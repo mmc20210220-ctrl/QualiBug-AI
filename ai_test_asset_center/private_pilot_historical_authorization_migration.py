@@ -1,13 +1,16 @@
-"""Private-pilot report loader adapter for historical authorization quarantine.
+"""Private-pilot adapters for historical authorization quarantine.
 
-The adapter is intentionally above ``ReportLoadingMixin`` in the handler MRO.  It
-loads the existing report through ``super()``, detects a valid ledger containing
-quarantinable historical authorization attempts, and returns an in-memory migrated
-view.  It never writes the scan artifact back to disk.
+The adapter is intentionally above ``ReportLoadingMixin`` and
+``CommandCenterBuilderMixin`` in the handler MRO. It loads the existing report
+through ``super()``, detects a valid ledger containing quarantinable historical
+authorization attempts, and returns an in-memory migrated view. It never writes the
+scan artifact back to disk.
 
 A generally invalid old ledger is left untouched so the existing quality projection
-can report UNVERIFIABLE.  An authorization-specific contradiction remains a hard
-MainlineContractError rather than being hidden as legacy compatibility.
+can report UNVERIFIABLE. An authorization-specific contradiction remains a hard
+MainlineContractError rather than being hidden as legacy compatibility. The command
+center receives the quarantine receipts and rerun queue as internal diagnostics only;
+these rows are never copied into defects, risks, or formal customer counts.
 """
 from __future__ import annotations
 
@@ -35,7 +38,7 @@ def _text(value: Any) -> str:
 
 
 class HistoricalAuthorizationReportMigrationMixin:
-    """Apply the derived migration only when a valid ledger needs quarantine."""
+    """Apply derived migration and expose its internal remediation projection."""
 
     @staticmethod
     def _historical_authorization_migrated_view(
@@ -80,6 +83,22 @@ class HistoricalAuthorizationReportMigrationMixin:
                 f"historical_authorization_artifact_migration_invalid:{exc}"
             ) from exc
 
+    @staticmethod
+    def _historical_authorization_projection(
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        row = _dict(payload)
+        nested = _dict(row.get("v12"))
+        quarantine = _dict(
+            row.get("historical_authorization_quarantine")
+            or nested.get("historical_authorization_quarantine")
+        )
+        migration = _dict(
+            row.get("historical_authorization_artifact_migration")
+            or nested.get("historical_authorization_artifact_migration")
+        )
+        return quarantine, migration
+
     def _load_v12_report(self, project_id: str, root: Path) -> dict[str, Any]:
         loaded = super()._load_v12_report(project_id, root)
         return self._historical_authorization_migrated_view(loaded)
@@ -91,6 +110,61 @@ class HistoricalAuthorizationReportMigrationMixin:
     ) -> dict[str, Any]:
         loaded = super()._load_current_scan_report(project_id, root)
         return self._historical_authorization_migrated_view(loaded)
+
+    def _build_command_center(self, project_id: str, root: Path) -> dict[str, Any]:
+        response = super()._build_command_center(project_id, root)
+        row = _dict(response)
+        data = _dict(row.get("data"))
+        if not data:
+            return response
+        report = self._load_current_scan_report(project_id, root)
+        if not report:
+            report = self._load_v12_report(project_id, root)
+        quarantine, migration = self._historical_authorization_projection(report)
+        if not quarantine or int(quarantine.get("quarantine_count") or 0) <= 0:
+            return response
+
+        projected_data = dict(data)
+        projected_data["historical_authorization_quarantine"] = quarantine
+        projected_data["historical_authorization_rerun_queue"] = list(
+            quarantine.get("rerun_queue") or []
+        )
+        if migration:
+            projected_data[
+                "historical_authorization_artifact_migration"
+            ] = migration
+        diagnostics = {
+            "status": _text(quarantine.get("status")),
+            "quarantine_count": int(
+                quarantine.get("quarantine_count") or 0
+            ),
+            "rerun_required_count": int(
+                quarantine.get("rerun_required_count") or 0
+            ),
+            "manual_recompile_required_count": int(
+                quarantine.get("manual_recompile_required_count") or 0
+            ),
+            "customer_defect_publication_allowed": False,
+            "scope": "internal_historical_authorization_remediation",
+        }
+        projected_data[
+            "historical_authorization_quarantine_summary"
+        ] = diagnostics
+        scan_meta = _dict(projected_data.get("scan_meta"))
+        if scan_meta:
+            projected_scan_meta = dict(scan_meta)
+            projected_scan_meta[
+                "historical_authorization_quarantine"
+            ] = diagnostics
+            projected_data["scan_meta"] = projected_scan_meta
+        task_board = _dict(projected_data.get("test_task_board"))
+        if task_board:
+            projected_task_board = dict(task_board)
+            projected_task_board[
+                "historical_authorization_remediation"
+            ] = diagnostics
+            projected_data["test_task_board"] = projected_task_board
+        return {**row, "data": projected_data}
 
 
 __all__ = ["HistoricalAuthorizationReportMigrationMixin"]
