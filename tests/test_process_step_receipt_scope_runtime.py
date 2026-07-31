@@ -5,6 +5,7 @@ from ai_test_asset_center.experiment_lifecycle_runtime import (
 from ai_test_asset_center.process_step_execution import ProcessStepLedger
 from ai_test_asset_center.process_step_receipt_scope import (
     extract_receipt_step_scope,
+    synchronize_scoped_receipts_from_observations,
 )
 from ai_test_asset_center.process_step_semantic_view import ProcessStepSemanticView
 
@@ -174,3 +175,55 @@ def test_exact_oracle_and_cleanup_receipts_bind_only_their_declared_steps() -> N
     assert rows["step-1"]["scoped_cleanup_receipt_ids"] == ["cleanup-1"]
     assert rows["step-2"]["scoped_cleanup_receipt_ids"] == ["cleanup-2"]
     assert observations["process_step_receipt_scope_binding"]["complete"] is True
+
+
+def test_identified_raw_oracle_trace_is_promoted_and_bound() -> None:
+    ledger = _ledger()
+    trace = {
+        "receipt_id": "trace-1",
+        "step_id": "step-1",
+        "trace_kind": "evaluation",
+    }
+    observations = {"oracle_trace": [trace]}
+
+    audit = synchronize_scoped_receipts_from_observations(ledger, observations)
+    rows = {row["step_id"]: row for row in ledger.all_rows()}
+
+    assert observations["oracle_trace_receipts"] == [trace]
+    assert rows["step-1"]["scoped_oracle_receipt_ids"] == ["trace-1"]
+    assert audit["oracle"]["bound"] == [
+        {
+            "receipt_id": "trace-1",
+            "step_id": "step-1",
+            "evidence_kind": "oracle",
+        }
+    ]
+
+
+def test_anonymous_raw_oracle_trace_stays_diagnostic_only() -> None:
+    ledger = _ledger()
+    trace = {"step_id": "step-1", "trace_kind": "diagnostic"}
+    observations = {"oracle_trace": [trace]}
+
+    audit = synchronize_scoped_receipts_from_observations(ledger, observations)
+    rows = {row["step_id"]: row for row in ledger.all_rows()}
+
+    assert observations["oracle_trace"] == [trace]
+    assert observations["oracle_trace_receipts"] == []
+    assert rows["step-1"]["scoped_oracle_receipt_ids"] == []
+    assert audit["oracle"]["bound"] == []
+    assert audit["oracle"]["unbound"] == []
+
+
+def test_formal_oracle_trace_without_receipt_id_fails_closed() -> None:
+    ledger = _ledger()
+    observations = {
+        "oracle_trace_receipts": [
+            {"step_id": "step-1", "trace_kind": "evaluation"}
+        ]
+    }
+
+    audit = synchronize_scoped_receipts_from_observations(ledger, observations)
+
+    assert audit["complete"] is False
+    assert audit["oracle"]["unbound"][0]["status"] == "RECEIPT_ID_MISSING"
