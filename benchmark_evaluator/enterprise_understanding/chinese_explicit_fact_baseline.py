@@ -191,6 +191,29 @@ def _threshold_status(metrics: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return ("PASS" if passed else "BELOW_TARGET"), checks
 
 
+def _quality_result_status(measurement_status: Any, threshold_status: Any) -> str:
+    """Return the authoritative isolated-baseline outcome.
+
+    Completing evaluation is not success. The source-backed product workflow passes
+    only when measurement itself completed and every frozen quality target was met.
+    """
+    measured = str(measurement_status or "").strip().upper()
+    threshold = str(threshold_status or "").strip().upper()
+    if measured != "PASS":
+        return "NOT_MEASURED"
+    return "PASS" if threshold == "PASS" else "BELOW_TARGET"
+
+
+def _baseline_exit_code(result: dict[str, Any]) -> int:
+    """Keep blocked execution distinct from a measured quality regression."""
+    status = str(result.get("status") or "").strip().upper()
+    if status == "PASS":
+        return 0
+    if status == "BELOW_TARGET":
+        return 3
+    return 2
+
+
 def run_chinese_explicit_fact_baseline(
     *,
     product_root: str | Path,
@@ -252,12 +275,13 @@ def run_chinese_explicit_fact_baseline(
         first_loss,
     )
     threshold_status, threshold_checks = _threshold_status(metrics)
+    measurement_status = measurement.get("status")
     summary = {
         "schema": "qualibug.chinese-explicit-fact-baseline-result.v1",
         "project_id": PROJECT_ID,
-        "status": "MEASURED" if measurement.get("status") == "PASS" else "NOT_MEASURED",
+        "status": _quality_result_status(measurement_status, threshold_status),
         "workflow_status": workflow.get("status"),
-        "measurement_status": measurement.get("status"),
+        "measurement_status": measurement_status,
         "threshold_status": threshold_status,
         "targets": TARGETS,
         "threshold_checks": threshold_checks,
@@ -271,6 +295,7 @@ def run_chinese_explicit_fact_baseline(
         "product_model_can_self_label_true_or_false": False,
         "automatic_winner_used": False,
         "fuzzy_or_llm_alignment_used": False,
+        "quality_thresholds_are_process_exit_authority": True,
         "output_paths": {
             "workflow_receipt": str(output / "source_backed_workflow_receipt.json"),
             "product_asset": str(asset_path),
@@ -299,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if result.get("status") == "MEASURED" else 2
+    return _baseline_exit_code(result)
 
 
 if __name__ == "__main__":
