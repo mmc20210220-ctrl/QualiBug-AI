@@ -11,6 +11,7 @@ admission -> source-occurrence evidence views -> one final persistence receipt.
 """
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -79,11 +80,66 @@ from .openapi_schema_fact_asset_projection import enrich_asset_with_openapi_sche
 from .source_occurrence_projection import project_source_occurrence_assets
 
 
+_DURABLE_IMPLICIT_RULE_GOVERNANCE_FIELDS = (
+    "implicit_rule_lifecycle_ledger",
+    "implicit_rule_authority_decision_ledger",
+    "implicit_rule_runtime_evolution",
+    "latest_implicit_rule_runtime_evolution",
+)
+
+
 def _probe_limit(value: Any, *, default: int = 140) -> int:
     """Resolve a Probe budget without treating an explicit zero as missing."""
     if value is None or value == "":
         return default
     return max(0, int(value))
+
+
+def _capture_previous_implicit_rule_governance(
+    project_id: str,
+    root: Path,
+) -> dict[str, Any]:
+    """Read only durable rule-governance state before the base rebuild overwrites it."""
+
+    previous = _base_api.load_enterprise_business_knowledge_asset(project_id, root) or {}
+    carried = {
+        field: copy.deepcopy(previous.get(field))
+        for field in _DURABLE_IMPLICIT_RULE_GOVERNANCE_FIELDS
+        if previous.get(field) not in (None, "", {}, [])
+    }
+    return {
+        "previous_asset_id": previous.get("asset_id"),
+        "fields": carried,
+    }
+
+
+def _restore_previous_implicit_rule_governance(
+    asset: dict[str, Any],
+    captured: dict[str, Any],
+) -> None:
+    """Restore governance history without reusing prior extraction or executable rows."""
+
+    fields = captured.get("fields") if isinstance(captured.get("fields"), dict) else {}
+    restored: list[str] = []
+    for field in _DURABLE_IMPLICIT_RULE_GOVERNANCE_FIELDS:
+        if field not in fields:
+            continue
+        asset[field] = copy.deepcopy(fields[field])
+        restored.append(field)
+    asset["implicit_rule_governance_carry_forward_receipt"] = {
+        "schema_version": "qualibug.implicit-rule-governance-carry-forward.v1",
+        "status": "RESTORED" if restored else "NO_PREVIOUS_GOVERNANCE_STATE",
+        "previous_asset_id": captured.get("previous_asset_id"),
+        "restored_fields": restored,
+        "restored_field_count": len(restored),
+        "authority": "previous_finalized_enterprise_knowledge_asset",
+        "captured_before_base_rebuild": True,
+        "prior_rule_library_reused": False,
+        "prior_business_fact_ledger_reused": False,
+        "prior_relationships_reused": False,
+        "prior_enterprise_understanding_model_reused": False,
+        "prior_probe_catalog_reused": False,
+    }
 
 
 def configure_source_parser_extensions() -> None:
@@ -217,11 +273,20 @@ def build_enterprise_business_knowledge_asset(
 
     configure_source_parser_extensions()
 
+    # Capture only durable implicit-rule governance before the extraction primitive
+    # overwrites the persisted asset path. Current source facts are always rebuilt.
+    previous_implicit_rule_governance = _capture_previous_implicit_rule_governance(
+        project, resolved_root
+    )
+
     # The base compiler is an extraction primitive in this composition. It is not
     # allowed to publish Probes before semantic, implementation and runtime gates.
     base_options = {**resolved_options, "probe_limit": 0}
     asset = _base_api.build_enterprise_business_knowledge_asset(
         project, resolved_root, base_options
+    )
+    _restore_previous_implicit_rule_governance(
+        asset, previous_implicit_rule_governance
     )
     parsed_sources = _parsed_sources_for_context(asset, resolved_root)
 
@@ -328,6 +393,13 @@ def build_enterprise_business_knowledge_asset(
             "relationship_count": len(asset.get("relationships") or []),
             "probe_generation_status": asset["probe_generation_gate"]["status"],
             "knowledge_composition_authority": "explicit_single_call_graph",
+            "implicit_rule_governance_carried_field_count": int(
+                (
+                    asset.get("implicit_rule_governance_carry_forward_receipt")
+                    or {}
+                ).get("restored_field_count")
+                or 0
+            ),
         }
     )
     asset["summary"] = summary
@@ -361,6 +433,9 @@ def build_enterprise_business_knowledge_asset(
             "implicit_rule_projection_runs_inside_understanding_boundary": True,
             "implicit_rule_projection_runs_after_conflict_reconciliation": True,
             "implicit_rule_projection_uses_existing_rule_library": True,
+            "implicit_rule_governance_loaded_before_reprojection": True,
+            "implicit_rule_governance_uses_previous_finalized_asset": True,
+            "implicit_rule_rebuild_reuses_prior_business_extraction": False,
             "semantic_lexicon_contract_precedes_formal_comprehension": True,
             "structure_first_fact_compilation_uses_existing_ledger": True,
             "structure_first_fact_compilation_precedes_downstream_binding": True,
