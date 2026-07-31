@@ -248,3 +248,35 @@ def test_reclassified_step_with_recomputed_fact_hash_still_breaks_set_balance() 
     assert "ledger_accepted_step_ids" in bundle["process_step_set_mismatch_fields"]
     result = _lifecycle(bundle)
     assert result["reason_code"] == "PROCESS_STEP_SET_MISMATCH"
+
+
+def test_fully_resigned_forgery_cannot_replace_ledger_hash_authority() -> None:
+    rows = _step_rows()
+    rows = [deepcopy(row) for row in rows]
+    rows[1]["operation_accepted"] = False
+    rows[1]["semantic_step_status"] = "OPERATION_REJECTED"
+    rows[1]["step_completed"] = False
+    rows[1]["step_failed"] = True
+    rows[1]["step_fact_hash"] = _stable_hash(_canonical_step_fact(rows[1]))
+
+    for row in rows:
+        row["ledger_accepted_step_ids"] = ["step-1"]
+        row["ledger_completed_step_ids"] = ["step-1"]
+        row["ledger_failed_step_ids"] = ["step-2"]
+        row["ledger_pending_semantic_step_ids"] = []
+        row["process_step_ledger_hash"] = "forged-ledger-hash"
+
+    bundle = _bundle(rows)
+    audit = bundle["process_step_audit"]
+
+    assert bundle["complete"] is False
+    assert audit["step_fact_hashes_valid"] is True
+    assert audit["step_sets_balanced"] is True
+    assert audit["ledger_hash_value_consistent"] is True
+    assert audit["ledger_hash_content_valid"] is False
+    assert (
+        audit["reconstructed_process_step_ledger_hash"]
+        != audit["declared_process_step_ledger_hash"]
+    )
+    result = _lifecycle(bundle)
+    assert result["reason_code"] == "PROCESS_STEP_LEDGER_HASH_MISMATCH"
