@@ -1,13 +1,17 @@
 """Public compile-freeze facade with one flow-data authority.
 
 The core module freezes protocol steps and readback contracts. This facade then
-freezes exact data dependencies across the complete flow, after every plan is
-available. The legacy Disposable Fixture Contract remains a compatibility
-projection and cannot declare whole-flow readiness.
+freezes exact data dependencies and proves the current runtimes can execute
+them, after every plan is available. The legacy Disposable Fixture Contract
+remains a compatibility projection and cannot declare whole-flow readiness.
 """
 from copy import deepcopy
 
 from . import experiment_compile_freezer_core as _core
+from .flow_data_execution_contract import (
+    STATUS_FROZEN as FLOW_DATA_EXECUTION_FROZEN,
+    freeze_flow_data_execution_contract,
+)
 from .flow_data_requirement import (
     STATUS_FROZEN as FLOW_DATA_FROZEN,
     build_flow_data_requirement,
@@ -80,21 +84,39 @@ def freeze_compiled_experiment(
             _text(requirement.get("detail"))
             or "flow_data_requirement_not_frozen",
         )
+    execution_contract = freeze_flow_data_execution_contract(
+        frozen,
+        requirement,
+    )
+    if _text(execution_contract.get("status")) != FLOW_DATA_EXECUTION_FROZEN:
+        return _block(
+            frozen,
+            _text(execution_contract.get("reason_code"))
+            or "BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE",
+            _text(execution_contract.get("detail"))
+            or "flow_data_execution_contract_not_frozen",
+        )
 
     result = deepcopy(frozen)
     requirement_id = _text(requirement.get("requirement_id"))
     requirement_fingerprint = _text(
         requirement.get("requirement_fingerprint")
     )
+    execution_fingerprint = _text(
+        execution_contract.get("contract_fingerprint")
+    )
     result["flow_data_requirement"] = requirement
+    result["flow_data_execution_contract"] = execution_contract
     flow_requirements = deepcopy(_dict(result.get("flow_requirements")))
     flow_requirements.update(
         {
             "data_requirement_id": requirement_id,
             "data_requirement_fingerprint": requirement_fingerprint,
+            "data_execution_contract_fingerprint": execution_fingerprint,
             "materialization_authority": _dict(
                 requirement.get("materialization_authority")
             ),
+            "cross_step_binding_authority": "process_graph_binding_ledger",
         }
     )
     result["flow_requirements"] = flow_requirements
@@ -136,6 +158,7 @@ def freeze_compiled_experiment(
         "flow_requirements": flow_requirements,
         "flow_data_requirement_id": requirement_id,
         "flow_data_requirement_fingerprint": requirement_fingerprint,
+        "flow_data_execution_contract_fingerprint": execution_fingerprint,
     }
     freeze_fingerprint = _fingerprint(reseal_payload)
     result["compile_freeze_receipt"] = {
@@ -150,6 +173,7 @@ def freeze_compiled_experiment(
         "compile_freeze_fingerprint": freeze_fingerprint,
         "flow_data_requirement_id": requirement_id,
         "flow_data_requirement_fingerprint": requirement_fingerprint,
+        "flow_data_execution_contract_fingerprint": execution_fingerprint,
         "fixture_contract_authority": "flow_data_requirement",
     }
     return result
