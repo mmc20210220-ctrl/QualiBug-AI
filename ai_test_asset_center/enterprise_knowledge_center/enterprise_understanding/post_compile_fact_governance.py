@@ -11,6 +11,7 @@ from .explicit_fact_semantic_normalization import (
     normalize_explicit_business_fact_semantics,
 )
 from .identity_evidence_policy import apply_identity_evidence_policy
+from .typed_fact_authority import retire_duplicate_compatibility_typed_facts
 from .typed_fact_conflicts import reconcile_typed_fact_conflicts
 from .typed_relation_projection import project_typed_object_relations
 
@@ -152,14 +153,15 @@ def govern_compiled_business_facts(
     project_id: str,
     root: Path,
 ) -> dict[str, Any]:
-    """Normalize coordinates, materialize claims, and reconcile typed facts.
+    """Close typed authority, normalize coordinates, and reconcile one fact ledger.
 
-    The first understanding pass discovers source-backed terms and rules. Structure-first
-    compilation upgrades that same ledger. This boundary first normalizes coordinates
-    already explicit in each source span; it does not discover another fact or select
-    among conflicting statements. Atomic effects and typed relations then project into
-    the existing ledger/object graph before the durable identity/conflict authorities run.
+    Structure-first compilation and the compatibility parser can temporarily describe
+    the same formal typed fact. Exact duplicate compatibility shells are retired first;
+    real cross-statement/cross-locator facts remain independent. Only then may semantic
+    normalization, atomic projection, typed values/relations, identities, and conflicts
+    consume the ledger. No second fact authority or downstream result patch is created.
     """
+    asset = retire_duplicate_compatibility_typed_facts(asset)
     asset = normalize_explicit_business_fact_semantics(asset)
     asset = project_atomic_claim_facts(asset)
     asset = _normalize_typed_fact_values(asset)
@@ -179,6 +181,8 @@ def govern_compiled_business_facts(
     receipt.update(
         {
             "second_pass_after_structure_compilation": True,
+            "typed_fact_authority_closed_before_projection": True,
+            "duplicate_compatibility_typed_shells_retired": True,
             "explicit_fact_semantic_coordinates_normalized": True,
             "atomic_claims_materialized_in_existing_ledger": True,
             "typed_relations_projected_into_existing_object_graph": True,
@@ -194,6 +198,9 @@ def govern_compiled_business_facts(
     governance.update(
         {
             "business_fact_two_pass_identity_governance": True,
+            "typed_fact_authority_retirement_precedes_all_projections": True,
+            "typed_fact_authority_retirement_selects_cross_statement": False,
+            "typed_fact_authority_retirement_selects_cross_locator": False,
             "explicit_fact_coordinate_normalization_precedes_atomic_projection": True,
             "explicit_fact_coordinate_normalization_discovers_new_facts": False,
             "atomic_data_effects_become_bindable_facts": True,
