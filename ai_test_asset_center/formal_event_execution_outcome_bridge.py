@@ -1,15 +1,16 @@
-"""Close formal Event execution outcomes on the canonical receipt authority.
+"""Close formal Event outcomes on the canonical exact-scope Finalizer.
 
-The bridge keeps three narrow responsibilities on the existing Experiment mainline:
+The bridge keeps two Event-specific responsibilities:
 
-* preserve a measured Event INDETERMINATE result as EXECUTED without creating a Bug;
-* project real Event Oracle / Cleanup receipts onto the unique trigger step without
-  changing their strict source schemas or semantic verdicts;
-* activate the existing Execution Receipt Bundle for a fixtureless Event write only
-  when the experiment creates its own disposable entity, cleanup succeeded, and the
-  environment restoration receipt is already positive.
+* project real Event Oracle, assertion, cleanup execution and cleanup
+  verification receipts onto the unique source-declared trigger step without
+  mutating their strict source schemas;
+* preserve a measured Event INDETERMINATE result as EXECUTED without creating a
+  Bug.
 
-No receipt, fixture, verdict, cleanup result, or restoration fact is invented here.
+Fixture applicability and Receipt Bundle activation are owned by lifecycle and
+the generic exact-scope Finalizer. No receipt, fixture, verdict, cleanup result,
+or restoration fact is invented here.
 """
 from __future__ import annotations
 
@@ -129,14 +130,7 @@ def _scoped_projection(
     step_id: str,
     projection_kind: str,
 ) -> dict[str, Any]:
-    """Repeat exact step scope around one real source receipt.
-
-    The original receipt remains immutable under ``source_receipt``. When the
-    source authority already has a receipt id, that identity is preserved. Some
-    older cleanup verification authorities expose only a sealed fingerprint; in
-    that case this scope projection receives its own content-addressed id derived
-    solely from source fingerprint, source schema, projection kind and step id.
-    """
+    """Repeat exact step scope around one immutable source receipt."""
     row = copy.deepcopy(_dict(receipt))
     rid, id_origin = _projection_receipt_id(
         row,
@@ -236,82 +230,21 @@ def _append_oracle_scope(
         )
 
 
-def _fixture_contract_absent(experiment: dict[str, Any]) -> bool:
-    exp = _dict(experiment)
-    if _dict(exp.get("disposable_fixture_contract")):
-        return False
-    if _list(exp.get("setup_plan")) or _list(exp.get("precondition_plan")):
-        return False
-    dag = _dict(exp.get("fixture_dag"))
-    if _list(dag.get("nodes")) or _list(dag.get("setup_order")):
-        return False
-    for raw in _list(exp.get("binding_plan")):
-        binding = _dict(raw)
-        if binding.get("force_fixture_setup") is True or _dict(
-            binding.get("fixture_setup")
-        ):
-            return False
-    return True
-
-
-def _cleanup_execution_succeeded(observations: dict[str, Any]) -> bool:
-    receipt = _dict(observations.get("cleanup_execution_receipt"))
-    return bool(
-        receipt
-        and receipt.get("succeeded") is True
-        and _text(receipt.get("status")).upper() == "ACCEPTED"
-        and int(receipt.get("status_code") or 0) > 0
-    )
-
-
-def _environment_restored(observations: dict[str, Any]) -> bool:
-    receipt = _dict(observations.get("environment_restoration_receipt"))
-    return bool(
-        receipt
-        and receipt.get("environment_restored") is True
-        and _text(receipt.get("final_status")) == "ENVIRONMENT_RESTORED"
-        and _receipt_id(receipt)
-    )
-
-
-def _fixtureless_bundle_eligible(
-    *,
-    experiment: dict[str, Any],
-    observations: dict[str, Any],
-    fixture_receipts: list[dict[str, Any]],
-    step_id: str,
-) -> bool:
-    exp = _dict(experiment)
-    compile_receipt = _dict(exp.get("compile_receipt"))
-    event_receipt = _dict(observations.get("pre_cleanup_event_observer_receipt"))
-    event_step = _text(_dict(event_receipt.get("evidence")).get("step_id"))
-    safety = _dict(exp.get("safety_contract"))
-    return bool(
-        _is_formal_event(exp)
-        and step_id
-        and event_step == step_id
-        and _text(compile_receipt.get("status")).upper() == "COMPILED"
-        and safety.get("governed_write") is True
-        and _fixture_contract_absent(exp)
-        and not fixture_receipts
-        and observations.get("process_step_ledger") is not None
-        and _cleanup_execution_succeeded(observations)
-        and _environment_restored(observations)
-    )
-
-
 def install_formal_event_execution_outcome_bridge() -> None:
-    """Install Event receipt scope and outcome wrappers on the main executor."""
+    """Compose Event-specific projections with exact-scope Finalizer hooks."""
     from . import experiment_executor as executor
     from . import experiment_outcome_finalizer as finalizer
 
     if getattr(executor, _INSTALL_MARKER, False):
         return
 
+    # The exact-scope facade calls these module-level underlying authorities on
+    # every run. Wrapping its public re-export is ineffective because
+    # ``_install_core_hooks`` restores the core functions before finalization.
     original_oracle = getattr(
         finalizer,
         _ORIGINAL_ORACLE_MARKER,
-        finalizer.evaluate_contract_oracle,
+        finalizer._original_evaluate_contract_oracle,
     )
     setattr(finalizer, _ORIGINAL_ORACLE_MARKER, original_oracle)
 
@@ -333,16 +266,20 @@ def install_formal_event_execution_outcome_bridge() -> None:
             )
         return verdict
 
+    finalizer._original_evaluate_contract_oracle = (
+        evaluate_oracle_with_event_scope
+    )
+
     original_equivalence = getattr(
         finalizer,
         _ORIGINAL_EQUIVALENCE_MARKER,
-        finalizer.evaluate_cleanup_equivalence,
+        finalizer._original_evaluate_cleanup_equivalence,
     )
     setattr(finalizer, _ORIGINAL_EQUIVALENCE_MARKER, original_equivalence)
 
     @functools.wraps(original_equivalence)
-    def evaluate_equivalence_with_event_scope(**kwargs: Any) -> dict[str, Any]:
-        receipt = dict(original_equivalence(**kwargs))
+    def evaluate_equivalence_with_event_scope(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        receipt = dict(original_equivalence(*args, **kwargs))
         scope = _EVENT_FINALIZER_SCOPE.get()
         if scope is not None:
             observations, step_id = scope
@@ -355,8 +292,9 @@ def install_formal_event_execution_outcome_bridge() -> None:
             )
         return receipt
 
-    finalizer.evaluate_contract_oracle = evaluate_oracle_with_event_scope
-    finalizer.evaluate_cleanup_equivalence = evaluate_equivalence_with_event_scope
+    finalizer._original_evaluate_cleanup_equivalence = (
+        evaluate_equivalence_with_event_scope
+    )
 
     original = getattr(
         executor,
@@ -369,47 +307,21 @@ def install_formal_event_execution_outcome_bridge() -> None:
     def finalize_with_event_outcome(**kwargs: Any) -> dict[str, Any]:
         experiment = _dict(kwargs.get("exp"))
         observations = _dict(kwargs.get("observations"))
-        fixture_receipts = [
-            row
-            for row in _list(kwargs.get("fixture_receipts"))
-            if isinstance(row, dict)
-        ]
         step_id = _event_trigger_step_id(experiment)
         token = _EVENT_FINALIZER_SCOPE.set(
             (observations, step_id)
             if _is_formal_event(experiment) and step_id
             else None
         )
-        previous_force_present = "force_receipt_bundle" in observations
-        previous_force = observations.get("force_receipt_bundle")
         try:
             if _is_formal_event(experiment) and step_id:
                 _scope_existing_cleanup_execution(
                     observations,
                     step_id=step_id,
                 )
-                if _fixtureless_bundle_eligible(
-                    experiment=experiment,
-                    observations=observations,
-                    fixture_receipts=fixture_receipts,
-                    step_id=step_id,
-                ):
-                    observations["force_receipt_bundle"] = True
-                    observations["fixtureless_event_bundle_activation"] = {
-                        "status": "ACTIVATED",
-                        "step_id": step_id,
-                        "fixture_required": False,
-                        "cleanup_execution_verified": True,
-                        "environment_restored": True,
-                        "synthetic_fixture_created": False,
-                    }
             result = dict(original(**kwargs))
         finally:
             _EVENT_FINALIZER_SCOPE.reset(token)
-            if previous_force_present:
-                observations["force_receipt_bundle"] = previous_force
-            else:
-                observations.pop("force_receipt_bundle", None)
 
         verdict = _dict(result.get("oracle_verdict"))
         if not (
