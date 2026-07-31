@@ -1,0 +1,85 @@
+            and isinstance(row.get("field_oracle_trace"), dict)
+        ]
+        if field_traces or assertion_traces:
+            # The experiment reached Oracle evaluation, but the semantic result
+            # remains indeterminate. Preserve traces without claiming completion.
+            status = "EXECUTED"
+            reason = _text(verdict.get("status")) or "INDETERMINATE"
+            detail = ",".join(
+                [
+                    _text(item.get("reason_code"))
+                    for item in (_list(verdict.get("assertions")) + field_traces)
+                    if isinstance(item, dict) and _text(item.get("reason_code"))
+                ][:8]
+            ) or ",".join(_list(verdict.get("missing_requirements"))[:8])
+        else:
+            status = "BLOCKED"
+            reason = "BLOCKED_MISSING_OBSERVER"
+            detail = ",".join(_list(verdict.get("missing_requirements"))[:8])
+        observations["finalizer_block_reason"] = reason
+'''
+source = source[:start] + replacement + source[end:]
+
+# Remove the legacy lifecycle pre-authoring block. Keep one placeholder which is
+# assigned only from operational_receipts at the single exit.
+start_marker = '    # ── V1.3.0-A: Lifecycle State + Environment Restoration Gate ──\n'
+end_marker = '    # ── V1.5.0 diagnostic formula (not authority for TRUE_COMPLETED) ──\n'
+start = source.index(start_marker)
+end = source.index(end_marker, start)
+source = source[:start] + '''    # Lifecycle state is intentionally not authored here. The v1.5 formula
+    # below remains diagnostic only; operational_receipts owns the terminal state.
+    _lifecycle_state = ""
+    _lifecycle_derivation: dict[str, Any] = {}
+
+''' + source[end:]
+
+# Remove the v1.5 diagnostic override of lifecycle state.
+old = '''        # Diagnostic terminal only — TRUE_COMPLETED requires receipt bundle below.
+        if (
+            _v150_true_completion.get("terminal_state")
+            and _v150_true_completion.get("terminal_state") != "TRUE_COMPLETED"
+        ):
+            _lifecycle_state = _v150_true_completion["terminal_state"]
+'''
+new = '''        # Diagnostic only. It cannot author or overwrite lifecycle_state.
+        observations["v150_true_completion"] = dict(_v150_true_completion)
+'''
+if old not in source:
+    raise RuntimeError('v150 override block not found')
+source = source.replace(old, new, 1)
+
+# Preserve a semantic block reason when the ledger is absent; do not overwrite
+# it with a secondary receipt-infrastructure symptom.
+old = '''    if _process_ledger is None and not observations.get("force_receipt_bundle"):
+        from .process_step_execution import (
+            FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED as _LEDGER_NOT_PROP,
+        )
+        _finalizer_block_reason = _LEDGER_NOT_PROP
+        observations["finalizer_block_reason"] = _LEDGER_NOT_PROP
+'''
+new = '''    if _process_ledger is None and not observations.get("force_receipt_bundle"):
+        from .process_step_execution import (
+            FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED as _LEDGER_NOT_PROP,
+        )
+        if not _finalizer_block_reason:
+            _finalizer_block_reason = _LEDGER_NOT_PROP
+            observations["finalizer_block_reason"] = _LEDGER_NOT_PROP
+'''
+if old not in source:
+    raise RuntimeError('ledger absent block not found')
+source = source.replace(old, new, 1)
+
+# The existing block assembles the receipt bundle only. Finalization is deferred
+# to the single exit, after all operational facts are frozen.
+call_start = source.index('                _finalization_receipt = _build_finalization(\n')
+call_end_marker = '            elif not _finalizer_block_reason:\n'
+call_end = source.index(call_end_marker, call_start)
+source = source[:call_start] + '''                # Bundle assembled. Authoritative finalization is deferred to
+                # the single exit after lifecycle facts are frozen.
+''' + source[call_end:]
+
+# Insert unconditional bundle fallback + single lifecycle finalization before
+# finding filtering. This makes blocked, failed, and incomplete paths observable
+# through the same authority and return schema.
+insert_marker = '    # ── P0-12: Finding filter reason ──\n'
+insert_at = source.index(insert_marker)
