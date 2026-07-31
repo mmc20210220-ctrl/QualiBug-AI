@@ -15,6 +15,7 @@ on:
       - "tests/test_enterprise_understanding_fact_slots.py"
       - "tests/test_enterprise_understanding_fact_slot_report.py"
       - "tests/test_enterprise_understanding_post_compile_governance.py"
+      - "tests/test_enterprise_understanding_public_import_contract.py"
       - "tests/test_enterprise_understanding_typed_fact_authority.py"
       - "tests/test_enterprise_understanding_typed_relation_projection.py"
       - "tests/test_enterprise_understanding_implicit_rule_*.py"
@@ -77,6 +78,7 @@ jobs:
             tests/test_enterprise_understanding_fact_slots.py \
             tests/test_enterprise_understanding_fact_slot_report.py \
             tests/test_enterprise_understanding_post_compile_governance.py \
+            tests/test_enterprise_understanding_public_import_contract.py \
             tests/test_enterprise_understanding_typed_fact_authority.py \
             tests/test_enterprise_understanding_typed_relation_projection.py \
             tests/test_enterprise_understanding_implicit_rule_*.py \
