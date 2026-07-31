@@ -58,6 +58,8 @@ def _authorization_attempt(attempt: dict[str, Any]) -> bool:
     ):
         return True
     finding = _dict(bundle.get("finding"))
+    if _text(finding.get("risk_family")).lower() in _AUTHORIZATION_FAMILIES:
+        return True
     return bool(
         _dict(finding.get("authorization_causality_receipt"))
         or _text(
