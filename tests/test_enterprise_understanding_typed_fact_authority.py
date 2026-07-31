@@ -9,6 +9,7 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.t
 
 LOCATOR = "rules.md#line=3;chars=10-30"
 STATEMENT = "每张发票必须关联且仅关联一个结算单"
+BLOCK_KIND = "BLOCKED_MULTIPLE_STRUCTURE_FIRST_TYPED_AUTHORITIES"
 
 
 def _fact(
@@ -96,6 +97,8 @@ def test_exact_compatibility_shell_is_retired_by_structure_authority() -> None:
     assert receipt["structure_first_authority_count"] == 1
     assert receipt["retired_compatibility_shell_count"] == 1
     assert receipt["automatic_winner_used"] is False
+    assert receipt["silent_authority_ambiguity_allowed"] is False
+    assert result["coverage_gaps"] == []
     assert result["enterprise_comprehension_gate"]["entry_allowed"] is True
 
 
@@ -131,6 +134,7 @@ def test_different_statement_or_locator_never_retires_a_fact() -> None:
     assert receipt["retired_compatibility_shell_count"] == 0
     assert receipt["cross_statement_merge_allowed"] is False
     assert receipt["cross_locator_merge_allowed"] is False
+    assert result["coverage_gaps"] == []
 
 
 def test_multiple_structure_authorities_fail_closed_without_selecting_one() -> None:
@@ -162,7 +166,11 @@ def test_multiple_structure_authorities_fail_closed_without_selecting_one() -> N
     ) == {"fact:structure:1", "fact:structure:2"}
     assert {fact["status"] for fact in facts.values()} == {"ACCEPTED"}
     assert result["enterprise_comprehension_gate"]["entry_allowed"] is False
-    assert result["enterprise_comprehension_gate"]["status"] == (
-        "BLOCKED_MULTIPLE_STRUCTURE_FIRST_TYPED_AUTHORITIES"
-    )
+    assert result["enterprise_comprehension_gate"]["status"] == BLOCK_KIND
     assert result["enterprise_comprehension_gate"]["required_operator_action"]
+    assert len(result["coverage_gaps"]) == 1
+    gap = result["coverage_gaps"][0]
+    assert gap["kind"] == BLOCK_KIND
+    assert gap["gap_type"] == "multiple_structure_first_typed_authorities"
+    assert gap["operator_action"]
+    assert len(gap["ambiguous_structure_authorities"]) == 1
