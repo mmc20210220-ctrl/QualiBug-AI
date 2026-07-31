@@ -32,6 +32,8 @@ from .obligation_attempt_ledger import (
     validate_obligation_attempt_ledger,
 )
 
+_AUTHORIZATION_FAMILIES = frozenset({"authorization", "isolation", "visibility"})
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -43,6 +45,27 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _authorization_attempt(attempt: dict[str, Any]) -> bool:
+    row = _dict(attempt)
+    if _text(row.get("risk_family")).lower() in _AUTHORIZATION_FAMILIES:
+        return True
+    bundle = _dict(row.get("delivery_evidence_bundle"))
+    if any(
+        _text(_dict(value).get("observer_id")) == "authorization_comparison"
+        for value in _list(bundle.get("observer_receipts"))
+    ):
+        return True
+    finding = _dict(bundle.get("finding"))
+    return bool(
+        _dict(finding.get("authorization_causality_receipt"))
+        or _text(
+            _dict(finding.get("oracle")).get(
+                "authorization_causality_receipt_id"
+            )
+        )
+    )
 
 
 def finding_id(item: dict[str, Any]) -> str:
@@ -116,6 +139,10 @@ def validated_deliverable_gate_index(
             and _text(gate.get("status")).upper() == "DELIVERABLE"
             and _text(gate.get("finding_id")) == occurrence_id
         ):
+            if _authorization_attempt(attempt):
+                raise MainlineContractError(
+                    f"formal_authorization_delivery_v2_required:{occurrence_id}"
+                )
             validated_gate = dict(gate)
         else:
             raise MainlineContractError("formal_deliverable_gate_v2_missing")
