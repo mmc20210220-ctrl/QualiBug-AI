@@ -5,6 +5,9 @@ from ai_test_asset_center.experiment_compile_freezer import (
     BLOCKED_READBACK_CONTRACT_INCOMPLETE,
     freeze_compiled_experiment,
 )
+from ai_test_asset_center.flow_data_execution_contract import (
+    BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE,
+)
 from ai_test_asset_center.flow_data_requirement import (
     BLOCKED_FLOW_DATA_BINDING_INCOMPLETE,
 )
@@ -101,6 +104,44 @@ def _experiment() -> dict:
     }
 
 
+def _two_step_graph() -> dict:
+    return {
+        "process_id": "process_confirm",
+        "topological_order": ["step_activate", "step_confirm"],
+        "nodes": [
+            {
+                "node_id": "step_activate",
+                "step_id": "step_activate",
+                "operation_ref": "op_write",
+                "output_binding_specs": [
+                    {
+                        "canonical_field_id": "confirmation_id",
+                        "json_path": "$.confirmationId",
+                    }
+                ],
+            },
+            {
+                "node_id": "step_confirm",
+                "step_id": "step_confirm",
+                "operation_ref": "op_second",
+                "input_binding_refs": [
+                    {
+                        "producer_node_id": "step_activate",
+                        "producer_output_field": "confirmation_id",
+                        "target": "confirmation_id",
+                    }
+                ],
+            },
+        ],
+        "edges": [
+            {
+                "source_node_id": "step_activate",
+                "target_node_id": "step_confirm",
+            }
+        ],
+    }
+
+
 def test_freeze_binds_compiled_async_policy_to_exact_primary_step() -> None:
     frozen = freeze_compiled_experiment(_experiment(), behavior_ir=IR)
 
@@ -130,6 +171,11 @@ def test_freeze_binds_compiled_async_policy_to_exact_primary_step() -> None:
     assert frozen["compile_receipt"]["flow_data_requirement_id"] == (
         requirement["requirement_id"]
     )
+    execution_contract = frozen["flow_data_execution_contract"]
+    assert execution_contract["status"] == "FROZEN"
+    assert frozen["compile_receipt"][
+        "flow_data_execution_contract_fingerprint"
+    ] == execution_contract["contract_fingerprint"]
     assert frozen["disposable_fixture_contract"]["projection_only"] is True
     assert frozen["disposable_fixture_contract"]["is_flow_data_authority"] is False
 
@@ -218,27 +264,94 @@ def test_missing_secondary_path_binding_blocks_compile() -> None:
     assert "step_confirm:confirmation_id" in frozen["compile_receipt"]["detail"]
 
 
-def test_prior_step_output_can_supply_later_step_without_global_binding() -> None:
+def test_graph_output_can_supply_later_step_with_explicit_binding_ref() -> None:
     experiment = _experiment()
-    experiment["treatment_plan"][0]["output_binding_specs"] = [
-        {"target": "confirmation_id", "json_path": "$.confirmationId"}
-    ]
+    graph = _two_step_graph()
+    experiment["treatment_plan"][0].update(
+        {
+            "output_binding_specs": graph["nodes"][0]["output_binding_specs"],
+            "_execution_graph": graph,
+        }
+    )
     experiment["treatment_plan"].append(
         {
             "step_id": "step_confirm",
             "operation_ref": "op_second",
             "actor_ref": "actor_1",
             "path": "/items/{confirmation_id}/confirm",
-            "input_binding_refs": ["confirmation_id"],
+            "input_binding_refs": graph["nodes"][1]["input_binding_refs"],
+            "_execution_graph": graph,
         }
     )
 
     frozen = freeze_compiled_experiment(experiment, behavior_ir=IR)
 
     assert frozen["compile_receipt"]["status"] == "COMPILED"
-    second = frozen["flow_data_requirement"]["step_requirements"][1]
-    assert second["required_binding_targets"] == ["confirmation_id"]
-    assert second["unresolved_binding_targets"] == []
+    second = frozen["flow_data_execution_contract"]["step_contracts"][1]
+    assert second["required_targets"] == ["confirmation_id"]
+    assert second["missing_targets"] == []
+    assert second["input_bindings"][0]["status"] == "RESOLVED"
+
+
+def test_sequential_output_binding_is_not_treated_as_executable() -> None:
+    experiment = _experiment()
+    experiment["treatment_plan"][0]["output_binding_specs"] = [
+        {
+            "canonical_field_id": "confirmation_id",
+            "json_path": "$.confirmationId",
+        }
+    ]
+
+    frozen = freeze_compiled_experiment(experiment, behavior_ir=IR)
+
+    assert frozen["compile_receipt"]["status"] == "BLOCKED"
+    assert frozen["compile_receipt"]["reason_code"] == (
+        BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE
+    )
+    assert "OUTPUT_BINDING_EXECUTOR_UNAVAILABLE" in frozen[
+        "compile_receipt"
+    ]["detail"]
+
+
+def test_query_placeholder_requires_an_executable_binding_source() -> None:
+    experiment = _experiment()
+    experiment["treatment_plan"][0]["query"] = {
+        "tenantId": "{tenant_id}"
+    }
+
+    frozen = freeze_compiled_experiment(experiment, behavior_ir=IR)
+
+    assert frozen["compile_receipt"]["status"] == "BLOCKED"
+    assert frozen["compile_receipt"]["reason_code"] == (
+        BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE
+    )
+    assert "STEP_BINDING_EXECUTION_SOURCE_MISSING" in frozen[
+        "compile_receipt"
+    ]["detail"]
+
+
+def test_graph_output_requires_exact_response_source_path() -> None:
+    experiment = _experiment()
+    graph = _two_step_graph()
+    graph["nodes"][0]["output_binding_specs"] = [
+        {"canonical_field_id": "confirmation_id"}
+    ]
+    experiment["treatment_plan"][0].update(
+        {
+            "output_binding_specs": graph["nodes"][0]["output_binding_specs"],
+            "_execution_graph": graph,
+        }
+    )
+
+    frozen = freeze_compiled_experiment(experiment, behavior_ir=IR)
+
+    assert frozen["compile_receipt"]["status"] == "BLOCKED"
+    assert frozen["compile_receipt"]["reason_code"] == (
+        BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE
+    )
+    assert "OUTPUT_BINDING_IDENTITY_INCOMPLETE" in frozen[
+        "compile_receipt"
+    ]["detail"]
 
 
 def test_conflicting_step_async_policies_block_compile() -> None:
@@ -300,4 +413,7 @@ def test_freeze_is_deterministic_and_idempotent() -> None:
     )
     assert once["flow_requirements"] == twice["flow_requirements"]
     assert once["flow_data_requirement"] == twice["flow_data_requirement"]
+    assert once["flow_data_execution_contract"] == (
+        twice["flow_data_execution_contract"]
+    )
     assert once["treatment_plan"] == twice["treatment_plan"]
