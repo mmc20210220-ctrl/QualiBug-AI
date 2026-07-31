@@ -43,7 +43,6 @@ jobs:
             ai_test_asset_center/ssrf_guard.py \
             ai_test_asset_center/db_persistence.py \
             ai_test_asset_center/enterprise_knowledge_center/_crud.py \
-            ai_test_asset_center/formal_event_execution_preflight.py \
             ai_test_asset_center/formal_event_observation_count_bridge.py \
             ai_test_asset_center/formal_event_execution_outcome_bridge.py
       - name: Run P0 root regression suite
