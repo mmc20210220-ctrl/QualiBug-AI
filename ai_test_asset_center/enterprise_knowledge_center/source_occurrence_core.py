@@ -1,19 +1,25 @@
 """Core authority for content, interpretation, and source-occurrence identity.
 
-This module does not parse documents.  It orchestrates the existing atomic transport and CRUD
+This module does not implement a parser. It orchestrates the existing atomic transport and CRUD
 activation authorities, then records three distinct identities in the existing project registry:
 immutable content, one governed interpretation, and each source occurrence.
+
+Canonical interpretation records are deliberately provenance-neutral. Source paths, archive
+membership and source versions live only on occurrence records, so updating or removing one
+occurrence cannot supersede a canonical interpretation still used elsewhere.
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import _crud
 from . import atomic_ingestion as _atomic
 from ._common import PHASE, ROOT, _safe_project_id
 from ._utils import _load_registry, _now, _require_manage_actor, _save_registry, _short_hash
+from ..enterprise_source_registry_lifecycle import deactivate_source_asset
 
-SOURCE_OCCURRENCE_INGESTION_SCHEMA = "qualibug.source-occurrence-enterprise-material-ingestion.v1"
+SOURCE_OCCURRENCE_INGESTION_SCHEMA = "qualibug.source-occurrence-enterprise-material-ingestion.v2"
 CONTENT_ASSET_SCHEMA = "qualibug.enterprise-content-asset.v1"
 INTERPRETATION_ASSET_SCHEMA = "qualibug.enterprise-interpretation-asset.v1"
 SOURCE_OCCURRENCE_SCHEMA = "qualibug.enterprise-source-occurrence.v1"
@@ -87,6 +93,18 @@ def _source_occurrence_id(
     )
 
 
+def _archive_base_ref(envelope: dict[str, Any]) -> str:
+    return _portable_ref(
+        envelope.get("external_ref")
+        or _atomic._envelope_filename(envelope)
+        or "archive"
+    )
+
+
+def _archive_prefix(envelope: dict[str, Any]) -> str:
+    return f"archive://{_archive_base_ref(envelope)}!/"
+
+
 def _archive_source_ref(row: dict[str, Any], envelope: dict[str, Any]) -> str:
     provenance = dict(row.get("archive_provenance") or {})
     member = _portable_ref(
@@ -95,15 +113,7 @@ def _archive_source_ref(row: dict[str, Any], envelope: dict[str, Any]) -> str:
         or row.get("filename")
         or row.get("original_name")
     )
-    if not member:
-        return ""
-    base = _portable_ref(
-        envelope.get("external_ref")
-        or provenance.get("top_level_archive_name")
-        or provenance.get("root_archive_filename")
-        or _atomic._envelope_filename(envelope)
-    )
-    return f"archive://{base}!/{member}" if base else f"archive://{member}"
+    return f"{_archive_prefix(envelope)}{member}" if member else ""
 
 
 def _source_ref(row: dict[str, Any], envelope: dict[str, Any]) -> str:
@@ -176,6 +186,53 @@ def _add_unique(row: dict[str, Any], key: str, value: str) -> None:
     )
 
 
+def _neutralize_canonical(
+    canonical: dict[str, Any], interpretation_asset_id: str
+) -> bool:
+    changed = False
+    canonical_key = f"interpretation:{interpretation_asset_id}"
+    if _text(canonical.get("logical_key")) != canonical_key:
+        canonical.setdefault("source_occurrence_logical_key", canonical.get("logical_key"))
+        canonical["logical_key"] = canonical_key
+        changed = True
+    if canonical.get("archive_provenance"):
+        canonical.setdefault(
+            "source_occurrence_archive_provenance",
+            dict(canonical.get("archive_provenance") or {}),
+        )
+        canonical["archive_provenance"] = {}
+        changed = True
+    if _text(canonical.get("external_ref")):
+        canonical.setdefault("source_occurrence_external_ref", canonical.get("external_ref"))
+        canonical["external_ref"] = ""
+        changed = True
+    canonical["identity_role"] = "CANONICAL_INTERPRETATION"
+    canonical["interpretation_asset_id"] = interpretation_asset_id
+    canonical["source_path_controls_canonical_lifecycle"] = False
+    return changed
+
+
+def _prepare_existing_canonical_identities(registry: dict[str, Any]) -> bool:
+    changed = False
+    source_by_id = {
+        _text(row.get("source_id")): row
+        for row in registry.get("sources") or []
+        if isinstance(row, dict) and _text(row.get("source_id"))
+    }
+    interpretation_by_id = {
+        _text(row.get("canonical_source_id")): _text(row.get("interpretation_asset_id"))
+        for row in registry.get("interpretation_assets") or []
+        if isinstance(row, dict)
+        and _text(row.get("canonical_source_id"))
+        and _text(row.get("interpretation_asset_id"))
+    }
+    for source_id, interpretation_id in interpretation_by_id.items():
+        canonical = source_by_id.get(source_id)
+        if canonical is not None:
+            changed = _neutralize_canonical(canonical, interpretation_id) or changed
+    return changed
+
+
 def _upsert_content_asset(
     registry: dict[str, Any], canonical: dict[str, Any], occurrence_id: str
 ) -> str:
@@ -193,10 +250,12 @@ def _upsert_content_asset(
             "source_occurrence_ids": [],
             "created_at_utc": _now(),
             "immutable_bytes": True,
+            "historical_bytes_retained_without_active_occurrence": True,
         }
         rows.append(asset)
     _add_unique(asset, "canonical_source_ids", _text(canonical.get("source_id")))
     _add_unique(asset, "source_occurrence_ids", occurrence_id)
+    asset["status"] = "ACTIVE"
     return identity
 
 
@@ -241,17 +300,177 @@ def _upsert_interpretation_asset(
         )
     _add_unique(asset, "source_occurrence_ids", occurrence_id)
     _add_unique(asset, "source_refs", source_ref)
+    asset["status"] = "ACTIVE"
+
+
+def _unlink_occurrence(registry: dict[str, Any], occurrence: dict[str, Any]) -> None:
+    occurrence_id = _text(occurrence.get("source_occurrence_id"))
+    source_ref = _text(occurrence.get("source_ref"))
+    for key in ("content_assets", "interpretation_assets"):
+        for row in registry.get(key) or []:
+            if not isinstance(row, dict):
+                continue
+            row["source_occurrence_ids"] = [
+                value
+                for value in row.get("source_occurrence_ids") or []
+                if _text(value) != occurrence_id
+            ]
+            if key == "interpretation_assets":
+                row["source_refs"] = [
+                    value
+                    for value in row.get("source_refs") or []
+                    if _text(value) != source_ref
+                ]
+    canonical = _source_by_id(registry, _text(occurrence.get("canonical_source_id")))
+    if canonical is not None:
+        canonical["source_occurrence_ids"] = [
+            value
+            for value in canonical.get("source_occurrence_ids") or []
+            if _text(value) != occurrence_id
+        ]
+        canonical["source_refs"] = [
+            value
+            for value in canonical.get("source_refs") or []
+            if _text(value) != source_ref
+        ]
+
+
+def _reactivate_canonical_if_needed(
+    *,
+    project: str,
+    root: Path,
+    actor: dict[str, Any],
+    canonical: dict[str, Any],
+) -> None:
+    if canonical.get("status") == "active":
+        return
+    parsed = _crud._record_parse(canonical, root)
+    if str(parsed.get("parse_status") or "") == "failed":
+        raise SourceOccurrenceIngestionError(
+            f"CANONICAL_INTERPRETATION_REACTIVATION_PARSE_FAILED:{canonical.get('source_id')}"
+        )
+    runtime_manifest, runtime_error = _crud._register_runtime_source(
+        project=project,
+        root=root,
+        runtime_asset_id=_text(canonical.get("runtime_asset_id"))
+        or _crud._runtime_asset_id(_text(canonical.get("logical_key"))),
+        filename=_text(canonical.get("original_name")) or "document",
+        source_type=_text(canonical.get("source_type")) or "other_document",
+        source_id=_text(canonical.get("source_id")),
+        content_hash=_text(canonical.get("content_hash")),
+        version=int(canonical.get("version") or 1),
+        external_ref="",
+        parsed=parsed,
+        actor=actor,
+        archive_provenance={},
+    )
+    if runtime_error:
+        raise SourceOccurrenceIngestionError(
+            "CANONICAL_INTERPRETATION_RUNTIME_REACTIVATION_FAILED:"
+            + _text(runtime_error.get("detail") or runtime_error.get("code"))
+        )
+    chunk_receipt, chunk_warning = _crud._register_chunks(
+        project=project,
+        root=root,
+        source_id=_text(canonical.get("source_id")),
+        content_hash=_text(canonical.get("content_hash")),
+        version=int(canonical.get("version") or 1),
+        parsed=parsed,
+        runtime_manifest=runtime_manifest,
+    )
+    if chunk_warning and str(chunk_receipt.get("status") or "") == "FAILED":
+        raise SourceOccurrenceIngestionError(
+            "CANONICAL_INTERPRETATION_CHUNK_REACTIVATION_FAILED:"
+            + _text(chunk_warning.get("detail") or chunk_warning.get("code"))
+        )
+    canonical["runtime_source_manifest"] = runtime_manifest
+    canonical["parse"] = _crud._parse_summary(parsed, chunk_receipt, runtime_manifest)
+    canonical["status"] = "active"
+    canonical["reactivated_at_utc"] = _now()
+
+
+def deactivate_unreferenced_canonical_sources(
+    project_id: str,
+    canonical_source_ids: Iterable[str],
+    *,
+    root: Path | None = None,
+    actor: dict[str, Any] | None = None,
+    reason: str = "no_active_source_occurrences",
+) -> dict[str, Any]:
+    """Remove orphan interpretations from active understanding while retaining source bytes."""
+    resolved_root = root or ROOT
+    project = _safe_project_id(project_id)
+    clean_actor = _require_manage_actor(actor)
+    registry = _load_registry(project, resolved_root)
+    occurrences = _registry_rows(registry, "source_occurrences")
+    deactivated: list[str] = []
+    errors: list[dict[str, Any]] = []
+    for source_id in sorted({_text(value) for value in canonical_source_ids if _text(value)}):
+        if any(
+            row.get("status") == "active"
+            and _text(row.get("canonical_source_id")) == source_id
+            for row in occurrences
+        ):
+            continue
+        canonical = _source_by_id(registry, source_id)
+        if canonical is None or canonical.get("status") != "active":
+            continue
+        runtime_asset_id = _text(canonical.get("runtime_asset_id"))
+        try:
+            runtime_receipt = deactivate_source_asset(
+                project,
+                runtime_asset_id,
+                root=resolved_root,
+                actor=clean_actor,
+                reason=reason,
+            )
+            if runtime_receipt.get("deactivated") is not True:
+                raise RuntimeError(_text(runtime_receipt.get("reason")) or "runtime source not deactivated")
+            canonical["status"] = "superseded"
+            canonical["superseded_reason"] = reason
+            canonical["superseded_at_utc"] = _now()
+            canonical["historical_source_bytes_retained"] = True
+            canonical["chunk_index_retained_for_reactivation"] = True
+            deactivated.append(source_id)
+        except Exception as exc:
+            errors.append(
+                {
+                    "code": "ORPHAN_CANONICAL_INTERPRETATION_DEACTIVATION_FAILED",
+                    "canonical_source_id": source_id,
+                    "detail": f"{type(exc).__name__}: {exc}"[:500],
+                    "blocks_formal_understanding": True,
+                }
+            )
+    registry.setdefault("audit_events", []).append(
+        {
+            "event": "deactivate_unreferenced_canonical_interpretations",
+            "at_utc": _now(),
+            "actor": clean_actor,
+            "canonical_source_ids": deactivated,
+            "reason": reason,
+            "historical_source_bytes_retained": True,
+            "error_count": len(errors),
+        }
+    )
+    _save_registry(project, resolved_root, registry)
+    return {
+        "status": "BLOCKED" if errors else "PASS",
+        "deactivated_canonical_source_ids": deactivated,
+        "historical_source_bytes_retained": True,
+        "errors": errors,
+    }
 
 
 def _register_occurrence(
     registry: dict[str, Any],
     *,
     project: str,
+    root: Path,
     actor: dict[str, Any],
     canonical: dict[str, Any],
     result_row: dict[str, Any],
     envelope: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
+) -> tuple[dict[str, Any], bool, set[str]]:
     source_id = _text(canonical.get("source_id"))
     content_hash = _text(canonical.get("content_hash"))
     if not source_id or not content_hash:
@@ -263,6 +482,13 @@ def _register_occurrence(
     if not source_ref:
         raise SourceOccurrenceIngestionError(f"SOURCE_REF_MISSING:{source_id}")
     interpretation_id = _interpretation_asset_id(content_hash, source_type, fmt)
+    _neutralize_canonical(canonical, interpretation_id)
+    _reactivate_canonical_if_needed(
+        project=project,
+        root=root,
+        actor=actor,
+        canonical=canonical,
+    )
     occurrence_id = _source_occurrence_id(project, source_ref, content_hash, interpretation_id)
     occurrences = _registry_rows(registry, "source_occurrences")
     existing = next(
@@ -270,13 +496,20 @@ def _register_occurrence(
         None,
     )
     if existing is not None:
-        return existing, False
+        return existing, False, set()
 
-    same_ref = [
+    previous = [
         item
         for item in occurrences
         if item.get("status") == "active" and _portable_ref(item.get("source_ref")) == source_ref
     ]
+    orphan_candidates: set[str] = set()
+    for item in previous:
+        item["status"] = "superseded"
+        item["superseded_at_utc"] = _now()
+        item["superseded_by_occurrence_id"] = occurrence_id
+        orphan_candidates.add(_text(item.get("canonical_source_id")))
+        _unlink_occurrence(registry, item)
     version = max(
         [
             int(item.get("version") or 0)
@@ -285,11 +518,6 @@ def _register_occurrence(
         ],
         default=0,
     ) + 1
-    for item in same_ref:
-        item["status"] = "superseded"
-        item["superseded_at_utc"] = _now()
-        item["superseded_by_occurrence_id"] = occurrence_id
-
     content_id = _content_asset_id(content_hash)
     occurrence = {
         "schema": SOURCE_OCCURRENCE_SCHEMA,
@@ -303,7 +531,7 @@ def _register_occurrence(
         "source_type": source_type,
         "format_identity": fmt,
         "filename": _text(canonical.get("original_name")),
-        "logical_key": _text(canonical.get("logical_key")),
+        "source_occurrence_logical_key": _text(canonical.get("source_occurrence_logical_key")),
         "archive_provenance": dict(result_row.get("archive_provenance") or {}),
         "version": version,
         "status": "active",
@@ -326,7 +554,6 @@ def _register_occurrence(
         source_ref=source_ref,
     )
     canonical["content_asset_id"] = content_id
-    canonical["interpretation_asset_id"] = interpretation_id
     _add_unique(canonical, "source_occurrence_ids", occurrence_id)
     _add_unique(canonical, "source_refs", source_ref)
     canonical["active_source_occurrence_count"] = sum(
@@ -334,7 +561,8 @@ def _register_occurrence(
         and _text(item.get("canonical_source_id")) == source_id
         for item in occurrences
     )
-    return occurrence, True
+    orphan_candidates.discard(source_id)
+    return occurrence, True, orphan_candidates
 
 
 def _register_child_result(
@@ -344,11 +572,12 @@ def _register_child_result(
     actor: dict[str, Any],
     envelope: dict[str, Any],
     child: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     registry = _load_registry(project, root)
     created_occurrences: list[dict[str, Any]] = []
     duplicate_occurrences: list[dict[str, Any]] = []
-    rows = [
+    orphan_candidates: set[str] = set()
+    result_rows = [
         (dict(row), True)
         for row in child.get("created") or []
         if isinstance(row, dict)
@@ -357,16 +586,18 @@ def _register_child_result(
         for row in child.get("duplicates") or []
         if isinstance(row, dict)
     ]
-    for result_row, canonical_created in rows:
+    for result_row, canonical_created in result_rows:
         canonical = _canonical_for_result(registry, result_row)
-        occurrence, occurrence_created = _register_occurrence(
+        occurrence, occurrence_created, newly_orphaned = _register_occurrence(
             registry,
             project=project,
+            root=root,
             actor=actor,
             canonical=canonical,
             result_row=result_row,
             envelope=envelope,
         )
+        orphan_candidates.update(newly_orphaned)
         projected = {**dict(occurrence), "canonical_source_was_created": canonical_created}
         (created_occurrences if occurrence_created else duplicate_occurrences).append(projected)
 
@@ -377,6 +608,8 @@ def _register_child_result(
             "same_interpretation_content_parsed_once": True,
             "different_interpretation_content_reuse_fails_closed": True,
             "source_occurrence_identity_authority": "SOURCE_OCCURRENCE_REGISTRY",
+            "canonical_interpretations_are_provenance_neutral": True,
+            "source_paths_control_only_occurrence_lifecycle": True,
         }
     )
     registry.setdefault("audit_events", []).append(
@@ -384,16 +617,77 @@ def _register_child_result(
             "event": "register_source_occurrences",
             "at_utc": _now(),
             "actor": actor,
-            "created_source_occurrence_ids": [
-                row["source_occurrence_id"] for row in created_occurrences
-            ],
-            "duplicate_source_occurrence_ids": [
-                row["source_occurrence_id"] for row in duplicate_occurrences
-            ],
+            "created_source_occurrence_ids": [row["source_occurrence_id"] for row in created_occurrences],
+            "duplicate_source_occurrence_ids": [row["source_occurrence_id"] for row in duplicate_occurrences],
         }
     )
     _save_registry(project, root, registry)
-    return created_occurrences, duplicate_occurrences
+    cleanup = deactivate_unreferenced_canonical_sources(
+        project,
+        orphan_candidates,
+        root=root,
+        actor=actor,
+        reason="source_occurrence_superseded",
+    )
+    return created_occurrences, duplicate_occurrences, list(cleanup.get("errors") or [])
+
+
+def _reconcile_archive_occurrences(
+    *,
+    project: str,
+    root: Path,
+    actor: dict[str, Any],
+    envelope: dict[str, Any],
+    previous_refs: set[str],
+    current_refs: set[str],
+) -> dict[str, Any]:
+    stale_refs = sorted(previous_refs - current_refs)
+    if not stale_refs:
+        return {
+            "status": "PASS",
+            "archive_ref": _archive_base_ref(envelope),
+            "retired_source_occurrence_ids": [],
+            "historical_source_bytes_retained": True,
+            "errors": [],
+        }
+    registry = _load_registry(project, root)
+    orphan_candidates: set[str] = set()
+    retired: list[str] = []
+    for occurrence in _registry_rows(registry, "source_occurrences"):
+        if occurrence.get("status") != "active" or _text(occurrence.get("source_ref")) not in stale_refs:
+            continue
+        occurrence["status"] = "retired_archive_member"
+        occurrence["retired_at_utc"] = _now()
+        occurrence["retired_reason"] = "member_absent_from_new_archive_version"
+        retired.append(_text(occurrence.get("source_occurrence_id")))
+        orphan_candidates.add(_text(occurrence.get("canonical_source_id")))
+        _unlink_occurrence(registry, occurrence)
+    registry.setdefault("audit_events", []).append(
+        {
+            "event": "reconcile_archive_source_occurrences",
+            "at_utc": _now(),
+            "actor": actor,
+            "archive_ref": _archive_base_ref(envelope),
+            "stale_source_refs": stale_refs,
+            "retired_source_occurrence_ids": retired,
+            "historical_source_bytes_retained": True,
+        }
+    )
+    _save_registry(project, root, registry)
+    cleanup = deactivate_unreferenced_canonical_sources(
+        project,
+        orphan_candidates,
+        root=root,
+        actor=actor,
+        reason="archive_source_occurrence_removed",
+    )
+    return {
+        "status": "BLOCKED" if cleanup.get("errors") else "PASS",
+        "archive_ref": _archive_base_ref(envelope),
+        "retired_source_occurrence_ids": retired,
+        "historical_source_bytes_retained": True,
+        "errors": list(cleanup.get("errors") or []),
+    }
 
 
 def _merge_child(aggregate: dict[str, Any], child: dict[str, Any]) -> None:
@@ -446,6 +740,7 @@ def ingest_enterprise_knowledge_documents(
         "warnings": [],
         "source_occurrences": [],
         "duplicate_source_occurrences": [],
+        "source_occurrence_reconciliations": [],
         "rolled_back_archives": [],
         "archive_reconciliations": [],
         "archive_expansion": {
@@ -468,6 +763,20 @@ def ingest_enterprise_knowledge_documents(
             )
             continue
         envelope = dict(raw)
+        registry_before = _load_registry(project, resolved_root)
+        if _prepare_existing_canonical_identities(registry_before):
+            _save_registry(project, resolved_root, registry_before)
+        archive_transport = _atomic._is_archive_transport(envelope)
+        prefix = _archive_prefix(envelope) if archive_transport else ""
+        previous_archive_refs = {
+            _text(row.get("source_ref"))
+            for row in registry_before.get("source_occurrences") or []
+            if isinstance(row, dict)
+            and row.get("status") == "active"
+            and prefix
+            and _text(row.get("source_ref")).startswith(prefix)
+        }
+
         child = _atomic.ingest_enterprise_knowledge_documents(
             project, [envelope], root=resolved_root, actor=clean_actor
         )
@@ -475,7 +784,7 @@ def ingest_enterprise_knowledge_documents(
         if child.get("errors"):
             continue
         try:
-            created, duplicates = _register_child_result(
+            created, duplicates, registration_errors = _register_child_result(
                 project=project,
                 root=resolved_root,
                 actor=clean_actor,
@@ -484,6 +793,23 @@ def ingest_enterprise_knowledge_documents(
             )
             aggregate["source_occurrences"].extend(created)
             aggregate["duplicate_source_occurrences"].extend(duplicates)
+            aggregate["errors"].extend(registration_errors)
+            if archive_transport:
+                current_refs = {
+                    _text(row.get("source_ref"))
+                    for row in [*created, *duplicates]
+                    if _text(row.get("source_ref"))
+                }
+                reconciliation = _reconcile_archive_occurrences(
+                    project=project,
+                    root=resolved_root,
+                    actor=clean_actor,
+                    envelope=envelope,
+                    previous_refs=previous_archive_refs,
+                    current_refs=current_refs,
+                )
+                aggregate["source_occurrence_reconciliations"].append(reconciliation)
+                aggregate["errors"].extend(reconciliation.get("errors") or [])
         except SourceOccurrenceIngestionError as exc:
             aggregate["errors"].append(
                 {
@@ -511,17 +837,19 @@ def ingest_enterprise_knowledge_documents(
             "source_count": len(active_sources),
             "source_occurrence_count": len(active_occurrences),
             "content_asset_count": len(_registry_rows(registry, "content_assets")),
-            "interpretation_asset_count": len(
-                _registry_rows(registry, "interpretation_assets")
-            ),
+            "interpretation_asset_count": len(_registry_rows(registry, "interpretation_assets")),
             "ok": not aggregate["errors"],
             "rebuild_recommended": bool(
-                aggregate["created"] or aggregate["source_occurrences"]
+                aggregate["created"]
+                or aggregate["source_occurrences"]
+                or aggregate["source_occurrence_reconciliations"]
             ),
             "content_identity_separate_from_source_occurrence": True,
             "interpretation_identity_separate_from_content_identity": True,
             "same_interpretation_content_parsed_once": True,
             "different_interpretation_content_reuse_fails_closed": True,
+            "canonical_interpretations_are_provenance_neutral": True,
+            "historical_source_bytes_retained": True,
             "atomic_transport_authority": "atomic_ingestion",
             "canonical_document_activation_authority": "_crud",
         }
@@ -558,6 +886,7 @@ __all__ = [
     "INTERPRETATION_ASSET_SCHEMA",
     "SOURCE_OCCURRENCE_SCHEMA",
     "SourceOccurrenceIngestionError",
+    "deactivate_unreferenced_canonical_sources",
     "ingest_enterprise_knowledge_documents",
     "ingest_enterprise_knowledge_files",
 ]
