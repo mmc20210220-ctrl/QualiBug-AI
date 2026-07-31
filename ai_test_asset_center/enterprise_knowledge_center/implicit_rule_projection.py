@@ -6,6 +6,11 @@ independent cross-source facts, validates them through ``_candidate_validation``
 and promotes only accepted candidates into ``rule_library``. The existing Behavior
 IR compiler then turns those rows into invariants and the existing obligation/
 experiment/oracle chain remains the sole execution authority.
+
+The projection is intentionally idempotent. The enterprise cognition boundary can
+run twice when a structure-first compiler upgrades the same fact ledger; every run
+replaces prior derived rules, relations, risks, oracles and gaps from the current
+fact authority instead of accumulating stale projection artifacts.
 """
 from __future__ import annotations
 
@@ -21,6 +26,11 @@ from ._candidate_validation import (
 )
 
 SCHEMA_VERSION = "qualibug.implicit-rule-projection.v1"
+_INVALID_SOURCE_IDS = frozenset({"", "unknown", "unspecified", "*"})
+_DERIVATION = "implicit_rule_entailment"
+_IMPLICIT_GAP_KINDS = frozenset(
+    {"IMPLICIT_RULE_AUTHORITY_INSUFFICIENT", "IMPLICIT_RULE_CONFLICTED"}
+)
 
 
 def _text(value: Any) -> str:
@@ -70,7 +80,7 @@ def _source_ref(
     fact_ref: Any = "",
 ) -> dict[str, Any]:
     return {
-        "source_id": _text(source_id) or "unknown",
+        "source_id": _text(source_id),
         "source_locator": _text(locator),
         "kind": kind,
         "fact_ref": _text(fact_ref),
@@ -82,7 +92,8 @@ def _source_ids(refs: Iterable[dict[str, Any]]) -> list[str]:
         {
             _text(row.get("source_id"))
             for row in refs
-            if isinstance(row, dict) and _text(row.get("source_id"))
+            if isinstance(row, dict)
+            and _text(row.get("source_id")).lower() not in _INVALID_SOURCE_IDS
         }
     )
 
@@ -137,9 +148,15 @@ def _rule_candidate(
         "scope": dict(scope or {}),
         "exceptions": list(exceptions or []),
         "derivation_basis": list(derivation_basis),
-        "supporting_fact_refs": sorted({_text(value) for value in supporting_fact_refs if _text(value)}),
+        "supporting_fact_refs": sorted(
+            {_text(value) for value in supporting_fact_refs if _text(value)}
+        ),
         "contradicting_fact_refs": sorted(
-            {_text(value) for value in (contradicting_fact_refs or []) if _text(value)}
+            {
+                _text(value)
+                for value in (contradicting_fact_refs or [])
+                if _text(value)
+            }
         ),
         "source_refs": source_refs,
         "supporting_source_ids": sources,
@@ -228,7 +245,14 @@ def _schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
         locator = _text(row.get("source_locator") or row.get("locator"))
         fact_ref = field_ref
         constraints = _constraint_text(row)
-        refs = [_source_ref(source_id, locator=locator, kind="formal_schema_constraint", fact_ref=fact_ref)]
+        refs = [
+            _source_ref(
+                source_id,
+                locator=locator,
+                kind="formal_schema_constraint",
+                fact_ref=fact_ref,
+            )
+        ]
         base = {
             "source_refs": refs,
             "supporting_fact_refs": [fact_ref],
@@ -252,10 +276,15 @@ def _schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
                 _rule_candidate(
                     logical_form="REQUIRED_FIELD",
                     statement=f"{table}.{field} 必须有值",
-                    antecedents=[{"entity_ref": table_ref, "predicate": "record_exists"}],
+                    antecedents=[
+                        {"entity_ref": table_ref, "predicate": "record_exists"}
+                    ],
                     consequent={"field_ref": field_ref, "operator": "not_null"},
                     observation_requirements=["field_value"],
-                    counterexample_plan={"mutate": "omit_or_null", "observe": field_ref},
+                    counterexample_plan={
+                        "mutate": "omit_or_null",
+                        "observe": field_ref,
+                    },
                     risk_type="validation",
                     **base,
                 )
@@ -275,10 +304,15 @@ def _schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
                 _rule_candidate(
                     logical_form="UNIQUENESS",
                     statement=f"{table}.{field} 的值必须唯一",
-                    antecedents=[{"entity_ref": table_ref, "predicate": "two_records_exist"}],
+                    antecedents=[
+                        {"entity_ref": table_ref, "predicate": "two_records_exist"}
+                    ],
                     consequent={"field_ref": field_ref, "operator": "unique"},
                     observation_requirements=["collection_values"],
-                    counterexample_plan={"mutate": "duplicate_value", "observe": field_ref},
+                    counterexample_plan={
+                        "mutate": "duplicate_value",
+                        "observe": field_ref,
+                    },
                     risk_type="data_integrity",
                     **base,
                 )
@@ -290,14 +324,19 @@ def _schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
                 _rule_candidate(
                     logical_form="DOMAIN_MEMBERSHIP",
                     statement=f"{table}.{field} 只能取声明枚举值",
-                    antecedents=[{"entity_ref": table_ref, "predicate": "record_exists"}],
+                    antecedents=[
+                        {"entity_ref": table_ref, "predicate": "record_exists"}
+                    ],
                     consequent={
                         "field_ref": field_ref,
                         "operator": "in",
                         "values": enum_values,
                     },
                     observation_requirements=["field_value"],
-                    counterexample_plan={"mutate": "outside_enum", "observe": field_ref},
+                    counterexample_plan={
+                        "mutate": "outside_enum",
+                        "observe": field_ref,
+                    },
                     risk_type="validation",
                     **base,
                 )
@@ -306,7 +345,10 @@ def _schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
         minimum = row.get("minimum")
         maximum = row.get("maximum")
         if minimum is not None or maximum is not None:
-            consequent: dict[str, Any] = {"field_ref": field_ref, "operator": "range"}
+            consequent: dict[str, Any] = {
+                "field_ref": field_ref,
+                "operator": "range",
+            }
             if minimum is not None:
                 consequent["minimum"] = minimum
             if maximum is not None:
@@ -315,10 +357,15 @@ def _schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
                 _rule_candidate(
                     logical_form="VALUE_BOUND",
                     statement=f"{table}.{field} 必须满足声明的数值边界",
-                    antecedents=[{"entity_ref": table_ref, "predicate": "record_exists"}],
+                    antecedents=[
+                        {"entity_ref": table_ref, "predicate": "record_exists"}
+                    ],
                     consequent=consequent,
                     observation_requirements=["field_value"],
-                    counterexample_plan={"mutate": "outside_declared_range", "observe": field_ref},
+                    counterexample_plan={
+                        "mutate": "outside_declared_range",
+                        "observe": field_ref,
+                    },
                     risk_type="validation",
                     **base,
                 )
@@ -326,19 +373,36 @@ def _schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
 
         foreign = row.get("foreign_key") or row.get("references") or row.get("ref_table")
         if foreign:
-            target_ref = _text(foreign) if not isinstance(foreign, dict) else _text(
-                foreign.get("table") or foreign.get("target") or foreign.get("ref")
+            target_ref = (
+                _text(foreign)
+                if not isinstance(foreign, dict)
+                else _text(
+                    foreign.get("table")
+                    or foreign.get("target")
+                    or foreign.get("ref")
+                )
             )
             if target_ref:
                 candidates.append(
                     _rule_candidate(
                         logical_form="REFERENTIAL_INTEGRITY",
-                        statement=f"{table}.{field} 必须引用存在的 {_text(target_ref)} 记录",
-                        antecedents=[{"entity_ref": table_ref, "field_ref": field_ref}],
-                        consequent={"target_ref": target_ref, "operator": "reference_exists"},
+                        statement=f"{table}.{field} 必须引用存在的 {target_ref} 记录",
+                        antecedents=[
+                            {"entity_ref": table_ref, "field_ref": field_ref}
+                        ],
+                        consequent={
+                            "target_ref": target_ref,
+                            "operator": "reference_exists",
+                        },
                         subject_refs=[table_ref, target_ref],
-                        observation_requirements=["foreign_key_value", "referenced_record"],
-                        counterexample_plan={"mutate": "unknown_reference", "observe": target_ref},
+                        observation_requirements=[
+                            "foreign_key_value",
+                            "referenced_record",
+                        ],
+                        counterexample_plan={
+                            "mutate": "unknown_reference",
+                            "observe": target_ref,
+                        },
                         risk_type="data_integrity",
                         source_refs=refs,
                         supporting_fact_refs=[fact_ref],
@@ -366,15 +430,19 @@ def _api_schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(operation, dict):
             continue
         schema = _request_schema(operation)
-        if not schema:
+        operation_ref = _text(
+            operation.get("interface_id") or operation.get("operation_id")
+        )
+        if not schema or not operation_ref:
             continue
-        operation_ref = _text(operation.get("interface_id") or operation.get("operation_id"))
         source_id = _text(operation.get("source_id"))
         locator = _text(operation.get("source_locator") or operation.get("path"))
         method = _text(operation.get("method")).upper()
         path = _text(operation.get("path"))
         properties = _dict(schema.get("properties"))
-        required = {_text(value) for value in _list(schema.get("required")) if _text(value)}
+        required = {
+            _text(value) for value in _list(schema.get("required")) if _text(value)
+        }
         for field, spec_value in properties.items():
             spec = _dict(spec_value)
             field_ref = f"operation_field:{operation_ref}:{field}"
@@ -400,10 +468,21 @@ def _api_schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
                     _rule_candidate(
                         logical_form="REQUIRED_FIELD",
                         statement=f"{method} {path} 请求字段 {field} 必须有值",
-                        antecedents=[{"operation_ref": operation_ref, "predicate": "request_sent"}],
-                        consequent={"field_ref": field_ref, "operator": "not_null"},
+                        antecedents=[
+                            {
+                                "operation_ref": operation_ref,
+                                "predicate": "request_sent",
+                            }
+                        ],
+                        consequent={
+                            "field_ref": field_ref,
+                            "operator": "not_null",
+                        },
                         observation_requirements=["http_response"],
-                        counterexample_plan={"mutate": "omit_or_null", "observe": "http_response"},
+                        counterexample_plan={
+                            "mutate": "omit_or_null",
+                            "observe": "http_response",
+                        },
                         risk_type="validation",
                         **base,
                     )
@@ -413,17 +492,34 @@ def _api_schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
                 candidates.append(
                     _rule_candidate(
                         logical_form="DOMAIN_MEMBERSHIP",
-                        statement=f"{method} {path} 请求字段 {field} 只能取声明枚举值",
-                        antecedents=[{"operation_ref": operation_ref, "predicate": "request_sent"}],
-                        consequent={"field_ref": field_ref, "operator": "in", "values": enum_values},
+                        statement=(
+                            f"{method} {path} 请求字段 {field} 只能取声明枚举值"
+                        ),
+                        antecedents=[
+                            {
+                                "operation_ref": operation_ref,
+                                "predicate": "request_sent",
+                            }
+                        ],
+                        consequent={
+                            "field_ref": field_ref,
+                            "operator": "in",
+                            "values": enum_values,
+                        },
                         observation_requirements=["http_response"],
-                        counterexample_plan={"mutate": "outside_enum", "observe": "http_response"},
+                        counterexample_plan={
+                            "mutate": "outside_enum",
+                            "observe": "http_response",
+                        },
                         risk_type="validation",
                         **base,
                     )
                 )
             if spec.get("minimum") is not None or spec.get("maximum") is not None:
-                bound: dict[str, Any] = {"field_ref": field_ref, "operator": "range"}
+                bound: dict[str, Any] = {
+                    "field_ref": field_ref,
+                    "operator": "range",
+                }
                 if spec.get("minimum") is not None:
                     bound["minimum"] = spec.get("minimum")
                 if spec.get("maximum") is not None:
@@ -432,10 +528,18 @@ def _api_schema_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
                     _rule_candidate(
                         logical_form="VALUE_BOUND",
                         statement=f"{method} {path} 请求字段 {field} 必须满足声明边界",
-                        antecedents=[{"operation_ref": operation_ref, "predicate": "request_sent"}],
+                        antecedents=[
+                            {
+                                "operation_ref": operation_ref,
+                                "predicate": "request_sent",
+                            }
+                        ],
                         consequent=bound,
                         observation_requirements=["http_response"],
-                        counterexample_plan={"mutate": "outside_declared_range", "observe": "http_response"},
+                        counterexample_plan={
+                            "mutate": "outside_declared_range",
+                            "observe": "http_response",
+                        },
                         risk_type="validation",
                         **base,
                     )
@@ -472,7 +576,13 @@ def _operation_resource_tokens(operation: dict[str, Any]) -> set[str]:
     for value in values:
         for token in re.split(r"[/{}:_\-]+", value):
             normalized = _singular(token)
-            if normalized and normalized not in {"api", "v1", "v2", "v3", "admin"}:
+            if normalized and normalized not in {
+                "api",
+                "v1",
+                "v2",
+                "v3",
+                "admin",
+            }:
                 tokens.add(normalized)
     return tokens
 
@@ -484,7 +594,11 @@ def _permission_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
     for permission in _list(asset.get("permission_matrix")):
         if not isinstance(permission, dict):
             continue
-        role = _text(permission.get("role") or permission.get("actor") or permission.get("principal"))
+        role = _text(
+            permission.get("role")
+            or permission.get("actor")
+            or permission.get("principal")
+        )
         resource = _text(permission.get("resource"))
         scope_key = _norm(permission.get("scope"))
         if not role or not resource or scope_key not in _SCOPE_FIELD_MARKERS:
@@ -518,29 +632,41 @@ def _permission_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
             (
                 row
                 for row in field_rows
-                if _singular(row.get("table") or row.get("entity")) == _singular(table_name)
-                and any(marker == _norm(row.get("field") or row.get("name")) for marker in scope_markers)
+                if _singular(row.get("table") or row.get("entity"))
+                == _singular(table_name)
+                and any(
+                    marker == _norm(row.get("field") or row.get("name"))
+                    for marker in scope_markers
+                )
             ),
             None,
         )
         if not isinstance(scope_field, dict):
             continue
         field_name = _text(scope_field.get("field") or scope_field.get("name"))
-        field_ref = _text(scope_field.get("field_id")) or f"field:{_norm(table_name)}.{_norm(field_name)}"
-        operations = [
-            operation
-            for operation in _list(asset.get("interfaces"))
-            if isinstance(operation, dict)
-            and resource_key in _operation_resource_tokens(operation)
-            and any(action in _norm(operation.get("path") or operation.get("summary")) for action in actions)
-        ]
-        if not operations:
+        field_ref = _text(scope_field.get("field_id")) or (
+            f"field:{_norm(table_name)}.{_norm(field_name)}"
+        )
+        operation_pairs: list[tuple[dict[str, Any], str]] = []
+        for operation in _list(asset.get("interfaces")):
+            if not isinstance(operation, dict):
+                continue
+            operation_ref = _text(
+                operation.get("interface_id") or operation.get("operation_id")
+            )
+            if not operation_ref:
+                continue
+            if resource_key not in _operation_resource_tokens(operation):
+                continue
+            operation_text = _norm(
+                operation.get("path") or operation.get("summary")
+            )
+            if not any(action in operation_text for action in actions):
+                continue
+            operation_pairs.append((operation, operation_ref))
+        if not operation_pairs:
             continue
-        operation_refs = [
-            _text(row.get("interface_id") or row.get("operation_id"))
-            for row in operations
-            if _text(row.get("interface_id") or row.get("operation_id"))
-        ]
+        operation_refs = [operation_ref for _, operation_ref in operation_pairs]
         permission_ref = _text(permission.get("permission_id")) or _stable_id(
             "permission", role, resource, actions, scope_key
         )
@@ -560,11 +686,13 @@ def _permission_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
             *[
                 _source_ref(
                     operation.get("source_id"),
-                    locator=operation.get("source_locator") or operation.get("path"),
+                    locator=(
+                        operation.get("source_locator") or operation.get("path")
+                    ),
                     kind="operation_contract",
                     fact_ref=operation_ref,
                 )
-                for operation, operation_ref in zip(operations, operation_refs)
+                for operation, operation_ref in operation_pairs
             ],
         ]
         conflict_refs = _matching_conflict_refs(asset, role, resource, field_name)
@@ -594,14 +722,20 @@ def _permission_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
                 table_refs=[table_ref],
                 field_refs=[field_ref],
                 scope={"kind": scope_key, "field_ref": field_ref},
-                observation_requirements=["actor_identity", "resource_identity", "scope_field"],
+                observation_requirements=[
+                    "actor_identity",
+                    "resource_identity",
+                    "scope_field",
+                ],
                 counterexample_plan={
                     "control": "within_scope_resource",
                     "treatment": "outside_scope_resource",
                     "observe": "access_decision_and_resource_identity",
                 },
                 contradicting_fact_refs=conflict_refs,
-                risk_type="isolation" if "tenant" in scope_key else "authorization",
+                risk_type=(
+                    "isolation" if "tenant" in scope_key else "authorization"
+                ),
                 severity="P1",
                 confidence=0.86,
             )
@@ -609,35 +743,45 @@ def _permission_rule_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
     return candidates
 
 
-def _matching_conflict_refs(
-    asset: dict[str, Any], *needles: Any
-) -> list[str]:
+def _matching_conflict_refs(asset: dict[str, Any], *needles: Any) -> list[str]:
     normalized = {_norm(value) for value in needles if _norm(value)}
     refs: list[str] = []
     for row in _list(asset.get("cross_document_conflicts")):
         if not isinstance(row, dict):
             continue
-        text = _norm(
+        conflict_text = _norm(
             " ".join(
                 _text(row.get(field))
-                for field in ("entity", "reason", "detail", "statement", "conflict_type")
+                for field in (
+                    "entity",
+                    "reason",
+                    "detail",
+                    "statement",
+                    "conflict_type",
+                )
             )
         )
-        if normalized and any(value and value in text for value in normalized):
+        if normalized and any(
+            value and value in conflict_text for value in normalized
+        ):
             refs.append(
                 _text(row.get("conflict_id") or row.get("id"))
-                or _stable_id("conflict", text)
+                or _stable_id("conflict", conflict_text)
             )
     return sorted(set(refs))
 
 
-def _industry_prior_candidates(
+def _partition_existing_rules(
     rules: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Keep source rules, quarantine industry priors and replace old projections."""
     retained: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     for rule in rules:
         if not isinstance(rule, dict):
+            continue
+        if _text(rule.get("derivation")) == _DERIVATION:
+            # Recomputed from the current fact ledger below.
             continue
         if _text(rule.get("source_id")) != "industry_inference" and _text(
             rule.get("source_type")
@@ -647,7 +791,9 @@ def _industry_prior_candidates(
         statement = _text(rule.get("statement") or rule.get("expected"))
         if not statement:
             continue
-        rule_id = _text(rule.get("rule_id")) or _stable_id("industry_rule", statement)
+        rule_id = _text(rule.get("rule_id")) or _stable_id(
+            "industry_rule", statement
+        )
         candidates.append(
             _rule_candidate(
                 logical_form="PRIOR_HYPOTHESIS",
@@ -663,18 +809,41 @@ def _industry_prior_candidates(
                 supporting_fact_refs=[rule_id],
                 source_authority="industry_prior",
                 derivation_basis=["industry_prior"],
-                antecedents=list(_dict(rule.get("structured_expression")).get("antecedents") or []),
-                consequent=dict(_dict(rule.get("structured_expression")).get("consequent") or {}),
+                antecedents=list(
+                    _dict(rule.get("structured_expression")).get("antecedents")
+                    or []
+                ),
+                consequent=dict(
+                    _dict(rule.get("structured_expression")).get("consequent")
+                    or {}
+                ),
                 subject_refs=list(rule.get("subject_refs") or []),
                 operation_refs=list(rule.get("operation_refs") or []),
                 risk_type=_text(rule.get("risk_type") or "business_logic"),
                 severity=_text(rule.get("severity") or "P2"),
-                observation_requirements=["independent_customer_source_confirmation"],
-                counterexample_plan={"action": "seek_independent_customer_source_or_runtime_contract"},
+                observation_requirements=[
+                    "independent_customer_source_confirmation"
+                ],
+                counterexample_plan={
+                    "action": (
+                        "seek_independent_customer_source_or_runtime_contract"
+                    )
+                },
                 confidence=min(0.45, float(rule.get("confidence") or 0.4)),
             )
         )
     return retained, candidates
+
+
+def _prior_proposal_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
+    """Carry non-authoritative priors across a second idempotent projection pass."""
+    return [
+        dict(row)
+        for row in _list(asset.get("implicit_rule_candidates"))
+        if isinstance(row, dict)
+        and _text(row.get("kind")) == "rule"
+        and _text(row.get("logical_form")) == "PRIOR_HYPOTHESIS"
+    ]
 
 
 def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -707,23 +876,31 @@ def _dedupe_by_id(rows: list[dict[str, Any]], field: str) -> list[dict[str, Any]
 def _project_relationships(
     existing: list[dict[str, Any]], accepted_rules: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    rows = [dict(row) for row in existing if isinstance(row, dict)]
+    rows = [
+        dict(row)
+        for row in existing
+        if isinstance(row, dict) and _text(row.get("derivation")) != _DERIVATION
+    ]
     for rule in accepted_rules:
         rule_id = _text(rule.get("rule_id"))
         for table_ref in _list(rule.get("table_refs")):
             if _text(table_ref):
                 rows.append(
                     {
-                        "edge_id": _stable_id("edge", rule_id, "rule_to_table", table_ref),
+                        "edge_id": _stable_id(
+                            "edge", rule_id, "rule_to_table", table_ref
+                        ),
                         "from": rule_id,
                         "to": _text(table_ref),
                         "relation": "rule_to_table",
                         "confidence": 1.0,
                         "status": "accepted",
-                        "derivation": "implicit_rule_entailment",
+                        "derivation": _DERIVATION,
                         "evidence": {
                             "candidate_id": rule.get("candidate_id"),
-                            "supporting_fact_refs": rule.get("supporting_fact_refs"),
+                            "supporting_fact_refs": rule.get(
+                                "supporting_fact_refs"
+                            ),
                         },
                     }
                 )
@@ -731,16 +908,23 @@ def _project_relationships(
             if _text(operation_ref):
                 rows.append(
                     {
-                        "edge_id": _stable_id("edge", rule_id, "rule_to_interface", operation_ref),
+                        "edge_id": _stable_id(
+                            "edge",
+                            rule_id,
+                            "rule_to_interface",
+                            operation_ref,
+                        ),
                         "from": rule_id,
                         "to": _text(operation_ref),
                         "relation": "rule_to_interface",
                         "confidence": 1.0,
                         "status": "accepted",
-                        "derivation": "implicit_rule_entailment",
+                        "derivation": _DERIVATION,
                         "evidence": {
                             "candidate_id": rule.get("candidate_id"),
-                            "supporting_fact_refs": rule.get("supporting_fact_refs"),
+                            "supporting_fact_refs": rule.get(
+                                "supporting_fact_refs"
+                            ),
                         },
                     }
                 )
@@ -750,8 +934,16 @@ def _project_relationships(
 def _project_risks_and_oracles(
     asset: dict[str, Any], accepted_rules: list[dict[str, Any]]
 ) -> None:
-    risks = [dict(row) for row in _list(asset.get("risk_domains")) if isinstance(row, dict)]
-    oracles = [dict(row) for row in _list(asset.get("oracle_library")) if isinstance(row, dict)]
+    risks = [
+        dict(row)
+        for row in _list(asset.get("risk_domains"))
+        if isinstance(row, dict) and _text(row.get("derivation")) != _DERIVATION
+    ]
+    oracles = [
+        dict(row)
+        for row in _list(asset.get("oracle_library"))
+        if isinstance(row, dict) and _text(row.get("derivation")) != _DERIVATION
+    ]
     for rule in accepted_rules:
         rule_id = _text(rule.get("rule_id"))
         risk_type = _text(rule.get("risk_type") or "business_logic")
@@ -765,7 +957,7 @@ def _project_risks_and_oracles(
                 "title": f"隐式规则验证：{_text(rule.get('statement'))}",
                 "expected": rule.get("statement"),
                 "evidence": list(rule.get("source_ids") or []),
-                "derivation": "implicit_rule_entailment",
+                "derivation": _DERIVATION,
                 "candidate_id": rule.get("candidate_id"),
             }
         )
@@ -777,9 +969,13 @@ def _project_risks_and_oracles(
                 "assertion": rule.get("statement"),
                 "linked_interfaces": list(rule.get("operation_refs") or []),
                 "linked_tables": list(rule.get("table_refs") or []),
-                "execution_policy": "read_only_evidence_or_governed_sandbox",
-                "evidence_requirements": list(rule.get("observation_requirements") or []),
-                "derivation": "implicit_rule_entailment",
+                "execution_policy": (
+                    "read_only_evidence_or_governed_sandbox"
+                ),
+                "evidence_requirements": list(
+                    rule.get("observation_requirements") or []
+                ),
+                "derivation": _DERIVATION,
                 "candidate_id": rule.get("candidate_id"),
             }
         )
@@ -790,24 +986,37 @@ def _project_risks_and_oracles(
 def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[str, Any]:
     """Derive, validate and promote implicit rules in the existing asset graph."""
     existing_rules = [
-        dict(row) for row in _list(asset.get("rule_library")) if isinstance(row, dict)
+        dict(row)
+        for row in _list(asset.get("rule_library"))
+        if isinstance(row, dict)
     ]
-    retained_rules, industry_candidates = _industry_prior_candidates(existing_rules)
+    retained_rules, industry_candidates = _partition_existing_rules(existing_rules)
     candidates = _dedupe_candidates(
         [
             *_schema_rule_candidates(asset),
             *_api_schema_rule_candidates(asset),
             *_permission_rule_candidates(asset),
             *industry_candidates,
+            *_prior_proposal_candidates(asset),
         ]
     )
     receipt = validate_and_promote_candidates(
         candidates,
-        interfaces=[row for row in _list(asset.get("interfaces")) if isinstance(row, dict)],
-        tables=[row for row in _list(asset.get("data_tables")) if isinstance(row, dict)],
+        interfaces=[
+            row
+            for row in _list(asset.get("interfaces"))
+            if isinstance(row, dict)
+        ],
+        tables=[
+            row
+            for row in _list(asset.get("data_tables"))
+            if isinstance(row, dict)
+        ],
         rules=retained_rules,
         state_machines=[
-            row for row in _list(asset.get("state_machines")) if isinstance(row, dict)
+            row
+            for row in _list(asset.get("state_machines"))
+            if isinstance(row, dict)
         ],
         validation_context={"asset": asset, "projection_schema": SCHEMA_VERSION},
     )
@@ -830,14 +1039,25 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
             else "READY_BEHAVIOR_IR_BINDING_REQUIRED"
         )
 
-    asset["rule_library"] = _dedupe_by_id([*retained_rules, *accepted_rules], "rule_id")
+    asset["rule_library"] = _dedupe_by_id(
+        [*retained_rules, *accepted_rules], "rule_id"
+    )
     asset["relationships"] = _project_relationships(
-        [row for row in _list(asset.get("relationships")) if isinstance(row, dict)],
+        [
+            row
+            for row in _list(asset.get("relationships"))
+            if isinstance(row, dict)
+        ],
         accepted_rules,
     )
     _project_risks_and_oracles(asset, accepted_rules)
 
-    gaps = [dict(row) for row in _list(asset.get("coverage_gaps")) if isinstance(row, dict)]
+    gaps = [
+        dict(row)
+        for row in _list(asset.get("coverage_gaps"))
+        if isinstance(row, dict)
+        and _text(row.get("kind")) not in _IMPLICIT_GAP_KINDS
+    ]
     for row in receipt.pending:
         gaps.append(
             {
@@ -846,10 +1066,13 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
                 "candidate_id": row.get("candidate_id"),
                 "logical_form": row.get("logical_form"),
                 "statement": row.get("statement"),
-                "pending_reason": row.get("reason") or row.get("pending_reason"),
+                "pending_reason": row.get("reason")
+                or row.get("pending_reason"),
                 "pending_gates": list(row.get("pending_gates") or []),
                 "source_ids": _candidate_source_ids_for_gap(row),
-                "operator_action": "provide independent source evidence or an approved runtime contract",
+                "operator_action": (
+                    "provide independent source evidence or an approved runtime contract"
+                ),
             }
         )
     for row in receipt.conflicted:
@@ -860,14 +1083,19 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
                 "candidate_id": row.get("candidate_id"),
                 "logical_form": row.get("logical_form"),
                 "statement": row.get("statement"),
-                "conflict_reason": row.get("reason") or row.get("conflict_reason"),
+                "conflict_reason": row.get("reason")
+                or row.get("conflict_reason"),
                 "conflict_sources": list(row.get("conflict_sources") or []),
-                "operator_action": "resolve source authority conflict before execution",
+                "operator_action": (
+                    "resolve source authority conflict before execution"
+                ),
             }
         )
     asset["coverage_gaps"] = gaps
 
-    counts = Counter(_text(row.get("logical_form")) or "UNKNOWN" for row in candidates)
+    counts = Counter(
+        _text(row.get("logical_form")) or "UNKNOWN" for row in candidates
+    )
     validation = receipt.to_dict()
     asset["implicit_rule_candidates"] = candidates
     asset["implicit_rule_candidate_validation_receipt"] = {
@@ -895,8 +1123,11 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
         "industry_prior_direct_authority_allowed": False,
         "runtime_convention_direct_authority_allowed": False,
         "pending_rule_execution_allowed": False,
-        "behavior_ir_authority": "existing_rule_library_to_invariant_compiler",
+        "behavior_ir_authority": (
+            "existing_rule_library_to_invariant_compiler"
+        ),
         "parallel_rule_ir_created": False,
+        "reprojection_is_idempotent": True,
     }
     summary = dict(asset.get("summary") or {})
     summary.update(
@@ -915,6 +1146,8 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
             "implicit_rules_use_existing_candidate_validation_authority": True,
             "implicit_rules_enter_existing_rule_library": True,
             "implicit_rules_create_parallel_behavior_ir": False,
+            "implicit_rule_projection_is_idempotent": True,
+            "implicit_rule_authority_requires_explicit_source_identity": True,
             "industry_prior_may_propose_but_not_authorize_rule": True,
             "runtime_convention_may_propose_but_not_authorize_rule": True,
             "rule_authority_uses_hard_gates_not_average_confidence": True,
@@ -925,7 +1158,11 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
 
 
 def _candidate_source_ids_for_gap(candidate: dict[str, Any]) -> list[str]:
-    refs = [row for row in _list(candidate.get("source_refs")) if isinstance(row, dict)]
+    refs = [
+        row
+        for row in _list(candidate.get("source_refs"))
+        if isinstance(row, dict)
+    ]
     return _source_ids(refs)
 
 
