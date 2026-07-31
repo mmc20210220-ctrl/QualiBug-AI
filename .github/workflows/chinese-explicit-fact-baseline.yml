@@ -15,6 +15,7 @@ on:
       - "tests/test_enterprise_understanding_fact_slots.py"
       - "tests/test_enterprise_understanding_fact_slot_report.py"
       - "tests/test_enterprise_understanding_post_compile_governance.py"
+      - "tests/test_enterprise_understanding_typed_relation_projection.py"
       - "tests/test_enterprise_understanding_implicit_rule_*.py"
       - "tests/test_enterprise_understanding_versioned_product_snapshot.py"
       - ".github/workflows/chinese-explicit-fact-baseline.yml"
@@ -75,6 +76,7 @@ jobs:
             tests/test_enterprise_understanding_fact_slots.py \
             tests/test_enterprise_understanding_fact_slot_report.py \
             tests/test_enterprise_understanding_post_compile_governance.py \
+            tests/test_enterprise_understanding_typed_relation_projection.py \
             tests/test_enterprise_understanding_implicit_rule_*.py \
             tests/test_enterprise_understanding_versioned_product_snapshot.py
 
