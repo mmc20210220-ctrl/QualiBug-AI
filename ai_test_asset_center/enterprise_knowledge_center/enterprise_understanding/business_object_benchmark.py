@@ -38,8 +38,43 @@ def _not_measured(reason_code: str, **details: Any) -> dict[str, Any]:
         "quality_claim_allowed": False,
         "ground_truth_generated_from_product_output": False,
         "fuzzy_or_llm_alignment_used": False,
-        "details": {key: value for key, value in details.items() if value not in (None, "", [], {})},
+        "details": {
+            key: value
+            for key, value in details.items()
+            if value not in (None, "", [], {})
+        },
     }
+
+
+def _expected_business_object(raw: dict[str, Any], expected_type: str) -> bool | None:
+    if "expected_business_object" in raw:
+        value = raw.get("expected_business_object")
+        return value if isinstance(value, bool) else None
+    if expected_type in SUPPORTED_TYPES:
+        return expected_type == OBJECT_TYPE
+    return None
+
+
+def _semantic_roles(
+    raw: dict[str, Any], expected_type: str, expected_object: bool
+) -> list[str]:
+    roles = unique_text(
+        [
+            expected_type,
+            *as_list(raw.get("semantic_roles")),
+            *as_list(raw.get("allowed_context_roles")),
+        ]
+    )
+    normalized = [
+        text(role).upper()
+        for role in roles
+        if text(role).upper() in SUPPORTED_TYPES
+    ]
+    if expected_object and OBJECT_TYPE not in normalized:
+        normalized.insert(0, OBJECT_TYPE)
+    if not normalized:
+        normalized = [OBJECT_TYPE if expected_object else "OTHER_NON_OBJECT"]
+    return unique_text(normalized)
 
 
 def _ground_truth_index(
@@ -53,6 +88,7 @@ def _ground_truth_index(
         if text(raw.get("annotation_status") or "CONFIRMED").upper() != "CONFIRMED":
             continue
         expected_type = text(raw.get("expected_type")).upper()
+        expected_object = _expected_business_object(raw, expected_type)
         labels = unique_text(
             [
                 raw.get("label"),
@@ -61,42 +97,90 @@ def _ground_truth_index(
                 *as_list(raw.get("aliases")),
             ]
         )
-        if expected_type not in SUPPORTED_TYPES or not labels:
+        raw_roles = unique_text(
+            [
+                expected_type,
+                *as_list(raw.get("semantic_roles")),
+                *as_list(raw.get("allowed_context_roles")),
+            ]
+        )
+        invalid_roles = sorted(
+            {
+                text(role).upper()
+                for role in raw_roles
+                if text(role).upper() not in SUPPORTED_TYPES
+            }
+        )
+        if expected_object is None or invalid_roles or not labels:
             conflicts.append(
                 {
                     "kind": "INVALID_BUSINESS_OBJECT_GROUND_TRUTH_ROW",
                     "position": position,
                     "expected_type": expected_type,
+                    "expected_business_object": raw.get("expected_business_object"),
+                    "invalid_semantic_roles": invalid_roles,
                     "labels": labels,
                 }
             )
             continue
+        roles = _semantic_roles(raw, expected_type, expected_object)
+        source_locators = unique_text(
+            [raw.get("source_locator"), *as_list(raw.get("source_locators"))]
+        )
+        annotation_refs = unique_text(
+            [
+                raw.get("annotation_ref"),
+                raw.get("ground_truth_id"),
+                *as_list(raw.get("annotation_refs")),
+            ]
+        )
         for label in labels:
             key = comparison_key(label)
             if not key:
                 continue
             prior = index.get(key)
-            if prior and text(prior.get("expected_type")) != expected_type:
+            if prior and bool(prior.get("expected_business_object")) != expected_object:
                 conflicts.append(
                     {
-                        "kind": "CONTRADICTORY_BUSINESS_OBJECT_TYPE_ANNOTATION",
+                        "kind": "CONTRADICTORY_BUSINESS_OBJECT_PROMOTION_ANNOTATION",
                         "comparison_key": key,
                         "labels": unique_text([prior.get("label"), label]),
-                        "expected_types": unique_text(
-                            [prior.get("expected_type"), expected_type]
+                        "expected_business_object_values": unique_text(
+                            [
+                                str(bool(prior.get("expected_business_object"))).lower(),
+                                str(expected_object).lower(),
+                            ]
+                        ),
+                        "semantic_roles": unique_text(
+                            [*as_list(prior.get("semantic_roles")), *roles]
                         ),
                     }
                 )
                 continue
+            if prior:
+                prior["semantic_roles"] = unique_text(
+                    [*as_list(prior.get("semantic_roles")), *roles]
+                )
+                prior["source_locators"] = unique_text(
+                    [*as_list(prior.get("source_locators")), *source_locators]
+                )
+                prior["annotation_refs"] = unique_text(
+                    [*as_list(prior.get("annotation_refs")), *annotation_refs]
+                )
+                prior["polysemous"] = len(prior["semantic_roles"]) > 1
+                continue
             index[key] = {
                 "comparison_key": key,
                 "label": label,
-                "expected_type": expected_type,
+                "expected_business_object": expected_object,
+                "expected_type": OBJECT_TYPE if expected_object else roles[0],
+                "semantic_roles": roles,
+                "polysemous": len(roles) > 1,
                 "criticality": text(raw.get("criticality") or "P2").upper(),
-                "source_locator": text(raw.get("source_locator")),
-                "annotation_ref": text(
-                    raw.get("annotation_ref") or raw.get("ground_truth_id")
-                ),
+                "source_locator": source_locators[0] if source_locators else "",
+                "source_locators": source_locators,
+                "annotation_ref": annotation_refs[0] if annotation_refs else "",
+                "annotation_refs": annotation_refs,
             }
     return index, conflicts
 
@@ -143,12 +227,15 @@ def _error_row(
     return {
         "comparison_key": key,
         "label": truth.get("label"),
+        "expected_business_object": truth.get("expected_business_object"),
         "expected_type": truth.get("expected_type"),
+        "semantic_roles": truth.get("semantic_roles") or [],
         "criticality": truth.get("criticality"),
         "error_type": error_type,
         "candidate_id": candidate.get("candidate_id"),
         "predicted_status": candidate.get("status") or "NOT_COLLECTED",
-        "reason_code": candidate.get("reason_code") or "OBJECT_CANDIDATE_NOT_COLLECTED",
+        "reason_code": candidate.get("reason_code")
+        or "OBJECT_CANDIDATE_NOT_COLLECTED",
         "uncertainty_surfaced": surfaced,
     }
 
@@ -199,7 +286,9 @@ def evaluate_business_object_recognition(
         )
 
     expected_objects = {
-        key for key, row in truth_by_key.items() if text(row.get("expected_type")) == OBJECT_TYPE
+        key
+        for key, row in truth_by_key.items()
+        if bool(row.get("expected_business_object"))
     }
     expected_non_objects = set(truth_by_key) - expected_objects
     true_positive = accepted & expected_objects
@@ -254,15 +343,25 @@ def evaluate_business_object_recognition(
         )
         for key in sorted(false_negative)
     ]
-    confusion_distribution = Counter(
-        text(truth_by_key[key].get("expected_type")) for key in false_positive
-    )
+    confusion_distribution: Counter[str] = Counter()
+    for key in false_positive:
+        roles = [
+            role
+            for role in as_list(truth_by_key[key].get("semantic_roles"))
+            if text(role) and text(role) != OBJECT_TYPE
+        ]
+        for role in roles or [text(truth_by_key[key].get("expected_type"))]:
+            confusion_distribution[text(role)] += 1
     missing_candidates = sorted(set(truth_by_key) - set(candidates))
+    polysemous_labels = [
+        key for key, row in truth_by_key.items() if bool(row.get("polysemous"))
+    ]
 
     metrics = {
         "annotated_label_count": len(truth_by_key),
         "expected_object_label_count": len(expected_objects),
         "expected_non_object_label_count": len(expected_non_objects),
+        "polysemous_annotated_label_count": len(polysemous_labels),
         "collected_candidate_label_count": len(candidates),
         "predicted_object_label_count": len(accepted),
         "true_positive_object_count": len(true_positive),
@@ -285,22 +384,44 @@ def evaluate_business_object_recognition(
         "benchmark_id": stable_id(
             "enterprise_business_object_benchmark",
             ground_truth.get("benchmark_id"),
-            sorted((key, row.get("expected_type")) for key, row in truth_by_key.items()),
+            sorted(
+                (
+                    key,
+                    bool(row.get("expected_business_object")),
+                    tuple(as_list(row.get("semantic_roles"))),
+                )
+                for key, row in truth_by_key.items()
+            ),
             sorted(accepted),
         ),
         "status": "MEASURED",
-        "measurement_contract": "EXTERNALLY_LABELED_CLOSED_WORLD_EXACT_OBJECT_TYPE",
+        "measurement_contract": "EXTERNALLY_LABELED_CLOSED_WORLD_OBJECT_PROMOTION",
         "quality_claim_allowed": True,
         "ground_truth_generated_from_product_output": False,
         "fuzzy_or_llm_alignment_used": False,
         "metrics": metrics,
         "false_positive_objects": false_positive_rows,
         "false_negative_objects": false_negative_rows,
+        "polysemous_annotations": [
+            {
+                "comparison_key": key,
+                "label": truth_by_key[key].get("label"),
+                "expected_business_object": truth_by_key[key].get(
+                    "expected_business_object"
+                ),
+                "semantic_roles": truth_by_key[key].get("semantic_roles") or [],
+            }
+            for key in sorted(polysemous_labels)
+        ],
         "missing_ground_truth_candidates": [
             {
                 "comparison_key": key,
                 "label": truth_by_key[key].get("label"),
+                "expected_business_object": truth_by_key[key].get(
+                    "expected_business_object"
+                ),
                 "expected_type": truth_by_key[key].get("expected_type"),
+                "semantic_roles": truth_by_key[key].get("semantic_roles") or [],
             }
             for key in missing_candidates
         ],
@@ -346,6 +467,8 @@ __all__ = [
     "ANNOTATION_SCOPE",
     "BENCHMARK_SCHEMA",
     "GROUND_TRUTH_SCHEMA",
+    "OBJECT_TYPE",
+    "SUPPORTED_TYPES",
     "evaluate_business_object_recognition",
     "project_business_object_benchmark",
 ]

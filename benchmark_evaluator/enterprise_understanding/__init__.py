@@ -4,6 +4,13 @@ Human Ground Truth stays outside ``ai_test_asset_center``. This package only rea
 persisted enterprise-understanding artifact and never writes into product runtime state.
 """
 from .alignment import align_enterprise_understanding
+from .business_object_types import (
+    BUSINESS_OBJECT_MEASUREMENT_SCHEMA,
+    BusinessObjectGroundTruthValidationError,
+    evaluate_business_object_types,
+    load_business_object_ground_truth,
+    validate_business_object_ground_truth,
+)
 from .document_ground_truth import (
     DOCUMENT_GROUND_TRUTH_KEY,
     DOCUMENT_GROUND_TRUTH_SCHEMA,
@@ -42,13 +49,18 @@ __all__ = [
     "INGESTION_EVIDENCE_SCHEMA",
     "FACT_SLOT_GROUND_TRUTH_SCHEMA",
     "FACT_SLOT_MEASUREMENT_SCHEMA",
+    "BUSINESS_OBJECT_MEASUREMENT_SCHEMA",
     "GroundTruthValidationError",
     "DocumentGroundTruthValidationError",
     "FactSlotGroundTruthValidationError",
+    "BusinessObjectGroundTruthValidationError",
     "load_ground_truth",
+    "load_business_object_ground_truth",
     "validate_ground_truth",
     "validate_document_ground_truth",
+    "validate_business_object_ground_truth",
     "evaluate_document_ground_truth",
+    "evaluate_business_object_types",
     "validate_business_fact_slot_row",
     "validate_business_fact_slot_document",
     "evaluate_business_fact_slots",
