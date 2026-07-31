@@ -278,7 +278,7 @@ def ingest_connector_snapshot(
 ) -> dict[str, Any]:
     """Ingest one externally fetched snapshot through the occurrence authority.
 
-    ``source_id`` remains a compatibility input and is recorded in the receipt. Remote identity is
+    ``source_id`` remains a compatibility input and is returned unchanged. Remote identity is
     owned by ``remote_resource_id`` (preferred), then ``external_ref``, then ``source_id``. Binary
     snapshots require a filename so existing document adapters can interpret the official export
     without a connector-specific parser.
@@ -382,6 +382,8 @@ def ingest_connector_snapshot(
     canonical_source_id = _text(occurrence.get("canonical_source_id"), 200)
     canonical = _canonical_result(result, canonical_source_id)
     runtime_manifest = dict(canonical.get("runtime_source_manifest") or {})
+    runtime_source_id = _text(runtime_manifest.get("source_id"), 200)
+    runtime_source_hash = _text(runtime_manifest.get("source_hash"), 128)
 
     return {
         **result,
@@ -408,12 +410,14 @@ def ingest_connector_snapshot(
         "source_occurrence_id": _text(
             occurrence.get("source_occurrence_id"), 200
         ),
+        "source_id": requested_source_id,
         "canonical_source_id": canonical_source_id,
-        "source_id": _text(runtime_manifest.get("source_id"), 200)
-        or canonical_source_id,
+        "knowledge_source_id": canonical_source_id,
+        "runtime_source_id": runtime_source_id,
         "content_hash": _text(occurrence.get("content_hash"), 128),
-        "source_hash": _text(runtime_manifest.get("source_hash"), 128)
+        "source_hash": runtime_source_hash
         or _text(occurrence.get("content_hash"), 128),
+        "runtime_source_hash": runtime_source_hash,
         "source_version_id": _text(
             runtime_manifest.get("source_version_id")
             or runtime_manifest.get("version_id"),
