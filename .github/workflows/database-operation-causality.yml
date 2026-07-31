@@ -11,8 +11,10 @@ on:
       - "ai_test_asset_center/operation_causality_runtime.py"
       - "ai_test_asset_center/operation_causality_runtime_attachment.py"
       - "ai_test_asset_center/operation_causality_receipt_integrity.py"
+      - "ai_test_asset_center/operation_causality_transport_authority.py"
       - "ai_test_asset_center/database_relation_delta_causality_oracle.py"
       - "ai_test_asset_center/database_relation_delta_causality_integrity.py"
+      - "ai_test_asset_center/database_relation_delta_causality_authority.py"
       - "ai_test_asset_center/database_relation_delta_causality_finding_bridge.py"
       - "ai_test_asset_center/database_relation_observer_runtime.py"
       - "ai_test_asset_center/database_relation_observer_experiment_runtime.py"
@@ -28,8 +30,11 @@ on:
       - "tests/test_database_relation_causality_runtime.py"
       - "tests/test_operation_causality_runtime.py"
       - "tests/test_operation_causality_receipt_integrity.py"
+      - "tests/test_operation_causality_transport_authority.py"
+      - "tests/test_operation_causality_private_cleanup.py"
       - "tests/test_database_relation_delta_causality_oracle.py"
       - "tests/test_database_relation_delta_causality_integrity.py"
+      - "tests/test_database_relation_delta_causality_authority.py"
       - "tests/test_database_relation_delta_causality_registration.py"
       - "tests/test_database_relation_delta_causality_contract_oracle.py"
       - "tests/test_database_relation_delta_causality_finding_bridge.py"
@@ -73,8 +78,10 @@ jobs:
             ai_test_asset_center/operation_causality_runtime.py \
             ai_test_asset_center/operation_causality_runtime_attachment.py \
             ai_test_asset_center/operation_causality_receipt_integrity.py \
+            ai_test_asset_center/operation_causality_transport_authority.py \
             ai_test_asset_center/database_relation_delta_causality_oracle.py \
             ai_test_asset_center/database_relation_delta_causality_integrity.py \
+            ai_test_asset_center/database_relation_delta_causality_authority.py \
             ai_test_asset_center/database_relation_delta_causality_finding_bridge.py \
             ai_test_asset_center/database_relation_observer_runtime.py \
             ai_test_asset_center/database_relation_observer_experiment_runtime.py \
@@ -99,8 +106,11 @@ jobs:
             tests/test_database_relation_causality_runtime.py \
             tests/test_operation_causality_runtime.py \
             tests/test_operation_causality_receipt_integrity.py \
+            tests/test_operation_causality_transport_authority.py \
+            tests/test_operation_causality_private_cleanup.py \
             tests/test_database_relation_delta_causality_oracle.py \
             tests/test_database_relation_delta_causality_integrity.py \
+            tests/test_database_relation_delta_causality_authority.py \
             tests/test_database_relation_delta_causality_registration.py \
             tests/test_database_relation_delta_causality_contract_oracle.py \
             tests/test_database_relation_delta_causality_finding_bridge.py \
