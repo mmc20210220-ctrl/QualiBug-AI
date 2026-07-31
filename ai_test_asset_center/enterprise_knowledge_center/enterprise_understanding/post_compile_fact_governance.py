@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .._chinese_business_conflicts import reconcile_chinese_business_fact_conflicts
+from .atomic_claim_projection import project_atomic_claim_facts
 from .identity_evidence_policy import apply_identity_evidence_policy
 from .typed_fact_conflicts import reconcile_typed_fact_conflicts
 
@@ -117,13 +118,14 @@ def govern_compiled_business_facts(
     project_id: str,
     root: Path,
 ) -> dict[str, Any]:
-    """Classify identities and reconcile final typed facts through existing authority.
+    """Materialize claims, classify identities, and reconcile final typed facts.
 
     The first understanding pass discovers source-backed terms and rules. Structure-first
     compilation upgrades that same ledger. This second pass never extracts from text; it
-    normalizes atomic values, classifies identity evidence, reapplies the legacy conflict
-    authority, then checks typed slots through the same durable operator ledger.
+    materializes accepted atomic data effects in the same ledger, normalizes typed values,
+    classifies identity evidence, and uses existing durable conflict authority.
     """
+    asset = project_atomic_claim_facts(asset)
     asset = _normalize_typed_fact_values(asset)
     asset = apply_identity_evidence_policy(asset)
     asset = reconcile_chinese_business_fact_conflicts(
@@ -140,6 +142,7 @@ def govern_compiled_business_facts(
     receipt.update(
         {
             "second_pass_after_structure_compilation": True,
+            "atomic_claims_materialized_in_existing_ledger": True,
             "typed_value_contract_normalized": True,
             "conflict_authority_reapplied": True,
             "typed_fact_conflicts_reconciled": True,
@@ -151,6 +154,7 @@ def govern_compiled_business_facts(
     governance.update(
         {
             "business_fact_two_pass_identity_governance": True,
+            "atomic_data_effects_become_bindable_facts": True,
             "typed_atomic_value_projection_is_single_boundary": True,
             "typed_atomic_value_projection_never_selects_multiple_claims": True,
             "identity_policy_runs_after_structure_fact_compilation": True,
