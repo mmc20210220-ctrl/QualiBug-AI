@@ -1,10 +1,14 @@
 """Reconcile typed implicit-rule promotions with one durable rule identity.
 
-Canonical parser source IDs are content-version identities. Source occurrences already
-carry stable ``source_ref`` values across those versions. This stage combines the existing
-source-rule row with typed semantics and, when occurrence identity is available, derives
-one durable rule authority ID from stable source refs plus normalized typed semantics.
-It does not create a second source registry, validator, promoter or linker.
+Canonical parser source IDs are content-version identities. Source occurrences provide
+stable evidence references, but the number or location of duplicate occurrences is not a
+business-rule identity. When both project scope and occurrence evidence are available,
+this stage derives one authority ID from ``project_id`` plus normalized typed semantics.
+Occurrence refs remain auditable evidence and never participate in the ID digest.
+
+The stage reuses the existing candidate validator/promoter, rule library, authoritative
+rule-to-interface linker, risk library and oracle library. It creates no parallel rule IR,
+source registry, validator, promoter or linker.
 """
 from __future__ import annotations
 
@@ -16,8 +20,14 @@ from typing import Any
 from ._candidate_validation import promote_validated_candidates
 from ._linking import _authoritative_rule_to_interface_edges
 
-SCHEMA_VERSION = "qualibug.implicit-rule-identity-reconciliation.v3"
+SCHEMA_VERSION = "qualibug.implicit-rule-identity-reconciliation.v4"
 _DERIVATION = "implicit_rule_entailment"
+_PROJECT_IDENTITY_AUTHORITY = (
+    "PROJECT_SCOPED_TYPED_SEMANTICS_WITH_OCCURRENCE_EVIDENCE"
+)
+_COMPATIBILITY_IDENTITY_AUTHORITY = (
+    "SOURCE_OCCURRENCE_REF_TYPED_SEMANTICS"
+)
 _IDENTITY_IGNORED_KEYS = frozenset(
     {
         "raw",
@@ -84,6 +94,18 @@ def _dedupe_by_id(rows: list[dict[str, Any]], field: str) -> list[dict[str, Any]
         seen.add(identity)
         result.append(row)
     return result
+
+
+def _unique_text(values: Any) -> list[str]:
+    return sorted({_text(value) for value in _list(values) if _text(value)})
+
+
+def _unique_dicts(values: Any) -> list[dict[str, Any]]:
+    by_value: dict[str, dict[str, Any]] = {}
+    for value in _list(values):
+        if isinstance(value, dict):
+            by_value.setdefault(_canonical(value), copy.deepcopy(value))
+    return [by_value[key] for key in sorted(by_value)]
 
 
 def _implicit_rules(asset: dict[str, Any]) -> list[dict[str, Any]]:
@@ -165,7 +187,10 @@ def _candidate_source_ids(candidate: dict[str, Any]) -> set[str]:
     return {
         value
         for value in [
-            *[_text(item) for item in _list(candidate.get("supporting_source_ids"))],
+            *[
+                _text(item)
+                for item in _list(candidate.get("supporting_source_ids"))
+            ],
             *[
                 _text(item.get("source_id"))
                 for item in _list(candidate.get("source_refs"))
@@ -238,17 +263,44 @@ def _typed_semantic_identity(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def _authority_rule_identity(
     asset: dict[str, Any], candidate: dict[str, Any], source_rule: dict[str, Any]
-) -> tuple[str, tuple[str, ...], str]:
+) -> tuple[str, tuple[str, ...], str, str]:
+    """Return durable authority ID, current evidence refs, authority and project.
+
+    The occurrence-ref set is intentionally excluded from the project-scoped digest.
+    Adding or removing a duplicate online location therefore updates evidence without
+    changing the business-rule identity. A compatibility digest is retained only for
+    direct legacy/unit assets that provide source refs but no project scope.
+    """
+
     source_rule_id = _text(source_rule.get("rule_id"))
     stable_refs = _stable_source_refs(asset, candidate, source_rule)
-    if not stable_refs:
-        return source_rule_id, (), "SOURCE_RULE_ID_FALLBACK"
-    payload = {
-        "stable_source_refs": list(stable_refs),
-        "typed_semantics": _typed_semantic_identity(candidate),
-    }
-    digest = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()[:24]
-    return f"implicit_rule:{digest}", stable_refs, "SOURCE_OCCURRENCE_REF_TYPED_SEMANTICS"
+    project_id = _text(asset.get("project_id"))
+    semantics = _typed_semantic_identity(candidate)
+    if project_id and stable_refs:
+        payload = {
+            "project_id": project_id,
+            "typed_semantics": semantics,
+        }
+        digest = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()[:24]
+        return (
+            f"implicit_rule:{digest}",
+            stable_refs,
+            _PROJECT_IDENTITY_AUTHORITY,
+            project_id,
+        )
+    if stable_refs:
+        payload = {
+            "stable_source_refs": list(stable_refs),
+            "typed_semantics": semantics,
+        }
+        digest = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()[:24]
+        return (
+            f"implicit_rule:{digest}",
+            stable_refs,
+            _COMPATIBILITY_IDENTITY_AUTHORITY,
+            "",
+        )
+    return source_rule_id, (), "SOURCE_RULE_ID_FALLBACK", project_id
 
 
 def _merge_source_and_typed_rule(
@@ -259,16 +311,22 @@ def _merge_source_and_typed_rule(
     authority_rule_id: str,
     stable_source_refs: tuple[str, ...],
     identity_authority: str,
+    identity_project_id: str,
 ) -> dict[str, Any]:
     target = _dict(candidate.get("authority_upgrade_target"))
     source_rule_id = _text(target.get("rule_id"))
+    source_origin = _source_rule_origin(source_rule)
     merged = {**copy.deepcopy(source_rule), **copy.deepcopy(typed_rule)}
     merged["rule_id"] = authority_rule_id
     merged["derivation"] = _DERIVATION
-    merged["source_rule_origin"] = _source_rule_origin(source_rule)
+    merged["source_rule_origin"] = source_origin
+    merged["source_rule_origins"] = [source_origin]
     merged["source_rule_id"] = source_rule_id
+    merged["source_rule_ids"] = [source_rule_id]
     merged["stable_source_refs"] = list(stable_source_refs)
+    merged["rule_identity_project_id"] = identity_project_id
     merged["rule_identity_authority"] = identity_authority
+    merged["occurrence_ref_set_participates_in_rule_id"] = False
     merged["authority_upgrade_target"] = {
         **copy.deepcopy(target),
         "source_rule_id": source_rule_id,
@@ -282,7 +340,9 @@ def _merge_source_and_typed_rule(
         "candidate_id": candidate.get("candidate_id"),
         "source_statement_relation": target.get("source_statement_relation"),
         "stable_source_refs": list(stable_source_refs),
+        "rule_identity_project_id": identity_project_id,
         "rule_identity_authority": identity_authority,
+        "occurrence_ref_set_participates_in_rule_id": False,
         "source_rule_identity_retained_as_origin": True,
         "typed_semantics_replaced_prose_projection": True,
         "parallel_rule_row_created": False,
@@ -295,10 +355,68 @@ def _merge_source_and_typed_rule(
         "source_rule_id": source_rule_id,
         "authority_rule_id": authority_rule_id,
         "stable_source_refs": list(stable_source_refs),
+        "rule_identity_project_id": identity_project_id,
         "rule_identity_authority": identity_authority,
+        "occurrence_ref_set_participates_in_rule_id": False,
         "typed_runtime_semantics_authoritative": True,
     }
     merged["semantic_contract"] = semantic_contract
+    return merged
+
+
+def _merge_same_authority_rule(
+    current: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
+    """Fuse independent declarations that resolve to the same project rule."""
+
+    merged = {**copy.deepcopy(current), **copy.deepcopy(incoming)}
+    merged["rule_id"] = current["rule_id"]
+    merged["stable_source_refs"] = _unique_text(
+        [
+            *current.get("stable_source_refs", []),
+            *incoming.get("stable_source_refs", []),
+        ]
+    )
+    merged["source_rule_ids"] = _unique_text(
+        [
+            *current.get("source_rule_ids", []),
+            current.get("source_rule_id"),
+            *incoming.get("source_rule_ids", []),
+            incoming.get("source_rule_id"),
+        ]
+    )
+    merged["source_rule_origins"] = _unique_dicts(
+        [
+            *current.get("source_rule_origins", []),
+            current.get("source_rule_origin"),
+            *incoming.get("source_rule_origins", []),
+            incoming.get("source_rule_origin"),
+        ]
+    )
+    for field in (
+        "source_ids",
+        "supporting_fact_refs",
+        "contradicting_fact_refs",
+        "subject_refs",
+        "actor_refs",
+        "operation_refs",
+        "table_refs",
+        "field_refs",
+        "derivation_basis",
+        "observation_requirements",
+    ):
+        merged[field] = _unique_text(
+            [*current.get(field, []), *incoming.get(field, [])]
+        )
+    merged["source_refs"] = _unique_dicts(
+        [*current.get("source_refs", []), *incoming.get("source_refs", [])]
+    )
+    receipt = _dict(merged.get("authority_upgrade_receipt"))
+    receipt["source_rule_ids"] = list(merged["source_rule_ids"])
+    receipt["stable_source_refs"] = list(merged["stable_source_refs"])
+    receipt["merged_source_rule_count"] = len(merged["source_rule_ids"])
+    receipt["multiple_occurrences_create_parallel_rules"] = False
+    merged["authority_upgrade_receipt"] = receipt
     return merged
 
 
@@ -445,7 +563,6 @@ def reconcile_implicit_rule_identities(asset: dict[str, Any]) -> dict[str, Any]:
     merged_by_authority_id: dict[str, dict[str, Any]] = {}
     source_target_ids: set[str] = set()
     missing_targets: list[dict[str, Any]] = []
-    stable_identity_count = 0
     for typed_rule in promoted:
         candidate = candidate_by_id.get(_text(typed_rule.get("candidate_id"))) or {}
         target = _dict(candidate.get("authority_upgrade_target"))
@@ -460,20 +577,41 @@ def reconcile_implicit_rule_identities(asset: dict[str, Any]) -> dict[str, Any]:
                 }
             )
             continue
-        authority_id, stable_refs, identity_authority = _authority_rule_identity(
-            asset, candidate, source_rule
-        )
-        if identity_authority == "SOURCE_OCCURRENCE_REF_TYPED_SEMANTICS":
-            stable_identity_count += 1
+        (
+            authority_id,
+            stable_refs,
+            identity_authority,
+            identity_project_id,
+        ) = _authority_rule_identity(asset, candidate, source_rule)
         source_target_ids.add(source_rule_id)
-        merged_by_authority_id[authority_id] = _merge_source_and_typed_rule(
+        merged = _merge_source_and_typed_rule(
             source_rule,
             typed_rule,
             candidate,
             authority_rule_id=authority_id,
             stable_source_refs=stable_refs,
             identity_authority=identity_authority,
+            identity_project_id=identity_project_id,
         )
+        if authority_id in merged_by_authority_id:
+            merged_by_authority_id[authority_id] = _merge_same_authority_rule(
+                merged_by_authority_id[authority_id], merged
+            )
+        else:
+            merged_by_authority_id[authority_id] = merged
+
+    project_scoped_identity_count = sum(
+        _text(rule.get("rule_identity_authority")) == _PROJECT_IDENTITY_AUTHORITY
+        for rule in merged_by_authority_id.values()
+    )
+    compatibility_identity_count = sum(
+        _text(rule.get("rule_identity_authority"))
+        == _COMPATIBILITY_IDENTITY_AUTHORITY
+        for rule in merged_by_authority_id.values()
+    )
+    stable_identity_count = (
+        project_scoped_identity_count + compatibility_identity_count
+    )
 
     if merged_by_authority_id:
         authority_ids = set(merged_by_authority_id)
@@ -509,8 +647,12 @@ def reconcile_implicit_rule_identities(asset: dict[str, Any]) -> dict[str, Any]:
         matching = [
             rule
             for rule in merged_by_authority_id.values()
-            if _text(_dict(rule.get("authority_upgrade_target")).get("source_rule_id"))
-            == source_rule_id
+            if source_rule_id in _unique_text(
+                [
+                    rule.get("source_rule_id"),
+                    *rule.get("source_rule_ids", []),
+                ]
+            )
         ]
         if len(matching) == 1:
             row["promoted_rule_id"] = matching[0]["rule_id"]
@@ -518,12 +660,20 @@ def reconcile_implicit_rule_identities(asset: dict[str, Any]) -> dict[str, Any]:
             row["stable_source_refs"] = list(
                 matching[0].get("stable_source_refs") or []
             )
+            row["rule_identity_authority"] = matching[0].get(
+                "rule_identity_authority"
+            )
+            row["occurrence_ref_set_participates_in_rule_id"] = False
+
     gate = _dict(asset.get("implicit_rule_projection_gate"))
     gate["source_rule_semantic_upgrade_count"] = len(merged_by_authority_id)
     gate["stable_rule_identity_count"] = stable_identity_count
+    gate["project_scoped_rule_identity_count"] = project_scoped_identity_count
+    gate["compatibility_rule_identity_count"] = compatibility_identity_count
     gate["exact_binding_refreshed_rule_count"] = (
         exact_binding_refreshed_rule_count
     )
+    gate["occurrence_ref_set_participates_in_rule_id"] = False
     gate["source_rule_identity_reconciliation_status"] = (
         "PASS" if not missing_targets else "BLOCKED_UPGRADE_TARGET_MISSING"
     )
@@ -539,6 +689,9 @@ def reconcile_implicit_rule_identities(asset: dict[str, Any]) -> dict[str, Any]:
         if merged_by_authority_id
         else "NO_TYPED_SOURCE_RULE_UPGRADES"
     )
+    duplicate_source_rule_count = max(
+        0, len(source_target_ids) - len(merged_by_authority_id)
+    )
     asset["implicit_rule_identity_reconciliation_receipt"] = {
         "schema": SCHEMA_VERSION,
         "status": status,
@@ -548,6 +701,9 @@ def reconcile_implicit_rule_identities(asset: dict[str, Any]) -> dict[str, Any]:
         "merged_rule_ids": sorted(merged_by_authority_id),
         "replaced_source_rule_ids": sorted(source_target_ids),
         "stable_rule_identity_count": stable_identity_count,
+        "project_scoped_rule_identity_count": project_scoped_identity_count,
+        "compatibility_rule_identity_count": compatibility_identity_count,
+        "duplicate_source_rule_count": duplicate_source_rule_count,
         "missing_targets": missing_targets,
         "exact_binding_refreshed_rule_count": exact_binding_refreshed_rule_count,
         "source_rule_identity_retained_as_origin": True,
@@ -555,9 +711,13 @@ def reconcile_implicit_rule_identities(asset: dict[str, Any]) -> dict[str, Any]:
             merged_by_authority_id
         ),
         "parallel_rule_row_created": False,
+        "multiple_occurrences_create_parallel_rules": False,
+        "occurrence_ref_set_participates_in_rule_id": False,
         "candidate_validation_authority_reused": True,
         "candidate_promotion_authority_reused": True,
-        "source_identity_authority": "SOURCE_OCCURRENCE_REGISTRY_SOURCE_REFS",
+        "source_identity_authority": (
+            "PROJECT_ID_PLUS_TYPED_SEMANTICS_WITH_SOURCE_OCCURRENCE_EVIDENCE"
+        ),
         "relationship_authority_reused": (
             "_authoritative_rule_to_interface_edges"
         ),
@@ -567,6 +727,12 @@ def reconcile_implicit_rule_identities(asset: dict[str, Any]) -> dict[str, Any]:
         merged_by_authority_id
     )
     summary["implicit_rule_stable_identity_count"] = stable_identity_count
+    summary["implicit_rule_project_scoped_identity_count"] = (
+        project_scoped_identity_count
+    )
+    summary["implicit_rule_duplicate_source_rule_count"] = (
+        duplicate_source_rule_count
+    )
     summary["implicit_rule_exact_binding_refreshed_rule_count"] = (
         exact_binding_refreshed_rule_count
     )
@@ -576,10 +742,13 @@ def reconcile_implicit_rule_identities(asset: dict[str, Any]) -> dict[str, Any]:
     governance.update(
         {
             "implicit_rule_source_identity_reconciled_before_behavior_ir": True,
-            "implicit_rule_authority_id_uses_stable_source_ref_when_available": True,
+            "implicit_rule_authority_id_uses_project_and_typed_semantics": True,
+            "implicit_rule_occurrence_refs_are_evidence_not_identity": True,
+            "implicit_rule_occurrence_ref_set_changes_preserve_rule_id": True,
             "implicit_rule_content_version_source_id_is_not_durable_rule_identity": True,
             "implicit_rule_source_rule_id_is_retained_as_origin": True,
             "implicit_rule_semantic_upgrade_creates_parallel_rule": False,
+            "implicit_rule_multiple_occurrences_create_parallel_rules": False,
             "implicit_rule_semantic_upgrade_reuses_candidate_promoter": True,
             "implicit_rule_exact_binding_reuses_existing_authority": True,
             "implicit_rule_exact_binding_refreshes_on_every_projection": True,
