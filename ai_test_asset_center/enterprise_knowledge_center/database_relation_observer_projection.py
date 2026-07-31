@@ -1,9 +1,9 @@
 """Project exact FK-scoped child collection Observer candidates.
 
 A relation candidate is derived only from a source-declared database foreign key and a
-currently runtime-bindable root database Observer contract.  It is never authoritative by
+currently runtime-bindable root database Observer contract. It is never authoritative by
 itself: the existing database mapping authority ledger must explicitly approve the relation
-for read-only observation.  No table-name, field-name, API-path or business-semantic relation
+for read-only observation. No table-name, field-name, API-path or business-semantic relation
 is inferred here.
 """
 from __future__ import annotations
@@ -128,12 +128,25 @@ def enrich_asset_with_database_relation_observer_candidates(
     gaps: list[dict[str, Any]] = []
     for root in root_contracts:
         parent_table_id = _text(root.get("database_table_id"))
+        selected_identity_key = [
+            _text(value)
+            for value in _list(root.get("selected_identity_key"))
+            if _text(value)
+        ]
         for relationship in relationships:
             if _text(relationship.get("parent_table_id")) != parent_table_id:
                 continue
             child_table_id = _text(relationship.get("child_table_id"))
-            child_columns = [_text(value) for value in _list(relationship.get("child_columns")) if _text(value)]
-            parent_columns = [_text(value) for value in _list(relationship.get("parent_columns")) if _text(value)]
+            child_columns = [
+                _text(value)
+                for value in _list(relationship.get("child_columns"))
+                if _text(value)
+            ]
+            parent_columns = [
+                _text(value)
+                for value in _list(relationship.get("parent_columns"))
+                if _text(value)
+            ]
             child_table = tables.get(child_table_id, {})
             child_fields = sorted(
                 [
@@ -153,6 +166,12 @@ def enrich_asset_with_database_relation_observer_candidates(
             if not child_columns or len(child_columns) != len(parent_columns):
                 status = "BLOCKED_FOREIGN_KEY_COLUMN_PAIR_INCOMPLETE"
                 reason = "DATABASE_RELATION_FOREIGN_KEY_COLUMN_PAIR_REQUIRED"
+            elif not selected_identity_key or parent_columns != selected_identity_key:
+                # The relation predicate fingerprints are compared with the root Observer
+                # identity fingerprints at Oracle time. Allowing an alternate parent column
+                # here would make two different scopes look equivalent.
+                status = "BLOCKED_PARENT_IDENTITY_SCOPE_MISMATCH"
+                reason = "DATABASE_RELATION_PARENT_IDENTITY_SCOPE_REQUIRED"
             elif not child_table:
                 status = "BLOCKED_CHILD_TABLE_DECLARATION_MISSING"
                 reason = "DATABASE_RELATION_CHILD_TABLE_REQUIRED"
@@ -198,6 +217,7 @@ def enrich_asset_with_database_relation_observer_candidates(
                 "parent_schema_name": _text(relationship.get("parent_schema")),
                 "parent_table_name": _text(relationship.get("parent_table")),
                 "parent_columns": parent_columns,
+                "root_selected_identity_key": selected_identity_key,
                 "child_table_id": child_table_id,
                 "child_schema_name": _text(relationship.get("child_schema")),
                 "child_table_name": _text(relationship.get("child_table")),
@@ -257,7 +277,11 @@ def enrich_asset_with_database_relation_observer_candidates(
     ]
     result["database_relation_observer_candidates"] = candidates
     result["coverage_gaps"] = [*retained_gaps, *gaps]
-    pending = sum(1 for row in candidates if _text(row.get("status")) == "PENDING_RELATION_AUTHORITY")
+    pending = sum(
+        1
+        for row in candidates
+        if _text(row.get("status")) == "PENDING_RELATION_AUTHORITY"
+    )
     result["database_relation_observer_candidate_projection"] = {
         "schema": DATABASE_RELATION_PROJECTION_SCHEMA,
         "status": "NOT_APPLICABLE" if not candidates else "PARTIAL" if gaps else "COMPLETE",
@@ -277,6 +301,7 @@ def enrich_asset_with_database_relation_observer_candidates(
         {
             "database_relation_candidates_require_source_declared_foreign_key": True,
             "database_relation_candidates_require_runtime_bindable_root_observer": True,
+            "database_relation_parent_columns_must_equal_root_identity_key": True,
             "database_relation_parent_values_require_approved_root_field_sources": True,
             "database_relation_candidates_require_operator_authority": True,
             "database_relation_candidates_never_use_client_side_filtering": True,
