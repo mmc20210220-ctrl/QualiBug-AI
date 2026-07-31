@@ -42,6 +42,8 @@ on:
       - "ai_test_asset_center/cleanup_equivalence_core.py"
       - "ai_test_asset_center/process_graph_wait_contract.py"
       - "ai_test_asset_center/process_graph_wait_contract_core.py"
+      - "ai_test_asset_center/process_graph_event_transition.py"
+      - "ai_test_asset_center/process_graph_async_transition_observer.py"
       - "ai_test_asset_center/process_graph_runtime.py"
       - "ai_test_asset_center/process_graph_read_runtime.py"
       - "ai_test_asset_center/experiment_plan_executor.py"
@@ -76,6 +78,10 @@ on:
       - "tests/test_process_graph_wait_contract.py"
       - "tests/test_process_graph_wait_source_authority.py"
       - "tests/test_process_graph_wait_outcome.py"
+      - "tests/test_process_graph_event_transition.py"
+      - "tests/test_process_graph_event_transition_scope.py"
+      - "tests/test_process_graph_event_transition_ledger.py"
+      - "tests/test_process_graph_async_transition_oracle.py"
       - "tests/test_wait_flow_data_requirement.py"
       - "tests/test_graph_scoped_receipt_copy.py"
       - "tests/test_process_graph_rollback_contract.py"
@@ -148,6 +154,8 @@ jobs:
             ai_test_asset_center/cleanup_equivalence_core.py \
             ai_test_asset_center/process_graph_wait_contract.py \
             ai_test_asset_center/process_graph_wait_contract_core.py \
+            ai_test_asset_center/process_graph_event_transition.py \
+            ai_test_asset_center/process_graph_async_transition_observer.py \
             ai_test_asset_center/process_graph_runtime.py \
             ai_test_asset_center/process_graph_read_runtime.py \
             ai_test_asset_center/experiment_plan_executor.py \
@@ -185,6 +193,10 @@ jobs:
             tests/test_process_graph_wait_contract.py \
             tests/test_process_graph_wait_source_authority.py \
             tests/test_process_graph_wait_outcome.py \
+            tests/test_process_graph_event_transition.py \
+            tests/test_process_graph_event_transition_scope.py \
+            tests/test_process_graph_event_transition_ledger.py \
+            tests/test_process_graph_async_transition_oracle.py \
             tests/test_wait_flow_data_requirement.py \
             tests/test_graph_scoped_receipt_copy.py \
             tests/test_process_graph_rollback_contract.py \
