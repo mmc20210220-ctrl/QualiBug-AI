@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from benchmark_evaluator.enterprise_understanding.fact_slots import evaluate_business_fact_slots
+
+
+LOCATOR = "rules.docx#paragraph=2"
 
 
 def _ground_truth() -> dict:
@@ -22,11 +27,18 @@ def _ground_truth() -> dict:
                 },
                 "exception_scope": [],
                 "state_effects": [{"from_state": "待审批", "to_state": "已审批"}],
-                "source_locators": ["rules.docx#paragraph=2"],
+                "source_locators": [LOCATOR],
             }
         ],
         "business_behaviors": [],
     }
+
+
+def _complete_ground_truth() -> dict:
+    value = deepcopy(_ground_truth())
+    value["explicit_fact_scope_complete"] = True
+    value["explicit_fact_scope_locators"] = [LOCATOR]
+    return value
 
 
 def _fact(fact_id: str = "fact:approve") -> dict:
@@ -45,14 +57,36 @@ def _fact(fact_id: str = "fact:approve") -> dict:
         },
         "exception_scope": [],
         "state_effects": [{"from_state": "待审批", "to_state": "已审批"}],
-        "source_spans": [{"source_id": "source:rules", "locator": "rules.docx#paragraph=2"}],
+        "source_spans": [{"source_id": "source:rules", "locator": LOCATOR}],
         "claims": [
             {
-                "claim_id": "claim:approve",
+                "claim_id": f"claim:{fact_id}",
                 "claim_type": "PRIMARY_OPERATION",
                 "predicate": "审批通过",
                 "subject_refs": ["经理"],
                 "object_refs": ["订单"],
+            }
+        ],
+    }
+
+
+def _extra_fact() -> dict:
+    return {
+        "fact_id": "fact:extra",
+        "fact_type": "BUSINESS_RULE",
+        "status": "ACCEPTED",
+        "subject": {"actor_refs": ["系统"], "entity_refs": ["发票"]},
+        "object": {"entity_refs": ["发票"]},
+        "action": {"canonical": "删除", "raw": "删除"},
+        "modality": "MUST",
+        "source_spans": [{"source_id": "source:rules", "locator": LOCATOR}],
+        "claims": [
+            {
+                "claim_id": "claim:extra",
+                "claim_type": "PRIMARY_OPERATION",
+                "predicate": "删除",
+                "subject_refs": ["系统"],
+                "object_refs": ["发票"],
             }
         ],
     }
@@ -69,6 +103,9 @@ def test_fact_slot_measurement_requires_exact_typed_slots() -> None:
     assert result["metrics"]["source_locator_annotated_fact_count"] == 1
     assert result["metrics"]["source_locator_exact_fact_count"] == 1
     assert result["metrics"]["source_locator_exact_accuracy"] == 1.0
+    assert result["metrics"]["accepted_fact_scope_complete"] is False
+    assert result["metrics"]["accepted_fact_precision"] is None
+    assert result["metrics"]["false_accepted_rate"] is None
     assert result["evidence_address_measurement_contract"][
         "annotated_fact_denominator_includes_missing_facts"
     ] is True
@@ -79,6 +116,42 @@ def test_fact_slot_measurement_requires_exact_typed_slots() -> None:
     assert result["automatic_winner_used"] is False
 
 
+def test_complete_scope_measures_one_supported_accepted_fact() -> None:
+    result = evaluate_business_fact_slots(
+        _complete_ground_truth(),
+        {"business_fact_ledger": {"items": [_fact()]}},
+    )
+
+    assert result["metrics"]["accepted_fact_scope_complete"] is True
+    assert result["metrics"]["accepted_fact_scope_locator_count"] == 1
+    assert result["metrics"]["accepted_fact_count_in_scope"] == 1
+    assert result["metrics"]["supported_accepted_fact_count"] == 1
+    assert result["metrics"]["false_accepted_fact_count"] == 0
+    assert result["metrics"]["accepted_fact_precision"] == 1.0
+    assert result["metrics"]["false_accepted_rate"] == 0.0
+    assert result["false_accepted_facts"] == []
+
+
+def test_extra_accepted_fact_in_closed_scope_reduces_precision() -> None:
+    result = evaluate_business_fact_slots(
+        _complete_ground_truth(),
+        {"business_fact_ledger": {"items": [_fact(), _extra_fact()]}},
+    )
+
+    assert result["metrics"]["accepted_fact_count_in_scope"] == 2
+    assert result["metrics"]["supported_accepted_fact_count"] == 1
+    assert result["metrics"]["false_accepted_fact_count"] == 1
+    assert result["metrics"]["accepted_fact_precision"] == 0.5
+    assert result["metrics"]["false_accepted_rate"] == 0.5
+    assert result["false_accepted_facts"][0]["candidate_id"] == "fact:extra"
+    assert result["false_accepted_facts"][0]["reason"].startswith(
+        "ACCEPTED_FACT_NOT_SELECTED"
+    )
+    assert result["accepted_fact_precision_contract"][
+        "unannotated_scope_blocks_remain_in_precision_scope"
+    ] is True
+
+
 def test_fact_slot_measurement_does_not_choose_between_duplicate_candidates() -> None:
     asset = {
         "business_fact_ledger": {
@@ -86,15 +159,24 @@ def test_fact_slot_measurement_does_not_choose_between_duplicate_candidates() ->
             "items": [_fact("fact:1"), _fact("fact:2")],
         }
     }
-    result = evaluate_business_fact_slots(_ground_truth(), asset)
+    result = evaluate_business_fact_slots(_complete_ground_truth(), asset)
     assert result["metrics"]["ambiguous_fact_count"] == 1
     assert result["metrics"]["source_locator_annotated_fact_count"] == 1
     assert result["metrics"]["source_locator_exact_fact_count"] == 0
     assert result["metrics"]["source_locator_ambiguous_fact_count"] == 1
     assert result["metrics"]["source_locator_exact_accuracy"] == 0.0
+    assert result["metrics"]["accepted_fact_count_in_scope"] == 2
+    assert result["metrics"]["supported_accepted_fact_count"] == 0
+    assert result["metrics"]["false_accepted_fact_count"] == 2
+    assert result["metrics"]["accepted_fact_precision"] == 0.0
+    assert result["metrics"]["false_accepted_rate"] == 1.0
     assert result["alignments"][0]["alignment_status"] == "AMBIGUOUS"
     assert result["alignments"][0]["candidate_id"] == ""
     assert set(result["alignments"][0]["candidate_ids"]) == {"fact:1", "fact:2"}
+    assert {row["candidate_id"] for row in result["false_accepted_facts"]} == {
+        "fact:1",
+        "fact:2",
+    }
 
 
 def test_wrong_source_locator_is_not_hidden_by_other_exact_slots() -> None:
@@ -185,6 +267,7 @@ def test_complete_object_coordinates_disambiguate_relation_targets() -> None:
     assert result["alignments"][0]["candidate_id"] == "fact:header"
     assert result["alignments"][0]["slot_alignments"]["object_refs"]["status"] == "EXACT"
     assert result["metrics"]["source_locator_exact_accuracy"] is None
+    assert result["metrics"]["accepted_fact_precision"] is None
     assert result["candidate_selection_contract"][
         "ground_truth_objects_must_be_subset_of_candidate_objects"
     ] is True
