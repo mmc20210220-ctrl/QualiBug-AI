@@ -58,6 +58,36 @@ def _legacy_projection_input(frozen: dict) -> dict:
     return projection_source
 
 
+def _requirement_projection_input(frozen: dict) -> dict:
+    """Align compatibility aliases without mutating the compiled experiment."""
+    projection_source = _legacy_projection_input(frozen)
+    for phase in ("precondition", "control", "treatment"):
+        normalized_steps: list[dict] = []
+        for raw_step in _list(projection_source.get(f"{phase}_plan")):
+            if not isinstance(raw_step, dict):
+                continue
+            step = deepcopy(raw_step)
+            output_specs: list[dict] = []
+            for raw_spec in _list(step.get("output_binding_specs")):
+                if not isinstance(raw_spec, dict):
+                    continue
+                spec = deepcopy(raw_spec)
+                canonical = _text(
+                    spec.get("target")
+                    or spec.get("canonical_field_id")
+                    or spec.get("output_field")
+                    or spec.get("field")
+                )
+                if canonical:
+                    spec.setdefault("target", canonical)
+                output_specs.append(spec)
+            if output_specs:
+                step["output_binding_specs"] = output_specs
+            normalized_steps.append(step)
+        projection_source[f"{phase}_plan"] = normalized_steps
+    return projection_source
+
+
 def freeze_compiled_experiment(
     experiment: dict,
     *,
@@ -73,7 +103,7 @@ def freeze_compiled_experiment(
         return frozen
 
     requirement = build_flow_data_requirement(
-        _legacy_projection_input(frozen),
+        _requirement_projection_input(frozen),
         behavior_ir=behavior_ir,
     )
     if _text(requirement.get("status")) != FLOW_DATA_FROZEN:
