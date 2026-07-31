@@ -1,0 +1,1 @@
+Validation-only trigger for the current mainline process graph multi-write proof, rollback, cleanup equivalence, environment truth, finalizer scope, and architecture gates. This file must not be merged.
