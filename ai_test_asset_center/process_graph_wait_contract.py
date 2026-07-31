@@ -81,28 +81,28 @@ def _wait_id(raw: dict[str, Any], index: int) -> str:
     )
 
 
-def _edge_relation(
+def _edge_scope(
     graph: dict[str, Any],
     *,
     source_node_id: str,
     target_node_id: str,
-) -> tuple[str, str]:
-    relations = list(
-        dict.fromkeys(
-            _text(_dict(edge).get("relation_type")).upper()
-            for edge in _list(graph.get("edges"))
-            if isinstance(edge, dict)
-            and _text(edge.get("source_node_id")) == source_node_id
-            and _text(edge.get("target_node_id")) == target_node_id
-            and _text(edge.get("relation_type"))
+) -> tuple[dict[str, Any], str]:
+    matches = [
+        deepcopy(_dict(edge))
+        for edge in _list(graph.get("edges"))
+        if isinstance(edge, dict)
+        and _text(edge.get("source_node_id")) == source_node_id
+        and _text(edge.get("target_node_id")) == target_node_id
+    ]
+    if len(matches) != 1:
+        return {}, (
+            "event_edge_identity_ambiguous:"
+            f"{source_node_id}->{target_node_id}:count={len(matches)}"
         )
-    )
-    if len(relations) != 1:
-        return "", (
-            "event_edge_relation_ambiguous:"
-            f"{source_node_id}->{target_node_id}:{relations}"
-        )
-    return relations[0], ""
+    edge = matches[0]
+    if not _text(edge.get("edge_id")) or not _text(edge.get("relation_type")):
+        return {}, "event_edge_identity_incomplete"
+    return edge, ""
 
 
 def _event_contract_fingerprint_valid(contract: dict[str, Any]) -> bool:
@@ -141,7 +141,6 @@ def compile_process_graph_wait_contracts(
         )
         operation = _dict(operations.get(observer_ref))
         if not operation:
-            # The mature core emits the canonical unresolved-operation detail.
             source["wait_contracts"][index] = raw
             continue
 
@@ -188,7 +187,6 @@ def compile_process_graph_wait_contracts(
                 f"{operation_system}!=primary"
             )
 
-        # The core receives only the exact source operation transport shape.
         raw["method"] = declared_method
         raw["path"] = declared_path
         raw.pop("path_template", None)
@@ -223,22 +221,43 @@ def compile_process_graph_wait_contracts(
         raw = _dict(raw_by_wait_id.get(wait_id))
         if not _event.has_event_transition(raw):
             continue
-        relation, relation_error = _edge_relation(
+        event_spec = _event._event_spec(raw)
+        event_source_refs = [
+            deepcopy(value)
+            for value in _list(event_spec.get("source_refs"))
+            if isinstance(value, dict)
+        ]
+        if not event_source_refs:
+            event_issues.append(f"{wait_id}:event_source_refs_missing")
+            continue
+        edge, edge_error = _edge_scope(
             compiled_graph,
             source_node_id=_text(row.get("source_node_id")),
             target_node_id=_text(row.get("target_node_id")),
         )
-        if relation_error:
-            event_issues.append(f"{wait_id}:{relation_error}")
+        if edge_error:
+            event_issues.append(f"{wait_id}:{edge_error}")
             continue
+        base_wait_fingerprint = _text(row.get("contract_fingerprint"))
         event_contract, event_error = _event.compile_event_transition_contract(
             raw_wait=raw,
             compiled_wait=row,
-            relation_type=relation,
+            relation_type=_text(edge.get("relation_type")),
         )
         if event_error:
             event_issues.append(f"{wait_id}:{event_error}")
             continue
+        event_contract.update(
+            {
+                "edge_id": _text(edge.get("edge_id")),
+                "wait_contract_fingerprint": base_wait_fingerprint,
+                "source_refs": event_source_refs,
+            }
+        )
+        event_contract.pop("contract_fingerprint", None)
+        event_contract["contract_fingerprint"] = _event._fingerprint(
+            event_contract
+        )
         row["transition_kind"] = "event_delivery"
         row["event_transition_contract"] = event_contract
         row["contract_fingerprint"] = _core._fingerprint(row)
@@ -295,6 +314,9 @@ def compiled_wait_runtime_ready(graph: dict[str, Any]) -> tuple[bool, str]:
         _text(contract.get("schema_version"))
         != _event.CONTRACT_SCHEMA_VERSION
         or _text(contract.get("status")) != _event.STATUS_COMPILED
+        or not _text(contract.get("edge_id"))
+        or not _text(contract.get("wait_contract_fingerprint"))
+        or not _list(contract.get("source_refs"))
         or not _event_contract_fingerprint_valid(contract)
         for contract in event_contracts
     ):
