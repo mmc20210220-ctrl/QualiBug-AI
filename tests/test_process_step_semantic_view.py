@@ -153,3 +153,45 @@ def test_legacy_evidence_broadcast_is_a_side_effect_free_noop() -> None:
         "transport_exact",
     ) is True
     assert ledger.get_step_row("step_1")["transport_receipt_id"] == "transport_exact"
+
+
+def test_fixtureless_ledger_normalizes_optional_identity_before_seal() -> None:
+    ledger = _ledger("step_1")
+    original_ledger_id = ledger.ledger_id
+    observations: dict = {}
+
+    view = ProcessStepSemanticView(ledger, observations)
+    rows = view.all_rows()
+
+    assert ledger.fixture_id == "NOT_APPLICABLE"
+    assert ledger.ledger_id != original_ledger_id
+    assert rows[0]["fixture_id"] == "NOT_APPLICABLE"
+    assert rows[0]["process_step_ledger_id"] == ledger.ledger_id
+    assert rows[0]["process_step_ledger_hash"] == ledger.compute_hash()
+    assert observations["process_step_ledger_id"] == ledger.ledger_id
+    assert observations["process_step_ledger_hash"] == ledger.compute_hash()
+
+
+def test_real_fixture_identity_is_preserved() -> None:
+    ledger = ProcessStepLedger(
+        experiment_id="exp_real_fixture",
+        fixture_id="fixture-owned-1",
+        required_step_ids=["step_1"],
+    )
+    ledger.record_step_execution(
+        step_id="step_1",
+        phase="treatment",
+        operation_ref="op_1",
+        actor_ref="actor_1",
+        status_code=200,
+        final_status="EXECUTED",
+        target_reached=True,
+        after_state_receipt_id="after_1",
+    )
+    original_ledger_id = ledger.ledger_id
+
+    rows = ProcessStepSemanticView(ledger, {}).all_rows()
+
+    assert ledger.fixture_id == "fixture-owned-1"
+    assert ledger.ledger_id == original_ledger_id
+    assert rows[0]["fixture_id"] == "fixture-owned-1"
