@@ -12,6 +12,9 @@ import hashlib
 from typing import Any
 
 from . import behavior_ir as _bir
+from .formal_event_binding_identity_bridge import (
+    project_formal_event_binding_identities,
+)
 
 BINDING_RECEIPT_SCHEMA = "qualibug.source-event-contract-binding.v1"
 
@@ -270,6 +273,18 @@ def bind_source_event_contracts(
         "reason_counts": dict(sorted(reason_counts.items())),
         "binding_basis": "exact_source_identity_only",
     }
+    model["source_event_contract_binding_receipt"] = receipt
+    model, identity_receipt = project_formal_event_binding_identities(model, asset)
+    receipt["binding_identity_status"] = identity_receipt.get("status")
+    receipt["binding_identity_required"] = bool(
+        identity_receipt.get("identity_required")
+    )
+    receipt["binding_identity_bound_count"] = int(
+        identity_receipt.get("bound_count") or 0
+    )
+    receipt["binding_identity_blocked_count"] = int(
+        identity_receipt.get("blocked_count") or 0
+    )
     model["source_event_contract_binding_receipt"] = receipt
     errors = _bir.validate_behavior_ir(model, require_explicit_relations=True)
     if errors:
