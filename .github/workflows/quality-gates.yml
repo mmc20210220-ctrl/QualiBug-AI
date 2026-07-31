@@ -126,6 +126,7 @@ jobs:
             tests/test_identity_annotation_package_identity.py \
             tests/test_identity_annotation_operator.py \
             tests/test_identity_annotation_http_contract.py \
+            tests/test_identity_field_evidence.py \
             tests/test_identity_benchmark_cli.py \
             tests/test_identity_benchmark_regression.py \
             tests/test_identity_benchmark_repository.py \
