@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from ai_test_asset_center.process_graph_runtime import (
     GRAPH_INPUT_BINDING_UNRESOLVED,
-    GRAPH_NODE_COMPENSATION_UNRESOLVED,
+    GRAPH_OUTPUT_BINDING_UNRESOLVED,
     GRAPH_PREDECESSOR_NOT_SUCCEEDED,
     GRAPH_RUNTIME_ASYNC_UNSUPPORTED,
-    GRAPH_SECONDARY_WRITE_CLEANUP_UNAVAILABLE,
     GRAPH_TARGET_NOT_APPROVED,
+    GRAPH_WRITE_RUNTIME_UNAVAILABLE,
     graph_step_context,
     prepare_graph_runtime,
     record_graph_step_outcome,
@@ -113,15 +113,19 @@ def _ops(second_method="GET"):
     }
 
 
-def test_sync_cross_system_read_targets_are_exact_and_ready():
-    graph = _graph()
-    runtime = prepare_graph_runtime(
+def _runtime(graph=None, ops=None):
+    graph = graph or _graph()
+    return prepare_graph_runtime(
         graph=graph,
         treatment_plan=_plan(graph),
-        ops=_ops(),
+        ops=ops or _ops(),
         base_url="https://erp.test.example",
         runtime_contract=_runtime_contract(),
     )
+
+
+def test_sync_cross_system_read_targets_are_exact_and_ready():
+    runtime = _runtime()
     assert runtime["status"] == "READY"
     assert runtime["wave_by_node"] == {
         "read_order": 0,
@@ -133,80 +137,31 @@ def test_sync_cross_system_read_targets_are_exact_and_ready():
     assert payment["target_policy_decision"]["read_allowed"] is True
 
 
-def test_secondary_system_write_blocks_before_transport():
+def test_every_graph_write_blocks_before_transport_until_graph_wide_closure():
     graph = _graph(second_method="POST")
-    graph["nodes"][1]["compensation_operation_ref"] = "op_reverse_payment"
-    ops = _ops("POST")
-    ops["op_reverse_payment"] = {
-        "id": "op_reverse_payment",
-        "method": "POST",
-        "path": "/payments/reverse",
-    }
-    runtime = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=_plan(graph),
-        ops=ops,
-        base_url="https://erp.test.example",
-        runtime_contract=_runtime_contract(),
-    )
+    runtime = _runtime(graph=graph, ops=_ops("POST"))
     assert runtime["status"] == "BLOCKED"
-    assert runtime["reason_code"] == (
-        GRAPH_SECONDARY_WRITE_CLEANUP_UNAVAILABLE
-    )
-
-
-def test_any_write_without_declared_compensation_blocks_before_transport():
-    graph = _graph()
-    graph["nodes"][0]["method"] = "POST"
-    ops = _ops()
-    ops["op_read_order"]["method"] = "POST"
-    runtime = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=_plan(graph),
-        ops=ops,
-        base_url="https://erp.test.example",
-        runtime_contract=_runtime_contract(),
-    )
-    assert runtime["status"] == "BLOCKED"
-    assert runtime["reason_code"] == GRAPH_NODE_COMPENSATION_UNRESOLVED
+    assert runtime["reason_code"] == GRAPH_WRITE_RUNTIME_UNAVAILABLE
 
 
 def test_missing_target_is_not_replaced_by_connector_or_primary_url():
     graph = _graph()
     graph["nodes"][1]["system_ref"] = "warehouse"
-    runtime = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=_plan(graph),
-        ops=_ops(),
-        base_url="https://erp.test.example",
-        runtime_contract=_runtime_contract(),
-    )
+    runtime = _runtime(graph=graph)
     assert runtime["status"] == "BLOCKED"
     assert runtime["reason_code"] == GRAPH_TARGET_NOT_APPROVED
 
 
 def test_async_edge_remains_blocked_without_wait_observer_scheduler():
     graph = _graph(relation_type="TRIGGERS")
-    runtime = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=_plan(graph),
-        ops=_ops(),
-        base_url="https://erp.test.example",
-        runtime_contract=_runtime_contract(),
-    )
+    runtime = _runtime(graph=graph)
     assert runtime["status"] == "BLOCKED"
     assert runtime["reason_code"] == GRAPH_RUNTIME_ASYNC_UNSUPPORTED
 
 
 def test_declared_output_enters_namespaced_binding_ledger():
     graph = _graph()
-    runtime = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=_plan(graph),
-        ops=_ops(),
-        base_url="https://erp.test.example",
-        runtime_contract=_runtime_contract(),
-    )
+    runtime = _runtime(graph=graph)
     result = record_graph_step_outcome(
         runtime=runtime,
         graph=graph,
@@ -225,15 +180,23 @@ def test_declared_output_enters_namespaced_binding_ledger():
     ]
 
 
+def test_missing_declared_output_blocks_the_producer_node():
+    graph = _graph()
+    runtime = _runtime(graph=graph)
+    result = record_graph_step_outcome(
+        runtime=runtime,
+        graph=graph,
+        step=_plan(graph)[0],
+        observation={"status_code": 200, "body": {"data": {}}},
+    )
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == GRAPH_OUTPUT_BINDING_UNRESOLVED
+    assert runtime["node_status"]["read_order"] == "BLOCKED"
+
+
 def test_consumer_receives_only_declared_producer_output():
     graph = _graph()
-    runtime = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=_plan(graph),
-        ops=_ops(),
-        base_url="https://erp.test.example",
-        runtime_contract=_runtime_contract(),
-    )
+    runtime = _runtime(graph=graph)
     record_graph_step_outcome(
         runtime=runtime,
         graph=graph,
@@ -256,15 +219,9 @@ def test_consumer_receives_only_declared_producer_output():
     }
 
 
-def test_missing_declared_output_blocks_consumer():
+def test_missing_declared_output_value_blocks_consumer():
     graph = _graph()
-    runtime = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=_plan(graph),
-        ops=_ops(),
-        base_url="https://erp.test.example",
-        runtime_contract=_runtime_contract(),
-    )
+    runtime = _runtime(graph=graph)
     runtime["node_status"]["read_order"] = "SUCCEEDED"
     context = graph_step_context(
         runtime=runtime,
@@ -278,13 +235,7 @@ def test_missing_declared_output_blocks_consumer():
 
 def test_failed_predecessor_blocks_join_or_successor():
     graph = _graph()
-    runtime = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=_plan(graph),
-        ops=_ops(),
-        base_url="https://erp.test.example",
-        runtime_contract=_runtime_contract(),
-    )
+    runtime = _runtime(graph=graph)
     runtime["node_status"]["read_order"] = "FAILED"
     context = graph_step_context(
         runtime=runtime,
