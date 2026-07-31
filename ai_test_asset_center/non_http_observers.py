@@ -9,6 +9,9 @@ from .database_observer_experiment_runtime import (
     PHASE_AGGREGATE_OBSERVER_ID,
     install_experiment_database_observer,
 )
+from .database_relation_delta_oracle import (
+    install_database_relation_delta_assertion,
+)
 from .database_relation_numeric_oracle import (
     install_database_relation_numeric_assertion,
 )
@@ -188,6 +191,7 @@ def install_non_http_observers() -> None:
     install_database_state_transition_assertion()
     install_database_numeric_assertions()
     install_database_relation_numeric_assertion()
+    install_database_relation_delta_assertion()
 
     if hasattr(_experiment_compiler, _ORIGINAL_COMPILER_MARKER):
         original_compile = getattr(
