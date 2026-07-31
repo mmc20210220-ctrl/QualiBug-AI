@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ai_test_asset_center.process_graph_runtime import (
     GRAPH_INPUT_BINDING_UNRESOLVED,
+    GRAPH_NODE_COMPENSATION_UNRESOLVED,
     GRAPH_PREDECESSOR_NOT_SUCCEEDED,
     GRAPH_RUNTIME_ASYNC_UNSUPPORTED,
     GRAPH_SECONDARY_WRITE_CLEANUP_UNAVAILABLE,
@@ -134,10 +135,17 @@ def test_sync_cross_system_read_targets_are_exact_and_ready():
 
 def test_secondary_system_write_blocks_before_transport():
     graph = _graph(second_method="POST")
+    graph["nodes"][1]["compensation_operation_ref"] = "op_reverse_payment"
+    ops = _ops("POST")
+    ops["op_reverse_payment"] = {
+        "id": "op_reverse_payment",
+        "method": "POST",
+        "path": "/payments/reverse",
+    }
     runtime = prepare_graph_runtime(
         graph=graph,
         treatment_plan=_plan(graph),
-        ops=_ops("POST"),
+        ops=ops,
         base_url="https://erp.test.example",
         runtime_contract=_runtime_contract(),
     )
@@ -145,6 +153,22 @@ def test_secondary_system_write_blocks_before_transport():
     assert runtime["reason_code"] == (
         GRAPH_SECONDARY_WRITE_CLEANUP_UNAVAILABLE
     )
+
+
+def test_any_write_without_declared_compensation_blocks_before_transport():
+    graph = _graph()
+    graph["nodes"][0]["method"] = "POST"
+    ops = _ops()
+    ops["op_read_order"]["method"] = "POST"
+    runtime = prepare_graph_runtime(
+        graph=graph,
+        treatment_plan=_plan(graph),
+        ops=ops,
+        base_url="https://erp.test.example",
+        runtime_contract=_runtime_contract(),
+    )
+    assert runtime["status"] == "BLOCKED"
+    assert runtime["reason_code"] == GRAPH_NODE_COMPENSATION_UNRESOLVED
 
 
 def test_missing_target_is_not_replaced_by_connector_or_primary_url():
