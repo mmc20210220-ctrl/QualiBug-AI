@@ -3,15 +3,24 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import benchmark_evaluator.enterprise_understanding.build_versioned_product_snapshot as versioned_module
 from benchmark_evaluator.enterprise_understanding.build_product_snapshot import (
     SOURCE_MANIFEST_SCHEMA,
+    ProductPhaseError,
     _git_blob_sha,
     _resolve_sources,
 )
 
 
-def _write_manifest(path: Path, project: str, source_path: str, source_ref: str, blob_sha: str):
+def _write_manifest(
+    path: Path,
+    project: str,
+    source_path: str,
+    source_ref: str,
+    blob_sha: str,
+):
     path.write_text(
         json.dumps(
             {
@@ -60,6 +69,78 @@ def test_manifest_separates_fixture_path_from_stable_source_identity(tmp_path):
     assert receipts[0]["path"] == "fixtures/v1.md"
     assert receipts[0]["source_ref"] == "online-docs/business-rules.md"
     assert receipts[0]["fixture_path_separate_from_source_identity"] is True
+
+
+def test_transition_contract_distinguishes_changed_and_unchanged_sources():
+    rule_ref = "online-docs/business-rules.md"
+    api_ref = "online-docs/payment-api.openapi.json"
+    phase_one = {
+        "occurrences_by_ref": {
+            rule_ref: {
+                "source_occurrence_id": "occurrence:rules:v1",
+                "canonical_source_id": "canonical:rules:v1",
+                "version": 1,
+            },
+            api_ref: {
+                "source_occurrence_id": "occurrence:api:v1",
+                "canonical_source_id": "canonical:api:v1",
+                "version": 1,
+            },
+        },
+        "source_receipts": [
+            {"source_ref": rule_ref, "path": "rules-v1.md", "blob_sha": "rules-v1"},
+            {"source_ref": api_ref, "path": "api.json", "blob_sha": "api-v1"},
+        ],
+    }
+    phase_two = {
+        "occurrences_by_ref": {
+            rule_ref: {
+                "source_occurrence_id": "occurrence:rules:v2",
+                "canonical_source_id": "canonical:rules:v2",
+                "version": 2,
+            },
+            api_ref: {
+                "source_occurrence_id": "occurrence:api:v1",
+                "canonical_source_id": "canonical:api:v1",
+                "version": 1,
+            },
+        },
+        "source_receipts": [
+            {"source_ref": rule_ref, "path": "rules-v2.md", "blob_sha": "rules-v2"},
+            {"source_ref": api_ref, "path": "api.json", "blob_sha": "api-v1"},
+        ],
+    }
+
+    transitions = versioned_module._assert_version_transition(phase_one, phase_two)
+    by_ref = {row["source_ref"]: row for row in transitions}
+
+    assert by_ref[rule_ref]["transition_kind"] == "SUPERSEDED_BY_CHANGED_CONTENT"
+    assert by_ref[rule_ref]["content_changed"] is True
+    assert by_ref[rule_ref]["source_occurrence_supersession_authority"] is True
+    assert by_ref[rule_ref]["source_occurrence_reuse_authority"] is False
+    assert by_ref[api_ref]["transition_kind"] == "UNCHANGED_OCCURRENCE_REUSED"
+    assert by_ref[api_ref]["content_changed"] is False
+    assert by_ref[api_ref]["source_occurrence_supersession_authority"] is False
+    assert by_ref[api_ref]["source_occurrence_reuse_authority"] is True
+
+
+def test_transition_contract_requires_at_least_one_changed_source():
+    source_ref = "online-docs/payment-api.openapi.json"
+    phase = {
+        "occurrences_by_ref": {
+            source_ref: {
+                "source_occurrence_id": "occurrence:api:v1",
+                "canonical_source_id": "canonical:api:v1",
+                "version": 1,
+            }
+        },
+        "source_receipts": [
+            {"source_ref": source_ref, "path": "api.json", "blob_sha": "api-v1"}
+        ],
+    }
+
+    with pytest.raises(ProductPhaseError, match="versioned_manifest_contains_no_changed_source"):
+        versioned_module._assert_version_transition(phase, phase)
 
 
 def test_two_phase_builder_reuses_product_authorities_without_ground_truth(
@@ -157,6 +238,10 @@ def test_two_phase_builder_reuses_product_authorities_without_ground_truth(
 
     assert receipt["status"] == "PASS"
     assert receipt["composition_invocation_count"] == 2
+    assert receipt["changed_source_count"] == 1
+    assert receipt["unchanged_source_count"] == 0
+    assert receipt["source_occurrence_supersession_used"] is True
+    assert receipt["unchanged_source_occurrence_reuse_verified"] is False
     assert receipt["ground_truth_loaded"] is False
     assert receipt["ground_truth_path_received"] is False
     assert receipt["hidden_answer_key_accessed"] is False
@@ -169,6 +254,8 @@ def test_two_phase_builder_reuses_product_authorities_without_ground_truth(
     )
     transition = receipt["source_version_transitions"][0]
     assert transition["source_ref"] == stable_ref
+    assert transition["transition_kind"] == "SUPERSEDED_BY_CHANGED_CONTENT"
+    assert transition["content_changed"] is True
     assert transition["phase_one_source_occurrence_id"] == "occurrence:v1"
     assert transition["phase_two_source_occurrence_id"] == "occurrence:v2"
     assert transition["phase_one_version"] == 1
