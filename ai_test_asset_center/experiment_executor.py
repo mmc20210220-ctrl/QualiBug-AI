@@ -83,6 +83,10 @@ def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(
         value,
@@ -98,9 +102,9 @@ def _authorization_binding_targets(
 ) -> list[str]:
     contract = _dict(experiment.get("authorization_comparison_contract"))
     return [
-        str(value or "").strip()
+        _text(value)
         for value in _list(contract.get("resource_identity_binding_targets"))
-        if str(value or "").strip()
+        if _text(value)
     ]
 
 
@@ -111,26 +115,57 @@ def _verify_authorization_compile_identity(
     """Prove the causal receipt was built against the current compiled contract."""
     receipt = _dict(result.get("authorization_causality_receipt"))
     contract = _dict(experiment.get("authorization_comparison_contract"))
-    if not receipt or not contract or str(receipt.get("status") or "").upper() != "PASSED":
+    if not receipt or not contract or _text(receipt.get("status")).upper() != "PASSED":
         return
     expected_contract_fingerprint = hashlib.sha256(
         _canonical(contract).encode("utf-8")
     ).hexdigest()
-    if str(receipt.get("comparison_contract_fingerprint") or "").strip() != expected_contract_fingerprint:
+    if _text(receipt.get("comparison_contract_fingerprint")) != expected_contract_fingerprint:
         raise AuthorizationDeliveryGateError(
             "authorization_delivery_comparison_contract_fingerprint_mismatch"
         )
-    expected_binding_graph_fingerprint = str(
-        contract.get("shared_binding_graph_fingerprint") or ""
-    ).strip()
+    expected_binding_graph_fingerprint = _text(
+        contract.get("shared_binding_graph_fingerprint")
+    )
     if (
         not expected_binding_graph_fingerprint
-        or str(receipt.get("compile_binding_graph_fingerprint") or "").strip()
+        or _text(receipt.get("compile_binding_graph_fingerprint"))
         != expected_binding_graph_fingerprint
     ):
         raise AuthorizationDeliveryGateError(
             "authorization_delivery_binding_graph_fingerprint_mismatch"
         )
+
+
+def _seal_authorization_finding_lineage(
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind the finding to the exact causal campaign/experiment execution."""
+    receipt = _dict(result.get("authorization_causality_receipt"))
+    finding = _dict(result.get("finding"))
+    if _text(receipt.get("status")).upper() != "PASSED" or not finding:
+        return result
+    output = dict(result)
+    sealed = dict(finding)
+    for field in (
+        "campaign_id",
+        "obligation_id",
+        "experiment_id",
+        "execution_id",
+    ):
+        expected = _text(receipt.get(field))
+        current = _text(sealed.get(field))
+        if not expected:
+            raise AuthorizationDeliveryGateError(
+                f"authorization_delivery_finding_lineage_missing:{field}"
+            )
+        if current and current != expected:
+            raise AuthorizationDeliveryGateError(
+                f"authorization_delivery_finding_lineage_mismatch:{field}"
+            )
+        sealed[field] = expected
+    output["finding"] = sealed
+    return output
 
 
 def _authorization_delivery_failure(
@@ -140,7 +175,7 @@ def _authorization_delivery_failure(
     """Preserve execution fact while removing an unpublishable finding."""
     blocked = dict(result)
     blocked["finding"] = None
-    if str(blocked.get("status") or "").upper() not in {
+    if _text(blocked.get("status")).upper() not in {
         "BLOCKED",
         "HARNESS_FAILURE",
     }:
@@ -202,11 +237,10 @@ def execute_one_experiment(
             account_rows=_governance._test_account_rows(root, project),
         )
         causal_passed = (
-            str(
+            _text(
                 _dict(governed.get("authorization_causality_receipt")).get(
                     "status"
                 )
-                or ""
             ).upper()
             == "PASSED"
         )
@@ -216,10 +250,11 @@ def execute_one_experiment(
                 targets,
             )
         _verify_authorization_compile_identity(governed, experiment)
-        return attach_authorization_delivery_evidence(
+        packaged = attach_authorization_delivery_evidence(
             governed,
             experiment=experiment,
         )
+        return _seal_authorization_finding_lineage(packaged)
     except (
         AuthorizationDeliveryGateError,
         BindingMaterializationIdentityError,
