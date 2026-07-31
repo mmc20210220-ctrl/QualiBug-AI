@@ -127,7 +127,10 @@ def compile_obligations_with_source_event(
         formal_identity = copy.deepcopy(
             _dict(invariant.get("formal_event_binding_identity"))
         )
-        if identity_required and (
+        invariant_identity_required = bool(
+            invariant.get("event_binding_identity_required")
+        )
+        if invariant_identity_required and (
             _text(invariant.get("event_binding_identity_status")) != "BOUND"
             or _text(formal_identity.get("status")) != "BOUND"
         ):
@@ -292,6 +295,9 @@ def compile_obligations_with_source_event(
             "binding_identity_required": identity_required,
             "binding_identity_status": identity_receipt.get("status"),
             "binding_identity_obligation_count": identity_obligation_count,
+            "runtime_overlay_event_invariant_count": int(
+                identity_receipt.get("runtime_overlay_event_invariant_count") or 0
+            ),
             "complete_family_vector": True,
         },
     })
