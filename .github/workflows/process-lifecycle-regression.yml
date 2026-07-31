@@ -75,6 +75,7 @@ on:
       - "tests/test_process_graph_dependency_rollback.py"
       - "tests/test_process_graph_multi_write_equivalence.py"
       - "tests/test_process_graph_cleanup_equivalence_scope.py"
+      - "tests/test_process_graph_environment_receipt_truth.py"
       - "tests/test_experiment_cleanup_lifecycle_adapter.py"
       - "tests/test_multi_write_cleanup_coverage.py"
       - "tests/test_async_readback_executor.py"
@@ -174,6 +175,7 @@ jobs:
             tests/test_process_graph_dependency_rollback.py \
             tests/test_process_graph_multi_write_equivalence.py \
             tests/test_process_graph_cleanup_equivalence_scope.py \
+            tests/test_process_graph_environment_receipt_truth.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_multi_write_cleanup_coverage.py \
             tests/test_async_readback_executor.py \
