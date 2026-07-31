@@ -11,6 +11,7 @@ on:
       - "ai_test_asset_center/implicit_rule_runtime_evolution.py"
       - "ai_test_asset_center/discovery_mainline.py"
       - "ai_test_asset_center/authorization_comparison_contract.py"
+      - "ai_test_asset_center/authorization_oracle_causality.py"
       - "ai_test_asset_center/experiment_compiler.py"
       - "ai_test_asset_center/experiment_executor.py"
       - "ai_test_asset_center/experiment_executor_governance.py"
@@ -75,6 +76,7 @@ jobs:
             ai_test_asset_center/implicit_rule_runtime_evolution.py \
             ai_test_asset_center/discovery_mainline.py \
             ai_test_asset_center/authorization_comparison_contract.py \
+            ai_test_asset_center/authorization_oracle_causality.py \
             ai_test_asset_center/experiment_compiler.py \
             ai_test_asset_center/experiment_executor.py \
             ai_test_asset_center/experiment_executor_governance.py
@@ -99,6 +101,7 @@ jobs:
             tests/test_test_asset_source_types.py \
             tests/test_generated_structure_label_authority.py \
             tests/test_authorization_comparison_identity_symmetry.py \
+            tests/test_enterprise_understanding_authorization_oracle_causality.py \
             tests/test_enterprise_understanding_ingestion_evidence*.py \
             tests/test_enterprise_understanding_document_ground_truth.py \
             tests/test_enterprise_understanding_source_*.py \
