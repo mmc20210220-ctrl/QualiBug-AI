@@ -1,13 +1,13 @@
-"""Public sequential step-kernel facade with graph wait gating.
+"""Public sequential step-kernel facade with graph async gating.
 
 The original transport/governance implementation remains unchanged in
 ``experiment_plan_step_executor_core``. Graph scheduling invokes this public
-kernel one node at a time. When that node carries a compile-frozen wait
-contract, the facade executes the existing bounded async readback first and
-only delegates to transport after convergence.
+kernel one node at a time. A compile-frozen state wait or event transition is
+executed before business transport; delegation occurs only after convergence.
 
-A separate master ProcessStepLedger records WAIT before copied child transport
-events. Ordinary plans without waits delegate byte-for-byte unchanged.
+The existing ProcessStepLedger records the async receipt before copied child
+transport events. Event receipts are a typed projection of the same scoped
+observer receipt, not a second ledger. Ordinary plans delegate unchanged.
 """
 from __future__ import annotations
 
@@ -15,6 +15,9 @@ from typing import Any
 
 from . import experiment_plan_step_executor_core as _core
 from .contract_oracles import build_contract_evidence_receipt
+from .process_graph_event_transition import (
+    RECEIPT_SCHEMA_VERSION as EVENT_RECEIPT_SCHEMA_VERSION,
+)
 from .process_graph_executor_support import copy_subledger_rows
 from .process_graph_wait_contract import (
     STATUS_BLOCKED as WAIT_BLOCKED,
@@ -57,6 +60,23 @@ def _required_step_ids(activation_requirements: dict[str, Any]) -> list[str]:
             if token and token not in values:
                 values.append(token)
     return values
+
+
+def _is_event_receipt(receipt: dict[str, Any]) -> bool:
+    return str(receipt.get("schema_version") or "").strip() == (
+        EVENT_RECEIPT_SCHEMA_VERSION
+    )
+
+
+def _append_async_receipt_projection(
+    observations: dict[str, Any],
+    receipt: dict[str, Any],
+) -> None:
+    observations.setdefault("process_graph_wait_receipts", []).append(receipt)
+    if _is_event_receipt(receipt):
+        observations.setdefault(
+            "process_graph_async_transition_receipts", []
+        ).append(receipt)
 
 
 def _new_wait_ledger(kwargs: dict[str, Any]) -> ProcessStepLedger:
@@ -102,6 +122,7 @@ def _blocked_wait_result(
     operation_ref = str(step.get("operation_ref") or "").strip()
     actor_ref = str(step.get("actor_ref") or "").strip()
     receipt_id = str(wait_receipt.get("receipt_id") or "").strip()
+    event_receipt = _is_event_receipt(wait_receipt)
     ledger.record_step_execution(
         step_id=step_id,
         phase="treatment",
@@ -120,15 +141,15 @@ def _blocked_wait_result(
     )
     ledger.record_timeline_event(
         step_id=step_id,
-        phase="wait",
-        event_type="WAIT_FAILED",
+        phase="event" if event_receipt else "wait",
+        event_type=("ASYNC_EVENT_FAILED" if event_receipt else "WAIT_FAILED"),
         operation_ref=str(
             wait_receipt.get("observer_operation_ref") or ""
         ).strip(),
         actor_ref=actor_ref,
         receipt_id=receipt_id,
     )
-    obs.setdefault("process_graph_wait_receipts", []).append(wait_receipt)
+    _append_async_receipt_projection(obs, wait_receipt)
     attach_ledger_refs_to_observations(obs, ledger)
     contract_receipt = build_contract_evidence_receipt(
         kind="treatment",
@@ -145,6 +166,23 @@ def _blocked_wait_result(
             "wait_receipt_id": receipt_id,
             "wait_attempt_count": int(wait_receipt.get("attempt_count") or 0),
             "wait_timed_out": wait_receipt.get("timed_out") is True,
+            "async_transition_kind": (
+                str(wait_receipt.get("delivery_kind") or "").strip()
+                if event_receipt
+                else "state_wait"
+            ),
+            "async_semantic_status": str(
+                wait_receipt.get("semantic_status") or ""
+            ).strip(),
+            "observed_unique_event_count": int(
+                wait_receipt.get("observed_unique_event_count") or 0
+            ),
+            "idempotency_mismatch_count": int(
+                wait_receipt.get("idempotency_mismatch_count") or 0
+            ),
+            "retry_limit_violation_count": int(
+                wait_receipt.get("retry_limit_violation_count") or 0
+            ),
         },
     )
     blocked_step = {
@@ -159,8 +197,13 @@ def _blocked_wait_result(
         "actor_ref": actor_ref,
         "operation_ref": operation_ref,
         "wait_receipt_id": receipt_id,
+        "async_transition_kind": (
+            str(wait_receipt.get("delivery_kind") or "").strip()
+            if event_receipt
+            else "state_wait"
+        ),
     }
-    return {
+    result = {
         "steps": [blocked_step],
         "contract_evidence_receipts": [contract_receipt],
         "request_bodies_for_cleanup": {},
@@ -175,6 +218,9 @@ def _blocked_wait_result(
         "executed_step_ids": ledger.executed_step_ids(),
         "process_graph_wait_receipts": [wait_receipt],
     }
+    if event_receipt:
+        result["process_graph_async_transition_receipts"] = [wait_receipt]
+    return result
 
 
 def _wait_step(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -244,7 +290,7 @@ def _wait_step(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def execute_non_barrier_plans(**kwargs: Any) -> dict[str, Any]:
-    """Gate one graph node on its compiled wait, then delegate to the core."""
+    """Gate one graph node on its compiled async transition."""
     _sync_core_hooks()
     step, wait_receipt = _wait_step(kwargs)
     if not step:
@@ -274,11 +320,14 @@ def execute_non_barrier_plans(**kwargs: Any) -> dict[str, Any]:
 
     master = _new_wait_ledger(kwargs)
     receipt_id = str(wait_receipt.get("receipt_id") or "").strip()
+    event_receipt = _is_event_receipt(wait_receipt)
     if wait_status == WAIT_CONVERGED:
         master.record_timeline_event(
             step_id=str(step.get("step_id") or "").strip(),
-            phase="wait",
-            event_type="WAIT_CONVERGED",
+            phase="event" if event_receipt else "wait",
+            event_type=(
+                "ASYNC_EVENT_VERIFIED" if event_receipt else "WAIT_CONVERGED"
+            ),
             operation_ref=str(
                 wait_receipt.get("observer_operation_ref") or ""
             ).strip(),
@@ -287,9 +336,7 @@ def execute_non_barrier_plans(**kwargs: Any) -> dict[str, Any]:
         )
         observations = kwargs.get("observations")
         if isinstance(observations, dict):
-            observations.setdefault("process_graph_wait_receipts", []).append(
-                wait_receipt
-            )
+            _append_async_receipt_projection(observations, wait_receipt)
 
     result = _core.execute_non_barrier_plans(**kwargs)
     child = result.get("process_step_ledger")
@@ -317,6 +364,8 @@ def execute_non_barrier_plans(**kwargs: Any) -> dict[str, Any]:
             "process_graph_wait_receipts": [wait_receipt],
         }
     )
+    if event_receipt:
+        result["process_graph_async_transition_receipts"] = [wait_receipt]
     return result
 
 
