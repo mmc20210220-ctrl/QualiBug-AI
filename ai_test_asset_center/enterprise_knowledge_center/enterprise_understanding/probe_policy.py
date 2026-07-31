@@ -9,7 +9,7 @@ from .schema import as_dict
 
 def _apply_implicit_rule_governance(asset: dict[str, Any]) -> None:
     """Close source/decision lifecycle before final Probe compilation/persistence."""
-    from ..implicit_rule_governance import (
+    from ..implicit_rule_governance_entry import (
         enrich_asset_with_governed_implicit_rule_projection,
     )
 
