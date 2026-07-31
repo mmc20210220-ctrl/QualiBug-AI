@@ -2,18 +2,19 @@
 
 This module extends the existing ``experiment_protocol_registry``; it does not
 create another orchestration registry or execution mainline.  The compile-time
-authority is an execution graph.  A legacy treatment plan is emitted only when
-that graph has one deterministic, currently executable linear projection.
+authority is an execution graph.  The existing plan executor consumes a
+topological projection only as transport work items; graph edges remain the
+dependency authority.
 
-The compiler never selects the first transition, never orders nodes by document
-appearance, and never treats the original write operation as its own cleanup.
-Unsupported graph runtime features remain visible as BLOCKED together with the
-compiled graph so later layers do not silently flatten them.
+No document-order inference, first-transition selection, target guessing, or
+write-as-cleanup fallback is permitted.  Asynchronous waits remain blocked
+until an observer-backed scheduler exists.
 """
 from __future__ import annotations
 
-import logging
 from collections import defaultdict, deque
+from copy import deepcopy
+import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,9 @@ MULTI_STEP_PROCESS_GRAPH_INVALID = "MULTI_STEP_PROCESS_GRAPH_INVALID"
 MULTI_STEP_PROCESS_GRAPH_CYCLE = "MULTI_STEP_PROCESS_GRAPH_CYCLE"
 MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE = "MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE"
 
-_ASYNC_RELATIONS = frozenset({"AWAITS", "NOTIFIES", "TRIGGERS", "MESSAGE", "ASYNC_MESSAGE"})
+_ASYNC_RELATIONS = frozenset(
+    {"AWAITS", "NOTIFIES", "TRIGGERS", "MESSAGE", "ASYNC_MESSAGE"}
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -59,7 +62,11 @@ def _unique_text(values: list[Any]) -> list[str]:
     return result
 
 
-def _blocked(reason_code: str, detail: str, graph: dict[str, Any] | None = None) -> dict[str, Any]:
+def _blocked(
+    reason_code: str,
+    detail: str,
+    graph: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     result: dict[str, Any] = {
         "status": "BLOCKED",
         "reason_code": reason_code,
@@ -70,11 +77,14 @@ def _blocked(reason_code: str, detail: str, graph: dict[str, Any] | None = None)
     return result
 
 
-def _operation_index(behavior_ir: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _operation_index(
+    behavior_ir: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
     return {
         _text(row.get("id") or row.get("operation_id")): row
         for row in _list(behavior_ir.get("operations"))
-        if isinstance(row, dict) and _text(row.get("id") or row.get("operation_id"))
+        if isinstance(row, dict)
+        and _text(row.get("id") or row.get("operation_id"))
     }
 
 
@@ -87,8 +97,13 @@ def _linear_graph_from_steps(
     nodes = [dict(row) for row in process_steps if isinstance(row, dict)]
     edges: list[dict[str, Any]] = []
     for index in range(len(nodes) - 1):
-        source_id = _text(nodes[index].get("step_id") or nodes[index].get("node_id"))
-        target_id = _text(nodes[index + 1].get("step_id") or nodes[index + 1].get("node_id"))
+        source_id = _text(
+            nodes[index].get("step_id") or nodes[index].get("node_id")
+        )
+        target_id = _text(
+            nodes[index + 1].get("step_id")
+            or nodes[index + 1].get("node_id")
+        )
         edges.append(
             {
                 "edge_id": f"edge_{index + 1}",
@@ -119,16 +134,30 @@ def _graph_from_transitions(
     for index, relation in enumerate(_list(behavior_ir.get("relations"))):
         if not isinstance(relation, dict):
             continue
-        if _text(relation.get("relation_type") or relation.get("kind")).lower() != "transitions":
+        if (
+            _text(
+                relation.get("relation_type") or relation.get("kind")
+            ).lower()
+            != "transitions"
+        ):
             continue
         op_ref = _text(relation.get("operation_ref"))
-        from_ref = _text(relation.get("from_ref") or relation.get("from_state_ref"))
-        to_ref = _text(relation.get("to_ref") or relation.get("to_state_ref"))
-        if not op_ref or not from_ref or not to_ref or op_ref not in operations:
+        from_ref = _text(
+            relation.get("from_ref") or relation.get("from_state_ref")
+        )
+        to_ref = _text(
+            relation.get("to_ref") or relation.get("to_state_ref")
+        )
+        if (
+            not op_ref
+            or not from_ref
+            or not to_ref
+            or op_ref not in operations
+        ):
             continue
-        node_id = _text(relation.get("step_id") or relation.get("relation_id"))
-        if not node_id:
-            node_id = f"transition_{index + 1}_{op_ref}"
+        node_id = _text(
+            relation.get("step_id") or relation.get("relation_id")
+        ) or f"transition_{index + 1}_{op_ref}"
         transitions.append(
             {
                 "node_id": node_id,
@@ -143,7 +172,11 @@ def _graph_from_transitions(
     if not transitions:
         return None, "no_source_declared_transitions"
 
-    primary_nodes = [row for row in transitions if _text(row.get("operation_ref")) == operation_ref]
+    primary_nodes = [
+        row
+        for row in transitions
+        if _text(row.get("operation_ref")) == operation_ref
+    ]
     if len(primary_nodes) != 1:
         return None, f"primary_transition_count:{len(primary_nodes)}"
 
@@ -152,7 +185,9 @@ def _graph_from_transitions(
         for target in transitions:
             if source is target:
                 continue
-            if _text(source.get("to_state")) == _text(target.get("from_state")):
+            if _text(source.get("to_state")) == _text(
+                target.get("from_state")
+            ):
                 adjacency[_text(source.get("node_id"))].append(target)
 
     reachable: dict[str, dict[str, Any]] = {}
@@ -180,7 +215,10 @@ def _graph_from_transitions(
                     "target_node_id": target_id,
                     "relation_type": "STATE_TRANSITION_SEQUENCE",
                     "source_refs": _unique_text(
-                        [*_list(source.get("source_refs")), *_list(target.get("source_refs"))]
+                        [
+                            *_list(source.get("source_refs")),
+                            *_list(target.get("source_refs")),
+                        ]
                     ),
                 }
             )
@@ -193,7 +231,11 @@ def _graph_from_transitions(
             "wait_contracts": [],
             "compensation_edges": [],
             "source_refs": _unique_text(
-                [ref for row in nodes for ref in _list(row.get("source_refs"))]
+                [
+                    ref
+                    for row in nodes
+                    for ref in _list(row.get("source_refs"))
+                ]
             ),
             "source_kind": "BEHAVIOR_IR_TRANSITIONS",
         },
@@ -207,7 +249,9 @@ def _select_source_graph(
     behavior_ir: dict[str, Any],
     operation_ref: str,
 ) -> tuple[dict[str, Any] | None, str, str]:
-    explicit = _dict(prop.get("execution_graph") or prop.get("process_graph"))
+    explicit = _dict(
+        prop.get("execution_graph") or prop.get("process_graph")
+    )
     if explicit:
         return explicit, "", "PROPERTY_PROCESS_GRAPH"
 
@@ -216,16 +260,18 @@ def _select_source_graph(
     for graph in _list(behavior_ir.get("process_graphs")):
         if not isinstance(graph, dict):
             continue
-        process_id = _text(graph.get("process_id") or graph.get("execution_graph_id"))
-        nodes = [row for row in _list(graph.get("nodes")) if isinstance(row, dict)]
+        process_id = _text(
+            graph.get("process_id") or graph.get("execution_graph_id")
+        )
         operation_refs = {
             _text(row.get("operation_ref") or row.get("operation_id"))
-            for row in nodes
-            if _text(row.get("operation_ref") or row.get("operation_id"))
+            for row in _list(graph.get("nodes"))
+            if isinstance(row, dict)
+            and _text(row.get("operation_ref") or row.get("operation_id"))
         }
         if graph_ref and process_id == graph_ref:
             candidates.append(graph)
-        elif not graph_ref and operation_ref and operation_ref in operation_refs:
+        elif not graph_ref and operation_ref in operation_refs:
             candidates.append(graph)
     if len(candidates) == 1:
         return dict(candidates[0]), "", "BUSINESS_BEHAVIOR_IR_PROCESS_GRAPH"
@@ -310,30 +356,23 @@ def _normalize_execution_graph(
             return None, MULTI_STEP_ACTOR_NOT_BOUND, f"step_{node_id}_missing_actor_ref"
 
         operation = _dict(operations.get(op_ref))
-        object_refs = _unique_text(
-            [
-                *_list(raw_node.get("object_refs")),
-                raw_node.get("object_ref"),
-                raw_node.get("primary_object_ref"),
-            ]
-        )
-        system_ref = _text(
-            raw_node.get("system_ref")
-            or raw_node.get("target_system_ref")
-            or raw_node.get("approved_target_ref")
-        )
-        compensation_ref = _text(
-            raw_node.get("compensation_operation_ref")
-            or raw_node.get("cleanup_operation_ref")
-            or raw_node.get("compensates_operation_ref")
-        )
         node = {
             "node_id": node_id,
             "step_id": node_id,
             "operation_ref": op_ref,
             "actor_ref": node_actor,
-            "system_ref": system_ref,
-            "object_refs": object_refs,
+            "system_ref": _text(
+                raw_node.get("system_ref")
+                or raw_node.get("target_system_ref")
+                or raw_node.get("approved_target_ref")
+            ),
+            "object_refs": _unique_text(
+                [
+                    *_list(raw_node.get("object_refs")),
+                    raw_node.get("object_ref"),
+                    raw_node.get("primary_object_ref"),
+                ]
+            ),
             "method": _text(raw_node.get("method") or operation.get("method")) or "POST",
             "path": _text(
                 raw_node.get("path")
@@ -347,7 +386,11 @@ def _normalize_execution_graph(
             "input_binding_refs": _list(raw_node.get("input_binding_refs")),
             "output_binding_specs": _list(raw_node.get("output_binding_specs")),
             "observer_requirements": _list(raw_node.get("observer_requirements")),
-            "compensation_operation_ref": compensation_ref,
+            "compensation_operation_ref": _text(
+                raw_node.get("compensation_operation_ref")
+                or raw_node.get("cleanup_operation_ref")
+                or raw_node.get("compensates_operation_ref")
+            ),
             "source_refs": _list(raw_node.get("source_refs")),
         }
         nodes.append(node)
@@ -412,7 +455,9 @@ def _normalize_execution_graph(
                 "edge_id": _text(raw_edge.get("edge_id")) or f"edge_{index + 1}",
                 "source_node_id": source_node,
                 "target_node_id": target_node,
-                "relation_type": _text(raw_edge.get("relation_type") or raw_edge.get("kind"))
+                "relation_type": _text(
+                    raw_edge.get("relation_type") or raw_edge.get("kind")
+                )
                 or "DEPENDS_ON",
                 "condition": _dict(raw_edge.get("condition")),
                 "binding_refs": _list(raw_edge.get("binding_refs")),
@@ -434,17 +479,25 @@ def _normalize_execution_graph(
                 }
             )
 
-    indegree: dict[str, int] = {node["node_id"]: 0 for node in nodes}
-    outgoing: dict[str, list[str]] = {node["node_id"]: [] for node in nodes}
+    indegree = {_text(node.get("node_id")): 0 for node in nodes}
+    outgoing: dict[str, list[str]] = {
+        _text(node.get("node_id")): [] for node in nodes
+    }
     for edge in edges:
-        source_node = edge["source_node_id"]
-        target_node = edge["target_node_id"]
-        outgoing[source_node].append(target_node)
-        indegree[target_node] += 1
+        source = _text(edge.get("source_node_id"))
+        target = _text(edge.get("target_node_id"))
+        outgoing[source].append(target)
+        indegree[target] += 1
 
-    queue = deque([node["node_id"] for node in nodes if indegree[node["node_id"]] == 0])
-    topological_order: list[str] = []
+    queue = deque(
+        [
+            node_id
+            for node_id in [_text(node.get("node_id")) for node in nodes]
+            if indegree[node_id] == 0
+        ]
+    )
     mutable_indegree = dict(indegree)
+    topological_order: list[str] = []
     while queue:
         current = queue.popleft()
         topological_order.append(current)
@@ -455,27 +508,11 @@ def _normalize_execution_graph(
     if len(topological_order) != len(nodes):
         return None, MULTI_STEP_PROCESS_GRAPH_CYCLE, "process_graph_contains_cycle"
 
-    starts = [node_id for node_id, count in indegree.items() if count == 0]
-    terminals = [node_id for node_id, targets in outgoing.items() if not targets]
-    fork_groups = [
-        {"fork_node_id": node_id, "successor_node_ids": list(targets)}
-        for node_id, targets in outgoing.items()
-        if len(targets) > 1
-    ]
     incoming: dict[str, list[str]] = defaultdict(list)
     for edge in edges:
-        incoming[edge["target_node_id"]].append(edge["source_node_id"])
-    join_groups = [
-        {"join_node_id": node_id, "predecessor_node_ids": list(sources)}
-        for node_id, sources in incoming.items()
-        if len(sources) > 1
-    ]
-
-    wait_contracts = [
-        dict(row)
-        for row in [*_list(raw_graph.get("wait_contracts")), *_list(raw_graph.get("waits"))]
-        if isinstance(row, dict)
-    ]
+        incoming[_text(edge.get("target_node_id"))].append(
+            _text(edge.get("source_node_id"))
+        )
     graph = {
         "schema_version": EXECUTION_GRAPH_SCHEMA,
         "execution_graph_id": _text(
@@ -485,32 +522,39 @@ def _normalize_execution_graph(
         "process_id": _text(raw_graph.get("process_id")) or "compiled_process_graph",
         "nodes": nodes,
         "edges": edges,
-        "start_node_refs": starts,
-        "terminal_node_refs": terminals,
+        "start_node_refs": [node_id for node_id, count in indegree.items() if count == 0],
+        "terminal_node_refs": [
+            node_id for node_id, targets in outgoing.items() if not targets
+        ],
         "topological_order": topological_order,
-        "fork_groups": fork_groups,
-        "join_groups": join_groups,
-        "wait_contracts": wait_contracts,
+        "fork_groups": [
+            {"fork_node_id": node_id, "successor_node_ids": list(targets)}
+            for node_id, targets in outgoing.items()
+            if len(targets) > 1
+        ],
+        "join_groups": [
+            {"join_node_id": node_id, "predecessor_node_ids": list(sources)}
+            for node_id, sources in incoming.items()
+            if len(sources) > 1
+        ],
+        "wait_contracts": [
+            dict(row)
+            for row in [
+                *_list(raw_graph.get("wait_contracts")),
+                *_list(raw_graph.get("waits")),
+            ]
+            if isinstance(row, dict)
+        ],
         "source_refs": _list(raw_graph.get("source_refs")),
         "source_kind": source_kind,
+        "scheduler_mode": "dependency_waves",
         "status": "COMPILED",
     }
     return graph, "", ""
 
 
 def _runtime_gap(graph: dict[str, Any]) -> str:
-    systems = {
-        _text(node.get("system_ref"))
-        for node in _list(graph.get("nodes"))
-        if isinstance(node, dict) and _text(node.get("system_ref"))
-    }
     reasons: list[str] = []
-    if len(systems) > 1:
-        reasons.append("cross_system_target_dispatch")
-    if _list(graph.get("fork_groups")):
-        reasons.append("fork_scheduler")
-    if _list(graph.get("join_groups")):
-        reasons.append("join_scheduler")
     if _list(graph.get("wait_contracts")):
         reasons.append("wait_observer_scheduler")
     if any(
@@ -519,12 +563,10 @@ def _runtime_gap(graph: dict[str, Any]) -> str:
         if isinstance(edge, dict)
     ):
         reasons.append("async_edge_scheduler")
-    if len(_list(graph.get("start_node_refs"))) != 1:
-        reasons.append("multiple_start_nodes")
     return ",".join(_unique_text(reasons))
 
 
-def _linear_treatment_plan(graph: dict[str, Any]) -> list[dict[str, Any]]:
+def _treatment_plan(graph: dict[str, Any]) -> list[dict[str, Any]]:
     by_id = {
         _text(row.get("node_id")): row
         for row in _list(graph.get("nodes"))
@@ -552,6 +594,7 @@ def _linear_treatment_plan(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 "compensation_operation_ref": _text(
                     node.get("compensation_operation_ref")
                 ),
+                "_execution_graph": deepcopy(graph),
             }
         )
     return plan
@@ -565,7 +608,11 @@ def _explicit_cleanup_plan(graph: dict[str, Any]) -> list[dict[str, Any]]:
     }
     cleanup: list[dict[str, Any]] = []
     for source_node_id in reversed(
-        [_text(value) for value in _list(graph.get("topological_order")) if _text(value)]
+        [
+            _text(value)
+            for value in _list(graph.get("topological_order"))
+            if _text(value)
+        ]
     ):
         node = _dict(by_id.get(source_node_id))
         compensation_ref = _text(node.get("compensation_operation_ref"))
@@ -586,15 +633,13 @@ def _explicit_cleanup_plan(graph: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def compile_multi_step_process_protocol(envelope: dict[str, Any]) -> dict[str, Any]:
-    """Compile a source-backed process into one execution-graph authority."""
     family = _text(envelope.get("risk_family"))
     operation_ref = _text(envelope.get("operation_ref"))
-    control_actor = _text(envelope.get("control_actor_ref"))
-    treatment_actor = _text(envelope.get("treatment_actor_ref"))
+    actor_ref = _text(
+        envelope.get("treatment_actor_ref") or envelope.get("control_actor_ref")
+    )
     prop = _dict(envelope.get("property_spec"))
     behavior_ir = _dict(envelope.get("behavior_ir"))
-
-    actor_ref = treatment_actor or control_actor
     if not actor_ref:
         return _blocked(MULTI_STEP_ACTOR_NOT_BOUND, "no_actor_for_multi_step_protocol")
 
@@ -610,7 +655,10 @@ def compile_multi_step_process_protocol(envelope: dict[str, Any]) -> dict[str, A
             or selection_detail.startswith("primary_transition_count")
             else MULTI_STEP_PROTOCOL_NOT_RESOLVED
         )
-        return _blocked(reason, selection_detail or "no_source_declared_process_graph")
+        return _blocked(
+            reason,
+            selection_detail or "no_source_declared_process_graph",
+        )
 
     graph, reason_code, detail = _normalize_execution_graph(
         raw_graph,
@@ -621,7 +669,6 @@ def compile_multi_step_process_protocol(envelope: dict[str, Any]) -> dict[str, A
     )
     if graph is None:
         return _blocked(reason_code or MULTI_STEP_PROCESS_GRAPH_INVALID, detail)
-
     if len(_list(graph.get("nodes"))) < 2:
         return _blocked(
             MULTI_STEP_PROTOCOL_NOT_RESOLVED,
@@ -635,16 +682,16 @@ def compile_multi_step_process_protocol(envelope: dict[str, Any]) -> dict[str, A
         graph["runtime_blockers"] = runtime_gap.split(",")
         return _blocked(MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE, runtime_gap, graph)
 
-    treatment_plan = _linear_treatment_plan(graph)
+    treatment_plan = _treatment_plan(graph)
     cleanup_plan = _explicit_cleanup_plan(graph)
     expected_order = _list(prop.get("expected_order"))
-    if not expected_order and source_kind in {
-        "PROPERTY_PROCESS_STEPS",
-        "BEHAVIOR_IR_TRANSITIONS",
-        "BUSINESS_BEHAVIOR_IR_PROCESS_GRAPH",
-    }:
+    if (
+        not expected_order
+        and not _list(graph.get("fork_groups"))
+        and not _list(graph.get("join_groups"))
+        and len(_list(graph.get("start_node_refs"))) == 1
+    ):
         expected_order = list(graph.get("topological_order") or [])
-
     source_refs = _list(prop.get("source_refs")) or _list(graph.get("source_refs"))
     return {
         "status": "COMPILED",
@@ -686,6 +733,18 @@ def compile_sequence_verification_protocol(envelope: dict[str, Any]) -> dict[str
     result = compile_multi_step_process_protocol(envelope)
     if result.get("status") != "COMPILED":
         return result
+    graph = _dict(result.get("execution_graph"))
+    if (
+        _list(graph.get("fork_groups"))
+        or _list(graph.get("join_groups"))
+        or len(_list(graph.get("start_node_refs"))) != 1
+        or not _list(result.get("expected_order"))
+    ):
+        return _blocked(
+            MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE,
+            "sequence_total_order_not_source_declared",
+            graph,
+        )
     result["assertion"] = {
         **_dict(result.get("assertion")),
         "kind": "step_sequence_order",
@@ -695,11 +754,7 @@ def compile_sequence_verification_protocol(envelope: dict[str, Any]) -> dict[str
 
 
 def register_v150_multi_step_protocols() -> list[str]:
-    """Idempotently register graph compilers in the existing registry.
-
-    Registration errors are deliberately not swallowed.  A missing observer or
-    assertion surface is a startup contract failure, not a debug-only event.
-    """
+    """Idempotently register graph compilers in the existing registry."""
     from .experiment_protocol_registry import register_family_protocol
     from .process_step_observer import install_process_step_surface
 
@@ -735,3 +790,23 @@ def register_v150_multi_step_protocols() -> list[str]:
     ]
     logger.debug("registered source-backed process protocols: %s", registered)
     return registered
+
+
+__all__ = [
+    "TEMPLATE_MULTI_STEP_PROCESS",
+    "TEMPLATE_STATE_CHAIN_PROCESS",
+    "TEMPLATE_SEQUENCE_VERIFICATION",
+    "EXECUTION_GRAPH_SCHEMA",
+    "MULTI_STEP_PROTOCOL_NOT_RESOLVED",
+    "MULTI_STEP_IDENTITY_INVALID",
+    "MULTI_STEP_ACTOR_NOT_BOUND",
+    "MULTI_STEP_OPERATION_NOT_BOUND",
+    "MULTI_STEP_PROCESS_GRAPH_AMBIGUOUS",
+    "MULTI_STEP_PROCESS_GRAPH_INVALID",
+    "MULTI_STEP_PROCESS_GRAPH_CYCLE",
+    "MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE",
+    "compile_multi_step_process_protocol",
+    "compile_state_chain_protocol",
+    "compile_sequence_verification_protocol",
+    "register_v150_multi_step_protocols",
+]
