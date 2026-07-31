@@ -44,18 +44,20 @@ def _typed_observer(
     observer_id: str,
     step_id: str,
     *,
-    target_reached: bool,
+    target_reached: bool | None = None,
 ) -> dict:
+    evidence = {
+        "step_id": step_id,
+        "status_code": 200,
+        "response_received": True,
+    }
+    if isinstance(target_reached, bool):
+        evidence["target_reached"] = target_reached
     return build_observer_receipt(
         observer_id=observer_id,
         status="OBSERVED",
         reason_code="",
-        evidence={
-            "step_id": step_id,
-            "target_reached": target_reached,
-            "status_code": 200,
-            "response_received": True,
-        },
+        evidence=evidence,
         campaign_id=IDENTITY["campaign_id"],
         execution_id=IDENTITY["run_id"],
     )
@@ -133,7 +135,7 @@ def _bundle(
         )
 
     http_receipts = [
-        _typed_observer("http_response", step_id, target_reached=False)
+        _typed_observer("http_response", step_id)
         for step_id in actual_http_step_ids
     ]
     business_receipts = [
