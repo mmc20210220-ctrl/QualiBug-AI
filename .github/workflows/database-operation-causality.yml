@@ -24,11 +24,13 @@ on:
       - "ai_test_asset_center/non_http_observers.py"
       - "tests/database_relation_delta_causality_fixtures.py"
       - "tests/test_database_relation_delta_causality_projection.py"
+      - "tests/test_database_relation_delta_causality_mainline.py"
       - "tests/test_database_relation_causality_runtime.py"
       - "tests/test_operation_causality_runtime.py"
       - "tests/test_operation_causality_receipt_integrity.py"
       - "tests/test_database_relation_delta_causality_oracle.py"
       - "tests/test_database_relation_delta_causality_integrity.py"
+      - "tests/test_database_relation_delta_causality_registration.py"
       - "tests/test_database_relation_delta_causality_contract_oracle.py"
       - "tests/test_database_relation_delta_causality_finding_bridge.py"
       - "tests/test_database_relation_delta_causality_runtime_integration.py"
@@ -93,11 +95,13 @@ jobs:
             tests/test_database_relation_delta_contract_oracle.py \
             tests/test_database_relation_delta_runtime_integration.py \
             tests/test_database_relation_delta_causality_projection.py \
+            tests/test_database_relation_delta_causality_mainline.py \
             tests/test_database_relation_causality_runtime.py \
             tests/test_operation_causality_runtime.py \
             tests/test_operation_causality_receipt_integrity.py \
             tests/test_database_relation_delta_causality_oracle.py \
             tests/test_database_relation_delta_causality_integrity.py \
+            tests/test_database_relation_delta_causality_registration.py \
             tests/test_database_relation_delta_causality_contract_oracle.py \
             tests/test_database_relation_delta_causality_finding_bridge.py \
             tests/test_database_relation_delta_causality_runtime_integration.py \
