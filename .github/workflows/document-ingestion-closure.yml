@@ -26,6 +26,7 @@ on:
       - "benchmark_evaluator/enterprise_understanding/ingestion_evidence.py"
       - "benchmark_evaluator/enterprise_understanding/runner.py"
       - "benchmark_evaluator/enterprise_understanding/report.py"
+      - "benchmark_evaluator/enterprise_understanding/run_source_backed_workflow.py"
       - "benchmark_evaluator/enterprise_understanding/__init__.py"
       - "benchmark_evaluator/enterprise_understanding/__main__.py"
       - "tests/test_enterprise_document_ingestion_closure.py"
@@ -64,6 +65,7 @@ on:
       - "tests/test_enterprise_understanding_ingestion_evidence.py"
       - "tests/test_enterprise_understanding_ingestion_evidence_fail_closed.py"
       - "tests/test_enterprise_understanding_document_ground_truth.py"
+      - "tests/test_enterprise_understanding_source_backed_ingestion_target.py"
       - "pyproject.toml"
       - "Dockerfile"
       - ".github/workflows/document-ingestion-closure.yml"
@@ -134,6 +136,7 @@ jobs:
             benchmark_evaluator/enterprise_understanding/ingestion_evidence.py \
             benchmark_evaluator/enterprise_understanding/runner.py \
             benchmark_evaluator/enterprise_understanding/report.py \
+            benchmark_evaluator/enterprise_understanding/run_source_backed_workflow.py \
             benchmark_evaluator/enterprise_understanding/__init__.py \
             benchmark_evaluator/enterprise_understanding/__main__.py
 
@@ -175,4 +178,5 @@ jobs:
             tests/test_generated_structure_label_authority.py \
             tests/test_enterprise_understanding_ingestion_evidence.py \
             tests/test_enterprise_understanding_ingestion_evidence_fail_closed.py \
-            tests/test_enterprise_understanding_document_ground_truth.py
+            tests/test_enterprise_understanding_document_ground_truth.py \
+            tests/test_enterprise_understanding_source_backed_ingestion_target.py
