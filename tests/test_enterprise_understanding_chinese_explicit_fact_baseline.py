@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
     build_chinese_first_comprehension,
@@ -14,6 +15,7 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.s
 from benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline import (
     FIXTURE_ROOT,
     PROJECT_ID,
+    TARGETS,
     _first_loss_analysis,
     _threshold_status,
 )
@@ -77,6 +79,38 @@ def _asset() -> dict:
     }
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _parent_fact(asset: dict[str, Any], statement_prefix: str) -> dict[str, Any]:
+    facts = _list(_dict(asset.get("business_fact_ledger")).get("items"))
+    matches = [
+        row
+        for row in facts
+        if isinstance(row, dict)
+        and not _text(row.get("parent_fact_ref"))
+        and _text(row.get("raw_statement")).startswith(statement_prefix)
+    ]
+    assert len(matches) == 1, [
+        {
+            "fact_id": row.get("fact_id"),
+            "fact_type": row.get("fact_type"),
+            "raw_statement": row.get("raw_statement"),
+        }
+        for row in matches
+    ]
+    return dict(matches[0])
+
+
 def test_frozen_ground_truth_is_valid_and_source_backed() -> None:
     ground_truth = validate_business_fact_slot_document(
         load_ground_truth(FIXTURE_ROOT / "ground_truth.json")
@@ -116,6 +150,51 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     assert asset["business_fact_candidate_ledger"]["all_candidates_terminal"] is True
     assert asset["business_fact_candidate_ledger"]["silent_drop_allowed"] is False
 
+    normalization = asset["explicit_fact_semantic_normalization_receipt"]
+    assert normalization["status"] == "PASS"
+    assert normalization["existing_ledger_reused"] is True
+    assert normalization["new_fact_discovery_allowed"] is False
+    assert normalization["automatic_winner_used"] is False
+
+    permission = _parent_fact(asset, "经理只有在订单状态为待审批")
+    permission_subject = _dict(permission.get("subject"))
+    assert permission["fact_type"] == "PERMISSION_RULE"
+    assert permission["modality"] == "MAY"
+    assert "经理" in _list(permission_subject.get("actor_refs"))
+    assert "订单" in _list(permission_subject.get("entity_refs"))
+    assert permission["action"]["canonical"] == "审批通过"
+    assert permission["condition_frame"]["kind"] == "ALL"
+    assert permission["condition_frame"]["combinator"] == "AND"
+    assert permission["condition_frame"]["conditions"] == [
+        "订单状态为待审批",
+        "所属部门一致",
+    ]
+
+    transition = _parent_fact(asset, "订单审批通过后")
+    transition_subject = _dict(transition.get("subject"))
+    assert transition["fact_type"] == "STATE_TRANSITION"
+    assert transition["action"]["canonical"] == "审批通过"
+    assert "订单" in _list(transition_subject.get("entity_refs"))
+    assert any(
+        _dict(row).get("from_state") == "待审批"
+        and _dict(row).get("to_state") == "已审批"
+        for row in _list(transition.get("state_effects"))
+    )
+
+    obligation = _parent_fact(asset, "财务人员必须在付款成功后")
+    obligation_subject = _dict(obligation.get("subject"))
+    assert obligation["fact_type"] == "BUSINESS_RULE"
+    assert obligation["modality"] == "MUST"
+    assert obligation["action"]["canonical"] == "开具"
+    assert "财务人员" in _list(obligation_subject.get("actor_refs"))
+    assert "发票" in _list(obligation_subject.get("entity_refs"))
+    assert any(
+        _dict(row).get("anchor") == "付款成功后"
+        and _dict(row).get("duration") == "24小时"
+        and _dict(row).get("relation") == "WITHIN"
+        for row in _list(obligation.get("time_window_constraints"))
+    )
+
     first_loss = _first_loss_analysis(measurement)
     assert first_loss["schema"] == (
         "qualibug.chinese-explicit-fact-first-loss-analysis.v1"
@@ -124,9 +203,12 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     assert len(first_loss["alignments"]) == 12
 
     threshold_status, checks = _threshold_status(measurement["metrics"])
-    assert threshold_status in {"PASS", "BELOW_TARGET"}
-    assert set(checks) == {
-        "fact_recall",
-        "slot_exact_accuracy",
-        "p0_exact_fact_recall",
+    assert threshold_status == "PASS", {
+        "metrics": measurement["metrics"],
+        "first_loss": first_loss,
     }
+    assert set(checks) == set(TARGETS)
+    for metric, target in TARGETS.items():
+        assert checks[metric]["measurable"] is True
+        assert checks[metric]["meets_target"] is True
+        assert float(measurement["metrics"][metric]) >= target
