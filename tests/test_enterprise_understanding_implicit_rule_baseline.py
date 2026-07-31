@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 
 from benchmark_evaluator.enterprise_understanding.implicit_rule_baseline import (
+    STABLE_INTERFACE_SOURCE_REF,
+    STABLE_RULE_SOURCE_REF,
     run_implicit_rule_baseline,
 )
 
@@ -54,12 +56,27 @@ def test_baseline_loads_ground_truth_only_after_versioned_product_phase(tmp_path
                     "status": "PASS",
                     "ground_truth_loaded": False,
                     "receipt_fingerprint": "versioned-product-receipt",
+                    "changed_source_count": 1,
+                    "unchanged_source_count": 1,
                     "source_version_transitions": [
                         {
-                            "source_ref": "online-docs/implicit-rules/business-rules.md",
+                            "source_ref": STABLE_RULE_SOURCE_REF,
+                            "content_changed": True,
+                            "transition_kind": "SUPERSEDED_BY_CHANGED_CONTENT",
+                            "source_occurrence_supersession_authority": True,
+                            "source_occurrence_reuse_authority": False,
                             "phase_one_version": 1,
                             "phase_two_version": 2,
-                        }
+                        },
+                        {
+                            "source_ref": STABLE_INTERFACE_SOURCE_REF,
+                            "content_changed": False,
+                            "transition_kind": "UNCHANGED_OCCURRENCE_REUSED",
+                            "source_occurrence_supersession_authority": False,
+                            "source_occurrence_reuse_authority": True,
+                            "phase_one_version": 1,
+                            "phase_two_version": 1,
+                        },
                     ],
                     "phase_two_governance_carry_forward_receipt": {
                         "captured_before_base_rebuild": True,
@@ -91,6 +108,12 @@ def test_baseline_loads_ground_truth_only_after_versioned_product_phase(tmp_path
     assert result["ground_truth_entered_product_runtime"] is False
     assert result["product_model_can_self_label_true_or_false"] is False
     assert result["threshold_gate_applied"] is False
+    assert result["execution_interface_authority_present"] is True
+    assert result["execution_linking_authority"] == (
+        "EXACT_RULE_STATEMENT_IN_INTERFACE_SOURCE_EXCERPT"
+    )
+    assert result["changed_source_count"] == 1
+    assert result["unchanged_source_count"] == 1
     assert result["quality_scope"] == (
         "FROZEN_CONTRACT_CORPUS_ONLY_NOT_131_BUG_RECALL_OR_INDUSTRY_GENERALIZATION"
     )
@@ -100,8 +123,31 @@ def test_baseline_loads_ground_truth_only_after_versioned_product_phase(tmp_path
     }
     assert "GROUND_TRUTH_TOKEN" not in seen["env"]
     assert "HIDDEN_BUG_ANSWER_KEY" not in seen["env"]
-    assert (output / "source_manifest_v1.json").is_file()
-    assert (output / "source_manifest_v2.json").is_file()
+
+    manifest_one = json.loads(
+        (output / "source_manifest_v1.json").read_text(encoding="utf-8")
+    )
+    manifest_two = json.loads(
+        (output / "source_manifest_v2.json").read_text(encoding="utf-8")
+    )
+    for manifest in (manifest_one, manifest_two):
+        sources = {row["source_ref"]: row for row in manifest["sources"]}
+        assert set(sources) == {
+            STABLE_RULE_SOURCE_REF,
+            STABLE_INTERFACE_SOURCE_REF,
+        }
+        assert sources[STABLE_INTERFACE_SOURCE_REF]["source_type"] == "openapi"
+        assert sources[STABLE_INTERFACE_SOURCE_REF]["blob_sha"]
+        assert manifest["execution_interface_authority_present"] is True
+        assert manifest["exact_rule_statement_embedded_in_interface_description"] is True
+    assert (
+        {row["source_ref"]: row for row in manifest_one["sources"]}[
+            STABLE_INTERFACE_SOURCE_REF
+        ]["blob_sha"]
+        == {row["source_ref"]: row for row in manifest_two["sources"]}[
+            STABLE_INTERFACE_SOURCE_REF
+        ]["blob_sha"]
+    )
     assert (output / "evaluation" / "implicit_rule_measurement.json").is_file()
     assert (output / "implicit_rule_baseline_summary.json").is_file()
 
