@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 
 from ai_test_asset_center.enterprise_knowledge_center._parsing import _parse_source
+from ai_test_asset_center.enterprise_knowledge_center.document_ingestion import (
+    build_document_structure_ir,
+)
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.interface_runtime_contracts import (
     install_interface_runtime_contract_parser,
 )
@@ -111,3 +114,26 @@ def test_openapi_parser_decodes_operation_prose_without_creating_text_rule():
     assert operation["source_excerpt_authority"] == (
         "OPENAPI_OPERATION_SUMMARY_DESCRIPTION"
     )
+
+
+def test_openapi_document_ir_keeps_structure_but_excludes_prose_from_plain_text():
+    path = FIXTURE / "payment_api.openapi.json"
+    structure = build_document_structure_ir(
+        path.read_bytes(),
+        filename=path.name,
+        source_id="source:payment-api",
+        declared_mime="application/json",
+        legacy_text=path.read_text(encoding="utf-8"),
+    )
+
+    assert IDEMPOTENCY not in str(structure.get("plain_text") or "")
+    operation_blocks = [
+        row
+        for row in structure.get("blocks") or []
+        if isinstance(row, dict) and row.get("node_kind") == "OPENAPI_OPERATION"
+    ]
+    assert len(operation_blocks) == 1
+    operation_block = operation_blocks[0]
+    assert operation_block["json_pointer"] == "/paths/~1payments/post"
+    assert operation_block["excluded_from_plain_text_projection"] is True
+    assert operation_block["structure_evidence"]["business_semantics_added"] is False
