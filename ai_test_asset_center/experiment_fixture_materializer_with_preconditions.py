@@ -1,14 +1,14 @@
 """Fixture materialization followed by compiled state preconditions.
 
-The original fixture materializer remains the data/setup authority. This
-wrapper executes the already-frozen precondition plan only after fixtures and
-runtime bindings are ready, before any measured control/treatment step.
+The core fixture materializer remains the data/setup authority. This wrapper
+executes the already-frozen precondition plan only after fixtures and runtime
+bindings are ready, before any measured control/treatment step.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from .experiment_fixture_materializer import (
+from .experiment_fixture_materializer_core import (
     materialize_experiment_fixtures as _materialize_experiment_fixtures,
 )
 from .experiment_precondition_executor import execute_precondition_plan
@@ -76,8 +76,6 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     if precondition.get("established") is True:
         return state
 
-    # Do not enter the measured window. Accepted governed writes stay in
-    # steps_out so the existing cleanup authority can see and compensate them.
     state["status"] = "precondition_blocked"
     state["precondition_reason_code"] = _text(precondition.get("reason_code"))
     state["precondition_detail"] = _text(precondition.get("detail"))
