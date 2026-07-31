@@ -17,6 +17,9 @@ Authority boundaries are deliberate:
 
 A fact whose original statement already exists as an authoritative source rule is
 suppressed so structure compilation cannot duplicate the same invariant and obligation.
+A source-grounded semantic rule may still remain pending when the current runtime cannot
+produce the evidence needed to evaluate it; semantic recognition never implies executable
+coverage.
 """
 from __future__ import annotations
 
@@ -170,6 +173,8 @@ def _candidate(
     scope: dict[str, Any] | None = None,
     exceptions: list[Any] | None = None,
     severity: str = "P1",
+    binding_readiness: str = "READY_FOR_IR_BINDING",
+    execution_capability: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     fact_id = _text(fact.get("fact_id") or fact.get("id"))
     statement = _text(fact.get("raw_statement") or fact.get("statement"))
@@ -204,7 +209,8 @@ def _candidate(
         "supporting_evidence": source_refs,
         "source_authority": "formal_constraint",
         "falsifiability": "EVALUABLE",
-        "binding_readiness": "READY_FOR_IR_BINDING",
+        "binding_readiness": binding_readiness,
+        "execution_capability": dict(execution_capability or {}),
         "scope_status": "RESOLVED" if scope else "NOT_APPLICABLE",
         "exception_status": "RESOLVED" if exception_values else "NOT_APPLICABLE",
         "counterexample_plan": counterexample_plan,
@@ -251,10 +257,17 @@ def _cardinality_candidates(
         },
         subject_refs=[*subjects, *objects],
         risk_type="data_integrity",
-        observation_requirements=["related_collection"],
+        observation_requirements=["collection"],
         counterexample_plan={
             "action": "construct_relation_count_outside_declared_cardinality",
-            "observe": "related_collection",
+            "observe": "collection",
+        },
+        binding_readiness="BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+        execution_capability={
+            "status": "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+            "assertion_kind": "cardinality",
+            "missing_observation_key": "collection",
+            "authority": "assertion_dsl_kind_to_evidence_contract",
         },
     )
     return [row] if row else []
