@@ -157,6 +157,12 @@ _STATE_INVARIANT_RE = re.compile(
 _AND_RE = re.compile(r"并且|同时满足|以及|(?<![并])且(?![不])")
 _OR_RE = re.compile(r"或者|或则|任一条件|其中之一")
 _PUNCTUATION_BOUNDARY_RE = re.compile(r"[，,；;。]")
+_GRAMMAR_FRAGMENT_RE = re.compile(
+    r"如果|若|一旦|则|否则|只有|仅当|必须|应当|务必|不得|严禁|禁止|"
+    r"不允许|不可|不能|可以|允许|有权|无权|本人|自己|尚未|已经|未审批|"
+    r"状态为|并且|同时满足|以及|或者|其中之一|(?<![并])且(?![不])"
+)
+_EXACT_ADDRESS_KINDS = frozenset({"EXACT_SOURCE_LOCATOR", "PAGE_BBOX"})
 
 
 def _text(value: Any) -> str:
@@ -204,13 +210,14 @@ def _source_backed_vocabulary(
     existing: Iterable[Any],
     heads: Iterable[str],
 ) -> list[str]:
-    """Reuse literal existing identities before falling back to generic heads."""
+    """Reuse literal identity names, never condition/modality/branch fragments."""
     head_values = tuple(_text(value) for value in heads if _text(value))
     existing_values = [
         _text(value)
         for value in existing
         if _text(value)
         and _text(value) in statement
+        and not _GRAMMAR_FRAGMENT_RE.search(_text(value))
         and any(_text(value).endswith(head) for head in head_values)
     ]
     return _ordered_unique([*existing_values, *head_values])
@@ -509,9 +516,14 @@ def _normalize_primary_claim(
 
 
 def _source_locator(fact: dict[str, Any]) -> str:
-    for span in _list(fact.get("source_spans")):
-        if not isinstance(span, dict):
-            continue
+    spans = [row for row in _list(fact.get("source_spans")) if isinstance(row, dict)]
+    for span in spans:
+        address_kind = _text(span.get("address_kind"))
+        if _text(span.get("document_block_id")) or address_kind in _EXACT_ADDRESS_KINDS:
+            locator = _text(span.get("locator") or span.get("source_locator"))
+            if locator:
+                return locator
+    for span in spans:
         locator = _text(span.get("locator") or span.get("source_locator"))
         if locator:
             return locator
@@ -755,9 +767,11 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
         "normalized_field_counts": dict(sorted(field_counts.items())),
         "existing_ledger_reused": True,
         "existing_source_backed_identity_vocabulary_reused": True,
+        "grammar_fragment_identity_reuse_allowed": False,
         "governed_operation_binding": True,
         "qualified_object_conditions_compiled": True,
         "split_if_else_pairing_requires_one_unique_pair_per_locator": True,
+        "split_if_else_pairing_prefers_exact_structure_locator": True,
         "negative_operation_is_not_negative_modality": True,
         "new_fact_discovery_allowed": False,
         "source_statement_rewrite_allowed": False,
@@ -772,8 +786,10 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             "explicit_fact_coordinates_normalized_at_compiler_boundary": True,
             "explicit_fact_identity_is_bound_to_governed_operation": True,
             "explicit_fact_normalization_reuses_source_backed_identity_vocabulary": True,
+            "explicit_fact_normalization_rejects_grammar_fragment_identity": True,
             "explicit_fact_qualified_object_conditions_are_source_backed": True,
             "explicit_fact_split_if_else_pairing_is_locator_scoped": True,
+            "explicit_fact_split_if_else_pairing_prefers_structure_locator": True,
             "explicit_fact_negative_operation_is_separate_from_modality": True,
             "explicit_fact_normalization_discovers_new_facts": False,
             "explicit_fact_normalization_selects_conflicting_values": False,
