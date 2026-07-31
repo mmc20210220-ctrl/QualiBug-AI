@@ -1,32 +1,10 @@
-"""Per-step process observation and the ordering assertion it enables.
+"""Canonical per-step process observation and sequence assertion.
 
-``experiment_plan_executor`` now appends a ``process_timeline`` row per step when a phase has
-more than one, but a channel nobody reads is inert — the exact shape of defect this codebase
-had in several places (a registry entry with no dispatch branch, an assertion kind whose
-evidence no observer produces, an entire lexicon file that did not exist). This module closes
-the loop: an observer that turns the timeline into a receipt, and an assertion kind that can
-state something no existing kind could.
-
-WHAT ORDERING ADDS
-==================
-Every built-in assertion kind is positive-polarity and single-window: it states that a value
-became something. None can state "step A must precede step B", so a process whose steps are
-individually correct but executed in the wrong order was unfalsifiable — the failure mode of
-approval-before-validation, ship-before-payment, and every other sequencing defect.
-
-SOURCE-DECLARED, LIKE EVERYTHING ELSE
-=====================================
-The expected order arrives on the assertion property. It is never derived from the plan
-itself, which would make the assertion tautological: a plan compared against its own step
-order can only ever pass.
-
-FAIL-CLOSED
-===========
-A timeline missing a declared step, or a step that never reached transport, yields
-INDETERMINATE with a named reason rather than a violation. A step that did not run is not
-evidence that ordering was broken.
+The executor publishes one ``qualibug.process-timeline.v1`` receipt. This
+observer consumes its ``events`` list and joins status facts from the live
+ProcessStepLedger. The former append-only list shape remains readable only for
+migration; no new second timeline is authored.
 """
-
 from __future__ import annotations
 
 import logging
@@ -38,8 +16,18 @@ OBSERVER_ID = "process_step_timeline"
 SURFACE = "process_timeline"
 ADAPTER = "http_api"
 EVIDENCE_KEY = "process_step_timeline"
-
 KIND_SEQUENCE_ORDER = "step_sequence_order"
+
+_BUSINESS_PHASES = frozenset({"control", "treatment"})
+_EXECUTION_EVENTS = frozenset(
+    {
+        "TRANSPORT_STARTED",
+        "TRANSPORT_COMPLETED",
+        "AFTER_STATE_OBSERVED",
+        "STEP_COMPLETED",
+        "STEP_FAILED",
+    }
+)
 
 
 def _text(value: Any) -> str:
@@ -55,49 +43,99 @@ def _list(value: Any) -> list[Any]:
 
 
 def _declared(spec: dict[str, Any], key: str) -> Any:
-    """Read a declaration from either shape the compiler produces.
-
-    evaluate_assertion passes the WHOLE assertion dict as spec; the compiler spreads
-    protocol assertion keys at that top level while nesting the source-derived property
-    spec under "property". Reading one shape turns every declaration into "not declared".
-    """
     source = _dict(spec)
     if key in source:
         return source[key]
     return _dict(source.get("property")).get(key)
 
 
+def _timeline_events(observations: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = observations.get("process_timeline")
+    if isinstance(raw, dict):
+        return [
+            dict(row)
+            for row in _list(raw.get("events"))
+            if isinstance(row, dict)
+        ]
+    return [dict(row) for row in _list(raw) if isinstance(row, dict)]
+
+
+def _ledger_rows(observations: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    ledger = observations.get("process_step_ledger")
+    if ledger is None or not hasattr(ledger, "all_rows"):
+        return {}
+    return {
+        _text(row.get("step_id")): dict(row)
+        for row in ledger.all_rows()
+        if isinstance(row, dict) and _text(row.get("step_id"))
+    }
+
+
 def observe_process_steps(envelope: dict[str, Any]) -> dict[str, Any]:
-    """Turn the per-step timeline into a receipt, or refuse with a named reason."""
+    """Turn the canonical timeline into a typed observer receipt."""
     from .observer_contracts_base import _receipt
 
     observations = _dict(envelope.get("observations"))
-    timeline = [row for row in _list(observations.get("process_timeline")) if isinstance(row, dict)]
-    if not timeline:
-        # The executor only writes the timeline when a phase has more than one step, so an
-        # empty one means this experiment is single-step -- not that observation failed.
+    events = _timeline_events(observations)
+    business_events = [
+        row
+        for row in events
+        if _text(row.get("phase")) in _BUSINESS_PHASES
+        and _text(row.get("step_id"))
+        and _text(row.get("event_type")) in _EXECUTION_EVENTS
+    ]
+    if not business_events:
         return _receipt(
             observer_id=OBSERVER_ID,
             status="INDETERMINATE",
             reason_code="PROCESS_TIMELINE_ABSENT",
-            evidence={"reason": "no phase in this experiment executed more than one step"},
+            evidence={
+                "timeline_schema": _text(_dict(observations.get("process_timeline")).get("schema_version")),
+                "event_count": len(events),
+                "reason": "no business-step execution events were recorded",
+            },
         )
 
-    steps = [
-        {
-            "step_id": _text(row.get("step_id")),
-            "phase": _text(row.get("phase")),
-            "ordinal": row.get("step_ordinal"),
-            "operation_ref": _text(row.get("operation_ref")),
-            "actor_ref": _text(row.get("actor_ref")),
-            "status_code": row.get("status_code"),
-            "reached_transport": bool(row.get("status_code")),
-        }
-        for row in timeline
-    ]
-    observed_order = [row["step_id"] for row in steps]
-    unreached = [row["step_id"] for row in steps if not row["reached_transport"]]
+    rows = _ledger_rows(observations)
+    step_order: list[str] = []
+    terminal_event_by_step: dict[str, dict[str, Any]] = {}
+    for event in business_events:
+        step_id = _text(event.get("step_id"))
+        if step_id not in step_order:
+            step_order.append(step_id)
+        terminal_event_by_step[step_id] = event
 
+    steps: list[dict[str, Any]] = []
+    for ordinal, step_id in enumerate(step_order, 1):
+        event = terminal_event_by_step[step_id]
+        row = _dict(rows.get(step_id))
+        status_code = int(row.get("status_code") or 0)
+        final_status = _text(
+            row.get("final_step_status") or row.get("final_status")
+        )
+        reached_transport = status_code > 0 or _text(event.get("event_type")) in {
+            "TRANSPORT_STARTED",
+            "TRANSPORT_COMPLETED",
+            "AFTER_STATE_OBSERVED",
+            "STEP_COMPLETED",
+        }
+        steps.append(
+            {
+                "step_id": step_id,
+                "phase": _text(event.get("phase")),
+                "ordinal": int(event.get("step_ordinal") or ordinal),
+                "operation_ref": _text(
+                    event.get("operation_ref") or row.get("operation_ref")
+                ),
+                "actor_ref": _text(event.get("actor_ref") or row.get("actor_ref")),
+                "status_code": status_code,
+                "final_status": final_status,
+                "terminal_event_type": _text(event.get("event_type")),
+                "reached_transport": reached_transport,
+            }
+        )
+
+    unreached = [row["step_id"] for row in steps if not row["reached_transport"]]
     return _receipt(
         observer_id=OBSERVER_ID,
         status="OBSERVED",
@@ -105,12 +143,13 @@ def observe_process_steps(envelope: dict[str, Any]) -> dict[str, Any]:
         evidence={
             EVIDENCE_KEY: {
                 "surface": SURFACE,
+                "timeline_schema": _text(
+                    _dict(observations.get("process_timeline")).get("schema_version")
+                ),
                 "steps": steps,
-                "observed_order": observed_order,
+                "observed_order": step_order,
                 "step_count": len(steps),
                 "steps_not_reaching_transport": unreached,
-                # A partially executed process is reported as such rather than presented as
-                # a complete ordering reading.
                 "coverage_complete": not unreached,
             }
         },
@@ -118,12 +157,14 @@ def observe_process_steps(envelope: dict[str, Any]) -> dict[str, Any]:
 
 
 def evaluate_step_sequence_order(envelope: dict[str, Any]) -> dict[str, Any]:
-    """Observed step order must match a source-declared expected order."""
+    """Compare observed order with a source-declared expected order."""
     spec = _dict(envelope.get("spec"))
-    expected_order = [_text(item) for item in _list(_declared(spec, "expected_step_order")) if _text(item)]
+    expected_order = [
+        _text(item)
+        for item in _list(_declared(spec, "expected_step_order"))
+        if _text(item)
+    ]
     if len(expected_order) < 2:
-        # One step has no order. Refusing keeps a vacuous "ordering verified" out of the
-        # record.
         return {
             "passed": None,
             "reason_code": "STEP_ORDER_NOT_DECLARED",
@@ -132,7 +173,9 @@ def evaluate_step_sequence_order(envelope: dict[str, Any]) -> dict[str, Any]:
         }
 
     payload = _dict(_dict(envelope.get("observations")).get(EVIDENCE_KEY))
-    observed_order = [_text(item) for item in _list(payload.get("observed_order")) if _text(item)]
+    observed_order = [
+        _text(item) for item in _list(payload.get("observed_order")) if _text(item)
+    ]
     if not observed_order:
         return {
             "passed": None,
@@ -143,7 +186,6 @@ def evaluate_step_sequence_order(envelope: dict[str, Any]) -> dict[str, Any]:
 
     missing = [step_id for step_id in expected_order if step_id not in observed_order]
     if missing:
-        # A declared step that never ran is not evidence that ordering was broken.
         return {
             "passed": None,
             "reason_code": "DECLARED_STEP_NOT_OBSERVED",
@@ -157,27 +199,29 @@ def evaluate_step_sequence_order(envelope: dict[str, Any]) -> dict[str, Any]:
             "expected": {"expected_step_order": expected_order},
             "actual": {
                 "observed_order": observed_order,
-                "steps_not_reaching_transport": list(payload["steps_not_reaching_transport"]),
+                "steps_not_reaching_transport": list(
+                    payload["steps_not_reaching_transport"]
+                ),
             },
         }
 
-    # Compare only the declared steps, in the order they were observed. A plan may contain
-    # steps the declaration says nothing about; those must not affect the verdict.
-    observed_declared = [step_id for step_id in observed_order if step_id in set(expected_order)]
+    expected_set = set(expected_order)
+    observed_declared = [
+        step_id for step_id in observed_order if step_id in expected_set
+    ]
     return {
         "passed": observed_declared == expected_order,
         "reason_code": "",
         "expected": {"expected_step_order": expected_order},
-        "actual": {"observed_order": observed_declared, "full_observed_order": observed_order},
+        "actual": {
+            "observed_order": observed_declared,
+            "full_observed_order": observed_order,
+        },
     }
 
 
 def install_process_step_surface() -> dict[str, str]:
-    """Install the per-step observer and the ordering assertion kind, in that order.
-
-    register_assertion_kind refuses a kind whose evidence key no registered observer
-    declares it produces, so the observer must exist first. Idempotent.
-    """
+    """Install the observer and ordering assertion through existing registries."""
     from .assertion_dsl_base import register_assertion_kind, registered_assertion_kinds
     from .observer_contracts_base import OBSERVER_REGISTRY, register_observer
 
