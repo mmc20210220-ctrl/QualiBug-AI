@@ -57,7 +57,7 @@ def _snapshot(snapshot_id: str, recorded_at: str) -> dict:
 def test_repository_round_trip_and_composition_injection(tmp_path) -> None:
     save_identity_ground_truth("project-a", _truth(), tmp_path)
     save_identity_quality_policy("project-a", _policy(), tmp_path)
-    append_identity_benchmark_snapshot(
+    event = append_identity_benchmark_snapshot(
         "project-a", _snapshot("snapshot:1", "2026-07-31T12:00:00Z"), tmp_path
     )
 
@@ -69,9 +69,10 @@ def test_repository_round_trip_and_composition_injection(tmp_path) -> None:
     )
     assert asset["enterprise_identity_ground_truth"] == _truth()
     assert asset["enterprise_identity_quality_policy"] == _policy()
-    assert asset["enterprise_identity_benchmark_history"]["snapshots"][0][
-        "snapshot_id"
-    ] == "snapshot:1"
+    persisted = asset["enterprise_identity_benchmark_history"]["snapshots"][0]
+    assert persisted["snapshot_id"] == event["snapshot_id"]
+    assert persisted["requested_snapshot_id"] == "snapshot:1"
+    assert persisted["snapshot_event_id_is_result_independent"] is True
     receipt = asset["enterprise_identity_benchmark_repository_receipt"]
     assert receipt["ground_truth_loaded"] is True
     assert receipt["quality_policy_loaded"] is True
@@ -94,6 +95,7 @@ def test_every_explicit_measurement_event_is_retained(tmp_path) -> None:
     assert repeated_event["requested_snapshot_id"] == "snapshot:1"
     assert repeated_event["same_result_event_ordinal"] == 2
     assert second_event["measurement_event_sequence"] == 3
+    assert all(row["snapshot_event_id_is_result_independent"] for row in history["snapshots"])
 
 
 def test_repository_snapshot_restore_is_transactional(tmp_path) -> None:
