@@ -1,9 +1,9 @@
 """Enterprise knowledge-center public facade.
 
 The facade only exports symbols. Importing it no longer assembles the product by stacking
-wrappers around a shared builder or loader. Public ingestion uses one source-occurrence identity
-root, which delegates archive atomicity to ``atomic_ingestion`` and leaf activation/parsing to
-``_crud``.
+wrappers around a shared builder or loader. Public ingestion and lifecycle use one
+source-occurrence identity root, which delegates archive atomicity to ``atomic_ingestion`` and
+leaf activation/parsing to ``_crud``.
 """
 from ._common import *  # noqa: F401,F403
 from ._utils import *  # noqa: F401,F403
@@ -117,6 +117,15 @@ from .source_occurrence_authority import (  # noqa: E402,F401
     SourceOccurrenceIngestionError,
     ingest_enterprise_knowledge_documents,
     ingest_enterprise_knowledge_files,
+)
+
+# Public lifecycle authority. List/update/delete operate on source occurrences and only retire
+# canonical bytes/runtime state when the final active occurrence disappears.
+from .source_occurrence_lifecycle import (  # noqa: E402,F401
+    delete_enterprise_knowledge_source,
+    list_enterprise_knowledge_sources,
+    operate_enterprise_knowledge_center,
+    update_enterprise_knowledge_source,
 )
 
 # Explicit re-exports for underscore-prefixed compatibility symbols.
