@@ -7,16 +7,17 @@ composes the canonical handler and owns the hardened HTTP server lifecycle.
 """
 
 import os
-import signal
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-_MAX_REQUEST_BODY = int(
-    os.environ.get("QUALIBUG_MAX_REQUEST_BODY", str(10 * 1024 * 1024))
+from .private_pilot_request_limits import (
+    MAX_REQUEST_BODY_BYTES,
+    content_length,
 )
+
 _HTTP_TIMEOUT = int(os.environ.get("QUALIBUG_HTTP_TIMEOUT", "30"))
 _REQUEST_QUEUE_SIZE = int(os.environ.get("QUALIBUG_REQUEST_QUEUE_SIZE", "128"))
 
@@ -169,7 +170,6 @@ from .private_pilot_scan_prep import (  # noqa: F401
     _validate_scan_base_url,
 )
 
-
 CONFIG_MANAGER_ROLES = {
     "project_owner",
     "qa_lead",
@@ -220,7 +220,7 @@ class PrivatePilotHandler(
         return
 
     def handle_one_request(self) -> None:
-        """Parse one request, reject oversized bodies, then dispatch once."""
+        """Parse one request, enforce the shared outer body bound, dispatch once."""
         try:
             self.raw_requestline = self.rfile.readline(65537)
             if len(self.raw_requestline) > 65536:
@@ -234,22 +234,16 @@ class PrivatePilotHandler(
                 return
             if not self.parse_request():
                 return
+            length = content_length(self.headers)
+        except ValueError:
+            self.send_error(400, "Bad Request: invalid Content-Length")
+            return
         except Exception:
             self.close_connection = True
             return
-        content_length = self.headers.get("Content-Length")
-        if content_length is not None:
-            try:
-                length = int(content_length)
-            except (TypeError, ValueError):
-                self.send_error(400, "Bad Request: invalid Content-Length")
-                return
-            if length < 0:
-                self.send_error(400, "Bad Request: invalid Content-Length")
-                return
-            if length > _MAX_REQUEST_BODY:
-                self.send_error(413, "Payload Too Large")
-                return
+        if length > MAX_REQUEST_BODY_BYTES:
+            self.send_error(413, "Payload Too Large")
+            return
         method_name = "do_" + self.command
         if not hasattr(self, method_name):
             self.send_error(501, "Unsupported method (%r)" % self.command)
@@ -315,12 +309,6 @@ class QualiBugHTTPServer(ThreadingHTTPServer):
 
 
 _global_server: QualiBugHTTPServer | None = None
-_shutdown_event = threading.Event()
-
-
-def _signal_handler(signum: int, frame: Any) -> None:
-    del signum, frame
-    _shutdown_event.set()
 
 
 def run_private_pilot_service(
@@ -329,7 +317,7 @@ def run_private_pilot_service(
     port: int | None = None,
 ) -> QualiBugHTTPServer:
     global _global_server
-    resolved_root = root or _root()
+    resolved_root = (root or _root()).resolve()
     resolved_host = host or os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1")
     if (
         resolved_host in {"0.0.0.0", "::"}
@@ -344,6 +332,8 @@ def run_private_pilot_service(
         if port is None
         else int(port)
     )
+    if not 0 < selected_port <= 65535:
+        raise ValueError("QUALIBUG_PORT must be between 1 and 65535")
     server = QualiBugHTTPServer(
         (resolved_host, selected_port),
         PrivatePilotHandler,
@@ -360,7 +350,7 @@ def run_private_pilot_service(
             "port": selected_port,
             "timeout": _HTTP_TIMEOUT,
             "request_queue_size": _REQUEST_QUEUE_SIZE,
-            "max_request_body": _MAX_REQUEST_BODY,
+            "max_request_body": MAX_REQUEST_BODY_BYTES,
         },
     )
     return server
