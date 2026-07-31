@@ -89,41 +89,77 @@ def test_deleting_one_occurrence_retains_shared_bytes_chunks_and_runtime_source(
     assert canonical_after["status"] == "active"
 
 
-def test_deleting_last_occurrence_retires_canonical_content(tmp_path) -> None:
-    _ingest_shared(tmp_path, project="occurrence-last-delete")
+def test_deleting_last_occurrence_retains_historical_bytes_by_default(tmp_path) -> None:
+    _ingest_shared(tmp_path, project="occurrence-last-retain")
     inventory = list_enterprise_knowledge_sources(
-        "occurrence-last-delete",
+        "occurrence-last-retain",
         root=tmp_path,
     )
     first, second = inventory["sources"]
     canonical_source_id = first["canonical_source_id"]
-    registry = _load_registry("occurrence-last-delete", tmp_path)
+    registry = _load_registry("occurrence-last-retain", tmp_path)
     canonical = next(row for row in registry["sources"] if row["source_id"] == canonical_source_id)
     stored = tmp_path / canonical["stored_path"]
-    assert stored.exists()
 
     delete_enterprise_knowledge_source(
-        "occurrence-last-delete",
+        "occurrence-last-retain",
         first["source_id"],
         root=tmp_path,
         actor=ACTOR,
     )
     deleted = delete_enterprise_knowledge_source(
-        "occurrence-last-delete",
+        "occurrence-last-retain",
         second["source_id"],
         root=tmp_path,
         actor=ACTOR,
     )
 
     assert deleted["remaining_active_occurrence_count"] == 0
-    assert deleted["canonical_source_deleted"] is True
-    assert deleted["shared_bytes_retained"] is False
-    assert not stored.exists()
-    final_inventory = list_enterprise_knowledge_sources(
-        "occurrence-last-delete",
+    assert deleted["canonical_source_deleted"] is False
+    assert deleted["canonical_source_deactivated"] is True
+    assert deleted["historical_source_bytes_retained"] is True
+    assert deleted["purge_bytes_executed"] is False
+    assert stored.exists()
+    registry_after = _load_registry("occurrence-last-retain", tmp_path)
+    retained = next(
+        row for row in registry_after["sources"] if row["source_id"] == canonical_source_id
+    )
+    assert retained["status"] == "superseded"
+    assert retained["historical_source_bytes_retained"] is True
+
+
+def test_explicit_purge_of_last_occurrence_physically_deletes_canonical_content(tmp_path) -> None:
+    _ingest_shared(tmp_path, project="occurrence-last-purge")
+    inventory = list_enterprise_knowledge_sources(
+        "occurrence-last-purge",
         root=tmp_path,
     )
-    assert final_inventory["summary"]["active_source_count"] == 0
+    first, second = inventory["sources"]
+    canonical_source_id = first["canonical_source_id"]
+    registry = _load_registry("occurrence-last-purge", tmp_path)
+    canonical = next(row for row in registry["sources"] if row["source_id"] == canonical_source_id)
+    stored = tmp_path / canonical["stored_path"]
+    assert stored.exists()
+
+    delete_enterprise_knowledge_source(
+        "occurrence-last-purge",
+        first["source_id"],
+        root=tmp_path,
+        actor=ACTOR,
+    )
+    deleted = delete_enterprise_knowledge_source(
+        "occurrence-last-purge",
+        second["source_id"],
+        root=tmp_path,
+        actor=ACTOR,
+        purge_bytes=True,
+    )
+
+    assert deleted["remaining_active_occurrence_count"] == 0
+    assert deleted["canonical_source_deleted"] is True
+    assert deleted["historical_source_bytes_retained"] is False
+    assert deleted["purge_bytes_executed"] is True
+    assert not stored.exists()
 
 
 def test_canonical_id_cannot_select_a_winner_when_multiple_occurrences_exist(tmp_path) -> None:
