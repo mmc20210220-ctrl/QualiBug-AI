@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from .._utils import _redact_text
 from .identity_annotation_manifest import MANIFEST_SCHEMA
 from .identity_benchmark import ANNOTATION_SCOPE, GROUND_TRUTH_SCHEMA
 from .schema import as_dict, as_list, stable_id, text
@@ -43,8 +44,7 @@ def _contains_forbidden_prediction_field(value: Any) -> bool:
 
 
 def _bounded(value: Any, limit: int = 800) -> str:
-    raw = text(value)
-    return raw if len(raw) <= limit else raw[:limit] + "…"
+    return _redact_text(value, limit=limit)
 
 
 def _progress(total: int, completed: int, *, status: str = "") -> dict[str, Any]:
@@ -224,6 +224,7 @@ def build_identity_annotation_task_package(
         "contains_product_cluster_suggestions": False,
         "contains_predicted_entity_ids": False,
         "contains_similarity_candidates": False,
+        "source_context_is_redacted": True,
         "is_ground_truth": False,
         "required_submission_schema": SUBMISSION_SCHEMA,
         "compiled_ground_truth_schema": GROUND_TRUTH_SCHEMA,
