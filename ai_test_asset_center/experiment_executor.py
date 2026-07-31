@@ -3,6 +3,9 @@
 Governance, graph-proof, account-identity and authorization-comparison adapters
 live in ``experiment_executor_governance``. This module keeps the established
 public identities and monkeypatch surface while delegating one execution call.
+The final public result additionally applies the authorization causal-evidence
+gate so an Oracle candidate cannot leave the execution boundary without the
+existing control/treatment/observer/binding receipt chain.
 """
 from __future__ import annotations
 
@@ -10,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 from . import experiment_executor_governance as _governance
+from .authorization_oracle_causality import (
+    enforce_authorization_oracle_causality,
+)
 from .experiment_runtime_support import (
     load_actor_tokens as _runtime_load_actor_tokens,
 )
@@ -68,9 +74,9 @@ def execute_one_experiment(
     execution_id: str,
     actor_tokens: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Execute through the governed adapter with compatible public hooks."""
+    """Execute through governance, then fail closed on authorization causality."""
     _sync_governance_hooks()
-    return _execute_one_governed(
+    result = _execute_one_governed(
         experiment,
         behavior_ir=behavior_ir,
         root=root,
@@ -80,6 +86,12 @@ def execute_one_experiment(
         campaign_id=campaign_id,
         execution_id=execution_id,
         actor_tokens=actor_tokens,
+    )
+    return enforce_authorization_oracle_causality(
+        result=result,
+        experiment=experiment,
+        behavior_ir=behavior_ir,
+        account_rows=_governance._test_account_rows(root, project),
     )
 
 
