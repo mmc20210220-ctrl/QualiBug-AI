@@ -9,6 +9,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .document_ground_truth import (
+    DOCUMENT_GROUND_TRUTH_KEY,
+    DocumentGroundTruthValidationError,
+    validate_document_ground_truth,
+)
+
 GROUND_TRUTH_SCHEMA = "qualibug.enterprise-understanding-ground-truth.v1"
 SUPPORTED_COLLECTIONS = (
     "business_objects",
@@ -119,6 +125,25 @@ def validate_ground_truth(document: dict[str, Any]) -> dict[str, Any]:
         normalized_collections[collection] = rows
         normalized[collection] = rows
 
+    try:
+        document_profile = validate_document_ground_truth(
+            document.get(DOCUMENT_GROUND_TRUTH_KEY)
+        )
+    except DocumentGroundTruthValidationError as exc:
+        raise GroundTruthValidationError(str(exc)) from exc
+    normalized[DOCUMENT_GROUND_TRUTH_KEY] = document_profile
+    document_ids: list[str] = []
+    if document_profile:
+        for collection in ("sources", "elements", "reading_order_pairs"):
+            for row in _rows(document_profile.get(collection)):
+                identity = _text(row.get("ground_truth_id"))
+                if identity in seen_ids:
+                    raise GroundTruthValidationError(
+                        f"duplicate ground_truth_id across business and document profile: {identity}"
+                    )
+                seen_ids.add(identity)
+                document_ids.append(identity)
+
     minimum_profile = document.get("minimum_profile")
     minimums = dict(minimum_profile) if isinstance(minimum_profile, dict) else {}
     shortfalls: list[dict[str, Any]] = []
@@ -147,17 +172,36 @@ def validate_ground_truth(document: dict[str, Any]) -> dict[str, Any]:
         for row in normalized_collections[collection]
         if row.get("annotation_status") != "CONFIRMED"
     ]
+    document_receipt = (
+        document_profile.get("validation_receipt")
+        if isinstance(document_profile, dict)
+        and isinstance(document_profile.get("validation_receipt"), dict)
+        else {}
+    )
+    document_status = _text(document_receipt.get("status")) or "NOT_DECLARED"
+    document_incomplete = list(document_receipt.get("incomplete_annotation_ids") or [])
+    overall_incomplete = bool(
+        shortfalls
+        or incomplete_annotations
+        or (document_profile is not None and document_status != "PASS")
+    )
     normalized["validation_receipt"] = {
         "status": (
-            "BENCHMARK_GROUND_TRUTH_INCOMPLETE"
-            if shortfalls or incomplete_annotations
-            else "PASS"
+            "BENCHMARK_GROUND_TRUTH_INCOMPLETE" if overall_incomplete else "PASS"
         ),
         "shortfalls": shortfalls,
-        "incomplete_annotation_ids": incomplete_annotations,
+        "incomplete_annotation_ids": [
+            *incomplete_annotations,
+            *document_incomplete,
+        ],
         "ground_truth_id_count": len(seen_ids),
+        "business_ground_truth_id_count": len(seen_ids) - len(document_ids),
+        "document_ground_truth_id_count": len(document_ids),
+        "document_ground_truth_status": document_status,
+        "document_ground_truth_counts": document_receipt.get("counts") or {},
         "model_writeback_allowed": False,
         "generated_from_current_model": False,
+        "document_ground_truth_generated_from_product_output": False,
     }
     return normalized
 
@@ -178,6 +222,7 @@ def load_ground_truth(path: str | Path) -> dict[str, Any]:
 __all__ = [
     "GROUND_TRUTH_SCHEMA",
     "SUPPORTED_COLLECTIONS",
+    "DOCUMENT_GROUND_TRUTH_KEY",
     "GroundTruthValidationError",
     "load_ground_truth",
     "validate_ground_truth",
