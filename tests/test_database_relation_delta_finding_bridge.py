@@ -36,6 +36,7 @@ def _root_snapshot(phase: str, value: str) -> dict:
 def _relation_snapshot(phase: str, value: str, count: int) -> dict:
     return {
         "draft_id": f"draft:relation:{phase.lower()}",
+        "relation_pair_id": "pair-1",
         "phase": phase,
         "phase_receipt_id": f"relation-{phase.lower()}-receipt",
         "receipt_id": f"relation-{phase.lower()}",
@@ -136,6 +137,7 @@ def _assertion_receipt() -> dict:
             "difference": "5",
             "tolerance": "0",
             "lineage_match": True,
+            "relation_pair_match": True,
             "root_identity_match": True,
             "relation_identity_match": True,
             "cross_observer_identity_match": True,
@@ -164,6 +166,8 @@ def test_delta_finding_evidence_is_exact_and_secret_free() -> None:
     )
 
     assert evidence["database_relationship_id"] == "fk:ledger:accounts"
+    assert evidence["relation_pair_id"] == "pair-1"
+    assert evidence["relation_pair_match"] is True
     assert evidence["root_delta"] == "-15"
     assert evidence["relation_delta"] == "10"
     assert evidence["difference"] == "5"
@@ -172,9 +176,11 @@ def test_delta_finding_evidence_is_exact_and_secret_free() -> None:
     assert evidence["root_before_snapshot"]["phase_receipt_id"] == (
         "root-before-receipt"
     )
+    assert evidence["relation_before_snapshot"]["relation_pair_id"] == "pair-1"
     assert evidence["relation_after_snapshot"]["phase_receipt_id"] == (
         "relation-after-receipt"
     )
+    assert evidence["relation_after_snapshot"]["relation_pair_id"] == "pair-1"
     assert evidence["observer_performed_oracle_verdict"] is False
     assert evidence["oracle_authority"] == "ContractOracle"
     assert evidence["database_observer_authority"] == "FACT_ONLY"
@@ -217,6 +223,10 @@ def test_enrichment_replaces_legacy_snapshot_without_upgrading_delivery() -> Non
         "APPROVED_ROOT_AND_FK_AGGREGATE_BEFORE_AFTER_PHASE_RECEIPTS"
     )
     assert finding["raw_evidence"]["legacy_http_body_used_as_db_snapshot"] is False
+    assert finding["raw_evidence"]["db_snapshot"]["relation_pair_id"] == "pair-1"
+    assert finding["raw_evidence"]["db_snapshot"]["actual"][
+        "relation_pair_match"
+    ] is True
     assert finding["raw_evidence"]["db_snapshot"]["actual"]["difference"] == "5"
     assert finding["gate_passed"] is False
     assert finding["customer_delivery_status"] == "candidate"
