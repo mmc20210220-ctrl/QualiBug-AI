@@ -66,6 +66,24 @@ def test_regression_blocks_only_against_same_manifest_and_truth() -> None:
     assert gate["baseline_snapshot_id"] == "snapshot:baseline"
 
 
+def test_unknown_regression_threshold_is_rejected_not_ignored() -> None:
+    gate = evaluate_identity_benchmark_regression(
+        _asset(),
+        {"status": "MEASURED", "metrics": _metrics()},
+        {
+            "enforce_regression": True,
+            "regression_thresholds": {
+                "maximum_pairwise_precision_drop": 0.01,
+                "maximum_pairwise_precison_drop": 0.01,
+            },
+        },
+    )
+
+    assert gate["status"] == "INVALID_IDENTITY_REGRESSION_POLICY"
+    assert gate["entry_allowed"] is False
+    assert gate["invalid_thresholds"] == ["maximum_pairwise_precison_drop"]
+
+
 def test_changed_annotation_universe_is_not_called_regression() -> None:
     asset = _asset(manifest="manifest:new")
     asset["enterprise_identity_benchmark_history"]["snapshots"][0][
