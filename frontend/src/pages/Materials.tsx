@@ -255,7 +255,7 @@ export function Materials() {
       setFormOpen(false);
       resetForm();
       await refresh();
-      toast.show(`飞书资料已连接，并同步 ${count} 份资料。后续更新由系统自动维护。`, 'success');
+      toast.show(`飞书资料已连接，并同步 ${count} 份资料。后续可点击“立即更新”，版本与异常恢复由系统处理。`, 'success');
     } catch (error: unknown) {
       await refresh();
       toast.show(error instanceof Error ? error.message : '飞书资料连接未完成，请重试。', 'danger');
@@ -318,7 +318,7 @@ export function Materials() {
         <div>
           <span className="panel-kicker">Enterprise Materials</span>
           <h1>企业资料</h1>
-          <p>连接一次，系统自动读取、识别、去重和维护企业资料；离线上传只作为补充。</p>
+          <p>连接一次，系统自动读取、识别和去重；后续只需点击“立即更新”。</p>
           <div className="page-summary-strip">
             <span className="summary-pill strong">在线来源 {connectors.length}</span>
             <span className="summary-pill">在线资料 {onlineSources.length}</span>
@@ -340,7 +340,7 @@ export function Materials() {
           <div>
             <span className="settings-hero-kicker">主要采集方式</span>
             <h2>飞书在线资料</h2>
-            <p>用户只负责授权和选择范围，资料更新、版本维护和异常恢复由系统处理。</p>
+            <p>用户只负责授权和选择范围，资料解析、版本维护和异常恢复由系统处理。</p>
           </div>
           <button className="btn btn-secondary" type="button" onClick={() => void refresh()} disabled={loading}>
             {loading ? '刷新中…' : '刷新状态'}
@@ -385,8 +385,8 @@ export function Materials() {
                       <strong>{formatTime(connector.last_successful_sync_at_utc)}</strong>
                     </div>
                     <div>
-                      <span>维护方式</span>
-                      <strong>系统自动维护</strong>
+                      <span>版本与恢复</span>
+                      <strong>自动处理</strong>
                     </div>
                   </div>
 
