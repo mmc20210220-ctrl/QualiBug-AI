@@ -4,9 +4,11 @@ import sqlite3
 from pathlib import Path
 
 from ai_test_asset_center import database_observer_experiment_runtime as phase_runtime
+from ai_test_asset_center.database_relation_delta_causality_authority import (
+    evaluate_database_relation_causal_delta_with_authority,
+)
 from ai_test_asset_center.database_relation_delta_causality_integrity import (
     causal_scope_fingerprint,
-    evaluate_database_relation_causal_delta_with_integrity,
 )
 from ai_test_asset_center.non_http_observers import install_non_http_observers
 from ai_test_asset_center.operation_causality_runtime import (
@@ -21,10 +23,33 @@ from tests.test_database_relation_delta_causality_runtime_integration import (
 
 
 install_non_http_observers()
+_RELATION_DECISION_ID = "decision:relation"
 
 
 def _freeze_exact_causal_scope(experiment: dict) -> dict:
     assertion = experiment["assertions"][0]
+    assertion["causal_attribution_contract"][
+        "mapping_decision_id"
+    ] = _RELATION_DECISION_ID
+    assertion["database_relation_delta_binding"].update(
+        {
+            "relation_mapping_decision_id": _RELATION_DECISION_ID,
+            "causal_mapping_decision_id": _RELATION_DECISION_ID,
+        }
+    )
+    for draft in experiment["database_relation_observer_execution_drafts"]:
+        draft["causal_attribution_contract"][
+            "mapping_decision_id"
+        ] = _RELATION_DECISION_ID
+        contract = draft["database_relation_observer_contract"]
+        contract["relation_mapping_decision_id"] = _RELATION_DECISION_ID
+        contract["causal_attribution_contract"][
+            "mapping_decision_id"
+        ] = _RELATION_DECISION_ID
+        for predicate in contract["relation_predicates"]:
+            if predicate.get("predicate_kind") == "OPERATION_ATTRIBUTION":
+                predicate["mapping_decision_id"] = _RELATION_DECISION_ID
+
     scope = causal_scope_fingerprint(assertion)
     assertion["causal_scope_fingerprint"] = scope
     assertion["causal_attribution_contract"][
@@ -135,8 +160,11 @@ def test_real_sqlite_integrity_chain_excludes_noise_and_clears_private_values(
     }
     assert str(payloads["AFTER"]["aggregate_values"]["related_value"]) == "10"
     assert payloads["AFTER"]["aggregate_values"]["related_scope_count"] == 1
+    assert payloads["AFTER"]["causal_attribution_scope"][
+        "relation_authority_match"
+    ] is True
 
-    result = evaluate_database_relation_causal_delta_with_integrity(
+    result = evaluate_database_relation_causal_delta_with_authority(
         {
             "spec": experiment["assertions"][0],
             "observations": observations,
@@ -147,6 +175,7 @@ def test_real_sqlite_integrity_chain_excludes_noise_and_clears_private_values(
     assert result["actual"]["root_delta"] == "-10"
     assert result["actual"]["relation_delta"] == "10"
     assert result["actual"]["difference"] == "0"
+    assert result["actual"]["relation_authority_match"] is True
     assert result["actual"]["causal_scope_semantic_match"] is True
     assert result["actual"]["transport_receipt_integrity_valid"] is True
     assert result["actual"]["causal_value_fingerprint_match"] is True
