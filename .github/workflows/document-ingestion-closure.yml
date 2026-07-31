@@ -43,6 +43,10 @@ on:
       - "Dockerfile"
       - ".github/workflows/document-ingestion-closure.yml"
 
+concurrency:
+  group: document-ingestion-closure-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
