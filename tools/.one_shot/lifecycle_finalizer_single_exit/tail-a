@@ -1,0 +1,134 @@
+condition_established",
+                not _precondition_required,
+            )
+        ),
+        "required_steps_declared": _required_steps_declared,
+        "all_required_steps_executed": _all_required_steps_executed,
+        "observation_completed": _observation_completed,
+        "oracle_evaluated": _oracle_evaluated,
+        "oracle_indeterminate": _oracle_indeterminate,
+        "cleanup_required": _cleanup_required,
+        "cleanup_executed": (not _cleanup_required) or _cleanup_execution_evidence,
+        "cleanup_verified": (not _cleanup_required)
+        or (
+            cleanup_gate == "PASSED"
+            and _cleanup_verification_evidence
+            and cleanup_failures == 0
+        ),
+        "environment_restored": bool(_env_restored),
+        "finalizer_block_reason": _text(
+            observations.get("finalizer_block_reason")
+            or _finalizer_block_reason
+            or reason
+        ),
+    }
+    _finalization_receipt = _build_finalization_once(
+        finalization_receipt_id=f"final_{eid}",
+        bundle=_execution_receipt_bundle,
+        oracle_evaluated=_oracle_evaluated,
+        cleanup_verified=_lifecycle_facts["cleanup_verified"],
+        environment_restored=bool(_env_restored),
+        code_commit_sha=_text(observations.get("code_commit_sha") or _NA_FINAL),
+        tree_hash=_text(observations.get("tree_hash") or _NA_FINAL),
+        lifecycle_facts=_lifecycle_facts,
+        execution_status=status,
+        finalizer_block_reason=_lifecycle_facts["finalizer_block_reason"],
+    )
+    _lifecycle_derivation = _dict(
+        _finalization_receipt.get("lifecycle_derivation")
+    )
+    _lifecycle_state = _text(
+        _lifecycle_derivation.get("lifecycle_state")
+        or _finalization_receipt.get("lifecycle_state")
+    )
+    if not reason:
+        reason = _text(_lifecycle_derivation.get("reason_code"))
+    if not detail and status in {"BLOCKED", "HARNESS_FAILURE", "HARNESS_FAILED"}:
+        detail = reason
+
+'''
+source = source[:insert_at] + unified + source[insert_at:]
+
+# Final outcome must expose the single derivation and use its reason/detail.
+source = source.replace(
+    '        "reason_code": harness_failure_reason if status == "HARNESS_FAILURE" else "",\n'
+    '        "detail": harness_failure_reason if status == "HARNESS_FAILURE" else "",\n',
+    '        "reason_code": reason,\n        "detail": detail,\n',
+    1,
+)
+source = source.replace(
+    '        "lifecycle_state": _lifecycle_state,\n        "environment_restored": _env_restored,\n',
+    '        "lifecycle_state": _lifecycle_state,\n'
+    '        "lifecycle_derivation": _lifecycle_derivation,\n'
+    '        "environment_restored": _env_restored,\n',
+    1,
+)
+source = source.replace(
+    '            "harness_failure_reason": harness_failure_reason or None,\n',
+    '            "harness_failure_reason": harness_failure_reason or None,\n'
+    '            "reason_code": reason or None,\n'
+    '            "detail": detail or None,\n',
+    1,
+)
+
+
+# Remove the no-longer-used intermediate finalization import and keep bundle
+# assembly separate from the single finalization call.
+source = source.replace(
+    '''        from .operational_receipts import (\n            NOT_APPLICABLE as _NA,\n            assemble_bundle_from_finalizer_observations as _assemble_bundle,\n            build_execution_finalization_receipt as _build_finalization,\n        )''',
+    '''        from .operational_receipts import (\n            NOT_APPLICABLE as _NA,\n            assemble_bundle_from_finalizer_observations as _assemble_bundle,\n        )''',
+    1,
+)
+source = source.replace(
+    '''    _fixture_required = bool(\n        fixture_receipts\n        or _dict(exp.get("fixture_contract"))\n        or _list(exp.get("fixture_requirements"))\n        or _text(exp.get("fixture_id"))\n    )\n    _precondition_required = bool(\n        observations.get("state_precondition_required")\n        or _dict(exp.get("state_precondition"))\n        or _dict(exp.get("state_precondition_plan"))\n    )''',
+    '''    _fixture_required = bool(\n        fixture_receipts\n        or exp.get("fixture_contract")\n        or exp.get("fixture_requirements")\n        or _text(exp.get("fixture_id"))\n    )\n    _precondition_required = bool(\n        observations.get("state_precondition_required")\n        or exp.get("state_precondition")\n        or exp.get("state_precondition_plan")\n    )''',
+    1,
+)
+path.write_text(source, encoding='utf-8')
+
+# Phase-aware reducer precedence: a BLOCKED operational status after all
+# required business steps belongs to Oracle, not partial execution. Cleanup
+# failures must reach the cleanup terminal rather than generic harness failure.
+op_path = Path('ai_test_asset_center/operational_receipts.py')
+op_source = op_path.read_text(encoding='utf-8')
+old_harness = '''            elif status in {"HARNESS_FAILURE", "HARNESS_FAILED"}:\n                lifecycle_state = LIFECYCLE_HARNESS_FAILED\n                reason_code = block_reason or status'''
+new_harness = '''            elif (\n                status in {"HARNESS_FAILURE", "HARNESS_FAILED"}\n                and "CLEANUP" not in block_reason\n                and "ENVIRONMENT" not in block_reason\n            ):\n                lifecycle_state = LIFECYCLE_HARNESS_FAILED\n                reason_code = block_reason or status'''
+if old_harness not in op_source:
+    raise RuntimeError('operational harness precedence block not found')
+op_source = op_source.replace(old_harness, new_harness, 1)
+old_partial = '''                    not required_steps_declared\n                    or not all_required_steps_executed\n                    or status in {"BLOCKED", "DEFERRED"}\n                ):'''
+new_partial = '''                    not required_steps_declared\n                    or not all_required_steps_executed\n                    or status == "DEFERRED"\n                    or (status == "BLOCKED" and not all_required_steps_executed)\n                ):'''
+if old_partial not in op_source:
+    raise RuntimeError('operational partial precedence block not found')
+op_source = op_source.replace(old_partial, new_partial, 1)
+op_path.write_text(op_source, encoding='utf-8')
+
+# Lock the exported finalizer to one return and one finalization receipt call.
+import ast
+finalizer_tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+finalizer_fn = next(
+    node for node in finalizer_tree.body
+    if isinstance(node, ast.FunctionDef)
+    and node.name == 'finalize_experiment_execution'
+)
+direct_returns = []
+class _ReturnVisitor(ast.NodeVisitor):
+    def visit_FunctionDef(self, node):
+        if node is finalizer_fn:
+            self.generic_visit(node)
+    def visit_Return(self, node):
+        direct_returns.append(node)
+_ReturnVisitor().visit(finalizer_fn)
+if len(direct_returns) != 1:
+    raise RuntimeError(f'finalizer_direct_return_count:{len(direct_returns)}')
+finalization_calls = [
+    node for node in ast.walk(finalizer_fn)
+    if isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Name)
+    and node.func.id == '_build_finalization_once'
+]
+if len(finalization_calls) != 1:
+    raise RuntimeError(f'finalization_call_count:{len(finalization_calls)}')
+
+Path('tests/test_experiment_outcome_single_exit.py').write_bytes(
+    __import__('base64').b64decode('ZnJvbSBfX2Z1dHVyZV9fIGltcG9ydCBhbm5vdGF0aW9ucwoKaW1wb3J0IGFzdAppbXBvcnQgdGltZQpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCBhaV90ZXN0X2Fzc2V0X2NlbnRlci5leHBlcmltZW50X291dGNvbWVfZmluYWxpemVyIGFzIGZpbmFsaXplcgoKClJPT1QgPSBQYXRoKF9fZmlsZV9fKS5yZXNvbHZlKCkucGFyZW50c1sxXQpTT1VSQ0UgPSBST09UIC8gImFpX3Rlc3RfYXNzZXRfY2VudGVyIiAvICJleHBlcmltZW50X291dGNvbWVfZmluYWxpemVyLnB5IgoKCmRlZiBfZmluYWxpemUoKipvdmVycmlkZXMpOgogICAgdmFsdWVzID0gewogICAgICAgICJleHAiOiB7ImFzc2VydGlvbnMiOiBbXX0sCiAgICAgICAgInN0ZXBzX291dCI6IFtdLAogICAgICAgICJvYnNlcnZhdGlvbnMiOiB7fSwKICAgICAgICAiY29udHJhY3RfZXZpZGVuY2VfcmVjZWlwdHMiOiBbXSwKICAgICAgICAiZml4dHVyZV9yZWNlaXB0cyI6IFtdLAogICAgICAgICJiaW5kaW5nX21hdGVyaWFsaXphdGlvbl9yZWNlaXB0cyI6IFtdLAogICAgICAgICJwcmVfdHJhbnNwb3J0X2Jsb2NrX3JlYXNvbnMiOiBbXSwKICAgICAgICAiY2xlYW51cF9mYWlsdXJlcyI6IDAsCiAgICAgICAgInJ1bnRpbWVfYmluZGluZ3MiOiB7fSwKICAgICAgICAib3BzIjoge30sCiAgICAgICAgImFjdG9ycyI6IHt9LAogICAgICAgICJlaWQiOiAiZXhwZXJpbWVudC0xIiwKICAgICAgICAib2lkIjogIm9ibGlnYXRpb24tMSIsCiAgICAgICAgImNhbXBhaWduX2lkIjogImNhbXBhaWduLTEiLAogICAgICAgICJyZXNvbHZlZF9jYW1wYWlnbl9pZCI6ICJjYW1wYWlnbi0xIiwKICAgICAgICAicmVzb2x2ZWRfZXhlY3V0aW9uX2lkIjogInJ1bi0xIiwKICAgICAgICAic3RhcnRlZCI6IHRpbWUudGltZSgpLAogICAgfQogICAgdmFsdWVzLnVwZGF0ZShvdmVycmlkZXMpCiAgICByZXR1cm4gZmluYWxpemVyLmZpbmFsaXplX2V4cGVyaW1lbnRfZXhlY3V0aW9uKCoqdmFsdWVzKQoKCmRlZiBfZmluYWxpemVyX2FzdCgpIC0+IGFzdC5GdW5jdGlvbkRlZjoKICAgIHRyZWUgPSBhc3QucGFyc2UoU09VUkNFLnJlYWRfdGV4dChlbmNvZGluZz0idXRmLTgiKSwgZmlsZW5hbWU9c3RyKFNPVVJDRSkpCiAgICByZXR1cm4gbmV4dCgKICAgICAgICBub2RlCiAgICAgICAgZm9yIG5vZGUgaW4gdHJlZS5ib2R5CiAgICAgICAgaWYgaXNpbnN0YW5jZShub2RlLCBhc3QuRnVuY3Rpb25EZWYpCiAgICAgICAgYW5kIG5vZGUubmFtZSA9PSAiZmluYWxpemVfZXhwZXJpbWVudF9leGVjdXRpb24iCiAgICApCgoKZGVmIHRlc3RfZmluYWxpemVyX2hhc19vbmVfZGlyZWN0X3JldHVybigpIC0+IE5vbmU6CiAgICBmdW5jdGlvbiA9IF9maW5hbGl6ZXJfYXN0KCkKICAgIHJldHVybnM6IGxpc3RbYXN0LlJldHVybl0gPSBbXQoKICAgIGNsYXNzIFZpc2l0b3IoYXN0Lk5vZGVWaXNpdG9yKToKICAgICAgICBkZWYgdmlzaXRfRnVuY3Rpb25EZWYoc2VsZiwgbm9kZTogYXN0LkZ1bmN0aW9uRGVmKSAtPiBOb25lOgogICAgICAgICAgICBpZiBub2RlIGlzIGZ1bmN0aW9uOgogICAgICAgICAgICAgICAgc2VsZi5nZW5lcmljX3Zpc2l0KG5vZGUpCgogICAgICAgIGRlZiB2aXNpdF9SZXR1cm4oc2VsZiwgbm9kZTogYXN0LlJldHVybikgLT4gTm9uZToKICAgICAgICAgICAgcmV0dXJucy5hcHBlbmQobm9kZSkKCiAgICBWaXNpdG9yKCkudmlzaXQoZnVuY3Rpb24pCiAgICBhc3NlcnQgbGVuKHJldHVybnMpID09IDEKCgpkZWYgdGVzdF9maW5hbGl6ZXJfYnVpbGRzX29uZV9hdXRob3JpdGF0aXZlX2ZpbmFsaXphdGlvbl9yZWNlaXB0KCkgLT4gTm9uZToKICAgIGZ1bmN0aW9uID0gX2ZpbmFsaXplcl9hc3QoKQogICAgY2FsbHMgPSBbCiAgICAgICAgbm9kZQogICAgICAgIGZvciBub2RlIGluIGFzdC53YWxrKGZ1bmN0aW9uKQogICAgICAgIGlmIGlzaW5zdGFuY2Uobm9kZSwgYXN0LkNhbGwpCiAgICAgICAgYW5kIGlzaW5zdGFuY2Uobm9kZS5mdW5jLCBhc3QuTmFtZSkKICAgICAgICBhbmQgbm9kZS5mdW5jLmlkID09ICJfYnVpbGRfZmluYWxpemF0aW9uX29uY2UiCiAgICBdCiAgICBhc3NlcnQgbGVuKGNhbGxzKSA9PSAxCiAgICBrZXl3b3JkcyA9IHtrZXl3b3JkLmFyZyBmb3Iga2V5d29yZCBpbiBjYWxsc1swXS5rZXl3b3Jkc30KICAgIGFzc2VydCB7CiAgICAgICAgImxpZmVjeWNsZV9mYWN0cyIsCiAgICAgICAgImV4ZWN1dGlvbl9zdGF0dXMiLAogICAgICAgICJmaW5hbGl6ZXJfYmxvY2tfcmVhc29uIiwKICAgIH0gPD0ga2V5d29yZHMKCgpkZWYgdGVzdF9wcmV0cmFuc3BvcnRfYmxvY2tfdXNlc19jb21tb25fZmluYWxpemF0aW9uKG1vbmtleXBhdGNoKSAtPiBOb25lOgogICAgbW9ua2V5cGF0Y2guc2V0YXR0cihmaW5hbGl6ZXI
