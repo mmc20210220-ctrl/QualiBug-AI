@@ -183,8 +183,7 @@ def test_condition_state_and_temporal_slots_stay_on_canonical_authorities():
                 "status": "ACCEPTED",
                 "raw_statement": "只有审批通过才允许订单发货",
                 "subject": {
-                    "actor_refs": ["仓库员"],
-                    "entity_refs": ["订单"],
+                    "actor_refs": ["仓库员"],n                    "entity_refs": ["订单"],
                 },
                 "action": {"canonical": "发货", "operation_ref": "ship_order"},
                 "conditions": ["审批通过"],
@@ -354,7 +353,7 @@ def test_typed_fact_projection_is_idempotent():
     assert len(twice["oracle_library"]) == len(once["oracle_library"])
 
 
-def test_typed_fact_does_not_duplicate_an_existing_authoritative_rule():
+def test_typed_fact_targets_existing_prose_rule_without_parallel_row():
     asset = _base_asset()
     asset["rule_library"] = [
         {
@@ -393,4 +392,13 @@ def test_typed_fact_does_not_duplicate_an_existing_authoritative_rule():
     ]
     assert projected["implicit_rule_projection_gate"][
         "typed_fact_candidate_count"
-    ] == 0
+    ] == 1
+    candidate = next(
+        row
+        for row in projected["implicit_rule_candidates"]
+        if row.get("logical_form") == "CONSERVATION_EQUATION"
+    )
+    assert candidate["rule_id"] == "rule:explicit-formula"
+    assert candidate["authority_upgrade_target"]["match_kind"] == (
+        "SOURCE_RULE_TYPED_SEMANTIC_UPGRADE"
+    )
