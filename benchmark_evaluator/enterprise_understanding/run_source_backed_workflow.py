@@ -1,8 +1,8 @@
 """Run the source-backed enterprise-understanding benchmark in two isolated phases.
 
-Phase 1 is a child process that receives only public enterprise sources and builds through the
-existing product composition root. Phase 2 starts only after Phase 1 exits successfully; it then
-loads evaluator Ground Truth and scores the immutable product asset snapshot.
+Phase 1 receives only public enterprise sources and builds through the existing product
+composition root. Phase 2 starts only after the product process, source-occurrence identity,
+and immutable snapshot all pass; only then may evaluator Ground Truth be loaded.
 """
 from __future__ import annotations
 
@@ -19,16 +19,9 @@ from benchmark_evaluator.scored_run_comparison import _fingerprint, _read_artifa
 from .ground_truth import load_ground_truth
 from .runner import run_benchmark
 
-SOURCE_BACKED_WORKFLOW_SCHEMA = (
-    "qualibug.enterprise-understanding-source-backed-workflow.v1"
-)
-_SENSITIVE_ENV_MARKERS = (
-    "GROUND_TRUTH",
-    "ANSWER_KEY",
-    "HIDDEN_BUG",
-    "EXPECTED_BUG",
-)
-_SOURCE_IDENTITY_AUTHORITY = "SOURCE_INVENTORY_EXTERNAL_REF"
+SOURCE_BACKED_WORKFLOW_SCHEMA = "qualibug.enterprise-understanding-source-backed-workflow.v2"
+_SENSITIVE_ENV_MARKERS = ("GROUND_TRUTH", "ANSWER_KEY", "HIDDEN_BUG", "EXPECTED_BUG")
+_SOURCE_IDENTITY_AUTHORITY = "SOURCE_OCCURRENCE_REGISTRY"
 
 
 class SourceBackedWorkflowError(RuntimeError):
@@ -89,17 +82,34 @@ def _validate_product_phase_receipt(value: Any) -> tuple[dict[str, Any], str]:
     if str(receipt.get("status") or "") != "PASS":
         return receipt, "PRODUCT_PHASE_RECEIPT_NOT_PASS"
     if receipt.get("source_manifest_external_refs_preserved") is not True:
-        return receipt, "PRODUCT_SOURCE_REFERENCES_NOT_PRESERVED"
+        return receipt, "PRODUCT_SOURCE_OCCURRENCES_NOT_PRESERVED"
     if str(receipt.get("source_identity_authority") or "") != _SOURCE_IDENTITY_AUTHORITY:
         return receipt, "PRODUCT_SOURCE_IDENTITY_AUTHORITY_INVALID"
-    source_ref_by_id = receipt.get("source_ref_by_source_id")
-    if not isinstance(source_ref_by_id, dict) or not source_ref_by_id:
-        return receipt, "PRODUCT_SOURCE_REFERENCE_MAP_MISSING"
+    if receipt.get("content_identity_separate_from_source_occurrence") is not True:
+        return receipt, "PRODUCT_CONTENT_AND_OCCURRENCE_IDENTITY_NOT_SEPARATED"
+    if receipt.get("interpretation_identity_separate_from_content_identity") is not True:
+        return receipt, "PRODUCT_INTERPRETATION_AND_CONTENT_IDENTITY_NOT_SEPARATED"
+    if receipt.get("same_interpretation_content_parsed_once") is not True:
+        return receipt, "PRODUCT_PARSE_REUSE_AUTHORITY_INVALID"
+
+    ref_by_occurrence = receipt.get("source_occurrence_ref_by_id")
+    canonical_by_occurrence = receipt.get("canonical_source_id_by_occurrence_id")
+    if not isinstance(ref_by_occurrence, dict) or not ref_by_occurrence:
+        return receipt, "PRODUCT_SOURCE_OCCURRENCE_REFERENCE_MAP_MISSING"
+    if not isinstance(canonical_by_occurrence, dict) or not canonical_by_occurrence:
+        return receipt, "PRODUCT_SOURCE_OCCURRENCE_CANONICAL_MAP_MISSING"
+    if set(ref_by_occurrence) != set(canonical_by_occurrence):
+        return receipt, "PRODUCT_SOURCE_OCCURRENCE_MAP_KEY_MISMATCH"
     if any(
-        not str(source_id or "").strip() or not str(source_ref or "").strip()
-        for source_id, source_ref in source_ref_by_id.items()
+        not str(occurrence_id or "").strip()
+        or not str(source_ref or "").strip()
+        or not str(canonical_by_occurrence.get(occurrence_id) or "").strip()
+        for occurrence_id, source_ref in ref_by_occurrence.items()
     ):
-        return receipt, "PRODUCT_SOURCE_REFERENCE_MAP_INCOMPLETE"
+        return receipt, "PRODUCT_SOURCE_OCCURRENCE_MAP_INCOMPLETE"
+    refs = [str(value or "").strip() for value in ref_by_occurrence.values()]
+    if len(refs) != len(set(refs)):
+        return receipt, "PRODUCT_SOURCE_OCCURRENCE_REFERENCE_AMBIGUOUS"
     if receipt.get("absolute_workspace_paths_persisted_as_identity") is not False:
         return receipt, "PRODUCT_SOURCE_IDENTITY_LEAKS_WORKSPACE_PATH"
     return receipt, ""
@@ -116,7 +126,7 @@ def run_source_backed_understanding_workflow(
     process_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     environment: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build from public sources, validate source identity, then start evaluator authority."""
+    """Build, validate occurrence identity, then start evaluator authority."""
     project = str(project_id or "").strip()
     if not project:
         raise SourceBackedWorkflowError("project_id_required")
@@ -200,33 +210,26 @@ def run_source_backed_understanding_workflow(
             reason_code="PRODUCT_PHASE_SUCCEEDED_WITHOUT_REQUIRED_ARTIFACTS",
         )
 
-    # Product governance is validated before any evaluator-private Ground Truth is opened.
     raw_product_phase_receipt = _read_artifact(product_receipt_path)
-    product_phase_receipt, product_receipt_error = _validate_product_phase_receipt(
+    product_phase_receipt, receipt_error = _validate_product_phase_receipt(
         raw_product_phase_receipt
     )
-    if product_receipt_error:
+    if receipt_error:
         return _finish_blocked(
             base_receipt,
             workflow_receipt_path,
             status="BLOCKED_PRODUCT_SOURCE_IDENTITY_INVALID",
-            reason_code=product_receipt_error,
+            reason_code=receipt_error,
             details={
-                "product_phase_receipt_fingerprint": (
-                    product_phase_receipt.get("receipt_fingerprint")
-                    if product_phase_receipt
-                    else ""
+                "product_phase_receipt_fingerprint": product_phase_receipt.get(
+                    "receipt_fingerprint", ""
                 ),
                 "source_identity_authority": product_phase_receipt.get(
-                    "source_identity_authority"
-                )
-                if product_phase_receipt
-                else "",
-                "source_manifest_external_refs_preserved": product_phase_receipt.get(
-                    "source_manifest_external_refs_preserved"
-                )
-                if product_phase_receipt
-                else False,
+                    "source_identity_authority", ""
+                ),
+                "source_manifest_external_refs_preserved": bool(
+                    product_phase_receipt.get("source_manifest_external_refs_preserved")
+                ),
             },
         )
 
@@ -240,10 +243,11 @@ def run_source_backed_understanding_workflow(
             details={
                 "product_phase_receipt_fingerprint": product_phase_receipt.get(
                     "receipt_fingerprint"
-                ),
+                )
             },
         )
 
+    occurrence_refs = product_phase_receipt.get("source_occurrence_ref_by_id") or {}
     base_receipt.update(
         {
             "source_identity_validated_before_ground_truth_load": True,
@@ -251,8 +255,15 @@ def run_source_backed_understanding_workflow(
                 "source_identity_authority"
             ),
             "source_manifest_external_refs_preserved": True,
-            "source_ref_count": len(
-                product_phase_receipt.get("source_ref_by_source_id") or {}
+            "source_occurrence_count": len(occurrence_refs),
+            "canonical_source_count": len(
+                set(
+                    (product_phase_receipt.get("canonical_source_id_by_occurrence_id") or {}).values()
+                )
+            ),
+            "content_asset_count": product_phase_receipt.get("content_asset_count"),
+            "interpretation_asset_count": product_phase_receipt.get(
+                "interpretation_asset_count"
             ),
             "product_phase_receipt_fingerprint": product_phase_receipt.get(
                 "receipt_fingerprint"
@@ -260,7 +271,6 @@ def run_source_backed_understanding_workflow(
         }
     )
 
-    # Evaluator authority starts only here, after the product process and source identity pass.
     ground_truth = load_ground_truth(ground_truth_file)
     benchmark = run_benchmark(
         ground_truth,
