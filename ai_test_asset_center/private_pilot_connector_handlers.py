@@ -2,7 +2,8 @@
 
 The HTTP layer owns authentication, public projection, and request shaping only. Trusted sync
 execution, checkpoint validation, fencing, automatic refresh, and retry policy live in the
-managed connector application service.
+managed connector application service. Stranded-run abort remains an internal recovery action
+and is never exposed as an unfenced HTTP mutation.
 """
 from __future__ import annotations
 
@@ -22,7 +23,6 @@ from .connector_connection_profiles import (
 )
 from .connector_sync_authority import (
     ConnectorSyncError,
-    abort_connector_sync_run,
     list_connector_instances,
     load_connector_sync_run,
 )
@@ -395,16 +395,6 @@ class KnowledgeConnectorHandlersMixin:
                 },
                 200 if run.get("status") == "COMPLETE" else 409,
             )
-        if action == "abort":
-            result = abort_connector_sync_run(
-                project,
-                connector_instance_id=connector,
-                reason=_text(body.get("reason"), 1000)
-                or "operator requested connector sync abort",
-                root=root,
-                actor=actor,
-            )
-            return self._json({"ok": True, "data": result})
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
 
     def do_GET(self) -> None:  # noqa: N802
@@ -459,7 +449,7 @@ class KnowledgeConnectorHandlersMixin:
                     root,
                     actor,
                 )
-            if len(tail) == 2 and tail[1] in {"test", "sync", "abort"}:
+            if len(tail) == 2 and tail[1] in {"test", "sync"}:
                 return self._handle_knowledge_connector_action(
                     project,
                     _text(tail[0], 160),
