@@ -18,11 +18,23 @@ def _dicts(value: Any) -> list[dict[str, Any]]:
     return [dict(row) for row in as_list(value) if isinstance(row, dict)]
 
 
+def _candidate_key(row: dict[str, Any]) -> str:
+    return text(row.get("contract_id") or row.get("id")) or stable_id(
+        "event_contract_candidate", row
+    )
+
+
 def _candidate_contracts(asset: dict[str, Any]) -> list[dict[str, Any]]:
-    retained = _dicts(asset.get("event_formal_contract_candidates"))
-    if retained:
-        return retained
-    return _source_event_contracts(asset)
+    # Retained candidates preserve invalid source material for correction. Current
+    # formal contracts are applied afterwards and therefore replace the same
+    # contract identity when an operator fixes it between pipeline runs.
+    merged: dict[str, dict[str, Any]] = {}
+    for row in [
+        *_dicts(asset.get("event_formal_contract_candidates")),
+        *_source_event_contracts(asset),
+    ]:
+        merged[_candidate_key(row)] = dict(row)
+    return list(merged.values())
 
 
 def _operation_matches(
