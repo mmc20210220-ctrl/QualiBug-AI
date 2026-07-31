@@ -1,13 +1,12 @@
-"""Runtime contracts for source-backed process execution graphs.
+"""Governed runtime contracts for source-backed process execution graphs.
 
-This module is consumed by the existing ``experiment_plan_executor``.  It is
-not a second scheduler or transport implementation: it validates graph
-dependencies, resolves exact approved targets, and owns the namespaced binding
-ledger used by that executor.
+The existing plan executor remains the only scheduler and transport authority.
+This module validates synchronous read graphs, resolves exact approved targets,
+and owns their namespaced binding ledger.  It never guesses targets, credentials,
+identities, output fields, or dependency order.
 
-Every cross-node value must be source-declared.  No default ``id`` extraction,
-latest-record lookup, field-name guessing, or connector endpoint fallback is
-allowed.
+Graph writes remain fail-closed until graph-wide observer compilation and cleanup
+dispatch share the same system-aware execution authority.
 """
 from __future__ import annotations
 
@@ -24,6 +23,7 @@ BINDING_LEDGER_SCHEMA = "qualibug.process-graph-binding-ledger.v1"
 GRAPH_RUNTIME_INVALID = "PROCESS_GRAPH_RUNTIME_INVALID"
 GRAPH_RUNTIME_WAIT_UNSUPPORTED = "PROCESS_GRAPH_WAIT_RUNTIME_NOT_AVAILABLE"
 GRAPH_RUNTIME_ASYNC_UNSUPPORTED = "PROCESS_GRAPH_ASYNC_RUNTIME_NOT_AVAILABLE"
+GRAPH_WRITE_RUNTIME_UNAVAILABLE = "PROCESS_GRAPH_WRITE_RUNTIME_NOT_AVAILABLE"
 GRAPH_TARGET_NOT_APPROVED = "PROCESS_GRAPH_TARGET_NOT_APPROVED"
 GRAPH_TARGET_ACTOR_CREDENTIAL_UNRESOLVED = (
     "PROCESS_GRAPH_TARGET_ACTOR_CREDENTIAL_UNRESOLVED"
@@ -59,7 +59,11 @@ def _text(value: Any) -> str:
 
 def _stable_hash(value: Any) -> str:
     raw = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -67,7 +71,7 @@ def _stable_hash(value: Any) -> str:
 def extract_execution_graph(
     treatment_plan: list[Any],
 ) -> tuple[dict[str, Any], str]:
-    """Return the single graph embedded on every graph-backed treatment step."""
+    """Return one identical graph carried by every graph-backed treatment step."""
     graphs = [
         _dict(step.get("_execution_graph"))
         for step in treatment_plan
@@ -75,15 +79,13 @@ def extract_execution_graph(
     ]
     if not graphs:
         return {}, ""
-    fingerprints = {_stable_hash(graph) for graph in graphs}
-    if len(fingerprints) != 1:
+    if len({_stable_hash(graph) for graph in graphs}) != 1:
         return {}, "execution_graph_fingerprint_mismatch_between_steps"
     return deepcopy(graphs[0]), ""
 
 
 def _target_rows(runtime_contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
     source = runtime_contract.get("approved_targets")
-    rows: dict[str, dict[str, Any]] = {}
     if isinstance(source, dict):
         iterator = source.items()
     elif isinstance(source, list):
@@ -101,6 +103,7 @@ def _target_rows(runtime_contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
         ]
     else:
         iterator = []
+    result: dict[str, dict[str, Any]] = {}
     for key, value in iterator:
         if not isinstance(value, dict):
             continue
@@ -111,8 +114,8 @@ def _target_rows(runtime_contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
             or value.get("approved_target_ref")
         )
         if ref:
-            rows[ref] = dict(value)
-    return rows
+            result[ref] = dict(value)
+    return result
 
 
 def _primary_aliases(runtime_contract: dict[str, Any]) -> set[str]:
@@ -130,15 +133,14 @@ def _primary_aliases(runtime_contract: dict[str, Any]) -> set[str]:
 
 
 def _primary_contract(
-    runtime_contract: dict[str, Any],
-    *,
-    base_url: str,
+    runtime_contract: dict[str, Any], *, base_url: str
 ) -> dict[str, Any]:
     row = dict(runtime_contract)
     approved = _text(row.get("approved_base_url")) or _text(base_url)
-    requested = _text(row.get("requested_base_url")) or _text(base_url) or approved
     row["approved_base_url"] = approved
-    row["requested_base_url"] = requested
+    row["requested_base_url"] = (
+        _text(row.get("requested_base_url")) or _text(base_url) or approved
+    )
     return row
 
 
@@ -148,26 +150,26 @@ def _target_contract(
     system_ref: str,
     base_url: str,
 ) -> tuple[dict[str, Any], bool, str]:
-    """Resolve one exact approved target; never reads connector endpoints."""
-    aliases = _primary_aliases(runtime_contract)
-    if not system_ref or system_ref in aliases:
+    if not system_ref or system_ref in _primary_aliases(runtime_contract):
         return _primary_contract(runtime_contract, base_url=base_url), True, ""
     row = _target_rows(runtime_contract).get(system_ref)
     if not row:
         return {}, False, f"approved_target_missing:{system_ref}"
     approved = _text(row.get("approved_base_url"))
-    requested = _text(row.get("requested_base_url")) or approved
     if not approved:
         return {}, False, f"approved_base_url_missing:{system_ref}"
-    merged = {
-        **runtime_contract,
-        **row,
-        "approved_base_url": approved,
-        "requested_base_url": requested,
-        "environment_ref": _text(row.get("environment_ref")) or system_ref,
-        "status": _text(row.get("status")) or "blocked",
-    }
-    return merged, False, ""
+    return (
+        {
+            **runtime_contract,
+            **row,
+            "approved_base_url": approved,
+            "requested_base_url": _text(row.get("requested_base_url")) or approved,
+            "environment_ref": _text(row.get("environment_ref")) or system_ref,
+            "status": _text(row.get("status")) or "blocked",
+        },
+        False,
+        "",
+    )
 
 
 def _target_decision(contract: dict[str, Any]) -> dict[str, Any]:
@@ -230,17 +232,17 @@ def _predecessors(
 def _waves(
     order: list[str], predecessors: dict[str, list[str]]
 ) -> tuple[dict[str, int], str]:
-    wave: dict[str, int] = {}
+    waves: dict[str, int] = {}
     for node_id in order:
-        missing = [ref for ref in predecessors.get(node_id, []) if ref not in wave]
+        missing = [ref for ref in predecessors.get(node_id, []) if ref not in waves]
         if missing:
             return {}, f"topological_order_predecessor_missing:{node_id}:{','.join(missing)}"
-        wave[node_id] = (
+        waves[node_id] = (
             0
             if not predecessors.get(node_id)
-            else 1 + max(wave[ref] for ref in predecessors[node_id])
+            else 1 + max(waves[ref] for ref in predecessors[node_id])
         )
-    return wave, ""
+    return waves, ""
 
 
 def _binding_refs_for_node(
@@ -271,20 +273,15 @@ def prepare_graph_runtime(
     base_url: str,
     runtime_contract: dict[str, Any],
 ) -> dict[str, Any]:
-    """Validate the executable synchronous graph before any transport occurs."""
+    """Validate a synchronous read graph before any request reaches transport."""
     nodes = _graph_nodes(graph)
-    order = [
-        _text(value)
-        for value in _list(graph.get("topological_order"))
-        if _text(value)
-    ]
+    order = [_text(value) for value in _list(graph.get("topological_order")) if _text(value)]
     if not nodes or set(order) != set(nodes) or len(order) != len(nodes):
         return {
             "status": "BLOCKED",
             "reason_code": GRAPH_RUNTIME_INVALID,
             "detail": "graph_nodes_and_topological_order_mismatch",
         }
-
     plan_ids = {
         _text(step.get("step_id"))
         for step in treatment_plan
@@ -295,31 +292,30 @@ def prepare_graph_runtime(
             "status": "BLOCKED",
             "reason_code": GRAPH_RUNTIME_INVALID,
             "detail": (
-                f"graph_plan_identity_mismatch:"
-                f"missing={sorted(set(nodes) - plan_ids)}:"
+                f"graph_plan_identity_mismatch:missing={sorted(set(nodes) - plan_ids)}:"
                 f"unexpected={sorted(plan_ids - set(nodes))}"
             ),
         }
-
     if _list(graph.get("wait_contracts")):
         return {
             "status": "BLOCKED",
             "reason_code": GRAPH_RUNTIME_WAIT_UNSUPPORTED,
             "detail": "source_declared_wait_contract_requires_observer_scheduler",
         }
-    async_edges = [
-        _text(edge.get("relation_type")).upper()
-        for edge in _list(graph.get("edges"))
-        if isinstance(edge, dict)
-        and _text(edge.get("relation_type")).upper() in _ASYNC_RELATIONS
-    ]
+    async_edges = sorted(
+        {
+            _text(edge.get("relation_type")).upper()
+            for edge in _list(graph.get("edges"))
+            if isinstance(edge, dict)
+            and _text(edge.get("relation_type")).upper() in _ASYNC_RELATIONS
+        }
+    )
     if async_edges:
         return {
             "status": "BLOCKED",
             "reason_code": GRAPH_RUNTIME_ASYNC_UNSUPPORTED,
-            "detail": ",".join(sorted(set(async_edges))),
+            "detail": ",".join(async_edges),
         }
-
     predecessors, error = _predecessors(graph, set(nodes))
     if error:
         return {
@@ -342,16 +338,11 @@ def prepare_graph_runtime(
         operation = _dict(ops.get(operation_ref))
         method = _text(node.get("method") or operation.get("method")).upper()
         if method in _WRITE_METHODS:
-            compensation_ref = _text(node.get("compensation_operation_ref"))
-            if not compensation_ref or compensation_ref not in ops:
-                return {
-                    "status": "BLOCKED",
-                    "reason_code": GRAPH_NODE_COMPENSATION_UNRESOLVED,
-                    "detail": (
-                        f"{node_id}:{operation_ref}:"
-                        f"{compensation_ref or 'missing_compensation_operation_ref'}"
-                    ),
-                }
+            return {
+                "status": "BLOCKED",
+                "reason_code": GRAPH_WRITE_RUNTIME_UNAVAILABLE,
+                "detail": f"{node_id}:{operation_ref}:{method}",
+            }
         system_ref = _text(node.get("system_ref"))
         contract, primary, error = _target_contract(
             runtime_contract,
@@ -374,16 +365,6 @@ def prepare_graph_runtime(
                     f"{','.join(decision.get('blocking_codes') or [])}"
                 ),
             }
-        approved_url = normalize_base_url(decision.get("approved_base_url"))
-        primary_url = normalize_base_url(
-            _text(runtime_contract.get("approved_base_url")) or base_url
-        )
-        if method in _WRITE_METHODS and approved_url != primary_url:
-            return {
-                "status": "BLOCKED",
-                "reason_code": GRAPH_SECONDARY_WRITE_CLEANUP_UNAVAILABLE,
-                "detail": f"{node_id}:{system_ref}:{operation_ref}",
-            }
         credential_key, error = _credential_key(
             contract,
             actor_ref=_text(node.get("actor_ref")),
@@ -398,7 +379,7 @@ def prepare_graph_runtime(
         target_contexts[node_id] = {
             "system_ref": system_ref,
             "primary": primary,
-            "base_url": approved_url,
+            "base_url": normalize_base_url(decision.get("approved_base_url")),
             "runtime_contract": contract,
             "target_policy_decision": decision,
             "credential_token_key": credential_key,
@@ -435,9 +416,7 @@ def _lookup_output(runtime: dict[str, Any], producer: str, field: str) -> Any:
         .get("outputs_by_node", {})
         .get(producer, {})
     ).get(field)
-    if isinstance(row, dict) and "value" in row:
-        return row["value"]
-    return None
+    return row.get("value") if isinstance(row, dict) and "value" in row else None
 
 
 def graph_step_context(
@@ -447,7 +426,7 @@ def graph_step_context(
     step: dict[str, Any],
     initial_bindings: dict[str, Any],
 ) -> dict[str, Any]:
-    """Resolve one READY node without exposing another node's flat namespace."""
+    """Resolve one node from explicit predecessor outputs only."""
     node_id = _text(step.get("step_id"))
     predecessors = _list(_dict(runtime.get("predecessors")).get(node_id))
     failed = [
@@ -461,7 +440,6 @@ def graph_step_context(
             "reason_code": GRAPH_PREDECESSOR_NOT_SUCCEEDED,
             "detail": f"{node_id}:{','.join(failed)}",
         }
-
     node = _dict(_dict(runtime.get("nodes")).get(node_id))
     bindings = dict(initial_bindings)
     consumptions: list[dict[str, Any]] = []
@@ -525,8 +503,6 @@ def graph_step_context(
 
 def _response_value(body: Any, path: str) -> Any:
     token = _text(path)
-    if not token:
-        return None
     if token.startswith("$."):
         parts = [part for part in token[2:].split(".") if part]
     elif token.startswith("/"):
@@ -555,28 +531,27 @@ def record_graph_step_outcome(
     observation: dict[str, Any] | None = None,
     blocked_reason: str = "",
 ) -> dict[str, Any]:
-    """Record status and source-declared outputs for one node."""
+    """Record transport status and all declared output bindings fail-closed."""
+    del graph
     node_id = _text(step.get("step_id"))
     statuses = _dict(runtime.get("node_status"))
     if blocked_reason:
         statuses[node_id] = "BLOCKED"
         return {"status": "BLOCKED", "node_id": node_id}
-
     obs = _dict(observation)
     status_code = int(obs.get("status_code") or obs.get("status") or 0)
-    succeeded = 200 <= status_code < 300
-    statuses[node_id] = "SUCCEEDED" if succeeded else "FAILED"
-    if not succeeded:
+    if not 200 <= status_code < 300:
+        statuses[node_id] = "FAILED"
         return {
-            "status": statuses[node_id],
+            "status": "FAILED",
             "node_id": node_id,
             "status_code": status_code,
         }
 
     node = _dict(_dict(runtime.get("nodes")).get(node_id))
     output_rows: dict[str, dict[str, Any]] = {}
-    body = obs.get("body")
     unresolved: list[str] = []
+    body = obs.get("body")
     for index, spec in enumerate(_list(node.get("output_binding_specs"))):
         if not isinstance(spec, dict):
             continue
@@ -606,10 +581,10 @@ def record_graph_step_outcome(
             "object_refs": _list(node.get("object_refs")),
             "response_fingerprint": _stable_hash(body),
         }
-
     ledger = _dict(runtime.get("binding_ledger"))
     ledger.setdefault("outputs_by_node", {})[node_id] = output_rows
     if unresolved:
+        statuses[node_id] = "BLOCKED"
         ledger.setdefault("unresolved", []).append(
             {
                 "node_id": node_id,
@@ -617,12 +592,21 @@ def record_graph_step_outcome(
                 "details": unresolved,
             }
         )
+        return {
+            "status": "BLOCKED",
+            "reason_code": GRAPH_OUTPUT_BINDING_UNRESOLVED,
+            "node_id": node_id,
+            "status_code": status_code,
+            "output_binding_count": len(output_rows),
+            "output_binding_unresolved": unresolved,
+        }
+    statuses[node_id] = "SUCCEEDED"
     return {
-        "status": statuses[node_id],
+        "status": "SUCCEEDED",
         "node_id": node_id,
         "status_code": status_code,
         "output_binding_count": len(output_rows),
-        "output_binding_unresolved": unresolved,
+        "output_binding_unresolved": [],
     }
 
 
@@ -632,6 +616,7 @@ __all__ = [
     "GRAPH_RUNTIME_INVALID",
     "GRAPH_RUNTIME_WAIT_UNSUPPORTED",
     "GRAPH_RUNTIME_ASYNC_UNSUPPORTED",
+    "GRAPH_WRITE_RUNTIME_UNAVAILABLE",
     "GRAPH_TARGET_NOT_APPROVED",
     "GRAPH_TARGET_ACTOR_CREDENTIAL_UNRESOLVED",
     "GRAPH_SECONDARY_WRITE_CLEANUP_UNAVAILABLE",
