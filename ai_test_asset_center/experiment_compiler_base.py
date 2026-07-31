@@ -1,8 +1,8 @@
-"""Compile TestObligations into ExecutableExperiments or explicit blocks.
+"""Compile TestObligations into frozen ExecutableExperiments.
 
-Single-obligation compile lives in ``experiment_compiler_obligation``; binding
-helpers live in ``experiment_compiler_support``. This module keeps batch
-``compile_experiments`` and re-exports the public compile surface.
+The existing single-obligation compiler remains the semantic authority. This
+module applies the final flow/readback freeze after that compiler returns, then
+keeps the batch compilation and public re-export surface.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any
 
 from .real_id_resolver import normalize_path_placeholders
 from .validation_obligation_expander import expand_validation_obligation
+from .experiment_compile_freezer import freeze_compiled_experiment
 from .experiment_compiler_support import (  # noqa: F401
     _actor_is_executable,
     _compensates_create_operation,
@@ -30,7 +31,7 @@ from .experiment_compiler_obligation import (  # noqa: F401
     BLOCK_REASONS,
     SCHEMA_VERSION,
     blocked_experiment,
-    compile_experiment_for_obligation,
+    compile_experiment_for_obligation as _compile_experiment_for_obligation,
     make_experiment,
     stable_experiment_id,
 )
@@ -46,6 +47,28 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def compile_experiment_for_obligation(
+    obligation: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+    environment_type: str = "",
+    policy_version: str = "",
+    available_adapters: "set[str] | frozenset[str] | None" = None,
+) -> dict[str, Any]:
+    """Compile one obligation and freeze its final cross-plan requirements."""
+    experiment = _compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=behavior_ir,
+        environment_type=environment_type,
+        policy_version=policy_version,
+        available_adapters=available_adapters,
+    )
+    return freeze_compiled_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+    )
 
 
 def compile_experiments(
@@ -76,22 +99,27 @@ def compile_experiments(
             )
             or _text(prop.get("operation_ref"))
         )
-        # Resolve mismatched operation IDs by method+path from source locators
         if operation_ref and operation_ref not in operations:
-            _src_locators = [
-                _text(s.get("locator")) for s in _list(obl.get("source_refs"))
-                if isinstance(s, dict) and _text(s.get("kind")) == "api_operation"
-                and _text(s.get("locator"))
+            source_locators = [
+                _text(source.get("locator"))
+                for source in _list(obl.get("source_refs"))
+                if isinstance(source, dict)
+                and _text(source.get("kind")) == "api_operation"
+                and _text(source.get("locator"))
             ]
-            for loc in _src_locators:
-                parts = loc.split(None, 1)
+            for locator in source_locators:
+                parts = locator.split(None, 1)
                 if len(parts) == 2:
-                    loc_method, loc_path = parts[0].upper(), parts[1].strip()
+                    locator_method, locator_path = parts[0].upper(), parts[1].strip()
                     for ir_id, ir_op in operations.items():
-                        if (isinstance(ir_op, dict)
-                            and _text(ir_op.get("method")).upper() == loc_method
-                            and normalize_path_placeholders(_text(ir_op.get("path") or ir_op.get("raw_path")))
-                            == normalize_path_placeholders(loc_path)):
+                        if (
+                            isinstance(ir_op, dict)
+                            and _text(ir_op.get("method")).upper() == locator_method
+                            and normalize_path_placeholders(
+                                _text(ir_op.get("path") or ir_op.get("raw_path"))
+                            )
+                            == normalize_path_placeholders(locator_path)
+                        ):
                             operation_ref = ir_id
                             break
                 if operation_ref in operations:
@@ -109,6 +137,12 @@ def compile_experiments(
                 environment_type=environment_type,
                 policy_version=policy_version,
                 available_adapters=available_adapters,
+            )
+            # A custom compile_one callback must still pass through the same
+            # final freeze. The freezer is deterministic and idempotent.
+            experiment = freeze_compiled_experiment(
+                experiment,
+                behavior_ir=behavior_ir,
             )
             receipt = _dict(experiment.get("compile_receipt"))
             if _text(receipt.get("status")) == "COMPILED":
