@@ -12,7 +12,16 @@ DRAFT_SCHEMA = "qualibug.database-relation-observer-execution-draft.v1"
 _BLOCK_REASON = "BLOCKED_DATABASE_RELATION_ORACLE_BINDING_AMBIGUOUS"
 _SOURCE_KINDS = frozenset({"conservation", "limit_constraint", "cross_entity_consistency"})
 _AGGREGATES = frozenset({"COUNT", "SUM", "MIN", "MAX"})
-_OPERATORS = frozenset({"EQ", "EQUALS", "==", "LTE", "LE", "<=", "GTE", "GE", ">=", "LT", "<", "GT", ">", "NEQ", "NE", "!="})
+_OPERATORS = frozenset(
+    {
+        "EQ", "EQUALS", "==",
+        "LTE", "LE", "<=",
+        "GTE", "GE", ">=",
+        "LT", "<",
+        "GT", ">",
+        "NEQ", "NE", "!=",
+    }
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -28,7 +37,13 @@ def _text(value: Any) -> str:
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _fingerprint(value: Any) -> str:
@@ -50,39 +65,71 @@ def _name(value: Any) -> str:
 
 def _identifier(value: Any) -> bool:
     text = _text(value)
-    return bool(text.startswith("#/") or ":" in text or text.startswith(("field_", "binding_")))
+    return bool(
+        text.startswith("#/")
+        or ":" in text
+        or text.startswith(("field_", "binding_"))
+    )
 
 
 def _side_field(side: dict[str, Any]) -> tuple[str, str]:
-    raw = side.get("field_id") or side.get("database_field_id") or side.get("value_field") or side.get("field")
+    raw = (
+        side.get("field_id")
+        or side.get("database_field_id")
+        or side.get("value_field")
+        or side.get("field")
+    )
     return (_text(raw), "ID") if _identifier(raw) else (_name(raw), "NAME")
 
 
 def _side_entity(side: dict[str, Any]) -> str:
-    return _name(side.get("entity") or side.get("entity_name") or side.get("source_entity_name") or side.get("source_entity_alias"))
+    return _name(
+        side.get("entity")
+        or side.get("entity_name")
+        or side.get("source_entity_name")
+        or side.get("source_entity_alias")
+    )
 
 
 def _aggregate(side: dict[str, Any]) -> str:
     return _text(side.get("aggregate") or side.get("function")).upper()
 
 
-def _expression(assertion: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str]:
+def _expression(
+    assertion: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], str]:
     expr = _dict(assertion.get("structured_expression"))
-    return _dict(expr.get("left")), _dict(expr.get("right")), _text(expr.get("operator") or assertion.get("operator")).upper()
+    return (
+        _dict(expr.get("left")),
+        _dict(expr.get("right")),
+        _text(expr.get("operator") or assertion.get("operator")).upper(),
+    )
 
 
-def _root_contracts(experiment: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    result: dict[str, dict[str, Any]] = {}
+def _root_targets(experiment: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Index every exact AFTER root draft; multiple drafts remain ambiguous."""
+    result: dict[str, list[dict[str, Any]]] = {}
     for raw in _list(experiment.get("database_observer_execution_drafts")):
         row = _dict(raw)
+        if _text(row.get("observation_phase")).upper() != "AFTER":
+            continue
         contract = _dict(row.get("database_observer_contract"))
         ref = _text(row.get("observer_contract_ref"))
-        if ref and contract:
-            result[ref] = contract
+        draft_id = _text(row.get("draft_id"))
+        if ref and contract and draft_id:
+            result.setdefault(ref, []).append(
+                {
+                    "contract": contract,
+                    "after_draft": row,
+                }
+            )
     return result
 
 
-def _match_root_field(contract: dict[str, Any], side: dict[str, Any]) -> list[dict[str, Any]]:
+def _match_root_field(
+    contract: dict[str, Any],
+    side: dict[str, Any],
+) -> list[dict[str, Any]]:
     token, basis = _side_field(side)
     if not token:
         return []
@@ -100,15 +147,28 @@ def _match_root_field(contract: dict[str, Any], side: dict[str, Any]) -> list[di
             _name(row.get("api_field_name")),
             _name(row.get("database_field_name")),
         }
-        if (basis == "ID" and token in identities) or (basis == "NAME" and token in names):
+        if (
+            (basis == "ID" and token in identities)
+            or (basis == "NAME" and token in names)
+        ):
             matches.append({**row, "match_basis": f"EXACT_FIELD_{basis}"})
     return matches
 
 
-def _match_child_field(contract: dict[str, Any], side: dict[str, Any], aggregate: str) -> list[dict[str, Any]]:
+def _match_child_field(
+    contract: dict[str, Any],
+    side: dict[str, Any],
+    aggregate: str,
+) -> list[dict[str, Any]]:
     token, basis = _side_field(side)
     if aggregate == "COUNT" and not token:
-        return [{"database_field_id": "", "database_field_name": "", "match_basis": "COUNT_ROWS"}]
+        return [
+            {
+                "database_field_id": "",
+                "database_field_name": "",
+                "match_basis": "COUNT_ROWS",
+            }
+        ]
     if not token:
         return []
     matches: list[dict[str, Any]] = []
@@ -116,12 +176,19 @@ def _match_child_field(contract: dict[str, Any], side: dict[str, Any], aggregate
         row = _dict(raw)
         identity = _text(row.get("database_field_id"))
         name = _name(row.get("database_field_name"))
-        if (basis == "ID" and token == identity) or (basis == "NAME" and token == name):
+        if (
+            (basis == "ID" and token == identity)
+            or (basis == "NAME" and token == name)
+        ):
             matches.append({**row, "match_basis": f"EXACT_FIELD_{basis}"})
     return matches
 
 
-def _entity_matches(contract: dict[str, Any], aggregate_side: dict[str, Any], root_side: dict[str, Any]) -> bool:
+def _entity_matches(
+    contract: dict[str, Any],
+    aggregate_side: dict[str, Any],
+    root_side: dict[str, Any],
+) -> bool:
     child_entity = _side_entity(aggregate_side)
     parent_entity = _side_entity(root_side)
     if child_entity and child_entity not in {
@@ -137,7 +204,27 @@ def _entity_matches(contract: dict[str, Any], aggregate_side: dict[str, Any], ro
     return True
 
 
-def _candidates(assertion: dict[str, Any], experiment: dict[str, Any]) -> list[dict[str, Any]]:
+def _relation_key(contract: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {
+            "child_database_field_name": _text(
+                _dict(raw).get("child_database_field_name")
+            ),
+            "parent_database_field_name": _text(
+                _dict(raw).get("parent_database_field_name")
+            ),
+        }
+        for raw in _list(contract.get("relation_predicates"))
+        if isinstance(raw, dict)
+        and _text(raw.get("child_database_field_name"))
+        and _text(raw.get("parent_database_field_name"))
+    ]
+
+
+def _candidates(
+    assertion: dict[str, Any],
+    experiment: dict[str, Any],
+) -> list[dict[str, Any]]:
     left, right, operator = _expression(assertion)
     left_aggregate = _aggregate(left)
     right_aggregate = _aggregate(right)
@@ -152,52 +239,66 @@ def _candidates(assertion: dict[str, Any], experiment: dict[str, Any]) -> list[d
     if operator not in _OPERATORS:
         return []
 
-    roots = _root_contracts(experiment)
+    roots = _root_targets(experiment)
     output: list[dict[str, Any]] = []
     for raw in _list(experiment.get("database_relation_observer_contracts")):
         relation = _dict(raw)
         if (
-            _text(relation.get("schema")) != "qualibug.database-relation-observer-contract.v1"
-            or _text(relation.get("status")) != "READY_FOR_RUNTIME_CONNECTION_BINDING"
+            _text(relation.get("schema"))
+            != "qualibug.database-relation-observer-contract.v1"
+            or _text(relation.get("status"))
+            != "READY_FOR_RUNTIME_CONNECTION_BINDING"
             or relation.get("runtime_observer_authoritative") is not True
             or not _entity_matches(relation, aggregate_side, root_side)
+            or not _text(relation.get("database_relationship_id"))
+            or not _relation_key(relation)
         ):
             continue
-        root = roots.get(_text(relation.get("root_observer_id")))
-        if not root:
-            continue
-        root_fields = _match_root_field(root, root_side)
-        child_fields = _match_child_field(relation, aggregate_side, aggregate)
-        if len(root_fields) == 1 and len(child_fields) == 1:
-            output.append(
-                {
-                    "relation_contract": relation,
-                    "root_contract": root,
-                    "root_field": root_fields[0],
-                    "child_field": child_fields[0],
-                    "aggregate": aggregate,
-                    "operator": operator,
-                    "aggregate_on_left": aggregate_on_left,
-                }
-            )
-    deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+        root_ref = _text(relation.get("root_observer_id"))
+        for root_target in roots.get(root_ref, []):
+            root = _dict(root_target.get("contract"))
+            root_draft = _dict(root_target.get("after_draft"))
+            root_fields = _match_root_field(root, root_side)
+            child_fields = _match_child_field(relation, aggregate_side, aggregate)
+            if len(root_fields) == 1 and len(child_fields) == 1:
+                output.append(
+                    {
+                        "relation_contract": relation,
+                        "root_contract": root,
+                        "root_after_draft": root_draft,
+                        "root_field": root_fields[0],
+                        "child_field": child_fields[0],
+                        "aggregate": aggregate,
+                        "operator": operator,
+                        "aggregate_on_left": aggregate_on_left,
+                    }
+                )
+    deduped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for row in output:
         key = (
             _text(_dict(row.get("relation_contract")).get("relation_observer_id")),
+            _text(_dict(row.get("root_after_draft")).get("draft_id")),
             _text(_dict(row.get("root_field")).get("field_binding_id")),
-            _text(_dict(row.get("child_field")).get("database_field_id")) or "COUNT_ROWS",
+            _text(_dict(row.get("child_field")).get("database_field_id"))
+            or "COUNT_ROWS",
         )
-        deduped[key] = row
+        if all(key):
+            deduped[key] = row
     return list(deduped.values())
 
 
-def _projection(assertion: dict[str, Any], candidate: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _projection(
+    assertion: dict[str, Any],
+    candidate: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     relation = _dict(candidate.get("relation_contract"))
     root = _dict(candidate.get("root_contract"))
+    root_after_draft = _dict(candidate.get("root_after_draft"))
     root_field = _dict(candidate.get("root_field"))
     child_field = _dict(candidate.get("child_field"))
     relation_ref = _text(relation.get("relation_observer_id"))
     aggregate = _text(candidate.get("aggregate"))
+    relation_key = _relation_key(relation)
     request = {
         "aggregate": aggregate,
         "database_field_id": _text(child_field.get("database_field_id")),
@@ -239,27 +340,49 @@ def _projection(assertion: dict[str, Any], candidate: dict[str, Any]) -> tuple[d
     projected = {
         **deepcopy(assertion),
         "kind": ASSERTION_KIND,
-        "source_assertion_kind": _text(assertion.get("kind") or assertion.get("type")),
+        "source_assertion_kind": _text(
+            assertion.get("kind") or assertion.get("type")
+        ),
         "database_relation_observer_ref": relation_ref,
         "database_relation_draft_id": draft["draft_id"],
+        "database_relationship_id": _text(
+            relation.get("database_relationship_id")
+        ),
+        "relation_key": relation_key,
         "root_observer_contract_ref": _text(relation.get("root_observer_id")),
+        "root_database_draft_id": _text(root_after_draft.get("draft_id")),
         "root_table_ref": _text(root.get("database_table_id")),
         "root_field_binding_id": _text(root_field.get("field_binding_id")),
         "root_database_field_id": _text(root_field.get("database_field_id")),
-        "root_database_field_name": _text(root_field.get("database_field_name")),
+        "root_database_field_name": _text(
+            root_field.get("database_field_name")
+        ),
         "child_table_ref": _text(relation.get("child_table_id")),
-        "child_database_field_id": _text(child_field.get("database_field_id")),
-        "child_database_field_name": _text(child_field.get("database_field_name")),
+        "child_database_field_id": _text(
+            child_field.get("database_field_id")
+        ),
+        "child_database_field_name": _text(
+            child_field.get("database_field_name")
+        ),
         "aggregate": aggregate,
         "aggregate_alias": "related_value",
         "comparison_operator": _text(candidate.get("operator")),
         "aggregate_on_left": candidate.get("aggregate_on_left") is True,
         "comparison_phase": "AFTER",
-        "tolerance": assertion.get("tolerance") or _dict(assertion.get("structured_expression")).get("tolerance"),
+        "tolerance": (
+            assertion.get("tolerance")
+            or _dict(assertion.get("structured_expression")).get("tolerance")
+        ),
         "database_relation_binding": {
             "schema": PROJECTION_SCHEMA,
-            "database_relationship_id": _text(relation.get("database_relationship_id")),
-            "relation_mapping_decision_id": _text(relation.get("relation_mapping_decision_id")),
+            "database_relationship_id": _text(
+                relation.get("database_relationship_id")
+            ),
+            "relation_mapping_decision_id": _text(
+                relation.get("relation_mapping_decision_id")
+            ),
+            "relation_key": relation_key,
+            "root_database_draft_id": _text(root_after_draft.get("draft_id")),
             "root_field_match_basis": _text(root_field.get("match_basis")),
             "child_field_match_basis": _text(child_field.get("match_basis")),
             "automatic_relation_mapping": False,
@@ -272,7 +395,11 @@ def _projection(assertion: dict[str, Any], candidate: dict[str, Any]) -> tuple[d
     return projected, draft
 
 
-def _blocked(experiment: dict[str, Any], assertion: dict[str, Any], matches: list[dict[str, Any]]) -> dict[str, Any]:
+def _blocked(
+    experiment: dict[str, Any],
+    assertion: dict[str, Any],
+    matches: list[dict[str, Any]],
+) -> dict[str, Any]:
     row = deepcopy(experiment)
     receipt = _dict(row.get("compile_receipt"))
     receipt.update(
@@ -283,7 +410,15 @@ def _blocked(experiment: dict[str, Any], assertion: dict[str, Any], matches: lis
                 "assertion_id": _text(assertion.get("assertion_id")),
                 "candidate_count": len(matches),
                 "candidate_relation_refs": sorted(
-                    _text(_dict(match.get("relation_contract")).get("relation_observer_id"))
+                    _text(
+                        _dict(match.get("relation_contract")).get(
+                            "relation_observer_id"
+                        )
+                    )
+                    for match in matches
+                ),
+                "candidate_root_draft_ids": sorted(
+                    _text(_dict(match.get("root_after_draft")).get("draft_id"))
                     for match in matches
                 ),
                 "automatic_winner_allowed": False,
@@ -295,7 +430,9 @@ def _blocked(experiment: dict[str, Any], assertion: dict[str, Any], matches: lis
     return row
 
 
-def project_database_relation_numeric_assertions(experiment_pack: dict[str, Any]) -> dict[str, Any]:
+def project_database_relation_numeric_assertions(
+    experiment_pack: dict[str, Any],
+) -> dict[str, Any]:
     pack = dict(experiment_pack or {})
     compiled: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
@@ -309,15 +446,22 @@ def project_database_relation_numeric_assertions(experiment_pack: dict[str, Any]
         assertions: list[dict[str, Any]] = []
         drafts = [
             dict(row)
-            for row in _list(experiment.get("database_relation_observer_execution_drafts"))
+            for row in _list(
+                experiment.get("database_relation_observer_execution_drafts")
+            )
             if isinstance(row, dict)
         ]
         gaps: list[dict[str, Any]] = []
         ambiguity: tuple[dict[str, Any], list[dict[str, Any]]] | None = None
         for raw_assertion in _list(experiment.get("assertions")):
             assertion = _dict(raw_assertion)
-            source_kind = _text(assertion.get("kind") or assertion.get("type")).lower()
-            if source_kind not in _SOURCE_KINDS or not _dict(assertion.get("structured_expression")):
+            source_kind = _text(
+                assertion.get("kind") or assertion.get("type")
+            ).lower()
+            if (
+                source_kind not in _SOURCE_KINDS
+                or not _dict(assertion.get("structured_expression"))
+            ):
                 assertions.append(assertion)
                 continue
             matches = _candidates(assertion, experiment)
@@ -329,7 +473,9 @@ def project_database_relation_numeric_assertions(experiment_pack: dict[str, Any]
                 gaps.append(
                     {
                         "assertion_id": _text(assertion.get("assertion_id")),
-                        "reason_code": "DATABASE_RELATION_EXACT_AGGREGATE_BINDING_MISSING",
+                        "reason_code": (
+                            "DATABASE_RELATION_EXACT_AGGREGATE_BINDING_MISSING"
+                        ),
                         "automatic_relation_mapping_allowed": False,
                         "fuzzy_matching_allowed": False,
                     }
@@ -346,63 +492,92 @@ def project_database_relation_numeric_assertions(experiment_pack: dict[str, Any]
             continue
         experiment["assertions"] = assertions
         unique_drafts = {
-            _text(row.get("draft_id")): row for row in drafts if _text(row.get("draft_id"))
+            _text(row.get("draft_id")): row
+            for row in drafts
+            if _text(row.get("draft_id"))
         }
-        experiment["database_relation_observer_execution_drafts"] = list(unique_drafts.values())
-        relation_assertions = [row for row in assertions if _text(row.get("kind")) == ASSERTION_KIND]
+        experiment["database_relation_observer_execution_drafts"] = list(
+            unique_drafts.values()
+        )
+        relation_assertions = [
+            row
+            for row in assertions
+            if _text(row.get("kind")) == ASSERTION_KIND
+        ]
         if relation_assertions:
             observers = [
-                dict(row) for row in _list(experiment.get("observers")) if isinstance(row, dict)
+                dict(row)
+                for row in _list(experiment.get("observers"))
+                if isinstance(row, dict)
             ]
             if "approved_database_relation_phase_aggregate" not in {
                 _text(row.get("observer_id")) for row in observers
             }:
                 observers.append(
                     {
-                        "observer_id": "approved_database_relation_phase_aggregate",
+                        "observer_id": (
+                            "approved_database_relation_phase_aggregate"
+                        ),
                         "adapter": "db_sql",
                     }
                 )
             remaining_legacy = any(
-                _text(row.get("kind") or row.get("type")).lower() in _SOURCE_KINDS
+                _text(row.get("kind") or row.get("type")).lower()
+                in _SOURCE_KINDS
                 for row in assertions
             )
             if not remaining_legacy:
                 observers = [
                     row
                     for row in observers
-                    if _text(row.get("observer_id")) not in {"before_state", "after_state"}
+                    if _text(row.get("observer_id"))
+                    not in {"before_state", "after_state"}
                 ]
             experiment["observers"] = observers
             fingerprint = _fingerprint(relation_assertions)
             receipt = _dict(experiment.get("compile_receipt"))
+            status = "PARTIAL" if gaps else "BOUND"
             receipt.update(
                 {
-                    "database_relation_numeric_projection_status": "PARTIAL" if gaps else "BOUND",
-                    "database_relation_numeric_assertion_count": len(relation_assertions),
-                    "database_relation_numeric_assertion_fingerprint": fingerprint,
+                    "database_relation_numeric_projection_status": status,
+                    "database_relation_numeric_assertion_count": len(
+                        relation_assertions
+                    ),
+                    "database_relation_numeric_assertion_fingerprint": (
+                        fingerprint
+                    ),
                     "database_relation_automatic_mapping_used": False,
                     "database_relation_client_side_filter_used": False,
                 }
             )
             experiment["compile_receipt"] = receipt
-            experiment["database_relation_numeric_projection_status"] = "PARTIAL" if gaps else "BOUND"
-            experiment["database_relation_numeric_assertion_fingerprint"] = fingerprint
+            experiment["database_relation_numeric_projection_status"] = status
+            experiment[
+                "database_relation_numeric_assertion_fingerprint"
+            ] = fingerprint
         elif gaps:
-            experiment["database_relation_numeric_projection_status"] = "INCOMPLETE"
+            experiment["database_relation_numeric_projection_status"] = (
+                "INCOMPLETE"
+            )
         else:
-            experiment["database_relation_numeric_projection_status"] = "NOT_APPLICABLE"
+            experiment["database_relation_numeric_projection_status"] = (
+                "NOT_APPLICABLE"
+            )
         if gaps:
             experiment["database_relation_numeric_projection_gaps"] = gaps
         compiled.append(experiment)
 
     existing_blocked = [
-        dict(row) for row in _list(pack.get("blocked_experiments")) if isinstance(row, dict)
+        dict(row)
+        for row in _list(pack.get("blocked_experiments"))
+        if isinstance(row, dict)
     ]
     all_blocked = [*existing_blocked, *blocked]
     reason_counts = dict(_dict(pack.get("block_reason_counts")))
     if blocked:
-        reason_counts[_BLOCK_REASON] = reason_counts.get(_BLOCK_REASON, 0) + len(blocked)
+        reason_counts[_BLOCK_REASON] = (
+            reason_counts.get(_BLOCK_REASON, 0) + len(blocked)
+        )
     pack.update(
         {
             "experiments": compiled,
@@ -412,7 +587,13 @@ def project_database_relation_numeric_assertions(experiment_pack: dict[str, Any]
             "block_reason_counts": reason_counts,
             "database_relation_numeric_experiment_projection": {
                 "schema": PROJECTION_SCHEMA,
-                "status": "BLOCKED" if blocked else "PARTIAL" if incomplete_count else "PASS",
+                "status": (
+                    "BLOCKED"
+                    if blocked
+                    else "PARTIAL"
+                    if incomplete_count
+                    else "PASS"
+                ),
                 "projected_assertion_count": projected_count,
                 "incomplete_assertion_count": incomplete_count,
                 "newly_blocked_experiment_count": len(blocked),
