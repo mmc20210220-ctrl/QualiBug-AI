@@ -33,6 +33,16 @@ def _write_json(path: Path, value: Any) -> None:
 def render_markdown_report(result: dict[str, Any]) -> str:
     metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
     root_causes = result.get("root_cause_analysis") if isinstance(result.get("root_cause_analysis"), dict) else {}
+    fact_slots = (
+        result.get("business_fact_slot_measurement")
+        if isinstance(result.get("business_fact_slot_measurement"), dict)
+        else {}
+    )
+    fact_slot_metrics = (
+        fact_slots.get("metrics")
+        if isinstance(fact_slots.get("metrics"), dict)
+        else {}
+    )
     ingestion = (
         result.get("ingestion_evidence_measurement")
         if isinstance(result.get("ingestion_evidence_measurement"), dict)
@@ -92,6 +102,20 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         f"| 假确定率 | {_percent(false_confirmation.get('false_confirmation_rate'))} |",
         f"| 本应解决但仍暴露的Unknown | {int(metrics.get('unexpected_unknown_count') or 0)} |",
         "",
+        "## 中文显式业务事实槽位测量",
+        "",
+        f"- 测量状态：`{_text(fact_slots.get('status')) or 'NOT_MEASURED'}`",
+        "",
+        "| 指标 | 结果 |",
+        "|---|---:|",
+        f"| 人工标注事实数 | {int(fact_slot_metrics.get('annotated_fact_count') or 0)} |",
+        f"| 显式事实召回率 | {_percent(fact_slot_metrics.get('fact_recall'))} |",
+        f"| 完整事实精确率 | {_percent(fact_slot_metrics.get('exact_fact_rate'))} |",
+        f"| 槽位精确准确率 | {_percent(fact_slot_metrics.get('slot_exact_accuracy'))} |",
+        f"| P0显式事实精确召回率 | {_percent(fact_slot_metrics.get('p0_exact_fact_recall'))} |",
+        f"| 缺失事实 | {int(fact_slot_metrics.get('missing_fact_count') or 0)} |",
+        f"| 歧义事实 | {int(fact_slot_metrics.get('ambiguous_fact_count') or 0)} |",
+        "",
         "## 多源接入与证据定位回执测量",
         "",
         "| 指标 | 结果 |",
@@ -123,6 +147,13 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         f"| 阅读顺序准确率 | {_percent(document_metrics.get('reading_order_accuracy'))} |",
         "",
     ]
+    if not fact_slot_metrics:
+        lines.extend(
+            [
+                "> 中文显式事实槽位准确率尚不可测：必须声明并通过人工来源化槽位 Ground Truth。产品事实不能反向生成真值。",
+                "",
+            ]
+        )
     if not document_metrics.get("true_structure_recall_measured"):
         lines.extend(
             [
@@ -178,6 +209,11 @@ def write_benchmark_outputs(result: dict[str, Any], output_dir: str | Path) -> d
     alignment = result.get("alignment") if isinstance(result.get("alignment"), dict) else {}
     metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
     root_causes = result.get("root_cause_analysis") if isinstance(result.get("root_cause_analysis"), dict) else {}
+    fact_slots = (
+        result.get("business_fact_slot_measurement")
+        if isinstance(result.get("business_fact_slot_measurement"), dict)
+        else {}
+    )
     ingestion = (
         result.get("ingestion_evidence_measurement")
         if isinstance(result.get("ingestion_evidence_measurement"), dict)
@@ -194,6 +230,8 @@ def write_benchmark_outputs(result: dict[str, Any], output_dir: str | Path) -> d
         "ground_truth_summary.json": result.get("ground_truth_summary") or {},
         "understanding_alignment.json": alignment,
         "metric_summary.json": metrics,
+        "business_fact_slot_measurement.json": fact_slots,
+        "business_fact_slot_alignments.json": fact_slots.get("alignments") or [],
         "ingestion_metric_summary.json": ingestion.get("summary") or {},
         "evidence_address_analysis.json": ingestion.get("evidence_address_analysis") or {},
         "structure_loss_analysis.json": ingestion.get("structure_loss_analysis") or {},
