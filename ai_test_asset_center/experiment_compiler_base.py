@@ -1,8 +1,9 @@
 """Compile TestObligations into frozen ExecutableExperiments.
 
 The existing single-obligation compiler remains the semantic authority. This
-module applies final flow/readback and state-precondition freezes after that
-compiler returns, then keeps the batch compilation and public re-export surface.
+module applies final process-graph write safety, flow/readback, and state-
+precondition freezes after that compiler returns, then keeps the batch
+compilation and public re-export surface.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from .real_id_resolver import normalize_path_placeholders
 from .validation_obligation_expander import expand_validation_obligation
 from .experiment_compile_freezer import freeze_compiled_experiment
 from .state_precondition_compile_freezer import freeze_state_precondition_fields
+from .process_graph_write_contract import finalize_process_graph_write_contract
 from .experiment_compiler_support import (  # noqa: F401
     _actor_is_executable,
     _compensates_create_operation,
@@ -55,8 +57,14 @@ def _finalize_compiled_experiment(
     *,
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    flow_frozen = freeze_compiled_experiment(
+    graph_safe = finalize_process_graph_write_contract(
         experiment,
+        behavior_ir,
+    )
+    if _text(_dict(graph_safe.get("compile_receipt")).get("status")) != "COMPILED":
+        return graph_safe
+    flow_frozen = freeze_compiled_experiment(
+        graph_safe,
         behavior_ir=behavior_ir,
     )
     return freeze_state_precondition_fields(flow_frozen)
@@ -152,7 +160,7 @@ def compile_experiments(
                 available_adapters=available_adapters,
             )
             # A custom compile_one callback must still pass through the same
-            # deterministic final freezes. Both functions are idempotent.
+            # deterministic final freezes. All finalizers are idempotent.
             experiment = _finalize_compiled_experiment(
                 experiment,
                 behavior_ir=behavior_ir,
