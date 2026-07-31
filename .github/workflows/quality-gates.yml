@@ -46,6 +46,11 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/business_state_graph.py').read()); print('business_state_graph.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/semantic_scenario_generator.py').read()); print('semantic_scenario_generator.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/v12_pipeline.py').read()); print('v12_pipeline.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_runtime.py').read()); print('process_graph_runtime.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_write_contract.py').read()); print('process_graph_write_contract.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_executor.py').read()); print('process_graph_cleanup_executor.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_plan_executor.py').read()); print('experiment_plan_executor.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_cleanup_lifecycle_adapter.py').read()); print('experiment_cleanup_lifecycle_adapter.py OK')"
       - name: Run backend and evidence truthfulness gates
         run: |
           python -m pytest \
@@ -81,6 +86,12 @@ jobs:
             tests/test_phase111_change_impact.py \
             tests/test_phase111_connector_source_ingestion.py \
             tests/test_phase111_delivery_package.py \
+            tests/test_v150_multi_step_protocol.py \
+            tests/test_process_graph_runtime.py \
+            tests/test_process_graph_plan_executor.py \
+            tests/test_process_graph_write_cleanup.py \
+            tests/test_process_graph_write_fail_closed.py \
+            tests/test_architecture_extraction_contracts.py \
             -q
 
   frontend-quality:
