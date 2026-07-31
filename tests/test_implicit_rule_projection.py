@@ -1,3 +1,4 @@
+from ai_test_asset_center.behavior_ir import build_behavior_ir_from_knowledge_asset
 from ai_test_asset_center.enterprise_knowledge_center._candidate_validation import (
     promote_validated_candidates,
     registered_candidate_kinds,
@@ -15,7 +16,13 @@ def formal_rule(**overrides):
         "statement": "orders.amount must be non-null",
         "logical_form": "REQUIRED_FIELD",
         "supporting_fact_refs": ["field:orders.amount"],
-        "source_refs": [{"source_id": "schema.sql", "kind": "formal_constraint"}],
+        "source_refs": [
+            {
+                "source_id": "schema.sql",
+                "source_locator": "schema.sql#orders.amount",
+                "kind": "formal_constraint",
+            }
+        ],
         "source_authority": "formal_constraint",
         "derivation_basis": ["schema_entailment"],
         "falsifiability": "EVALUABLE",
@@ -25,6 +32,8 @@ def formal_rule(**overrides):
         "counterexample_plan": {"mutate": "null"},
         "antecedents": [{"entity_ref": "table:orders"}],
         "consequent": {"field_ref": "field:orders.amount", "operator": "not_null"},
+        "subject_refs": ["table:orders"],
+        "field_refs": ["field:orders.amount"],
     }
     row.update(overrides)
     return row
@@ -37,9 +46,46 @@ def test_rule_kind_is_registered_and_formal_constraint_promotes():
     assert receipt.pending == []
     promoted = promote_validated_candidates(receipt.validated, kind="rule")
     assert len(promoted) == 1
-    assert promoted[0]["derivation"] == "implicit_rule_entailment"
-    assert promoted[0]["semantic_contract"]["status"] == "ACCEPTED"
-    assert promoted[0]["structured_expression"]["consequent"]["operator"] == "not_null"
+    rule = promoted[0]
+    assert rule["derivation"] == "implicit_rule_entailment"
+    assert rule["semantic_contract"]["status"] == "ACCEPTED"
+    assert rule["structured_expression"]["consequent"]["operator"] == "not_null"
+    assert rule["kind"] == "validation_required"
+    assert rule["operator"] == "not_null"
+    assert rule["operands"] == [
+        {
+            "field_ref": "field:orders.amount",
+            "field_id": "field:orders.amount",
+            "operator": "not_null",
+        }
+    ]
+    assert rule["entity"] == "table:orders"
+    assert rule["source_locator"] == "schema.sql#orders.amount"
+
+
+def test_promoted_rule_keeps_typed_expression_in_existing_behavior_ir():
+    receipt = validate_and_promote_candidates([formal_rule()])
+    rule = promote_validated_candidates(receipt.validated, kind="rule")[0]
+
+    behavior_ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "rule_library": [rule],
+            "objects": [{"name": "table:orders", "kind": "entity"}],
+        },
+        project_id="implicit-rule-runtime-shape",
+    )
+    invariant = next(
+        row
+        for row in behavior_ir["invariants"]
+        if rule["rule_id"] in row.get("source_rule_refs", [])
+    )
+
+    assert invariant["expression"]["kind"] == "validation_required"
+    assert invariant["expression"]["operator"] == "not_null"
+    assert invariant["expression"]["operands"][0]["field_id"] == (
+        "field:orders.amount"
+    )
+    assert invariant.get("binding_status") != "umbrella_rule_excluded"
 
 
 def test_industry_prior_cannot_self_authorize():
