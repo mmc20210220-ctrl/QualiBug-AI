@@ -1,14 +1,15 @@
 """Public experiment execution facade.
 
-The existing implementation remains in ``experiment_executor_core``. This module preserves
-the established public/re-export and monkeypatch surface while adapting two execution
-boundaries: graph-only credentials remain owned by the graph target authority, and an actor
-with an account-qualified identity may never fall back to another token that merely shares
-its role.
+The existing implementation remains in ``experiment_executor_core``. This
+module preserves the established public/re-export and monkeypatch surface while
+adapting governed boundaries that require stronger authority: graph-only
+credentials remain owned by the graph target authority, account-qualified
+actors cannot fall back to role aliases, and graph cleanup proof sets are
+validated per source step before transport.
 
-No credential value is invented for execution. Compatibility markers exist only in a private
-copy passed to structural preflight; the core retains and transports the caller's original
-token map. The graph runtime resolves every target-specific credential before transport.
+No credential, proof, binding or transport result is invented. Ordinary
+experiments continue through the original preflight, fingerprint and cleanup
+validator functions unchanged.
 """
 from __future__ import annotations
 
@@ -18,12 +19,23 @@ from pathlib import Path
 from typing import Any
 
 from . import experiment_executor_core as _core
+from .cleanup_plan_validator import (
+    validate_cleanup_plan as _original_validate_cleanup_plan,
+)
 from .experiment_runtime_support import (
     _jwt_expired,
     _parse_test_accounts_md,
     _resolve_token as _original_resolve_token,
     load_actor_tokens as _original_load_actor_tokens,
     preflight_experiment_executable as _original_preflight,
+)
+from .process_graph_reversibility import (
+    build_process_graph_proof_fingerprint,
+    is_process_graph_reversibility_proof,
+    validate_process_graph_reversibility_runtime,
+)
+from .write_reversibility_contract import (
+    build_proof_fingerprint as _original_build_proof_fingerprint,
 )
 
 
@@ -288,20 +300,72 @@ def _graph_aware_preflight(
     )
 
 
+def _graph_aware_build_proof_fingerprint(proof: dict[str, Any]) -> str:
+    if is_process_graph_reversibility_proof(proof):
+        return build_process_graph_proof_fingerprint(proof)
+    return _original_build_proof_fingerprint(proof)
+
+
+def _graph_aware_validate_cleanup_plan(
+    experiment: dict[str, Any],
+    behavior_ir: dict[str, Any],
+    *,
+    phase: str = "compile",
+    compile_proof_fingerprint: str = "",
+    runtime_bindings: dict[str, Any] | None = None,
+    binding_receipts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    proof = _dict(_dict(experiment).get("write_reversibility_proof"))
+    if is_process_graph_reversibility_proof(proof):
+        if phase != "runtime":
+            return {
+                "valid": True,
+                "reason_code": "",
+                "detail": "",
+                "proof": proof,
+                "coverage": _dict(
+                    _dict(experiment).get("cleanup_coverage_contract")
+                ),
+                "phase": phase,
+            }
+        return validate_process_graph_reversibility_runtime(
+            experiment,
+            behavior_ir,
+            compile_proof_fingerprint=compile_proof_fingerprint,
+            runtime_bindings=runtime_bindings or {},
+            binding_receipts=binding_receipts or [],
+        )
+    validator = globals().get("validate_cleanup_plan")
+    if validator is None or validator is _graph_aware_validate_cleanup_plan:
+        validator = _original_validate_cleanup_plan
+    return validator(
+        experiment,
+        behavior_ir,
+        phase=phase,
+        compile_proof_fingerprint=compile_proof_fingerprint,
+        runtime_bindings=runtime_bindings,
+        binding_receipts=binding_receipts,
+    )
+
+
 _core.preflight_experiment_executable = _graph_aware_preflight
 _core._resolve_token = _strict_resolve_token
 _core.load_actor_tokens = _identity_safe_load_actor_tokens
+_core.build_proof_fingerprint = _graph_aware_build_proof_fingerprint
+_core.validate_cleanup_plan = _graph_aware_validate_cleanup_plan
 _execute_one_core = _core.execute_one_experiment
 
 for _name in dir(_core):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_core, _name)
 
-# Preserve the established public structural preflight identity. The private core
-# path remains graph-aware and account-strict.
+# Preserve established public identities. The private core path remains graph-
+# aware, account-strict and proof-set aware.
 preflight_experiment_executable = _original_preflight
 load_actor_tokens = _identity_safe_load_actor_tokens
 _resolve_token = _strict_resolve_token
+build_proof_fingerprint = _original_build_proof_fingerprint
+validate_cleanup_plan = _original_validate_cleanup_plan
 
 _HOOK_NAMES = (
     "_http_request",
@@ -316,7 +380,6 @@ _HOOK_NAMES = (
     "execute_database_observer_phase",
     "finalize_experiment_execution",
     "load_actor_tokens",
-    "validate_cleanup_plan",
 )
 
 
@@ -328,6 +391,8 @@ def _sync_core_hooks() -> None:
             setattr(_core, name, value)
     _core.preflight_experiment_executable = _graph_aware_preflight
     _core._resolve_token = _strict_resolve_token
+    _core.build_proof_fingerprint = _graph_aware_build_proof_fingerprint
+    _core.validate_cleanup_plan = _graph_aware_validate_cleanup_plan
 
 
 def execute_one_experiment(
@@ -342,7 +407,7 @@ def execute_one_experiment(
     execution_id: str,
     actor_tokens: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Execute through the unchanged core with governed credential routing."""
+    """Execute through the unchanged core with governed graph authorities."""
     _sync_core_hooks()
     return _execute_one_core(
         experiment,
@@ -369,5 +434,7 @@ __all__ = sorted(
         "_original_preflight",
         "_original_resolve_token",
         "_original_load_actor_tokens",
+        "_original_validate_cleanup_plan",
+        "_original_build_proof_fingerprint",
     }
 )
