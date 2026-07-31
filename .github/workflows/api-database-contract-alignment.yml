@@ -73,6 +73,7 @@ on:
       - "tests/test_database_relation_observer_runtime.py"
       - "tests/test_database_relation_numeric_experiment_projection.py"
       - "tests/test_database_relation_numeric_oracle.py"
+      - "tests/test_database_relation_numeric_scope_hardening.py"
       - "tests/test_database_relation_numeric_contract_oracle.py"
       - "tests/test_database_relation_numeric_finding_bridge.py"
       - "tests/test_database_relation_numeric_runtime_integration.py"
@@ -179,6 +180,7 @@ jobs:
             tests/test_database_relation_observer_runtime.py \
             tests/test_database_relation_numeric_experiment_projection.py \
             tests/test_database_relation_numeric_oracle.py \
+            tests/test_database_relation_numeric_scope_hardening.py \
             tests/test_database_relation_numeric_contract_oracle.py \
             tests/test_database_relation_numeric_finding_bridge.py \
             tests/test_database_relation_numeric_runtime_integration.py
