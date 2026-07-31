@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .connector_checkpoint_recovery import (
+    _legacy_stale_seconds,
     begin_connector_checkpoint_commit,
     clear_connector_checkpoint_journal,
     recover_connector_checkpoint_commit,
@@ -29,7 +30,8 @@ from .connector_connection_profiles import (
     resolve_connector_connection_profile,
 )
 from .connector_sync_authority import ConnectorSyncError, list_connector_instances
-from .connector_sync_fencing import managed_connector_sync_fence
+from .connector_sync_fencing import _takeover_seconds, managed_connector_sync_fence
+from .connector_sync_ownership import inspect_connector_sync_ownership
 from .enterprise_knowledge_center._common import ROOT
 from .feishu_connector_adapter import (
     _default_transport,
@@ -190,7 +192,6 @@ def _current_remote_checkpoint(
     transport: Any = None,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> str:
-    """Reconstruct the deterministic Feishu cursor without ingesting content."""
     instance = _instance(project, connector, root)
     profile_ref = _text(instance.get("connection_profile_ref"), 500)
     profile = resolve_connector_connection_profile(project, profile_ref, root=root)
@@ -306,7 +307,7 @@ def run_managed_feishu_sync(
     transport: Any = None,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """Execute the only trusted, recoverable and fenced Feishu sync path."""
+    """Execute the only trusted, recoverable, and fenced Feishu sync path."""
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
@@ -478,6 +479,8 @@ def _recovery_pending(
     connector: str,
     instance: dict[str, Any],
     profile: dict[str, Any],
+    *,
+    now: float,
 ) -> bool:
     workspace = (
         root
@@ -485,16 +488,40 @@ def _recovery_pending(
         / project
         / "enterprise_knowledge_center"
     )
-    journal = workspace / "connector_checkpoint_journal" / f"{connector}.json"
-    ownership = workspace / "connector_sync_ownership" / f"{connector}.json"
+    journal_path = workspace / "connector_checkpoint_journal" / f"{connector}.json"
+    ownership_path = workspace / "connector_sync_ownership" / f"{connector}.json"
+    active_epoch = _text(instance.get("active_sync_epoch_id"), 160)
+
+    if ownership_path.is_file():
+        try:
+            ownership = inspect_connector_sync_ownership(
+                project,
+                connector,
+                root=root,
+                stale_after_seconds=_takeover_seconds(),
+            )
+        except Exception:
+            return True
+        if (
+            ownership.get("owner_alive") is True
+            and ownership.get("progress_stale") is not True
+        ):
+            return False
+        return True
+
+    if active_epoch:
+        started = _parse_utc(instance.get("last_sync_started_at_utc"))
+        return bool(
+            started
+            and now - started >= _legacy_stale_seconds()
+        )
+
     registry_fingerprint = _text(
         instance.get("last_committed_cursor_fingerprint"), 128
     )
     profile_fingerprint = _text(profile.get("checkpoint_fingerprint"), 128)
     return bool(
-        instance.get("active_sync_epoch_id")
-        or journal.is_file()
-        or ownership.is_file()
+        journal_path.is_file()
         or registry_fingerprint != profile_fingerprint
     )
 
@@ -531,7 +558,11 @@ def _failure_category(exc: Exception) -> str:
         return "AUTHORIZATION_REQUIRED"
     if "permission" in message or "forbidden" in message:
         return "PERMISSION_REQUIRED"
-    if "already_running" in message or "lock_held" in message or "owner_active" in message:
+    if (
+        "already_running" in message
+        or "lock_held" in message
+        or "owner_active" in message
+    ):
         return "BUSY"
     if "checkpoint" in message or "cursor" in message or "fence" in message:
         return "AUTO_RECOVERY"
@@ -630,6 +661,7 @@ def run_connector_auto_sync_sweep(
                     connector,
                     raw,
                     profile,
+                    now=timestamp,
                 )
             )
             if not _due(
