@@ -2,8 +2,8 @@
 
 This is a surface-specific slice of the existing mainline, not a second metric:
 
-    scan event contract -> IR binding -> event obligation -> compile
-    -> business trigger -> event observation -> Oracle -> Delivery Gate
+    scan event contract -> IR binding -> durable identity closure -> event obligation
+    -> compile -> business trigger -> event observation -> Oracle -> Delivery Gate
 
 The initial event observer measures correlated unique event identities from a
 source-declared read-only HTTP observation endpoint. It does not claim direct
@@ -58,6 +58,12 @@ def build_formal_event_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
     test_obligations = _dict(result.get("test_obligations"))
     overlay = _dict(behavior_ir.get("scan_event_contract_overlay_receipt"))
     source_binding = _dict(behavior_ir.get("source_event_contract_binding_receipt"))
+    identity_binding = _dict(
+        behavior_ir.get("formal_event_binding_identity_receipt")
+    )
+    identity_evidence = _dict(
+        result.get("formal_event_binding_evidence_receipt")
+    )
     obligation_binding = _dict(
         test_obligations.get("source_event_obligation_receipt")
     )
@@ -139,6 +145,11 @@ def build_formal_event_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
         for key, value in _dict(source_binding.get("reason_counts")).items()
         if _text(key)
     })
+    identity_reason_counts = Counter({
+        _text(key): _safe_int(value)
+        for key, value in _dict(identity_binding.get("reason_counts")).items()
+        if _text(key)
+    })
     skipped_reason_counts = Counter({
         _text(key): _safe_int(value)
         for key, value in _dict(
@@ -151,20 +162,28 @@ def build_formal_event_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
     enterprise_contracts = _safe_int(source_binding.get("contract_count"))
     source_contract_count = max(scan_contracts, enterprise_contracts)
     bound_invariants = _safe_int(source_binding.get("bound_invariant_count"))
+    identity_managed = _safe_int(
+        identity_binding.get("managed_event_invariant_count")
+    )
+    identity_bound = _safe_int(identity_binding.get("bound_count"))
+    identity_projected = _safe_int(identity_evidence.get("identity_receipt_count"))
 
     return {
-        "schema_version": "qualibug.formal-event-loss-funnel.v1",
+        "schema_version": "qualibug.formal-event-loss-funnel.v2",
         "risk_family": RISK_FAMILY,
         "observer_id": OBSERVER_ID,
         "measurement_scope": "source_declared_http_event_observation_only",
         "stages": [
             {"stage": "source_contract", "count": source_contract_count},
             {"stage": "ir_bound", "count": bound_invariants},
+            {"stage": "identity_managed", "count": identity_managed},
+            {"stage": "identity_bound", "count": identity_bound},
             {"stage": "obligation_generated", "count": len(event_obligations)},
             {"stage": "selected", "count": len(attempts)},
             {"stage": "compiled", "count": compiled},
             {"stage": "executed", "count": executed},
             {"stage": "observed", "count": observed},
+            {"stage": "identity_receipt_projected", "count": identity_projected},
             {"stage": "oracle_evaluated", "count": oracle_evaluated},
             {"stage": "oracle_violation", "count": oracle_violation},
             {"stage": "deliverable", "count": deliverable},
@@ -181,11 +200,26 @@ def build_formal_event_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
             "source_binding_gap_count": _safe_int(
                 source_binding.get("coverage_gap_count")
             ),
+            "binding_identity_status": _text(identity_binding.get("status")),
+            "binding_identity_required": bool(
+                identity_binding.get("identity_required")
+            ),
+            "binding_identity_managed_count": identity_managed,
+            "binding_identity_bound_count": identity_bound,
+            "runtime_overlay_event_invariant_count": _safe_int(
+                identity_binding.get("runtime_overlay_event_invariant_count")
+            ),
             "obligation_binding_status": _text(
                 obligation_binding.get("status")
             ),
             "misclassified_obligations_removed": _safe_int(
                 obligation_binding.get("misclassified_obligation_count_removed")
+            ),
+            "identity_evidence_projection_status": _text(
+                identity_evidence.get("status")
+            ),
+            "identity_evidence_graph_count": _safe_int(
+                identity_evidence.get("evidence_graph_count")
             ),
             "complete_family_vector": (
                 obligation_binding.get("complete_family_vector") is True
@@ -194,6 +228,12 @@ def build_formal_event_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
         "losses": {
             "source_binding_reason_counts": dict(
                 sorted(binding_reason_counts.items())
+            ),
+            "binding_identity_reason_counts": dict(
+                sorted(identity_reason_counts.items())
+            ),
+            "binding_identity_blocked_count": _safe_int(
+                identity_binding.get("blocked_count")
             ),
             "obligation_skip_reason_counts": dict(
                 sorted(skipped_reason_counts.items())
@@ -209,6 +249,7 @@ def build_formal_event_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
             "property_held_count": oracle_property_held,
             "violation_count": oracle_violation,
             "deliverable_count": deliverable,
+            "durable_identity_evidence_count": identity_projected,
         },
         "capability_boundary": {
             "direct_broker_protocol_supported": False,
@@ -217,6 +258,9 @@ def build_formal_event_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
             "duplicate_physical_delivery_of_same_event_id_provable": False,
             "ordering_contract_supported": False,
             "raw_event_payloads_included": False,
+            "durable_identity_required_for_enterprise_managed_contracts": True,
+            "runtime_overlay_contracts_require_precompiled_identity": False,
+            "identity_reselection_used": False,
         },
         "external_quality_metrics": {
             "status": "NOT_MEASURED",
