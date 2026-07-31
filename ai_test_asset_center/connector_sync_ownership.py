@@ -1,6 +1,7 @@
-"""Process ownership and heartbeat for one managed connector synchronization."""
+"""Process ownership, heartbeat, and forward-progress observation for one connector sync."""
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import socket
@@ -123,6 +124,27 @@ def _operation_alive(thread_id: int, operation_code: Any) -> bool:
     return False
 
 
+def _operation_signature(thread_id: int) -> str:
+    frame = sys._current_frames().get(thread_id)
+    parts: list[str] = []
+    ignored = {
+        __name__,
+        "ai_test_asset_center.connector_checkpoint_recovery",
+        "ai_test_asset_center.connector_write_fence",
+        "ai_test_asset_center.connector_sync_fencing",
+    }
+    while frame is not None and len(parts) < 16:
+        module = str(frame.f_globals.get("__name__") or "")
+        if module not in ignored:
+            parts.append(
+                f"{module}:{frame.f_code.co_name}:{int(frame.f_lasti)}"
+            )
+        frame = frame.f_back
+    if not parts:
+        return ""
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
+
+
 def read_connector_sync_ownership(
     project_id: str,
     connector_instance_id: str,
@@ -142,6 +164,7 @@ def heartbeat_connector_sync_ownership(
     root: Path,
     active_epoch_id: str = "",
     state: str = "ACTIVE",
+    progress_signature: str = "",
 ) -> dict[str, Any]:
     project = _safe_project_id(project_id)
     connector = _connector_id(connector_instance_id)
@@ -154,6 +177,8 @@ def heartbeat_connector_sync_ownership(
                 "connector_sync_owner_attempt_mismatch"
             )
         now = time.time()
+        signature = _text(progress_signature, 80)
+        previous_signature = _text(payload.get("progress_signature"), 80)
         payload.update(
             {
                 "state": _text(state, 80) or "ACTIVE",
@@ -163,12 +188,19 @@ def heartbeat_connector_sync_ownership(
                 "updated_at_utc": _utc(now),
             }
         )
+        if signature and signature != previous_signature:
+            payload["progress_signature"] = signature
+            payload["last_progress_unix"] = now
+            payload["last_progress_at_utc"] = _utc(now)
         _write_json_object_atomic(path, payload)
     return {
         "ok": True,
         "attempt_id": attempt,
         "active_sync_epoch_id": payload["active_sync_epoch_id"],
         "heartbeat_recorded": True,
+        "forward_progress_recorded": bool(
+            signature and signature != previous_signature
+        ),
     }
 
 
@@ -192,6 +224,7 @@ def _heartbeat_iterations(
                     attempt,
                     root=root,
                     state="OWNER_THREAD_EXITED",
+                    progress_signature=_operation_signature(owner_thread_id),
                 )
             except Exception:
                 pass
@@ -209,6 +242,7 @@ def _heartbeat_iterations(
                 attempt,
                 root=root,
                 active_epoch_id=epoch,
+                progress_signature=_operation_signature(owner_thread_id),
             )
         except (ConnectorSyncOwnershipError, ConnectorWriteFenceRevoked):
             return
@@ -281,6 +315,7 @@ def begin_connector_sync_ownership(
     fencing_token = int(fence.get("fencing_token") or 0)
     validator = fence.get("validator") if callable(fence.get("validator")) else None
     now = time.time()
+    signature = _operation_signature(owner_thread_id)
     payload = {
         "schema": SYNC_OWNERSHIP_SCHEMA,
         "project_id": project,
@@ -294,10 +329,13 @@ def begin_connector_sync_ownership(
         "hostname": socket.gethostname()[:240],
         "active_sync_epoch_id": "",
         "fencing_token": fencing_token,
+        "progress_signature": signature,
         "started_unix": now,
         "started_at_utc": _utc(now),
         "last_heartbeat_unix": now,
         "last_heartbeat_at_utc": _utc(now),
+        "last_progress_unix": now,
+        "last_progress_at_utc": _utc(now),
         "updated_at_utc": _utc(now),
         "raw_credentials_persisted": False,
         "source_content_persisted": False,
@@ -352,6 +390,7 @@ def begin_connector_sync_ownership(
         "pid": os.getpid(),
         "fencing_token": fencing_token,
         "heartbeat_started": True,
+        "forward_progress_observed": True,
         "plaintext_credentials_persisted": False,
     }
 
@@ -474,11 +513,17 @@ def inspect_connector_sync_ownership(
             "owner_alive": None,
             "owner_dead": False,
             "heartbeat_stale": False,
+            "progress_stale": False,
         }
     try:
         pid = int(payload.get("pid") or 0)
         owner_thread_id = int(payload.get("owner_thread_id") or 0)
         heartbeat = float(payload.get("last_heartbeat_unix") or 0)
+        progress = float(
+            payload.get("last_progress_unix")
+            or payload.get("started_unix")
+            or 0
+        )
     except (TypeError, ValueError):
         return {
             **payload,
@@ -486,6 +531,7 @@ def inspect_connector_sync_ownership(
             "owner_alive": None,
             "owner_dead": False,
             "heartbeat_stale": True,
+            "progress_stale": True,
         }
     alive = _pid_alive(pid)
     recorded_marker = _text(payload.get("process_start_marker"), 200)
@@ -505,9 +551,9 @@ def inspect_connector_sync_ownership(
     )
     declared_thread_exit = payload.get("state") == "OWNER_THREAD_EXITED"
     fenced_out = payload.get("state") == "FENCED_OUT"
-    heartbeat_stale = not heartbeat or (
-        time.time() - heartbeat > max(10, int(stale_after_seconds))
-    )
+    threshold = max(10, int(stale_after_seconds))
+    heartbeat_stale = not heartbeat or time.time() - heartbeat > threshold
+    progress_stale = not progress or time.time() - progress > threshold
     owner_dead = bool(
         not alive or reused or local_thread_dead or declared_thread_exit or fenced_out
     )
@@ -519,6 +565,8 @@ def inspect_connector_sync_ownership(
         state = "REUSED_PROCESS_ID"
     elif local_thread_dead or declared_thread_exit:
         state = "DEAD_OWNER_THREAD"
+    elif progress_stale:
+        state = "STALLED_OWNER_THREAD"
     elif heartbeat_stale:
         state = "STALE_HEARTBEAT_OWNER_ALIVE"
     else:
@@ -529,6 +577,7 @@ def inspect_connector_sync_ownership(
         "owner_alive": bool(alive and not owner_dead),
         "owner_dead": owner_dead,
         "heartbeat_stale": heartbeat_stale,
+        "progress_stale": progress_stale,
         "process_id_reused": reused,
         "fenced_out": fenced_out,
     }
