@@ -143,51 +143,89 @@ class ProcessStepSemanticView:
                 target_reached=verdict,
             )
 
+    def _projection(self) -> dict[str, list[str]]:
+        self._synchronize()
+        return project_step_sets(self._ledger)
+
+    def _publish_receipt_declarations(self) -> tuple[list[dict[str, Any]], str]:
+        """Publish one sealed ledger declaration on every process-step receipt.
+
+        A bundle can therefore prove that no step receipt was removed, added,
+        mixed from another ledger, or reclassified after the ledger hash was
+        sealed. These are declarations of the existing ledger, not a second
+        authority.
+        """
+
+        projection = self._projection()
+        ledger_hash = self._ledger.compute_hash()
+        declaration = {
+            "ledger_recorded_step_ids": list(projection["recorded_step_ids"]),
+            "ledger_required_step_ids": list(self._ledger.required_step_ids),
+            "ledger_attempted_step_ids": list(projection["attempted_step_ids"]),
+            "ledger_executed_step_ids": list(projection["executed_step_ids"]),
+            "ledger_accepted_step_ids": list(projection["accepted_step_ids"]),
+            "ledger_completed_step_ids": list(projection["completed_step_ids"]),
+            "ledger_failed_step_ids": list(projection["failed_step_ids"]),
+            "ledger_pending_semantic_step_ids": list(
+                projection["pending_semantic_step_ids"]
+            ),
+            "ledger_receipt_count": len(projection["recorded_step_ids"]),
+        }
+        rows = [{**row, **declaration} for row in self._ledger.all_rows()]
+        self._observations.update(
+            {
+                "process_step_ledger_id": self._ledger.ledger_id,
+                "process_step_ledger_hash": ledger_hash,
+                "process_step_receipts": rows,
+                "required_step_ids": list(self._ledger.required_step_ids),
+                "recorded_step_ids": list(projection["recorded_step_ids"]),
+                "attempted_step_ids": list(projection["attempted_step_ids"]),
+                "executed_step_ids": list(projection["executed_step_ids"]),
+                "accepted_step_ids": list(projection["accepted_step_ids"]),
+                "completed_step_ids": list(projection["completed_step_ids"]),
+                "failed_step_ids": list(projection["failed_step_ids"]),
+            }
+        )
+        return rows, ledger_hash
+
     def compute_hash(self) -> str:
         """Seal only after all exact-scoped semantic receipts are projected."""
-        self._synchronize()
-        return self._ledger.compute_hash()
+        _, ledger_hash = self._publish_receipt_declarations()
+        return ledger_hash
 
     @property
     def ledger_hash(self) -> str:
         return self.compute_hash()
 
     def all_rows(self) -> list[dict[str, Any]]:
-        self._synchronize()
-        return self._ledger.all_rows()
+        rows, _ = self._publish_receipt_declarations()
+        return rows
 
     def to_authority_dict(self) -> dict[str, Any]:
-        self._synchronize()
+        self._publish_receipt_declarations()
         return self._ledger.to_authority_dict()
 
     def attempted_step_ids(self) -> list[str]:
-        self._synchronize()
-        return project_step_sets(self._ledger)["attempted_step_ids"]
+        return self._projection()["attempted_step_ids"]
 
     def executed_step_ids(self) -> list[str]:
-        self._synchronize()
-        return project_step_sets(self._ledger)["executed_step_ids"]
+        return self._projection()["executed_step_ids"]
 
     def completed_step_ids(self) -> list[str]:
-        self._synchronize()
-        return project_step_sets(self._ledger)["completed_step_ids"]
+        return self._projection()["completed_step_ids"]
 
     def accepted_step_ids(self) -> list[str]:
-        self._synchronize()
-        return project_step_sets(self._ledger)["accepted_step_ids"]
+        return self._projection()["accepted_step_ids"]
 
     def failed_step_ids(self) -> list[str]:
-        self._synchronize()
-        return project_step_sets(self._ledger)["failed_step_ids"]
+        return self._projection()["failed_step_ids"]
 
     def successful_write_step_ids(self) -> list[str]:
         self._synchronize()
         return self._ledger.successful_write_step_ids()
 
     def recorded_step_ids(self) -> list[str]:
-        self._synchronize()
-        return project_step_sets(self._ledger)["recorded_step_ids"]
+        return self._projection()["recorded_step_ids"]
 
     def semantic_projection(self) -> dict[str, list[str]]:
-        self._synchronize()
-        return project_step_sets(self._ledger)
+        return self._projection()
