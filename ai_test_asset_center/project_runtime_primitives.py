@@ -11,12 +11,15 @@ import copy
 import html
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_PROJECT_ID_MAX_LENGTH = 128
+_PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9_-](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9_-])?$")
 
 
 class ProjectArtifactError(RuntimeError):
@@ -24,9 +27,25 @@ class ProjectArtifactError(RuntimeError):
 
 
 def safe_project_id(value: Any) -> str:
-    raw = str(value or "real_project_demo").strip()
-    safe = "".join(character for character in raw if character.isalnum() or character in "_-." )
-    return safe or "real_project_demo"
+    """Return one canonical, path-safe project identifier.
+
+    Project identity is an authorization boundary and must never be silently
+    rewritten. Empty values retain the historical demo default; every supplied
+    value must already be a single safe path segment. In particular, ``.`` and
+    ``..`` are rejected rather than allowed through a permissive character
+    filter.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return "real_project_demo"
+    if (
+        len(raw) > _PROJECT_ID_MAX_LENGTH
+        or raw in {".", ".."}
+        or _PROJECT_ID_RE.fullmatch(raw) is None
+    ):
+        raise ValueError("project_id must be a single path-safe identifier")
+    return raw
 
 
 def read_text_artifact(path: Path | str, *, missing: str = "") -> str:
