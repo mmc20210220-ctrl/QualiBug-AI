@@ -63,11 +63,19 @@ def _owners_by_receipt(
         step_id = _text(payload.get("step_id"))
         if not step_id:
             continue
-        for receipt_id in _ids(payload.get(field)):
-            owners.setdefault(receipt_id, [])
-            if step_id not in owners[receipt_id]:
-                owners[receipt_id].append(step_id)
+        for rid in _ids(payload.get(field)):
+            owners.setdefault(rid, [])
+            if step_id not in owners[rid]:
+                owners[rid].append(step_id)
     return owners
+
+
+def _filter_owners(
+    owners: dict[str, list[str]],
+    allowed_receipt_ids: list[str],
+) -> dict[str, list[str]]:
+    allowed = set(allowed_receipt_ids)
+    return {rid: list(step_ids) for rid, step_ids in owners.items() if rid in allowed}
 
 
 def _audit_group(
@@ -84,38 +92,29 @@ def _audit_group(
     unreferenced: list[str] = []
     broadcast: list[str] = []
     owner_mismatch: list[str] = []
-    missing_receipt_ids: list[str] = []
     exact_owner_by_receipt: dict[str, str] = {}
 
-    discovered = set(discovered_receipt_ids)
-    for receipt_id in sorted(owners):
-        if receipt_id not in discovered:
-            missing_receipt_ids.append(receipt_id)
-
-    for receipt_id in discovered_receipt_ids:
-        envelope = _dict(receipts_by_id.get(receipt_id))
-        scope = extract_receipt_step_scope(
-            envelope,
-            known_step_ids=known_step_ids,
-        )
+    for rid in discovered_receipt_ids:
+        envelope = _dict(receipts_by_id.get(rid))
+        scope = extract_receipt_step_scope(envelope, known_step_ids=known_step_ids)
         status = _text(scope.get("status"))
         step_id = _text(scope.get("step_id"))
-        receipt_owners = sorted(set(owners.get(receipt_id, [])))
+        receipt_owners = sorted(set(owners.get(rid, [])))
         if status == "STEP_SCOPE_MISSING":
-            unscoped.append(receipt_id)
+            unscoped.append(rid)
         elif status == "MULTI_STEP_SCOPE_FORBIDDEN":
-            multi_step.append(receipt_id)
+            multi_step.append(rid)
         elif status == "STEP_SCOPE_UNKNOWN":
-            unknown_step.append(receipt_id)
+            unknown_step.append(rid)
         elif status == "EXACT":
-            exact_owner_by_receipt[receipt_id] = step_id
+            exact_owner_by_receipt[rid] = step_id
 
         if not receipt_owners:
-            unreferenced.append(receipt_id)
+            unreferenced.append(rid)
         elif len(receipt_owners) > 1:
-            broadcast.append(receipt_id)
+            broadcast.append(rid)
         elif status == "EXACT" and receipt_owners[0] != step_id:
-            owner_mismatch.append(receipt_id)
+            owner_mismatch.append(rid)
 
     complete = not any(
         (
@@ -125,7 +124,6 @@ def _audit_group(
             unreferenced,
             broadcast,
             owner_mismatch,
-            missing_receipt_ids,
         )
     )
     return {
@@ -140,7 +138,6 @@ def _audit_group(
         "unreferenced_receipt_ids": unreferenced,
         "broadcast_receipt_ids": broadcast,
         "owner_mismatch_receipt_ids": owner_mismatch,
-        "missing_receipt_ids": missing_receipt_ids,
     }
 
 
@@ -159,7 +156,11 @@ def audit_process_step_evidence_scope(
 ) -> dict[str, Any]:
     """Verify exact receipt lineage and per-step evidence coverage."""
 
-    payloads = [dict(_dict(row)) for row in process_step_payloads if isinstance(row, dict)]
+    payloads = [
+        dict(_dict(row))
+        for row in process_step_payloads
+        if isinstance(row, dict)
+    ]
     known_step_ids = [
         _text(row.get("step_id"))
         for row in payloads
@@ -204,47 +205,65 @@ def audit_process_step_evidence_scope(
         {CLEANUP_VERIFICATION_RECEIPT_TYPE},
     )
 
-    observation_owners = _owners_by_receipt(
+    observation_owners_all = _owners_by_receipt(
         payloads,
         "scoped_observation_receipt_ids",
     )
-    oracle_owners = _owners_by_receipt(payloads, "scoped_oracle_receipt_ids")
-    cleanup_owners = _owners_by_receipt(payloads, "scoped_cleanup_receipt_ids")
+    oracle_owners_all = _owners_by_receipt(
+        payloads,
+        "scoped_oracle_receipt_ids",
+    )
+    cleanup_owners_all = _owners_by_receipt(
+        payloads,
+        "scoped_cleanup_receipt_ids",
+    )
 
     observation = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=observation_ids,
-        owners=observation_owners,
+        owners=_filter_owners(observation_owners_all, observation_ids),
         known_step_ids=known_step_ids,
         evidence_kind="observation",
     )
     oracle_invocation = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=oracle_invocation_ids,
-        owners=oracle_owners,
+        owners=_filter_owners(oracle_owners_all, oracle_invocation_ids),
         known_step_ids=known_step_ids,
         evidence_kind="oracle_invocation",
     )
     oracle_trace = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=oracle_trace_ids,
-        owners=oracle_owners,
+        owners=_filter_owners(oracle_owners_all, oracle_trace_ids),
         known_step_ids=known_step_ids,
         evidence_kind="oracle_trace",
     )
     cleanup_execution = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=cleanup_execution_ids,
-        owners=cleanup_owners,
+        owners=_filter_owners(cleanup_owners_all, cleanup_execution_ids),
         known_step_ids=known_step_ids,
         evidence_kind="cleanup_execution",
     )
     cleanup_verification = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=cleanup_verification_ids,
-        owners=cleanup_owners,
+        owners=_filter_owners(cleanup_owners_all, cleanup_verification_ids),
         known_step_ids=known_step_ids,
         evidence_kind="cleanup_verification",
+    )
+
+    observation_unknown_refs = sorted(
+        set(observation_owners_all) - set(observation_ids)
+    )
+    oracle_unknown_refs = sorted(
+        set(oracle_owners_all) - set(oracle_invocation_ids) - set(oracle_trace_ids)
+    )
+    cleanup_unknown_refs = sorted(
+        set(cleanup_owners_all)
+        - set(cleanup_execution_ids)
+        - set(cleanup_verification_ids)
     )
 
     required = set(required_executed_step_ids)
@@ -267,24 +286,28 @@ def audit_process_step_evidence_scope(
     )
     broadcast_receipt_ids = sorted(
         {
-            receipt_id
+            rid
             for group in group_audits
-            for receipt_id in _ids(group.get("broadcast_receipt_ids"))
+            for rid in _ids(group.get("broadcast_receipt_ids"))
         }
     )
     unbound_receipt_ids = sorted(
         {
-            receipt_id
-            for group in group_audits
-            for field in (
-                "unscoped_receipt_ids",
-                "multi_step_receipt_ids",
-                "unknown_step_receipt_ids",
-                "unreferenced_receipt_ids",
-                "owner_mismatch_receipt_ids",
-                "missing_receipt_ids",
-            )
-            for receipt_id in _ids(group.get(field))
+            *observation_unknown_refs,
+            *oracle_unknown_refs,
+            *cleanup_unknown_refs,
+            *(
+                rid
+                for group in group_audits
+                for field in (
+                    "unscoped_receipt_ids",
+                    "multi_step_receipt_ids",
+                    "unknown_step_receipt_ids",
+                    "unreferenced_receipt_ids",
+                    "owner_mismatch_receipt_ids",
+                )
+                for rid in _ids(group.get(field))
+            ),
         }
     )
 
@@ -321,6 +344,9 @@ def audit_process_step_evidence_scope(
         "oracle_trace": oracle_trace,
         "cleanup_execution": cleanup_execution,
         "cleanup_verification": cleanup_verification,
+        "observation_unknown_reference_ids": observation_unknown_refs,
+        "oracle_unknown_reference_ids": oracle_unknown_refs,
+        "cleanup_unknown_reference_ids": cleanup_unknown_refs,
         "missing_observation_step_ids": missing_observation_step_ids,
         "missing_oracle_step_ids": missing_oracle_step_ids,
         "missing_cleanup_execution_step_ids": missing_cleanup_execution_step_ids,
