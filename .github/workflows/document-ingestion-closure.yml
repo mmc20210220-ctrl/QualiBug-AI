@@ -10,6 +10,8 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/**"
       - "ai_test_asset_center/implicit_rule_runtime_evolution.py"
       - "ai_test_asset_center/discovery_mainline.py"
+      - "ai_test_asset_center/experiment_executor.py"
+      - "ai_test_asset_center/experiment_runtime_support.py"
       - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
       - "ai_test_asset_center/private_pilot_project_assets.py"
       - "ai_test_asset_center/private_pilot_ingest_authority.py"
@@ -67,7 +69,8 @@ jobs:
             benchmark_evaluator/enterprise_understanding
           python -m py_compile \
             ai_test_asset_center/implicit_rule_runtime_evolution.py \
-            ai_test_asset_center/discovery_mainline.py
+            ai_test_asset_center/discovery_mainline.py \
+            ai_test_asset_center/experiment_executor.py
 
       - name: Run document ingestion closure
         run: |
@@ -96,6 +99,7 @@ jobs:
             tests/test_enterprise_understanding_authorization_coordinate_edge.py \
             tests/test_enterprise_understanding_authorization_unknown_propagation.py \
             tests/test_enterprise_understanding_credential_identity_coordinates.py \
+            tests/test_enterprise_understanding_experiment_actor_credential_identity.py \
             tests/test_enterprise_understanding_responsibility_authorization_boundary.py \
             tests/test_enterprise_understanding_structure_first_facts.py \
             tests/test_enterprise_understanding_fact_slots.py \
