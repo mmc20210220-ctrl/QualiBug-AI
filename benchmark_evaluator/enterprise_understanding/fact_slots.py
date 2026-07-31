@@ -122,7 +122,11 @@ def _fact_locators(fact: dict[str, Any]) -> set[str]:
     return values
 
 
-def _expected_base(gt: dict[str, Any]) -> tuple[set[str], set[str]]:
+def _fact_type(fact: dict[str, Any]) -> str:
+    return _norm(fact.get("fact_type") or fact.get("kind"))
+
+
+def _expected_base(gt: dict[str, Any]) -> tuple[set[str], set[str], str]:
     operations = {
         _norm(value)
         for value in [
@@ -137,14 +141,24 @@ def _expected_base(gt: dict[str, Any]) -> tuple[set[str], set[str]]:
         for value in _values(gt.get("object_refs"))
         if _norm(value)
     }
-    return operations, objects
+    return operations, objects, _norm(gt.get("fact_type"))
 
 
 def _candidate_base_matches(gt: dict[str, Any], fact: dict[str, Any]) -> bool:
-    operations, objects = _expected_base(gt)
+    """Match one deterministic typed coordinate before any slot comparison.
+
+    Operation aliases may match by intersection, but the declared fact type must be
+    exact and every Ground Truth object coordinate must be present. Requiring only one
+    shared object made distinct relation targets collide; ignoring fact_type made a
+    permission rule and state transition for the same operation look ambiguous.
+    """
+    operations, objects, expected_fact_type = _expected_base(gt)
+    if expected_fact_type and expected_fact_type != _fact_type(fact):
+        return False
     if operations and not operations.intersection(_fact_operation(fact)):
         return False
-    if objects and not objects.intersection(_fact_objects(fact)):
+    candidate_objects = _fact_objects(fact)
+    if objects and not objects.issubset(candidate_objects):
         return False
     return True
 
@@ -352,6 +366,12 @@ def evaluate_business_fact_slots(
             "fact_status_distribution": dict(fact_statuses),
         },
         "alignments": alignments,
+        "candidate_selection_contract": {
+            "fact_type_exact": True,
+            "ground_truth_objects_must_be_subset_of_candidate_objects": True,
+            "operation_alias_intersection_allowed": True,
+            "single_shared_object_is_sufficient": False,
+        },
         "alignment_authority": "DETERMINISTIC_EXACT_TYPED_SLOT_MATCHING",
         "fuzzy_or_llm_alignment_used": False,
         "automatic_winner_used": False,
