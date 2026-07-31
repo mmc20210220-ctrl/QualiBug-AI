@@ -82,6 +82,8 @@ on:
       - "tests/test_process_graph_event_transition_scope.py"
       - "tests/test_process_graph_event_transition_ledger.py"
       - "tests/test_process_graph_async_transition_oracle.py"
+      - "tests/test_process_graph_experiment_contract.py"
+      - "tests/test_process_graph_event_finalizer_scope.py"
       - "tests/test_wait_flow_data_requirement.py"
       - "tests/test_graph_scoped_receipt_copy.py"
       - "tests/test_process_graph_rollback_contract.py"
@@ -197,6 +199,8 @@ jobs:
             tests/test_process_graph_event_transition_scope.py \
             tests/test_process_graph_event_transition_ledger.py \
             tests/test_process_graph_async_transition_oracle.py \
+            tests/test_process_graph_experiment_contract.py \
+            tests/test_process_graph_event_finalizer_scope.py \
             tests/test_wait_flow_data_requirement.py \
             tests/test_graph_scoped_receipt_copy.py \
             tests/test_process_graph_rollback_contract.py \
