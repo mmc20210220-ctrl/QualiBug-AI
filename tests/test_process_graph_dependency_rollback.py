@@ -142,6 +142,16 @@ def _kwargs(*, steps_out: list[dict], observations: dict | None = None) -> dict:
     }
 
 
+def _receipt_source(receipt: dict) -> str:
+    evidence = receipt.get("evidence")
+    evidence_row = evidence if isinstance(evidence, dict) else {}
+    return str(
+        receipt.get("source_step_id")
+        or evidence_row.get("source_step_id")
+        or ""
+    )
+
+
 def _install_fake_core(monkeypatch, statuses: dict[str, str], called: list[str]) -> None:
     def fake_execute(**kwargs):
         cleanup = kwargs["exp"]["process_graph_write_contract"][
@@ -223,7 +233,7 @@ def test_unreached_descendant_is_not_cleanup_failure(monkeypatch) -> None:
 
     assert called == ["write_d", "write_b", "write_a"]
     receipts = {
-        row["source_step_id"]: row
+        _receipt_source(row): row
         for row in result["process_graph_cleanup_receipts"]
     }
     assert receipts["write_c"]["status"] == "NOT_REQUIRED"
@@ -267,7 +277,7 @@ def test_descendant_cleanup_failure_blocks_only_ancestors(monkeypatch) -> None:
         "write_a": "BLOCKED",
     }
     receipts = {
-        row["source_step_id"]: row
+        _receipt_source(row): row
         for row in result["process_graph_cleanup_receipts"]
     }
     assert receipts["write_b"]["status"] == "BLOCKED"
