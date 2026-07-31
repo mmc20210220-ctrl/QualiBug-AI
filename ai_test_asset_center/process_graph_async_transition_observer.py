@@ -1,8 +1,8 @@
 """Canonical observer/assertion surface for graph async transitions.
 
-The runtime already publishes exact-step event transition receipts and the
-ProcessStepLedger remains the timeline authority. This module only projects
-those immutable receipts into the existing Observer/Assertion DSL so measured
+The runtime publishes exact-step event transition receipts and the
+ProcessStepLedger remains the timeline authority. This module projects those
+immutable receipts into the existing Observer/Assertion DSL so measured
 message, callback, retry and idempotency violations become Oracle violations
 rather than harness failures.
 """
@@ -32,7 +32,9 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _declared_event_contracts(experiment: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _declared_event_contracts(
+    experiment: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
     graph = _dict(_dict(experiment).get("execution_graph"))
     contracts: dict[str, dict[str, Any]] = {}
     for wait in _list(graph.get("wait_contracts")):
@@ -64,7 +66,9 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
         )
 
     receipts_by_target: dict[str, list[dict[str, Any]]] = {}
-    for raw in _list(observations.get("process_graph_async_transition_receipts")):
+    for raw in _list(
+        observations.get("process_graph_async_transition_receipts")
+    ):
         receipt = _dict(raw)
         target = _text(receipt.get("target_node_id") or receipt.get("step_id"))
         if target:
@@ -95,10 +99,16 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
                 "target_step_id": target,
                 "edge_id": _text(contract.get("edge_id")),
                 "delivery_kind": _text(receipt.get("delivery_kind")),
-                "delivery_semantics": _text(receipt.get("delivery_semantics")),
-                "semantic_status": _text(receipt.get("semantic_status")).upper(),
+                "delivery_semantics": _text(
+                    receipt.get("delivery_semantics")
+                ),
+                "semantic_status": _text(
+                    receipt.get("semantic_status")
+                ).upper(),
                 "reason_code": _text(receipt.get("reason_code")),
-                "coverage_complete": receipt.get("coverage_complete") is True,
+                "coverage_complete": (
+                    receipt.get("coverage_complete") is True
+                ),
                 "observation_window_completed": (
                     receipt.get("observation_window_completed") is True
                 ),
@@ -135,7 +145,9 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
     return _receipt(
         observer_id=OBSERVER_ID,
         status="OBSERVED" if complete else "INDETERMINATE",
-        reason_code="" if complete else "PROCESS_GRAPH_EVENT_OBSERVATION_INCOMPLETE",
+        reason_code=(
+            "" if complete else "PROCESS_GRAPH_EVENT_OBSERVATION_INCOMPLETE"
+        ),
         evidence={
             EVIDENCE_KEY: {
                 "surface": SURFACE,
@@ -149,8 +161,15 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def evaluate_process_async_completion(envelope: dict[str, Any]) -> dict[str, Any]:
-    """Require process completion and every measured async transition to hold."""
+def evaluate_process_async_completion(
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    """Require all measured async transitions and the process flow to hold.
+
+    A complete, contract-scoped async violation is already a proven target
+    defect. Preserve it even when a later business node fails or never reaches
+    transport; downstream incompleteness must not erase stronger prior evidence.
+    """
     spec = _dict(envelope.get("spec"))
     observations = _dict(envelope.get("observations"))
     process = _dict(observations.get("process_step_timeline"))
@@ -172,6 +191,56 @@ def evaluate_process_async_completion(envelope: dict[str, Any]) -> dict[str, Any
         )
         if _text(value)
     ]
+
+    # Async evidence is evaluated first because a complete violation is a
+    # settled business verdict, independent of what a downstream node later did.
+    if async_rows.get("coverage_complete") is not True:
+        return {
+            "passed": None,
+            "reason_code": "PROCESS_GRAPH_EVENT_OBSERVATION_INCOMPLETE",
+            "expected": {
+                "declared_transition_count": int(
+                    async_rows.get("declared_transition_count") or 0
+                )
+            },
+            "actual": {
+                "observed_transition_count": int(
+                    async_rows.get("observed_transition_count") or 0
+                ),
+                "issues": _list(async_rows.get("issues")),
+            },
+        }
+
+    transitions = [
+        _dict(row)
+        for row in _list(async_rows.get("transitions"))
+        if isinstance(row, dict)
+    ]
+    violations = [
+        row
+        for row in transitions
+        if _text(row.get("semantic_status")) == "VIOLATION"
+    ]
+    if violations:
+        first = violations[0]
+        return {
+            "passed": False,
+            "reason_code": _text(first.get("reason_code"))
+            or "PROCESS_GRAPH_ASYNC_TRANSITION_VIOLATION",
+            "expected": {
+                "all_async_transitions": "PASS",
+                "transition_count": len(transitions),
+            },
+            "actual": {
+                "violating_step_ids": [
+                    _text(row.get("step_id")) for row in violations
+                ],
+                "violation_reason_codes": [
+                    _text(row.get("reason_code")) for row in violations
+                ],
+            },
+        }
+
     observed_order = [
         _text(value)
         for value in _list(process.get("observed_order"))
@@ -182,7 +251,9 @@ def evaluate_process_async_completion(envelope: dict[str, Any]) -> dict[str, Any
         for value in _list(process.get("steps_not_reaching_transport"))
         if _text(value)
     ]
-    missing = [step_id for step_id in expected_steps if step_id not in observed_order]
+    missing = [
+        step_id for step_id in expected_steps if step_id not in observed_order
+    ]
     if (
         not process
         or process.get("coverage_complete") is not True
@@ -212,50 +283,6 @@ def evaluate_process_async_completion(envelope: dict[str, Any]) -> dict[str, Any
                 "actual": {"observed_order": observed_declared},
             }
 
-    if async_rows.get("coverage_complete") is not True:
-        return {
-            "passed": None,
-            "reason_code": "PROCESS_GRAPH_EVENT_OBSERVATION_INCOMPLETE",
-            "expected": {
-                "declared_transition_count": int(
-                    async_rows.get("declared_transition_count") or 0
-                )
-            },
-            "actual": {
-                "observed_transition_count": int(
-                    async_rows.get("observed_transition_count") or 0
-                ),
-                "issues": _list(async_rows.get("issues")),
-            },
-        }
-
-    transitions = [
-        _dict(row)
-        for row in _list(async_rows.get("transitions"))
-        if isinstance(row, dict)
-    ]
-    violations = [
-        row for row in transitions if _text(row.get("semantic_status")) == "VIOLATION"
-    ]
-    if violations:
-        first = violations[0]
-        return {
-            "passed": False,
-            "reason_code": _text(first.get("reason_code"))
-            or "PROCESS_GRAPH_ASYNC_TRANSITION_VIOLATION",
-            "expected": {
-                "all_async_transitions": "PASS",
-                "transition_count": len(transitions),
-            },
-            "actual": {
-                "violating_step_ids": [
-                    _text(row.get("step_id")) for row in violations
-                ],
-                "violation_reason_codes": [
-                    _text(row.get("reason_code")) for row in violations
-                ],
-            },
-        }
     return {
         "passed": True,
         "reason_code": "",
@@ -271,7 +298,10 @@ def evaluate_process_async_completion(envelope: dict[str, Any]) -> dict[str, Any
 
 
 def install_process_graph_async_transition_surface() -> dict[str, str]:
-    from .assertion_dsl_base import register_assertion_kind, registered_assertion_kinds
+    from .assertion_dsl_base import (
+        register_assertion_kind,
+        registered_assertion_kinds,
+    )
     from .observer_contracts_base import OBSERVER_REGISTRY, register_observer
 
     installed: dict[str, str] = {}
