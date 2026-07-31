@@ -89,8 +89,6 @@ def run_source_backed_understanding_workflow(
         raise SourceBackedWorkflowError(f"product_root_missing:{product}")
     if not manifest.is_file():
         raise SourceBackedWorkflowError(f"source_manifest_missing:{manifest}")
-    # Ground Truth existence is checked only as evaluator input metadata here. Its bytes are not
-    # opened until after the product child process has exited successfully.
     if not ground_truth_file.is_file():
         raise SourceBackedWorkflowError(f"ground_truth_file_missing:{ground_truth_file}")
 
@@ -163,7 +161,6 @@ def run_source_backed_understanding_workflow(
         _write_receipt(workflow_receipt_path, base_receipt)
         return base_receipt
 
-    # Evaluator authority starts here, after the product process is fully complete.
     ground_truth = load_ground_truth(ground_truth_file)
     product_asset = _read_artifact(asset_path)
     if not isinstance(product_asset, dict):
@@ -174,6 +171,11 @@ def run_source_backed_understanding_workflow(
         output_dir=str(evaluator_output),
     )
     product_phase_receipt = _read_artifact(product_receipt_path)
+    benchmark_workflow_receipt = (
+        benchmark.get("workflow_receipt")
+        if isinstance(benchmark.get("workflow_receipt"), dict)
+        else {}
+    )
     base_receipt.update(
         {
             "status": str(benchmark.get("status") or "UNKNOWN"),
@@ -189,6 +191,13 @@ def run_source_backed_understanding_workflow(
             ),
             "benchmark_result_fingerprint": benchmark.get("result_fingerprint"),
             "next_repair_target": benchmark.get("next_repair_target") or "",
+            "next_ingestion_repair_target": benchmark.get(
+                "next_ingestion_repair_target"
+            )
+            or "",
+            "document_ground_truth_measurement_status": benchmark_workflow_receipt.get(
+                "document_ground_truth_measurement_status"
+            ),
             "hidden_ground_truth_entered_product_runtime": False,
             "product_model_can_self_label_true_or_false": False,
             "output_paths": {
