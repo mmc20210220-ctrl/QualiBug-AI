@@ -182,6 +182,23 @@ def _explicit_refs(statement: str, vocabulary: Iterable[str]) -> list[str]:
     return _ordered_unique(value for _start, _end, value in selected)
 
 
+def _source_backed_vocabulary(
+    statement: str,
+    existing: Iterable[Any],
+    heads: Iterable[str],
+) -> list[str]:
+    """Reuse literal existing identities before falling back to generic heads."""
+    head_values = tuple(_text(value) for value in heads if _text(value))
+    existing_values = [
+        _text(value)
+        for value in existing
+        if _text(value)
+        and _text(value) in statement
+        and any(_text(value).endswith(head) for head in head_values)
+    ]
+    return _ordered_unique([*existing_values, *head_values])
+
+
 def _action_matches(statement: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for priority, (canonical, pattern) in enumerate(_ACTION_PATTERNS):
@@ -235,7 +252,11 @@ def _governed_action(statement: str, fact: dict[str, Any]) -> dict[str, Any]:
     return dict(rows[0]) if rows else {}
 
 
-def _governed_entities(statement: str, action: dict[str, Any]) -> list[str]:
+def _governed_entities(
+    statement: str,
+    action: dict[str, Any],
+    existing_entities: Iterable[Any],
+) -> list[str]:
     """Bind objects to the selected operation, not to every entity in the sentence."""
     if not action:
         return []
@@ -244,15 +265,20 @@ def _governed_entities(statement: str, action: dict[str, Any]) -> list[str]:
     if start < 0 or end < start:
         return []
 
+    vocabulary = _source_backed_vocabulary(
+        statement,
+        existing_entities,
+        _ENTITY_HEADS,
+    )
     suffix = statement[end:]
     suffix_clause = _CLAUSE_BOUNDARY_RE.split(suffix, maxsplit=1)[0]
-    refs = _explicit_refs(suffix_clause, _ENTITY_HEADS)
+    refs = _explicit_refs(suffix_clause, vocabulary)
     if refs:
         return refs
 
     prefix = statement[:start]
     prefix_clause = re.split(r"[，,；;。]", prefix)[-1]
-    refs = _explicit_refs(prefix_clause, _ENTITY_HEADS)
+    refs = _explicit_refs(prefix_clause, vocabulary)
     return refs[-1:] if refs else []
 
 
@@ -406,16 +432,22 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             continue
         changed: list[str] = []
 
+        subject = dict(_dict(fact.get("subject")))
+        existing_actors = [
+            _text(row) for row in _list(subject.get("actor_refs")) if _text(row)
+        ]
+        actor_vocabulary = _source_backed_vocabulary(
+            statement,
+            existing_actors,
+            _ROLE_HEADS,
+        )
         exception_scopes = set(_text(row) for row in _list(fact.get("exception_scope")))
         explicit_actors = [
             row
-            for row in _explicit_refs(statement, _ROLE_HEADS)
+            for row in _explicit_refs(statement, actor_vocabulary)
             if row not in exception_scopes
         ]
-        subject = dict(_dict(fact.get("subject")))
-        actors = explicit_actors or [
-            _text(row) for row in _list(subject.get("actor_refs")) if _text(row)
-        ]
+        actors = explicit_actors or existing_actors
         if actors != _list(subject.get("actor_refs")):
             subject["actor_refs"] = actors
             changed.append("actor_refs")
@@ -431,10 +463,15 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             fact["predicate"] = action["canonical"]
             changed.append("action")
 
-        governed_entities = _governed_entities(statement, action_coordinate)
-        entities = governed_entities or [
+        existing_entities = [
             _text(row) for row in _list(subject.get("entity_refs")) if _text(row)
         ]
+        governed_entities = _governed_entities(
+            statement,
+            action_coordinate,
+            existing_entities,
+        )
+        entities = governed_entities or existing_entities
         if governed_entities and entities != _list(subject.get("entity_refs")):
             subject["entity_refs"] = entities
             changed.append("entity_refs")
@@ -522,6 +559,7 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
         "formal_typed_fact_count_left_on_compiler_coordinates": skipped_formal_typed,
         "normalized_field_counts": dict(sorted(field_counts.items())),
         "existing_ledger_reused": True,
+        "existing_source_backed_identity_vocabulary_reused": True,
         "governed_operation_binding": True,
         "new_fact_discovery_allowed": False,
         "source_statement_rewrite_allowed": False,
@@ -535,6 +573,7 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
         {
             "explicit_fact_coordinates_normalized_at_compiler_boundary": True,
             "explicit_fact_identity_is_bound_to_governed_operation": True,
+            "explicit_fact_normalization_reuses_source_backed_identity_vocabulary": True,
             "explicit_fact_normalization_discovers_new_facts": False,
             "explicit_fact_normalization_selects_conflicting_values": False,
             "explicit_fact_identity_mentions_are_longest_non_overlapping": True,
