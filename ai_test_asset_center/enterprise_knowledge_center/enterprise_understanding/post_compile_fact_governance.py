@@ -7,6 +7,9 @@ from typing import Any
 
 from .._chinese_business_conflicts import reconcile_chinese_business_fact_conflicts
 from .atomic_claim_projection import project_atomic_claim_facts
+from .explicit_fact_semantic_normalization import (
+    normalize_explicit_business_fact_semantics,
+)
 from .identity_evidence_policy import apply_identity_evidence_policy
 from .typed_fact_conflicts import reconcile_typed_fact_conflicts
 from .typed_relation_projection import project_typed_object_relations
@@ -149,13 +152,15 @@ def govern_compiled_business_facts(
     project_id: str,
     root: Path,
 ) -> dict[str, Any]:
-    """Materialize claims/relations, classify identities, and reconcile typed facts.
+    """Normalize coordinates, materialize claims, and reconcile typed facts.
 
     The first understanding pass discovers source-backed terms and rules. Structure-first
-    compilation upgrades that same ledger. This second pass never extracts from text; it
-    materializes accepted atomic effects, projects typed object relations into the existing
-    object-graph input, normalizes values, and uses existing durable conflict authority.
+    compilation upgrades that same ledger. This boundary first normalizes coordinates
+    already explicit in each source span; it does not discover another fact or select
+    among conflicting statements. Atomic effects and typed relations then project into
+    the existing ledger/object graph before the durable identity/conflict authorities run.
     """
+    asset = normalize_explicit_business_fact_semantics(asset)
     asset = project_atomic_claim_facts(asset)
     asset = _normalize_typed_fact_values(asset)
     asset = project_typed_object_relations(asset)
@@ -174,6 +179,7 @@ def govern_compiled_business_facts(
     receipt.update(
         {
             "second_pass_after_structure_compilation": True,
+            "explicit_fact_semantic_coordinates_normalized": True,
             "atomic_claims_materialized_in_existing_ledger": True,
             "typed_relations_projected_into_existing_object_graph": True,
             "typed_value_contract_normalized": True,
@@ -188,6 +194,8 @@ def govern_compiled_business_facts(
     governance.update(
         {
             "business_fact_two_pass_identity_governance": True,
+            "explicit_fact_coordinate_normalization_precedes_atomic_projection": True,
+            "explicit_fact_coordinate_normalization_discovers_new_facts": False,
             "atomic_data_effects_become_bindable_facts": True,
             "typed_object_relations_use_existing_object_graph": True,
             "typed_atomic_value_projection_is_single_boundary": True,
