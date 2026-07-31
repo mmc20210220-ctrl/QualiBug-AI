@@ -244,11 +244,16 @@ def enrich_asset_with_enterprise_understanding(
     # This is the only correct rule-entailment boundary: all technical declarations
     # already exist, Chinese source spans are attached, and conflicts have been
     # reconciled, but the Enterprise Understanding Model has not yet been frozen.
-    # The projection writes accepted candidates into the existing rule_library, which
-    # the existing Behavior IR compiler consumes as invariants.
+    # The projection writes accepted candidates into the existing rule_library. The
+    # identity reconciliation immediately merges typed upgrades back into the one
+    # source-rule ID before Behavior IR, lifecycle or obligations may consume them.
+    from ..implicit_rule_identity_reconciliation import (
+        reconcile_implicit_rule_identities,
+    )
     from ..implicit_rule_projection import enrich_asset_with_implicit_rule_projection
 
     asset = enrich_asset_with_implicit_rule_projection(asset)
+    asset = reconcile_implicit_rule_identities(asset)
 
     model = build_enterprise_understanding_model(asset)
     model = apply_minimum_understanding_closure(model, asset)
@@ -399,6 +404,8 @@ def enrich_asset_with_enterprise_understanding(
             "document_context_promotions_are_conflict_reconciled": parsed_sources is not None,
             "implicit_rule_projection_runs_after_conflict_reconciliation": True,
             "implicit_rule_projection_runs_before_understanding_model": True,
+            "implicit_rule_identity_reconciliation_runs_before_understanding_model": True,
+            "implicit_rule_identity_reconciliation_blocks_missing_targets": True,
             "implicit_rules_enter_existing_rule_library": True,
             "implicit_rules_create_parallel_behavior_ir": False,
             "document_adapter_registry_enabled": parsed_sources is not None,
