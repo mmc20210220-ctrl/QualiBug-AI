@@ -320,7 +320,6 @@ def _project_nonlinear_lifecycle_process(
                 "path_kind": path_kind,
                 "steps": [_step_from_transition(row, 1)],
             }
-            # Extend each branch only along a unique linear continuation.
             continuation = _linear_chain_from(
                 text(row.get("to_state")),
                 outgoing,
@@ -348,7 +347,6 @@ def _project_nonlinear_lifecycle_process(
                     }
                 )
 
-    # Source-backed cycles are loops; do not invent iteration bounds.
     loops = [
         {
             "loop_id": stable_id("process_loop", object_ref, cycle),
@@ -389,7 +387,6 @@ def _project_nonlinear_lifecycle_process(
             shared_prefix = [_step_from_transition(row, index + 1) for index, row in enumerate(prefix)]
 
     if underdetermined_states and not branches and not loops and not parallel_groups:
-        # Still emit a visible PARTIAL shell so silent "no process" cannot hide the gap.
         process = {
             "schema": PROCESS_SCHEMA,
             "process_id": stable_id("business_process", object_ref, "underdetermined", [row.get("transition_id") for row in transitions]),
@@ -428,7 +425,6 @@ def _project_nonlinear_lifecycle_process(
         kinds = unique_text([row.get("path_kind") for row in exception_paths])
         process_types.extend(kinds)
     if not process_types and merge_states:
-        # Merge without distinguished branch evidence — visible but incomplete.
         unknowns.append(
             new_unknown(
                 "PROCESS_MERGE_UNDERDETERMINED",
@@ -640,13 +636,11 @@ def _project_multi_object_processes(
     join_objects = sorted(obj for obj, rows in incoming.items() if len(rows) > 1)
     unknowns: list[dict[str, Any]] = []
 
-    # Forks require explicit parallel markers on every outgoing edge; otherwise fail closed.
     underdetermined_forks = [
         obj
         for obj in fork_objects
         if not all(_relation_has_parallel_marker(relation) for _, relation in outgoing[obj])
     ]
-    # Joins require explicit join markers on every incoming edge; otherwise fail closed.
     underdetermined_joins = [
         obj
         for obj in join_objects
@@ -692,7 +686,6 @@ def _project_multi_object_processes(
             )
         ]
 
-    # Unique chain (no forks/joins): walk from the single start.
     if not fork_objects and not join_objects:
         ordered_objects: list[str] = []
         link_steps: list[dict[str, Any]] = []
@@ -810,7 +803,6 @@ def _project_multi_object_processes(
         }
         return [process], []
 
-    # Explicit join / parallel orchestration graph.
     joins: list[dict[str, Any]] = []
     for obj in join_objects:
         rows = incoming[obj]
@@ -859,7 +851,6 @@ def _project_multi_object_processes(
             }
         )
 
-    # Topological layers from starts; fail closed on cycles.
     ordered_objects = []
     waits = []
     link_steps = []
@@ -1009,7 +1000,6 @@ def _normalize_conflicts(asset: dict[str, Any]) -> list[dict[str, Any]]:
                     else ""
                 )
             )
-        # Promote opposing fact spans into standard evidence when only `facts` is present.
         if not as_list(row.get("evidence")):
             promoted: list[dict[str, Any]] = []
             for fact_row in as_list(row.get("facts")):
@@ -1125,13 +1115,10 @@ def _technical_source_attachment_unknowns(
             or "chinese_fact" in source_kinds
         ):
             chinese_object_names.append(name)
-        # Also treat objects that are not purely data_table inventory as Chinese-side
-        # when they came only from accepted facts (no data_table source kind).
         elif source_kinds and "data_table" not in source_kinds and name not in table_names:
             chinese_object_names.append(name)
 
     chinese_object_names = unique_text(chinese_object_names)
-    # Identity self-maps in alias_to_name are not TERM_ALIAS bridges.
     bridging_aliases = {
         text(key): text(value)
         for key, value in alias_to_name.items()
@@ -1180,8 +1167,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     )
     object_names = [text(row.get("name")) for row in business_objects]
     operations, operation_unknowns = _build_operations(facts, alias_to_name)
-    actors = _build_actors(asset, facts, operations)
-    # Rewrite fact entity refs for relation/lifecycle builders without inventing names.
+    actors, authorization_unknowns = _build_actors(asset, facts, operations)
     rewritten_facts: list[dict[str, Any]] = []
     for fact in facts:
         if not isinstance(fact, dict):
@@ -1234,8 +1220,6 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     for fact in _accepted_facts(facts):
         if text(fact.get("kind")) not in {"RULE", "STATE_TRANSITION"}:
             continue
-        # Keep structured slots that operations / Behavior IR / rule_library already retain.
-        # Thin rule shells previously dropped condition_frame / effects / constraints silently.
         rules.append(
             {
                 "fact_id": fact.get("fact_id"),
@@ -1313,14 +1297,31 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
         )
 
     deduped_unknowns = list({text(row.get("unknown_id")): row for row in unknowns if isinstance(row, dict) and text(row.get("unknown_id"))}.values())
+    deduped_authorization_unknowns = list(
+        {
+            text(row.get("unknown_id")): row
+            for row in authorization_unknowns
+            if isinstance(row, dict) and text(row.get("unknown_id"))
+        }.values()
+    )
     conflicts = _normalize_conflicts(asset)
     evidence_index = dedupe_evidence(
         [
             *[row for item in [*business_objects, *actors, *operations, *object_relations, *lifecycles, *processes, *rules] for row in as_list(item.get("evidence"))],
             *[row for item in deduped_unknowns for row in as_list(item.get("evidence"))],
+            *[row for item in deduped_authorization_unknowns for row in as_list(item.get("evidence"))],
         ]
     )
 
+    actor_authorization_fingerprint = [
+        {
+            "actor_id": row.get("actor_id"),
+            "permissions": row.get("permissions"),
+            "restrictions": row.get("restrictions"),
+            "permission_unknowns": row.get("permission_unknowns"),
+        }
+        for row in actors
+    ]
     model.update(
         {
             "schema": MODEL_SCHEMA,
@@ -1330,6 +1331,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
                 [row.get("object_id") for row in business_objects],
                 [row.get("operation_id") for row in operations],
                 [row.get("lifecycle_id") for row in lifecycles],
+                actor_authorization_fingerprint,
             ),
             "source_asset_id": asset.get("asset_id"),
             "business_objects": business_objects,
@@ -1339,6 +1341,16 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
             "lifecycles": lifecycles,
             "processes": processes,
             "rules": rules,
+            "authorization_unknowns": deduped_authorization_unknowns,
+            "authorization_model": {
+                "schema": "qualibug.enterprise-authorization-model.v1",
+                "decision_contract": "ALLOW_DENY_UNKNOWN_THREE_WAY",
+                "responsibility_is_permission": False,
+                "unknown_is_allow": False,
+                "unknown_is_deny": False,
+                "mixed_allow_and_deny_rows_are_split": True,
+                "automatic_inference_allowed": False,
+            },
             "unknowns": deduped_unknowns,
             "conflicts": conflicts,
             "evidence_index": evidence_index,
@@ -1539,8 +1551,6 @@ def _build_business_objects(
     for fact in accepted:
         for object_name in _fact_object_refs(fact, alias_map):
             ensure(object_name, evidence_from_fact(fact), source_kind="business_fact")
-        # Also ensure from pre-canonical mentions so alias evidence attaches even when
-        # the fact still carries only the alias form.
         for object_name in _fact_object_refs(fact):
             ensure(object_name, evidence_from_fact(fact), source_kind="business_fact")
 
@@ -1763,12 +1773,110 @@ def _build_operations(
     return sorted(operations.values(), key=lambda row: (text(row.get("name")), tuple(as_list(row.get("object_refs"))))), unknowns
 
 
+_ALLOW_DECISIONS = frozenset({"allow", "allowed", "grant", "granted", "permit", "permitted"})
+_DENY_DECISIONS = frozenset({"deny", "denied", "forbid", "forbidden", "prohibit", "prohibited"})
+
+
+def _normalize_authorization_decision(value: Any) -> str:
+    normalized = text(value).lower()
+    if normalized in _ALLOW_DECISIONS:
+        return "ALLOW"
+    if normalized in _DENY_DECISIONS:
+        return "DENY"
+    return "UNKNOWN"
+
+
+def _authorization_fact_decision(fact: dict[str, Any]) -> str:
+    modality = text(fact.get("modality")).upper()
+    polarity = text(fact.get("polarity")).lower()
+    frame = as_dict(fact.get("semantic_frame") or fact.get("business_semantic_frame"))
+    modality = modality or text(frame.get("modality")).upper()
+    polarity = polarity or text(frame.get("polarity")).lower()
+    if modality in {"MUST_NOT", "PROHIBITED"} or polarity == "negative":
+        return "DENY"
+    if modality in {"MAY", "EXCLUSIVE", "ONLY_IF"}:
+        return "ALLOW"
+    return ""
+
+
+def _authorization_contract(
+    *,
+    decision: str,
+    resource_refs: Iterable[Any],
+    actions: Iterable[Any],
+    scope: Any,
+    source_ref: Any,
+    evidence: Iterable[dict[str, Any]],
+    derivation: str,
+    conditions: Iterable[Any] = (),
+) -> dict[str, Any]:
+    resources = unique_text(resource_refs)
+    action_values = unique_text(actions)
+    evidence_rows = dedupe_evidence(evidence)
+    return {
+        "authorization_contract_id": stable_id(
+            "authorization_contract",
+            decision,
+            resources,
+            action_values,
+            scope,
+            source_ref,
+            derivation,
+        ),
+        "decision": decision,
+        "resource_refs": resources,
+        "actions": action_values,
+        "scope": scope,
+        "conditions": unique_text(conditions),
+        "source_ref": source_ref,
+        "derivation": derivation,
+        "evidence": evidence_rows,
+        "automatic_inference_allowed": False,
+    }
+
+
+def _authorization_unknown(
+    *,
+    actor_name: str,
+    contract: dict[str, Any],
+    reason_code: str,
+) -> dict[str, Any]:
+    actions = unique_text(as_list(contract.get("actions")))
+    resources = unique_text(as_list(contract.get("resource_refs")))
+    return new_unknown(
+        "ACTOR_AUTHORIZATION_UNRESOLVED",
+        (
+            f"角色“{actor_name}”的授权声明无法形成明确 ALLOW/DENY 合同："
+            f"资源={resources or ['未明确']}，动作={actions or ['未明确']}。"
+        ),
+        related_objects=resources,
+        related_operations=actions,
+        evidence=as_list(contract.get("evidence")),
+        severity="P1",
+        blocks_formal_understanding=False,
+        reason_code=reason_code,
+        details={
+            "actor": actor_name,
+            "authorization_contract": contract,
+            "unknown_never_authorizes": True,
+            "automatic_inference_allowed": False,
+        },
+    )
+
+
+def _append_unique_contract(target: list[dict[str, Any]], contract: dict[str, Any]) -> None:
+    contract_id = text(contract.get("authorization_contract_id"))
+    if contract_id and all(text(row.get("authorization_contract_id")) != contract_id for row in target):
+        target.append(contract)
+
+
 def _build_actors(
     asset: dict[str, Any],
     facts: list[dict[str, Any]],
     operations: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     actors: dict[str, dict[str, Any]] = {}
+    authorization_unknowns: list[dict[str, Any]] = []
 
     def ensure(name: Any, evidence: Iterable[dict[str, Any]], source_kind: str) -> dict[str, Any] | None:
         actor_name = text(name)
@@ -1781,66 +1889,181 @@ def _build_actors(
                 "actor_id": stable_id("business_actor", actor_name),
                 "name": actor_name,
                 "responsibility_operation_refs": [],
+                "authorization_contracts": [],
                 "permissions": [],
                 "restrictions": [],
+                "permission_unknowns": [],
                 "source_kinds": [],
                 "evidence": [],
                 "status": "UNDERSTOOD",
+                "authorization_status": "NOT_DECLARED",
             },
         )
         row["source_kinds"] = unique_text([*as_list(row.get("source_kinds")), source_kind])
         row["evidence"] = dedupe_evidence([*as_list(row.get("evidence")), *evidence])
         return row
 
+    def add_contract(row: dict[str, Any], contract: dict[str, Any]) -> None:
+        _append_unique_contract(row["authorization_contracts"], contract)
+        decision = text(contract.get("decision"))
+        if decision == "ALLOW":
+            _append_unique_contract(row["permissions"], contract)
+        elif decision == "DENY":
+            _append_unique_contract(row["restrictions"], contract)
+        else:
+            _append_unique_contract(row["permission_unknowns"], contract)
+
     for index, raw in enumerate(as_list(asset.get("roles"))):
         if not isinstance(raw, dict):
             continue
-        ensure(raw.get("role") or raw.get("name"), _asset_evidence(raw, text(raw.get("role_id")) or f"roles[{index}]", "source_backed_role"), "role_asset")
+        ensure(
+            raw.get("role") or raw.get("name"),
+            _asset_evidence(
+                raw,
+                text(raw.get("role_id")) or f"roles[{index}]",
+                "source_backed_role",
+            ),
+            "role_asset",
+        )
 
     for index, raw in enumerate(as_list(asset.get("permission_matrix"))):
         if not isinstance(raw, dict):
             continue
         name = raw.get("role") or raw.get("actor")
-        row = ensure(name, _asset_evidence(raw, text(raw.get("permission_id")) or f"permission_matrix[{index}]", "source_backed_permission"), "permission_matrix")
+        permission_ref = text(raw.get("permission_id")) or f"permission_matrix[{index}]"
+        evidence = _asset_evidence(raw, permission_ref, "source_backed_permission")
+        row = ensure(name, evidence, "permission_matrix")
         if not row:
             continue
-        decision = text(raw.get("decision") or raw.get("effect")).lower()
-        permission = {
-            "resource_refs": unique_text([raw.get("resource"), *as_list(raw.get("resources"))]),
-            "actions": unique_text([raw.get("action"), *as_list(raw.get("actions"))]),
-            "scope": raw.get("scope") or raw.get("data_scope"),
-            "permission_id": raw.get("permission_id"),
-        }
-        if decision in {"deny", "denied", "forbid", "forbidden"} or as_list(raw.get("denied_actions")):
-            permission["actions"] = unique_text([*permission["actions"], *as_list(raw.get("denied_actions"))])
-            row["restrictions"].append(permission)
-        else:
-            row["permissions"].append(permission)
+        resources = unique_text([raw.get("resource"), *as_list(raw.get("resources"))])
+        allowed_actions = unique_text([raw.get("action"), *as_list(raw.get("actions"))])
+        denied_actions = unique_text(as_list(raw.get("denied_actions")))
+        decision = _normalize_authorization_decision(raw.get("decision") or raw.get("effect"))
+        scope = raw.get("scope") or raw.get("data_scope") or "unspecified"
+
+        if denied_actions:
+            add_contract(
+                row,
+                _authorization_contract(
+                    decision="DENY",
+                    resource_refs=resources,
+                    actions=denied_actions,
+                    scope=scope,
+                    source_ref=permission_ref,
+                    evidence=evidence,
+                    derivation="permission_matrix_denied_actions",
+                ),
+            )
+
+        if decision == "ALLOW" and allowed_actions and resources:
+            add_contract(
+                row,
+                _authorization_contract(
+                    decision="ALLOW",
+                    resource_refs=resources,
+                    actions=allowed_actions,
+                    scope=scope,
+                    source_ref=permission_ref,
+                    evidence=evidence,
+                    derivation="permission_matrix_explicit_allow",
+                ),
+            )
+        elif decision == "DENY" and resources and (allowed_actions or denied_actions):
+            deny_actions = allowed_actions or denied_actions
+            add_contract(
+                row,
+                _authorization_contract(
+                    decision="DENY",
+                    resource_refs=resources,
+                    actions=deny_actions,
+                    scope=scope,
+                    source_ref=permission_ref,
+                    evidence=evidence,
+                    derivation="permission_matrix_explicit_deny",
+                ),
+            )
+        elif not denied_actions or allowed_actions:
+            unknown_contract = _authorization_contract(
+                decision="UNKNOWN",
+                resource_refs=resources,
+                actions=allowed_actions,
+                scope=scope,
+                source_ref=permission_ref,
+                evidence=evidence,
+                derivation="permission_matrix_unresolved",
+            )
+            add_contract(row, unknown_contract)
+            reason_code = (
+                "ACTOR_AUTHORIZATION_DECISION_UNRESOLVED"
+                if decision == "UNKNOWN"
+                else "ACTOR_AUTHORIZATION_COORDINATE_INCOMPLETE"
+            )
+            authorization_unknowns.append(
+                _authorization_unknown(
+                    actor_name=text(row.get("name")),
+                    contract=unknown_contract,
+                    reason_code=reason_code,
+                )
+            )
 
     for fact in _accepted_facts(facts):
+        fact_decision = _authorization_fact_decision(fact)
+        action = text(
+            as_dict(fact.get("action")).get("canonical")
+            or as_dict(fact.get("action")).get("raw")
+        )
+        object_refs = _fact_object_refs(fact)
         for actor_name in _fact_actor_refs(fact):
             row = ensure(actor_name, evidence_from_fact(fact), "business_fact")
-            if not row:
+            if not row or not fact_decision:
                 continue
-            contract = {
-                "object_refs": _fact_object_refs(fact),
-                "action": text(as_dict(fact.get("action")).get("canonical") or as_dict(fact.get("action")).get("raw")),
-                "scope": as_dict(fact.get("scope")),
-                "fact_id": fact.get("fact_id"),
-            }
-            if text(fact.get("modality")) == "MUST_NOT":
-                if contract not in row["restrictions"]:
-                    row["restrictions"].append(contract)
-            elif contract["action"]:
-                if contract not in row["permissions"]:
-                    row["permissions"].append(contract)
+            contract = _authorization_contract(
+                decision=fact_decision if action and object_refs else "UNKNOWN",
+                resource_refs=object_refs,
+                actions=[action],
+                scope=as_dict(fact.get("scope")),
+                source_ref=fact.get("fact_id"),
+                evidence=evidence_from_fact(fact),
+                derivation="explicit_business_fact_authorization",
+                conditions=as_list(fact.get("conditions")),
+            )
+            add_contract(row, contract)
+            if text(contract.get("decision")) == "UNKNOWN":
+                authorization_unknowns.append(
+                    _authorization_unknown(
+                        actor_name=text(row.get("name")),
+                        contract=contract,
+                        reason_code="ACTOR_AUTHORIZATION_COORDINATE_INCOMPLETE",
+                    )
+                )
 
     for operation in operations:
         for actor_name in as_list(operation.get("actor_refs")):
             row = ensure(actor_name, as_list(operation.get("evidence")), "operation")
             if row:
-                row["responsibility_operation_refs"] = unique_text([*as_list(row.get("responsibility_operation_refs")), operation.get("operation_id")])
-    return sorted(actors.values(), key=lambda row: text(row.get("name")))
+                row["responsibility_operation_refs"] = unique_text(
+                    [
+                        *as_list(row.get("responsibility_operation_refs")),
+                        operation.get("operation_id"),
+                    ]
+                )
+
+    for row in actors.values():
+        counts = {
+            "ALLOW": len(as_list(row.get("permissions"))),
+            "DENY": len(as_list(row.get("restrictions"))),
+            "UNKNOWN": len(as_list(row.get("permission_unknowns"))),
+        }
+        row["authorization_decision_counts"] = counts
+        if counts["UNKNOWN"]:
+            row["authorization_status"] = "UNRESOLVED"
+            row["status"] = "PARTIAL"
+        elif counts["ALLOW"] or counts["DENY"]:
+            row["authorization_status"] = "RESOLVED"
+        else:
+            row["authorization_status"] = "NOT_DECLARED"
+
+    return sorted(actors.values(), key=lambda row: text(row.get("name"))), authorization_unknowns
 
 
 __all__ = ["build_enterprise_understanding_model"]
