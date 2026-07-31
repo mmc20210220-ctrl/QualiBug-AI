@@ -1,28 +1,30 @@
-"""Continuous discovery scan loop and durable state helpers.
-
-Extracted from ``private_pilot_service``. Symbols remain re-exported there so
-handler routes and runtime patches keep working.
-"""
+"""Continuous discovery scan loop and durable state helpers."""
 from __future__ import annotations
 
 import json
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from . import db_persistence as db_persist
+from .private_pilot_scan_coordinator import ScanLeaseBusy, project_scan_lease
 
 
 def _read_json_artifact(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace") or "null")
+        return json.loads(path.read_text(encoding="utf-8") or "null")
     except Exception as exc:
         raise ValueError(f"failed to read JSON artifact: {path}: {exc}") from exc
 
 
-def _read_json_object(path: Path, *, missing: dict[str, Any] | None = None) -> dict[str, Any]:
+def _read_json_object(
+    path: Path,
+    *,
+    missing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not path.exists() or not path.is_file():
         return dict(missing or {})
     payload = _read_json_artifact(path)
@@ -51,136 +53,249 @@ def _write_json_object_atomic(path: Path, payload: dict[str, Any]) -> None:
         os.replace(temporary_path, path)
         temporary_path = None
     finally:
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 _CONTINUOUS_STATE_FILE = "continuous_discovery_state.json"
-
-# In-memory tracking of active continuous-scan threads per project.
-# Key: (root, project_id), Value: dict with thread + stop flag.
 _continuous_threads: dict[tuple[str, str], dict[str, Any]] = {}
+_continuous_threads_lock = threading.RLock()
 
 
-def _continuous_scan_loop(root: Path, project: str, tenant_id: str, interval_s: int) -> None:
-    """Background loop: run scans at intervals until convergence or stop.
+def _thread_key(root: Path, project: str) -> tuple[str, str]:
+    return str(root.resolve()), project
 
-    Convergence = consecutive N rounds with zero new findings AND coverage
-    above threshold. Once converged, the loop auto-stops and records the
-    reason so the UI can show "覆盖收敛，自动暂停".
-    """
-    import time as _time
-    from .__main__ import scan as _scan_fn
 
-    key = (str(root), project)
+def _stop_requested(entry: dict[str, Any] | None) -> bool:
+    if not entry:
+        return True
+    event = entry.get("stop_event")
+    if isinstance(event, threading.Event):
+        return event.is_set()
+    return bool(entry.get("stop"))
+
+
+def _finding_key(finding: dict[str, Any]) -> tuple[str, str, str]:
+    evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
+    return (
+        str(finding.get("title") or finding.get("description") or "").strip().lower()[:240],
+        str(
+            finding.get("_api_method")
+            or finding.get("method")
+            or evidence.get("method")
+            or ""
+        ).upper(),
+        str(
+            finding.get("_api_path")
+            or finding.get("path")
+            or evidence.get("path")
+            or ""
+        ).strip(),
+    )
+
+
+def _result_findings(result: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[Any] = []
+    for value in (
+        result.get("real_findings"),
+        result.get("bug_scores"),
+        result.get("db_findings"),
+        result.get("e2e_findings"),
+        result.get("deep_findings"),
+        result.get("ui_findings"),
+    ):
+        if isinstance(value, list):
+            candidates.extend(value)
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in candidates:
+        if not isinstance(raw, dict):
+            continue
+        key = _finding_key(raw)
+        if not any(key) or key in seen:
+            continue
+        seen.add(key)
+        rows.append(dict(raw))
+    return rows
+
+
+def _continuous_scan_loop(
+    root: Path,
+    project: str,
+    tenant_id: str,
+    interval_s: int,
+) -> None:
+    """Run serialized scan rounds until convergence, stop or safety limit."""
+
+    from .__main__ import scan as scan_fn
+    from .private_pilot_scan_context_contract import (
+        CONTINUOUS_CAMPAIGN_CONTEXTS,
+        SCAN_CAMPAIGN_CONTEXT,
+        continuous_context_key,
+    )
+
+    key = _thread_key(root, project)
     no_new_rounds = 0
-    CONVERGE_ROUNDS = 3  # 连续3轮无新发现视为收敛
-    CONVERGE_COVERAGE = 0.7
-    MAX_ROUNDS = 20  # 安全上限，防止无限循环
+    completed_rounds = 0
+    converge_rounds = 3
+    converge_coverage = 0.7
+    max_rounds = 20
 
-    for round_num in range(1, MAX_ROUNDS + 1):
-        # Check stop flag
-        entry = _continuous_threads.get(key)
-        if not entry or entry.get("stop"):
-            break
-
-        phase = "scan"
-        try:
-            from .private_pilot_scan_context_contract import (
-                CONTINUOUS_CAMPAIGN_CONTEXTS,
-                SCAN_CAMPAIGN_CONTEXT,
-                continuous_context_key,
-            )
-
-            campaign_context = CONTINUOUS_CAMPAIGN_CONTEXTS.get(continuous_context_key(root, project))
-            token = SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
-            try:
-                result = _scan_fn(
-                    project,
-                    root,
-                    save_report=True,
-                    campaign_context=dict(campaign_context) if isinstance(campaign_context, dict) else None,
-                )
-            finally:
-                SCAN_CAMPAIGN_CONTEXT.reset(token)
-            if not isinstance(result, dict):
-                raise TypeError("continuous scan result must be an object")
-
-            # Cumulative merge
-            phase = "cumulative_merge"
-            db_persist.init_db(root)
-            report_path = root / "platform_outputs" / project / "intelligence_report.json"
-            report_data = _read_json_object(report_path)
-            findings_value = report_data.get("real_findings") or report_data.get("bug_scores") or []
-            if not isinstance(findings_value, list):
-                raise ValueError(f"continuous report findings must be a list: {report_path}")
-            if any(not isinstance(finding, dict) for finding in findings_value):
-                raise ValueError(f"continuous report findings must contain objects: {report_path}")
-            findings_list = list(findings_value)
-            enriched = dict(result)
-            enriched["findings"] = findings_list
-            scan_id = db_persist.save_scan(root, tenant_id, project, enriched)
-            merge_result = db_persist.merge_findings_cumulative(root, tenant_id, project, scan_id, findings_list)
-            if not isinstance(merge_result, dict):
-                raise TypeError("cumulative merge result must be an object")
-            new_count = int(merge_result.get("new") or 0)
-
-            # Update continuous state
-            phase = "state_update"
-            _update_continuous_state(root, project, result)
-
-            # Convergence check
-            if new_count == 0:
-                no_new_rounds += 1
-            else:
-                no_new_rounds = 0
-
-            phase = "convergence"
-            coverage = float(result.get("coverage", 0) or 0)
-            converged = no_new_rounds >= CONVERGE_ROUNDS and coverage >= CONVERGE_COVERAGE
-
-            # Update thread entry with progress
-            if key in _continuous_threads:
-                _continuous_threads[key]["round"] = round_num
-                _continuous_threads[key]["last_new"] = new_count
-                _continuous_threads[key]["no_new_rounds"] = no_new_rounds
-                if converged:
-                    _continuous_threads[key]["converged"] = True
-                    _continuous_threads[key]["stop"] = True
-                    # Mark state as converged
-                    _mark_continuous_converged(root, project, reason="连续{}轮无新发现且覆盖率≥{:.0%}".format(CONVERGE_ROUNDS, CONVERGE_COVERAGE))
-                    break
-        except Exception as exc:
-            if key in _continuous_threads:
-                _continuous_threads[key].update({
-                    "status": "failed",
-                    "failed_phase": phase,
-                    "failed_round": round_num,
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    "stop": True,
-                })
-            _continuous_threads.pop(key, None)
-            _record_continuous_failure(root, project, round_num=round_num, phase=phase, error=exc)
-            raise
-
-        # Wait for next interval (check stop flag every second)
-        for _ in range(interval_s):
-            entry = _continuous_threads.get(key)
-            if not entry or entry.get("stop"):
+    try:
+        while completed_rounds < max_rounds:
+            with _continuous_threads_lock:
+                entry = _continuous_threads.get(key)
+            if _stop_requested(entry):
                 break
-            _time.sleep(1)
-    else:
-        try:
-            _mark_continuous_max_rounds(root, project, max_rounds=MAX_ROUNDS)
-        finally:
-            _continuous_threads.pop(key, None)
-        return
+            try:
+                with project_scan_lease(
+                    root,
+                    project,
+                    mode="continuous_scan",
+                    tenant_id=tenant_id,
+                    actor=(entry or {}).get("actor")
+                    if isinstance((entry or {}).get("actor"), dict)
+                    else {},
+                ):
+                    phase = "scan"
+                    campaign_context = CONTINUOUS_CAMPAIGN_CONTEXTS.get(
+                        continuous_context_key(root, project)
+                    )
+                    token = SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
+                    try:
+                        result = scan_fn(
+                            project,
+                            root,
+                            save_report=True,
+                            campaign_context=dict(campaign_context)
+                            if isinstance(campaign_context, dict)
+                            else None,
+                        )
+                    finally:
+                        SCAN_CAMPAIGN_CONTEXT.reset(token)
+                    if not isinstance(result, dict):
+                        raise TypeError("continuous scan result must be an object")
+                    if (
+                        result.get("success") is False
+                        or result.get("error")
+                        or not str(result.get("scan_id") or "").strip()
+                    ):
+                        raise RuntimeError(
+                            str(result.get("error") or "continuous scan produced no result")
+                        )
 
-    # Clean up thread entry
-    _continuous_threads.pop(key, None)
+                    phase = "cumulative_merge"
+                    findings = _result_findings(result)
+                    enriched = dict(result)
+                    enriched["findings"] = findings
+                    enriched["report_binding"] = {
+                        "status": "result_native",
+                        "reason": "continuous loop does not read shared report files",
+                    }
+                    scan_id = db_persist.save_scan(
+                        root,
+                        tenant_id,
+                        project,
+                        enriched,
+                    )
+                    merge_result = db_persist.merge_findings_cumulative(
+                        root,
+                        tenant_id,
+                        project,
+                        scan_id,
+                        findings,
+                    )
+                    new_count = int(merge_result.get("new") or 0)
+
+                    phase = "state_update"
+                    _update_continuous_state(root, project, result)
+                    completed_rounds += 1
+                    no_new_rounds = no_new_rounds + 1 if new_count == 0 else 0
+                    coverage = float(result.get("coverage") or 0)
+                    converged = (
+                        no_new_rounds >= converge_rounds
+                        and coverage >= converge_coverage
+                    )
+                    with _continuous_threads_lock:
+                        live = _continuous_threads.get(key)
+                        if live is not None:
+                            live.update(
+                                {
+                                    "round": completed_rounds,
+                                    "last_new": new_count,
+                                    "no_new_rounds": no_new_rounds,
+                                    "status": "converged" if converged else "running",
+                                }
+                            )
+                    if converged:
+                        _mark_continuous_converged(
+                            root,
+                            project,
+                            reason=(
+                                f"连续{converge_rounds}轮无新发现且覆盖率≥"
+                                f"{converge_coverage:.0%}"
+                            ),
+                        )
+                        break
+            except ScanLeaseBusy as exc:
+                _mark_continuous_waiting(root, project, exc.owner)
+            except Exception as exc:
+                _record_continuous_failure(
+                    root,
+                    project,
+                    round_num=completed_rounds + 1,
+                    phase=locals().get("phase", "scan"),
+                    error=exc,
+                )
+                with _continuous_threads_lock:
+                    live = _continuous_threads.get(key)
+                    if live is not None:
+                        live.update(
+                            {
+                                "status": "failed",
+                                "error_type": type(exc).__name__,
+                                "error": str(exc),
+                            }
+                        )
+                return
+
+            deadline = time.monotonic() + max(1, int(interval_s))
+            while time.monotonic() < deadline:
+                with _continuous_threads_lock:
+                    live = _continuous_threads.get(key)
+                if _stop_requested(live):
+                    break
+                time.sleep(min(1.0, max(0.05, deadline - time.monotonic())))
+        else:
+            _mark_continuous_max_rounds(
+                root,
+                project,
+                max_rounds=max_rounds,
+            )
+    finally:
+        with _continuous_threads_lock:
+            entry = _continuous_threads.get(key)
+            if entry is not None:
+                entry["finished_at"] = time.time()
+                entry["alive"] = False
+                if _stop_requested(entry) and entry.get("status") not in {
+                    "failed",
+                    "converged",
+                }:
+                    entry["status"] = "stopped"
+            _continuous_threads.pop(key, None)
+
+
 def _continuous_state_path(root: Path, project: str) -> Path:
-    return root / "platform_workspace" / project / "defect_discovery" / _CONTINUOUS_STATE_FILE
+    return (
+        root
+        / "platform_workspace"
+        / project
+        / "defect_discovery"
+        / _CONTINUOUS_STATE_FILE
+    )
+
+
 def _record_continuous_failure(
     root: Path,
     project: str,
@@ -209,8 +324,25 @@ def _record_continuous_failure(
     state.pop("termination", None)
     state["last_failure"] = failure
     _write_json_object_atomic(state_file, state)
+
+
+def _mark_continuous_waiting(
+    root: Path,
+    project: str,
+    active_owner: dict[str, Any],
+) -> None:
+    state_file = _continuous_state_path(root, project)
+    state = _read_json_object(state_file)
+    state["status"] = "waiting_for_project_scan"
+    state["converged"] = False
+    state["active_scan"] = dict(active_owner or {})
+    state["last_wait_at"] = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+    )
+    _write_json_object_atomic(state_file, state)
+
+
 def _mark_continuous_converged(root: Path, project: str, reason: str) -> None:
-    """Mark the continuous discovery state as converged with a reason."""
     state_file = _continuous_state_path(root, project)
     state = _read_json_object(state_file)
     state["status"] = "converged"
@@ -218,8 +350,16 @@ def _mark_continuous_converged(root: Path, project: str, reason: str) -> None:
     state["converge_reason"] = reason
     state.pop("last_failure", None)
     state.pop("termination", None)
+    state.pop("active_scan", None)
     _write_json_object_atomic(state_file, state)
-def _mark_continuous_max_rounds(root: Path, project: str, *, max_rounds: int) -> None:
+
+
+def _mark_continuous_max_rounds(
+    root: Path,
+    project: str,
+    *,
+    max_rounds: int,
+) -> None:
     state_file = _continuous_state_path(root, project)
     state = _read_json_object(state_file)
     state["status"] = "max_rounds_reached"
@@ -231,87 +371,98 @@ def _mark_continuous_max_rounds(root: Path, project: str, *, max_rounds: int) ->
         "round": max_rounds,
     }
     _write_json_object_atomic(state_file, state)
-def _update_continuous_state(root: Path, project: str, scan_result: dict) -> None:
-    """Track continuous discovery coverage state after each auto-scan."""
-    state_dir = root / "platform_workspace" / project / "defect_discovery"
-    state_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _update_continuous_state(
+    root: Path,
+    project: str,
+    scan_result: dict[str, Any],
+) -> None:
     state_file = _continuous_state_path(root, project)
+    state_file.parent.mkdir(parents=True, exist_ok=True)
     state = _read_json_object(state_file)
-
-    total_findings = scan_result.get("total_findings", 0)
-    coverage = scan_result.get("coverage", 0)
-    grade = scan_result.get("grade", "C")
-    total_ms = scan_result.get("total_ms", 0)
-
-    # Track scan runs
     runs = state.get("runs", [])
     if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
-        raise ValueError(f"continuous discovery runs must be a list of objects: {state_file}")
-    runs.append({
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "findings": total_findings,
-        "coverage": coverage,
-        "grade": grade,
-        "duration_ms": total_ms,
-    })
-    # Keep last 50 runs
+        raise ValueError(
+            f"continuous discovery runs must be a list of objects: {state_file}"
+        )
+    runs.append(
+        {
+            "scan_id": str(scan_result.get("scan_id") or ""),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "findings": scan_result.get("total_findings", 0),
+            "coverage": scan_result.get("coverage", 0),
+            "grade": scan_result.get("grade", "C"),
+            "duration_ms": scan_result.get("total_ms", 0),
+        }
+    )
     runs = runs[-50:]
-
-    state["runs"] = runs
-    state["status"] = "scanning"
-    state["converged"] = False
-    state["last_scan"] = runs[-1]["timestamp"] if runs else ""
-    state["total_runs"] = len(runs)
+    state.update(
+        {
+            "runs": runs,
+            "status": "scanning",
+            "converged": False,
+            "last_scan": runs[-1]["timestamp"],
+            "total_runs": len(runs),
+        }
+    )
     state.pop("converge_reason", None)
     state.pop("termination", None)
     state.pop("last_failure", None)
-
+    state.pop("active_scan", None)
     _write_json_object_atomic(state_file, state)
+
+
 def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
-    """Get the current continuous discovery state."""
-    state_file = root / "platform_workspace" / project / "defect_discovery" / _CONTINUOUS_STATE_FILE
-    if not state_file.exists():
-        return {
-            "status": "idle",
-            "converged": False,
-            "runs": [],
-            "total_runs": 0,
-            "message": "尚未运行过持续检测。上传文档后将自动开始。"
-        }
+    state_file = _continuous_state_path(root, project)
     state = _read_json_object(state_file)
     runs = state.get("runs", [])
     if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
-        raise ValueError(f"continuous discovery runs must be a list of objects: {state_file}")
-    last_failure = state.get("last_failure")
-    if last_failure is not None and not isinstance(last_failure, dict):
-        raise ValueError(f"continuous discovery last_failure must be an object: {state_file}")
-    termination = state.get("termination")
-    if termination is not None and not isinstance(termination, dict):
-        raise ValueError(f"continuous discovery termination must be an object: {state_file}")
+        raise ValueError(
+            f"continuous discovery runs must be a list of objects: {state_file}"
+        )
     last_run = runs[-1] if runs else {}
     status = str(state.get("status") or "idle")
-    if status == "failed" and last_failure:
-        message = (
-            f"持续检测失败（阶段 {last_failure.get('phase') or 'unknown'}，"
-            f"第 {last_failure.get('round') or 0} 轮）：{last_failure.get('error') or 'unknown error'}"
-        )
-    elif status == "max_rounds_reached" and termination:
-        message = f"持续检测已达到 {termination.get('round') or 0} 轮安全上限，未判定为收敛。"
-    elif state.get("converged"):
-        message = "持续检测覆盖已收敛，系统自动暂停。上传新文档后将自动恢复。"
-    elif runs:
-        message = "持续检测进行中，系统检测到新的覆盖空间。"
-    else:
-        message = "等待首次扫描..."
+    messages = {
+        "idle": "尚未运行持续检测。",
+        "scanning": "持续检测进行中。",
+        "waiting_for_project_scan": "其他项目检测任务正在运行，持续检测等待租约。",
+        "stopping": "持续检测正在停止。",
+        "stopped": "持续检测已停止。",
+        "converged": "持续检测覆盖已收敛，系统自动暂停。",
+        "max_rounds_reached": "持续检测达到安全轮次上限，未判定收敛。",
+        "failed": "持续检测失败，请查看 last_failure。",
+    }
     return {
         "status": status,
-        "converged": state.get("converged", False),
+        "converged": bool(state.get("converged")),
         "runs": runs[-10:],
-        "total_runs": state.get("total_runs", len(runs)),
+        "total_runs": int(state.get("total_runs") or len(runs)),
         "last_scan": state.get("last_scan", ""),
         "last_findings": last_run.get("findings", 0),
         "last_coverage": last_run.get("coverage", 0),
-        "last_failure": last_failure or {},
-        "termination": termination or {},
-        "message": message,
+        "last_failure": state.get("last_failure")
+        if isinstance(state.get("last_failure"), dict)
+        else {},
+        "termination": state.get("termination")
+        if isinstance(state.get("termination"), dict)
+        else {},
+        "active_scan": state.get("active_scan")
+        if isinstance(state.get("active_scan"), dict)
+        else {},
+        "message": messages.get(status, "持续检测状态未知。"),
     }
+
+
+__all__ = [
+    "_CONTINUOUS_STATE_FILE",
+    "_continuous_scan_loop",
+    "_continuous_state_path",
+    "_continuous_threads",
+    "_continuous_threads_lock",
+    "_get_continuous_state",
+    "_mark_continuous_converged",
+    "_mark_continuous_max_rounds",
+    "_record_continuous_failure",
+    "_update_continuous_state",
+]
