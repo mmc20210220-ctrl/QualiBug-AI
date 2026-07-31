@@ -266,3 +266,51 @@ def test_actor_model_preserves_explicit_unknown_only_as_unknown() -> None:
     assert model["authorization_model"]["unknown_is_allow"] is False
     assert model["authorization_model"]["unknown_is_deny"] is False
     assert model["authorization_model"]["explicit_unknown_can_fallback_to_text"] is False
+
+
+def test_non_identity_scope_remains_business_rule() -> None:
+    fact = _fact(
+        "仓库员不得在夜间登记入库单",
+        modality="MUST_NOT",
+        scope={"time_window": "夜间"},
+    )
+
+    resolution = resolve_fact_authorization(fact)
+    assert resolution["decision"] == "UNSPECIFIED"
+    assert resolution["semantic_kind"] == "NONE"
+    assert resolution["authority_declared"] is False
+
+    behavior, gate = _behavior(fact)
+    assert behavior["permission_decision"] == "UNSPECIFIED"
+    assert behavior["authorization_semantics_explicit"] is False
+    assert _scenario_type(behavior) == ("REJECTION", ["REJECTION"])
+    assert gate["metrics"]["authorization_behavior_count"] == 0
+
+    actor = _only_actor(_understanding_model(fact))
+    assert actor["authorization_contracts"] == []
+    assert actor["restrictions"] == []
+    assert actor["authorization_status"] == "NOT_DECLARED"
+
+
+def test_empty_explicit_authorization_declaration_is_unknown() -> None:
+    fact = _fact(
+        "仓库员允许执行受控登记",
+        modality="MAY",
+        authorization_semantics={},
+    )
+
+    resolution = resolve_fact_authorization(fact)
+    assert resolution["decision"] == "UNKNOWN"
+    assert resolution["declared_decision"] == "UNKNOWN"
+    assert resolution["resolution_status"] == "UNRESOLVED"
+    assert resolution["text_fallback_used"] is False
+
+    _rows, behaviors, conflicts, unknowns, gate = build_business_behavior_ir(
+        {}, [fact], []
+    )
+    assert conflicts == []
+    assert len(behaviors) == 1
+    assert behaviors[0]["permission_decision"] == "UNKNOWN"
+    assert behaviors[0]["status"] == "INCOMPLETE"
+    assert len(unknowns) == 1
+    assert gate["entry_allowed"] is False
