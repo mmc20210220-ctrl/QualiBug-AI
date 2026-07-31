@@ -84,6 +84,75 @@ def test_field_key_evidence_extends_the_single_identity_authority_before_measure
     assert '"enterprise_identity_field_evidence"' in source
 
 
+def test_key_backed_bound_field_can_surface_name_only_candidate_without_binding() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_field_evidence import (
+        augment_identity_field_evidence,
+    )
+
+    asset = {
+        "data_tables": [
+            {
+                "table_id": "table:orders",
+                "columns": [
+                    {
+                        "column_id": "orders.order_id",
+                        "name": "order_id",
+                        "primary_key": True,
+                        "identity_key_ref": "sales-order-id",
+                    }
+                ],
+            }
+        ],
+        "interfaces": [
+            {
+                "interface_id": "api:legacy-order",
+                "parameter_contracts": [
+                    {
+                        "field_id": "path.order_id",
+                        "name": "order_id",
+                        "is_identifier": True,
+                    }
+                ],
+            }
+        ],
+    }
+    result = {
+        "bindings": [
+            {
+                "schema": "qualibug.enterprise-identity-binding.v1",
+                "binding_id": "binding:orders",
+                "entity_id": "entity:sales-order",
+                "artifact_type": "DATABASE_TABLE",
+                "artifact_ref": "table:orders",
+                "status": "RESOLVED",
+                "identity_field_bindings": [],
+                "evidence": [],
+            }
+        ],
+        "unknowns": [
+            {
+                "unknown_id": "unknown:api:legacy-order",
+                "reason_code": "CROSS_SOURCE_IDENTITY_UNRESOLVED",
+                "details": {"artifact_ref": "api:legacy-order"},
+            }
+        ],
+        "conflicts": [],
+        "gate": {"status": "PARTIAL_ENTERPRISE_IDENTITY_BINDING", "entry_allowed": True},
+    }
+
+    projected = augment_identity_field_evidence(asset, result)
+
+    assert not any(
+        row.get("artifact_ref") == "api:legacy-order"
+        for row in projected["bindings"]
+    )
+    candidates = projected["identity_field_evidence"]["candidate_bindings"]
+    assert len(candidates) == 1
+    assert candidates[0]["candidate_entity_ids"] == ["entity:sales-order"]
+    assert candidates[0]["automatic_resolution_allowed"] is False
+    assert projected["unknowns"]
+
+
 def test_regression_projection_extends_the_existing_identity_benchmark_gate() -> None:
     source, function = _understanding_builder()
     calls = _named_calls(function)
