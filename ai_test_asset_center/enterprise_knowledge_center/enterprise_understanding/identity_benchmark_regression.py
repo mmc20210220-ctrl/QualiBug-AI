@@ -36,6 +36,13 @@ _COUNT_REGRESSION_DEFINITIONS = (
         "INCREASE",
     ),
 )
+_REGRESSION_DEFINITIONS = (
+    *_RATE_REGRESSION_DEFINITIONS,
+    *_COUNT_REGRESSION_DEFINITIONS,
+)
+_KNOWN_REGRESSION_THRESHOLDS = frozenset(
+    threshold for threshold, _metric, _direction in _REGRESSION_DEFINITIONS
+)
 
 
 def _number(value: Any) -> float | None:
@@ -171,10 +178,7 @@ def evaluate_identity_benchmark_regression(
     current_metrics = as_dict(benchmark.get("metrics"))
     baseline_metrics = as_dict(baseline.get("metrics"))
     deltas: dict[str, float] = {}
-    for _threshold, metric, _direction in (
-        *_RATE_REGRESSION_DEFINITIONS,
-        *_COUNT_REGRESSION_DEFINITIONS,
-    ):
+    for _threshold, metric, _direction in _REGRESSION_DEFINITIONS:
         current = _number(current_metrics.get(metric))
         prior = _number(baseline_metrics.get(metric))
         if current is not None and prior is not None:
@@ -194,11 +198,8 @@ def evaluate_identity_benchmark_regression(
         }
 
     checks: list[dict[str, Any]] = []
-    invalid: list[str] = []
-    for threshold_key, metric, direction in (
-        *_RATE_REGRESSION_DEFINITIONS,
-        *_COUNT_REGRESSION_DEFINITIONS,
-    ):
+    invalid = sorted(set(thresholds) - _KNOWN_REGRESSION_THRESHOLDS)
+    for threshold_key, metric, direction in _REGRESSION_DEFINITIONS:
         if threshold_key not in thresholds:
             continue
         threshold = _number(thresholds.get(threshold_key))
@@ -241,7 +242,7 @@ def evaluate_identity_benchmark_regression(
             "comparable": True,
             "baseline_snapshot_id": baseline.get("snapshot_id"),
             "metric_deltas": deltas,
-            "invalid_thresholds": sorted(invalid),
+            "invalid_thresholds": sorted(set(invalid)),
             "blocking_reasons": (
                 ["IDENTITY_REGRESSION_THRESHOLDS_MISSING"]
                 if not checks and not invalid
@@ -422,7 +423,7 @@ def build_identity_benchmark_snapshot(
     return {
         "schema": SNAPSHOT_SCHEMA,
         "snapshot_id": stable_id(
-            "enterprise_identity_benchmark_snapshot",
+            "enterprise_identity_benchmark_snapshot_request",
             recorded_at_utc,
             trigger,
             result_fingerprint,
