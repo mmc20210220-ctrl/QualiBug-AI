@@ -1,0 +1,91 @@
+name: Apply source occurrence history ledger
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: read
+
+concurrency:
+  group: source-occurrence-history-ledger-main
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.event.issue.title == 'APPLY_SOURCE_OCCURRENCE_HISTORY_LEDGER_20260731'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Assemble final authority files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/source-occurrence-history
+          base64 -d tools/.one_shot/source_occurrence_history/bundle.b64 > /tmp/source-occurrence-history/bundle.tar.gz
+          tar -xzf /tmp/source-occurrence-history/bundle.tar.gz -C /tmp/source-occurrence-history
+          cp /tmp/source-occurrence-history/source_occurrence_ledger.py ai_test_asset_center/enterprise_knowledge_center/source_occurrence_ledger.py
+          cp /tmp/source-occurrence-history/source_occurrence_core.py ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py
+          cp /tmp/source-occurrence-history/source_occurrence_lifecycle.py ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py
+          cp /tmp/source-occurrence-history/source_occurrence_projection.py ai_test_asset_center/enterprise_knowledge_center/source_occurrence_projection.py
+          cp /tmp/source-occurrence-history/test_source_occurrence_history_ledger.py tests/test_source_occurrence_history_ledger.py
+          cp /tmp/source-occurrence-history/test_source_occurrence_restore_lifecycle.py tests/test_source_occurrence_restore_lifecycle.py
+          cp /tmp/source-occurrence-history/test_source_occurrence_archive_lifecycle.py tests/test_source_occurrence_archive_lifecycle.py
+          python -m py_compile \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_ledger.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_projection.py \
+            tests/test_source_occurrence_history_ledger.py \
+            tests/test_source_occurrence_restore_lifecycle.py \
+            tests/test_source_occurrence_archive_lifecycle.py
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Run focused occurrence regression
+        run: |
+          pytest -q \
+            tests/test_source_occurrence_history_ledger.py \
+            tests/test_source_occurrence_restore_lifecycle.py \
+            tests/test_source_occurrence_archive_lifecycle.py \
+            tests/test_source_occurrence_content_identity.py \
+            tests/test_source_occurrence_projection.py \
+            tests/test_source_occurrence_lifecycle.py
+
+      - name: Commit final authority and remove one-shot transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'qualibug-mainline-bot'
+          git config user.email 'qualibug-mainline-bot@users.noreply.github.com'
+          rm -rf tools/.one_shot/source_occurrence_history
+          rm .github/workflows/apply-source-occurrence-history-ledger.yml
+          git add \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_ledger.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_projection.py \
+            tests/test_source_occurrence_history_ledger.py \
+            tests/test_source_occurrence_restore_lifecycle.py \
+            tests/test_source_occurrence_archive_lifecycle.py \
+            tools/.one_shot/source_occurrence_history \
+            .github/workflows/apply-source-occurrence-history-ledger.yml
+          git diff --cached --check
+          git commit -m 'feat(ingestion): separate occurrence history from current state'
+          git pull --rebase origin main
+          git push origin HEAD:main
