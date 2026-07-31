@@ -30,10 +30,13 @@ export type IdentityBenchmarkWorkspace = {
   project_id?: string;
   manifest?: IdentityAnnotationManifest;
   benchmark?: Record<string, unknown>;
+  regression?: Record<string, unknown>;
   identity_gate?: Record<string, unknown>;
   identity_quality_gate?: Record<string, unknown>;
   quality_policy?: Record<string, unknown>;
   ground_truth_summary?: Record<string, unknown>;
+  history?: Record<string, unknown>;
+  error_queue?: Record<string, unknown>;
   audit?: Record<string, unknown>;
   workflow?: Record<string, unknown>;
 };
@@ -107,5 +110,12 @@ export function saveIdentityQualityPolicy(
   return request<IdentityBenchmarkWorkspace>(projectPath(project, '/quality-policy'), {
     method: 'POST',
     body: JSON.stringify({ quality_policy: qualityPolicy }),
+  });
+}
+
+export function runIdentityBenchmark(project: string): Promise<IdentityBenchmarkWorkspace> {
+  return request<IdentityBenchmarkWorkspace>(projectPath(project, '/run'), {
+    method: 'POST',
+    body: JSON.stringify({}),
   });
 }
