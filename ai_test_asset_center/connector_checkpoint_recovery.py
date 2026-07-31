@@ -1,10 +1,4 @@
-"""Crash-safe connector checkpoint commit journal and recovery authority.
-
-The source sync registry and encrypted connection profile are separate durable files.
-This module closes the crash window between them without introducing a second connector
-registry or source pipeline. It records only one per-connector commit intent, encrypts raw
-checkpoint values, and either promotes, discards, or compensates the existing registry.
-"""
+"""Crash-safe checkpoint commit journal for online knowledge connectors."""
 from __future__ import annotations
 
 import hashlib
@@ -37,7 +31,7 @@ from .real_project_onboarding import _safe_project_id
 CHECKPOINT_JOURNAL_SCHEMA = "qualibug.connector-checkpoint-commit-journal.v1"
 
 
-class ConnectorCheckpointRecoveryError(RuntimeError):
+class ConnectorCheckpointRecoveryError(ConnectorProfileError):
     """A checkpoint commit could not be recovered without guessing."""
 
 
@@ -45,12 +39,12 @@ def _text(value: Any, limit: int = 1000) -> str:
     return str(value or "").strip()[:limit]
 
 
-def _fingerprint(checkpoint: str) -> str:
-    value = str(checkpoint or "")
-    return hashlib.sha256(value.encode("utf-8")).hexdigest() if value else ""
+def _fingerprint(value: str) -> str:
+    raw = str(value or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest() if raw else ""
 
 
-def _journal_path(root: Path, project: str, connector: str) -> Path:
+def _path(root: Path, project: str, connector: str) -> Path:
     return (
         root.resolve()
         / "platform_workspace"
@@ -61,18 +55,32 @@ def _journal_path(root: Path, project: str, connector: str) -> Path:
     )
 
 
-def _read_journal(root: Path, project: str, connector: str) -> dict[str, Any]:
-    return _read_json_object(_journal_path(root, project, connector))
+def _read(root: Path, project: str, connector: str) -> dict[str, Any]:
+    return _read_json_object(_path(root, project, connector))
 
 
-def _delete_journal(root: Path, project: str, connector: str) -> None:
-    path = _journal_path(root, project, connector)
+def _remove(root: Path, project: str, connector: str) -> None:
     try:
-        path.unlink(missing_ok=True)
+        _path(root, project, connector).unlink(missing_ok=True)
     except OSError as exc:
         raise ConnectorCheckpointRecoveryError(
             "connector_checkpoint_journal_delete_failed"
         ) from exc
+
+
+def _knowledge_tx(
+    root: Path,
+    project: str,
+    operation: str,
+    actor: dict[str, Any],
+):
+    return knowledge_transaction(
+        root,
+        project,
+        operation=operation,
+        actor=actor,
+        wait_seconds=5.0,
+    )
 
 
 def begin_connector_checkpoint_commit(
@@ -83,13 +91,9 @@ def begin_connector_checkpoint_commit(
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Persist a durable intent before remote synchronization starts."""
-
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
-    if not connector:
-        raise ConnectorCheckpointRecoveryError("connector_instance_id_required")
     clean_actor = _require_manage_actor(actor)
     attempt_id = "checkpoint_" + uuid.uuid4().hex
     payload = {
@@ -107,19 +111,17 @@ def begin_connector_checkpoint_commit(
         "plaintext_checkpoint_persisted": False,
     }
     try:
-        with knowledge_transaction(
+        with _knowledge_tx(
             resolved_root,
             project,
-            operation="begin_connector_checkpoint_commit",
-            actor=clean_actor,
-            wait_seconds=5.0,
+            "begin_connector_checkpoint_commit",
+            clean_actor,
         ):
-            existing = _read_journal(resolved_root, project, connector)
-            if existing:
+            if _read(resolved_root, project, connector):
                 raise ConnectorCheckpointRecoveryError(
                     "connector_checkpoint_journal_already_exists"
                 )
-            path = _journal_path(resolved_root, project, connector)
+            path = _path(resolved_root, project, connector)
             path.parent.mkdir(parents=True, exist_ok=True)
             _write_json_object_atomic(path, payload)
     except KnowledgeTransactionBusy as exc:
@@ -144,34 +146,31 @@ def stage_connector_checkpoint_result(
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Encrypt the coordinator-committed checkpoint before profile promotion."""
-
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
     attempt = _text(attempt_id, 160)
     value = str(checkpoint or "").strip()
     epoch = _text(sync_epoch_id, 160)
+    clean_actor = _require_manage_actor(actor)
     if not connector or not attempt or not value or not epoch:
         raise ConnectorCheckpointRecoveryError(
             "connector_checkpoint_stage_fields_required"
         )
-    clean_actor = _require_manage_actor(actor)
     ciphertext = encrypt(value)
     if not is_encrypted(ciphertext):
         raise ConnectorCheckpointRecoveryError(
             "connector_checkpoint_journal_plaintext_refused"
         )
     try:
-        with knowledge_transaction(
+        with _knowledge_tx(
             resolved_root,
             project,
-            operation="stage_connector_checkpoint_result",
-            actor=clean_actor,
-            wait_seconds=5.0,
+            "stage_connector_checkpoint_result",
+            clean_actor,
         ):
-            journal = _read_journal(resolved_root, project, connector)
-            if not journal or _text(journal.get("attempt_id"), 160) != attempt:
+            journal = _read(resolved_root, project, connector)
+            if _text(journal.get("attempt_id"), 160) != attempt:
                 raise ConnectorCheckpointRecoveryError(
                     "connector_checkpoint_journal_attempt_mismatch"
                 )
@@ -186,7 +185,7 @@ def stage_connector_checkpoint_result(
                 }
             )
             _write_json_object_atomic(
-                _journal_path(resolved_root, project, connector),
+                _path(resolved_root, project, connector),
                 journal,
             )
     except KnowledgeTransactionBusy as exc:
@@ -215,14 +214,13 @@ def clear_connector_checkpoint_journal(
     connector = _text(connector_instance_id, 160)
     clean_actor = _require_manage_actor(actor)
     try:
-        with knowledge_transaction(
+        with _knowledge_tx(
             resolved_root,
             project,
-            operation="clear_connector_checkpoint_journal",
-            actor=clean_actor,
-            wait_seconds=5.0,
+            "clear_connector_checkpoint_journal",
+            clean_actor,
         ):
-            journal = _read_journal(resolved_root, project, connector)
+            journal = _read(resolved_root, project, connector)
             if expected_attempt_id and journal:
                 if _text(journal.get("attempt_id"), 160) != _text(
                     expected_attempt_id, 160
@@ -230,7 +228,7 @@ def clear_connector_checkpoint_journal(
                     raise ConnectorCheckpointRecoveryError(
                         "connector_checkpoint_journal_attempt_mismatch"
                     )
-            _delete_journal(resolved_root, project, connector)
+            _remove(resolved_root, project, connector)
     except KnowledgeTransactionBusy as exc:
         raise ConnectorCheckpointRecoveryError(
             "connector_checkpoint_recovery_transaction_busy"
@@ -238,11 +236,15 @@ def clear_connector_checkpoint_journal(
     return {"ok": True, "cleared": True}
 
 
-def _decrypt_journal_checkpoint(journal: dict[str, Any]) -> str:
+def _decrypt_staged(journal: dict[str, Any]) -> str:
     ciphertext = str(journal.get("checkpoint_ciphertext") or "")
     expected = _text(journal.get("checkpoint_fingerprint"), 128)
-    if not ciphertext or not is_encrypted(ciphertext) or not expected:
+    if not ciphertext or not expected:
         return ""
+    if not is_encrypted(ciphertext):
+        raise ConnectorCheckpointRecoveryError(
+            "connector_checkpoint_journal_ciphertext_invalid"
+        )
     try:
         checkpoint = decrypt(ciphertext)
     except Exception as exc:
@@ -280,17 +282,18 @@ def _repair_registry_to_profile(
     recovery_epoch = "recovery_" + uuid.uuid4().hex[:24]
     try:
         with _sync_lock(project, connector, recovery_epoch, root):
-            with knowledge_transaction(
+            with _knowledge_tx(
                 root,
                 project,
-                operation="repair_connector_checkpoint_registry",
-                actor=actor,
-                wait_seconds=5.0,
+                "repair_connector_checkpoint_registry",
+                actor,
             ):
                 registry = _load_connector_registry(project, root)
                 instance = _instance_by_id(registry, connector)
                 if instance is None:
-                    raise ConnectorSyncError("connector_instance_not_registered")
+                    raise ConnectorSyncError(
+                        "connector_instance_not_registered"
+                    )
                 if instance.get("active_sync_epoch_id"):
                     raise ConnectorCheckpointRecoveryError(
                         "connector_checkpoint_recovery_blocked_by_active_sync"
@@ -333,20 +336,22 @@ def recover_connector_checkpoint_commit(
     actor: dict[str, Any] | None = None,
     remote_checkpoint_resolver: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
-    """Recover all crash windows without asking the user to repair internals."""
-
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
     clean_actor = _require_manage_actor(actor)
-    active_checkpoint = load_connector_sync_checkpoint(
-        project, connector, root=resolved_root
+    active = load_connector_sync_checkpoint(
+        project,
+        connector,
+        root=resolved_root,
     )
-    active_fingerprint = _fingerprint(active_checkpoint)
+    active_fingerprint = _fingerprint(active)
     registry_fingerprint, _ = _registry_fingerprint(
-        resolved_root, project, connector
+        resolved_root,
+        project,
+        connector,
     )
-    journal = _read_journal(resolved_root, project, connector)
+    journal = _read(resolved_root, project, connector)
 
     if registry_fingerprint == active_fingerprint and not journal:
         return {"ok": True, "action": "CONSISTENT", "replay_required": False}
@@ -355,17 +360,15 @@ def recover_connector_checkpoint_commit(
         previous = _text(
             journal.get("previous_checkpoint_fingerprint"), 128
         )
-        staged_checkpoint = _decrypt_journal_checkpoint(journal)
-        staged_fingerprint = _fingerprint(staged_checkpoint)
-        staged_epoch = _text(journal.get("sync_epoch_id"), 160)
-
-        if staged_checkpoint and registry_fingerprint == staged_fingerprint:
+        staged = _decrypt_staged(journal)
+        staged_fingerprint = _fingerprint(staged)
+        if staged and registry_fingerprint == staged_fingerprint:
             if active_fingerprint != staged_fingerprint:
                 commit_connector_sync_checkpoint(
                     project,
                     connector,
-                    staged_checkpoint,
-                    sync_epoch_id=staged_epoch,
+                    staged,
+                    sync_epoch_id=_text(journal.get("sync_epoch_id"), 160),
                     root=resolved_root,
                     actor=clean_actor,
                 )
@@ -381,7 +384,6 @@ def recover_connector_checkpoint_commit(
                 "action": "PROMOTED_STAGED_CHECKPOINT",
                 "replay_required": False,
             }
-
         if registry_fingerprint in {active_fingerprint, previous}:
             clear_connector_checkpoint_journal(
                 project,
@@ -396,34 +398,35 @@ def recover_connector_checkpoint_commit(
                 "replay_required": False,
             }
 
+    remote = ""
     if remote_checkpoint_resolver is not None:
         try:
-            remote_checkpoint = str(remote_checkpoint_resolver() or "").strip()
+            remote = str(remote_checkpoint_resolver() or "").strip()
         except Exception:
-            remote_checkpoint = ""
-        if remote_checkpoint and _fingerprint(remote_checkpoint) == registry_fingerprint:
-            epoch = _text(
-                (journal or {}).get("sync_epoch_id"), 160
-            ) or "sync_recovered_" + uuid.uuid4().hex[:24]
-            commit_connector_sync_checkpoint(
-                project,
-                connector,
-                remote_checkpoint,
-                sync_epoch_id=epoch,
-                root=resolved_root,
-                actor=clean_actor,
-            )
-            clear_connector_checkpoint_journal(
-                project,
-                connector,
-                root=resolved_root,
-                actor=clean_actor,
-            )
-            return {
-                "ok": True,
-                "action": "RECONSTRUCTED_REMOTE_CHECKPOINT",
-                "replay_required": False,
-            }
+            remote = ""
+    if remote and _fingerprint(remote) == registry_fingerprint:
+        epoch = _text(
+            (journal or {}).get("sync_epoch_id"), 160
+        ) or "sync_recovered_" + uuid.uuid4().hex[:24]
+        commit_connector_sync_checkpoint(
+            project,
+            connector,
+            remote,
+            sync_epoch_id=epoch,
+            root=resolved_root,
+            actor=clean_actor,
+        )
+        clear_connector_checkpoint_journal(
+            project,
+            connector,
+            root=resolved_root,
+            actor=clean_actor,
+        )
+        return {
+            "ok": True,
+            "action": "RECONSTRUCTED_REMOTE_CHECKPOINT",
+            "replay_required": False,
+        }
 
     _repair_registry_to_profile(
         resolved_root,
