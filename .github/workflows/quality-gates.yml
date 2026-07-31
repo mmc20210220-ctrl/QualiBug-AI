@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: quality-gates-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -13,65 +17,37 @@ jobs:
   backend-contracts:
     name: Backend contracts
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: pip
+      - name: Syntax check Python files
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          failures = []
+          for path in Path('.').rglob('*.py'):
+              if any(part in {'.git', '.venv', 'venv', '__pycache__'} for part in path.parts):
+                  continue
+              try:
+                  ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+              except Exception as exc:
+                  failures.append(f'{path}: {exc}')
+
+          if failures:
+              raise SystemExit('\n'.join(failures))
+          print('Python syntax check passed')
+          PY
       - name: Install runtime and test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-      - name: Parse modified Python entry points
-        run: |
-          python -c "import ast; ast.parse(open('core/engine.py').read()); print('core/engine.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/policy_wiring.py').read()); print('policy_wiring.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/policy_registry.py').read()); print('policy_registry.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_campaign.py').read()); print('enterprise_campaign.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_source_registry.py').read()); print('enterprise_source_registry.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/evidence_artifact_store.py').read()); print('evidence_artifact_store.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/browser_execution.py').read()); print('browser_execution.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_test_data_receipts.py').read()); print('enterprise_test_data_receipts.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_test_data_plan.py').read()); print('enterprise_test_data_plan.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/execution_approvals.py').read()); print('execution_approvals.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_access_policy.py').read()); print('enterprise_access_policy.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/change_impact.py').read()); print('change_impact.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/connector_source_ingestion.py').read()); print('connector_source_ingestion.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_delivery_package.py').read()); print('enterprise_delivery_package.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/release_gate.py').read()); print('release_gate.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/__main__.py').read()); print('__main__.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/identity_benchmark_cli.py').read()); print('identity_benchmark_cli.py OK')"
-          python -c "import ast; ast.parse(open('backend/main.py').read()); print('backend/main.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/stage_reason_all_v2.py').read()); print('stage_reason_all_v2.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/business_state_graph.py').read()); print('business_state_graph.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/semantic_scenario_generator.py').read()); print('semantic_scenario_generator.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/v12_pipeline.py').read()); print('v12_pipeline.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_compiler_base.py').read()); print('experiment_compiler_base.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_runtime.py').read()); print('process_graph_runtime.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_write_contract.py').read()); print('process_graph_write_contract.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_write_contract_core.py').read()); print('process_graph_write_contract_core.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_reversibility.py').read()); print('process_graph_reversibility.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_reversibility_core.py').read()); print('process_graph_reversibility_core.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_rollback_contract.py').read()); print('process_graph_rollback_contract.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_executor.py').read()); print('process_graph_cleanup_executor.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_executor_core.py').read()); print('process_graph_cleanup_executor_core.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_equivalence.py').read()); print('process_graph_cleanup_equivalence.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_equivalence_core.py').read()); print('process_graph_cleanup_equivalence_core.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/cleanup_equivalence.py').read()); print('cleanup_equivalence.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/cleanup_equivalence_core.py').read()); print('cleanup_equivalence_core.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_plan_executor.py').read()); print('experiment_plan_executor.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_cleanup_lifecycle_adapter.py').read()); print('experiment_cleanup_lifecycle_adapter.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor.py').read()); print('experiment_executor.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor_governance.py').read()); print('experiment_executor_governance.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor_core.py').read()); print('experiment_executor_core.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_annotation_tasks.py').read()); print('identity_annotation_tasks.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_annotation_operator.py').read()); print('identity_annotation_operator.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_benchmark_regression.py').read()); print('identity_benchmark_regression.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_benchmark_repository.py').read()); print('identity_benchmark_repository.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_benchmark_workflow.py').read()); print('identity_benchmark_workflow.py OK')"
-          python -c "import ast; ast.parse(open('ai_test_asset_center/private_pilot_identity_benchmark_handlers.py').read()); print('private_pilot_identity_benchmark_handlers.py OK')"
-      - name: Run backend and evidence truthfulness gates
+      - name: Run backend, guardrail, and evidence truthfulness gates
         run: |
           python -m pytest \
             tests/test_backend_main_auth.py \
@@ -90,6 +66,24 @@ jobs:
             tests/test_behavior_ir_obligation_experiment.py \
             tests/test_discovery_evaluation_contract.py \
             tests/test_reasoner_hypothesis_guardrail.py \
+            tests/test_reasoner_static_guardrails.py \
+            tests/test_reasoner_prompt_contract.py \
+            tests/test_reasoner_quality_report.py \
+            tests/test_reasoner_report_wiring.py \
+            tests/test_render_reasoner_quality_report.py \
+            tests/test_enforce_reasoner_quality_threshold.py \
+            tests/test_execution_evidence_report.py \
+            tests/test_render_execution_evidence_report.py \
+            tests/test_enforce_execution_evidence_threshold.py \
+            tests/test_confirmed_bug_gate.py \
+            tests/test_render_confirmed_bug_evidence_report.py \
+            tests/test_enforce_confirmed_bug_evidence_threshold.py \
+            tests/test_end_to_end_bug_promotion_chain.py \
+            tests/test_bug_risk_scoring.py \
+            tests/test_render_bug_risk_report.py \
+            tests/test_reasoner_hypothesis_quality.py \
+            tests/test_discovery_execution_chain.py \
+            tests/test_discovery_verifier_evidence.py \
             tests/test_phase109_incremental_behavior_slices.py \
             tests/test_phase109_behavior_slice_policy_registry.py \
             tests/test_phase110_enterprise_campaign.py \
@@ -136,6 +130,7 @@ jobs:
   frontend-quality:
     name: Frontend typecheck and lint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: frontend
