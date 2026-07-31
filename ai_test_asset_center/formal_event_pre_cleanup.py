@@ -62,6 +62,25 @@ def _event_assertion(exp: dict[str, Any]) -> dict[str, Any]:
     return matches[0] if len(matches) == 1 else {}
 
 
+def _registered_handler() -> Any:
+    """Resolve the current composed authority while preserving the explicit test seam.
+
+    Production wrappers are installed in the observer registry. The public surface handler
+    normally remains the exact authority captured when pre-cleanup was installed. A test may
+    explicitly replace that surface handler after installation; honor only that deliberate
+    replacement, otherwise use the fully composed registry chain.
+    """
+    from . import observer_contracts_base as observers
+
+    current_surface = _surface._event_observer_handler
+    installed_base = getattr(_surface, _ORIGINAL_HANDLER_MARKER, current_surface)
+    if current_surface is not installed_base:
+        return current_surface
+    return observers._REGISTERED_OBSERVER_HANDLERS.get(
+        _surface.OBSERVER_ID
+    ) or current_surface
+
+
 def _pre_observe_event(
     *,
     exp: dict[str, Any],
@@ -86,13 +105,11 @@ def _pre_observe_event(
         )
     else:
         try:
-            from . import observer_contracts_base as _observers
+            from . import observer_contracts_base as observers
 
-            handler = _observers._REGISTERED_OBSERVER_HANDLERS.get(
-                _surface.OBSERVER_ID
-            )
+            handler = _registered_handler()
             if not callable(handler):
-                handler = _surface._event_observer_handler
+                raise RuntimeError("formal_event_observer_handler_not_registered")
             receipt = handler({
                 "observer_id": _surface.OBSERVER_ID,
                 "experiment": exp,
@@ -105,13 +122,13 @@ def _pre_observe_event(
                 "campaign_id": campaign_id,
                 "execution_id": execution_id,
             })
-            validated = _observers.validate_observer_receipt(_dict(receipt))
+            validated = observers.validate_observer_receipt(_dict(receipt))
             evidence = copy.deepcopy(_dict(validated.get("evidence")))
             event_evidence = _dict(evidence.get(_surface.EVIDENCE_KEY))
             if event_evidence:
                 event_evidence["observation_phase"] = "pre_cleanup"
                 evidence[_surface.EVIDENCE_KEY] = event_evidence
-                receipt = _observers.build_observer_receipt(
+                receipt = observers.build_observer_receipt(
                     observer_id=_surface.OBSERVER_ID,
                     status=_text(validated.get("status")),
                     reason_code=_text(validated.get("reason_code")),
@@ -142,22 +159,22 @@ def _pre_observe_event(
 
 def install_formal_event_pre_cleanup_observer() -> None:
     """Patch the imported mainline cleanup symbol and registered event handler idempotently."""
-    from . import experiment_executor as _executor
-    from . import observer_contracts_base as _observers
+    from . import experiment_executor as executor
+    from . import observer_contracts_base as observers
 
-    if getattr(_executor, _INSTALL_MARKER, False):
+    if getattr(executor, _INSTALL_MARKER, False):
         return
     original_cleanup = getattr(
-        _executor,
+        executor,
         _ORIGINAL_CLEANUP_MARKER,
-        _executor.execute_experiment_cleanup_compensation,
+        executor.execute_experiment_cleanup_compensation,
     )
-    setattr(_executor, _ORIGINAL_CLEANUP_MARKER, original_cleanup)
+    setattr(executor, _ORIGINAL_CLEANUP_MARKER, original_cleanup)
 
     original_handler = getattr(
         _surface,
         _ORIGINAL_HANDLER_MARKER,
-        _observers._REGISTERED_OBSERVER_HANDLERS.get(_surface.OBSERVER_ID)
+        observers._REGISTERED_OBSERVER_HANDLERS.get(_surface.OBSERVER_ID)
         or _surface._event_observer_handler,
     )
     setattr(_surface, _ORIGINAL_HANDLER_MARKER, original_handler)
@@ -187,11 +204,11 @@ def install_formal_event_pre_cleanup_observer() -> None:
         )
         return original_cleanup(*args, **kwargs)
 
-    _observers._REGISTERED_OBSERVER_HANDLERS[_surface.OBSERVER_ID] = (
+    observers._REGISTERED_OBSERVER_HANDLERS[_surface.OBSERVER_ID] = (
         event_handler_reusing_pre_cleanup
     )
-    _executor.execute_experiment_cleanup_compensation = cleanup_after_event_observation
-    setattr(_executor, _INSTALL_MARKER, True)
+    executor.execute_experiment_cleanup_compensation = cleanup_after_event_observation
+    setattr(executor, _INSTALL_MARKER, True)
 
 
 __all__ = [
