@@ -108,7 +108,7 @@ jobs:
             tests/test_process_graph_write_fail_closed.py \
             tests/test_process_graph_target_preflight.py \
             tests/test_process_graph_rollback_contract.py \
-            tests/test_process_graph_cleanup_rollback.py \
+            tests/test_process_graph_dependency_rollback.py \
             tests/test_process_graph_multi_write_equivalence.py \
             tests/test_architecture_extraction_contracts.py \
             tests/test_identity_benchmark_regression.py \
