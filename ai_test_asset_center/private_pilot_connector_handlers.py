@@ -1,7 +1,8 @@
 """Private-pilot HTTP surface for enterprise knowledge connectors.
 
-The HTTP layer owns authentication and request shaping only. Trusted sync execution,
-checkpoint validation, automatic refresh, and retry policy live in connector_auto_sync.
+The HTTP layer owns authentication, public projection, and request shaping only. Trusted sync
+execution, checkpoint validation, fencing, automatic refresh, and retry policy live in the
+managed connector application service.
 """
 from __future__ import annotations
 
@@ -29,6 +30,19 @@ from .feishu_connector_adapter import FeishuConnectorError
 from .real_project_onboarding import _safe_project_id
 
 _ROUTE_MARKER = "knowledge-connectors"
+_PRIVATE_CONNECTOR_FIELDS = {
+    "fencing_generation",
+    "last_fencing_token_issued_at_utc",
+    "last_fencing_token_issued_by",
+    "fencing_takeover_pending",
+    "last_committed_cursor_fingerprint",
+}
+_PRIVATE_SYNC_RESPONSE_FIELDS = {
+    "fencing_token",
+    "previous_fencing_token",
+    "takeover_attempt_id",
+    "next_cursor",
+}
 
 
 def _text(value: Any, limit: int = 1000) -> str:
@@ -84,6 +98,14 @@ def _profile_index(project: str, root: Path) -> dict[str, dict[str, Any]]:
     }
 
 
+def _public_connector_instance(value: dict[str, Any]) -> dict[str, Any]:
+    row = dict(value or {})
+    for field in _PRIVATE_CONNECTOR_FIELDS:
+        row.pop(field, None)
+    row["fencing_token_returned_to_client"] = False
+    return row
+
+
 def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
     instances = list_connector_instances(
         project,
@@ -95,7 +117,7 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
     for raw in instances.get("connector_instances") or []:
         if not isinstance(raw, dict):
             continue
-        row = dict(raw)
+        row = _public_connector_instance(raw)
         connector = _text(row.get("connector_instance_id"), 160)
         row["connection_profile"] = profiles.get(
             connector,
@@ -135,16 +157,21 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             **dict(instances.get("governance") or {}),
             "credentials_returned_to_frontend": False,
             "connection_profiles_masked": True,
+            "fencing_tokens_returned_to_frontend": False,
+            "checkpoint_fingerprints_returned_to_frontend": False,
             "automatic_refresh_uses_existing_sync_authority": True,
             "second_connector_registry_created": False,
+            "second_fencing_registry_created": False,
         },
     }
 
 
 def _sanitize_sync_response(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload)
-    result.pop("next_cursor", None)
+    for field in _PRIVATE_SYNC_RESPONSE_FIELDS:
+        result.pop(field, None)
     result["next_cursor_returned_to_client"] = False
+    result["fencing_token_returned_to_client"] = False
     result["checkpoint_storage"] = "encrypted_connection_profile"
     result["source_content_returned"] = False
     return result
@@ -168,6 +195,8 @@ def _error_status(exc: Exception) -> int:
             "lock_held",
             "owner_active",
             "owner_unverified",
+            "fence_revoked",
+            "fence_transaction_busy",
             "cursor_mismatch",
             "previous_cursor_required",
             "checkpoint_integrity",
@@ -260,9 +289,10 @@ class KnowledgeConnectorHandlersMixin:
                 return self._json(
                     {
                         "ok": True,
-                        "data": run,
+                        "data": _sanitize_sync_response(run),
                         "source_content_returned": False,
                         "raw_cursor_returned": False,
+                        "fencing_token_returned": False,
                     }
                 )
             return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
@@ -300,8 +330,12 @@ class KnowledgeConnectorHandlersMixin:
             display_name=_text(body.get("display_name"), 240),
             status=_text(body.get("status"), 32) or "ACTIVE",
         )
+        public_result = dict(result)
+        public_result["connector_instance"] = _public_connector_instance(
+            dict(result.get("connector_instance") or {})
+        )
         return self._json(
-            {"ok": True, "data": result},
+            {"ok": True, "data": public_result},
             201 if result["created"] else 200,
         )
 
@@ -449,5 +483,6 @@ __all__ = [
     "KnowledgeConnectorHandlersMixin",
     "_connector_inventory",
     "_connector_route",
+    "_public_connector_instance",
     "_sanitize_sync_response",
 ]
