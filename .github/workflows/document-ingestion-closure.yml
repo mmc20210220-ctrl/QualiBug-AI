@@ -16,6 +16,8 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/_common.py"
       - "ai_test_asset_center/enterprise_knowledge_center/_crud.py"
       - "ai_test_asset_center/enterprise_knowledge_center/__init__.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/gate.py"
       - "ai_test_asset_center/private_pilot_project_assets.py"
       - "ai_test_asset_center/private_pilot_ingest_authority.py"
       - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
@@ -70,6 +72,7 @@ on:
       - "tests/test_enterprise_understanding_source_backed_workflow.py"
       - "tests/test_enterprise_understanding_source_reference_authority.py"
       - "tests/test_enterprise_understanding_product_source_references.py"
+      - "tests/test_enterprise_understanding_actor_permission_contract.py"
       - "pyproject.toml"
       - "Dockerfile"
       - ".github/workflows/document-ingestion-closure.yml"
@@ -130,6 +133,8 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/_common.py \
             ai_test_asset_center/enterprise_knowledge_center/_crud.py \
             ai_test_asset_center/enterprise_knowledge_center/__init__.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/gate.py \
             ai_test_asset_center/private_pilot_project_assets.py \
             ai_test_asset_center/private_pilot_ingest_authority.py \
             ai_test_asset_center/enterprise_source_registry_lifecycle.py \
@@ -187,4 +192,5 @@ jobs:
             tests/test_enterprise_understanding_source_backed_ingestion_target.py \
             tests/test_enterprise_understanding_source_backed_workflow.py \
             tests/test_enterprise_understanding_source_reference_authority.py \
-            tests/test_enterprise_understanding_product_source_references.py
+            tests/test_enterprise_understanding_product_source_references.py \
+            tests/test_enterprise_understanding_actor_permission_contract.py
