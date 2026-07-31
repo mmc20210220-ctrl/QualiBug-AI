@@ -66,8 +66,28 @@ class _ExactScopeFinalizerLedger:
         return self._ledger
 
 
-_original_observe_experiment_requirements = _core.observe_experiment_requirements
-_original_evaluate_contract_oracle = _core.evaluate_contract_oracle
+_ORIGINAL_OBSERVER_ATTR = "_qualibug_exact_scope_original_observer"
+_ORIGINAL_ORACLE_ATTR = "_qualibug_exact_scope_original_oracle"
+if not hasattr(_core, _ORIGINAL_OBSERVER_ATTR):
+    setattr(
+        _core,
+        _ORIGINAL_OBSERVER_ATTR,
+        _core.observe_experiment_requirements,
+    )
+if not hasattr(_core, _ORIGINAL_ORACLE_ATTR):
+    setattr(
+        _core,
+        _ORIGINAL_ORACLE_ATTR,
+        _core.evaluate_contract_oracle,
+    )
+_original_observe_experiment_requirements = getattr(
+    _core,
+    _ORIGINAL_OBSERVER_ATTR,
+)
+_original_evaluate_contract_oracle = getattr(
+    _core,
+    _ORIGINAL_ORACLE_ATTR,
+)
 
 
 def _observe_experiment_requirements_exact(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
@@ -92,8 +112,12 @@ def _evaluate_contract_oracle_exact(*args: Any, **kwargs: Any) -> dict[str, Any]
     return verdict
 
 
-_core.observe_experiment_requirements = _observe_experiment_requirements_exact
-_core.evaluate_contract_oracle = _evaluate_contract_oracle_exact
+def _install_core_hooks() -> None:
+    _core.observe_experiment_requirements = _observe_experiment_requirements_exact
+    _core.evaluate_contract_oracle = _evaluate_contract_oracle_exact
+
+
+_install_core_hooks()
 
 for _name in dir(_core):
     if not _name.startswith("__") and _name != "finalize_experiment_execution":
@@ -102,6 +126,7 @@ for _name in dir(_core):
 
 def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
     """Finalize through one exact-scoped process-step evidence authority."""
+    _install_core_hooks()
     observations = kwargs.get("observations")
     if not isinstance(observations, dict):
         return _core.finalize_experiment_execution(*args, **kwargs)
@@ -115,7 +140,10 @@ def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
         if isinstance(ledger, ProcessStepSemanticView)
         else ProcessStepSemanticView(ledger, observations=observations)
     )
-    synchronize_scoped_receipts_from_observations(semantic_view, observations)
+    synchronize_scoped_receipts_from_observations(
+        semantic_view.source_ledger,
+        observations,
+    )
     observations["process_step_ledger"] = _ExactScopeFinalizerLedger(semantic_view)
     observations["process_step_ledger_view"] = "exact_scope_finalizer"
     try:
