@@ -334,12 +334,19 @@ def synchronize_scoped_receipts_from_observations(
                 "cleanup_execution_receipts",
                 partition["exact_execution"],
             )
-        if not partition["verification_aggregates"]:
-            _core._publish_rows(
-                observations,
-                "cleanup_verification_receipts",
-                partition["exact_verification"],
-            )
+        graph_cleanup_context = bool(
+            partition["execution_aggregates"]
+            or partition["verification_aggregates"]
+        )
+        _core._publish_rows(
+            observations,
+            "cleanup_verification_receipts",
+            (
+                partition["verification_aggregates"]
+                if graph_cleanup_context
+                else partition["exact_verification"]
+            ),
+        )
 
     aggregate_ids = [
         _core.receipt_id(row)
