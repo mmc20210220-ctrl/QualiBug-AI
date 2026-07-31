@@ -95,6 +95,16 @@ def _relation_after(
         )
     receipt = matches[0]
     payload = _dict(_dict(receipt.get("evidence")).get(RELATION_EVIDENCE_KEY))
+    aggregate_requests = [
+        {
+            "aggregate": _text(row.get("aggregate")).upper(),
+            "database_field_id": _text(row.get("database_field_id")),
+            "database_field_name": _text(row.get("database_field_name")),
+            "alias": _text(row.get("alias")),
+        }
+        for row in _list(payload.get("aggregate_requests"))
+        if isinstance(row, dict)
+    ]
     actual = {
         "draft_id": _text(receipt.get("draft_id")),
         "phase_receipt_id": _text(receipt.get("receipt_id")),
@@ -110,11 +120,13 @@ def _relation_after(
         "child_table_name": _text(payload.get("child_table_name")),
         "relation_key": _list(payload.get("relation_key")),
         "relation_parameter_fingerprints": _list(payload.get("relation_parameter_fingerprints")),
+        "aggregate_requests": aggregate_requests,
         "aggregate_alias": alias,
         "aggregate_value": _dict(payload.get("aggregate_values")).get(alias),
         "aggregate_fingerprint": _text(payload.get("aggregate_fingerprint")),
         "client_side_filter_used": payload.get("client_side_filter_used") is True,
         "raw_rows_retained": payload.get("raw_rows_retained") is True,
+        "payload_oracle_verdict_emitted": payload.get("oracle_verdict_emitted"),
     }
     if actual["source_observer_id"] != DIRECT_RELATION_OBSERVER_ID:
         return actual, "DATABASE_RELATION_AGGREGATE_SOURCE_INVALID"
@@ -122,10 +134,15 @@ def _relation_after(
         return actual, "DATABASE_RELATION_AGGREGATE_RECEIPT_NOT_OBSERVED"
     if not actual["campaign_id"] or not actual["execution_id"]:
         return actual, "DATABASE_RELATION_AGGREGATE_LINEAGE_MISSING"
-    if _text(receipt.get("oracle_verdict_emitted")).lower() not in {"false", "0"} and receipt.get("oracle_verdict_emitted") is not False:
+    if (
+        receipt.get("oracle_verdict_emitted") is not False
+        or payload.get("oracle_verdict_emitted") is not False
+    ):
         return actual, "DATABASE_RELATION_OBSERVER_AUTHORITY_INVALID"
     if actual["relation_observer_ref"] != relation_ref:
         return actual, "DATABASE_RELATION_AGGREGATE_SCOPE_MISMATCH"
+    if not actual["relation_key"] or not actual["relation_parameter_fingerprints"]:
+        return actual, "DATABASE_RELATION_IDENTITY_SCOPE_MISSING"
     if actual["client_side_filter_used"] or actual["raw_rows_retained"]:
         return actual, "DATABASE_RELATION_AGGREGATE_EVIDENCE_POLICY_INVALID"
     if alias not in _dict(payload.get("aggregate_values")):
@@ -161,20 +178,30 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
     root_table_ref = _text(spec.get("root_table_ref"))
     root_field_name = _text(spec.get("root_database_field_name"))
     child_table_ref = _text(spec.get("child_table_ref"))
+    child_field_id = _text(spec.get("child_database_field_id"))
+    child_field_name = _text(spec.get("child_database_field_name"))
+    aggregate = _text(spec.get("aggregate")).upper()
     alias = _text(spec.get("aggregate_alias") or "related_value")
     operator = _text(spec.get("comparison_operator") or "EQ").upper()
     aggregate_on_left = spec.get("aggregate_on_left") is True
+    binding = _dict(spec.get("database_relation_binding"))
+    expected_relationship_id = _text(
+        spec.get("database_relationship_id")
+        or binding.get("database_relationship_id")
+    )
     expected = {
         "schema": ORACLE_SCHEMA,
         "database_relation_observer_ref": relation_ref,
+        "database_relationship_id": expected_relationship_id,
         "root_observer_contract_ref": root_ref,
         "root_table_ref": root_table_ref,
         "root_database_field_id": _text(spec.get("root_database_field_id")),
         "root_database_field_name": root_field_name,
         "child_table_ref": child_table_ref,
-        "child_database_field_id": _text(spec.get("child_database_field_id")),
-        "child_database_field_name": _text(spec.get("child_database_field_name")),
-        "aggregate": _text(spec.get("aggregate")).upper(),
+        "child_database_field_id": child_field_id,
+        "child_database_field_name": child_field_name,
+        "aggregate": aggregate,
+        "aggregate_alias": alias,
         "comparison_operator": operator,
         "aggregate_on_left": aggregate_on_left,
         "comparison_phase": "AFTER",
@@ -185,6 +212,7 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
         "relation_snapshot": {},
         "lineage_match": False,
         "identity_match": False,
+        "aggregate_request_match": False,
         "root_value": None,
         "aggregate_value": None,
         "left_value": None,
@@ -192,7 +220,19 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
         "difference": None,
         "observer_performed_oracle_verdict": False,
     }
-    if not all((relation_ref, root_ref, root_table_ref, root_field_name, child_table_ref, alias)):
+    if not all(
+        (
+            relation_ref,
+            root_ref,
+            root_table_ref,
+            root_field_name,
+            child_table_ref,
+            aggregate,
+            alias,
+        )
+    ):
+        return _reason("DATABASE_RELATION_ASSERTION_SPEC_INCOMPLETE", expected, actual)
+    if aggregate != "COUNT" and not child_field_name:
         return _reason("DATABASE_RELATION_ASSERTION_SPEC_INCOMPLETE", expected, actual)
 
     root_snapshot, root_reason = _root_after(
@@ -213,12 +253,47 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
         return _reason(root_reason or relation_reason, expected, actual)
     if _text(relation_snapshot.get("root_observer_ref")) != root_ref:
         return _reason("DATABASE_RELATION_ROOT_OBSERVER_SCOPE_MISMATCH", expected, actual)
-    if _text(relation_snapshot.get("parent_table_ref")) != root_table_ref or _text(relation_snapshot.get("child_table_ref")) != child_table_ref:
+    if (
+        _text(relation_snapshot.get("parent_table_ref")) != root_table_ref
+        or _text(relation_snapshot.get("child_table_ref")) != child_table_ref
+    ):
         return _reason("DATABASE_RELATION_TABLE_SCOPE_MISMATCH", expected, actual)
+    if (
+        expected_relationship_id
+        and _text(relation_snapshot.get("database_relationship_id"))
+        != expected_relationship_id
+    ):
+        return _reason("DATABASE_RELATION_FOREIGN_KEY_SCOPE_MISMATCH", expected, actual)
+
+    requests = [
+        _dict(row)
+        for row in _list(relation_snapshot.get("aggregate_requests"))
+        if isinstance(row, dict)
+    ]
+    request_matches = [
+        row
+        for row in requests
+        if _text(row.get("aggregate")).upper() == aggregate
+        and _text(row.get("alias")) == alias
+        and (
+            aggregate == "COUNT"
+            and not child_field_name
+            and not _text(row.get("database_field_name"))
+            or (
+                _text(row.get("database_field_id")) == child_field_id
+                and _text(row.get("database_field_name")) == child_field_name
+            )
+        )
+    ]
+    actual["aggregate_request_match"] = len(request_matches) == 1 and len(requests) == 1
+    if not actual["aggregate_request_match"]:
+        return _reason("DATABASE_RELATION_AGGREGATE_REQUEST_SCOPE_MISMATCH", expected, actual)
 
     lineage_match = bool(
-        _text(root_snapshot.get("campaign_id")) == _text(relation_snapshot.get("campaign_id"))
-        and _text(root_snapshot.get("execution_id")) == _text(relation_snapshot.get("execution_id"))
+        _text(root_snapshot.get("campaign_id"))
+        == _text(relation_snapshot.get("campaign_id"))
+        and _text(root_snapshot.get("execution_id"))
+        == _text(relation_snapshot.get("execution_id"))
     )
     actual["lineage_match"] = lineage_match
     if not lineage_match:
