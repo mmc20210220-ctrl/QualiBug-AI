@@ -1,9 +1,9 @@
 """Occurrence-aware source inventory and lifecycle authority.
 
 The user-visible source is a source occurrence, not a canonical interpretation record. Removing
-one occurrence never deletes shared bytes, chunks, or runtime source state. The existing CRUD
-delete authority is called only when the final active occurrence of a canonical interpretation is
-removed.
+one occurrence never deletes shared bytes, chunks, or runtime source state. Removing the final
+occurrence deactivates the canonical interpretation while retaining historical bytes by default;
+physical deletion requires an explicit ``purge_bytes`` request.
 """
 from __future__ import annotations
 
@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from . import _crud
+from . import source_occurrence_core as _occurrence_core
 from ._common import PHASE, ROOT, _safe_project_id
 from ._utils import _load_registry, _now, _require_manage_actor, _save_registry
 from .source_occurrence_authority import ingest_enterprise_knowledge_documents
 
-SOURCE_OCCURRENCE_LIFECYCLE_SCHEMA = "qualibug.enterprise-source-occurrence-lifecycle.v1"
+SOURCE_OCCURRENCE_LIFECYCLE_SCHEMA = "qualibug.enterprise-source-occurrence-lifecycle.v2"
 
 
 def _text(value: Any) -> str:
@@ -49,13 +50,13 @@ def _active_occurrences(registry: dict[str, Any]) -> list[dict[str, Any]]:
 def _project_occurrence(
     occurrence: dict[str, Any], canonical: dict[str, Any] | None
 ) -> dict[str, Any]:
-    source_id = _text(occurrence.get("source_occurrence_id"))
+    occurrence_id = _text(occurrence.get("source_occurrence_id"))
     canonical_source_id = _text(occurrence.get("canonical_source_id"))
     base = copy.deepcopy(canonical or {})
     base.update(
         {
-            "source_id": source_id,
-            "source_occurrence_id": source_id,
+            "source_id": occurrence_id,
+            "source_occurrence_id": occurrence_id,
             "canonical_source_id": canonical_source_id,
             "source_ref": _text(occurrence.get("source_ref")),
             "external_ref": _text(occurrence.get("source_ref")),
@@ -117,6 +118,9 @@ def list_enterprise_knowledge_sources(
             "superseded_source_count": status_counts.get("superseded", 0),
             "failed_source_count": status_counts.get("failed", 0),
             "deleted_source_count": status_counts.get("deleted", 0),
+            "retired_archive_member_count": status_counts.get(
+                "retired_archive_member", 0
+            ),
             "canonical_source_count": len(canonical),
             "content_asset_count": len(
                 [row for row in registry.get("content_assets") or [] if isinstance(row, dict)]
@@ -136,6 +140,7 @@ def list_enterprise_knowledge_sources(
             **dict(registry.get("governance") or {}),
             "public_source_inventory_identity": "SOURCE_OCCURRENCE",
             "canonical_interpretations_hidden_from_source_count": True,
+            "historical_source_bytes_retained_by_default": True,
         },
     }
 
@@ -164,46 +169,6 @@ def _resolve_active_occurrence(
             "canonical source has multiple active occurrences; select one occurrence_id or source_ref"
         )
     raise KeyError(f"active source occurrence not found: {identity}")
-
-
-def _remove_occurrence_links(registry: dict[str, Any], occurrence: dict[str, Any]) -> None:
-    occurrence_id = _text(occurrence.get("source_occurrence_id"))
-    source_ref = _text(occurrence.get("source_ref"))
-    for key in ("content_assets", "interpretation_assets"):
-        for row in registry.get(key) or []:
-            if not isinstance(row, dict):
-                continue
-            row["source_occurrence_ids"] = [
-                value
-                for value in row.get("source_occurrence_ids") or []
-                if _text(value) != occurrence_id
-            ]
-            if key == "interpretation_assets":
-                row["source_refs"] = [
-                    value
-                    for value in row.get("source_refs") or []
-                    if _text(value) != source_ref
-                ]
-    canonical = _canonical_by_id(registry).get(
-        _text(occurrence.get("canonical_source_id"))
-    )
-    if canonical is not None:
-        canonical["source_occurrence_ids"] = [
-            value
-            for value in canonical.get("source_occurrence_ids") or []
-            if _text(value) != occurrence_id
-        ]
-        canonical["source_refs"] = [
-            value
-            for value in canonical.get("source_refs") or []
-            if _text(value) != source_ref
-        ]
-        canonical["active_source_occurrence_count"] = sum(
-            row.get("status") == "active"
-            and _text(row.get("canonical_source_id"))
-            == _text(occurrence.get("canonical_source_id"))
-            for row in _occurrences(registry)
-        )
 
 
 def update_enterprise_knowledge_source(
@@ -237,7 +202,10 @@ def update_enterprise_knowledge_source(
         )
     unknown = requested - {"tags"}
     if unknown:
-        raise ValueError("unsupported source occurrence metadata fields: " + ",".join(sorted(unknown)))
+        raise ValueError(
+            "unsupported source occurrence metadata fields: "
+            + ",".join(sorted(unknown))
+        )
     if "tags" in patch:
         occurrence["tags"] = [
             str(value)[:80]
@@ -293,7 +261,7 @@ def delete_enterprise_knowledge_source(
     occurrence["status"] = "deleted"
     occurrence["deleted_at_utc"] = _now()
     occurrence["deleted_by"] = clean_actor
-    _remove_occurrence_links(registry, occurrence)
+    _occurrence_core._unlink_occurrence(registry, occurrence)
     remaining = [
         row
         for row in _active_occurrences(registry)
@@ -308,25 +276,42 @@ def delete_enterprise_knowledge_source(
             "source_ref": occurrence.get("source_ref"),
             "canonical_source_id": canonical_source_id,
             "remaining_active_occurrence_count": len(remaining),
-            "shared_content_deleted": False,
+            "purge_bytes_requested": bool(purge_bytes),
         }
     )
     _save_registry(project, resolved_root, registry)
 
-    canonical_result: dict[str, Any] | None = None
+    canonical_delete_result: dict[str, Any] | None = None
+    canonical_deactivation_result: dict[str, Any] | None = None
     if not remaining:
         try:
-            canonical_result = _crud.delete_enterprise_knowledge_source(
-                project,
-                canonical_source_id,
-                root=resolved_root,
-                actor=clean_actor,
-                purge_bytes=purge_bytes,
-            )
+            if purge_bytes:
+                canonical_delete_result = _crud.delete_enterprise_knowledge_source(
+                    project,
+                    canonical_source_id,
+                    root=resolved_root,
+                    actor=clean_actor,
+                    purge_bytes=True,
+                )
+            else:
+                canonical_deactivation_result = (
+                    _occurrence_core.deactivate_unreferenced_canonical_sources(
+                        project,
+                        [canonical_source_id],
+                        root=resolved_root,
+                        actor=clean_actor,
+                        reason="final_source_occurrence_deleted",
+                    )
+                )
+                if canonical_deactivation_result.get("errors"):
+                    raise RuntimeError(
+                        str(canonical_deactivation_result.get("errors"))[:1000]
+                    )
         except Exception:
             _save_registry(project, resolved_root, before)
             raise
 
+    historical_bytes_retained = not purge_bytes
     return {
         "ok": True,
         "schema": SOURCE_OCCURRENCE_LIFECYCLE_SCHEMA,
@@ -335,11 +320,15 @@ def delete_enterprise_knowledge_source(
         "source_ref": occurrence.get("source_ref"),
         "canonical_source_id": canonical_source_id,
         "remaining_active_occurrence_count": len(remaining),
-        "canonical_source_deleted": canonical_result is not None,
-        "shared_bytes_retained": bool(remaining),
-        "shared_chunks_retained": bool(remaining),
+        "canonical_source_deleted": canonical_delete_result is not None,
+        "canonical_source_deactivated": canonical_deactivation_result is not None,
+        "shared_bytes_retained": bool(remaining) or historical_bytes_retained,
+        "shared_chunks_retained": bool(remaining) or historical_bytes_retained,
         "shared_runtime_source_retained": bool(remaining),
-        "canonical_delete_result": canonical_result or {},
+        "historical_source_bytes_retained": historical_bytes_retained,
+        "purge_bytes_executed": bool(canonical_delete_result),
+        "canonical_delete_result": canonical_delete_result or {},
+        "canonical_deactivation_result": canonical_deactivation_result or {},
         "rebuild_recommended": True,
     }
 
@@ -370,7 +359,11 @@ def operate_enterprise_knowledge_center(
             or {},
         }
     if action in {"upload", "ingest"}:
-        documents = payload.get("documents") if isinstance(payload.get("documents"), list) else []
+        documents = (
+            payload.get("documents")
+            if isinstance(payload.get("documents"), list)
+            else []
+        )
         result = ingest_enterprise_knowledge_documents(
             project,
             documents,
@@ -407,7 +400,9 @@ def operate_enterprise_knowledge_center(
             else None,
         )
         return {"ok": True, "action": "rebuild", "asset": asset}
-    raise ValueError("unsupported knowledge center action; use view, upload, edit, delete or rebuild")
+    raise ValueError(
+        "unsupported knowledge center action; use view, upload, edit, delete or rebuild"
+    )
 
 
 __all__ = [
