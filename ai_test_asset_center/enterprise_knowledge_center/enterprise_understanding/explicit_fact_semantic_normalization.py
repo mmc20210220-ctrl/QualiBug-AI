@@ -2,19 +2,14 @@
 
 The compatibility extractor intentionally remains broad so old enterprise fixtures keep
 working. Structure-first compilation turns those rows into the formal typed ledger.
-This module closes the contract between both stages: it normalizes coordinates already
-stated in the same source span, but never discovers a new fact, chooses between
-conflicting source statements, or creates a second ledger.
+This boundary normalizes only coordinates already stated in the same source span. It
+never discovers a new fact, chooses between conflicting statements, or creates a
+second ledger.
 
-Normalization is deliberately limited to deterministic Chinese grammar visible in
-``raw_statement``:
-
-* explicit role/object lexical heads use longest non-overlapping source mentions;
-* governed actions are separated from temporal anchors and downstream effects;
-* ``只有…才可以`` remains a conditional MAY permission rather than ONLY_IF modality;
-* source/target states are retained for ``从A变为B`` transitions;
-* ``在X后24小时内`` becomes one WITHIN time-window coordinate; and
-* typed fact classification distinguishes actor obligations from permissions.
+The central rule is governed-operation binding: role and object coordinates belong to
+the operation governed by the modality/trigger, not to every noun or verb in the whole
+sentence. Formal relation/cardinality/formula facts already carry compiler-owned
+subject/object coordinates and therefore bypass this compatibility normalization.
 """
 from __future__ import annotations
 
@@ -24,8 +19,11 @@ from typing import Any, Iterable
 from .structured_fact_compiler import _semantic_signature
 
 RECEIPT_SCHEMA = "qualibug.explicit-fact-semantic-normalization.v1"
+_FORMAL_TYPED_COORDINATES = frozenset(
+    {"OBJECT_RELATION", "CARDINALITY_CONSTRAINT", "DERIVED_VALUE", "DATA_EFFECT"}
+)
 
-_ROLE_SUFFIXES = tuple(
+_ROLE_HEADS = tuple(
     sorted(
         {
             "仓库管理员",
@@ -127,8 +125,6 @@ _MODAL_PIVOT_RE = re.compile(
 _TEMPORAL_TRIGGER_RE = re.compile(
     r"(?P<trigger>[^，,；;。]{1,48}?)(?:之后|以后|后|时)[，,]?"
 )
-# Requiring the explicit source preposition prevents actor/modality text before ``在``
-# from being absorbed into the temporal anchor.
 _WITHIN_WINDOW_RE = re.compile(
     r"在(?P<anchor>[^，,；;。]{1,24}?(?:之前|之后|以前|以后|前|后))"
     r"(?P<duration>\d+(?:\.\d+)?(?:天|日|小时|分钟|秒))"
@@ -143,6 +139,7 @@ _STATE_FROM_TO_RE = re.compile(
 _ONLY_IF_FRAME_RE = re.compile(r"(?:只有|仅当)(?P<body>.+?)才")
 _AND_RE = re.compile(r"并且|同时满足|以及|(?<![并])且(?![不])")
 _OR_RE = re.compile(r"或者|或则|任一条件|其中之一")
+_CLAUSE_BOUNDARY_RE = re.compile(r"[，,；;。]|并且|以及|(?<![并])且(?![不])")
 
 
 def _text(value: Any) -> str:
@@ -208,15 +205,12 @@ def _action_matches(statement: str) -> list[dict[str, Any]]:
     )
 
 
-def _first_action_after(statement: str, pivot: int) -> dict[str, str]:
+def _first_action_after(statement: str, pivot: int) -> dict[str, Any]:
     rows = [row for row in _action_matches(statement) if int(row["start"]) >= pivot]
-    if not rows:
-        return {}
-    row = rows[0]
-    return {"canonical": _text(row["canonical"]), "raw": _text(row["raw"])}
+    return dict(rows[0]) if rows else {}
 
 
-def _governed_action(statement: str, fact: dict[str, Any]) -> dict[str, str]:
+def _governed_action(statement: str, fact: dict[str, Any]) -> dict[str, Any]:
     """Choose the governed operation from explicit grammar, not keyword order."""
     has_effect = bool(_list(fact.get("state_effects")) or _list(fact.get("data_effects")))
     if has_effect:
@@ -224,11 +218,7 @@ def _governed_action(statement: str, fact: dict[str, Any]) -> dict[str, str]:
         if trigger:
             trigger_rows = _action_matches(_text(trigger.group("trigger")))
             if trigger_rows:
-                row = trigger_rows[0]
-                return {
-                    "canonical": _text(row["canonical"]),
-                    "raw": _text(row["raw"]),
-                }
+                return dict(trigger_rows[0])
 
     window = _WITHIN_WINDOW_RE.search(statement)
     if window:
@@ -242,10 +232,28 @@ def _governed_action(statement: str, fact: dict[str, Any]) -> dict[str, str]:
         return selected
 
     rows = _action_matches(statement)
-    if not rows:
-        return {}
-    row = rows[0]
-    return {"canonical": _text(row["canonical"]), "raw": _text(row["raw"])}
+    return dict(rows[0]) if rows else {}
+
+
+def _governed_entities(statement: str, action: dict[str, Any]) -> list[str]:
+    """Bind objects to the selected operation, not to every entity in the sentence."""
+    if not action:
+        return []
+    start = int(action.get("start", -1))
+    end = int(action.get("end", -1))
+    if start < 0 or end < start:
+        return []
+
+    suffix = statement[end:]
+    suffix_clause = _CLAUSE_BOUNDARY_RE.split(suffix, maxsplit=1)[0]
+    refs = _explicit_refs(suffix_clause, _ENTITY_HEADS)
+    if refs:
+        return refs
+
+    prefix = statement[:start]
+    prefix_clause = re.split(r"[，,；;。]", prefix)[-1]
+    refs = _explicit_refs(prefix_clause, _ENTITY_HEADS)
+    return refs[-1:] if refs else []
 
 
 def _modality(statement: str) -> tuple[str, str]:
@@ -347,15 +355,6 @@ def _normalized_time_window(statement: str) -> dict[str, Any] | None:
 
 
 def _normalized_fact_type(fact: dict[str, Any]) -> str:
-    current = _text(fact.get("fact_type")).upper()
-    if current in {
-        "TERM_ALIAS",
-        "OBJECT_RELATION",
-        "CARDINALITY_CONSTRAINT",
-        "DERIVED_VALUE",
-        "DATA_EFFECT",
-    }:
-        return current
     if _list(fact.get("state_effects")):
         return "STATE_TRANSITION"
     if _text(fact.get("modality")).upper() in {"MAY", "MUST_NOT", "ONLY_IF"}:
@@ -363,46 +362,89 @@ def _normalized_fact_type(fact: dict[str, Any]) -> str:
     return "BUSINESS_RULE"
 
 
+def _normalize_primary_claim(
+    fact: dict[str, Any],
+    *,
+    action: dict[str, Any],
+    actors: list[str],
+    entities: list[str],
+) -> bool:
+    claims = [dict(row) for row in _list(fact.get("claims")) if isinstance(row, dict)]
+    changed = False
+    for claim in claims:
+        if _text(claim.get("claim_type")).upper() != "PRIMARY_OPERATION":
+            continue
+        predicate = _text(action.get("canonical"))
+        if predicate and _text(claim.get("predicate")) != predicate:
+            claim["predicate"] = predicate
+            changed = True
+        if actors and _list(claim.get("subject_refs")) != actors:
+            claim["subject_refs"] = list(actors)
+            changed = True
+        if entities and _list(claim.get("object_refs")) != entities:
+            claim["object_refs"] = list(entities)
+            changed = True
+    if changed:
+        fact["claims"] = claims
+    return changed
+
+
 def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[str, Any]:
     ledger = _dict(asset.get("business_fact_ledger"))
     facts = [dict(row) for row in _list(ledger.get("items")) if isinstance(row, dict)]
     normalized_ids: list[str] = []
+    skipped_formal_typed = 0
     field_counts: dict[str, int] = {}
 
     for fact in facts:
         statement = _text(fact.get("raw_statement"))
+        current_type = _text(fact.get("fact_type")).upper()
         if not statement or _text(fact.get("kind")) == "TERM_ALIAS":
+            continue
+        if current_type in _FORMAL_TYPED_COORDINATES:
+            skipped_formal_typed += 1
             continue
         changed: list[str] = []
 
+        exception_scopes = set(_text(row) for row in _list(fact.get("exception_scope")))
+        explicit_actors = [
+            row
+            for row in _explicit_refs(statement, _ROLE_HEADS)
+            if row not in exception_scopes
+        ]
         subject = dict(_dict(fact.get("subject")))
-        actors = _ordered_unique(
-            [*_list(subject.get("actor_refs")), *_explicit_refs(statement, _ROLE_SUFFIXES)]
-        )
-        entities = _ordered_unique(
-            [*_list(subject.get("entity_refs")), *_explicit_refs(statement, _ENTITY_HEADS)]
-        )
+        actors = explicit_actors or [
+            _text(row) for row in _list(subject.get("actor_refs")) if _text(row)
+        ]
         if actors != _list(subject.get("actor_refs")):
             subject["actor_refs"] = actors
             changed.append("actor_refs")
-        if entities != _list(subject.get("entity_refs")):
-            subject["entity_refs"] = entities
-            changed.append("entity_refs")
-        fact["subject"] = subject
-        object_part = dict(_dict(fact.get("object")))
-        object_entities = _ordered_unique(
-            [*_list(object_part.get("entity_refs")), *entities]
-        )
-        if object_entities != _list(object_part.get("entity_refs")):
-            object_part["entity_refs"] = object_entities
-            changed.append("object_refs")
-        fact["object"] = object_part
 
-        action = _governed_action(statement, fact)
+        action_coordinate = _governed_action(statement, fact)
+        action = {
+            "canonical": _text(action_coordinate.get("canonical")),
+            "raw": _text(action_coordinate.get("raw")),
+        }
+        action = {key: value for key, value in action.items() if value}
         if action and action != _dict(fact.get("action")):
             fact["action"] = action
             fact["predicate"] = action["canonical"]
             changed.append("action")
+
+        governed_entities = _governed_entities(statement, action_coordinate)
+        entities = governed_entities or [
+            _text(row) for row in _list(subject.get("entity_refs")) if _text(row)
+        ]
+        if governed_entities and entities != _list(subject.get("entity_refs")):
+            subject["entity_refs"] = entities
+            changed.append("entity_refs")
+        fact["subject"] = subject
+
+        object_part = dict(_dict(fact.get("object")))
+        if governed_entities and entities != _list(object_part.get("entity_refs")):
+            object_part["entity_refs"] = entities
+            changed.append("object_refs")
+        fact["object"] = object_part
 
         modality, polarity = _modality(statement)
         if modality != _text(fact.get("modality")):
@@ -441,9 +483,17 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             changed.append("time_window_constraints")
 
         fact_type = _normalized_fact_type(fact)
-        if fact_type != _text(fact.get("fact_type")).upper():
+        if fact_type != current_type:
             fact["fact_type"] = fact_type
             changed.append("fact_type")
+
+        if _normalize_primary_claim(
+            fact,
+            action=action_coordinate,
+            actors=actors,
+            entities=entities,
+        ):
+            changed.append("primary_operation_claim")
 
         if not changed:
             continue
@@ -451,6 +501,7 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             "status": "PASS",
             "normalized_fields": sorted(set(changed)),
             "source_backed": True,
+            "governed_operation_binding": True,
             "new_fact_discovered": False,
             "automatic_winner_used": False,
         }
@@ -468,21 +519,26 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
         "status": "PASS",
         "normalized_fact_count": len(normalized_ids),
         "normalized_fact_ids": normalized_ids,
+        "formal_typed_fact_count_left_on_compiler_coordinates": skipped_formal_typed,
         "normalized_field_counts": dict(sorted(field_counts.items())),
         "existing_ledger_reused": True,
+        "governed_operation_binding": True,
         "new_fact_discovery_allowed": False,
         "source_statement_rewrite_allowed": False,
         "conflicting_source_value_selection_allowed": False,
         "overlapping_identity_coordinate_emission_allowed": False,
+        "formal_typed_coordinate_reinterpretation_allowed": False,
         "automatic_winner_used": False,
     }
     governance = dict(_dict(asset.get("governance")))
     governance.update(
         {
             "explicit_fact_coordinates_normalized_at_compiler_boundary": True,
+            "explicit_fact_identity_is_bound_to_governed_operation": True,
             "explicit_fact_normalization_discovers_new_facts": False,
             "explicit_fact_normalization_selects_conflicting_values": False,
             "explicit_fact_identity_mentions_are_longest_non_overlapping": True,
+            "formal_typed_fact_coordinates_remain_compiler_owned": True,
         }
     )
     asset["governance"] = governance
