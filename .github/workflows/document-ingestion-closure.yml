@@ -89,6 +89,7 @@ jobs:
             tests/test_enterprise_understanding_product_source_references.py \
             tests/test_enterprise_understanding_actor_permission_contract.py \
             tests/test_enterprise_understanding_authorization_coordinate_edge.py \
+            tests/test_enterprise_understanding_responsibility_authorization_boundary.py \
             tests/test_enterprise_understanding_structure_first_facts.py \
             tests/test_enterprise_understanding_fact_slots.py \
             tests/test_enterprise_understanding_fact_probe_policy.py \
