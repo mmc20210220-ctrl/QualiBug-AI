@@ -29,10 +29,6 @@ _SLOT_FIELDS = (
     "formula_constraints",
     "source_locators",
 )
-# ``operation`` and ``object_refs`` are the existing coarse alignment contract. They
-# remain measured once a row opts into slot-level Ground Truth, but they must not make
-# every legacy benchmark row look slot-annotated. At least one new semantic slot must
-# be explicitly declared before this evaluator leaves NOT_MEASURED.
 _ANNOTATION_TRIGGER_FIELDS = tuple(
     field for field in _SLOT_FIELDS if field != "object_refs"
 )
@@ -81,14 +77,7 @@ def _canonical(value: Any) -> Any:
 
 
 def _contains_expected(expected: Any, actual: Any) -> bool:
-    """Return True when actual preserves every explicitly annotated coordinate.
-
-    Ground Truth is allowed to annotate only the semantic fields under review. Product
-    rows may retain evidence metadata such as ``raw`` and ``source_backed``. Matching is
-    still exact at every annotated leaf: dictionaries use key containment and lists use
-    one-to-one deterministic element containment. No fuzzy text or automatic winner is
-    involved.
-    """
+    """Require every annotated leaf while allowing unannotated evidence metadata."""
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             return False
@@ -182,13 +171,6 @@ def _expected_base(gt: dict[str, Any]) -> tuple[set[str], set[str], str]:
 
 
 def _candidate_base_matches(gt: dict[str, Any], fact: dict[str, Any]) -> bool:
-    """Match one deterministic typed coordinate before any slot comparison.
-
-    Operation aliases may match by intersection, but the declared fact type must be
-    exact and every Ground Truth object coordinate must be present. Requiring only one
-    shared object made distinct relation targets collide; ignoring fact_type made a
-    permission rule and state transition for the same operation look ambiguous.
-    """
     operations, objects, expected_fact_type = _expected_base(gt)
     if expected_fact_type and expected_fact_type != _fact_type(fact):
         return False
@@ -271,12 +253,6 @@ def _source_locator_metrics(
     annotated: list[tuple[str, dict[str, Any]]],
     alignments: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Measure exact evidence address closure across every locator-annotated fact.
-
-    A missing or ambiguous fact has no trustworthy evidence address and remains in the
-    denominator. This metric is therefore independent from the ordinary slot metric,
-    whose denominator covers slots only after one candidate has been selected.
-    """
     annotated_ids = {
         _text(row.get("ground_truth_id"))
         for _collection, row in annotated
@@ -318,22 +294,21 @@ def _source_locator_metrics(
 
 def _accepted_fact_precision_metrics(
     ground_truth: dict[str, Any],
-    annotated: list[tuple[str, dict[str, Any]]],
     facts: list[dict[str, Any]],
     alignments: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Measure false ACCEPTED facts only when the explicit fact universe is closed.
-
-    Scope is the union of exact source locators declared by the complete Ground Truth.
-    A product fact counts as supported only when the existing one-candidate alignment
-    authority selected it for one Ground Truth row. Duplicate/ambiguous candidates are
-    therefore false accepts rather than being rescued by an automatic winner.
-    """
+    """Measure false ACCEPTED facts against the declared complete locator universe."""
     scope_complete = ground_truth.get("explicit_fact_scope_complete") is True
-    if not scope_complete:
+    scope_locators = {
+        _text(value)
+        for value in _values(ground_truth.get("explicit_fact_scope_locators"))
+        if _text(value)
+    }
+    if not scope_complete or not scope_locators:
         return (
             {
                 "accepted_fact_scope_complete": False,
+                "accepted_fact_scope_locator_count": len(scope_locators),
                 "accepted_fact_count_in_scope": 0,
                 "supported_accepted_fact_count": 0,
                 "false_accepted_fact_count": 0,
@@ -343,12 +318,6 @@ def _accepted_fact_precision_metrics(
             [],
         )
 
-    scope_locators = {
-        locator
-        for _collection, row in annotated
-        for locator in (_expected_slot(row, "source_locators") or [])
-        if _text(locator)
-    }
     scoped_facts = [
         fact
         for fact in facts
@@ -366,7 +335,7 @@ def _accepted_fact_precision_metrics(
     accepted_count = len(scoped_facts)
     supported_count = len(supported)
     false_count = len(false_accepted)
-    rows = [
+    false_rows = [
         {
             "candidate_id": _candidate_id(fact),
             "fact_type": fact.get("fact_type") or fact.get("kind"),
@@ -382,6 +351,7 @@ def _accepted_fact_precision_metrics(
     return (
         {
             "accepted_fact_scope_complete": True,
+            "accepted_fact_scope_locator_count": len(scope_locators),
             "accepted_fact_count_in_scope": accepted_count,
             "supported_accepted_fact_count": supported_count,
             "false_accepted_fact_count": false_count,
@@ -390,7 +360,7 @@ def _accepted_fact_precision_metrics(
             ),
             "false_accepted_rate": false_count / accepted_count if accepted_count else 1.0,
         },
-        rows,
+        false_rows,
     )
 
 
@@ -498,7 +468,6 @@ def evaluate_business_fact_slots(
     evidence_metrics = _source_locator_metrics(annotated, alignments)
     precision_metrics, false_accepted_facts = _accepted_fact_precision_metrics(
         ground_truth,
-        annotated,
         facts,
         alignments,
     )
@@ -547,7 +516,9 @@ def evaluate_business_fact_slots(
         },
         "accepted_fact_precision_contract": {
             "explicit_fact_scope_complete_required": True,
-            "accepted_scope_uses_annotated_exact_source_locators": True,
+            "explicit_fact_scope_locators_required": True,
+            "accepted_scope_uses_declared_exact_source_locators": True,
+            "unannotated_scope_blocks_remain_in_precision_scope": True,
             "duplicate_candidates_count_as_false_accepted": True,
             "ambiguous_candidates_count_as_false_accepted": True,
             "automatic_winner_allowed": False,
