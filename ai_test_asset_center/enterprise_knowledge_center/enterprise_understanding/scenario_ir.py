@@ -25,6 +25,12 @@ _INCLUSIVE_BOUNDARY_OPERATORS = {
     "GREATER_THAN_OR_EQUAL",
     "LESS_THAN_OR_EQUAL",
 }
+_BUSINESS_REJECTION_MODALITIES = {
+    "MUST_NOT",
+    "FORBIDDEN",
+    "PROHIBITED",
+    "DENY",
+}
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
@@ -47,14 +53,22 @@ def _authoritative_api(binding: dict[str, Any]) -> dict[str, Any]:
 
 def _scenario_type(behavior: dict[str, Any]) -> tuple[str, list[str]]:
     decision = text(behavior.get("permission_decision"))
+    modality = text(behavior.get("business_modality")).upper()
+    authorization_explicit = bool(behavior.get("authorization_semantics_explicit"))
     actors = unique_text(as_list(behavior.get("actor_refs")))
     dimensions: list[str] = []
     if _dicts(behavior.get("state_effects")):
         dimensions.append("STATE_TRANSITION")
-    if decision == "DENY":
+
+    # A denied authorization coordinate is different from a prohibited business
+    # outcome. Only the former may become an unauthorized / actor-comparison design.
+    if decision == "DENY" and authorization_explicit:
         if actors:
             dimensions.extend(["REJECTION", "AUTHORIZATION"])
             return "UNAUTHORIZED", unique_text(dimensions)
+        dimensions.append("REJECTION")
+        return "REJECTION", unique_text(dimensions)
+    if modality in _BUSINESS_REJECTION_MODALITIES or decision == "DENY":
         dimensions.append("REJECTION")
         return "REJECTION", unique_text(dimensions)
     if decision == "REQUIRE_APPROVAL":
@@ -69,6 +83,10 @@ def _scenario_type(behavior: dict[str, Any]) -> tuple[str, list[str]]:
 def _expected_outcome(behavior: dict[str, Any]) -> dict[str, Any]:
     return {
         "permission_decision": text(behavior.get("permission_decision")) or "UNSPECIFIED",
+        "business_modality": text(behavior.get("business_modality")) or "ASSERTS",
+        "authorization_semantics_explicit": bool(
+            behavior.get("authorization_semantics_explicit")
+        ),
         "expected_effects": unique_text(as_list(behavior.get("expected_effects"))),
         "state_effects": _dicts(behavior.get("state_effects")),
         "data_effects": _dicts(behavior.get("data_effects")),
@@ -129,6 +147,8 @@ def _base_scenario(
         as_list(behavior.get("expected_effects"))
         or as_list(behavior.get("state_effects"))
         or as_list(behavior.get("data_effects"))
+        or text(behavior.get("business_modality")).upper()
+        in _BUSINESS_REJECTION_MODALITIES
     ):
         unresolved.append("SCENARIO_EXPECTED_OUTCOME_UNRESOLVED")
 
@@ -448,6 +468,8 @@ def project_scenario_ir_to_asset(asset: dict[str, Any], model: dict[str, Any]) -
             "scenario_ir_does_not_compile_concrete_assertions": True,
             "strict_boundary_complement_requires_source_evidence": True,
             "unauthorized_scenario_requires_explicit_denied_actor": True,
+            "business_rejection_is_not_authorization_denial": True,
+            "business_rejection_preserved_after_authorization_separation": True,
         }
     )
     asset["governance"] = governance
