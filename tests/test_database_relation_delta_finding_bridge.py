@@ -9,6 +9,9 @@ from ai_test_asset_center.database_relation_delta_finding_bridge import (
     build_database_relation_delta_finding_evidence,
     enrich_database_relation_delta_finding,
 )
+from ai_test_asset_center.database_relation_delta_projection_gate import (
+    SEMANTIC_PAIR_SCHEMA,
+)
 
 
 def _root_snapshot(phase: str, value: str) -> dict:
@@ -97,6 +100,7 @@ def _assertion_receipt() -> dict:
         "status": "VIOLATION",
         "reason_code": "DATABASE_RELATION_DELTA_CONSERVATION_VIOLATED",
         "expected": {
+            "semantic_pair_schema": SEMANTIC_PAIR_SCHEMA,
             "database_relation_observer_ref": "relation-observer:ledger",
             "database_relationship_id": "fk:ledger:accounts",
             "relation_key": [
@@ -106,6 +110,7 @@ def _assertion_receipt() -> dict:
                 }
             ],
             "relation_pair_id": "pair-1",
+            "recomputed_relation_pair_id": "pair-1",
             "relation_before_draft_id": "draft:relation:before",
             "relation_after_draft_id": "draft:relation:after",
             "root_observer_contract_ref": "observer:accounts",
@@ -136,6 +141,8 @@ def _assertion_receipt() -> dict:
             "weighted_right_delta": "10",
             "difference": "5",
             "tolerance": "0",
+            "binding_match": True,
+            "semantic_pair_match": True,
             "lineage_match": True,
             "relation_pair_match": True,
             "root_identity_match": True,
@@ -165,9 +172,13 @@ def test_delta_finding_evidence_is_exact_and_secret_free() -> None:
         _assertion_receipt()
     )
 
-    assert evidence["database_relationship_id"] == "fk:ledger:accounts"
+    assert evidence["semantic_pair_schema"] == SEMANTIC_PAIR_SCHEMA
     assert evidence["relation_pair_id"] == "pair-1"
+    assert evidence["recomputed_relation_pair_id"] == "pair-1"
+    assert evidence["binding_match"] is True
+    assert evidence["semantic_pair_match"] is True
     assert evidence["relation_pair_match"] is True
+    assert evidence["database_relationship_id"] == "fk:ledger:accounts"
     assert evidence["root_delta"] == "-15"
     assert evidence["relation_delta"] == "10"
     assert evidence["difference"] == "5"
@@ -223,11 +234,14 @@ def test_enrichment_replaces_legacy_snapshot_without_upgrading_delivery() -> Non
         "APPROVED_ROOT_AND_FK_AGGREGATE_BEFORE_AFTER_PHASE_RECEIPTS"
     )
     assert finding["raw_evidence"]["legacy_http_body_used_as_db_snapshot"] is False
-    assert finding["raw_evidence"]["db_snapshot"]["relation_pair_id"] == "pair-1"
-    assert finding["raw_evidence"]["db_snapshot"]["actual"][
-        "relation_pair_match"
-    ] is True
-    assert finding["raw_evidence"]["db_snapshot"]["actual"]["difference"] == "5"
+    snapshot = finding["raw_evidence"]["db_snapshot"]
+    assert snapshot["semantic_pair_schema"] == SEMANTIC_PAIR_SCHEMA
+    assert snapshot["relation_pair_id"] == "pair-1"
+    assert snapshot["recomputed_relation_pair_id"] == "pair-1"
+    assert snapshot["actual"]["binding_match"] is True
+    assert snapshot["actual"]["semantic_pair_match"] is True
+    assert snapshot["actual"]["relation_pair_match"] is True
+    assert snapshot["actual"]["difference"] == "5"
     assert finding["gate_passed"] is False
     assert finding["customer_delivery_status"] == "candidate"
     assert finding["final_review_status"] == "PENDING_DELIVERY_GATE"
