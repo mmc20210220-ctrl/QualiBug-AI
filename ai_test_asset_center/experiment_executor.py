@@ -5,7 +5,9 @@ live in ``experiment_executor_governance``. This module keeps the established
 public identities and monkeypatch surface while delegating one execution call.
 The final public result additionally applies the authorization causal-evidence
 gate so an Oracle candidate cannot leave the execution boundary without the
-existing control/treatment/observer/binding receipt chain.
+existing control/treatment/observer/binding receipt chain. Passed authorization
+findings embed that complete receipt and exact binding proofs before Gate v2
+fingerprints the customer-facing payload.
 """
 from __future__ import annotations
 
@@ -13,6 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from . import experiment_executor_governance as _governance
+from .authorization_delivery_gate import (
+    attach_authorization_delivery_evidence,
+)
 from .authorization_oracle_causality import (
     enforce_authorization_oracle_causality,
 )
@@ -74,7 +79,7 @@ def execute_one_experiment(
     execution_id: str,
     actor_tokens: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Execute through governance, then fail closed on authorization causality."""
+    """Execute through governance, causal validation, then delivery packaging."""
     _sync_governance_hooks()
     result = _execute_one_governed(
         experiment,
@@ -87,11 +92,15 @@ def execute_one_experiment(
         execution_id=execution_id,
         actor_tokens=actor_tokens,
     )
-    return enforce_authorization_oracle_causality(
+    governed = enforce_authorization_oracle_causality(
         result=result,
         experiment=experiment,
         behavior_ir=behavior_ir,
         account_rows=_governance._test_account_rows(root, project),
+    )
+    return attach_authorization_delivery_evidence(
+        governed,
+        experiment=experiment,
     )
 
 
