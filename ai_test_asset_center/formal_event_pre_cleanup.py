@@ -76,9 +76,9 @@ def _pre_observe_event(
         return existing
     assertion = _event_assertion(exp)
     if not assertion:
-        from .observer_contracts_base import _receipt
+        from .observer_contracts_base import build_observer_receipt
 
-        receipt = _receipt(
+        receipt = build_observer_receipt(
             observer_id=_surface.OBSERVER_ID,
             status="INDETERMINATE",
             reason_code="EVENT_ASSERTION_IDENTITY_NOT_UNIQUE",
@@ -86,7 +86,14 @@ def _pre_observe_event(
         )
     else:
         try:
-            receipt = _surface._event_observer_handler({
+            from . import observer_contracts_base as _observers
+
+            handler = _observers._REGISTERED_OBSERVER_HANDLERS.get(
+                _surface.OBSERVER_ID
+            )
+            if not callable(handler):
+                handler = _surface._event_observer_handler
+            receipt = handler({
                 "observer_id": _surface.OBSERVER_ID,
                 "experiment": exp,
                 "observations": observations,
@@ -98,10 +105,26 @@ def _pre_observe_event(
                 "campaign_id": campaign_id,
                 "execution_id": execution_id,
             })
+            validated = _observers.validate_observer_receipt(_dict(receipt))
+            evidence = copy.deepcopy(_dict(validated.get("evidence")))
+            event_evidence = _dict(evidence.get(_surface.EVIDENCE_KEY))
+            if event_evidence:
+                event_evidence["observation_phase"] = "pre_cleanup"
+                evidence[_surface.EVIDENCE_KEY] = event_evidence
+                receipt = _observers.build_observer_receipt(
+                    observer_id=_surface.OBSERVER_ID,
+                    status=_text(validated.get("status")),
+                    reason_code=_text(validated.get("reason_code")),
+                    evidence=evidence,
+                    campaign_id=_text(validated.get("campaign_id")),
+                    execution_id=_text(validated.get("execution_id")),
+                )
+            else:
+                receipt = validated
         except Exception as exc:  # noqa: BLE001 - cleanup must still proceed
-            from .observer_contracts_base import _receipt
+            from .observer_contracts_base import build_observer_receipt
 
-            receipt = _receipt(
+            receipt = build_observer_receipt(
                 observer_id=_surface.OBSERVER_ID,
                 status="INDETERMINATE",
                 reason_code="EVENT_PRE_CLEANUP_OBSERVER_FAILED",
@@ -109,11 +132,6 @@ def _pre_observe_event(
             )
     receipt = copy.deepcopy(_dict(receipt))
     evidence = _dict(receipt.get("evidence"))
-    event_evidence = _dict(evidence.get(_surface.EVIDENCE_KEY))
-    if event_evidence:
-        event_evidence["observation_phase"] = "pre_cleanup"
-        evidence[_surface.EVIDENCE_KEY] = event_evidence
-        receipt["evidence"] = evidence
     observations[_PRE_RECEIPT_KEY] = copy.deepcopy(receipt)
     if _text(receipt.get("status")).upper() == "OBSERVED":
         for key, value in evidence.items():
