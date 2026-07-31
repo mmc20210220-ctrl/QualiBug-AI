@@ -95,6 +95,7 @@ jobs:
             tests/test_enterprise_understanding_actor_permission_contract.py \
             tests/test_enterprise_understanding_authorization_coordinate_edge.py \
             tests/test_enterprise_understanding_authorization_unknown_propagation.py \
+            tests/test_enterprise_understanding_credential_identity_coordinates.py \
             tests/test_enterprise_understanding_responsibility_authorization_boundary.py \
             tests/test_enterprise_understanding_structure_first_facts.py \
             tests/test_enterprise_understanding_fact_slots.py \
