@@ -44,15 +44,20 @@ from .formal_event_execution_preflight import (  # noqa: E402
 from .formal_event_binding_receipt_bridge import (  # noqa: E402
     install_formal_event_binding_receipt_bridge,
 )
+from .formal_event_observation_count_bridge import (  # noqa: E402
+    install_formal_event_observation_count_bridge,
+)
 from .formal_event_verdict_reason_bridge import (  # noqa: E402
     install_formal_event_verdict_reason_bridge,
 )
 
 # Semantic binding registers the event observer, assertion and pre-cleanup wrapper first.
-# Execution preflight then recognizes that exact registered observer as the Event Contract's
-# effect evidence; receipt and verdict bridges preserve identity and explain violations.
+# Execution preflight recognizes that exact registered observer as Event Contract evidence.
+# Receipt wrappers then preserve durable identity and privacy-safe total cardinality before
+# the existing assertion authority classifies the already-determined violation.
 install_formal_event_execution_preflight()
 install_formal_event_binding_receipt_bridge()
+install_formal_event_observation_count_bridge()
 install_formal_event_verdict_reason_bridge()
 
 from .discovery_runtime_quality_projection import (  # noqa: E402,F401
