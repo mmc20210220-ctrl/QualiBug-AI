@@ -68,6 +68,14 @@ def _relation_phase() -> dict:
                     }
                 ],
                 "relation_parameter_fingerprints": ["identity-o-1"],
+                "aggregate_requests": [
+                    {
+                        "aggregate": "SUM",
+                        "database_field_id": "field:order_lines:amount",
+                        "database_field_name": "amount",
+                        "alias": "related_value",
+                    }
+                ],
                 "aggregate_values": {"related_value": "25.00"},
                 "aggregate_fingerprint": "aggregate-25",
                 "client_side_filter_used": False,
@@ -117,6 +125,14 @@ def _experiment() -> dict:
                 "relation_observer_contract_ref": "relation-observer:order-lines",
                 "root_observer_contract_ref": "observer:orders",
                 "observation_phase": "AFTER",
+                "aggregate_requests": [
+                    {
+                        "aggregate": "SUM",
+                        "database_field_id": "field:order_lines:amount",
+                        "database_field_name": "amount",
+                        "alias": "related_value",
+                    }
+                ],
                 "required": True,
             }
         ],
@@ -128,7 +144,15 @@ def _experiment() -> dict:
                 "require_control": False,
                 "database_relation_observer_ref": "relation-observer:order-lines",
                 "database_relation_draft_id": "draft:relation:after",
+                "database_relationship_id": "fk:order_lines:orders",
+                "relation_key": [
+                    {
+                        "child_database_field_name": "order_id",
+                        "parent_database_field_name": "id",
+                    }
+                ],
                 "root_observer_contract_ref": "observer:orders",
+                "root_database_draft_id": "draft:orders:after",
                 "root_table_ref": "table:orders",
                 "root_database_field_id": "field:orders:total",
                 "root_database_field_name": "total",
@@ -212,6 +236,7 @@ def test_contract_oracle_promotes_cross_table_violation_not_observer() -> None:
     assertion = result["failed_assertions"][0]
     assert assertion["kind"] == ASSERTION_KIND
     assert assertion["reason_code"] == "DATABASE_RELATION_CONSERVATION_VIOLATED"
+    assert assertion["actual"]["aggregate_request_match"] is True
     assert assertion["actual"]["root_value"] == "30"
     assert assertion["actual"]["aggregate_value"] == "25"
     assert assertion["actual"]["observer_performed_oracle_verdict"] is False
