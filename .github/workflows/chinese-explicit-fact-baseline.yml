@@ -116,6 +116,9 @@ jobs:
               exitCode === 0 ? "PASS" : exitCode === 3 ? "BELOW_TARGET" : "BLOCKED";
             const resultStatus = String(summary.status || fallbackStatus).toUpperCase();
             const state = exitCode === 0 ? "success" : exitCode === 3 ? "failure" : "error";
+            const falseAccepted = Number.isFinite(Number(metrics.false_accepted_fact_count))
+              ? Number(metrics.false_accepted_fact_count)
+              : "n/a";
             const loss = summary.highest_impact_first_loss
               ? ` loss=${summary.highest_impact_first_loss}`
               : "";
@@ -124,6 +127,8 @@ jobs:
               ` slots=${formatMetric(metrics.slot_exact_accuracy)}` +
               ` p0=${formatMetric(metrics.p0_exact_fact_recall)}` +
               ` evidence=${formatMetric(metrics.source_locator_exact_accuracy)}` +
+              ` precision=${formatMetric(metrics.accepted_fact_precision)}` +
+              ` false=${falseAccepted}` +
               loss
             ).slice(0, 140);
             await github.rest.repos.createCommitStatus({
