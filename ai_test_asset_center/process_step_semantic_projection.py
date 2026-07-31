@@ -1,7 +1,8 @@
 """Semantic completion projection for process-step ledger rows.
 
-Ledger rows keep raw execution facts. This module derives the semantic sets
-used by completion gates without modifying the stored rows.
+Ledger rows keep raw execution facts. This module derives the distinct
+attempted, executed, accepted, completed, failed, and pending sets used by
+lifecycle and completion gates without modifying stored rows.
 """
 from __future__ import annotations
 
@@ -46,8 +47,10 @@ def _explicit_verdict(row: dict[str, Any]) -> bool | None:
 
 
 def project_step_sets(ledger: ProcessStepLedger) -> dict[str, list[str]]:
-    """Project recorded, accepted, completed, failed, and pending step sets."""
+    """Project every lifecycle-relevant step set without semantic aliasing."""
     recorded: list[str] = []
+    attempted: list[str] = []
+    executed: list[str] = []
     accepted: list[str] = []
     completed: list[str] = []
     failed: list[str] = []
@@ -58,6 +61,21 @@ def project_step_sets(ledger: ProcessStepLedger) -> dict[str, list[str]]:
         if not step_id:
             continue
         recorded.append(step_id)
+        response_received = row.get("response_received") is True
+        transport_attempted = (
+            row.get("transport_attempted") is True
+            or response_received
+            or bool(_text(row.get("request_receipt_id")))
+            or bool(_text(row.get("transport_receipt_id")))
+        )
+        if transport_attempted:
+            attempted.append(step_id)
+        if (
+            response_received
+            and _text(row.get("final_status")).upper() == "EXECUTED"
+        ):
+            executed.append(step_id)
+
         is_accepted = _accepted(row)
         if is_accepted:
             accepted.append(step_id)
@@ -77,6 +95,8 @@ def project_step_sets(ledger: ProcessStepLedger) -> dict[str, list[str]]:
 
     return {
         "recorded_step_ids": recorded,
+        "attempted_step_ids": attempted,
+        "executed_step_ids": executed,
         "accepted_step_ids": accepted,
         "completed_step_ids": completed,
         "failed_step_ids": failed,
