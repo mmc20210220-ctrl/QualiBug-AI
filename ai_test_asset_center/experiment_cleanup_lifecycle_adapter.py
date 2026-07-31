@@ -1,9 +1,9 @@
 """Lifecycle adapter for the existing experiment cleanup authority.
 
 Ordinary experiments delegate to the existing cleanup core with the established
-precondition-write projection.  Experiments carrying a resolved process-graph
+precondition-write projection. Experiments carrying a resolved process-graph
 write contract execute system-aware graph compensation first, then reuse the
-same core for fixture cleanup and lifecycle aggregation.  No second public
+same core for fixture cleanup and lifecycle aggregation. No second public
 cleanup entry point is introduced.
 """
 from __future__ import annotations
@@ -13,9 +13,9 @@ from typing import Any
 
 from . import experiment_cleanup_executor_core as _core
 from .experiment_runtime_support import _dict, _list, _request_example, _text
-from .process_graph_cleanup_executor import (
-    execute_process_graph_cleanup,
-    finalize_process_graph_cleanup_result,
+from .process_graph_cleanup_executor import execute_process_graph_cleanup
+from .process_graph_cleanup_equivalence import (
+    finalize_process_graph_cleanup_equivalence_inputs,
 )
 from .runtime_binding_materializer import materialize_body_template
 
@@ -158,7 +158,7 @@ def _graph_cleanup(kwargs: dict[str, Any]) -> dict[str, Any]:
             if isinstance(row, dict)
         ],
         request_bodies_for_cleanup=_dict(
-            kwargs.get("request_bodies_for_cleanup")
+            kwargs.get("request_bodies_for_cleanup"),
         ),
         runtime_bindings=_dict(kwargs.get("runtime_bindings")),
         cleanup_failures=int(kwargs.get("cleanup_failures") or 0),
@@ -202,10 +202,11 @@ def _graph_cleanup(kwargs: dict[str, Any]) -> dict[str, Any]:
             "cleanup_failures": graph_result["cleanup_failures"],
         }
     )
-    finalized = finalize_process_graph_cleanup_result(
+    finalized = finalize_process_graph_cleanup_equivalence_inputs(
         exp=exp,
         result=core_result,
         resolved_campaign_id=_text(kwargs.get("resolved_campaign_id")),
+        runtime_bindings=_dict(kwargs.get("runtime_bindings")),
     )
     observations = _dict(finalized.get("observations"))
     observations["cleanup_authority"] = "process_graph_write_contract"
