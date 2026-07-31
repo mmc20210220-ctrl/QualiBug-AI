@@ -24,6 +24,10 @@ from .authorization_delivery_gate import (
 from .authorization_oracle_causality import (
     enforce_authorization_oracle_causality,
 )
+from .binding_materialization_identity_receipt import (
+    BindingMaterializationIdentityError,
+    seal_binding_materialization_receipts,
+)
 from .experiment_runtime_support import (
     load_actor_tokens as _runtime_load_actor_tokens,
 )
@@ -113,6 +117,36 @@ def _verify_authorization_compile_identity(
         )
 
 
+def _authorization_delivery_failure(
+    result: dict[str, Any],
+    exc: Exception,
+) -> dict[str, Any]:
+    """Preserve execution fact while removing an unpublishable finding."""
+    blocked = dict(result)
+    blocked["finding"] = None
+    if str(blocked.get("status") or "").upper() not in {
+        "BLOCKED",
+        "HARNESS_FAILURE",
+    }:
+        blocked["status"] = "EXECUTED"
+    blocked["reason_code"] = "AUTHORIZATION_DELIVERY_EVIDENCE_INVALID"
+    blocked["detail"] = str(exc)
+    verdict = dict(
+        blocked.get("oracle_verdict")
+        if isinstance(blocked.get("oracle_verdict"), dict)
+        else {}
+    )
+    verdict.update({
+        "status": "INDETERMINATE",
+        "verdict": "blocked_experiment",
+        "customer_deliverable_candidate": False,
+        "authorization_delivery_gate": "INDETERMINATE",
+        "authorization_delivery_reason": str(exc),
+    })
+    blocked["oracle_verdict"] = verdict
+    return blocked
+
+
 def execute_one_experiment(
     experiment: dict[str, Any],
     *,
@@ -138,42 +172,28 @@ def execute_one_experiment(
         execution_id=execution_id,
         actor_tokens=actor_tokens,
     )
-    governed = enforce_authorization_oracle_causality(
-        result=result,
-        experiment=experiment,
-        behavior_ir=behavior_ir,
-        account_rows=_governance._test_account_rows(root, project),
-    )
     try:
+        prepared = (
+            seal_binding_materialization_receipts(result)
+            if _dict(experiment.get("authorization_comparison_contract"))
+            else result
+        )
+        governed = enforce_authorization_oracle_causality(
+            result=prepared,
+            experiment=experiment,
+            behavior_ir=behavior_ir,
+            account_rows=_governance._test_account_rows(root, project),
+        )
         _verify_authorization_compile_identity(governed, experiment)
         return attach_authorization_delivery_evidence(
             governed,
             experiment=experiment,
         )
-    except AuthorizationDeliveryGateError as exc:
-        blocked = dict(governed)
-        blocked["finding"] = None
-        if str(blocked.get("status") or "").upper() not in {
-            "BLOCKED",
-            "HARNESS_FAILURE",
-        }:
-            blocked["status"] = "EXECUTED"
-        blocked["reason_code"] = "AUTHORIZATION_DELIVERY_EVIDENCE_INVALID"
-        blocked["detail"] = str(exc)
-        verdict = dict(
-            blocked.get("oracle_verdict")
-            if isinstance(blocked.get("oracle_verdict"), dict)
-            else {}
-        )
-        verdict.update({
-            "status": "INDETERMINATE",
-            "verdict": "blocked_experiment",
-            "customer_deliverable_candidate": False,
-            "authorization_delivery_gate": "INDETERMINATE",
-            "authorization_delivery_reason": str(exc),
-        })
-        blocked["oracle_verdict"] = verdict
-        return blocked
+    except (
+        AuthorizationDeliveryGateError,
+        BindingMaterializationIdentityError,
+    ) as exc:
+        return _authorization_delivery_failure(result, exc)
 
 
 __all__ = sorted(
