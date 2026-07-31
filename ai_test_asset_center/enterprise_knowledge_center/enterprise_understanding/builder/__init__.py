@@ -1,8 +1,8 @@
 """Enterprise-understanding builder with one identity authority.
 
 The mature semantic projection remains in the historical sibling ``builder.py``.
-Identity evidence, stable registry drift and technical bindings are closed before
-that builder receives a compatibility projection.
+Identity evidence, stable registry drift, existing operator decisions and technical
+bindings are closed before that builder receives a compatibility projection.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ..identity_authority_projection import project_identity_authority_receipt
 from ..identity_evidence_policy import apply_identity_evidence_policy
 from ..identity_registry_governance import govern_identity_registry
 from ..identity_resolution import (
@@ -64,6 +65,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     resolution = resolve_enterprise_identities(asset)
     resolution = govern_identity_registry(prior_registry, resolution, asset=asset)
     resolution = augment_technical_identity_projection(asset, resolution)
+    resolution = project_identity_authority_receipt(asset, resolution)
     _govern_identity_conflicts(resolution)
     projected_asset = project_asset_for_legacy_builder(asset, resolution)
     model = _legacy.build_enterprise_understanding_model(projected_asset)
