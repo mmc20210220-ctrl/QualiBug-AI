@@ -1,0 +1,1 @@
+validation-only: process graph async transaction closure
