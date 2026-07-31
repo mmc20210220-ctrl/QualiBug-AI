@@ -4,6 +4,17 @@ import ast
 from pathlib import Path
 
 
+def _named_calls(function: ast.FunctionDef) -> list[tuple[str, int]]:
+    calls: list[tuple[str, int]] = []
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        target = node.func
+        if isinstance(target, ast.Name):
+            calls.append((target.id, node.lineno))
+    return calls
+
+
 def test_identity_benchmark_repository_precedes_first_understanding_pass() -> None:
     source = Path(
         "ai_test_asset_center/enterprise_knowledge_center/composition.py"
@@ -15,13 +26,7 @@ def test_identity_benchmark_repository_precedes_first_understanding_pass() -> No
         if isinstance(node, ast.FunctionDef)
         and node.name == "build_enterprise_business_knowledge_asset"
     )
-    calls = []
-    for node in ast.walk(function):
-        if not isinstance(node, ast.Call):
-            continue
-        target = node.func
-        if isinstance(target, ast.Name):
-            calls.append((target.id, node.lineno))
+    calls = _named_calls(function)
     repository_line = min(
         line for name, line in calls if name == "apply_identity_benchmark_repository"
     )
@@ -35,3 +40,36 @@ def test_identity_benchmark_repository_precedes_first_understanding_pass() -> No
         "identity_benchmark_repository_precedes_enterprise_understanding"
         in source
     )
+
+
+def test_regression_projection_extends_the_existing_identity_benchmark_gate() -> None:
+    source = Path(
+        "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/"
+        "builder/__init__.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_enterprise_understanding_model"
+    )
+    calls = _named_calls(function)
+    benchmark_line = next(
+        line for name, line in calls if name == "project_identity_benchmark"
+    )
+    regression_line = next(
+        line
+        for name, line in calls
+        if name == "project_identity_benchmark_regression"
+    )
+    legacy_line = next(
+        node.lineno
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "build_enterprise_understanding_model"
+    )
+
+    assert benchmark_line < regression_line < legacy_line
+    assert source.count("project_identity_benchmark_regression(") == 1
