@@ -14,10 +14,14 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.i
     evaluate_identity_resolution,
 )
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_benchmark_repository import (
+    append_identity_benchmark_snapshot,
     identity_benchmark_paths,
     load_identity_benchmark_audit,
+    load_identity_benchmark_history,
     load_identity_ground_truth,
     load_identity_quality_policy,
+    payload_fingerprint,
+    save_identity_ground_truth,
 )
 
 
@@ -57,6 +61,7 @@ def _asset(tmp_path) -> dict:
     resolution = _resolution()
     ground_truth = load_identity_ground_truth("project-a", tmp_path)
     policy = load_identity_quality_policy("project-a", tmp_path)
+    history = load_identity_benchmark_history("project-a", tmp_path)
     benchmark = (
         evaluate_identity_resolution(
             resolution, ground_truth, quality_policy=policy
@@ -74,6 +79,15 @@ def _asset(tmp_path) -> dict:
                 {"mention_ref": "m2", "raw_label": "SO"},
             ],
         },
+        "enterprise_identity_benchmark_repository_receipt": {
+            "ground_truth_fingerprint": (
+                payload_fingerprint(ground_truth) if ground_truth else ""
+            ),
+            "quality_policy_fingerprint": (
+                payload_fingerprint(policy) if policy else ""
+            ),
+        },
+        "enterprise_identity_benchmark_history": history,
         "enterprise_identity_resolution": resolution,
         "enterprise_identity_benchmark": benchmark,
         "enterprise_identity_gate": resolution["gate"],
@@ -138,7 +152,7 @@ def test_incomplete_closed_world_truth_is_rejected(tmp_path, monkeypatch) -> Non
     assert not identity_benchmark_paths("project-a", tmp_path)["ground_truth"].exists()
 
 
-def test_successful_import_rebuilds_and_records_audit(tmp_path, monkeypatch) -> None:
+def test_successful_import_rebuilds_and_records_snapshot(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(workflow, "_asset", lambda project, root, rebuild=False: _asset(tmp_path))
 
     result = workflow.import_identity_ground_truth(
@@ -151,20 +165,33 @@ def test_successful_import_rebuilds_and_records_audit(tmp_path, monkeypatch) -> 
 
     assert result["benchmark"]["status"] == "MEASURED"
     assert result["benchmark"]["metrics"]["pairwise_precision"] == 1.0
+    assert result["history"]["snapshot_count"] == 1
+    assert result["history"]["latest_snapshot"]["trigger"] == "GROUND_TRUTH_IMPORT"
     assert load_identity_ground_truth("project-a", tmp_path)["manifest_id"] == "manifest:current"
     events = load_identity_benchmark_audit("project-a", tmp_path)["events"]
     assert events[-1]["event"] == "identity_ground_truth_imported"
     assert events[-1]["actor"]["name"] == "qa"
+    assert events[-1]["snapshot_id"]
 
 
-def test_rebuild_failure_restores_previous_ground_truth(tmp_path, monkeypatch) -> None:
+def test_rebuild_failure_restores_previous_ground_truth_and_history(tmp_path, monkeypatch) -> None:
     prior = _truth()
     prior["benchmark_id"] = "prior"
-    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_benchmark_repository import (
-        save_identity_ground_truth,
-    )
-
     save_identity_ground_truth("project-a", prior, tmp_path)
+    append_identity_benchmark_snapshot(
+        "project-a",
+        {
+            "schema": "qualibug.enterprise-identity-benchmark-snapshot.v1",
+            "snapshot_id": "snapshot:prior",
+            "recorded_at_utc": "2026-07-31T12:00:00Z",
+            "measurement_status": "MEASURED",
+            "manifest_id": "manifest:current",
+            "ground_truth_fingerprint": payload_fingerprint(prior),
+            "metrics": {},
+            "errors": [],
+        },
+        tmp_path,
+    )
 
     def failing_asset(project, root, rebuild=False):
         if rebuild:
@@ -185,6 +212,10 @@ def test_rebuild_failure_restores_previous_ground_truth(tmp_path, monkeypatch) -
         )
 
     assert load_identity_ground_truth("project-a", tmp_path)["benchmark_id"] == "prior"
+    assert [
+        row["snapshot_id"]
+        for row in load_identity_benchmark_history("project-a", tmp_path)["snapshots"]
+    ] == ["snapshot:prior"]
     events = load_identity_benchmark_audit("project-a", tmp_path)["events"]
     assert events[-1]["event"] == "identity_ground_truth_import_rolled_back"
 
@@ -204,15 +235,36 @@ def test_invalid_quality_policy_is_not_persisted(tmp_path) -> None:
     assert not identity_benchmark_paths("project-a", tmp_path)["quality_policy"].exists()
 
 
-def test_valid_quality_policy_rebuilds_through_same_workflow(tmp_path, monkeypatch) -> None:
+def test_enforced_regression_requires_thresholds(tmp_path) -> None:
+    invalid = {
+        "schema": QUALITY_POLICY_SCHEMA,
+        "enforce": True,
+        "enforce_regression": True,
+        "thresholds": {"minimum_pairwise_precision": 0.9},
+    }
+
+    with pytest.raises(
+        ValueError, match="identity_regression_thresholds_required_when_enforced"
+    ):
+        workflow.update_identity_quality_policy(
+            "project-a", invalid, actor=_actor(), root=tmp_path, rebuild=False
+        )
+
+
+def test_valid_quality_and_regression_policy_rebuilds(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(workflow, "_asset", lambda project, root, rebuild=False: _asset(tmp_path))
     policy = {
         "schema": QUALITY_POLICY_SCHEMA,
         "enforce": True,
+        "enforce_regression": True,
         "thresholds": {
             "minimum_pairwise_precision": 0.98,
             "minimum_pairwise_recall": 0.95,
             "maximum_overmerge_rate": 0.02,
+        },
+        "regression_thresholds": {
+            "maximum_pairwise_precision_drop": 0.01,
+            "maximum_pairwise_recall_drop": 0.01,
         },
     }
 
@@ -225,3 +277,56 @@ def test_valid_quality_policy_rebuilds_through_same_workflow(tmp_path, monkeypat
     assert load_identity_benchmark_audit("project-a", tmp_path)["events"][-1][
         "event"
     ] == "identity_quality_policy_updated"
+
+
+def test_manual_remeasurement_appends_versioned_snapshot(tmp_path, monkeypatch) -> None:
+    save_identity_ground_truth("project-a", _truth(), tmp_path)
+    monkeypatch.setattr(workflow, "_asset", lambda project, root, rebuild=False: _asset(tmp_path))
+
+    first = workflow.run_identity_benchmark(
+        "project-a", actor=_actor(), root=tmp_path
+    )
+    second = workflow.run_identity_benchmark(
+        "project-a", actor=_actor(), root=tmp_path
+    )
+
+    assert first["history"]["snapshot_count"] == 1
+    assert second["history"]["snapshot_count"] == 2
+    assert second["history"]["latest_snapshot"]["trigger"] == "MANUAL_REMEASURE"
+    assert load_identity_benchmark_audit("project-a", tmp_path)["events"][-1][
+        "event"
+    ] == "identity_benchmark_remeasured"
+
+
+def test_manual_remeasurement_restores_history_when_snapshot_fails(tmp_path, monkeypatch) -> None:
+    save_identity_ground_truth("project-a", _truth(), tmp_path)
+    append_identity_benchmark_snapshot(
+        "project-a",
+        {
+            "schema": "qualibug.enterprise-identity-benchmark-snapshot.v1",
+            "snapshot_id": "snapshot:prior",
+            "recorded_at_utc": "2026-07-31T12:00:00Z",
+            "measurement_status": "MEASURED",
+            "manifest_id": "manifest:current",
+            "ground_truth_fingerprint": payload_fingerprint(_truth()),
+            "metrics": {},
+            "errors": [],
+        },
+        tmp_path,
+    )
+    monkeypatch.setattr(workflow, "_asset", lambda project, root, rebuild=False: _asset(tmp_path))
+    monkeypatch.setattr(
+        workflow,
+        "_record_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("snapshot failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="snapshot failed"):
+        workflow.run_identity_benchmark(
+            "project-a", actor=_actor(), root=tmp_path
+        )
+
+    assert [
+        row["snapshot_id"]
+        for row in load_identity_benchmark_history("project-a", tmp_path)["snapshots"]
+    ] == ["snapshot:prior"]
