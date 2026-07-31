@@ -45,6 +45,26 @@ def _event_invariants(model: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _managed_contract_refs(asset: dict[str, Any], graph: dict[str, Any]) -> set[str]:
+    refs = {
+        _text(row.get("event_contract_ref"))
+        for row in _rows(graph.get("observer_bindings"))
+        if _text(row.get("binding_kind")) == _EVENT_BINDING_KIND
+        and _text(row.get("event_contract_ref"))
+    }
+    refs.update(
+        _text(row.get("contract_id") or row.get("id"))
+        for row in _rows(asset.get("event_formal_contract_candidates"))
+        if _text(row.get("contract_id") or row.get("id"))
+    )
+    refs.update(
+        _text(row.get("contract_id"))
+        for row in _rows(asset.get("event_formal_contract_validation_failures"))
+        if _text(row.get("contract_id"))
+    )
+    return refs
+
+
 def _observer_refs(row: dict[str, Any]) -> set[str]:
     return {
         _text(value)
@@ -210,14 +230,17 @@ def project_formal_event_binding_identities(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Attach exact durable event identities to matching Behavior IR invariants."""
     model = copy.deepcopy(_dict(behavior_ir))
-    graph = _dict(_dict(asset).get("binding_identity_graph"))
+    asset_row = _dict(asset)
+    graph = _dict(asset_row.get("binding_identity_graph"))
     invariants = _event_invariants(model)
     if not invariants:
         receipt = {
             "schema_version": SCHEMA_VERSION,
             "status": "NOT_REQUESTED",
-            "identity_required": bool(graph),
+            "identity_required": False,
             "event_invariant_count": 0,
+            "managed_event_invariant_count": 0,
+            "runtime_overlay_event_invariant_count": 0,
             "bound_count": 0,
             "blocked_count": 0,
             "reason_counts": {},
@@ -230,6 +253,8 @@ def project_formal_event_binding_identities(
             "status": "LEGACY_IDENTITY_GRAPH_ABSENT",
             "identity_required": False,
             "event_invariant_count": len(invariants),
+            "managed_event_invariant_count": 0,
+            "runtime_overlay_event_invariant_count": len(invariants),
             "bound_count": 0,
             "blocked_count": 0,
             "reason_counts": {},
@@ -237,17 +262,30 @@ def project_formal_event_binding_identities(
         model["formal_event_binding_identity_receipt"] = receipt
         return model, receipt
 
+    managed_refs = _managed_contract_refs(asset_row, graph)
     projected: list[dict[str, Any]] = []
     reasons: list[str] = []
     bound = 0
+    blocked = 0
+    managed = 0
+    runtime_overlay = 0
     event_ids = {_text(row.get("id")) for row in invariants}
     for raw in _rows(model.get("invariants")):
         invariant = dict(raw)
         if _text(invariant.get("id")) not in event_ids:
             projected.append(invariant)
             continue
+        contract_ref = _text(invariant.get("event_contract_id"))
+        if contract_ref not in managed_refs:
+            invariant["event_binding_identity_required"] = False
+            invariant["event_binding_identity_status"] = "RUNTIME_OVERLAY_ONLY"
+            runtime_overlay += 1
+            projected.append(invariant)
+            continue
+        managed += 1
+        invariant["event_binding_identity_required"] = True
         identity, reason = _binding_identity(
-            asset=_dict(asset),
+            asset=asset_row,
             invariant=invariant,
             graph=graph,
         )
@@ -270,15 +308,25 @@ def project_formal_event_binding_identities(
             invariant["event_binding_identity_status"] = "BLOCKED"
             invariant["event_binding_identity_reason_code"] = reason
             reasons.append(reason)
+            blocked += 1
         projected.append(invariant)
     model["invariants"] = projected
+    status = (
+        "BLOCKED"
+        if blocked
+        else "BOUND"
+        if managed
+        else "RUNTIME_OVERLAY_ONLY"
+    )
     receipt = {
         "schema_version": SCHEMA_VERSION,
-        "status": "BOUND" if bound == len(invariants) else "BLOCKED",
-        "identity_required": True,
+        "status": status,
+        "identity_required": managed > 0,
         "event_invariant_count": len(invariants),
+        "managed_event_invariant_count": managed,
+        "runtime_overlay_event_invariant_count": runtime_overlay,
         "bound_count": bound,
-        "blocked_count": len(invariants) - bound,
+        "blocked_count": blocked,
         "reason_counts": dict(sorted(Counter(reasons).items())),
         "identity_reselection_allowed": False,
         "token_overlap_is_authoritative": False,
