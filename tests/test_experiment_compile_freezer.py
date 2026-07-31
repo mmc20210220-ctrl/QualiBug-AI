@@ -5,14 +5,17 @@ from ai_test_asset_center.experiment_compile_freezer import (
     BLOCKED_READBACK_CONTRACT_INCOMPLETE,
     freeze_compiled_experiment,
 )
+from ai_test_asset_center.flow_data_requirement import (
+    BLOCKED_FLOW_DATA_BINDING_INCOMPLETE,
+)
 
 
 IR = {
     "operations": [
-        {"id": "op_write", "method": "POST", "read_write": "write", "path": "/items/{id}/activate"},
-        {"id": "op_second", "method": "POST", "read_write": "write", "path": "/items/{id}/confirm"},
-        {"id": "op_read", "method": "GET", "read_write": "read", "path": "/items/{id}"},
-        {"id": "op_read_alt", "method": "GET", "read_write": "read", "path": "/items/{id}/status"},
+        {"id": "op_write", "method": "POST", "read_write": "write", "path": "/items/{id}/activate", "entity_refs": ["entity_item"]},
+        {"id": "op_second", "method": "POST", "read_write": "write", "path": "/items/{id}/confirm", "entity_refs": ["entity_item"]},
+        {"id": "op_read", "method": "GET", "read_write": "read", "path": "/items/{id}", "entity_refs": ["entity_item"]},
+        {"id": "op_read_alt", "method": "GET", "read_write": "read", "path": "/items/{id}/status", "entity_refs": ["entity_item"]},
     ]
 }
 
@@ -59,6 +62,30 @@ def _experiment() -> dict:
             {"property": {"operation_ref": "op_write"}}
         ],
         "observers": [_observer()],
+        "binding_plan": [
+            {
+                "target": "id",
+                "status": "runtime_resolvable",
+                "target_path": "/items/{id}",
+                "resolver_operations": [
+                    {
+                        "operation_ref": "op_read",
+                        "method": "GET",
+                        "path": "/items/{id}",
+                    }
+                ],
+            }
+        ],
+        "fixture_dependency_dag": {
+            "execution_order": ["binding:id"],
+            "nodes": [{"node_id": "binding:id", "target": "id"}],
+        },
+        "disposable_fixture_contract": {
+            "fixture_id": "legacy_fixture_1",
+            "create_operation_ref": "op_write",
+            "entity_ref": "entity_item",
+            "status": "RESOLVED",
+        },
         "precondition_plan": [],
         "control_plan": [],
         "treatment_plan": [
@@ -97,6 +124,14 @@ def test_freeze_binds_compiled_async_policy_to_exact_primary_step() -> None:
     assert frozen["flow_requirements"]["write_step_ids"] == [
         "step_activate"
     ]
+    requirement = frozen["flow_data_requirement"]
+    assert requirement["status"] == "FROZEN"
+    assert requirement["materialized_before_measurement_targets"] == ["id"]
+    assert frozen["compile_receipt"]["flow_data_requirement_id"] == (
+        requirement["requirement_id"]
+    )
+    assert frozen["disposable_fixture_contract"]["projection_only"] is True
+    assert frozen["disposable_fixture_contract"]["is_flow_data_authority"] is False
 
 
 def test_global_primary_observer_does_not_leak_to_other_flow_step() -> None:
@@ -116,6 +151,10 @@ def test_global_primary_observer_does_not_leak_to_other_flow_step() -> None:
     assert "async_policy" not in secondary
     bindings = frozen["flow_requirements"]["observer_bindings"]
     assert [row["bound"] for row in bindings] == [True, False]
+    assert [
+        row["operation_ref"]
+        for row in frozen["flow_data_requirement"]["step_requirements"]
+    ] == ["op_write", "op_second"]
 
 
 def test_step_declared_observer_requirement_binds_secondary_step() -> None:
@@ -157,6 +196,49 @@ def test_step_declared_observer_requirement_binds_secondary_step() -> None:
     assert secondary["readback_contract"]["resolver_operations"][0][
         "operation_ref"
     ] == "op_read_alt"
+
+
+def test_missing_secondary_path_binding_blocks_compile() -> None:
+    experiment = _experiment()
+    experiment["treatment_plan"].append(
+        {
+            "step_id": "step_confirm",
+            "operation_ref": "op_second",
+            "actor_ref": "actor_1",
+            "path": "/items/{confirmation_id}/confirm",
+        }
+    )
+
+    frozen = freeze_compiled_experiment(experiment, behavior_ir=IR)
+
+    assert frozen["compile_receipt"]["status"] == "BLOCKED"
+    assert frozen["compile_receipt"]["reason_code"] == (
+        BLOCKED_FLOW_DATA_BINDING_INCOMPLETE
+    )
+    assert "step_confirm:confirmation_id" in frozen["compile_receipt"]["detail"]
+
+
+def test_prior_step_output_can_supply_later_step_without_global_binding() -> None:
+    experiment = _experiment()
+    experiment["treatment_plan"][0]["output_binding_specs"] = [
+        {"target": "confirmation_id", "json_path": "$.confirmationId"}
+    ]
+    experiment["treatment_plan"].append(
+        {
+            "step_id": "step_confirm",
+            "operation_ref": "op_second",
+            "actor_ref": "actor_1",
+            "path": "/items/{confirmation_id}/confirm",
+            "input_binding_refs": ["confirmation_id"],
+        }
+    )
+
+    frozen = freeze_compiled_experiment(experiment, behavior_ir=IR)
+
+    assert frozen["compile_receipt"]["status"] == "COMPILED"
+    second = frozen["flow_data_requirement"]["step_requirements"][1]
+    assert second["required_binding_targets"] == ["confirmation_id"]
+    assert second["unresolved_binding_targets"] == []
 
 
 def test_conflicting_step_async_policies_block_compile() -> None:
@@ -217,4 +299,5 @@ def test_freeze_is_deterministic_and_idempotent() -> None:
         twice["compile_freeze_receipt"]["freeze_fingerprint"]
     )
     assert once["flow_requirements"] == twice["flow_requirements"]
+    assert once["flow_data_requirement"] == twice["flow_data_requirement"]
     assert once["treatment_plan"] == twice["treatment_plan"]
