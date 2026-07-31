@@ -1,23 +1,25 @@
 """Enterprise-understanding builder with one identity authority.
 
 The mature semantic projection remains in the historical sibling ``builder.py``.
-This package shadows that module intentionally: identity is resolved first by
-``identity_resolution``; the historical builder then receives a compatibility
-projection with no alias authority and continues to build operations, lifecycles,
-relations and processes.
+Identity evidence, stable registry drift and technical bindings are closed before
+that builder receives a compatibility projection.
 """
 from __future__ import annotations
 
 import importlib.util
 import sys
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ..identity_evidence_policy import apply_identity_evidence_policy
+from ..identity_registry_governance import govern_identity_registry
 from ..identity_resolution import (
     apply_identity_resolution_to_model,
     project_asset_for_legacy_builder,
     resolve_enterprise_identities,
 )
+from ..identity_technical_projection import augment_technical_identity_projection
 from ..schema import as_list, stable_id, text
 
 _PACKAGE = __package__.rsplit(".builder", 1)[0]
@@ -49,7 +51,7 @@ def _govern_identity_conflicts(resolution: dict[str, Any]) -> None:
                 "enterprise_identity_conflict",
                 kind,
                 conflict.get("alias") or conflict.get("label") or conflict.get("labels"),
-                conflict.get("candidate_entity_ids"),
+                conflict.get("candidate_entity_ids") or conflict.get("prior_entity_id"),
             ),
         )
         conflict.setdefault("reason_code", kind)
@@ -57,7 +59,11 @@ def _govern_identity_conflicts(resolution: dict[str, Any]) -> None:
 
 
 def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any]:
+    prior_registry = deepcopy(asset.get("enterprise_identity_registry") or {})
+    apply_identity_evidence_policy(asset)
     resolution = resolve_enterprise_identities(asset)
+    resolution = govern_identity_registry(prior_registry, resolution, asset=asset)
+    resolution = augment_technical_identity_projection(asset, resolution)
     _govern_identity_conflicts(resolution)
     projected_asset = project_asset_for_legacy_builder(asset, resolution)
     model = _legacy.build_enterprise_understanding_model(projected_asset)
