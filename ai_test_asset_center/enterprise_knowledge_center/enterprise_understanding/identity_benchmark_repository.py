@@ -1,8 +1,8 @@
-"""Durable project-scoped inputs for enterprise identity measurement.
+"""Durable project-scoped inputs and receipts for identity measurement.
 
 This module owns storage only. It does not resolve identities, evaluate quality or
-rebuild the knowledge asset. Composition loads the persisted inputs before the
-single understanding authority runs.
+rebuild the knowledge asset. Composition loads the persisted inputs and immutable
+measurement history before the single understanding authority runs.
 """
 from __future__ import annotations
 
@@ -14,12 +14,15 @@ from typing import Any
 from .._common import ROOT, _load_json, _safe_project_id, _write_json
 from .._utils import _now, _paths
 from .identity_benchmark import GROUND_TRUTH_SCHEMA, QUALITY_POLICY_SCHEMA
-from .schema import as_dict, as_list, text
+from .identity_benchmark_regression import HISTORY_SCHEMA, SNAPSHOT_SCHEMA
+from .schema import as_list, text
 
 AUDIT_SCHEMA = "qualibug.enterprise-identity-benchmark-audit.v1"
 GROUND_TRUTH_FILENAME = "enterprise_identity_ground_truth.json"
 QUALITY_POLICY_FILENAME = "enterprise_identity_quality_policy.json"
+HISTORY_FILENAME = "enterprise_identity_benchmark_history.json"
 AUDIT_FILENAME = "enterprise_identity_benchmark_audit.json"
+_MAX_HISTORY_SNAPSHOTS = 500
 
 
 def _workspace(project_id: str, root: Path | None = None) -> tuple[str, Path]:
@@ -36,6 +39,7 @@ def identity_benchmark_paths(
     return {
         "ground_truth": workspace / GROUND_TRUTH_FILENAME,
         "quality_policy": workspace / QUALITY_POLICY_FILENAME,
+        "history": workspace / HISTORY_FILENAME,
         "audit": workspace / AUDIT_FILENAME,
     }
 
@@ -55,6 +59,26 @@ def load_identity_quality_policy(
     project_id: str, root: Path | None = None
 ) -> dict[str, Any]:
     return _load(identity_benchmark_paths(project_id, root)["quality_policy"])
+
+
+def load_identity_benchmark_history(
+    project_id: str, root: Path | None = None
+) -> dict[str, Any]:
+    project, _workspace_path = _workspace(project_id, root)
+    loaded = _load(identity_benchmark_paths(project, root)["history"])
+    snapshots = [
+        dict(row)
+        for row in as_list(loaded.get("snapshots"))
+        if isinstance(row, dict)
+        and text(row.get("schema")) == SNAPSHOT_SCHEMA
+        and text(row.get("snapshot_id"))
+    ]
+    return {
+        "schema": HISTORY_SCHEMA,
+        "project_id": project,
+        "updated_at_utc": text(loaded.get("updated_at_utc")),
+        "snapshots": snapshots[-_MAX_HISTORY_SNAPSHOTS:],
+    }
 
 
 def load_identity_benchmark_audit(
@@ -95,6 +119,33 @@ def save_identity_quality_policy(
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(path, dict(payload))
     return path
+
+
+def append_identity_benchmark_snapshot(
+    project_id: str,
+    snapshot: dict[str, Any],
+    root: Path | None = None,
+) -> dict[str, Any]:
+    if text(snapshot.get("schema")) != SNAPSHOT_SCHEMA:
+        raise ValueError("identity_benchmark_snapshot_schema_invalid")
+    if not text(snapshot.get("snapshot_id")):
+        raise ValueError("identity_benchmark_snapshot_id_required")
+    project, _workspace_path = _workspace(project_id, root)
+    path = identity_benchmark_paths(project, root)["history"]
+    history = load_identity_benchmark_history(project, root)
+    rows = [
+        dict(row)
+        for row in as_list(history.get("snapshots"))
+        if isinstance(row, dict)
+    ]
+    if any(text(row.get("snapshot_id")) == text(snapshot.get("snapshot_id")) for row in rows):
+        return dict(snapshot)
+    rows.append(dict(snapshot))
+    history["snapshots"] = rows[-_MAX_HISTORY_SNAPSHOTS:]
+    history["updated_at_utc"] = text(snapshot.get("recorded_at_utc")) or _now()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(path, history)
+    return dict(snapshot)
 
 
 def snapshot_identity_benchmark_file(path: Path) -> bytes | None:
@@ -160,9 +211,10 @@ def apply_identity_benchmark_repository(
     project_id: str,
     root: Path | None = None,
 ) -> dict[str, Any]:
-    """Inject durable benchmark inputs before enterprise understanding runs."""
+    """Inject durable inputs and prior snapshots before understanding runs."""
     ground_truth = load_identity_ground_truth(project_id, root)
     quality_policy = load_identity_quality_policy(project_id, root)
+    history = load_identity_benchmark_history(project_id, root)
     if ground_truth:
         asset["enterprise_identity_ground_truth"] = ground_truth
     else:
@@ -171,10 +223,19 @@ def apply_identity_benchmark_repository(
         asset["enterprise_identity_quality_policy"] = quality_policy
     else:
         asset.pop("enterprise_identity_quality_policy", None)
+    asset["enterprise_identity_benchmark_history"] = history
+    snapshots = as_list(history.get("snapshots"))
     asset["enterprise_identity_benchmark_repository_receipt"] = {
         "schema": "qualibug.enterprise-identity-benchmark-repository-receipt.v1",
         "ground_truth_loaded": bool(ground_truth),
         "quality_policy_loaded": bool(quality_policy),
+        "history_loaded": True,
+        "history_snapshot_count": len(snapshots),
+        "latest_snapshot_id": (
+            text(snapshots[-1].get("snapshot_id"))
+            if snapshots and isinstance(snapshots[-1], dict)
+            else ""
+        ),
         "ground_truth_fingerprint": payload_fingerprint(ground_truth) if ground_truth else "",
         "quality_policy_fingerprint": payload_fingerprint(quality_policy) if quality_policy else "",
         "storage_scope": "PROJECT_WORKSPACE",
@@ -184,10 +245,13 @@ def apply_identity_benchmark_repository(
 
 __all__ = [
     "AUDIT_SCHEMA",
+    "HISTORY_FILENAME",
     "append_identity_benchmark_audit",
+    "append_identity_benchmark_snapshot",
     "apply_identity_benchmark_repository",
     "identity_benchmark_paths",
     "load_identity_benchmark_audit",
+    "load_identity_benchmark_history",
     "load_identity_ground_truth",
     "load_identity_quality_policy",
     "payload_fingerprint",
