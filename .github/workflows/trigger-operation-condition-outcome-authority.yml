@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   diagnose:
-    if: github.event.issue.title == 'DIAGNOSE_OPERATION_CONDITION_OUTCOME_AUTHORITY_20260731'
+    if: github.event.issue.title == 'Canonical behavior authority diagnostic'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
