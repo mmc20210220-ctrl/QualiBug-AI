@@ -22,6 +22,8 @@ BEHAVIOR_ROW_LEDGER_SCHEMA = "qualibug.decision-matrix-row-ledger.v1"
 BEHAVIOR_GATE_SCHEMA = "qualibug.enterprise-business-behavior-gate.v1"
 IMPLEMENTATION_BINDING_SCHEMA = "qualibug.business-behavior-implementation-binding.v1"
 IMPLEMENTATION_BINDING_GATE_SCHEMA = "qualibug.business-behavior-implementation-binding-gate.v1"
+BINDING_IDENTITY_SCHEMA = "qualibug.implementation-binding-identity-graph.v1"
+BINDING_IDENTITY_GATE_SCHEMA = "qualibug.implementation-binding-identity-gate.v1"
 SCENARIO_IR_SCHEMA = "qualibug.enterprise-test-scenario-ir.v1"
 SCENARIO_IR_GATE_SCHEMA = "qualibug.enterprise-test-scenario-ir-gate.v1"
 SCENARIO_EXECUTION_CONTRACT_SCHEMA = "qualibug.scenario-execution-contract.v1"
@@ -235,6 +237,24 @@ def empty_model() -> dict[str, Any]:
             "execution_allowed": False,
             "metrics": {},
         },
+        "binding_identity_graph": {
+            "schema": BINDING_IDENTITY_SCHEMA,
+            "action_surface_bindings": [],
+            "contract_field_bindings": [],
+            "runtime_value_bindings": [],
+            "observer_bindings": [],
+            "formal_ui_surface_bindings": [],
+        },
+        "binding_identity_unknowns": [],
+        "binding_identity_relationships": [],
+        "binding_identity_gate": {
+            "schema": BINDING_IDENTITY_GATE_SCHEMA,
+            "status": "NOT_BUILT",
+            "entry_allowed": False,
+            "binding_identity_ready": False,
+            "execution_allowed": False,
+            "metrics": {},
+        },
         "scenario_ir": [],
         "scenario_ir_unknowns": [],
         "scenario_ir_evidence_index": [],
@@ -318,13 +338,15 @@ def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
     ):
         if not isinstance(model.get(key), list):
             violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
-    # Downstream fields are additive and remain optional for persisted pre-v1 models.
-    # When present they must have the canonical container shape.
+    # Downstream fields remain optional for persisted pre-v1 models. When present,
+    # their containers must match the canonical runtime-understanding contract.
     for key in (
         "behavior_implementation_bindings",
         "implementation_binding_unknowns",
         "implementation_binding_conflicts",
         "implementation_evidence_index",
+        "binding_identity_unknowns",
+        "binding_identity_relationships",
         "scenario_ir",
         "scenario_ir_unknowns",
         "scenario_ir_evidence_index",
@@ -346,31 +368,39 @@ def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
             violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
     if not isinstance(model.get("behavior_ir_gate"), dict):
         violations.append({"code": "MODEL_OBJECT_INVALID", "field": "behavior_ir_gate"})
-    if "implementation_binding_gate" in model and not isinstance(
-        model.get("implementation_binding_gate"), dict
+    for key in (
+        "implementation_binding_gate",
+        "binding_identity_graph",
+        "binding_identity_gate",
+        "scenario_ir_gate",
+        "scenario_execution_contract_gate",
+        "runtime_plan_gate",
+        "runtime_materialization_gate",
     ):
-        violations.append(
-            {"code": "MODEL_OBJECT_INVALID", "field": "implementation_binding_gate"}
-        )
-    if "scenario_ir_gate" in model and not isinstance(model.get("scenario_ir_gate"), dict):
-        violations.append({"code": "MODEL_OBJECT_INVALID", "field": "scenario_ir_gate"})
-    if "scenario_execution_contract_gate" in model and not isinstance(
-        model.get("scenario_execution_contract_gate"), dict
-    ):
-        violations.append(
-            {
-                "code": "MODEL_OBJECT_INVALID",
-                "field": "scenario_execution_contract_gate",
-            }
-        )
-    if "runtime_plan_gate" in model and not isinstance(model.get("runtime_plan_gate"), dict):
-        violations.append({"code": "MODEL_OBJECT_INVALID", "field": "runtime_plan_gate"})
-    if "runtime_materialization_gate" in model and not isinstance(
-        model.get("runtime_materialization_gate"), dict
-    ):
-        violations.append(
-            {"code": "MODEL_OBJECT_INVALID", "field": "runtime_materialization_gate"}
-        )
+        if key in model and not isinstance(model.get(key), dict):
+            violations.append({"code": "MODEL_OBJECT_INVALID", "field": key})
+
+    graph = as_dict(model.get("binding_identity_graph"))
+    if graph:
+        if text(graph.get("schema")) != BINDING_IDENTITY_SCHEMA:
+            violations.append(
+                {
+                    "code": "BINDING_IDENTITY_GRAPH_SCHEMA_INVALID",
+                    "value": graph.get("schema"),
+                }
+            )
+        for key in (
+            "action_surface_bindings",
+            "contract_field_bindings",
+            "runtime_value_bindings",
+            "observer_bindings",
+            "formal_ui_surface_bindings",
+        ):
+            if not isinstance(graph.get(key), list):
+                violations.append(
+                    {"code": "MODEL_COLLECTION_INVALID", "field": f"binding_identity_graph.{key}"}
+                )
+
     for collection in (
         "business_objects",
         "actors",
@@ -416,6 +446,8 @@ __all__ = [
     "BEHAVIOR_GATE_SCHEMA",
     "IMPLEMENTATION_BINDING_SCHEMA",
     "IMPLEMENTATION_BINDING_GATE_SCHEMA",
+    "BINDING_IDENTITY_SCHEMA",
+    "BINDING_IDENTITY_GATE_SCHEMA",
     "SCENARIO_IR_SCHEMA",
     "SCENARIO_IR_GATE_SCHEMA",
     "SCENARIO_EXECUTION_CONTRACT_SCHEMA",
