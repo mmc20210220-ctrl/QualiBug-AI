@@ -38,6 +38,9 @@ from .discovery_runtime_planning import (  # noqa: E402,F401
 from .discovery_runtime_semantic_binding import (  # noqa: E402,F401
     build_discovery_plan,
 )
+from .formal_event_execution_preflight import (  # noqa: E402
+    install_formal_event_execution_preflight,
+)
 from .formal_event_binding_receipt_bridge import (  # noqa: E402
     install_formal_event_binding_receipt_bridge,
 )
@@ -46,7 +49,9 @@ from .formal_event_verdict_reason_bridge import (  # noqa: E402
 )
 
 # Semantic binding registers the event observer, assertion and pre-cleanup wrapper first.
-# These additive bridges then wrap the current registered authorities in that exact order.
+# Execution preflight then recognizes that exact registered observer as the Event Contract's
+# effect evidence; receipt and verdict bridges preserve identity and explain violations.
+install_formal_event_execution_preflight()
 install_formal_event_binding_receipt_bridge()
 install_formal_event_verdict_reason_bridge()
 
