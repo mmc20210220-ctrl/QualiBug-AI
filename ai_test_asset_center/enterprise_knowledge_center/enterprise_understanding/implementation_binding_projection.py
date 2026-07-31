@@ -13,28 +13,50 @@ from .schema import as_dict, as_list, text
 
 SCENARIO_PLANNING_GATE_SCHEMA = "qualibug.business-behavior-scenario-planning-gate.v1"
 _SEMANTIC_SCENARIO_GAP = "BLOCKED_SCENARIO_PLANNING_SEMANTIC_GATE"
+_PARTIAL_PASS = "PARTIAL_PASS_SCENARIO_PLANNING"
 
 
 def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
     semantic_gate = as_dict(model.get("gate"))
     implementation_gate = as_dict(model.get("implementation_binding_gate"))
+    implementation_metrics = dict(as_dict(implementation_gate.get("metrics")))
     semantic_ready = bool(semantic_gate.get("entry_allowed"))
-    implementation_ready = bool(
+    implementation_full_ready = bool(
         implementation_gate.get("scenario_planning_allowed")
         or implementation_gate.get("entry_allowed")
     )
     implementation_status = text(implementation_gate.get("status")) or "NOT_BUILT"
+    behavior_binding_count = int(
+        implementation_metrics.get("behavior_binding_count") or 0
+    )
+    ready_binding_count = int(
+        implementation_metrics.get("scenario_ready_binding_count") or 0
+    )
+    partial_admission_ready = (
+        not implementation_full_ready
+        and behavior_binding_count > 0
+        and ready_binding_count > 0
+    )
 
     if not semantic_ready:
         status = _SEMANTIC_SCENARIO_GAP
+    elif implementation_full_ready:
+        status = "PASS"
+    elif partial_admission_ready:
+        # Readiness is owned by each governed behavior binding. One unresolved or
+        # conflicted behavior must remain blocked and visible, but it must not erase
+        # independently closed behaviors from the planning mainline.
+        status = _PARTIAL_PASS
     elif implementation_status.startswith("BLOCKED"):
         status = implementation_status
-    elif not implementation_ready:
-        status = "PARTIAL_SCENARIO_PLANNING_IMPLEMENTATION_BINDING"
     else:
-        status = "PASS"
+        status = "PARTIAL_SCENARIO_PLANNING_IMPLEMENTATION_BINDING"
 
-    ready = status == "PASS"
+    ready = status in {"PASS", _PARTIAL_PASS}
+    isolated_unready_binding_count = max(
+        behavior_binding_count - ready_binding_count,
+        0,
+    )
     return {
         "schema": SCENARIO_PLANNING_GATE_SCHEMA,
         "status": status,
@@ -44,22 +66,36 @@ def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
         "semantic_understanding_status": text(semantic_gate.get("status")) or "UNKNOWN",
         "semantic_understanding_ready": semantic_ready,
         "implementation_binding_status": implementation_status,
-        "implementation_binding_ready": implementation_ready,
-        "implementation_binding_metrics": dict(
-            as_dict(implementation_gate.get("metrics"))
-        ),
+        "implementation_binding_ready": implementation_full_ready,
+        "implementation_binding_full_ready": implementation_full_ready,
+        "partial_binding_admission": status == _PARTIAL_PASS,
+        "admitted_ready_binding_count": ready_binding_count if ready else 0,
+        "isolated_unready_binding_count": isolated_unready_binding_count,
+        "implementation_binding_metrics": implementation_metrics,
         "blocking_reasons": [
             reason
             for reason in (
                 "SEMANTIC_UNDERSTANDING_NOT_CLOSED" if not semantic_ready else "",
                 (
-                    "IMPLEMENTATION_BINDING_NOT_CLOSED"
-                    if semantic_ready and not implementation_ready
+                    "NO_SCENARIO_READY_IMPLEMENTATION_BINDING"
+                    if semantic_ready and not ready
+                    else ""
+                ),
+            )
+            if reason
+        ],
+        "isolated_reasons": [
+            reason
+            for reason in (
+                (
+                    "UNREADY_IMPLEMENTATION_BINDINGS_ISOLATED"
+                    if status == _PARTIAL_PASS and isolated_unready_binding_count
                     else ""
                 ),
                 (
-                    "IMPLEMENTATION_BINDING_CONFLICT"
-                    if implementation_status.startswith("BLOCKED")
+                    "IMPLEMENTATION_BINDING_CONFLICT_ISOLATED"
+                    if status == _PARTIAL_PASS
+                    and implementation_status.startswith("BLOCKED")
                     else ""
                 ),
             )
@@ -72,6 +108,8 @@ def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
             "effect_or_outcome_channel_required": True,
             "ambiguous_binding_allowed": False,
             "token_overlap_endpoint_selection_allowed": False,
+            "admission_scope": "PER_GOVERNED_BEHAVIOR_BINDING",
+            "unready_binding_can_block_ready_binding": False,
         },
         "request_payload_compiled": False,
         "expected_assertion_compiled": False,
@@ -128,6 +166,18 @@ def project_final_scenario_planning_gate(
             "implementation_binding_ready": bool(
                 scenario_gate.get("implementation_binding_ready")
             ),
+            "implementation_binding_full_ready": bool(
+                scenario_gate.get("implementation_binding_full_ready")
+            ),
+            "implementation_binding_partial_admission": bool(
+                scenario_gate.get("partial_binding_admission")
+            ),
+            "implementation_binding_admitted_ready_count": int(
+                scenario_gate.get("admitted_ready_binding_count") or 0
+            ),
+            "implementation_binding_isolated_unready_count": int(
+                scenario_gate.get("isolated_unready_binding_count") or 0
+            ),
             "implementation_execution_allowed": False,
         }
     )
@@ -138,6 +188,8 @@ def project_final_scenario_planning_gate(
         {
             "scenario_planning_uses_final_semantic_gate": True,
             "scenario_planning_requires_semantic_and_implementation_gates": True,
+            "scenario_planning_admission_is_per_governed_behavior_binding": True,
+            "unready_behavior_binding_cannot_block_ready_behavior_binding": True,
             "implementation_binding_cannot_override_semantic_unknowns": True,
             "semantic_understanding_cannot_substitute_for_system_binding": True,
             "scenario_planning_gate_does_not_enable_execution": True,
