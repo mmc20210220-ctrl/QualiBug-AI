@@ -62,6 +62,15 @@ class _MigratingCommandCenter(
     pass
 
 
+@pytest.fixture(autouse=True)
+def _valid_mainline_contract(monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "validate_mainline_run_contract",
+        lambda value: deepcopy(value),
+    )
+
+
 def test_clear_report_is_returned_without_migration(monkeypatch, tmp_path: Path) -> None:
     source = _payload()
     snapshot = deepcopy(source)
@@ -112,6 +121,29 @@ def test_quarantined_report_returns_in_memory_migrated_view(
     assert loader._load_v12_report("demo", tmp_path) == migrated
     assert loader._load_current_scan_report("demo", tmp_path) == migrated
     assert source == snapshot
+
+
+def test_stale_mainline_keeps_existing_unverifiable_path(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = _payload()
+    calls: list[str] = []
+    monkeypatch.setattr(
+        adapter,
+        "validate_mainline_run_contract",
+        lambda value: (_ for _ in ()).throw(
+            MainlineContractError("mainline_contract_fields_invalid")
+        ),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "build_historical_authorization_quarantine_projection",
+        lambda *args, **kwargs: calls.append("preview") or {},
+    )
+
+    assert _MigratingLoader(source)._load_v12_report("demo", tmp_path) == source
+    assert calls == []
 
 
 def test_generally_invalid_ledger_keeps_existing_unverifiable_path(
