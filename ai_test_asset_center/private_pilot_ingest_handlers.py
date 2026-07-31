@@ -8,17 +8,18 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from .private_pilot_json_io import _write_json_object_atomic
 from .private_pilot_project_assets import (
     KNOWLEDGE_INGEST_EXTENSIONS,
     KNOWLEDGE_INGEST_SOURCE_TYPES,
 )
-from .private_pilot_scan_prep import _run_ingest_auto_scan
-
-_MAX_UPLOAD_BYTES = int(
-    os.environ.get("QUALIBUG_MAX_KNOWLEDGE_UPLOAD_BYTES", str(100 * 1024 * 1024))
+from .private_pilot_request_limits import (
+    MAX_KNOWLEDGE_UPLOAD_BYTES,
+    content_length,
 )
+from .private_pilot_scan_prep import _run_ingest_auto_scan
 
 
 def _archive_response_projection(
@@ -60,7 +61,61 @@ def _canonical_storage_paths(result: dict[str, Any]) -> list[str]:
     return paths
 
 
+def _header_true(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class IngestHandlersMixin:
+    def _read_ingest_request(self) -> dict[str, Any]:
+        """Read raw upload bytes or the legacy bounded JSON envelope."""
+
+        media_type = str(self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if media_type != "application/octet-stream":
+            return self._body()
+        size = content_length(self.headers)
+        if size <= 0:
+            raise ValueError("knowledge upload body is empty")
+        if size > MAX_KNOWLEDGE_UPLOAD_BYTES:
+            raise ValueError(
+                f"knowledge upload exceeds {MAX_KNOWLEDGE_UPLOAD_BYTES} byte limit"
+            )
+        raw = self.rfile.read(size)
+        if len(raw) != size:
+            raise ValueError("knowledge upload ended before Content-Length bytes were read")
+        filename = unquote(
+            str(self.headers.get("X-QualiBug-Filename") or "enterprise_source.bin")
+        )
+        return {
+            "filename": filename,
+            "type": str(self.headers.get("X-QualiBug-Source-Type") or ""),
+            "defer_auto_scan": _header_true(
+                self.headers.get("X-QualiBug-Defer-Auto-Scan")
+            ),
+            "finalize_batch": _header_true(
+                self.headers.get("X-QualiBug-Finalize-Batch")
+            ),
+            "_raw_content": raw,
+            "transport_encoding": "raw_octet_stream",
+        }
+
+    def _upload_bytes(self, body: dict[str, Any]) -> bytes:
+        raw_value = body.get("_raw_content")
+        if isinstance(raw_value, (bytes, bytearray, memoryview)):
+            raw = bytes(raw_value)
+        else:
+            encoded = str(body.get("content") or body.get("data") or "")
+            if not encoded:
+                raise ValueError("MISSING_CONTENT")
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+            except Exception as exc:
+                raise ValueError("DECODE_FAILED") from exc
+        if not raw:
+            raise ValueError("EMPTY_UPLOAD")
+        if len(raw) > MAX_KNOWLEDGE_UPLOAD_BYTES:
+            raise ValueError("UPLOAD_TOO_LARGE")
+        return raw
+
     def _handle_ingest(
         self,
         project: str,
@@ -68,13 +123,7 @@ class IngestHandlersMixin:
         root: Path,
         actor: dict[str, str],
     ) -> None:
-        """Stage one upload and delegate activation to the canonical transaction.
-
-        The HTTP layer never writes the caller filename into a stable project
-        location. A unique staging file exists only for the duration of the
-        transaction, so a failed upload cannot overwrite or delete an existing
-        project artifact.
-        """
+        """Stage one upload and delegate activation to the canonical transaction."""
 
         if not self._require_known_project(project, root):
             return None
@@ -95,52 +144,25 @@ class IngestHandlersMixin:
                 },
                 400,
             )
-        encoded = str(body.get("content") or body.get("data") or "")
-        if not encoded:
-            return self._json(
-                {
-                    "ok": False,
-                    "error": "MISSING_CONTENT",
-                    "message": "缺少文件内容。",
-                },
-                400,
-            )
         try:
-            raw = base64.b64decode(encoded, validate=True)
-        except Exception:
+            raw = self._upload_bytes(body)
+        except ValueError as exc:
+            code = str(exc)
+            status = 413 if code == "UPLOAD_TOO_LARGE" else 400
             return self._json(
                 {
                     "ok": False,
-                    "error": "DECODE_FAILED",
-                    "message": "文件内容解码失败，请重新选择原始文件。",
+                    "error": code,
+                    "max_bytes": MAX_KNOWLEDGE_UPLOAD_BYTES,
                 },
-                400,
-            )
-        if not raw:
-            return self._json(
-                {"ok": False, "error": "EMPTY_UPLOAD"},
-                400,
-            )
-        if len(raw) > _MAX_UPLOAD_BYTES:
-            return self._json(
-                {
-                    "ok": False,
-                    "error": "UPLOAD_TOO_LARGE",
-                    "max_bytes": _MAX_UPLOAD_BYTES,
-                },
-                413,
+                status,
             )
 
         staging_root = (
             root / "platform_workspace" / project / ".ingest_staging"
         ).resolve()
-        project_workspace = (
-            root / "platform_workspace" / project
-        ).resolve()
-        if (
-            project_workspace != staging_root
-            and project_workspace not in staging_root.parents
-        ):
+        project_workspace = (root / "platform_workspace" / project).resolve()
+        if project_workspace != staging_root and project_workspace not in staging_root.parents:
             raise ValueError("ingest staging path escaped project workspace")
         staging_root.mkdir(parents=True, exist_ok=True)
         staging_path: Path | None = None
@@ -170,9 +192,7 @@ class IngestHandlersMixin:
                 staging_path = Path(stream.name)
 
             ingest_phase = "canonical_ingest"
-            from .private_pilot_ingest_authority import (
-                ingest_uploaded_enterprise_material,
-            )
+            from .private_pilot_ingest_authority import ingest_uploaded_enterprise_material
 
             authority_result = ingest_uploaded_enterprise_material(
                 project=project,
@@ -187,14 +207,10 @@ class IngestHandlersMixin:
                 raise TypeError("upload ingest authority result must be an object")
             ingest_result = dict(authority_result.get("ingest_result") or {})
             doc_type = str(authority_result.get("doc_type") or "")
-            type_resolution = str(
-                authority_result.get("type_resolution") or ""
-            )
+            type_resolution = str(authority_result.get("type_resolution") or "")
             doc_info = dict(authority_result.get("doc_info") or {})
             transport = str(authority_result.get("transport") or "document")
-            source_manifest = dict(
-                authority_result.get("source_manifest") or {}
-            )
+            source_manifest = dict(authority_result.get("source_manifest") or {})
             source_ids = [
                 str(value)
                 for value in authority_result.get("source_ids") or []
@@ -295,7 +311,11 @@ class IngestHandlersMixin:
                     kwargs={
                         "root": root,
                         "project": project,
-                        "body": dict(body),
+                        "body": {
+                            key: value
+                            for key, value in body.items()
+                            if key != "_raw_content"
+                        },
                         "raw": bytes(raw),
                         "doc_type": doc_type,
                         "source_manifest": dict(source_manifest),
@@ -329,9 +349,7 @@ class IngestHandlersMixin:
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                     "stable_upload_overwritten": False,
-                    "at": time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                    ),
+                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 },
             )
             raise
@@ -373,6 +391,7 @@ class IngestHandlersMixin:
                 "filename": filename,
                 "doc_type": doc_type,
                 "transport": transport,
+                "transport_encoding": body.get("transport_encoding") or "base64_json",
                 "source_type_resolution": type_resolution,
                 "size_bytes": len(raw),
                 "path": storage_paths[0] if storage_paths else "",
@@ -399,9 +418,7 @@ class IngestHandlersMixin:
         root: Path,
         actor: dict[str, str],
     ) -> None:
-        from .enterprise_knowledge_center import (
-            delete_enterprise_knowledge_source,
-        )
+        from .enterprise_knowledge_center import delete_enterprise_knowledge_source
 
         source_id = str(body.get("source_id") or "").strip()
         if not source_id:
