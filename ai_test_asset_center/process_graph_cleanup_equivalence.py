@@ -1,186 +1,68 @@
-"""Per-source-step cleanup execution and equivalence aggregation for graphs.
+"""Strict public authority for process-graph cleanup equivalence.
 
-Every graph write is evaluated by the existing single-write cleanup equivalence
-engine using that node's own WriteReversibilityProof and governance snapshots.
-This module only scopes evidence and aggregates formal receipts; it never
-reimplements business-state comparison.
+The existing per-step input builder and single-write comparison remain unchanged
+in ``process_graph_cleanup_equivalence_core``.  This facade seals their runtime
+scope and handles the one graph-specific semantic case: a formal write that is
+proven never to have reached transport needs no compensation.
 """
 from __future__ import annotations
 
-import hashlib
-import json
+from copy import deepcopy
 from typing import Any
 
-from . import cleanup_equivalence_core as _equivalence_core
-from .cleanup_execution_receipt import build_cleanup_execution_receipt
-from .process_graph_reversibility import (
-    GRAPH_REVERSIBILITY_SCHEMA,
-    is_process_graph_reversibility_proof,
+from . import process_graph_cleanup_equivalence_core as _core
+
+for _name in dir(_core):
+    if not _name.startswith("__"):
+        globals()[_name] = getattr(_core, _name)
+
+GRAPH_EQUIVALENCE_SCOPE_INVALID = "PROCESS_GRAPH_EQUIVALENCE_SCOPE_INVALID"
+GRAPH_SOURCE_WRITE_NOT_REACHED = (
+    "PROCESS_GRAPH_SOURCE_WRITE_NOT_REACHED_TRANSPORT"
 )
 
 
-GRAPH_CLEANUP_EXECUTION_SET_SCHEMA = (
-    "qualibug.process-graph-cleanup-execution-set.v1"
-)
-GRAPH_CLEANUP_EQUIVALENCE_SCHEMA = (
-    "qualibug.process-graph-cleanup-equivalence-receipt.v1"
-)
-GRAPH_ENVIRONMENT_RESTORATION_PENDING = (
-    "qualibug.environment-restoration-receipt.v1"
-)
-
-
-def _dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _stable_hash(value: Any) -> str:
-    raw = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
+def _receipt_step_id(receipt: dict[str, Any]) -> str:
+    return _core._text(
+        receipt.get("source_step_id")
+        or _core._dict(receipt.get("evidence")).get("source_step_id")
     )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _rows_by_identity(
-    rows: list[dict[str, Any]],
-    *,
-    key: str,
-) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {}
-    for raw in rows:
-        row = _dict(raw)
-        identity = _text(row.get(key))
-        if identity:
-            result.setdefault(identity, []).append(row)
-    return result
-
-
-def _source_steps(steps_out: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {}
-    for raw in steps_out:
-        row = _dict(raw)
-        if _text(row.get("phase")) != "treatment":
-            continue
-        step_id = _text(row.get("step_id") or row.get("subject_id"))
-        if step_id and isinstance(row.get("governance_receipt"), dict):
-            result.setdefault(step_id, []).append(row)
-    return result
-
-
-def _cleanup_steps(steps_out: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {}
-    for raw in steps_out:
-        row = _dict(raw)
-        if _text(row.get("phase")) != "cleanup":
-            continue
-        source_step_id = _text(
-            row.get("compensates_step_id") or row.get("source_step_id")
-        )
-        if source_step_id:
-            result.setdefault(source_step_id, []).append(row)
-    return result
-
-
-def _graph_cleanup_receipts(
-    observations: dict[str, Any],
-) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {}
-    for raw in _list(observations.get("process_graph_cleanup_receipts")):
-        row = _dict(raw)
-        source_step_id = _text(_dict(row.get("evidence")).get("source_step_id"))
-        if source_step_id:
-            result.setdefault(source_step_id, []).append(row)
-    return result
-
-
-def _observation_from_governance(
-    governance: dict[str, Any],
-    key: str,
-    *,
-    phase: str,
-    fallback_path: str = "",
-) -> dict[str, Any]:
-    observed = _dict(governance.get(key))
-    status = int(observed.get("status") or observed.get("status_code") or 0)
-    if not observed or status <= 0:
-        return {}
+def _scope_payload(execution_set: dict[str, Any]) -> dict[str, Any]:
+    row = _core._dict(execution_set)
+    inputs = _core._dict(row.get("step_inputs_by_id"))
+    node_receipts = _core._dict(
+        row.get("step_cleanup_execution_receipts_by_id")
+    )
     return {
-        "status_code": status,
-        "body": observed.get("body"),
-        "path": _text(
-            governance.get("observation_path") or fallback_path
+        "schema_version": _core._text(row.get("schema_version")),
+        "receipt_id": _core._text(row.get("receipt_id")),
+        "proof_id": _core._text(row.get("proof_id")),
+        "process_graph_write_contract_id": _core._text(
+            row.get("process_graph_write_contract_id")
         ),
-        "phase": phase,
-        "source": "process_graph_governance",
-    }
-
-
-def _cleanup_status_for_step(
-    graph_receipts: list[dict[str, Any]],
-    cleanup_rows: list[dict[str, Any]],
-) -> str:
-    if len(cleanup_rows) == 1:
-        return "completed"
-    statuses = {
-        _text(row.get("status")).upper()
-        for row in graph_receipts
-        if _text(row.get("status"))
-    }
-    if statuses == {"NOT_REQUIRED"}:
-        return "not_required"
-    if "FAILED" in statuses or "BLOCKED" in statuses:
-        return "blocked"
-    return "not_attempted"
-
-
-def _pending_environment_receipt(
-    *,
-    experiment_id: str,
-    campaign_id: str,
-    graph_proof_id: str,
-    cleanup_execution_set_id: str,
-) -> dict[str, Any]:
-    receipt_id = "envr_" + _stable_hash(
-        {
-            "experiment_id": experiment_id,
-            "campaign_id": campaign_id,
-            "graph_proof_id": graph_proof_id,
-            "cleanup_execution_set_id": cleanup_execution_set_id,
-        }
-    )[:32]
-    return {
-        "schema_version": GRAPH_ENVIRONMENT_RESTORATION_PENDING,
-        "receipt_id": receipt_id,
-        "experiment_id": experiment_id,
-        "campaign_id": campaign_id,
-        "database_cleanup_receipt_ids": [],
-        "api_cleanup_receipt_ids": [],
-        "fixture_receipt_ids": [],
-        "created_rows_remaining": 0,
-        "modified_rows_not_restored": 0,
-        "deleted_rows_not_restored": 0,
-        "cleanup_failures": [],
-        "baseline_comparison": {
-            "relevant_tables_match": False,
-            "relevant_fields_match": False,
+        "write_step_ids": list(_core._list(row.get("write_step_ids"))),
+        "cleanup_order": list(_core._list(row.get("cleanup_order"))),
+        "source_receipt_ids": list(
+            _core._list(row.get("source_receipt_ids"))
+        ),
+        "status": _core._text(row.get("status")).upper(),
+        "step_input_fingerprints_by_id": {
+            key: _core._stable_hash(_core._dict(value))[:32]
+            for key, value in sorted(inputs.items())
         },
-        "environment_restored": False,
-        "final_status": "PENDING_EQUIVALENCE",
-        "authority": "process_graph_cleanup_equivalence",
-        "graph_proof_id": graph_proof_id,
+        "step_cleanup_receipt_fingerprints_by_id": {
+            key: _core._stable_hash(_core._dict(value))[:32]
+            for key, value in sorted(node_receipts.items())
+        },
     }
+
+
+def build_process_graph_cleanup_scope_fingerprint(
+    execution_set: dict[str, Any],
+) -> str:
+    return _core._stable_hash(_scope_payload(execution_set))[:32]
 
 
 def finalize_process_graph_cleanup_equivalence_inputs(
@@ -190,258 +72,301 @@ def finalize_process_graph_cleanup_equivalence_inputs(
     resolved_campaign_id: str,
     runtime_bindings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build one CER and one equivalence input bundle per graph write step."""
-    output = dict(result)
-    observations = _dict(output.get("observations"))
-    steps_out = [
-        row for row in _list(output.get("steps_out")) if isinstance(row, dict)
-    ]
-    proof = _dict(exp.get("write_reversibility_proof"))
-    contract = _dict(exp.get("process_graph_write_contract"))
-    if not is_process_graph_reversibility_proof(proof):
+    output = _core.finalize_process_graph_cleanup_equivalence_inputs(
+        exp=exp,
+        result=result,
+        resolved_campaign_id=resolved_campaign_id,
+        runtime_bindings=runtime_bindings,
+    )
+    observations = _core._dict(output.get("observations"))
+    execution_set = _core._dict(
+        observations.get("cleanup_execution_receipt")
+    )
+    if (
+        _core._text(execution_set.get("schema_version"))
+        != _core.GRAPH_CLEANUP_EXECUTION_SET_SCHEMA
+    ):
         return output
 
-    write_step_ids = [
-        _text(value)
-        for value in _list(proof.get("write_step_ids"))
-        if _text(value)
+    write_ids = [
+        _core._text(value)
+        for value in _core._list(execution_set.get("write_step_ids"))
+        if _core._text(value)
     ]
-    step_proofs = _dict(proof.get("step_proofs_by_id"))
-    cleanup_contracts = {
-        _text(row.get("source_step_id")): row
-        for row in _list(contract.get("cleanup_steps"))
-        if isinstance(row, dict) and _text(row.get("source_step_id"))
-    }
-    source_rows = _source_steps(steps_out)
-    cleanup_rows = _cleanup_steps(steps_out)
-    graph_receipts = _graph_cleanup_receipts(observations)
+    inputs = deepcopy(_core._dict(execution_set.get("step_inputs_by_id")))
+    graph_receipts = _core._graph_cleanup_receipts(observations)
+    rollback_outcomes = _core._dict(
+        observations.get("process_graph_rollback_outcomes")
+    )
+    node_receipts = _core._dict(
+        execution_set.get("step_cleanup_execution_receipts_by_id")
+    )
 
-    node_execution_receipts: dict[str, dict[str, Any]] = {}
-    step_inputs: dict[str, dict[str, Any]] = {}
-    cleanup_failures = int(output.get("cleanup_failures") or 0)
-    runtime_values = dict(runtime_bindings or {})
-
-    for source_step_id in write_step_ids:
-        node_proof = _dict(step_proofs.get(source_step_id))
-        cleanup_contract = _dict(cleanup_contracts.get(source_step_id))
-        sources = source_rows.get(source_step_id, [])
-        cleanups = cleanup_rows.get(source_step_id, [])
-        graph_rows = graph_receipts.get(source_step_id, [])
-        source = sources[0] if len(sources) == 1 else {}
-        cleanup_row = cleanups[0] if len(cleanups) == 1 else {}
-        cleanup_status = _cleanup_status_for_step(graph_rows, cleanups)
-
-        node_cer = build_cleanup_execution_receipt(
-            experiment_id=(
-                f"{_text(exp.get('experiment_id'))}::{source_step_id}"
-            ),
-            proof_id=_text(node_proof.get("proof_id")),
-            cleanup_plan=([cleanup_contract] if cleanup_contract else []),
-            steps_out=([cleanup_row] if cleanup_row else []),
-            cleanup_failures=(
-                0
-                if cleanup_status in {"completed", "not_required"}
-                else 1
-            ),
-            cleanup_status=cleanup_status,
-            proof=node_proof,
-            adapter_cleanup_receipts=[],
+    for step_id in write_ids:
+        row = deepcopy(_core._dict(inputs.get(step_id)))
+        scoped = [
+            deepcopy(value)
+            for value in graph_receipts.get(step_id, [])
+            if isinstance(value, dict)
+        ]
+        graph_receipt = scoped[0] if len(scoped) == 1 else {}
+        node_receipt = _core._dict(node_receipts.get(step_id))
+        row.update(
+            {
+                "graph_cleanup_receipt": graph_receipt,
+                "graph_cleanup_receipt_identity_valid": bool(
+                    len(scoped) == 1
+                    and _receipt_step_id(graph_receipt) == step_id
+                ),
+                "rollback_outcome": _core._text(
+                    rollback_outcomes.get(step_id)
+                ).upper(),
+                "cleanup_execution_receipt_identity_valid": bool(
+                    _core._text(node_receipt.get("source_step_id"))
+                    == step_id
+                    and _core._text(node_receipt.get("receipt_id"))
+                    == _core._text(
+                        _core._dict(
+                            row.get("cleanup_execution_receipt")
+                        ).get("receipt_id")
+                    )
+                ),
+            }
         )
-        node_cer["source_step_id"] = source_step_id
-        node_cer["system_ref"] = _text(cleanup_contract.get("system_ref"))
-        node_execution_receipts[source_step_id] = node_cer
+        inputs[step_id] = row
 
-        source_governance = _dict(source.get("governance_receipt"))
-        cleanup_governance = _dict(cleanup_row.get("governance_receipt"))
-        before_observation = _observation_from_governance(
-            source_governance,
-            "before",
-            phase="before",
-            fallback_path=_text(source.get("observation_path")),
+    execution_set["step_inputs_by_id"] = inputs
+    execution_set["scope_fingerprint"] = (
+        build_process_graph_cleanup_scope_fingerprint(execution_set)
+    )
+    environment = _core._dict(
+        execution_set.get("environment_restoration_receipt")
+    )
+    if environment:
+        environment["cleanup_execution_scope_fingerprint"] = (
+            execution_set["scope_fingerprint"]
         )
-        after_write_observation = _observation_from_governance(
-            source_governance,
-            "after",
-            phase="after_write",
-            fallback_path=_text(source.get("observation_path")),
-        )
-        after_cleanup_observation = _observation_from_governance(
-            cleanup_governance,
-            "after",
-            phase="after_cleanup",
-            fallback_path=_text(cleanup_row.get("observation_path")),
-        )
-        step_inputs[source_step_id] = {
-            "source_step_id": source_step_id,
-            "system_ref": _text(cleanup_contract.get("system_ref")),
-            "proof": node_proof,
-            "before_observation": before_observation,
-            "after_write_observation": after_write_observation,
-            "after_cleanup_observation": after_cleanup_observation,
-            "runtime_bindings": runtime_values,
-            "cleanup_execution_receipt": node_cer,
-            "source_step_identity_valid": len(sources) == 1,
-            "cleanup_step_identity_valid": (
-                len(cleanups) == 1
-                or _text(node_cer.get("status")).upper() == "NOT_REQUIRED"
-            ),
-        }
-
-        ledger = observations.get("process_step_ledger")
-        receipt_id = _text(node_cer.get("receipt_id"))
-        if (
-            receipt_id
-            and ledger is not None
-            and hasattr(ledger, "append_scoped_receipt_ref")
-        ):
-            ledger.append_scoped_receipt_ref(
-                step_id=source_step_id,
-                field="cleanup_receipt_ids",
-                receipt_id=receipt_id,
-                receipt_step_id=source_step_id,
-            )
-
-    source_receipt_ids = [
-        _text(node_execution_receipts[step_id].get("receipt_id"))
-        for step_id in write_step_ids
-        if _text(node_execution_receipts[step_id].get("receipt_id"))
-    ]
-    execution_set_id = "pgces_" + _stable_hash(
-        {
-            "proof_id": _text(proof.get("proof_id")),
-            "write_step_ids": write_step_ids,
-            "source_receipt_ids": source_receipt_ids,
-        }
-    )[:24]
-    accepted_statuses = {"ACCEPTED", "NOT_REQUIRED"}
-    all_accepted = bool(write_step_ids) and all(
-        _text(node_execution_receipts[step_id].get("status")).upper()
-        in accepted_statuses
-        for step_id in write_step_ids
-    )
-    aggregate = {
-        "schema_version": GRAPH_CLEANUP_EXECUTION_SET_SCHEMA,
-        "receipt_id": execution_set_id,
-        "experiment_id": _text(exp.get("experiment_id")),
-        "proof_id": _text(proof.get("proof_id")),
-        "process_graph_write_contract_id": _text(contract.get("contract_id")),
-        "write_step_ids": list(write_step_ids),
-        "cleanup_order": list(_list(contract.get("cleanup_order"))),
-        "attempted": any(
-            bool(row.get("attempted"))
-            for row in node_execution_receipts.values()
-        ),
-        "transport_reached": any(
-            bool(row.get("transport_reached"))
-            for row in node_execution_receipts.values()
-        ),
-        "succeeded": all_accepted and cleanup_failures == 0,
-        "status": "ACCEPTED" if all_accepted and cleanup_failures == 0 else "BLOCKED",
-        "status_code": 200 if all_accepted and cleanup_failures == 0 else 0,
-        "source_receipt_ids": source_receipt_ids,
-        "step_cleanup_execution_receipts_by_id": node_execution_receipts,
-        "step_inputs_by_id": step_inputs,
-        "fingerprint": "",
-    }
-    aggregate["fingerprint"] = _stable_hash(
-        {
-            "receipt_id": execution_set_id,
-            "proof_id": aggregate["proof_id"],
-            "write_step_ids": write_step_ids,
-            "source_receipt_ids": source_receipt_ids,
-            "status": aggregate["status"],
-        }
-    )[:32]
-    environment_receipt = _pending_environment_receipt(
-        experiment_id=_text(exp.get("experiment_id")),
-        campaign_id=resolved_campaign_id,
-        graph_proof_id=_text(proof.get("proof_id")),
-        cleanup_execution_set_id=execution_set_id,
-    )
-    environment_receipt["api_cleanup_receipt_ids"] = list(
-        source_receipt_ids
-    )
-    aggregate["environment_restoration_receipt"] = environment_receipt
-
-    observations["cleanup_execution_receipt"] = aggregate
-    # The execution bundle consumes one graph-scoped receipt. Per-node receipts
-    # remain explicitly addressable and are bound to their source ledger rows.
-    observations["cleanup_execution_receipts"] = [aggregate]
-    observations["cleanup_execution_receipt_ids"] = [execution_set_id]
-    observations["process_graph_step_cleanup_execution_receipts"] = [
-        node_execution_receipts[step_id] for step_id in write_step_ids
-    ]
-    observations["process_graph_step_cleanup_execution_receipts_by_id"] = (
-        node_execution_receipts
-    )
-    observations["process_graph_cleanup_equivalence_inputs_by_step"] = (
-        step_inputs
-    )
-    observations["environment_restoration_receipt"] = environment_receipt
-    observations["environment_restored"] = False
-
+    observations["cleanup_execution_receipt"] = execution_set
+    observations["cleanup_execution_receipts"] = [execution_set]
+    observations[
+        "process_graph_cleanup_equivalence_inputs_by_step"
+    ] = inputs
     output["observations"] = observations
-    output["steps_out"] = steps_out
-    output["cleanup_failures"] = cleanup_failures
     return output
 
 
-def _update_environment_receipt(
-    execution_set: dict[str, Any],
-    *,
-    equivalence_status: str,
-    reason_codes: list[str],
-    step_receipt_ids: list[str],
-) -> None:
-    environment = _dict(
-        execution_set.get("environment_restoration_receipt")
+def _scope_error(
+    proof: dict[str, Any], execution_set: dict[str, Any]
+) -> str:
+    graph_proof = _core._dict(proof)
+    execution = _core._dict(execution_set)
+    write_ids = [
+        _core._text(value)
+        for value in _core._list(graph_proof.get("write_step_ids"))
+        if _core._text(value)
+    ]
+    if not _core.is_process_graph_reversibility_proof(graph_proof):
+        return "graph_proof_schema_invalid"
+    if (
+        _core._text(execution.get("schema_version"))
+        != _core.GRAPH_CLEANUP_EXECUTION_SET_SCHEMA
+    ):
+        return "cleanup_execution_set_schema_invalid"
+    if not write_ids or len(write_ids) != len(set(write_ids)):
+        return "write_step_identity_invalid"
+    if list(_core._list(execution.get("write_step_ids"))) != write_ids:
+        return "write_step_scope_mismatch"
+    if _core._text(execution.get("proof_id")) != _core._text(
+        graph_proof.get("proof_id")
+    ):
+        return "proof_identity_mismatch"
+    if _core._text(
+        execution.get("process_graph_write_contract_id")
+    ) != _core._text(
+        graph_proof.get("process_graph_write_contract_id")
+    ):
+        return "write_contract_identity_mismatch"
+    if list(_core._list(execution.get("cleanup_order"))) != list(
+        _core._list(graph_proof.get("cleanup_order"))
+    ):
+        return "cleanup_order_mismatch"
+
+    expected = set(write_ids)
+    inputs = _core._dict(execution.get("step_inputs_by_id"))
+    proofs = _core._dict(graph_proof.get("step_proofs_by_id"))
+    node_receipts = _core._dict(
+        execution.get("step_cleanup_execution_receipts_by_id")
     )
-    if not environment:
-        return
-    environment["cleanup_equivalence_receipt_ids"] = list(
-        step_receipt_ids
-    )
-    if equivalence_status == "EQUIVALENT":
-        environment.update(
-            {
-                "created_rows_remaining": 0,
-                "modified_rows_not_restored": 0,
-                "deleted_rows_not_restored": 0,
-                "cleanup_failures": [],
-                "baseline_comparison": {
-                    "relevant_tables_match": True,
-                    "relevant_fields_match": True,
-                },
-                "environment_restored": True,
-                "final_status": "ENVIRONMENT_RESTORED",
-            }
+    if set(inputs) != expected or set(proofs) != expected:
+        return "step_input_or_proof_scope_mismatch"
+    if set(node_receipts) != expected:
+        return "cleanup_receipt_scope_mismatch"
+
+    source_receipt_ids: list[str] = []
+    for step_id in write_ids:
+        row = _core._dict(inputs.get(step_id))
+        node_proof = _core._dict(proofs.get(step_id))
+        row_proof = _core._dict(row.get("proof"))
+        node_receipt = _core._dict(node_receipts.get(step_id))
+        row_receipt = _core._dict(
+            row.get("cleanup_execution_receipt")
         )
-        return
-    environment.update(
-        {
-            "created_rows_remaining": 1,
-            "cleanup_failures": [
-                {
-                    "reason": (
-                        "process_graph_cleanup_not_equivalent"
-                        if equivalence_status == "NOT_EQUIVALENT"
-                        else "process_graph_cleanup_equivalence_indeterminate"
-                    ),
-                    "reason_codes": list(reason_codes),
-                }
-            ],
-            "baseline_comparison": {
-                "relevant_tables_match": False,
-                "relevant_fields_match": False,
-            },
-            "environment_restored": False,
-            "final_status": (
-                "ENVIRONMENT_DIRTY"
-                if equivalence_status == "NOT_EQUIVALENT"
-                else "CLEANUP_FAILED"
-            ),
-        }
+        graph_receipt = _core._dict(row.get("graph_cleanup_receipt"))
+        if _core._text(row.get("source_step_id")) != step_id:
+            return f"{step_id}:step_input_identity_mismatch"
+        if (
+            _core._text(row_proof.get("proof_id"))
+            != _core._text(node_proof.get("proof_id"))
+            or _core._text(row_proof.get("fingerprint"))
+            != _core._text(node_proof.get("fingerprint"))
+        ):
+            return f"{step_id}:step_proof_identity_mismatch"
+        if (
+            _core._text(node_receipt.get("source_step_id")) != step_id
+            or not _core._text(node_receipt.get("receipt_id"))
+            or _core._stable_hash(node_receipt)
+            != _core._stable_hash(row_receipt)
+            or row.get("cleanup_execution_receipt_identity_valid")
+            is not True
+        ):
+            return f"{step_id}:cleanup_receipt_identity_mismatch"
+        if (
+            row.get("graph_cleanup_receipt_identity_valid") is not True
+            or _receipt_step_id(graph_receipt) != step_id
+            or not _core._text(graph_receipt.get("receipt_id"))
+        ):
+            return f"{step_id}:graph_cleanup_receipt_identity_mismatch"
+        graph_status = _core._text(graph_receipt.get("status")).upper()
+        if graph_status != _core._text(
+            row.get("rollback_outcome")
+        ).upper():
+            return f"{step_id}:rollback_outcome_mismatch"
+        node_status = _core._text(node_receipt.get("status")).upper()
+        if graph_status == "COMPLETED" and node_status != "ACCEPTED":
+            return f"{step_id}:completed_receipt_not_accepted"
+        if graph_status == "NOT_REQUIRED" and node_status != "NOT_REQUIRED":
+            return f"{step_id}:not_required_receipt_mismatch"
+        if graph_status in {"FAILED", "BLOCKED"} and node_status in {
+            "ACCEPTED",
+            "NOT_REQUIRED",
+        }:
+            return f"{step_id}:failed_receipt_contradiction"
+        source_receipt_ids.append(_core._text(node_receipt.get("receipt_id")))
+
+    if list(_core._list(execution.get("source_receipt_ids"))) != source_receipt_ids:
+        return "source_receipt_order_mismatch"
+    attached = _core._text(execution.get("scope_fingerprint"))
+    computed = build_process_graph_cleanup_scope_fingerprint(execution)
+    if not attached or attached != computed:
+        return f"scope_fingerprint_mismatch:{attached}:{computed}"
+    return ""
+
+
+def _zero_transport_receipt(
+    step_id: str,
+    node_proof: dict[str, Any],
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    graph_receipt = _core._dict(row.get("graph_cleanup_receipt"))
+    evidence = _core._dict(graph_receipt.get("evidence"))
+    cleanup_receipt = _core._dict(
+        row.get("cleanup_execution_receipt")
     )
+    valid = bool(
+        row.get("source_step_identity_valid") is not True
+        and row.get("cleanup_step_identity_valid") is True
+        and row.get("graph_cleanup_receipt_identity_valid") is True
+        and row.get("cleanup_execution_receipt_identity_valid") is True
+        and _core._text(row.get("rollback_outcome")).upper()
+        == "NOT_REQUIRED"
+        and _core._text(graph_receipt.get("status")).upper()
+        == "NOT_REQUIRED"
+        and _receipt_step_id(graph_receipt) == step_id
+        and _core._text(evidence.get("reason_code"))
+        == GRAPH_SOURCE_WRITE_NOT_REACHED
+        and evidence.get("request_reached_transport") is False
+        and int(evidence.get("effectful_write_count") or 0) == 0
+        and int(evidence.get("cleanup_write_count") or 0) == 0
+        and _core._text(cleanup_receipt.get("status")).upper()
+        == "NOT_REQUIRED"
+        and cleanup_receipt.get("attempted") is False
+        and cleanup_receipt.get("transport_reached") is False
+        and not _core._dict(row.get("before_observation"))
+        and not _core._dict(row.get("after_write_observation"))
+        and not _core._dict(row.get("after_cleanup_observation"))
+    )
+    if not valid:
+        return {}
+    proof_id = _core._text(node_proof.get("proof_id"))
+    return {
+        "schema_version": "qualibug.cleanup-equivalence-receipt.v1",
+        "receipt_id": "ceq_"
+        + _core._stable_hash(
+            {
+                "proof_id": proof_id,
+                "step_id": step_id,
+                "graph_receipt_id": _core._text(
+                    graph_receipt.get("receipt_id")
+                ),
+                "cleanup_receipt_id": _core._text(
+                    cleanup_receipt.get("receipt_id")
+                ),
+            }
+        )[:32],
+        "proof_id": proof_id,
+        "source_step_id": step_id,
+        "system_ref": _core._text(row.get("system_ref")),
+        "equivalence_status": "NOT_APPLICABLE",
+        "reason_code": GRAPH_SOURCE_WRITE_NOT_REACHED,
+        "detail": "source_write_formally_proven_not_to_reach_transport",
+        "transport_proven_absent": True,
+        "graph_cleanup_receipt_id": _core._text(
+            graph_receipt.get("receipt_id")
+        ),
+        "cleanup_execution_receipt_id": _core._text(
+            cleanup_receipt.get("receipt_id")
+        ),
+    }
+
+
+def _indeterminate_receipt(
+    proof: dict[str, Any], execution_set: dict[str, Any], detail: str
+) -> dict[str, Any]:
+    proof_id = _core._text(proof.get("proof_id"))
+    execution_id = _core._text(execution_set.get("receipt_id"))
+    receipt = {
+        "schema_version": _core.GRAPH_CLEANUP_EQUIVALENCE_SCHEMA,
+        "receipt_id": "pgceq_"
+        + _core._stable_hash(
+            {"proof_id": proof_id, "execution_id": execution_id, "detail": detail}
+        )[:32],
+        "proof_id": proof_id,
+        "process_graph_write_contract_id": _core._text(
+            proof.get("process_graph_write_contract_id")
+        ),
+        "cleanup_execution_receipt_id": execution_id,
+        "write_step_ids": list(_core._list(proof.get("write_step_ids"))),
+        "cleanup_order": list(_core._list(proof.get("cleanup_order"))),
+        "equivalence_status": "INDETERMINATE",
+        "reason_code": "PROCESS_GRAPH_CLEANUP_EQUIVALENCE_INDETERMINATE",
+        "detail": f"{GRAPH_EQUIVALENCE_SCOPE_INVALID}:{detail}",
+        "step_equivalence_receipts_by_id": {},
+        "step_equivalence_receipt_ids": [],
+        "equivalent_step_count": 0,
+        "not_equivalent_step_count": 0,
+        "indeterminate_step_count": len(
+            _core._list(proof.get("write_step_ids"))
+        ),
+        "fingerprint": "",
+    }
+    receipt["fingerprint"] = _core._stable_hash(receipt)[:32]
+    _core._update_environment_receipt(
+        execution_set,
+        equivalence_status="INDETERMINATE",
+        reason_codes=[receipt["detail"]],
+        step_receipt_ids=[],
+    )
+    return receipt
 
 
 def evaluate_process_graph_cleanup_equivalence(
@@ -449,169 +374,135 @@ def evaluate_process_graph_cleanup_equivalence(
     proof: dict[str, Any],
     cleanup_execution_receipt: dict[str, Any],
 ) -> dict[str, Any]:
-    """Evaluate every graph write with the existing single-write engine."""
-    graph_proof = _dict(proof)
-    execution_set = _dict(cleanup_execution_receipt)
-    write_step_ids = [
-        _text(value)
-        for value in _list(graph_proof.get("write_step_ids"))
-        if _text(value)
-    ]
-    inputs = _dict(execution_set.get("step_inputs_by_id"))
-    proof_steps = _dict(graph_proof.get("step_proofs_by_id"))
-    node_receipts: dict[str, dict[str, Any]] = {}
-    reason_codes: list[str] = []
+    graph_proof = _core._dict(proof)
+    execution_set = _core._dict(cleanup_execution_receipt)
+    error = _scope_error(graph_proof, execution_set)
+    if error:
+        return _indeterminate_receipt(graph_proof, execution_set, error)
 
-    scope_valid = bool(
-        is_process_graph_reversibility_proof(graph_proof)
-        and _text(execution_set.get("schema_version"))
-        == GRAPH_CLEANUP_EXECUTION_SET_SCHEMA
-        and write_step_ids
-        and set(inputs) == set(write_step_ids)
-        and set(proof_steps) == set(write_step_ids)
+    aggregate = _core.evaluate_process_graph_cleanup_equivalence(
+        proof=graph_proof,
+        cleanup_execution_receipt=execution_set,
     )
-    if scope_valid:
-        for source_step_id in write_step_ids:
-            row = _dict(inputs.get(source_step_id))
-            if (
-                row.get("source_step_identity_valid") is not True
-                or row.get("cleanup_step_identity_valid") is not True
-            ):
-                node_receipts[source_step_id] = {
-                    "schema_version": "qualibug.cleanup-equivalence-receipt.v1",
-                    "receipt_id": "ceq_"
-                    + _stable_hash(
-                        {
-                            "proof_id": _text(
-                                _dict(proof_steps.get(source_step_id)).get(
-                                    "proof_id"
-                                )
-                            ),
-                            "source_step_id": source_step_id,
-                            "reason": "step_identity_invalid",
-                        }
-                    )[:32],
-                    "proof_id": _text(
-                        _dict(proof_steps.get(source_step_id)).get("proof_id")
-                    ),
-                    "equivalence_status": "INDETERMINATE",
-                    "reason_code": "PROCESS_GRAPH_STEP_EVIDENCE_IDENTITY_INVALID",
-                    "detail": f"source_step={source_step_id}",
-                    "source_step_id": source_step_id,
-                }
-                continue
-            node_receipt = _equivalence_core.evaluate_cleanup_equivalence(
-                proof=_dict(proof_steps.get(source_step_id)),
-                before_observation=_dict(row.get("before_observation")),
-                after_write_observation=_dict(
-                    row.get("after_write_observation")
-                ),
-                after_cleanup_observation=_dict(
-                    row.get("after_cleanup_observation")
-                ),
-                runtime_bindings=_dict(row.get("runtime_bindings")),
-                cleanup_execution_receipt=_dict(
-                    row.get("cleanup_execution_receipt")
-                ),
-            )
-            node_receipt["source_step_id"] = source_step_id
-            node_receipt["system_ref"] = _text(row.get("system_ref"))
-            node_receipts[source_step_id] = node_receipt
-    else:
-        reason_codes.append("PROCESS_GRAPH_EQUIVALENCE_SCOPE_INVALID")
-
-    statuses = [
-        _text(node_receipts.get(step_id, {}).get("equivalence_status")).upper()
-        for step_id in write_step_ids
+    write_ids = [
+        _core._text(value)
+        for value in _core._list(graph_proof.get("write_step_ids"))
+        if _core._text(value)
     ]
-    if not scope_valid or len(node_receipts) != len(write_step_ids):
-        aggregate_status = "INDETERMINATE"
-    elif any(status == "NOT_EQUIVALENT" for status in statuses):
-        aggregate_status = "NOT_EQUIVALENT"
-    elif any(
-        status not in {"EQUIVALENT", "NOT_APPLICABLE"}
-        for status in statuses
-    ):
-        aggregate_status = "INDETERMINATE"
-    else:
-        aggregate_status = "EQUIVALENT"
+    inputs = _core._dict(execution_set.get("step_inputs_by_id"))
+    proofs = _core._dict(graph_proof.get("step_proofs_by_id"))
+    node_receipts = deepcopy(
+        _core._dict(aggregate.get("step_equivalence_receipts_by_id"))
+    )
+    changed = False
+    for step_id in write_ids:
+        replacement = _zero_transport_receipt(
+            step_id,
+            _core._dict(proofs.get(step_id)),
+            _core._dict(inputs.get(step_id)),
+        )
+        if replacement:
+            node_receipts[step_id] = replacement
+            changed = True
+    if not changed:
+        return aggregate
 
-    for step_id in write_step_ids:
-        reason = _text(node_receipts.get(step_id, {}).get("reason_code"))
-        if reason:
-            reason_codes.append(f"{step_id}:{reason}")
-    reason_codes = list(dict.fromkeys(reason_codes))
-    step_receipt_ids = [
-        _text(node_receipts.get(step_id, {}).get("receipt_id"))
-        for step_id in write_step_ids
-        if _text(node_receipts.get(step_id, {}).get("receipt_id"))
-    ]
-    aggregate_receipt = {
-        "schema_version": GRAPH_CLEANUP_EQUIVALENCE_SCHEMA,
-        "receipt_id": "pgceq_"
-        + _stable_hash(
-            {
-                "proof_id": _text(graph_proof.get("proof_id")),
-                "execution_set_id": _text(execution_set.get("receipt_id")),
-                "step_receipt_ids": step_receipt_ids,
-                "status": aggregate_status,
-            }
-        )[:32],
-        "proof_id": _text(graph_proof.get("proof_id")),
-        "process_graph_write_contract_id": _text(
-            graph_proof.get("process_graph_write_contract_id")
-        ),
-        "cleanup_execution_receipt_id": _text(
-            execution_set.get("receipt_id")
-        ),
-        "write_step_ids": list(write_step_ids),
-        "cleanup_order": list(_list(graph_proof.get("cleanup_order"))),
-        "equivalence_status": aggregate_status,
-        "reason_code": (
-            ""
-            if aggregate_status == "EQUIVALENT"
-            else (
-                "PROCESS_GRAPH_CLEANUP_NOT_EQUIVALENT"
-                if aggregate_status == "NOT_EQUIVALENT"
-                else "PROCESS_GRAPH_CLEANUP_EQUIVALENCE_INDETERMINATE"
-            )
-        ),
-        "detail": ";".join(reason_codes),
-        "step_equivalence_receipts_by_id": node_receipts,
-        "step_equivalence_receipt_ids": step_receipt_ids,
-        "equivalent_step_count": sum(
-            status in {"EQUIVALENT", "NOT_APPLICABLE"}
-            for status in statuses
-        ),
-        "not_equivalent_step_count": sum(
-            status == "NOT_EQUIVALENT" for status in statuses
-        ),
-        "indeterminate_step_count": sum(
-            status not in {"EQUIVALENT", "NOT_APPLICABLE", "NOT_EQUIVALENT"}
-            for status in statuses
-        ),
-        "fingerprint": "",
+    statuses = {
+        step_id: _core._text(
+            _core._dict(node_receipts.get(step_id)).get("equivalence_status")
+        ).upper()
+        for step_id in write_ids
     }
-    aggregate_receipt["fingerprint"] = _stable_hash(
+    values = [statuses.get(step_id, "") for step_id in write_ids]
+    if any(value == "NOT_EQUIVALENT" for value in values):
+        final_status = "NOT_EQUIVALENT"
+    elif any(
+        value not in {"EQUIVALENT", "NOT_APPLICABLE"} for value in values
+    ):
+        final_status = "INDETERMINATE"
+    else:
+        final_status = "EQUIVALENT"
+    receipt_ids = [
+        _core._text(_core._dict(node_receipts.get(step_id)).get("receipt_id"))
+        for step_id in write_ids
+        if _core._text(
+            _core._dict(node_receipts.get(step_id)).get("receipt_id")
+        )
+    ]
+    reasons = [
+        f"{step_id}:{_core._text(_core._dict(node_receipts.get(step_id)).get('reason_code'))}"
+        for step_id in write_ids
+        if _core._text(
+            _core._dict(node_receipts.get(step_id)).get("reason_code")
+        )
+    ]
+    aggregate.update(
         {
-            "receipt_id": aggregate_receipt["receipt_id"],
-            "proof_id": aggregate_receipt["proof_id"],
-            "equivalence_status": aggregate_status,
-            "step_receipt_ids": step_receipt_ids,
+            "receipt_id": "pgceq_"
+            + _core._stable_hash(
+                {
+                    "proof_id": _core._text(graph_proof.get("proof_id")),
+                    "execution_id": _core._text(execution_set.get("receipt_id")),
+                    "scope_fingerprint": _core._text(
+                        execution_set.get("scope_fingerprint")
+                    ),
+                    "receipt_ids": receipt_ids,
+                    "status": final_status,
+                }
+            )[:32],
+            "equivalence_status": final_status,
+            "reason_code": (
+                ""
+                if final_status == "EQUIVALENT"
+                else (
+                    "PROCESS_GRAPH_CLEANUP_NOT_EQUIVALENT"
+                    if final_status == "NOT_EQUIVALENT"
+                    else "PROCESS_GRAPH_CLEANUP_EQUIVALENCE_INDETERMINATE"
+                )
+            ),
+            "detail": ";".join(reasons),
+            "step_equivalence_receipts_by_id": node_receipts,
+            "step_equivalence_receipt_ids": receipt_ids,
+            "step_equivalence_status_by_id": statuses,
+            "equivalent_step_count": sum(
+                value in {"EQUIVALENT", "NOT_APPLICABLE"} for value in values
+            ),
+            "not_equivalent_step_count": sum(
+                value == "NOT_EQUIVALENT" for value in values
+            ),
+            "indeterminate_step_count": sum(
+                value
+                not in {"EQUIVALENT", "NOT_APPLICABLE", "NOT_EQUIVALENT"}
+                for value in values
+            ),
+            "fingerprint": "",
+        }
+    )
+    aggregate["fingerprint"] = _core._stable_hash(
+        {
+            "receipt_id": aggregate["receipt_id"],
+            "proof_id": aggregate["proof_id"],
+            "equivalence_status": final_status,
+            "receipt_ids": receipt_ids,
+            "statuses": statuses,
         }
     )[:32]
-    _update_environment_receipt(
+    _core._update_environment_receipt(
         execution_set,
-        equivalence_status=aggregate_status,
-        reason_codes=reason_codes,
-        step_receipt_ids=step_receipt_ids,
+        equivalence_status=final_status,
+        reason_codes=reasons,
+        step_receipt_ids=receipt_ids,
     )
-    return aggregate_receipt
+    return aggregate
 
 
-__all__ = [
-    "GRAPH_CLEANUP_EXECUTION_SET_SCHEMA",
-    "GRAPH_CLEANUP_EQUIVALENCE_SCHEMA",
-    "finalize_process_graph_cleanup_equivalence_inputs",
-    "evaluate_process_graph_cleanup_equivalence",
-]
+__all__ = sorted(
+    {
+        *[name for name in dir(_core) if not name.startswith("__")],
+        "GRAPH_EQUIVALENCE_SCOPE_INVALID",
+        "GRAPH_SOURCE_WRITE_NOT_REACHED",
+        "build_process_graph_cleanup_scope_fingerprint",
+        "finalize_process_graph_cleanup_equivalence_inputs",
+        "evaluate_process_graph_cleanup_equivalence",
+    }
+)
