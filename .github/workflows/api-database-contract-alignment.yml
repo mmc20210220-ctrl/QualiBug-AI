@@ -15,6 +15,11 @@ on:
       - "ai_test_asset_center/database_numeric_oracle.py"
       - "ai_test_asset_center/database_numeric_experiment_projection.py"
       - "ai_test_asset_center/database_numeric_finding_bridge.py"
+      - "ai_test_asset_center/database_relation_observer_runtime.py"
+      - "ai_test_asset_center/database_relation_experiment_bridge.py"
+      - "ai_test_asset_center/database_relation_numeric_experiment_projection.py"
+      - "ai_test_asset_center/database_relation_numeric_oracle.py"
+      - "ai_test_asset_center/database_relation_numeric_finding_bridge.py"
       - "ai_test_asset_center/experiment_compiler.py"
       - "ai_test_asset_center/experiment_executor.py"
       - "ai_test_asset_center/non_http_observers.py"
@@ -30,6 +35,9 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/database_observer_implementation_binding.py"
       - "ai_test_asset_center/enterprise_knowledge_center/database_observer_runtime_plan_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/database_observer_runtime_materialization_projection.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/database_relation_observer_projection.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/database_relation_authority.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/database_relation_observer_contract_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding_governance.py"
       - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/scenario_execution_contract_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/composition.py"
@@ -59,6 +67,13 @@ on:
       - "tests/test_database_numeric_contract_oracle.py"
       - "tests/test_database_numeric_finding_bridge.py"
       - "tests/test_database_numeric_runtime_integration.py"
+      - "tests/test_database_relation_observer_projection.py"
+      - "tests/test_database_relation_authority.py"
+      - "tests/test_database_relation_observer_runtime.py"
+      - "tests/test_database_relation_numeric_experiment_projection.py"
+      - "tests/test_database_relation_numeric_oracle.py"
+      - "tests/test_database_relation_numeric_contract_oracle.py"
+      - "tests/test_database_relation_numeric_finding_bridge.py"
       - ".github/workflows/api-database-contract-alignment.yml"
 
 permissions:
@@ -100,6 +115,11 @@ jobs:
             ai_test_asset_center/database_numeric_oracle.py \
             ai_test_asset_center/database_numeric_experiment_projection.py \
             ai_test_asset_center/database_numeric_finding_bridge.py \
+            ai_test_asset_center/database_relation_observer_runtime.py \
+            ai_test_asset_center/database_relation_experiment_bridge.py \
+            ai_test_asset_center/database_relation_numeric_experiment_projection.py \
+            ai_test_asset_center/database_relation_numeric_oracle.py \
+            ai_test_asset_center/database_relation_numeric_finding_bridge.py \
             ai_test_asset_center/experiment_compiler.py \
             ai_test_asset_center/experiment_executor.py \
             ai_test_asset_center/non_http_observers.py \
@@ -115,6 +135,9 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/database_observer_implementation_binding.py \
             ai_test_asset_center/enterprise_knowledge_center/database_observer_runtime_plan_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/database_observer_runtime_materialization_projection.py \
+            ai_test_asset_center/enterprise_knowledge_center/database_relation_observer_projection.py \
+            ai_test_asset_center/enterprise_knowledge_center/database_relation_authority.py \
+            ai_test_asset_center/enterprise_knowledge_center/database_relation_observer_contract_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding_governance.py \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/scenario_execution_contract_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/composition.py \
@@ -147,4 +170,11 @@ jobs:
             tests/test_database_numeric_experiment_projection.py \
             tests/test_database_numeric_contract_oracle.py \
             tests/test_database_numeric_finding_bridge.py \
-            tests/test_database_numeric_runtime_integration.py
+            tests/test_database_numeric_runtime_integration.py \
+            tests/test_database_relation_observer_projection.py \
+            tests/test_database_relation_authority.py \
+            tests/test_database_relation_observer_runtime.py \
+            tests/test_database_relation_numeric_experiment_projection.py \
+            tests/test_database_relation_numeric_oracle.py \
+            tests/test_database_relation_numeric_contract_oracle.py \
+            tests/test_database_relation_numeric_finding_bridge.py
