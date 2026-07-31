@@ -1,0 +1,67 @@
+name: Apply process-step fact separation
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: process-step-fact-separation-main
+  cancel-in-progress: false
+
+jobs:
+  refactor:
+    if: github.event.issue.title == 'RUN_PROCESS_STEP_FACT_SEPARATION_20260731'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply root-cause refactor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/.one_shot/process_step_fact_separation/apply.py
+          python tools/.one_shot/process_step_fact_separation/apply.py
+          python -m py_compile \
+            ai_test_asset_center/process_step_execution.py \
+            ai_test_asset_center/process_step_semantic_projection.py \
+            ai_test_asset_center/process_step_semantic_view.py \
+            tests/test_process_step_fact_separation.py
+
+      - name: Run focused process regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e .
+          pytest -q \
+            tests/test_process_step_fact_separation.py \
+            tests/test_operational_lifecycle_authority.py \
+            tests/test_experiment_outcome_single_exit.py
+
+      - name: Commit canonical fact model
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'qualibug-mainline-bot'
+          git config user.email 'qualibug-mainline-bot@users.noreply.github.com'
+          git rm -r tools/.one_shot/process_step_fact_separation
+          git rm .github/workflows/apply-process-step-fact-separation.yml
+          git add \
+            ai_test_asset_center/process_step_execution.py \
+            ai_test_asset_center/process_step_semantic_projection.py \
+            ai_test_asset_center/process_step_semantic_view.py \
+            tests/test_process_step_fact_separation.py
+          git diff --cached --check
+          git commit -m 'refactor(process): separate execution acceptance effect and completion facts'
+          git pull --rebase origin main
+          git push origin HEAD:main
