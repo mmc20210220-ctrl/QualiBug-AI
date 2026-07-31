@@ -86,7 +86,11 @@ def _candidates(observations: dict[str, Any]) -> list[tuple[str, dict[str, Any]]
     for row in _list(observations.get("observer_receipts")):
         if isinstance(row, dict):
             out.append(("observer", row))
-    for key in ("process_step_oracle_receipts", "oracle_receipts", "assertion_receipts"):
+    for key in (
+        "process_step_oracle_receipts",
+        "oracle_receipts",
+        "assertion_receipts",
+    ):
         for row in _list(observations.get(key)):
             if isinstance(row, dict):
                 out.append(("oracle", row))
@@ -148,26 +152,24 @@ class ProcessStepSemanticView:
         return project_step_sets(self._ledger)
 
     def _publish_receipt_declarations(self) -> tuple[list[dict[str, Any]], str]:
-        """Publish one sealed ledger declaration on every process-step receipt.
-
-        A bundle can therefore prove that no step receipt was removed, added,
-        mixed from another ledger, or reclassified after the ledger hash was
-        sealed. These are declarations of the existing ledger, not a second
-        authority.
-        """
+        """Publish reconstructable ledger declarations on every receipt."""
 
         projection = self._projection()
+        fact_snapshot = self._ledger.build_fact_snapshot()
         ledger_hash = self._ledger.compute_hash()
         declaration = {
             "ledger_recorded_step_ids": list(projection["recorded_step_ids"]),
-            "ledger_required_step_ids": list(self._ledger.required_step_ids),
-            "ledger_attempted_step_ids": list(projection["attempted_step_ids"]),
-            "ledger_executed_step_ids": list(projection["executed_step_ids"]),
-            "ledger_accepted_step_ids": list(projection["accepted_step_ids"]),
-            "ledger_completed_step_ids": list(projection["completed_step_ids"]),
-            "ledger_failed_step_ids": list(projection["failed_step_ids"]),
+            "ledger_required_step_ids": list(fact_snapshot["required_step_ids"]),
+            "ledger_attempted_step_ids": list(fact_snapshot["attempted_step_ids"]),
+            "ledger_executed_step_ids": list(fact_snapshot["executed_step_ids"]),
+            "ledger_accepted_step_ids": list(fact_snapshot["accepted_step_ids"]),
+            "ledger_completed_step_ids": list(fact_snapshot["completed_step_ids"]),
+            "ledger_failed_step_ids": list(fact_snapshot["failed_step_ids"]),
             "ledger_pending_semantic_step_ids": list(
                 projection["pending_semantic_step_ids"]
+            ),
+            "ledger_receipt_scope_rejections": list(
+                fact_snapshot["receipt_scope_rejections"]
             ),
             "ledger_receipt_count": len(projection["recorded_step_ids"]),
         }
