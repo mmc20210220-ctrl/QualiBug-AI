@@ -119,6 +119,8 @@ def apply_recognition_to_model(
     model: dict[str, Any], recognition: dict[str, Any]
 ) -> dict[str, Any]:
     model["business_object_recognition"] = deepcopy(recognition)
+    benchmark = dict(as_dict(recognition.get("benchmark")))
+    model["business_object_benchmark"] = benchmark
     recognition_gate = dict(as_dict(recognition.get("gate")))
     model["business_object_recognition_gate"] = recognition_gate
     model["unknowns"] = [
@@ -144,6 +146,10 @@ def apply_recognition_to_model(
 
     metrics = dict(as_dict(model.get("metrics")))
     recognition_metrics = as_dict(recognition_gate.get("metrics"))
+    measured = (
+        text(benchmark.get("status")) == "MEASURED"
+        and bool(benchmark.get("quality_claim_allowed"))
+    )
     metrics.update(
         {
             "business_object_candidate_count": int(recognition_metrics.get("candidate_count") or 0),
@@ -153,9 +159,23 @@ def apply_recognition_to_model(
             "business_object_type_conflict_count": int(
                 recognition_metrics.get("type_conflict_count") or 0
             ),
-            "business_object_recognition_is_measured_recall": False,
+            "business_object_recognition_is_measured_recall": measured,
+            "business_object_measurement_status": benchmark.get("status") or "NOT_MEASURED",
         }
     )
+    if measured:
+        for key in (
+            "object_type_precision",
+            "object_type_recall",
+            "object_type_f1",
+            "object_overpromotion_rate",
+            "object_miss_rate",
+            "object_error_unknown_coverage_rate",
+            "silent_object_error_count",
+            "type_confusion_distribution",
+        ):
+            if key in recognition_metrics:
+                metrics[f"business_{key}"] = recognition_metrics[key]
     model["metrics"] = metrics
     model["model_id"] = stable_id(
         "enterprise_understanding", model.get("model_id"), recognition.get("recognition_id")

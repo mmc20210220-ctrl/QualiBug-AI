@@ -12,6 +12,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ..business_object_benchmark import project_business_object_benchmark
 from ..business_object_recognition import (
     apply_recognition_to_model,
     project_asset_for_recognized_objects,
@@ -105,6 +106,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     prior_registry = deepcopy(asset.get("enterprise_identity_registry") or {})
     apply_identity_evidence_policy(asset)
     recognition = recognize_business_objects(asset)
+    recognition = project_business_object_benchmark(asset, recognition)
     recognized_asset = project_asset_for_recognized_objects(asset, recognition)
     resolution = resolve_enterprise_identities(recognized_asset)
     resolution = govern_identity_registry(prior_registry, resolution, asset=recognized_asset)
