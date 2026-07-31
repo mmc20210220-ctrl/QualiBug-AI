@@ -50,6 +50,9 @@ from .database_relation_observer_projection import (
 from .database_table_source_alignment import (
     enrich_asset_with_database_table_alignment_candidates,
 )
+from .enterprise_understanding.identity_benchmark_repository import (
+    apply_identity_benchmark_repository,
+)
 from .enterprise_understanding.integration import (
     _parsed_sources_for_context,
     enrich_asset_with_enterprise_understanding,
@@ -193,6 +196,9 @@ def _persist_final(
             "identity_second_pass_status": (
                 asset.get("identity_evidence_policy_receipt") or {}
             ).get("classified_fact_count"),
+            "identity_benchmark_measurement_status": (
+                asset.get("enterprise_identity_benchmark") or {}
+            ).get("status"),
         }
     )
     _save_registry(project_id, root, registry)
@@ -249,6 +255,15 @@ def build_enterprise_business_knowledge_asset(
     # The shared language policy is a formal runtime dependency. A missing or malformed
     # lexicon blocks comprehension instead of silently degrading to an empty vocabulary.
     asset = apply_semantic_lexicon_contract(asset)
+
+    # Externally supplied Ground Truth and quality policy are project-scoped durable
+    # inputs. They enter only here, before the first identity benchmark projection, and
+    # never bypass the canonical understanding or Probe gates.
+    asset = apply_identity_benchmark_repository(
+        asset,
+        project_id=project,
+        root=resolved_root,
+    )
 
     # Existing Chinese-first parsing remains the compatibility parser. It creates the
     # current ledger and conflict/context assets through the existing authority. The
@@ -340,6 +355,9 @@ def build_enterprise_business_knowledge_asset(
             "database_relation_candidate_projection_precedes_enterprise_understanding": True,
             "database_relation_authority_precedes_enterprise_understanding": True,
             "database_relation_observer_projection_precedes_enterprise_understanding": True,
+            "identity_benchmark_repository_precedes_enterprise_understanding": True,
+            "identity_benchmark_inputs_use_project_workspace": True,
+            "identity_benchmark_api_reuses_composition_root": True,
             "implicit_rule_projection_runs_inside_understanding_boundary": True,
             "implicit_rule_projection_runs_after_conflict_reconciliation": True,
             "implicit_rule_projection_uses_existing_rule_library": True,
