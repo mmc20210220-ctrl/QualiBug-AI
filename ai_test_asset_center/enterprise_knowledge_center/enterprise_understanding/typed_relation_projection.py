@@ -58,28 +58,31 @@ def _evidence(fact: dict[str, Any]) -> dict[str, Any]:
 
 def project_typed_object_relations(asset: dict[str, Any]) -> dict[str, Any]:
     ledger = _dict(asset.get("business_fact_ledger"))
-    facts = [
-        dict(row)
-        for row in _list(ledger.get("items"))
-        if isinstance(row, dict)
-        and _text(row.get("status")) == "ACCEPTED"
-        and _text(row.get("fact_type")).upper() == "OBJECT_RELATION"
+    all_facts = [
+        dict(row) for row in _list(ledger.get("items")) if isinstance(row, dict)
+    ]
+    typed_facts = [
+        fact
+        for fact in all_facts
+        if _text(fact.get("status")) == "ACCEPTED"
+        and _text(fact.get("fact_type")).upper() == "OBJECT_RELATION"
     ]
     existing = [
         dict(row) for row in _list(asset.get("entity_relations")) if isinstance(row, dict)
     ]
-    identities = {
+    identity_to_edge = {
         (
             _text(row.get("from_entity") or row.get("from") or row.get("source")),
             _text(row.get("relation") or row.get("relation_type")).upper(),
             _text(row.get("to_entity") or row.get("to") or row.get("target")),
             _text(row.get("fact_ref")),
-        )
+        ): _text(row.get("edge_id") or row.get("relation_id"))
         for row in existing
     }
     projected: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
-    for fact in facts:
+    marked = 0
+    for fact in typed_facts:
         sources, targets = _relation_endpoints(fact)
         relation = _text(fact.get("predicate") or fact.get("relation_type")).upper()
         evidence = _evidence(fact)
@@ -107,31 +110,41 @@ def project_typed_object_relations(asset: dict[str, Any]) -> dict[str, Any]:
             )
             continue
         identity = (source, relation, target, _text(fact.get("fact_id")))
-        if identity in identities:
-            continue
-        identities.add(identity)
-        projected.append(
-            {
-                "edge_id": _stable_id(source, relation, target, fact.get("fact_id")),
-                "from_entity": source,
-                "to_entity": target,
-                "relation": relation,
-                "status": "accepted",
-                "source_id": evidence.get("source_id"),
-                "fact_ref": fact.get("fact_id"),
-                "conditions": list(_list(fact.get("conditions"))),
-                "exceptions": list(_list(fact.get("exception_scope") or fact.get("exceptions"))),
-                "evidence": evidence,
-                "derivation": _DERIVATION,
-                "automatic_endpoint_inference_allowed": False,
-            }
+        edge_id = identity_to_edge.get(identity) or _stable_id(
+            source, relation, target, fact.get("fact_id")
         )
+        if identity not in identity_to_edge:
+            identity_to_edge[identity] = edge_id
+            projected.append(
+                {
+                    "edge_id": edge_id,
+                    "from_entity": source,
+                    "to_entity": target,
+                    "relation": relation,
+                    "status": "accepted",
+                    "source_id": evidence.get("source_id"),
+                    "fact_ref": fact.get("fact_id"),
+                    "conditions": list(_list(fact.get("conditions"))),
+                    "exceptions": list(_list(fact.get("exception_scope") or fact.get("exceptions"))),
+                    "evidence": evidence,
+                    "derivation": _DERIVATION,
+                    "automatic_endpoint_inference_allowed": False,
+                }
+            )
+        fact["object_graph_projection_authority"] = "EXISTING_ENTITY_RELATIONS"
+        fact["object_graph_projection_ref"] = edge_id
+        fact["object_graph_text_reparse_allowed"] = False
+        marked += 1
+    ledger["items"] = all_facts
+    ledger["typed_object_relation_projection_authority_marked_count"] = marked
+    asset["business_fact_ledger"] = ledger
     asset["entity_relations"] = [*existing, *projected]
     asset["typed_object_relation_projection_receipt"] = {
         "schema": RECEIPT_SCHEMA,
         "status": "BLOCKED" if blocked else "PASS",
-        "typed_relation_fact_count": len(facts),
+        "typed_relation_fact_count": len(typed_facts),
         "projected_relation_count": len(projected),
+        "authority_marked_fact_count": marked,
         "blocked_relation_count": len(blocked),
         "blocked_relations": blocked,
         "raw_statement_reparsed": False,
@@ -169,6 +182,7 @@ def project_typed_object_relations(asset: dict[str, Any]) -> dict[str, Any]:
             "typed_object_relations_feed_existing_object_graph": True,
             "typed_object_relation_projection_reparses_text": False,
             "typed_object_relation_projection_infers_endpoints": False,
+            "typed_object_relation_fact_marks_projection_authority": True,
         }
     )
     asset["governance"] = governance
