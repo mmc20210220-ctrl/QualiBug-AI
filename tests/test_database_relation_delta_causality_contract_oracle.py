@@ -95,6 +95,9 @@ def _experiment(assertion: dict) -> dict:
             "status": "RESOLVED",
             "assertion_kind": ASSERTION_KIND,
             "operation_causality_bound": True,
+            "causal_authority_basis": (
+                "APPROVED_DATABASE_RELATION_FIELD_CATALOG"
+            ),
         },
         "safety_contract": {"governed_write": False},
     }
@@ -184,11 +187,21 @@ def test_contract_oracle_owns_operation_attributed_delta_violation() -> None:
     assert failed["reason_code"] == (
         "DATABASE_RELATION_DELTA_CONSERVATION_VIOLATED"
     )
-    assert failed["actual"]["causal_scope_semantic_match"] is True
-    assert failed["actual"]["transport_receipt_integrity_valid"] is True
-    assert failed["actual"]["transport_scope_match"] is True
-    assert failed["actual"]["causal_value_fingerprint_match"] is True
-    assert failed["actual"]["causal_lineage_match"] is True
-    assert failed["actual"]["root_delta"] == "-15"
-    assert failed["actual"]["relation_delta"] == "10"
-    assert failed["actual"]["observer_performed_oracle_verdict"] is False
+    actual = failed["actual"]
+    assert actual["relation_authority_match"] is True
+    assert actual["relation_receipt_authority_match"] is True
+    assert actual["automatic_authority_selection_used"] is False
+    assert actual["relation_before_authority_scope"][
+        "mapping_decision_id"
+    ] == "decision:relation"
+    assert actual["relation_after_authority_scope"][
+        "relation_mapping_decision_id"
+    ] == "decision:relation"
+    assert actual["causal_scope_semantic_match"] is True
+    assert actual["transport_receipt_integrity_valid"] is True
+    assert actual["transport_scope_match"] is True
+    assert actual["causal_value_fingerprint_match"] is True
+    assert actual["causal_lineage_match"] is True
+    assert actual["root_delta"] == "-15"
+    assert actual["relation_delta"] == "10"
+    assert actual["observer_performed_oracle_verdict"] is False
