@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
+import pytest
+
+from ai_test_asset_center.connector_connection_profiles import ConnectorProfileError
 from ai_test_asset_center.private_pilot_connector_handlers import (
     KnowledgeConnectorHandlersMixin,
     _connector_route,
     _sanitize_sync_response,
+    _validate_checkpoint_against_registry,
 )
 
 PROJECT = "enterprise-project"
@@ -58,6 +63,11 @@ def test_sync_action_uses_server_checkpoint_and_commits_new_checkpoint(
         handlers,
         "load_connector_sync_checkpoint",
         lambda project, connector, root: old_checkpoint,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_validate_checkpoint_against_registry",
+        lambda *args, **kwargs: None,
     )
 
     def fake_sync(project, **kwargs):
@@ -123,6 +133,11 @@ def test_non_complete_sync_does_not_advance_encrypted_checkpoint(
     )
     monkeypatch.setattr(
         handlers,
+        "_validate_checkpoint_against_registry",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        handlers,
         "sync_feishu_connector",
         lambda *args, **kwargs: {
             "status": "FAILED",
@@ -164,3 +179,34 @@ def test_private_pilot_handler_composes_connector_router_before_canonical_router
 
     mro = list(PrivatePilotHandler.__mro__)
     assert mro.index(KnowledgeConnectorHandlersMixin) < mro.index(HttpRoutingMixin)
+
+
+def test_checkpoint_registry_mismatch_blocks_before_remote_sync(tmp_path, monkeypatch):
+    import ai_test_asset_center.private_pilot_connector_handlers as handlers
+
+    checkpoint = "feishu-snapshot-v1:" + "9" * 64
+    monkeypatch.setattr(
+        handlers,
+        "list_connector_instances",
+        lambda project, root, include_disabled: {
+            "connector_instances": [
+                {
+                    "connector_instance_id": CONNECTOR,
+                    "last_committed_cursor_fingerprint": hashlib.sha256(
+                        b"different-checkpoint"
+                    ).hexdigest(),
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(
+        ConnectorProfileError,
+        match="checkpoint_registry_mismatch",
+    ):
+        _validate_checkpoint_against_registry(
+            PROJECT,
+            CONNECTOR,
+            checkpoint,
+            tmp_path,
+        )
