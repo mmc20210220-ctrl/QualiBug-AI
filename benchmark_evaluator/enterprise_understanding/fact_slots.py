@@ -316,6 +316,84 @@ def _source_locator_metrics(
     }
 
 
+def _accepted_fact_precision_metrics(
+    ground_truth: dict[str, Any],
+    annotated: list[tuple[str, dict[str, Any]]],
+    facts: list[dict[str, Any]],
+    alignments: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Measure false ACCEPTED facts only when the explicit fact universe is closed.
+
+    Scope is the union of exact source locators declared by the complete Ground Truth.
+    A product fact counts as supported only when the existing one-candidate alignment
+    authority selected it for one Ground Truth row. Duplicate/ambiguous candidates are
+    therefore false accepts rather than being rescued by an automatic winner.
+    """
+    scope_complete = ground_truth.get("explicit_fact_scope_complete") is True
+    if not scope_complete:
+        return (
+            {
+                "accepted_fact_scope_complete": False,
+                "accepted_fact_count_in_scope": 0,
+                "supported_accepted_fact_count": 0,
+                "false_accepted_fact_count": 0,
+                "accepted_fact_precision": None,
+                "false_accepted_rate": None,
+            },
+            [],
+        )
+
+    scope_locators = {
+        locator
+        for _collection, row in annotated
+        for locator in (_expected_slot(row, "source_locators") or [])
+        if _text(locator)
+    }
+    scoped_facts = [
+        fact
+        for fact in facts
+        if _fact_type(fact) != _norm("TERM_ALIAS")
+        and bool(scope_locators.intersection(_fact_locators(fact)))
+    ]
+    selected_ids = {
+        _text(row.get("candidate_id"))
+        for row in alignments
+        if _text(row.get("alignment_status")).upper() in {"EXACT", "PARTIAL"}
+        and _text(row.get("candidate_id"))
+    }
+    supported = [fact for fact in scoped_facts if _candidate_id(fact) in selected_ids]
+    false_accepted = [fact for fact in scoped_facts if _candidate_id(fact) not in selected_ids]
+    accepted_count = len(scoped_facts)
+    supported_count = len(supported)
+    false_count = len(false_accepted)
+    rows = [
+        {
+            "candidate_id": _candidate_id(fact),
+            "fact_type": fact.get("fact_type") or fact.get("kind"),
+            "operations": sorted(_fact_operation(fact)),
+            "objects": sorted(_fact_objects(fact)),
+            "actors": sorted(_fact_actors(fact)),
+            "source_locators": sorted(_fact_locators(fact)),
+            "raw_statement": fact.get("raw_statement"),
+            "reason": "ACCEPTED_FACT_NOT_SELECTED_BY_UNIQUE_GROUND_TRUTH_ALIGNMENT",
+        }
+        for fact in false_accepted
+    ]
+    return (
+        {
+            "accepted_fact_scope_complete": True,
+            "accepted_fact_count_in_scope": accepted_count,
+            "supported_accepted_fact_count": supported_count,
+            "false_accepted_fact_count": false_count,
+            "accepted_fact_precision": (
+                supported_count / accepted_count if accepted_count else 0.0
+            ),
+            "false_accepted_rate": false_count / accepted_count if accepted_count else 1.0,
+        },
+        rows,
+    )
+
+
 def evaluate_business_fact_slots(
     ground_truth: dict[str, Any],
     product_asset: dict[str, Any],
@@ -418,6 +496,12 @@ def evaluate_business_fact_slots(
     total_facts = len(annotated)
     covered_facts = fact_statuses["EXACT"] + fact_statuses["PARTIAL"]
     evidence_metrics = _source_locator_metrics(annotated, alignments)
+    precision_metrics, false_accepted_facts = _accepted_fact_precision_metrics(
+        ground_truth,
+        annotated,
+        facts,
+        alignments,
+    )
     return {
         "schema": FACT_SLOT_MEASUREMENT_SCHEMA,
         "status": "PASS",
@@ -441,10 +525,12 @@ def evaluate_business_fact_slots(
             "p0_exact_fact_count": p0_exact,
             "p0_exact_fact_recall": p0_exact / p0_total if p0_total else None,
             **evidence_metrics,
+            **precision_metrics,
             "slot_status_distribution": dict(slot_statuses),
             "fact_status_distribution": dict(fact_statuses),
         },
         "alignments": alignments,
+        "false_accepted_facts": false_accepted_facts,
         "candidate_selection_contract": {
             "fact_type_exact": True,
             "ground_truth_objects_must_be_subset_of_candidate_objects": True,
@@ -458,6 +544,13 @@ def evaluate_business_fact_slots(
             "annotated_fact_denominator_includes_ambiguous_facts": True,
             "exact_source_locator_required": True,
             "workspace_absolute_path_allowed": False,
+        },
+        "accepted_fact_precision_contract": {
+            "explicit_fact_scope_complete_required": True,
+            "accepted_scope_uses_annotated_exact_source_locators": True,
+            "duplicate_candidates_count_as_false_accepted": True,
+            "ambiguous_candidates_count_as_false_accepted": True,
+            "automatic_winner_allowed": False,
         },
         "alignment_authority": "DETERMINISTIC_EXACT_TYPED_SLOT_MATCHING",
         "fuzzy_or_llm_alignment_used": False,
