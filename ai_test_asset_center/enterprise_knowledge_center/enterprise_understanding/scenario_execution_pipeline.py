@@ -22,6 +22,10 @@ from .binding_identity_runtime_closure import (
     close_runtime_plan_binding_identities,
 )
 from .contract_field_identity_audit import enforce_exact_contract_field_identity
+from .event_observer_runtime_projection import (
+    project_event_observers_into_materializations,
+    project_event_observers_into_runtime_plans,
+)
 from .runtime_materialization_security import (
     project_secure_runtime_materializations_to_asset,
 )
@@ -122,15 +126,21 @@ def project_governed_scenario_execution_contracts(
     close_execution_contract_binding_identities(asset, model)
 
     project_governed_runtime_plans_to_asset(asset, model)
+    project_event_observers_into_runtime_plans(asset, model)
     project_binding_identities_to_runtime_plans(asset, model)
     close_runtime_plan_binding_identities(asset, model)
 
+    # Approved database and source-event observers extend the same runtime plan.
+    # Re-project both after the DB observer replacement so neither extension can
+    # erase or reselect the other's exact identity.
     project_database_observers_into_runtime_plans(asset, model)
+    project_event_observers_into_runtime_plans(asset, model)
     project_binding_identities_to_runtime_plans(asset, model)
     close_runtime_plan_binding_identities(asset, model)
 
     project_secure_runtime_materializations_to_asset(asset, model)
     project_database_observer_runtime_materializations(asset, model)
+    project_event_observers_into_materializations(asset, model)
     project_binding_identities_to_materializations(asset, model)
     close_materialization_binding_identities(asset, model)
 
@@ -147,9 +157,13 @@ def project_governed_scenario_execution_contracts(
             "runtime_projection_mutates_probe_compiler": False,
             "approved_database_observer_projection_precedes_runtime_materialization": True,
             "approved_database_observer_phase_projection_follows_materialization": True,
+            "formal_event_observer_projection_precedes_runtime_materialization": True,
+            "formal_event_observer_assertion_draft_follows_materialization": True,
             "scenario_contract_runtime_plan_materialization_share_binding_ids": True,
             "formal_ui_contracts_reuse_source_ui_contract_authority": True,
+            "formal_event_contracts_reuse_source_event_contract_authority": True,
             "ui_locator_generation_from_labels_allowed": False,
+            "event_topic_or_broker_inference_allowed": False,
             "required_request_fields_use_exact_contract_field_binding": True,
             "copied_contract_field_refs_require_source_identity_revalidation": True,
         }
