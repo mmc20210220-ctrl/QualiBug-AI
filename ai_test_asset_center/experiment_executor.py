@@ -25,11 +25,20 @@ from .sandbox_write_executor import (  # noqa: F401
 
 from .experiment_fixture_materializer import materialize_experiment_fixtures
 from .experiment_barrier_executor import execute_barrier_plans
-from .experiment_plan_executor import execute_non_barrier_plans
+from .experiment_plan_lifecycle_adapter import execute_non_barrier_plans
 from .experiment_outcome_finalizer import finalize_experiment_execution
 from .experiment_cleanup_executor import execute_experiment_cleanup_compensation
 from .cleanup_plan_validator import validate_cleanup_plan
 from .write_reversibility_contract import build_proof_fingerprint
+from .experiment_lifecycle_runtime import (
+    attach_lifecycle_ledger,
+    attach_lifecycle_to_result,
+    new_experiment_lifecycle_ledger,
+    record_stage_event,
+    record_stage_rows,
+    terminal_result_with_lifecycle,
+)
+from .process_step_execution import ProcessStepLedger
 from .experiment_cleanup import (  # noqa: F401
     _cleanup_compensates_created_resource,
     _cleanup_restores_governed_write,
@@ -105,12 +114,35 @@ def execute_one_experiment(
         raise ValueError("experiment execution campaign_id and execution_id are required")
     exp["campaign_id"] = resolved_campaign_id
     exp["execution_id"] = resolved_execution_id
-    tokens = actor_tokens if actor_tokens is not None else load_actor_tokens(root, project, base_url=base_url)
+    started = time.time()
+    lifecycle_ledger = new_experiment_lifecycle_ledger(
+        exp,
+        experiment_id=eid,
+        obligation_id=oid,
+        campaign_id=resolved_campaign_id,
+        run_id=resolved_execution_id,
+    )
+
+    def _terminal(
+        result: dict[str, Any],
+        *,
+        phase: str,
+        reason_code: str,
+    ) -> dict[str, Any]:
+        return terminal_result_with_lifecycle(
+            lifecycle_ledger,
+            result,
+            phase=phase,
+            reason_code=reason_code,
+        )
+
+    tokens = actor_tokens if actor_tokens is not None else load_actor_tokens(
+        root, project, base_url=base_url
+    )
     # Strict preflight — no automatic best-effort retry on the formal path.
     ok, reason, detail = preflight_experiment_executable(
         exp, behavior_ir=behavior_ir, actor_tokens=tokens
     )
-    started = time.time()
     if not ok:
         _exec_logger.warning(
             f"Experiment BLOCKED: {eid} obligation={oid} reason={reason}",
@@ -120,132 +152,162 @@ def execute_one_experiment(
                 "campaign_id": resolved_campaign_id,
             }},
         )
-        return {
-            "schema_version": "qualibug.experiment-execution.v1",
-            "experiment_id": eid,
-            "obligation_id": oid,
-            "status": "BLOCKED",
-            "reason_code": reason,
-            "detail": detail,
-            "elapsed_ms": int((time.time() - started) * 1000),
-            "finding": None,
-            "execution_receipt": {"status": "BLOCKED", "reason_code": reason, "detail": detail},
-        }
+        return _terminal(
+            {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "status": "BLOCKED",
+                "reason_code": reason,
+                "detail": detail,
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": reason,
+                    "detail": detail,
+                },
+            },
+            phase="preflight",
+            reason_code=reason,
+        )
 
     ir = _dict(behavior_ir)
     actors = _index_by_id(_list(ir.get("actors")))
     ops = _index_by_id(_list(ir.get("operations")))
 
     # ── SPEC v1.2.1 §6.5 + §7.6: Runtime Binding Graph Validation ──
-    # Verify binding_coverage_graph fingerprint matches compile-time freeze.
     compile_coverage_receipt = _dict(exp.get("compile_coverage_receipt"))
     compile_binding_fp = _text(compile_coverage_receipt.get("binding_graph_fingerprint"))
     runtime_binding_graph = _dict(exp.get("binding_coverage_graph"))
     runtime_binding_fp = _text(runtime_binding_graph.get("binding_graph_fingerprint"))
     if compile_binding_fp and runtime_binding_fp and compile_binding_fp != runtime_binding_fp:
-        return {
-            "schema_version": "qualibug.experiment-execution.v1",
-            "experiment_id": eid,
-            "obligation_id": oid,
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
-            "detail": f"binding_graph_fingerprint_drift:compile={compile_binding_fp}:runtime={runtime_binding_fp}",
-            "elapsed_ms": int((time.time() - started) * 1000),
-            "finding": None,
-            "execution_receipt": {
+        return _terminal(
+            {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
                 "status": "BLOCKED",
                 "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
-                "detail": "binding_graph_fingerprint_drift",
+                "detail": (
+                    "binding_graph_fingerprint_drift:"
+                    f"compile={compile_binding_fp}:runtime={runtime_binding_fp}"
+                ),
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
+                    "detail": "binding_graph_fingerprint_drift",
+                },
             },
-        }
+            phase="runtime_binding_preflight",
+            reason_code="BLOCKED_BINDING_GRAPH_INVALID",
+        )
 
     # ── SPEC v1.1.1 §10 Phase A: Three-party fingerprint validation ──
-    # A = compile_receipt.write_reversibility_fingerprint (frozen, authoritative)
-    # B = attached proof recomputed fingerprint
-    # C = runtime rebuilt proof fingerprint (Phase B, after fixture)
-    # Require: A == B before fixture; A == C after fixture.
     safety = _dict(exp.get("safety_contract"))
     is_governed_write = safety.get("governed_write")
     compile_proof_fingerprint = ""
     if is_governed_write:
         compile_proof = _dict(exp.get("write_reversibility_proof"))
-        # Phase A: verify proof exists and is PROVEN
         if not compile_proof or _text(compile_proof.get("proof_status")) != "PROVEN":
-            return {
-                "schema_version": "qualibug.experiment-execution.v1",
-                "experiment_id": eid,
-                "obligation_id": oid,
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
-                "detail": "compile_proof_missing_or_invalid",
-                "elapsed_ms": int((time.time() - started) * 1000),
-                "finding": None,
-                "execution_receipt": {
+            return _terminal(
+                {
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "experiment_id": eid,
+                    "obligation_id": oid,
                     "status": "BLOCKED",
                     "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
                     "detail": "compile_proof_missing_or_invalid",
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                    "finding": None,
+                    "execution_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                        "detail": "compile_proof_missing_or_invalid",
+                    },
                 },
-            }
-        # §10.3: Frozen fingerprint ONLY from compile_receipt
+                phase="cleanup_contract_preflight",
+                reason_code="BLOCKED_CLEANUP_CONTRACT_DRIFT",
+            )
         compile_receipt = _dict(exp.get("compile_receipt"))
         frozen_fp = _text(compile_receipt.get("write_reversibility_fingerprint"))
-        # B: Recompute fingerprint from attached proof content
         recomputed_fp = build_proof_fingerprint(compile_proof)
         attached_fp = _text(compile_proof.get("fingerprint"))
-        # Validate: frozen non-empty, recomputed matches attached and frozen
         if not frozen_fp:
-            # Fallback: if compile_receipt absent, use attached proof fingerprint
             frozen_fp = attached_fp
         if not frozen_fp or not recomputed_fp:
-            return {
-                "schema_version": "qualibug.experiment-execution.v1",
-                "experiment_id": eid,
-                "obligation_id": oid,
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
-                "detail": "fingerprint_empty:frozen={}:recomputed={}".format(frozen_fp, recomputed_fp),
-                "elapsed_ms": int((time.time() - started) * 1000),
-                "finding": None,
-                "execution_receipt": {
+            return _terminal(
+                {
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "experiment_id": eid,
+                    "obligation_id": oid,
                     "status": "BLOCKED",
                     "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
-                    "detail": "fingerprint_empty",
+                    "detail": (
+                        "fingerprint_empty:"
+                        f"frozen={frozen_fp}:recomputed={recomputed_fp}"
+                    ),
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                    "finding": None,
+                    "execution_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                        "detail": "fingerprint_empty",
+                    },
                 },
-            }
+                phase="cleanup_contract_preflight",
+                reason_code="BLOCKED_CLEANUP_CONTRACT_DRIFT",
+            )
         if recomputed_fp != attached_fp:
-            return {
-                "schema_version": "qualibug.experiment-execution.v1",
-                "experiment_id": eid,
-                "obligation_id": oid,
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
-                "detail": "fingerprint_mismatch:recomputed={}:attached={}".format(recomputed_fp, attached_fp),
-                "elapsed_ms": int((time.time() - started) * 1000),
-                "finding": None,
-                "execution_receipt": {
+            return _terminal(
+                {
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "experiment_id": eid,
+                    "obligation_id": oid,
                     "status": "BLOCKED",
                     "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
-                    "detail": "phase_a_recomputed_ne_attached",
+                    "detail": (
+                        "fingerprint_mismatch:"
+                        f"recomputed={recomputed_fp}:attached={attached_fp}"
+                    ),
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                    "finding": None,
+                    "execution_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                        "detail": "phase_a_recomputed_ne_attached",
+                    },
                 },
-            }
+                phase="cleanup_contract_preflight",
+                reason_code="BLOCKED_CLEANUP_CONTRACT_DRIFT",
+            )
         if frozen_fp != recomputed_fp:
-            return {
-                "schema_version": "qualibug.experiment-execution.v1",
-                "experiment_id": eid,
-                "obligation_id": oid,
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
-                "detail": "fingerprint_mismatch:frozen={}:recomputed={}".format(frozen_fp, recomputed_fp),
-                "elapsed_ms": int((time.time() - started) * 1000),
-                "finding": None,
-                "execution_receipt": {
+            return _terminal(
+                {
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "experiment_id": eid,
+                    "obligation_id": oid,
                     "status": "BLOCKED",
                     "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
-                    "detail": "phase_a_frozen_ne_recomputed",
+                    "detail": (
+                        "fingerprint_mismatch:"
+                        f"frozen={frozen_fp}:recomputed={recomputed_fp}"
+                    ),
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                    "finding": None,
+                    "execution_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                        "detail": "phase_a_frozen_ne_recomputed",
+                    },
                 },
-            }
-        # A == B verified; use frozen as authoritative for Phase B
+                phase="cleanup_contract_preflight",
+                reason_code="BLOCKED_CLEANUP_CONTRACT_DRIFT",
+            )
         compile_proof_fingerprint = frozen_fp
+
     steps_out: list[dict[str, Any]] = []
     request_bodies_for_cleanup: dict[str, Any] = {}
     observations: dict[str, Any] = {
@@ -254,7 +316,17 @@ def execute_one_experiment(
         "control_succeeded": False,
         "harness_error": False,
     }
+    attach_lifecycle_ledger(observations, lifecycle_ledger)
     activation_requirements = contract_activation_requirements(exp)
+    lifecycle_ledger.set_required_step_ids(
+        [
+            _text(step_id)
+            for phase in ("control", "treatment")
+            for step_id in _list(activation_requirements.get(phase))
+            if _text(step_id)
+        ]
+        or lifecycle_ledger.required_step_ids
+    )
     contract_evidence_receipts: list[dict[str, Any]] = []
     cleanup_failures = 0
     pre_transport_block_reasons: list[str] = []
@@ -267,10 +339,6 @@ def execute_one_experiment(
         for item in _list(exp.get("binding_plan"))
         if isinstance(item, dict) and _text(item.get("target"))
     }
-    # ── Inject source-observed bindings before fixture materialization ──
-    # Batch-level auto_resolve_bindings resolves path placeholders by calling GET
-    # endpoints. Inject those values so the fixture materializer can use them directly
-    # instead of re-resolving (which may fail without proper actor context).
     _pre_bindings = _dict(exp.get("_pre_resolved_bindings"))
     if _pre_bindings:
         for _bk, _bv in _pre_bindings.items():
@@ -310,33 +378,45 @@ def execute_one_experiment(
         campaign_id=resolved_campaign_id,
     )
     if fixture_state.get("status") == "terminal":
-        return dict(fixture_state.get("result") or {
-            "schema_version": "qualibug.experiment-execution.v1",
-            "experiment_id": eid,
-            "obligation_id": oid,
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_MISSING_FIXTURE",
-            "finding": None,
-        })
+        fixture_terminal = dict(
+            fixture_state.get("result")
+            or {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_FIXTURE",
+                "finding": None,
+            }
+        )
+        return _terminal(
+            fixture_terminal,
+            phase="fixture",
+            reason_code=_text(
+                fixture_terminal.get("reason_code")
+                or "BLOCKED_MISSING_FIXTURE"
+            ),
+        )
     steps_out = list(fixture_state.get("steps_out") or [])
     fixture_receipts = list(fixture_state.get("fixture_receipts") or [])
     binding_materialization_receipts = list(
         fixture_state.get("binding_materialization_receipts") or []
     )
     runtime_bindings = dict(fixture_state.get("runtime_bindings") or {})
-    # Do NOT merge batch _pre_resolved_bindings here. A global {id} from
-    # /api/cart/items previously overwrote /api/orders/{id} after materialization
-    # skipped or failed proof. Path-scoped materialization (with identity proof)
-    # is the only authority that may populate runtime_bindings for transport.
-    pending_fixture_cleanups = list(fixture_state.get("pending_fixture_cleanups") or [])
+    pending_fixture_cleanups = list(
+        fixture_state.get("pending_fixture_cleanups") or []
+    )
     cleanup_failures = int(fixture_state.get("cleanup_failures") or 0)
     contract_evidence_receipts = list(
         fixture_state.get("contract_evidence_receipts") or []
     )
+    record_stage_rows(lifecycle_ledger, fixture_receipts, phase="fixture")
+    record_stage_rows(
+        lifecycle_ledger,
+        binding_materialization_receipts,
+        phase="fixture_binding",
+    )
 
-    # A forced disposable fixture is a source-resolver fallback, not proof that
-    # setup ran. Runtime binding receipts freeze whether cleanup responsibility
-    # actually materialized; missing or ambiguous evidence remains fail-closed.
     activation_requirements = contract_activation_requirements(
         exp,
         evidence={
@@ -344,91 +424,124 @@ def execute_one_experiment(
             "contract_evidence_receipts": contract_evidence_receipts,
         },
     )
+    lifecycle_ledger.set_required_step_ids(
+        [
+            _text(step_id)
+            for phase in ("control", "treatment")
+            for step_id in _list(activation_requirements.get(phase))
+            if _text(step_id)
+        ]
+        or lifecycle_ledger.required_step_ids
+    )
 
     # ── SPEC v1.2.2 §10: Runtime Binding Provenance Validation ──
-    # Verify all runtime bindings have legitimate sources from compile graph.
-    # Synthetic/degraded values must NOT reach transport.
     _compile_graph = _dict(exp.get("binding_coverage_graph"))
     _compile_nodes = _list(_compile_graph.get("nodes"))
-    # A node is looked up by every name that identifies it. Keying only by binding_id
-    # compared a runtime binding key ("sku") against an opaque hash
-    # ("bind_0573d5af75dc5986"), which can never match: the set was non-empty, so the
-    # guard fired, and semantic_name -- the field that actually holds "sku" -- was never
-    # read. 146 experiments on a live target compiled successfully and were then blocked
-    # at execution with undeclared_runtime_binding:sku / :id while the graph itself
-    # reported graph_status VALID.
     _compile_node_targets: dict[str, dict[str, Any]] = {}
     for n in _compile_nodes:
         if not isinstance(n, dict):
             continue
-        for _key in (n.get("semantic_name"), n.get("binding_id"), n.get("target"), n.get("name")):
+        for _key in (
+            n.get("semantic_name"),
+            n.get("binding_id"),
+            n.get("target"),
+            n.get("name"),
+        ):
             _key_text = _text(_key)
             if _key_text:
                 _compile_node_targets.setdefault(_key_text, n)
-    _FORBIDDEN_RUNTIME_SOURCES = {"degraded_synthetic", "synthetic_value", "random_placeholder", "invented"}
+    _FORBIDDEN_RUNTIME_SOURCES = {
+        "degraded_synthetic",
+        "synthetic_value",
+        "random_placeholder",
+        "invented",
+    }
     _provenance_violations: list[str] = []
     for _bk, _bv in runtime_bindings.items():
-        # Check binding value is not synthetic
         _bv_str = str(_bv or "")
         if _bv_str.startswith("qb_test_") or _bv_str.startswith("qb-test-"):
-            _provenance_violations.append(f"synthetic_binding_reaching_transport:{_bk}")
+            _provenance_violations.append(
+                f"synthetic_binding_reaching_transport:{_bk}"
+            )
             continue
-        # Check binding exists in compile graph (if graph has nodes)
         if _compile_node_targets and _bk not in _compile_node_targets:
-            # Only flag if compile graph explicitly covers this binding
-            _plan_targets = {_text(bp.get("target")) for bp in _list(exp.get("binding_plan")) if isinstance(bp, dict)}
+            _plan_targets = {
+                _text(bp.get("target"))
+                for bp in _list(exp.get("binding_plan"))
+                if isinstance(bp, dict)
+            }
             if _bk in _plan_targets:
-                _provenance_violations.append(f"undeclared_runtime_binding:{_bk}")
-    # Check fixture receipts for degraded/synthetic status
+                _provenance_violations.append(
+                    f"undeclared_runtime_binding:{_bk}"
+                )
     for _fr in fixture_receipts:
         _fr_status = _text(_dict(_fr).get("status")).lower()
         if _fr_status in _FORBIDDEN_RUNTIME_SOURCES:
             _provenance_violations.append(
-                f"forbidden_fixture_source:{_text(_dict(_fr).get('target'))}:{_fr_status}"
+                "forbidden_fixture_source:"
+                f"{_text(_dict(_fr).get('target'))}:{_fr_status}"
             )
     if _provenance_violations:
-        return {
-            "schema_version": "qualibug.experiment-execution.v1",
-            "experiment_id": eid,
-            "obligation_id": oid,
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
-            "detail": ";".join(_provenance_violations[:5]),
-            "elapsed_ms": int((time.time() - started) * 1000),
-            "finding": None,
-            "execution_receipt": {
+        return _terminal(
+            {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
                 "status": "BLOCKED",
                 "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
-                "detail": "runtime_binding_provenance_invalid",
+                "detail": ";".join(_provenance_violations[:5]),
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
+                    "detail": "runtime_binding_provenance_invalid",
+                },
+                "runtime_binding_provenance": {
+                    "status": "INVALID",
+                    "violations": _provenance_violations[:10],
+                },
             },
-            "runtime_binding_provenance": {
-                "status": "INVALID",
-                "violations": _provenance_violations[:10],
-            },
-        }
+            phase="runtime_binding",
+            reason_code="BLOCKED_BINDING_GRAPH_INVALID",
+        )
 
     # ── V1.3.0-A: Fixture Row Lineage (SPEC §6) ──
-    # Record complete lineage for every QualiBug-created test object.
     _fixture_lineage_receipts: list[dict[str, Any]] = []
     if fixture_receipts:
-        from .cleanup_execution_receipt import build_fixture_row_lineage as _build_lineage
+        from .cleanup_execution_receipt import (
+            build_fixture_row_lineage as _build_lineage,
+        )
+
         for _fr in fixture_receipts:
             _fr_d = _dict(_fr)
-            _fr_table = _text(_fr_d.get("table") or _fr_d.get("entity") or _fr_d.get("target"))
-            _fr_pk = _text(_fr_d.get("primary_key") or _fr_d.get("row_id") or _fr_d.get("created_id"))
+            _fr_table = _text(
+                _fr_d.get("table")
+                or _fr_d.get("entity")
+                or _fr_d.get("target")
+            )
+            _fr_pk = _text(
+                _fr_d.get("primary_key")
+                or _fr_d.get("row_id")
+                or _fr_d.get("created_id")
+            )
             if _fr_table and _fr_pk:
-                _fixture_lineage_receipts.append(_build_lineage(
-                    campaign_id=resolved_campaign_id,
-                    experiment_id=eid,
-                    fixture_id=_text(_fr_d.get("fixture_id") or _fr_d.get("receipt_id")),
-                    step_id=_text(_fr_d.get("step_id")),
-                    table=_fr_table,
-                    primary_key=_fr_pk,
-                ))
+                _fixture_lineage_receipts.append(
+                    _build_lineage(
+                        campaign_id=resolved_campaign_id,
+                        experiment_id=eid,
+                        fixture_id=_text(
+                            _fr_d.get("fixture_id")
+                            or _fr_d.get("receipt_id")
+                        ),
+                        step_id=_text(_fr_d.get("step_id")),
+                        table=_fr_table,
+                        primary_key=_fr_pk,
+                    )
+                )
     observations["fixture_row_lineage_receipts"] = _fixture_lineage_receipts
 
     # ── SPEC v1.1 §10 Phase B: Runtime binding validation ──
-    # After fixture materialization, verify proof fingerprint and bindings.
     if is_governed_write:
         runtime_validation = validate_cleanup_plan(
             exp,
@@ -449,27 +562,30 @@ def execute_one_experiment(
                     "campaign_id": resolved_campaign_id,
                 }},
             )
-            return {
-                "schema_version": "qualibug.experiment-execution.v1",
-                "experiment_id": eid,
-                "obligation_id": oid,
-                "status": "BLOCKED",
-                "reason_code": runtime_validation["reason_code"],
-                "detail": runtime_validation["detail"],
-                "elapsed_ms": int((time.time() - started) * 1000),
-                "finding": None,
-                "execution_receipt": {
+            return _terminal(
+                {
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "experiment_id": eid,
+                    "obligation_id": oid,
                     "status": "BLOCKED",
                     "reason_code": runtime_validation["reason_code"],
                     "detail": runtime_validation["detail"],
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                    "finding": None,
+                    "execution_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": runtime_validation["reason_code"],
+                        "detail": runtime_validation["detail"],
+                    },
+                    "runtime_proof_validation": {
+                        "status": "INVALID",
+                        "reason_code": runtime_validation["reason_code"],
+                        "detail": runtime_validation["detail"],
+                    },
                 },
-                "runtime_proof_validation": {
-                    "status": "INVALID",
-                    "reason_code": runtime_validation["reason_code"],
-                    "detail": runtime_validation["detail"],
-                },
-            }
-        # Mark runtime proof validation as passed
+                phase="cleanup_contract_runtime",
+                reason_code=runtime_validation["reason_code"],
+            )
         exp["runtime_proof_validation"] = {
             "status": "VALID",
             "compile_fingerprint": compile_proof_fingerprint,
@@ -478,8 +594,6 @@ def execute_one_experiment(
             ),
         }
 
-    # A required database BEFORE draft is evaluated after fixture/binding proof but before any
-    # barrier or sequential transport. Failure blocks transport while preserving cleanup.
     database_before = execute_database_observer_phase(
         exp,
         phase="BEFORE",
@@ -494,11 +608,19 @@ def execute_one_experiment(
     )
     database_before_blocked = bool(database_before.get("blocked"))
     if database_before_blocked:
-        pre_transport_block_reasons.append(
+        database_before_reason = (
             _text(database_before.get("reason_code"))
             or "DATABASE_OBSERVER_BEFORE_PHASE_INCOMPLETE"
         )
+        pre_transport_block_reasons.append(database_before_reason)
         observations["database_observer_transport_blocked"] = True
+        record_stage_event(
+            lifecycle_ledger,
+            phase="database_before",
+            step_id="database_before",
+            status="FAILED",
+            receipt_id=database_before_reason,
+        )
         barrier_result: dict[str, Any] = {
             "steps": [],
             "contract_evidence_receipts": [],
@@ -512,8 +634,16 @@ def execute_one_experiment(
             "request_bodies_for_cleanup": {},
             "pre_transport_block_reasons": [],
             "cleanup_failures": cleanup_failures,
+            "process_step_ledger": lifecycle_ledger,
         }
     else:
+        record_stage_event(
+            lifecycle_ledger,
+            phase="database_before",
+            step_id="database_before",
+            status=_text(database_before.get("status")) or "COMPLETED",
+            receipt_id=_text(database_before.get("receipt_id")),
+        )
         barrier_result = execute_barrier_plans(
             control_plan=_list(exp.get("control_plan")),
             treatment_plan=_list(exp.get("treatment_plan")),
@@ -533,7 +663,9 @@ def execute_one_experiment(
             runtime_contract=runtime_contract,
             observations=observations,
         )
-        steps_out.extend(list(barrier_result.get("steps") or []))
+        barrier_steps = list(barrier_result.get("steps") or [])
+        steps_out.extend(barrier_steps)
+        record_stage_rows(lifecycle_ledger, barrier_steps, phase="barrier")
         contract_evidence_receipts.extend(
             list(barrier_result.get("contract_evidence_receipts") or [])
         )
@@ -543,7 +675,9 @@ def execute_one_experiment(
         pre_transport_block_reasons.extend(
             list(barrier_result.get("pre_transport_block_reasons") or [])
         )
-        consumed_barrier_steps = set(barrier_result.get("consumed_barrier_steps") or set())
+        consumed_barrier_steps = set(
+            barrier_result.get("consumed_barrier_steps") or set()
+        )
         control_plan = _list(exp.get("control_plan"))
         treatment_plan = _list(exp.get("treatment_plan"))
         plan_result = execute_non_barrier_plans(
@@ -577,30 +711,17 @@ def execute_one_experiment(
         pre_transport_block_reasons.extend(
             list(plan_result.get("pre_transport_block_reasons") or [])
         )
-        cleanup_failures = int(plan_result.get("cleanup_failures") or cleanup_failures)
+        cleanup_failures = int(
+            plan_result.get("cleanup_failures") or cleanup_failures
+        )
 
-    # V1.6.2-R1: propagate ledger id/hash + step id sets into Finalizer observations.
-    # Live ProcessStepLedger remains SSOT on observations; do not drop step lists.
-    from .process_step_execution import attach_ledger_refs_to_observations as _attach_ledger
     _plan_ledger = plan_result.get("process_step_ledger") or observations.get(
         "process_step_ledger"
     )
-    if _plan_ledger is not None:
-        _attach_ledger(observations, _plan_ledger)
-    else:
-        for _k in (
-            "process_step_ledger_id",
-            "process_step_ledger_hash",
-            "required_step_ids",
-            "planned_step_ids",
-            "executed_step_ids",
-            "process_timeline",
-            "transport_receipt_ids",
-        ):
-            if plan_result.get(_k) is not None:
-                observations[_k] = plan_result[_k]
+    if isinstance(_plan_ledger, ProcessStepLedger):
+        lifecycle_ledger = _plan_ledger
+        attach_lifecycle_ledger(observations, lifecycle_ledger)
 
-    # AFTER runs only after all business transport and before cleanup can restore state.
     if not database_before_blocked:
         database_after = execute_database_observer_phase(
             exp,
@@ -614,17 +735,35 @@ def execute_one_experiment(
             campaign_id=resolved_campaign_id,
             execution_id=resolved_execution_id,
         )
-        if _text(database_after.get("status")) == "INDETERMINATE":
-            pre_transport_block_reasons.append(
+        database_after_status = _text(database_after.get("status"))
+        if database_after_status == "INDETERMINATE":
+            database_after_reason = (
                 _text(database_after.get("reason_code"))
                 or "DATABASE_OBSERVER_AFTER_PHASE_INCOMPLETE"
             )
+            pre_transport_block_reasons.append(database_after_reason)
             observations["database_observer_after_phase_incomplete"] = True
+            record_stage_event(
+                lifecycle_ledger,
+                phase="database_after",
+                step_id="database_after",
+                status="FAILED",
+                receipt_id=database_after_reason,
+            )
+        else:
+            record_stage_event(
+                lifecycle_ledger,
+                phase="database_after",
+                step_id="database_after",
+                status=database_after_status or "COMPLETED",
+                receipt_id=_text(database_after.get("receipt_id")),
+            )
 
     _exec_logger.info(
         f"Experiment started: {eid} obligation={oid} campaign={resolved_campaign_id}",
         extra={"context": {
-            "experiment_id": eid, "obligation_id": oid,
+            "experiment_id": eid,
+            "obligation_id": oid,
             "campaign_id": resolved_campaign_id,
         }},
     )
@@ -655,22 +794,40 @@ def execute_one_experiment(
     steps_out = list(cleanup_result.get("steps_out") or steps_out)
     observations = dict(cleanup_result.get("observations") or observations)
     contract_evidence_receipts = list(
-        cleanup_result.get("contract_evidence_receipts") or contract_evidence_receipts
+        cleanup_result.get("contract_evidence_receipts")
+        or contract_evidence_receipts
     )
     cleanup_failures = int(cleanup_result.get("cleanup_failures") or 0)
+    cleanup_steps = [
+        row
+        for row in steps_out
+        if isinstance(row, dict) and _text(row.get("phase")) == "cleanup"
+    ]
+    record_stage_rows(lifecycle_ledger, cleanup_steps, phase="cleanup")
+    record_stage_rows(
+        lifecycle_ledger,
+        _list(observations.get("cleanup_execution_receipts")),
+        phase="cleanup",
+    )
+    attach_lifecycle_ledger(observations, lifecycle_ledger)
 
     # ── Related Entity Observer Execution ──
-    # For experiments with structured expressions referencing related entities,
-    # execute observers to fetch related entity collections before finalization.
     _has_structured_expr = any(
-        isinstance(a, dict) and (
+        isinstance(a, dict)
+        and (
             _dict(a.get("structured_expression"))
-            or _text(a.get("kind")) in ("cross_entity_consistency", "limit_constraint", "conservation")
+            or _text(a.get("kind"))
+            in (
+                "cross_entity_consistency",
+                "limit_constraint",
+                "conservation",
+            )
         )
         for a in _list(exp.get("assertions"))
     )
     _exec_logger.debug(
-        f"Related entity observer check: {eid} has_structured_expr={_has_structured_expr} "
+        f"Related entity observer check: {eid} "
+        f"has_structured_expr={_has_structured_expr} "
         f"assertions_count={len(_list(exp.get('assertions')))}",
         extra={"context": {"experiment_id": eid, "obligation_id": oid}},
     )
@@ -679,7 +836,6 @@ def execute_one_experiment(
             from .related_entity_observer_binder import bind_observer_plan
             from .related_entity_observer_executor import execute_observer_plan
 
-            # Collect observer_requirements from assertions
             _all_observer_reqs: list[dict[str, Any]] = []
             _root_identity_value: Any = None
             _tenant_scope_values: dict[str, Any] = {}
@@ -691,24 +847,20 @@ def execute_one_experiment(
                 _obs_reqs = _list(_assertion.get("observer_requirements"))
                 if _obs_reqs:
                     _all_observer_reqs.extend(_obs_reqs)
-                    # Extract relation_key from MANY cardinality requirements
                     for _req in _obs_reqs:
-                        if isinstance(_req, dict) and _text(_req.get("cardinality")).upper() == "MANY":
+                        if (
+                            isinstance(_req, dict)
+                            and _text(_req.get("cardinality")).upper() == "MANY"
+                        ):
                             _rk = _text(_req.get("relation_key"))
                             if _rk:
                                 _relation_key = _rk
                                 break
 
-            # Extract root identity from multiple sources:
-            # 1. Before/after observations using relation_key (real data)
-            # 2. Treatment body using relation_key (for conservation experiments)
-            # 3. Before/after state body id/uuid
-            # 4. Runtime bindings
             _treatment_plan = _list(exp.get("treatment_plan"))
             _before_states = _list(observations.get("before_state_evidence"))
             _after_states = _list(observations.get("after_state_evidence"))
 
-            # Priority 1: Extract from before/after observations (real data)
             if _relation_key and _root_identity_value is None:
                 for _state_list in (_after_states, _before_states):
                     if _root_identity_value is not None:
@@ -717,26 +869,32 @@ def execute_one_experiment(
                         if not isinstance(_state, dict):
                             continue
                         _state_body = _state.get("body")
-                        # Handle list body (collection observation)
                         if isinstance(_state_body, list) and _state_body:
                             for _rec in _state_body:
-                                if isinstance(_rec, dict) and _relation_key in _rec:
+                                if (
+                                    isinstance(_rec, dict)
+                                    and _relation_key in _rec
+                                ):
                                     _val = _rec[_relation_key]
-                                    # Skip placeholder UUIDs (550e8400 pattern)
                                     if _val and not str(_val).startswith("550e8400"):
                                         _root_identity_value = _val
                                         break
                             if _root_identity_value is not None:
                                 break
-                        # Handle dict body (single entity)
-                        elif isinstance(_state_body, dict) and _relation_key in _state_body:
+                        elif (
+                            isinstance(_state_body, dict)
+                            and _relation_key in _state_body
+                        ):
                             _val = _state_body[_relation_key]
                             if _val and not str(_val).startswith("550e8400"):
                                 _root_identity_value = _val
                                 break
 
-            # Priority 2: Extract from treatment body
-            if _relation_key and _root_identity_value is None and _treatment_plan:
+            if (
+                _relation_key
+                and _root_identity_value is None
+                and _treatment_plan
+            ):
                 for _step in _treatment_plan:
                     if not isinstance(_step, dict):
                         continue
@@ -745,40 +903,51 @@ def execute_one_experiment(
                         _root_identity_value = _body[_relation_key]
                         break
 
-            # Priority 3: Extract id/uuid from after/before state
             if _root_identity_value is None and _after_states:
                 _root_body = _dict(_after_states[-1]).get("body")
                 if isinstance(_root_body, dict):
-                    _root_identity_value = _root_body.get("id") or _root_body.get("uuid")
+                    _root_identity_value = (
+                        _root_body.get("id") or _root_body.get("uuid")
+                    )
             if _root_identity_value is None:
-                _root_identity_value = runtime_bindings.get("id") or runtime_bindings.get("uuid")
+                _root_identity_value = (
+                    runtime_bindings.get("id")
+                    or runtime_bindings.get("uuid")
+                )
 
-            # Extract tenant scope from root body or treatment body
             if _after_states:
                 _root_body = _dict(_after_states[-1]).get("body")
                 if isinstance(_root_body, dict):
-                    for _sf in ("tenant_id", "owner_id", "department_id"):
+                    for _sf in (
+                        "tenant_id",
+                        "owner_id",
+                        "department_id",
+                    ):
                         if _sf in _root_body:
                             _tenant_scope_values[_sf] = _root_body[_sf]
-            # Also check treatment body for tenant scope
             if not _tenant_scope_values and _treatment_plan:
                 for _step in _treatment_plan:
                     if not isinstance(_step, dict):
                         continue
                     _body = _dict(_step.get("body"))
-                    for _sf in ("tenant_id", "owner_id", "department_id"):
+                    for _sf in (
+                        "tenant_id",
+                        "owner_id",
+                        "department_id",
+                    ):
                         if _sf in _body:
                             _tenant_scope_values[_sf] = _body[_sf]
                     if _tenant_scope_values:
                         break
 
             _exec_logger.debug(
-                f"Related entity observer reqs: {eid} count={len(_all_observer_reqs)} "
-                f"root_identity={_root_identity_value} tenant_scope={list(_tenant_scope_values.keys())}",
+                f"Related entity observer reqs: {eid} "
+                f"count={len(_all_observer_reqs)} "
+                f"root_identity={_root_identity_value} "
+                f"tenant_scope={list(_tenant_scope_values.keys())}",
                 extra={"context": {"experiment_id": eid, "obligation_id": oid}},
             )
             if _all_observer_reqs:
-                # Bind observer plan
                 _observer_plan = bind_observer_plan(
                     _all_observer_reqs,
                     behavior_ir,
@@ -793,9 +962,7 @@ def execute_one_experiment(
                     extra={"context": {"experiment_id": eid, "obligation_id": oid}},
                 )
 
-                # Execute observer plan if we have related observers
                 if _observer_plan.get("related_observers"):
-                    # Get auth token from actors
                     _auth_token = ""
                     for _actor_ref, _actor_info in actors.items():
                         _token = _text(_dict(_actor_info).get("token"))
@@ -813,26 +980,38 @@ def execute_one_experiment(
                         tenant_scope_values=_tenant_scope_values,
                     )
 
-                    # Store results in observations for finalizer
-                    observations["related_entity_observations"] = _exec_result.get("related_observations", [])
-                    observations["related_entity_multi_state"] = _exec_result.get("multi_entity_state", {})
-                    observations["related_entity_trace"] = _exec_result.get("trace", [])
-                    observations["related_entity_blockers"] = _exec_result.get("blockers", [])
+                    observations["related_entity_observations"] = (
+                        _exec_result.get("related_observations", [])
+                    )
+                    observations["related_entity_multi_state"] = (
+                        _exec_result.get("multi_entity_state", {})
+                    )
+                    observations["related_entity_trace"] = _exec_result.get(
+                        "trace", []
+                    )
+                    observations["related_entity_blockers"] = _exec_result.get(
+                        "blockers", []
+                    )
 
                     _exec_logger.info(
-                        f"Related entity observers: {eid} fetched={len(_exec_result.get('related_observations', []))} "
+                        f"Related entity observers: {eid} "
+                        f"fetched={len(_exec_result.get('related_observations', []))} "
                         f"blockers={len(_exec_result.get('blockers', []))}",
                         extra={"context": {"experiment_id": eid, "obligation_id": oid}},
                     )
         except Exception as _obs_exc:
             _exec_logger.warning(
-                f"Related entity observer execution failed: {eid} error={_obs_exc}",
-                extra={"context": {"experiment_id": eid, "obligation_id": oid, "error": str(_obs_exc)}},
+                f"Related entity observer execution failed: {eid} "
+                f"error={_obs_exc}",
+                extra={"context": {
+                    "experiment_id": eid,
+                    "obligation_id": oid,
+                    "error": str(_obs_exc),
+                }},
             )
             observations["related_entity_observer_error"] = str(_obs_exc)
 
     # ── Multi-Layer Observation + Cross-Surface Evidence Enrichment ──
-    # Extends typed observer system; evidence only, never produces formal findings.
     try:
         from .multi_layer_observation import check_observation_completeness
         from .cross_surface_oracle import detect_emergent_violation
@@ -846,7 +1025,6 @@ def execute_one_experiment(
             "completeness": _ml_completeness,
             "observation_count": len(_ml_obs),
         }
-        # Cross-surface emergent violation detection (evidence only)
         if _ml_obs:
             _emergent = detect_emergent_violation(
                 experiment_id=eid,
@@ -857,11 +1035,21 @@ def execute_one_experiment(
     except Exception as _ml_exc:
         _exec_logger.warning(
             "Multi-layer observation enrichment failed: %s obligation=%s error=%s",
-            eid, oid, str(_ml_exc)[:300],
+            eid,
+            oid,
+            str(_ml_exc)[:300],
             exc_info=_ml_exc,
         )
         observations["multi_layer_error"] = str(_ml_exc)[:200]
 
+    record_stage_event(
+        lifecycle_ledger,
+        phase="finalizer",
+        step_id="finalizer",
+        status="READY",
+        receipt_id="finalizer_inputs_sealed",
+    )
+    attach_lifecycle_ledger(observations, lifecycle_ledger)
     _final_result = finalize_experiment_execution(
         exp=exp,
         steps_out=steps_out,
@@ -881,17 +1069,32 @@ def execute_one_experiment(
         resolved_execution_id=resolved_execution_id,
         started=started,
     )
+    _final_result = attach_lifecycle_to_result(
+        lifecycle_ledger,
+        _dict(_final_result),
+    )
     _final_status = _dict(_final_result).get("status", "UNKNOWN")
     _elapsed = int((time.time() - started) * 1000)
     if _final_status == "BLOCKED":
         _exec_logger.warning(
-            f"Experiment finished BLOCKED: {eid} ({_elapsed}ms) reason={_dict(_final_result).get('reason_code', '')}",
-            extra={"context": {"experiment_id": eid, "obligation_id": oid, "elapsed_ms": _elapsed, "status": _final_status}},
+            f"Experiment finished BLOCKED: {eid} ({_elapsed}ms) "
+            f"reason={_dict(_final_result).get('reason_code', '')}",
+            extra={"context": {
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "elapsed_ms": _elapsed,
+                "status": _final_status,
+            }},
         )
     else:
         _exec_logger.info(
             f"Experiment finished: {eid} status={_final_status} ({_elapsed}ms)",
-            extra={"context": {"experiment_id": eid, "obligation_id": oid, "elapsed_ms": _elapsed, "status": _final_status}},
+            extra={"context": {
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "elapsed_ms": _elapsed,
+                "status": _final_status,
+            }},
         )
     return _final_result
 
