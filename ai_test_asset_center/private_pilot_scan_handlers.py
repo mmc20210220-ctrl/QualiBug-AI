@@ -1,8 +1,8 @@
 """Scan, preflight and regression-run HTTP authorities.
 
-One request performs at most one scan execution. Runtime approval discovered
-from a result is returned for a future explicit run; it never causes an
-implicit second execution inside the same request.
+One project has one scan lease across manual, continuous and regression entry
+points. A request executes at most once and may persist only report data whose
+identity is explicitly bound to the returned scan id.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from . import db_persistence as db_persist
 from .private_pilot_continuous import _update_continuous_state
 from .private_pilot_debug_client import _dbg_fingerprint_payload, _dbg_report
 from .private_pilot_json_io import _write_json_object_atomic
+from .private_pilot_scan_coordinator import ScanLeaseBusy, project_scan_lease
 from .private_pilot_scan_prep import (
     _is_local_private_service,
     _issue_runtime_approval_for_result,
@@ -61,6 +62,8 @@ def _collect_findings(result: dict[str, Any], report: dict[str, Any]) -> list[di
     for value in (
         report.get("real_findings"),
         report.get("bug_scores"),
+        result.get("real_findings"),
+        result.get("bug_scores"),
         result.get("db_findings"),
         result.get("e2e_findings"),
         result.get("deep_findings"),
@@ -96,6 +99,25 @@ def _collect_findings(result: dict[str, Any], report: dict[str, Any]) -> list[di
     return rows
 
 
+def _report_scan_id(report: dict[str, Any]) -> str:
+    for value in (
+        report.get("scan_id"),
+        (report.get("scan_meta") or {}).get("scan_id")
+        if isinstance(report.get("scan_meta"), dict)
+        else "",
+        (report.get("metadata") or {}).get("scan_id")
+        if isinstance(report.get("metadata"), dict)
+        else "",
+        (report.get("runtime_contract") or {}).get("scan_id")
+        if isinstance(report.get("runtime_contract"), dict)
+        else "",
+    ):
+        text = _text(value)
+        if text:
+            return text
+    return ""
+
+
 class ScanHandlersMixin:
     def _handle_scan_preflight(
         self,
@@ -103,8 +125,6 @@ class ScanHandlersMixin:
         root: Path,
         body: dict[str, Any] | None = None,
     ) -> None:
-        """Return fail-visible readiness checks before scan execution."""
-
         request = dict(body or {})
         reasons: list[dict[str, str]] = []
         service_config_path = (
@@ -183,6 +203,7 @@ class ScanHandlersMixin:
         project_config_path = (
             root / "platform_inputs" / project / "real_project_config.json"
         )
+        project_config: dict[str, Any] = {}
         if project_config_path.is_file():
             try:
                 project_config = _read_json_object(project_config_path)
@@ -193,7 +214,6 @@ class ScanHandlersMixin:
                         "message": f"项目运行配置无法解析: {exc}",
                     }
                 )
-                project_config = {}
             base_url = base_url or _text(project_config.get("base_url"))
             approved_url = approved_url or _text(
                 project_config.get("approved_base_url")
@@ -215,10 +235,7 @@ class ScanHandlersMixin:
             )
         if not base_url:
             reasons.append(
-                {
-                    "code": "NO_TARGET",
-                    "message": "未配置被测目标 base_url。",
-                }
+                {"code": "NO_TARGET", "message": "未配置被测目标 base_url。"}
             )
 
         read_only = request.get("read_only") is True
@@ -237,7 +254,8 @@ class ScanHandlersMixin:
             blocking_codes = [
                 code
                 for code in blocking_codes
-                if code not in {
+                if code
+                not in {
                     "READ_ONLY_MODE",
                     "UNKNOWN_ENVIRONMENT",
                     "PRODUCTION_WRITE_BLOCKED",
@@ -258,47 +276,99 @@ class ScanHandlersMixin:
             if code and code not in seen_codes:
                 seen_codes.add(code)
                 unique_reasons.append(reason)
-        response: dict[str, Any] = {
-            "ok": True,
-            "schema_version": "qualibug.environment-preflight.v1",
-            "project_id": project,
-            "ready": not unique_reasons,
-            "blocking_codes": [row["code"] for row in unique_reasons],
-            "reasons": unique_reasons,
-            "target_policy_decision": target_policy,
-            "input_checks": {
-                "credentials": {
-                    "status": "passed" if services else "blocked",
-                    "service_count": len(services),
+        return self._json(
+            {
+                "ok": True,
+                "schema_version": "qualibug.environment-preflight.v1",
+                "project_id": project,
+                "ready": not unique_reasons,
+                "blocking_codes": [row["code"] for row in unique_reasons],
+                "reasons": unique_reasons,
+                "target_policy_decision": target_policy,
+                "input_checks": {
+                    "credentials": {
+                        "status": "passed" if services else "blocked",
+                        "service_count": len(services),
+                    },
+                    "sources": {
+                        "status": "passed" if assets else "blocked",
+                        "source_count": len(assets),
+                    },
+                    "target": {
+                        "status": "passed" if base_url else "blocked",
+                        "target_url": base_url,
+                        "approved_base_url": approved_url,
+                    },
+                    "environment": {
+                        "status": "passed"
+                        if environment_type and environment_ref
+                        else "blocked",
+                        "environment_type": environment_type,
+                        "environment_ref": environment_ref,
+                    },
+                    "target_policy": {
+                        "status": "passed"
+                        if (
+                            target_policy.get("read_allowed")
+                            if read_only
+                            else target_policy.get("write_allowed")
+                        )
+                        else "blocked"
+                    },
                 },
-                "sources": {
-                    "status": "passed" if assets else "blocked",
-                    "source_count": len(assets),
-                },
-                "target": {
-                    "status": "passed" if base_url else "blocked",
-                    "target_url": base_url,
-                    "approved_base_url": approved_url,
-                },
-                "environment": {
-                    "status": "passed"
-                    if environment_type and environment_ref
-                    else "blocked",
-                    "environment_type": environment_type,
-                    "environment_ref": environment_ref,
-                },
-                "target_policy": {
-                    "status": "passed"
-                    if (
-                        target_policy.get("read_allowed")
-                        if read_only
-                        else target_policy.get("write_allowed")
-                    )
-                    else "blocked"
-                },
-            },
+            }
+        )
+
+    def _bound_scan_report(
+        self,
+        project: str,
+        root: Path,
+        result: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        result_scan_id = _text(result.get("scan_id"))
+        report_ref = _text(result.get("report_path"))
+        if report_ref:
+            candidate = Path(report_ref)
+            report_path = (
+                candidate.resolve()
+                if candidate.is_absolute()
+                else (root / candidate).resolve()
+            )
+        else:
+            report_path = (
+                root / "platform_outputs" / project / "intelligence_report.json"
+            ).resolve()
+        allowed_root = (root / "platform_outputs" / project).resolve()
+        try:
+            report_path.relative_to(allowed_root)
+        except ValueError:
+            return {}, {
+                "status": "blocked",
+                "reason": "report_path_outside_project_outputs",
+                "report_path": str(report_path),
+            }
+        if not report_path.exists() or not report_path.is_file():
+            return {}, {
+                "status": "missing",
+                "reason": "report_not_found",
+                "report_path": str(report_path),
+            }
+        report = _read_json_object(report_path)
+        report_scan_id = _report_scan_id(report)
+        if not result_scan_id or report_scan_id != result_scan_id:
+            return {}, {
+                "status": "unbound",
+                "reason": "report_scan_id_mismatch_or_missing",
+                "result_scan_id": result_scan_id,
+                "report_scan_id": report_scan_id,
+                "report_path": str(report_path),
+            }
+        return report, {
+            "status": "bound",
+            "result_scan_id": result_scan_id,
+            "report_scan_id": report_scan_id,
+            "report_path": str(report_path),
         }
-        return self._json(response)
 
     def _persist_scan_result(
         self,
@@ -306,13 +376,13 @@ class ScanHandlersMixin:
         root: Path,
         result: dict[str, Any],
     ) -> dict[str, Any]:
-        report_path = root / "platform_outputs" / project / "intelligence_report.json"
-        report = _read_json_object(report_path) if report_path.exists() else {}
+        report, report_binding = self._bound_scan_report(project, root, result)
         findings = _collect_findings(result, report)
         tenant_id = self._request_tenant()
         enriched = dict(result)
         enriched["findings"] = findings
-        scan_id = db_persist.save_scan(
+        enriched["report_binding"] = report_binding
+        scan_record_id = db_persist.save_scan(
             root,
             tenant_id,
             project,
@@ -322,23 +392,54 @@ class ScanHandlersMixin:
             root,
             tenant_id,
             project,
-            scan_id,
+            scan_record_id,
             findings,
         )
-        increment_scan_counter(
-            root / "platform_outputs" / project / "scan_counter.json"
-        )
-        if result.get("spectrum"):
-            spectrum_path = (
-                root
-                / "platform_outputs"
-                / project
-                / "spectrum"
-                / "spectrum_result.json"
+        projection_errors: list[dict[str, str]] = []
+        try:
+            increment_scan_counter(
+                root / "platform_outputs" / project / "scan_counter.json"
             )
-            _write_json_object_atomic(spectrum_path, dict(result["spectrum"]))
-        _update_continuous_state(root, project, result)
-        return {"scan_record_id": scan_id, **cumulative}
+        except Exception as exc:
+            projection_errors.append(
+                {
+                    "projection": "scan_counter",
+                    "error": f"{type(exc).__name__}: {exc}"[:300],
+                }
+            )
+        if result.get("spectrum"):
+            try:
+                spectrum_path = (
+                    root
+                    / "platform_outputs"
+                    / project
+                    / "spectrum"
+                    / "spectrum_result.json"
+                )
+                _write_json_object_atomic(spectrum_path, dict(result["spectrum"]))
+            except Exception as exc:
+                projection_errors.append(
+                    {
+                        "projection": "spectrum",
+                        "error": f"{type(exc).__name__}: {exc}"[:300],
+                    }
+                )
+        try:
+            _update_continuous_state(root, project, result)
+        except Exception as exc:
+            projection_errors.append(
+                {
+                    "projection": "continuous_state",
+                    "error": f"{type(exc).__name__}: {exc}"[:300],
+                }
+            )
+        return {
+            "scan_record_id": scan_record_id,
+            **cumulative,
+            "report_binding": report_binding,
+            "projection_status": "degraded" if projection_errors else "complete",
+            "projection_errors": projection_errors,
+        }
 
     def _handle_v12_scan(
         self,
@@ -349,6 +450,34 @@ class ScanHandlersMixin:
     ) -> None:
         if not self._require_role(actor, _SCAN_ROLES, "scan execution"):
             return None
+        tenant_id = self._request_tenant()
+        try:
+            with project_scan_lease(
+                root,
+                project,
+                mode="manual_scan",
+                tenant_id=tenant_id,
+                actor=actor,
+            ):
+                return self._execute_v12_scan(project, root, actor, body)
+        except ScanLeaseBusy as exc:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "PROJECT_SCAN_ALREADY_RUNNING",
+                    "message": "该项目已有检测任务运行中。",
+                    "active_scan": exc.owner,
+                },
+                409,
+            )
+
+    def _execute_v12_scan(
+        self,
+        project: str,
+        root: Path,
+        actor: dict[str, str],
+        body: dict[str, Any],
+    ) -> None:
         try:
             from .__main__ import scan
             from .enterprise_source_registry import compose_project_source_manifest
@@ -437,9 +566,7 @@ class ScanHandlersMixin:
                         or api_doc
                     ),
                     base_url=_text(prepared.get("base_url") or base_url),
-                    multi_layer=bool(
-                        _text(prepared.get("base_url") or base_url)
-                    ),
+                    multi_layer=bool(_text(prepared.get("base_url") or base_url)),
                     campaign_context=campaign_context,
                 )
             finally:
@@ -470,9 +597,7 @@ class ScanHandlersMixin:
                         or "扫描未产出结果，请查看执行状态与失败阶段。",
                         "project": project,
                         "scan_id": _text(result.get("scan_id")),
-                        "execution_status": _text(
-                            result.get("execution_status")
-                        ),
+                        "execution_status": _text(result.get("execution_status")),
                         "customer_output_status": _text(
                             result.get("customer_output_status")
                         ),
@@ -484,11 +609,7 @@ class ScanHandlersMixin:
                 )
 
             try:
-                cumulative = self._persist_scan_result(
-                    project,
-                    root,
-                    result,
-                )
+                cumulative = self._persist_scan_result(project, root, result)
             except Exception as exc:
                 _scan_logger.exception(
                     "scan result persistence failed",
@@ -506,9 +627,7 @@ class ScanHandlersMixin:
                         "error": "SCAN_PERSISTENCE_FAILED",
                         "message": str(exc)[:500],
                         "scan_id": _text(result.get("scan_id")),
-                        "execution_status": _text(
-                            result.get("execution_status")
-                        ),
+                        "execution_status": _text(result.get("execution_status")),
                         "result_available_but_not_committed": True,
                         "future_execution_approval_id": future_approval_id or "",
                         "implicit_retry_performed": False,
@@ -564,9 +683,7 @@ class ScanHandlersMixin:
         root: Path,
         body: dict[str, Any],
     ) -> dict[str, Any]:
-        config_path = (
-            root / "platform_inputs" / project / "real_project_config.json"
-        )
+        config_path = root / "platform_inputs" / project / "real_project_config.json"
         config = _read_json_object(config_path) if config_path.exists() else {}
         return build_target_policy_decision(
             requested_base_url=body.get("base_url") or config.get("base_url"),
@@ -634,22 +751,39 @@ class ScanHandlersMixin:
                     },
                     403,
                 )
+        tenant_id = self._request_tenant()
         try:
-            from .regression_runner import run_regression_suite
+            with project_scan_lease(
+                root,
+                project,
+                mode="regression",
+                tenant_id=tenant_id,
+                actor=actor,
+            ):
+                from .regression_runner import run_regression_suite
 
-            result = run_regression_suite(
-                project_id=project,
-                root=root,
-                options={
-                    "mode": mode,
-                    "allow_destructive_execution": allow_destructive,
-                    "dry_run": dry_run,
-                    "execution_approval_id": _text(
-                        body.get("execution_approval_id")
-                    ),
-                    "target_policy_decision": target_policy,
-                    "actor": actor,
+                result = run_regression_suite(
+                    project_id=project,
+                    root=root,
+                    options={
+                        "mode": mode,
+                        "allow_destructive_execution": allow_destructive,
+                        "dry_run": dry_run,
+                        "execution_approval_id": _text(
+                            body.get("execution_approval_id")
+                        ),
+                        "target_policy_decision": target_policy,
+                        "actor": actor,
+                    },
+                )
+        except ScanLeaseBusy as exc:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "PROJECT_SCAN_ALREADY_RUNNING",
+                    "active_scan": exc.owner,
                 },
+                409,
             )
         except Exception as exc:
             return self._json(
@@ -662,39 +796,26 @@ class ScanHandlersMixin:
             )
         if not isinstance(result, dict):
             return self._json(
-                {
-                    "ok": False,
-                    "error": "REGRESSION_RESULT_INVALID",
-                },
+                {"ok": False, "error": "REGRESSION_RESULT_INVALID"},
                 500,
             )
-        summary = (
-            result.get("summary")
-            if isinstance(result.get("summary"), dict)
-            else {}
-        )
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
         ci_feedback = (
             result.get("ci_feedback")
             if isinstance(result.get("ci_feedback"), dict)
             else {}
         )
-        failures = (
-            result.get("failures")
-            if isinstance(result.get("failures"), list)
-            else []
-        )
+        failures = result.get("failures") if isinstance(result.get("failures"), list) else []
         return self._json(
             {
-                "ok": bool(result.get("ok", True)),
+                "ok": result.get("ok") is True,
                 "project_id": project,
                 "mode": mode,
                 "summary": summary,
                 "ci_feedback": ci_feedback,
                 "failures": failures[:20],
                 "artifacts": {
-                    "regression_suite_ref": _text(
-                        result.get("regression_suite_ref")
-                    ),
+                    "regression_suite_ref": _text(result.get("regression_suite_ref")),
                     "run_result_ref": (
                         f"platform_outputs/{project}/regression_run/"
                         "regression_run_result.json"
