@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from ai_test_asset_center import experiment_executor as executor
+from ai_test_asset_center import experiment_executor_governance as governance
 
 
 def _write_accounts(root: Path, project: str, accounts: list[dict]) -> None:
@@ -43,7 +44,7 @@ def test_same_role_accounts_keep_exact_tokens_but_remove_role_aliases(
         ],
     )
 
-    tokens = executor.load_actor_tokens(tmp_path, "demo")
+    tokens = governance._identity_safe_load_actor_tokens(tmp_path, "demo")
 
     assert tokens["warehouse-a"] == "token-a"
     assert tokens["secret_ref:test_accounts:warehouse-a"] == "token-a"
@@ -62,7 +63,7 @@ def test_single_active_account_keeps_role_compatibility_alias(tmp_path: Path) ->
         [_account("warehouse-a", "token-a")],
     )
 
-    tokens = executor.load_actor_tokens(tmp_path, "demo")
+    tokens = governance._identity_safe_load_actor_tokens(tmp_path, "demo")
 
     assert tokens["仓库员"] == "token-a"
     assert tokens["secret_ref:test_accounts:仓库员"] == "token-a"
@@ -78,7 +79,7 @@ def test_disabled_second_account_does_not_make_role_ambiguous(tmp_path: Path) ->
         ],
     )
 
-    tokens = executor.load_actor_tokens(tmp_path, "demo")
+    tokens = governance._identity_safe_load_actor_tokens(tmp_path, "demo")
 
     assert tokens["仓库员"] == "token-a"
     assert "warehouse-disabled" in tokens
@@ -98,13 +99,13 @@ def test_account_qualified_actor_never_falls_back_to_role_token() -> None:
         "secret_ref:test_accounts:warehouse-b": "token-b",
     }
 
-    assert executor._resolve_token(actor, wrong_only) == ""
+    assert governance._resolve_token(actor, wrong_only) == ""
 
     exact = {
         **wrong_only,
         "secret_ref:test_accounts:warehouse-a": "token-a",
     }
-    assert executor._resolve_token(actor, exact) == "token-a"
+    assert governance._resolve_token(actor, exact) == "token-a"
 
 
 def test_role_only_actor_keeps_single_account_compatibility() -> None:
@@ -114,7 +115,7 @@ def test_role_only_actor_keeps_single_account_compatibility() -> None:
         "credential_secret_ref": "secret_ref:actor:仓库员",
     }
 
-    assert executor._resolve_token(actor, {"仓库员": "token-a"}) == "token-a"
+    assert governance._resolve_token(actor, {"仓库员": "token-a"}) == "token-a"
 
 
 def test_exact_account_preflight_blocks_when_only_role_token_exists() -> None:
@@ -141,7 +142,7 @@ def test_exact_account_preflight_blocks_when_only_role_token_exists() -> None:
         ]
     }
 
-    ok, reason, detail = executor._exact_secret_preflight(
+    ok, reason, detail = governance._exact_secret_preflight(
         experiment,
         behavior_ir=behavior_ir,
         actor_tokens={"仓库员": "token-b"},
@@ -177,7 +178,7 @@ def test_exact_account_preflight_accepts_declared_secret() -> None:
         ]
     }
 
-    assert executor._exact_secret_preflight(
+    assert governance._exact_secret_preflight(
         experiment,
         behavior_ir=behavior_ir,
         actor_tokens={"secret_ref:test_accounts:warehouse-a": "token-a"},
@@ -209,7 +210,7 @@ def test_graph_only_actor_remains_owned_by_graph_target_authority() -> None:
         ]
     }
 
-    assert executor._exact_secret_preflight(
+    assert governance._exact_secret_preflight(
         experiment,
         behavior_ir=behavior_ir,
         actor_tokens={},
@@ -217,8 +218,13 @@ def test_graph_only_actor_remains_owned_by_graph_target_authority() -> None:
     ) == (True, "", "")
 
 
-def test_core_hooks_use_same_identity_safe_authorities() -> None:
-    executor._sync_core_hooks()
+def test_governed_core_hooks_use_same_identity_safe_authorities() -> None:
+    governance._sync_core_hooks()
 
-    assert executor._core.load_actor_tokens is executor.load_actor_tokens
-    assert executor._core._resolve_token is executor._resolve_token
+    assert governance._core.load_actor_tokens is governance.load_actor_tokens
+    assert governance._core._resolve_token is governance._resolve_token
+
+
+def test_public_facade_preserves_historical_loader_identity() -> None:
+    assert executor.load_actor_tokens is executor._runtime_load_actor_tokens
+    assert governance.load_actor_tokens is governance._identity_safe_load_actor_tokens
