@@ -31,7 +31,7 @@ _EXPLICIT_EXPRESSION_TYPES = frozenset(
     }
 )
 _GENERIC_BINDING_GAP = "DATABASE_RELATION_DELTA_EXACT_BINDING_MISSING"
-_PAIR_SCHEMA = "qualibug.database-relation-delta-semantic-pair.v1"
+SEMANTIC_PAIR_SCHEMA = "qualibug.database-relation-delta-semantic-pair.v1"
 
 
 def _canonical(value: Any) -> str:
@@ -44,13 +44,18 @@ def _canonical(value: Any) -> str:
     )
 
 
-def _semantic_pair_id(assertion: dict[str, Any]) -> str:
+def semantic_relation_delta_pair_id(assertion: dict[str, Any]) -> str:
+    """Return the deterministic pair id for all verdict-relevant semantics."""
     binding = _dict(assertion.get("database_relation_delta_binding"))
+    source_refs = sorted(
+        [deepcopy(row) for row in _list(assertion.get("source_refs"))],
+        key=_canonical,
+    )
     payload = {
-        "schema": _PAIR_SCHEMA,
+        "schema": SEMANTIC_PAIR_SCHEMA,
         "assertion_id": _text(assertion.get("assertion_id")),
         "source_assertion_kind": _text(assertion.get("source_assertion_kind")),
-        "source_refs": _list(assertion.get("source_refs")),
+        "source_refs": source_refs,
         "database_relation_observer_ref": _text(
             assertion.get("database_relation_observer_ref")
         ),
@@ -129,7 +134,7 @@ def _freeze_semantic_pairs(
         old_after_id = _text(assertion.get("relation_after_draft_id"))
         relation_ref = _text(assertion.get("database_relation_observer_ref"))
         assertion_id = _text(assertion.get("assertion_id"))
-        new_pair_id = _semantic_pair_id(assertion)
+        new_pair_id = semantic_relation_delta_pair_id(assertion)
         new_before_id = _stable_id(
             "database_relation_observer_execution_draft",
             relation_ref,
@@ -158,7 +163,7 @@ def _freeze_semantic_pairs(
         binding = _dict(assertion.get("database_relation_delta_binding"))
         binding.update(
             {
-                "semantic_pair_schema": _PAIR_SCHEMA,
+                "semantic_pair_schema": SEMANTIC_PAIR_SCHEMA,
                 "previous_relation_pair_id": old_pair_id,
                 "relation_pair_id": new_pair_id,
                 "relation_before_draft_id": new_before_id,
@@ -188,7 +193,7 @@ def _freeze_semantic_pairs(
             {
                 "database_relation_delta_assertion_fingerprint": fingerprint,
                 "database_relation_delta_semantic_pair_count": len(bound),
-                "database_relation_delta_semantic_pair_schema": _PAIR_SCHEMA,
+                "database_relation_delta_semantic_pair_schema": SEMANTIC_PAIR_SCHEMA,
             }
         )
         row["compile_receipt"] = receipt
@@ -326,7 +331,7 @@ def project_database_relation_delta_assertions(
     summary["malformed_explicit_expression_count"] = incomplete_count
     summary["replaced_generic_gap_count"] = removed_generic_count
     summary["semantic_pair_count"] = semantic_pair_count
-    summary["semantic_pair_schema"] = _PAIR_SCHEMA
+    summary["semantic_pair_schema"] = SEMANTIC_PAIR_SCHEMA
     summary["automatic_expression_repair_count"] = 0
     if incomplete_count and _text(summary.get("status")).upper() == "PASS":
         summary["status"] = "PARTIAL"
@@ -334,4 +339,8 @@ def project_database_relation_delta_assertions(
     return projected
 
 
-__all__ = ["project_database_relation_delta_assertions"]
+__all__ = [
+    "SEMANTIC_PAIR_SCHEMA",
+    "project_database_relation_delta_assertions",
+    "semantic_relation_delta_pair_id",
+]
