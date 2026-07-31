@@ -104,12 +104,43 @@ def govern_identity_registry(
     result["conflicts"] = conflicts
     _reindex(result)
     mention_to_entity = as_dict(result.get("mention_to_entity"))
+    mentions = {
+        text(row.get("mention_id")): row
+        for row in as_list(result.get("mentions"))
+        if isinstance(row, dict)
+    }
+    business_mention_by_artifact: dict[str, str] = {}
+    for edge in as_list(result.get("edges")):
+        if not isinstance(edge, dict) or text(edge.get("relation")) != "IMPLEMENTS_ENTITY":
+            continue
+        left_id = text(edge.get("left_mention_id"))
+        right_id = text(edge.get("right_mention_id"))
+        left = as_dict(mentions.get(left_id))
+        right = as_dict(mentions.get(right_id))
+        if text(left.get("mention_type")) == "TECHNICAL_ARTIFACT":
+            technical, business_id = left, right_id
+        else:
+            technical, business_id = right, left_id
+        artifact_ref = text(technical.get("artifact_ref"))
+        if artifact_ref and business_id:
+            business_mention_by_artifact[artifact_ref] = business_id
     for binding in as_list(result.get("bindings")):
         if not isinstance(binding, dict):
             continue
         mention_id = text(binding.get("business_mention_id"))
+        if not mention_id:
+            mention_id = business_mention_by_artifact.get(text(binding.get("artifact_ref")), "")
+            if mention_id:
+                binding["business_mention_id"] = mention_id
         if mention_id and text(mention_to_entity.get(mention_id)):
             binding["entity_id"] = mention_to_entity[mention_id]
+        binding["binding_id"] = stable_id(
+            "identity_binding",
+            binding.get("entity_id"),
+            binding.get("artifact_type"),
+            binding.get("artifact_ref"),
+            binding.get("relation"),
+        )
 
     current_ids = {
         text(row.get("entity_id")) for row in clusters if text(row.get("entity_id"))
