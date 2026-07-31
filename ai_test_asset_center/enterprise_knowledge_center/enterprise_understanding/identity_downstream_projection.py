@@ -60,6 +60,7 @@ def _binding_row(
 
 
 def _authoritative_rows(values: Iterable[Any]) -> list[dict[str, Any]]:
+    """Accept only a governed status or an explicit authoritative assertion."""
     result: list[dict[str, Any]] = []
     for value in values:
         if not isinstance(value, dict):
@@ -68,7 +69,7 @@ def _authoritative_rows(values: Iterable[Any]) -> list[dict[str, Any]]:
         authoritative = value.get("authoritative")
         if status and status not in _ACCEPTED_BINDING_STATUS:
             continue
-        if authoritative is False:
+        if status not in _ACCEPTED_BINDING_STATUS and authoritative is not True:
             continue
         result.append(value)
     return result
@@ -156,16 +157,16 @@ def _project_bindings_from_implementation(
                     evidence=as_list(row.get("evidence")),
                 )
                 if projected:
-                    projected["identity_field_bindings"] = [
-                        {
-                            "technical_field": text(
-                                row.get("field")
-                                or row.get("field_ref")
-                                or row.get("field_path")
-                            ),
-                            "source_backed": True,
-                        }
-                    ] if text(row.get("field") or row.get("field_ref") or row.get("field_path")) else []
+                    field = text(
+                        row.get("field")
+                        or row.get("field_ref")
+                        or row.get("field_path")
+                    )
+                    projected["identity_field_bindings"] = (
+                        [{"technical_field": field, "source_backed": True}]
+                        if field
+                        else []
+                    )
                     rows.append(projected)
     return rows
 
