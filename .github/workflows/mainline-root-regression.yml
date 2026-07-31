@@ -43,8 +43,12 @@ jobs:
             ai_test_asset_center/ssrf_guard.py \
             ai_test_asset_center/db_persistence.py \
             ai_test_asset_center/enterprise_knowledge_center/_crud.py \
+            ai_test_asset_center/experiment_compiler_obligation.py \
             ai_test_asset_center/experiment_lifecycle_runtime.py \
             ai_test_asset_center/experiment_outcome_finalizer.py \
+            ai_test_asset_center/operational_receipts.py \
+            ai_test_asset_center/process_step_evidence_scope_audit.py \
+            ai_test_asset_center/process_step_receipt_scope.py \
             ai_test_asset_center/process_step_semantic_view.py \
             ai_test_asset_center/formal_event_pre_cleanup.py \
             ai_test_asset_center/formal_event_observation_count_bridge.py \
@@ -59,6 +63,8 @@ jobs:
             tests/test_p0_root_security_boundaries.py \
             tests/test_p0_atomic_mainline_contracts.py \
             tests/test_process_step_semantic_view.py \
+            tests/test_compiled_http_observer_bundle_scope.py \
+            tests/test_process_graph_event_finalizer_scope.py \
             tests/test_formal_event_mainline.py \
             tests/test_formal_event_runtime_execution.py \
             tests/test_formal_event_post_runtime_execution.py
