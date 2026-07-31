@@ -110,7 +110,9 @@
     "ai_test_asset_center.real_project_discovery_with_chain": "compatibility",
     "ai_test_asset_center.connector_source_ingestion": "core",
     "ai_test_asset_center.connector_sync_authority": "core",
-    "ai_test_asset_center.feishu_connector_adapter": "core"
+    "ai_test_asset_center.feishu_connector_adapter": "core",
+    "ai_test_asset_center.connector_connection_profiles": "core",
+    "ai_test_asset_center.private_pilot_connector_handlers": "core"
   },
   "discovery_entrypoints": [
     {
