@@ -23,6 +23,12 @@ on:
       - "ai_test_asset_center/flow_data_materializer_projection.py"
       - "ai_test_asset_center/multi_step_protocol.py"
       - "ai_test_asset_center/multi_step_protocol_core.py"
+      - "ai_test_asset_center/process_graph_write_contract.py"
+      - "ai_test_asset_center/process_graph_write_contract_core.py"
+      - "ai_test_asset_center/process_graph_reversibility.py"
+      - "ai_test_asset_center/process_graph_rollback_contract.py"
+      - "ai_test_asset_center/process_graph_cleanup_executor.py"
+      - "ai_test_asset_center/process_graph_cleanup_executor_core.py"
       - "ai_test_asset_center/process_graph_wait_contract.py"
       - "ai_test_asset_center/process_graph_wait_contract_core.py"
       - "ai_test_asset_center/process_graph_runtime.py"
@@ -57,6 +63,8 @@ on:
       - "tests/test_process_graph_wait_outcome.py"
       - "tests/test_wait_flow_data_requirement.py"
       - "tests/test_graph_scoped_receipt_copy.py"
+      - "tests/test_process_graph_rollback_contract.py"
+      - "tests/test_process_graph_dependency_rollback.py"
       - "tests/test_experiment_cleanup_lifecycle_adapter.py"
       - "tests/test_multi_write_cleanup_coverage.py"
       - "tests/test_async_readback_executor.py"
@@ -101,6 +109,12 @@ jobs:
             ai_test_asset_center/flow_data_materializer_projection.py \
             ai_test_asset_center/multi_step_protocol.py \
             ai_test_asset_center/multi_step_protocol_core.py \
+            ai_test_asset_center/process_graph_write_contract.py \
+            ai_test_asset_center/process_graph_write_contract_core.py \
+            ai_test_asset_center/process_graph_reversibility.py \
+            ai_test_asset_center/process_graph_rollback_contract.py \
+            ai_test_asset_center/process_graph_cleanup_executor.py \
+            ai_test_asset_center/process_graph_cleanup_executor_core.py \
             ai_test_asset_center/process_graph_wait_contract.py \
             ai_test_asset_center/process_graph_wait_contract_core.py \
             ai_test_asset_center/process_graph_runtime.py \
@@ -138,6 +152,8 @@ jobs:
             tests/test_process_graph_wait_outcome.py \
             tests/test_wait_flow_data_requirement.py \
             tests/test_graph_scoped_receipt_copy.py \
+            tests/test_process_graph_rollback_contract.py \
+            tests/test_process_graph_dependency_rollback.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_multi_write_cleanup_coverage.py \
             tests/test_async_readback_executor.py \
