@@ -1,78 +1,351 @@
-"""Sequential control/treatment plan execution for experiments.
+"""Graph-aware entry point for experiment plan execution.
 
-Extracted from ``experiment_executor.execute_one_experiment``. Executes
-non-barrier plan steps after ``execute_barrier_plans``, preserving
-control-body capture for treatment reuse and pre-transport binding blocks.
+The mature sequential transport/governance implementation lives in
+``experiment_plan_step_executor`` and remains byte-for-byte the execution
+kernel for ordinary plans.  This module is the existing mainline authority: it
+adds source-backed dependency scheduling, exact approved-target dispatch, and
+namespaced cross-node bindings before invoking that kernel one node at a time.
+
+It does not infer targets, credentials, ordering, joins, or binding fields.
+Asynchronous waits remain blocked until a receipt-backed observer scheduler is
+available.  Secondary-system writes remain blocked until cleanup can dispatch
+to the same approved target.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-import re
 from typing import Any
-from urllib.parse import urlencode
 
 from .contract_oracles import build_contract_evidence_receipt
-from .experiment_runtime_support import (
-    _WRITE_METHODS,
-    _declared_observation_path,
-    _dict,
-    _has_response_bound_create_observers,
-    _list,
-    _observation_state,
-    _resolve_token,
-    _response_bound_observation_path,
-    _run_http_step,
-    _sha256,
-    _text,
-    _unresolved_body_placeholders,
-    _unresolved_path_placeholders,
+from .experiment_plan_step_executor import (
+    execute_non_barrier_plans as _execute_sequential_plans,
 )
-from .real_id_resolver import (
-    infer_path_params,
+from .experiment_runtime_support import _dict, _list, _text
+from .process_graph_runtime import (
+    GRAPH_PREDECESSOR_NOT_SUCCEEDED,
+    GRAPH_RUNTIME_INVALID,
+    GRAPH_TARGET_ACTOR_CREDENTIAL_UNRESOLVED,
+    extract_execution_graph,
+    graph_step_context,
+    prepare_graph_runtime,
+    record_graph_step_outcome,
 )
-from .real_id_resolver_base import normalize_path_placeholders
-from .runtime_binding_materializer import (
-    materialize_body_template as _materialize_body_template,
-    materialize_path as _materialize_path,
+from .process_step_execution import (
+    ProcessStepLedger,
+    attach_ledger_refs_to_observations,
 )
-from .sandbox_write_executor import (
-    _http_request,
-    execute_governed_control_write,
-    sandbox_write_allowed,
-)
-from .sandbox_write_executor_base import evaluator_request_trace
 
 
-def _resolve_route_with_fallback(
+def _required_step_ids(
+    activation_requirements: dict[str, Any],
+    graph_order: list[str],
+) -> list[str]:
+    values: list[str] = []
+    for phase in ("control", "treatment"):
+        for value in _list(activation_requirements.get(phase)):
+            token = _text(value)
+            if token and token not in values:
+                values.append(token)
+    for value in graph_order:
+        token = _text(value)
+        if token and token not in values:
+            values.append(token)
+    return values
+
+
+def _new_master_ledger(
     *,
-    base_url: str,
-    method: str,
-    path: str,
-    token: str,
+    observations: dict[str, Any],
+    eid: str,
+    oid: str,
+    resolved_campaign_id: str,
+    resolved_execution_id: str,
+    campaign_id: str,
+    required_step_ids: list[str],
+) -> ProcessStepLedger:
+    fixture_id = _text(
+        _dict(observations.get("disposable_fixture_contract")).get("fixture_id")
+    )
+    protocol_id = _text(
+        observations.get("protocol_id")
+        or _dict(observations.get("protocol")).get("protocol_id")
+    )
+    return ProcessStepLedger(
+        experiment_id=eid,
+        fixture_id=fixture_id,
+        campaign_id=_text(resolved_campaign_id or campaign_id),
+        run_id=_text(resolved_execution_id),
+        obligation_id=_text(oid),
+        protocol_id=protocol_id,
+        required_step_ids=required_step_ids,
+    )
+
+
+def _record_blocked_step(
+    *,
+    master: ProcessStepLedger,
+    contract_evidence_receipts: list[dict[str, Any]],
+    pre_transport_block_reasons: list[str],
+    step: dict[str, Any],
+    reason_code: str,
+    detail: str,
+    phase: str,
+    eid: str,
+    oid: str,
+    resolved_campaign_id: str,
+    resolved_execution_id: str,
+    graph_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Execute one HTTP step against the single approved, campaign-bound base URL.
-
-    This used to retry a 404 against arbitrary alternate hosts named by the
-    operator-settable ``QUALIBUG_SERVICE_URLS`` environment variable, replaying the
-    same actor token against every one of them. That let a single approved-target
-    campaign spray a live actor credential across hosts nobody in the campaign
-    contract approved -- an env-controlled bypass of the whole non-production
-    target-policy gate. Multi-service discovery belongs to the declared connector /
-    approved-target registry (``target_policy`` / ``enterprise_pilot_runtime``), not
-    to a token replay loop reading process environment variables at request time.
-
-    Returns the observation dict with a ``resolved_route`` field so downstream
-    reporting keeps the same shape as before.
-    """
-    obs = _run_http_step(base_url=base_url, method=method, path=path, token=token)
-    obs["resolved_route"] = {
-        "strategy": "approved_target",
-        "base_url": base_url,
-        "path": path,
-        "status_code": int(obs.get("status_code") or 0),
+    step_id = _text(step.get("step_id"))
+    op_ref = _text(step.get("operation_ref"))
+    actor_ref = _text(step.get("actor_ref"))
+    pre_transport_block_reasons.append(f"{reason_code}:{detail}")
+    contract_evidence_receipts.append(
+        build_contract_evidence_receipt(
+            kind=phase,
+            experiment_id=eid,
+            obligation_id=oid,
+            campaign_id=resolved_campaign_id,
+            execution_id=resolved_execution_id,
+            subject_id=step_id,
+            status="BLOCKED",
+            evidence={
+                "request_reached_transport": False,
+                "reason_code": reason_code,
+                "detail": detail,
+                "execution_graph_id": _text(
+                    _dict(graph_meta).get("execution_graph_id")
+                ),
+            },
+        )
+    )
+    row = master.record_step_execution(
+        step_id=step_id,
+        phase=phase,
+        operation_ref=op_ref,
+        actor_ref=actor_ref,
+        runtime_identity={},
+        status_code=0,
+        final_status="BLOCKED",
+        target_reached=False,
+    )
+    row.update(
+        {
+            "reason_code": reason_code,
+            "detail": detail,
+            "system_ref": _text(step.get("system_ref")),
+            "object_refs": _list(step.get("object_refs")),
+            "wave_index": int(_dict(graph_meta).get("wave_index") or 0),
+        }
+    )
+    master.record_timeline_event(
+        step_id=step_id,
+        phase=phase,
+        event_type="STEP_FAILED",
+        operation_ref=op_ref,
+        actor_ref=actor_ref,
+    )
+    return {
+        "phase": phase,
+        "step_id": step_id,
+        "status": "blocked_request",
+        "reason": reason_code,
+        "detail": detail,
+        "method": _text(step.get("method")).upper(),
+        "path": _text(step.get("path") or step.get("path_template")),
+        "status_code": 0,
+        "actor_ref": actor_ref,
+        "operation_ref": op_ref,
+        "system_ref": _text(step.get("system_ref")),
+        "object_refs": _list(step.get("object_refs")),
     }
-    return obs
+
+
+def _copy_subledger_rows(
+    master: ProcessStepLedger,
+    subledger: Any,
+    *,
+    graph_context_by_step: dict[str, dict[str, Any]] | None = None,
+) -> set[str]:
+    copied: set[str] = set()
+    if subledger is None or not hasattr(subledger, "all_rows"):
+        return copied
+    contexts = graph_context_by_step or {}
+    for source in subledger.all_rows():
+        if not isinstance(source, dict):
+            continue
+        step_id = _text(source.get("step_id"))
+        if not step_id:
+            continue
+        row = master.record_step_execution(
+            step_id=step_id,
+            phase=_text(source.get("phase")),
+            operation_ref=_text(
+                source.get("operation_ref") or source.get("operation_id")
+            ),
+            actor_ref=_text(source.get("actor_ref")),
+            runtime_identity=_dict(source.get("runtime_identity")),
+            request_receipt_id=_text(source.get("request_receipt_id")),
+            response_receipt_id=_text(source.get("response_receipt_id")),
+            transport_receipt_id=_text(source.get("transport_receipt_id")),
+            before_state_receipt_id=_text(source.get("before_state_receipt_id")),
+            after_state_receipt_id=_text(source.get("after_state_receipt_id")),
+            observer_receipt_ids=list(
+                source.get("observation_receipt_ids")
+                or source.get("observer_receipt_ids")
+                or []
+            ),
+            oracle_receipt_ids=list(source.get("oracle_receipt_ids") or []),
+            cleanup_contract_id=_text(source.get("cleanup_contract_id")),
+            cleanup_receipt_ids=list(source.get("cleanup_receipt_ids") or []),
+            status_code=int(source.get("status_code") or 0),
+            final_status=_text(
+                source.get("final_step_status") or source.get("final_status")
+            )
+            or "BLOCKED",
+            mutation_occurred=source.get("mutation_occurred"),
+            target_reached=source.get("target_reached"),
+        )
+        context = _dict(contexts.get(step_id))
+        row.update(
+            {
+                key: value
+                for key, value in (
+                    ("system_ref", _text(context.get("system_ref"))),
+                    ("object_refs", _list(context.get("object_refs"))),
+                    ("wave_index", context.get("wave_index")),
+                    (
+                        "target_policy_decision_id",
+                        _text(
+                            _dict(context.get("target_policy_decision")).get(
+                                "decision_id"
+                            )
+                        ),
+                    ),
+                )
+                if value not in ("", None, [])
+            }
+        )
+        copied.add(step_id)
+    if hasattr(subledger, "timeline"):
+        for event in subledger.timeline():
+            if not isinstance(event, dict):
+                continue
+            master.record_timeline_event(
+                step_id=_text(event.get("step_id")),
+                phase=_text(event.get("phase")),
+                event_type=_text(event.get("event_type")) or "STEP_FAILED",
+                operation_ref=_text(event.get("operation_ref")),
+                actor_ref=_text(event.get("actor_ref")),
+                receipt_id=_text(event.get("receipt_id")),
+            )
+    return copied
+
+
+def _merge_result_bags(target: dict[str, Any], result: dict[str, Any]) -> None:
+    target["steps"].extend(list(result.get("steps") or []))
+    target["contract_evidence_receipts"].extend(
+        list(result.get("contract_evidence_receipts") or [])
+    )
+    target["request_bodies_for_cleanup"].update(
+        dict(result.get("request_bodies_for_cleanup") or {})
+    )
+    target["pre_transport_block_reasons"].extend(
+        list(result.get("pre_transport_block_reasons") or [])
+    )
+    target["cleanup_failures"] = max(
+        int(target.get("cleanup_failures") or 0),
+        int(result.get("cleanup_failures") or 0),
+    )
+
+
+def _step_observation(result: dict[str, Any], step_id: str) -> dict[str, Any]:
+    candidates = [
+        row
+        for row in list(result.get("steps") or [])
+        if isinstance(row, dict)
+        and _text(row.get("step_id") or row.get("subject_id")) == step_id
+        and not _text(row.get("phase")).endswith(
+            "_response_bound_effect_observation"
+        )
+    ]
+    return dict(candidates[-1]) if candidates else {}
+
+
+def _scoped_actor_context(
+    *,
+    actors: dict[str, dict[str, Any]],
+    tokens: dict[str, str],
+    step: dict[str, Any],
+    credential_token_key: str,
+) -> tuple[dict[str, dict[str, Any]], dict[str, str], str]:
+    if not credential_token_key:
+        return actors, tokens, ""
+    token = _text(tokens.get(credential_token_key))
+    if not token:
+        return {}, {}, f"credential_token_missing:{credential_token_key}"
+    actor_ref = _text(step.get("actor_ref"))
+    actor = _dict(actors.get(actor_ref))
+    if not actor:
+        return {}, {}, f"actor_identity_missing:{actor_ref}"
+    scoped_actors = dict(actors)
+    scoped_actor = dict(actor)
+    scoped_actor["credential_secret_ref"] = credential_token_key
+    scoped_actors[actor_ref] = scoped_actor
+    return scoped_actors, tokens, ""
+
+
+def _public_binding_ledger(runtime: dict[str, Any]) -> dict[str, Any]:
+    source = deepcopy(_dict(runtime.get("binding_ledger")))
+    outputs = _dict(source.get("outputs_by_node"))
+    for node_values in outputs.values():
+        if not isinstance(node_values, dict):
+            continue
+        for row in node_values.values():
+            if not isinstance(row, dict) or "value" not in row:
+                continue
+            value = row.pop("value")
+            import hashlib
+            import json
+
+            row["value_fingerprint"] = hashlib.sha256(
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+    return source
+
+
+def _runtime_projection(runtime: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": runtime.get("schema_version"),
+        "status": runtime.get("status"),
+        "execution_graph_id": runtime.get("execution_graph_id"),
+        "process_id": runtime.get("process_id"),
+        "topological_order": list(runtime.get("topological_order") or []),
+        "predecessors": deepcopy(_dict(runtime.get("predecessors"))),
+        "wave_by_node": deepcopy(_dict(runtime.get("wave_by_node"))),
+        "node_status": deepcopy(_dict(runtime.get("node_status"))),
+        "target_decisions": {
+            node_id: {
+                "system_ref": _text(_dict(context).get("system_ref")),
+                "base_url": _text(_dict(context).get("base_url")),
+                "decision_id": _text(
+                    _dict(_dict(context).get("target_policy_decision")).get(
+                        "decision_id"
+                    )
+                ),
+                "primary": _dict(context).get("primary") is True,
+            }
+            for node_id, context in _dict(runtime.get("target_contexts")).items()
+            if isinstance(context, dict)
+        },
+    }
 
 
 def execute_non_barrier_plans(
@@ -97,687 +370,290 @@ def execute_non_barrier_plans(
     runtime_contract: dict[str, Any],
     cleanup_failures: int = 0,
 ) -> dict[str, Any]:
-    """Execute sequential control/treatment steps not consumed by barriers.
-
-    Mutates ``observations`` in place. Returns steps and evidence bags for the
-    caller to merge before cleanup compensation.
-    """
-    contract_evidence_receipts: list[dict[str, Any]] = []
-    request_bodies_for_cleanup: dict[str, Any] = {}
-    pre_transport_block_reasons: list[str] = []
-
-    # ── V1.5.0 §21 / V1.6.2-R1: Per-Step Execution Ledger ──
-    from .process_step_execution import ProcessStepLedger, attach_ledger_refs_to_observations
-    _fixture_id = _text(_dict(observations.get("disposable_fixture_contract")).get("fixture_id"))
-    _protocol_id = _text(
-        observations.get("protocol_id")
-        or (
-            _dict(observations.get("protocol")).get("protocol_id")
-            if isinstance(observations.get("protocol"), dict)
-            else ""
+    """Execute a normal plan unchanged or a synchronous source-backed graph."""
+    graph, graph_error = extract_execution_graph(treatment_plan)
+    if not graph and not graph_error:
+        return _execute_sequential_plans(
+            control_plan=control_plan,
+            treatment_plan=treatment_plan,
+            consumed_barrier_steps=consumed_barrier_steps,
+            actors=actors,
+            ops=ops,
+            tokens=tokens,
+            runtime_bindings=runtime_bindings,
+            activation_requirements=activation_requirements,
+            observations=observations,
+            eid=eid,
+            oid=oid,
+            resolved_campaign_id=resolved_campaign_id,
+            resolved_execution_id=resolved_execution_id,
+            campaign_id=campaign_id,
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+            cleanup_failures=cleanup_failures,
         )
-    )
-    # Required step identities come from activation_requirements (compile/plan SSOT),
-    # never forged from final HTTP responses.
-    _required_step_ids: list[str] = []
-    for _phase_key in ("control", "treatment"):
-        for _sid in list(activation_requirements.get(_phase_key) or []):
-            _text_sid = _text(_sid)
-            if _text_sid and _text_sid not in _required_step_ids:
-                _required_step_ids.append(_text_sid)
-    process_ledger = ProcessStepLedger(
-        experiment_id=eid,
-        fixture_id=_fixture_id,
-        campaign_id=_text(resolved_campaign_id or campaign_id),
-        run_id=_text(resolved_execution_id),
-        obligation_id=_text(oid),
-        protocol_id=_protocol_id,
-        required_step_ids=_required_step_ids,
-    )
-    attach_ledger_refs_to_observations(observations, process_ledger)
 
-    source_observed_control_bodies: dict[str, Any] = {}
-    source_body_control_blocked = False
+    order = [
+        _text(value)
+        for value in _list(graph.get("topological_order"))
+        if _text(value)
+    ]
+    master = _new_master_ledger(
+        observations=observations,
+        eid=eid,
+        oid=oid,
+        resolved_campaign_id=resolved_campaign_id,
+        resolved_execution_id=resolved_execution_id,
+        campaign_id=campaign_id,
+        required_step_ids=_required_step_ids(activation_requirements, order),
+    )
+    bags: dict[str, Any] = {
+        "steps": [],
+        "contract_evidence_receipts": [],
+        "request_bodies_for_cleanup": {},
+        "pre_transport_block_reasons": [],
+        "cleanup_failures": cleanup_failures,
+    }
 
-    def _identity_block(
-        *,
-        phase: str,
-        subject_id: str,
-        step: dict[str, Any],
-        reason_code: str,
-        detail: str,
-    ) -> dict[str, Any]:
-        pre_transport_block_reasons.append(f"{reason_code}:{detail}")
-        contract_evidence_receipts.append(build_contract_evidence_receipt(
-            kind=phase,
-            experiment_id=eid,
-            obligation_id=oid,
-            campaign_id=resolved_campaign_id,
-            execution_id=resolved_execution_id,
-            subject_id=subject_id,
-            status="BLOCKED",
-            evidence={
-                "request_reached_transport": False,
-                "reason_code": reason_code,
-                "detail": detail,
-            },
-        ))
-        return {
-            "phase": phase,
-            "step_id": subject_id,
-            "status": "blocked_request",
-            "reason": reason_code,
-            "detail": detail,
-            "method": _text(step.get("method")).upper(),
-            "path": _text(step.get("path") or step.get("path_template")),
-            "status_code": 0,
-            "actor_ref": _text(step.get("actor_ref")),
-            "operation_ref": _text(step.get("operation_ref")),
+    if graph_error:
+        runtime = {
+            "status": "BLOCKED",
+            "reason_code": GRAPH_RUNTIME_INVALID,
+            "detail": graph_error,
         }
+    elif control_plan:
+        runtime = {
+            "status": "BLOCKED",
+            "reason_code": GRAPH_RUNTIME_INVALID,
+            "detail": "graph_backed_protocol_must_not_mix_control_plan",
+        }
+    else:
+        filtered_treatment = [
+            step
+            for step in treatment_plan
+            if isinstance(step, dict) and id(step) not in consumed_barrier_steps
+        ]
+        runtime = prepare_graph_runtime(
+            graph=graph,
+            treatment_plan=filtered_treatment,
+            ops=ops,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+        )
 
-    def _exec_plan(plan: list[Any], *, phase: str) -> list[dict[str, Any]]:
-        nonlocal cleanup_failures, source_body_control_blocked
-        results = []
-        planned_subjects = activation_requirements.get(phase) or []
-        for index, step in enumerate(plan):
+    if _text(runtime.get("status")) != "READY":
+        reason = _text(runtime.get("reason_code")) or GRAPH_RUNTIME_INVALID
+        detail = _text(runtime.get("detail")) or "graph_runtime_not_ready"
+        for step in treatment_plan:
             if not isinstance(step, dict):
                 continue
-            actor_ref = _text(step.get("actor_ref"))
-            op_ref = _text(step.get("operation_ref"))
-            # Contract subject identity is step_id-authoritative, not positional.
-            #
-            # This fixes a live misalignment, not just a future N-step concern.
-            # `planned_subjects` is activation_requirements[phase], built by
-            # contract_oracles._plan_subjects over the UNFILTERED plan and then de-duplicated
-            # with dict.fromkeys. But `plan` here is the barrier-FILTERED list built at the
-            # two _exec_plan call sites, which drop every step already consumed as a barrier
-            # participant. So any phase mixing barrier and non-barrier steps mislabels every
-            # step after the first barrier step, filing its contract evidence receipt under
-            # another step's identity.
-            #
-            # Provably identical for every existing plan: _plan_subjects derives each subject
-            # as `step_id or id`, and every built-in protocol branch emits a literal
-            # 'control_1' / 'treatment_1'. For a one-step phase planned_subjects is exactly
-            # ['control_1'] or ['treatment_1'] and the step's own step_id is that same
-            # literal, so the declared branch returns what planned_subjects[index] returned.
-            # The positional and generated fallbacks are retained unchanged for a step that
-            # declares no id.
-            declared_step_id = _text(step.get("step_id"))
-            subject_id = (
-                declared_step_id
-                if declared_step_id and declared_step_id in planned_subjects
-                else (
-                    planned_subjects[index]
-                    if index < len(planned_subjects)
-                    else declared_step_id
-                    or f"{phase}:{op_ref or 'operation'}:{index + 1}"
-                )
-            )
-            if phase == "treatment" and source_body_control_blocked:
-                reason = "control_body_binding_blocked"
-                pre_transport_block_reasons.append(reason)
-                contract_evidence_receipts.append(build_contract_evidence_receipt(
-                    kind=phase,
-                    experiment_id=eid,
-                    obligation_id=oid,
-                    campaign_id=resolved_campaign_id,
-                    execution_id=resolved_execution_id,
-                    subject_id=subject_id,
-                    status="BLOCKED",
-                    evidence={
-                        "write_reached_transport": False,
-                        "reason_code": reason,
-                    },
-                ))
-                results.append({
-                    "phase": phase,
-                    "step_id": subject_id,
-                    "status": "blocked_write",
-                    "reason": "BLOCKED_MISSING_BINDING",
-                    "detail": reason,
-                    "method": _text(step.get("method") or "POST").upper(),
-                    "path": _text(step.get("path") or step.get("path_template")),
-                    "status_code": 0,
-                })
-                continue
-            if not actor_ref or actor_ref not in actors:
-                results.append(_identity_block(
-                    phase=phase,
-                    subject_id=subject_id,
+            bags["steps"].append(
+                _record_blocked_step(
+                    master=master,
+                    contract_evidence_receipts=bags["contract_evidence_receipts"],
+                    pre_transport_block_reasons=bags["pre_transport_block_reasons"],
                     step=step,
-                    reason_code="BLOCKED_MISSING_ACTOR",
-                    detail=f"actor_identity_missing:{actor_ref or '<empty>'}",
-                ))
-                continue
-            if not op_ref or op_ref not in ops:
-                results.append(_identity_block(
-                    phase=phase,
-                    subject_id=subject_id,
-                    step=step,
-                    reason_code="BLOCKED_MISSING_OPERATION",
-                    detail=f"operation_identity_missing:{op_ref or '<empty>'}",
-                ))
-                continue
-            actor = actors[actor_ref]
-            op = ops[op_ref]
-            method = _text(op.get("method") or "GET").upper()
-            path_template = _text(
-                step.get("path") or op.get("path") or op.get("raw_path")
-                or op.get("normalized_path") or op.get("path_template")
-            )
-            if not path_template:
-                # SPEC §8.1: path missing → BLOCKED, no guessing from operation_id
-                results.append(_identity_block(
-                    phase=phase,
-                    subject_id=subject_id,
-                    step=step,
-                    reason_code="BLOCKED_MISSING_OPERATION",
-                    detail=f"source_declared_path_missing:{op_ref}",
-                ))
-                continue
-            path = _materialize_path(
-                path_template,
-                runtime_bindings,
-            )
-            unresolved_path_tokens = _unresolved_path_placeholders(path)
-            query_spec = _dict(step.get("query"))
-            if query_spec and not unresolved_path_tokens:
-                materialized_query: dict[str, str] = {}
-                unresolved_query_tokens: list[str] = []
-                for key, raw_value in query_spec.items():
-                    name = _text(key)
-                    if not name:
-                        continue
-                    value = raw_value
-                    if isinstance(raw_value, str):
-                        token_match = re.fullmatch(
-                            r"\s*\{([A-Za-z_][A-Za-z0-9_]*)\}\s*",
-                            raw_value,
-                        )
-                        if token_match:
-                            token = _text(token_match.group(1))
-                            bound = runtime_bindings.get(token)
-                            if bound in (None, "", [], {}):
-                                unresolved_query_tokens.append(token)
-                                continue
-                            value = bound
-                    if value in (None, "", [], {}):
-                        unresolved_query_tokens.append(name)
-                        continue
-                    materialized_query[name] = str(value)
-                if unresolved_query_tokens:
-                    unresolved_path_tokens = list(dict.fromkeys(
-                        [*unresolved_path_tokens, *unresolved_query_tokens]
-                    ))
-                elif materialized_query:
-                    separator = "&" if "?" in path else "?"
-                    path = f"{path}{separator}{urlencode(materialized_query)}"
-            if unresolved_path_tokens:
-                # ── P0-PLACEHOLDER: BLOCK instead of force-strip ──
-                # Unresolved path placeholders mean no real entity exists.
-                # Executing with placeholder IDs (e.g. "1") guarantees 404/400
-                # failures and wastes compute. Block the experiment until real
-                # fixture data exists via Bootstrap.
-                results.append({
-                    "phase": phase,
-                    "subject_id": subject_id,
-                    "method": method,
-                    "path": path,
-                    "status_code": 0,
-                    "skipped_reason": f"BLOCKED_UNRESOLVED_PATH_PLACEHOLDERS:{','.join(unresolved_path_tokens[:6])}",
-                    "request": {},
-                    "response": {"status_code": 0, "body": {}},
-                })
-                pre_transport_block_reasons.append(f"unresolved_path_placeholders:{','.join(unresolved_path_tokens[:6])}")
-                continue
-            request_body = (
-                step.get("body")
-                if "body" in step
-                else op.get("request_example")
-                if method in _WRITE_METHODS and op.get("request_example")
-                else None
-            )
-            request_body = _materialize_body_template(
-                request_body,
-                runtime_bindings,
-            )
-            unresolved_body_tokens = _unresolved_body_placeholders(
-                request_body,
-                runtime_bindings,
-            )
-            if method in _WRITE_METHODS and unresolved_body_tokens:
-                # ── P0-PLACEHOLDER: BLOCK instead of force-fill ──
-                # Unresolved body placeholders mean fixture data is missing.
-                # Force-filling with generated values creates fake data that
-                # violates the Non-Production Execution Contract.
-                results.append({
-                    "phase": phase,
-                    "subject_id": subject_id,
-                    "method": method,
-                    "path": path,
-                    "status_code": 0,
-                    "skipped_reason": f"BLOCKED_UNRESOLVED_BODY_PLACEHOLDERS:{','.join(unresolved_body_tokens[:6])}",
-                    "request": {"body": request_body} if request_body else {},
-                    "response": {"status_code": 0, "body": {}},
-                })
-                pre_transport_block_reasons.append(f"unresolved_body_placeholders:{','.join(unresolved_body_tokens[:6])}")
-                continue
-            runtime_body_plan = deepcopy(_dict(step.get("runtime_body_plan")))
-            if runtime_body_plan:
-                identity_fields = infer_path_params(path_template)
-                runtime_body_plan["identity_bindings"] = {
-                    field: runtime_bindings[field]
-                    for field in identity_fields
-                    if field in runtime_bindings
-                    and runtime_bindings[field] not in (None, "")
-                }
-                if phase == "treatment" and op_ref in source_observed_control_bodies:
-                    request_body = deepcopy(source_observed_control_bodies[op_ref])
-                    runtime_body_plan = {}
-            mutation = _dict(step.get("mutation"))
-            mutation_class = _text(
-                mutation.get("class")
-                or mutation.get("constraint")
-                or mutation.get("operator")
-                or step.get("protocol_step")
-                or step.get("intent")
-                or f"{phase}_request"
-            )
-            mutation_selector = _text(
-                mutation.get("json_path")
-                or mutation.get("field_selector")
-                or mutation.get("field")
-            )
-            mutation_operator = _text(
-                mutation.get("operator") or mutation.get("constraint")
-            )
-            request_body_fingerprint = _sha256(request_body)
-            request_semantics_fingerprint = _sha256({
-                "operation_ref": op_ref,
-                "method": method,
-                "path_template": path_template,
-                "mutation_class": mutation_class,
-                "mutation_selector": mutation_selector,
-                "mutation_operator": mutation_operator,
-                "request_body_fingerprint": request_body_fingerprint,
-            })
-            token = _resolve_token(actor, tokens)
-            is_write = method in _WRITE_METHODS
-            response_bound_observation: dict[str, Any] = {}
-            runtime_body_blocked = False
-            if is_write:
-                allowed, reason = sandbox_write_allowed(
-                    root=root,
-                    project=project,
-                    runtime_contract=runtime_contract,
-                    actor_token=token,
-                    actor_identity=_text(actor.get("role") or actor_ref),
+                    reason_code=reason,
+                    detail=detail,
+                    phase="treatment",
+                    eid=eid,
+                    oid=oid,
+                    resolved_campaign_id=resolved_campaign_id,
+                    resolved_execution_id=resolved_execution_id,
+                    graph_meta={},
                 )
-                if not allowed:
-                    policy_reason = f"BLOCKED_TARGET_POLICY:{_text(reason)}"
-                    pre_transport_block_reasons.append(policy_reason)
-                    contract_evidence_receipts.append(
-                        build_contract_evidence_receipt(
-                            kind=phase,
-                            experiment_id=eid,
-                            obligation_id=oid,
-                            campaign_id=resolved_campaign_id,
-                            execution_id=resolved_execution_id,
-                            subject_id=subject_id,
-                            status="BLOCKED",
-                            evidence={"reason_code": _text(reason)},
-                        )
-                    )
-                    results.append({
-                        "phase": phase,
-                        "step_id": subject_id,
-                        "status": "blocked_write",
-                        "reason": reason,
-                        "method": method,
-                        "path": path,
-                    })
-                    continue
-                observation_path = _declared_observation_path(
-                    path_template,
-                    ops,
-                    runtime_bindings=runtime_bindings,
-                    request_body=request_body,
-                )
-                # Collection creates often only declare identity GETs
-                # (…/{id}). Those cannot materialize before the write; governance
-                # may observe the create collection, and effect proof comes from
-                # _response_bound_observation_path after a 2xx response.
-                if not observation_path and _has_response_bound_create_observers(op, ops):
-                    observation_path = normalize_path_placeholders(path_template)
-                # The observation path must be a source-declared read. Deriving
-                # one from the write path assumes a URL convention the source
-                # never stated, and reading back the write path itself makes the
-                # write its own evidence.
-                if not observation_path:
-                    reason_code = "BLOCKED_MISSING_OBSERVER"
-                    pre_transport_block_reasons.append(reason_code)
-                    contract_evidence_receipts.append(
-                        build_contract_evidence_receipt(
-                            kind=phase,
-                            experiment_id=eid,
-                            obligation_id=oid,
-                            campaign_id=resolved_campaign_id,
-                            execution_id=resolved_execution_id,
-                            subject_id=subject_id,
-                            status="BLOCKED",
-                            evidence={
-                                "write_reached_transport": False,
-                                "reason_code": reason_code,
-                            },
-                        )
-                    )
-                    results.append({
-                        "phase": phase,
-                        "step_id": subject_id,
-                        "status": "blocked_write",
-                        "reason": reason_code,
-                        "method": method,
-                        "path": path,
-                        "status_code": 0,
-                    })
-                    continue
-                governed = execute_governed_control_write(
-                    root=root,
-                    project=project,
-                    base_url=base_url,
-                    runtime_contract=runtime_contract,
-                    campaign_id=campaign_id,
-                    operation_phase=f"experiment_{phase}",
-                    actor_identity=_text(actor.get("role") or actor_ref),
-                    actor_token=token,
-                    method=method,
-                    path=path,
-                    body=request_body,
-                    observation_path=observation_path,
-                    runtime_body_plan=runtime_body_plan or None,
-                )
-                runtime_body_receipt = _dict(governed.get("runtime_body_receipt"))
-                runtime_body_blocked = (
-                    _text(runtime_body_receipt.get("status")).upper() == "BLOCKED"
-                )
-                if runtime_body_blocked:
-                    reason_code = _text(
-                        runtime_body_receipt.get("reason_code")
-                        or governed.get("reason")
-                    ) or "runtime_body_materialization_blocked"
-                    pre_transport_block_reasons.append(reason_code)
-                materialized_body = governed.get("materialized_request_body")
-                if isinstance(materialized_body, dict) and materialized_body:
-                    request_body = deepcopy(materialized_body)
-                    request_body_fingerprint = _sha256(request_body)
-                    request_semantics_fingerprint = _sha256({
-                        "operation_ref": op_ref,
-                        "method": method,
-                        "path_template": path_template,
-                        "mutation_class": mutation_class,
-                        "mutation_selector": mutation_selector,
-                        "mutation_operator": mutation_operator,
-                        "request_body_fingerprint": request_body_fingerprint,
-                    })
-                    if phase == "control":
-                        source_observed_control_bodies[op_ref] = deepcopy(request_body)
-                request_bodies_for_cleanup[subject_id] = request_body
-                write_receipt = _dict(governed.get("write"))
-                if 200 <= int(write_receipt.get("status") or 0) < 300:
-                    response_bound_path = _response_bound_observation_path(
-                        op,
-                        ops,
-                        write_receipt.get("body"),
-                    )
-                    if response_bound_path:
-                        response_bound_raw = _http_request(
-                            _text(response_bound_path.get("method") or "GET"),
-                            base_url.rstrip("/") + _text(response_bound_path.get("path")),
-                            token=token,
-                        )
-                        response_bound_observation = {
-                            "method": _text(response_bound_path.get("method") or "GET"),
-                            "path": _text(response_bound_path.get("path")),
-                            "path_template": _text(response_bound_path.get("path_template")),
-                            "status_code": int(response_bound_raw.get("status") or 0),
-                            "status": int(response_bound_raw.get("status") or 0),
-                            "body": response_bound_raw.get("body"),
-                            "headers": response_bound_raw.get("headers") or {},
-                            "duration_ms": response_bound_raw.get("duration_ms"),
-                            "phase": f"{phase}_response_bound_effect_observation",
-                            "step_id": f"{subject_id}:response_bound_effect",
-                            "actor_ref": actor_ref,
-                            "operation_ref": _text(response_bound_path.get("operation_ref")),
-                            "source_operation_ref": op_ref,
-                        }
-                        governed["response_bound_after"] = {
-                            "method": _text(response_bound_path.get("method") or "GET"),
-                            "url": base_url.rstrip("/") + _text(response_bound_path.get("path")),
-                            "status": int(response_bound_raw.get("status") or 0),
-                            "body": response_bound_raw.get("body"),
-                            "headers": response_bound_raw.get("headers") or {},
-                            "duration_ms": response_bound_raw.get("duration_ms"),
-                        }
-                        governed["response_bound_after_ref"] = (
-                            "response_bound_after:"
-                            f"{_text(response_bound_path.get('path'))}:"
-                            f"{int(response_bound_raw.get('status') or 0)}"
-                        )
-                        governed["response_bound_observer_operation_ref"] = _text(
-                            response_bound_path.get("operation_ref")
-                        )
-                obs = {
-                    "method": method,
-                    "path": path,
-                    "status_code": int(write_receipt.get("status") or 0),
-                    "body": write_receipt.get("body"),
-                    "headers": write_receipt.get("headers") or {},
-                    "duration_ms": write_receipt.get("duration_ms"),
-                    "error": write_receipt.get("error") or governed.get("reason") or "",
-                    "governance_receipt": governed,
-                    "observation_path": observation_path,
-                }
-                if response_bound_observation:
-                    obs["response_bound_observation"] = response_bound_observation
-            else:
-                obs = _resolve_route_with_fallback(base_url=base_url, method=method, path=path, token=token)
-            obs["phase"] = phase
-            obs["step_id"] = subject_id
-            obs["actor_ref"] = actor_ref
-            obs["operation_ref"] = op_ref
-            obs["path_template"] = path_template
-            obs["request_body_fingerprint"] = request_body_fingerprint
-            obs["request_semantics_fingerprint"] = (
-                request_semantics_fingerprint
             )
-            obs["mutation_class"] = mutation_class
-            obs["mutation_selector"] = mutation_selector
-            obs["mutation_operator"] = mutation_operator
-            if runtime_body_blocked:
-                obs["status"] = "blocked_write"
-                obs["reason"] = _text(
-                    _dict(obs.get("governance_receipt")).get("reason")
-                ) or "runtime_body_materialization_blocked"
-            observed_status = int(obs.get("status_code") or 0)
-            obs["response_observed"] = observed_status > 0
-            if _text(step.get("protocol_step")) == "temporal_write":
-                temporal_elapsed = int(obs.get("duration_ms") or 0)
-                after_state = _observation_state(
-                    _dict(obs.get("governance_receipt")).get("after")
-                )
-                observations.setdefault("temporal_timeline", []).extend([
-                    {
-                        "event": "trigger",
-                        "phase": phase,
-                        "step_id": subject_id,
-                        "at_ms": 0,
-                        "status_code": observed_status,
-                    },
-                    {
-                        "event": "final_observed",
-                        "phase": phase,
-                        "step_id": subject_id,
-                        "at_ms": temporal_elapsed,
-                        "status_code": int(after_state.get("status") or 0),
-                    },
-                ])
-            contract_status = (
-                "BLOCKED"
-                if runtime_body_blocked
-                else "OBSERVED"
-                if phase == "control" and observed_status > 0
-                else "OBSERVED"
-                if phase == "treatment" and observed_status > 0
-                else "FAILED"
-            )
-            contract_evidence_receipts.append(build_contract_evidence_receipt(
-                kind=phase,
-                experiment_id=eid,
-                obligation_id=oid,
-                campaign_id=resolved_campaign_id,
-                execution_id=resolved_execution_id,
-                subject_id=subject_id,
-                status=contract_status,
-                evidence={
-                    "method": method,
-                    "path": path,
-                    "status_code": observed_status,
-                    "operation_ref": op_ref,
-                    "path_template": path_template,
-                    "request_body_fingerprint": request_body_fingerprint,
-                    "request_semantics_fingerprint": (
-                        request_semantics_fingerprint
-                    ),
-                    "mutation_class": mutation_class,
-                    "mutation_selector": mutation_selector,
-                    "mutation_operator": mutation_operator,
-                    "response_observed": observed_status > 0,
-                    "control_succeeded": (
-                        200 <= observed_status < 300
-                        if phase == "control"
-                        else None
-                    ),
-                },
-            ))
-            results.append(obs)
-            # ── V1.5.0 §21: Record step in ProcessStepLedger ──
-            _gov = _dict(obs.get("governance_receipt"))
-            _transport_rid = _text(_gov.get("receipt_id") or request_body_fingerprint)
-            # Response body fingerprint is real transport observation evidence.
-            # Only attach when the step actually reached the target (status > 0).
-            _response_rid = (
-                _sha256(obs.get("body")) if int(observed_status or 0) > 0 else ""
-            )
-            _step_obs_rids = [_response_rid] if _response_rid else []
-            _before = _dict(_gov.get("before"))
-            _after = _dict(_gov.get("after"))
-            process_ledger.record_step_execution(
-                step_id=subject_id,
-                phase=phase,
-                operation_ref=op_ref,
-                actor_ref=actor_ref,
-                runtime_identity=runtime_bindings,
-                request_receipt_id=request_body_fingerprint,
-                response_receipt_id=_response_rid,
-                transport_receipt_id=_transport_rid,
-                before_state_receipt_id=_text(
-                    _before.get("receipt_id") or _before.get("observation_receipt_id")
-                ),
-                after_state_receipt_id=_text(
-                    _after.get("receipt_id") or _after.get("observation_receipt_id")
-                ),
-                observer_receipt_ids=_step_obs_rids,
-                cleanup_contract_id=_text(step.get("cleanup_contract_id")),
-                status_code=observed_status,
-                final_status="EXECUTED" if observed_status > 0 else "BLOCKED",
-                target_reached=observed_status > 0,
-            )
-            process_ledger.record_timeline_event(
-                step_id=subject_id,
-                phase=phase,
-                event_type="STEP_COMPLETED" if observed_status > 0 else "STEP_FAILED",
-                operation_ref=op_ref,
-                actor_ref=actor_ref,
-                receipt_id=_transport_rid,
-            )
-            if response_bound_observation:
-                results.append(response_bound_observation)
-            if phase == "control":
-                observations["control_observation"] = obs
-                observations["control_actor_ref"] = actor_ref
-                if 200 <= int(obs.get("status_code") or 0) < 300:
-                    observations["control_succeeded"] = True
-                    observations["authorized_control"] = True
-            if phase == "treatment":
-                observations["treatment_observation"] = obs
-                observations["treatment_result"] = obs
-                observations["treatment_actor_ref"] = actor_ref
-                observations["status_code"] = obs.get("status_code")
-                observations["body"] = obs.get("body")
+        observations["process_graph_runtime"] = dict(runtime)
+        attach_ledger_refs_to_observations(observations, master)
+        return {
+            **bags,
+            "process_step_ledger": master,
+            "process_step_ledger_id": master.ledger_id,
+            "process_step_ledger_hash": master.compute_hash(),
+            "process_timeline": master.build_timeline_receipt(),
+            "required_step_ids": list(master.required_step_ids),
+            "planned_step_ids": list(master.required_step_ids),
+            "executed_step_ids": master.executed_step_ids(),
+            "process_graph_runtime": dict(runtime),
+            "process_graph_binding_ledger": {},
+        }
 
-            # Per-step evidence channel, append-only and parallel to the single slots above.
-            #
-            # Every http-shaped observer and assertion reads control_observation /
-            # treatment_observation, which this loop OVERWRITES on each step. So in a plan
-            # with more than one step per phase, steps 1..N-1 leave no trace and the
-            # experiment still reports a verdict from the last one. An additive channel
-            # keyed by step_id is the only way to expose per-step evidence without changing
-            # what any existing observer sees.
-            #
-            # Guarded on len(plan) > 1, so for every existing one-step-per-phase experiment
-            # the observations dict is byte-identical and no observer's input changes.
-            #
-            # Deliberately NOT written into barrier_timeline: that observer returns
-            # INDETERMINATE without a release-class event and two distinct participants, so
-            # feeding ordinary sequential steps into it would manufacture a degraded
-            # concurrency reading out of a process that has no concurrency in it. The shape
-            # and placement copy the temporal_timeline writer above.
-            if len(plan) > 1:
-                observations.setdefault("process_timeline", []).append({
-                    "event": "step_observed",
-                    "phase": phase,
-                    "step_id": subject_id,
-                    "step_ordinal": index + 1,
-                    "step_count": len(plan),
-                    "operation_ref": op_ref,
-                    "actor_ref": actor_ref,
-                    "status_code": observed_status,
-                    "after_state": _observation_state(
-                        _dict(obs.get("governance_receipt")).get("after")
-                    ),
-                })
-        return results
-
-    steps: list[dict[str, Any]] = []
-    steps.extend(_exec_plan(
-        [
-            step for step in control_plan
-            if not isinstance(step, dict) or id(step) not in consumed_barrier_steps
-        ],
-        phase="control",
-    ))
-    steps.extend(_exec_plan(
-        [
-            step for step in treatment_plan
-            if not isinstance(step, dict) or id(step) not in consumed_barrier_steps
-        ],
-        phase="treatment",
-    ))
-    # Refresh id/hash + step sets after real event rows are written.
-    attach_ledger_refs_to_observations(observations, process_ledger)
-    return {
-        "steps": steps,
-        "contract_evidence_receipts": contract_evidence_receipts,
-        "request_bodies_for_cleanup": request_bodies_for_cleanup,
-        "pre_transport_block_reasons": pre_transport_block_reasons,
-        "cleanup_failures": cleanup_failures,
-        "process_step_ledger": process_ledger,
-        "process_step_ledger_id": process_ledger.ledger_id,
-        "process_step_ledger_hash": process_ledger.compute_hash(),
-        "process_timeline": process_ledger.build_timeline_receipt(),
-        "required_step_ids": list(process_ledger.required_step_ids),
-        # Planned == required (compile/plan authority) ONLY — never fall back
-        # to executed steps, which would make the balance check tautological.
-        "planned_step_ids": list(process_ledger.required_step_ids),
-        "executed_step_ids": process_ledger.executed_step_ids(),
+    plan_by_id = {
+        _text(step.get("step_id")): step
+        for step in treatment_plan
+        if isinstance(step, dict) and _text(step.get("step_id"))
     }
+    graph_observations: list[dict[str, Any]] = []
+
+    for node_id in order:
+        step = _dict(plan_by_id.get(node_id))
+        context = graph_step_context(
+            runtime=runtime,
+            graph=graph,
+            step=step,
+            initial_bindings=runtime_bindings,
+        )
+        if _text(context.get("status")) != "READY":
+            reason = _text(context.get("reason_code")) or (
+                GRAPH_PREDECESSOR_NOT_SUCCEEDED
+            )
+            detail = _text(context.get("detail"))
+            bags["steps"].append(
+                _record_blocked_step(
+                    master=master,
+                    contract_evidence_receipts=bags["contract_evidence_receipts"],
+                    pre_transport_block_reasons=bags["pre_transport_block_reasons"],
+                    step=step,
+                    reason_code=reason,
+                    detail=detail,
+                    phase="treatment",
+                    eid=eid,
+                    oid=oid,
+                    resolved_campaign_id=resolved_campaign_id,
+                    resolved_execution_id=resolved_execution_id,
+                    graph_meta=context,
+                )
+            )
+            record_graph_step_outcome(
+                runtime=runtime,
+                graph=graph,
+                step=step,
+                blocked_reason=reason,
+            )
+            continue
+
+        call_actors, call_tokens, credential_error = _scoped_actor_context(
+            actors=actors,
+            tokens=tokens,
+            step=step,
+            credential_token_key=_text(context.get("credential_token_key")),
+        )
+        if credential_error:
+            reason = GRAPH_TARGET_ACTOR_CREDENTIAL_UNRESOLVED
+            bags["steps"].append(
+                _record_blocked_step(
+                    master=master,
+                    contract_evidence_receipts=bags["contract_evidence_receipts"],
+                    pre_transport_block_reasons=bags["pre_transport_block_reasons"],
+                    step=step,
+                    reason_code=reason,
+                    detail=credential_error,
+                    phase="treatment",
+                    eid=eid,
+                    oid=oid,
+                    resolved_campaign_id=resolved_campaign_id,
+                    resolved_execution_id=resolved_execution_id,
+                    graph_meta=context,
+                )
+            )
+            record_graph_step_outcome(
+                runtime=runtime,
+                graph=graph,
+                step=step,
+                blocked_reason=reason,
+            )
+            continue
+
+        sub_result = _execute_sequential_plans(
+            control_plan=[],
+            treatment_plan=[step],
+            consumed_barrier_steps=set(),
+            actors=call_actors,
+            ops=ops,
+            tokens=call_tokens,
+            runtime_bindings=dict(context.get("bindings") or {}),
+            activation_requirements={"control": [], "treatment": [node_id]},
+            observations=observations,
+            eid=eid,
+            oid=oid,
+            resolved_campaign_id=resolved_campaign_id,
+            resolved_execution_id=resolved_execution_id,
+            campaign_id=campaign_id,
+            root=root,
+            project=project,
+            base_url=_text(context.get("base_url")),
+            runtime_contract=_dict(context.get("runtime_contract")),
+            cleanup_failures=int(bags.get("cleanup_failures") or 0),
+        )
+        _merge_result_bags(bags, sub_result)
+        copied = _copy_subledger_rows(
+            master,
+            sub_result.get("process_step_ledger"),
+            graph_context_by_step={
+                node_id: {
+                    **context,
+                    "object_refs": _list(step.get("object_refs")),
+                }
+            },
+        )
+        observation = _step_observation(sub_result, node_id)
+        if node_id not in copied:
+            status_code = int(
+                observation.get("status_code") or observation.get("status") or 0
+            )
+            row = master.record_step_execution(
+                step_id=node_id,
+                phase="treatment",
+                operation_ref=_text(step.get("operation_ref")),
+                actor_ref=_text(step.get("actor_ref")),
+                runtime_identity=dict(context.get("bindings") or {}),
+                status_code=status_code,
+                final_status="EXECUTED" if status_code > 0 else "BLOCKED",
+                target_reached=status_code > 0,
+            )
+            row.update(
+                {
+                    "system_ref": _text(step.get("system_ref")),
+                    "object_refs": _list(step.get("object_refs")),
+                    "wave_index": int(context.get("wave_index") or 0),
+                }
+            )
+
+        outcome = record_graph_step_outcome(
+            runtime=runtime,
+            graph=graph,
+            step=step,
+            observation=observation,
+        )
+        if observation:
+            graph_observations.append(
+                {
+                    **observation,
+                    "execution_graph_id": runtime.get("execution_graph_id"),
+                    "process_id": runtime.get("process_id"),
+                    "system_ref": _text(step.get("system_ref")),
+                    "object_refs": _list(step.get("object_refs")),
+                    "wave_index": int(context.get("wave_index") or 0),
+                    "graph_node_status": outcome.get("status"),
+                    "target_policy_decision_id": _text(
+                        _dict(context.get("target_policy_decision")).get(
+                            "decision_id"
+                        )
+                    ),
+                }
+            )
+
+    observations["graph_step_observations"] = graph_observations
+    observations["process_graph_runtime"] = _runtime_projection(runtime)
+    observations["process_graph_binding_ledger"] = _public_binding_ledger(runtime)
+    attach_ledger_refs_to_observations(observations, master)
+
+    return {
+        **bags,
+        "process_step_ledger": master,
+        "process_step_ledger_id": master.ledger_id,
+        "process_step_ledger_hash": master.compute_hash(),
+        "process_timeline": master.build_timeline_receipt(),
+        "required_step_ids": list(master.required_step_ids),
+        "planned_step_ids": list(master.required_step_ids),
+        "executed_step_ids": master.executed_step_ids(),
+        "process_graph_runtime": observations["process_graph_runtime"],
+        "process_graph_binding_ledger": observations[
+            "process_graph_binding_ledger"
+        ],
+    }
+
+
+__all__ = ["execute_non_barrier_plans"]
