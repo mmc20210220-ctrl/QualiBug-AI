@@ -4,8 +4,9 @@ The existing implementation remains in ``experiment_executor_core``. This
 module preserves the established public/re-export and monkeypatch surface while
 adapting governed boundaries that require stronger authority: graph-only
 credentials remain owned by the graph target authority, account-qualified
-actors cannot fall back to role aliases, and graph cleanup proof sets are
-validated per source step before transport.
+actors cannot fall back to role aliases, authorization comparisons vary one
+identity dimension only, and graph cleanup proof sets are validated per source
+step before transport.
 
 No credential, proof, binding or transport result is invented. Ordinary
 experiments continue through the original preflight, fingerprint and cleanup
@@ -19,6 +20,10 @@ from pathlib import Path
 from typing import Any
 
 from . import experiment_executor_core as _core
+from .authorization_comparison_contract import (
+    bind_runtime_actor_identity_context,
+    validate_authorization_comparison_contract,
+)
 from .cleanup_plan_validator import (
     validate_cleanup_plan as _original_validate_cleanup_plan,
 )
@@ -253,10 +258,15 @@ def _graph_aware_preflight(
     behavior_ir: dict[str, Any],
     actor_tokens: dict[str, str],
 ) -> tuple[bool, str, str]:
-    """Run structural preflight with graph deferral and exact-account enforcement."""
+    """Run structural preflight with graph, account and comparison governance."""
     exp = _dict(experiment)
     graph_refs = _graph_actor_refs(exp)
     deferrable = graph_refs - _pregraph_actor_refs(exp)
+    comparison_ok, comparison_reason, comparison_detail = (
+        validate_authorization_comparison_contract(exp, behavior_ir)
+    )
+    if not comparison_ok:
+        return comparison_ok, comparison_reason, comparison_detail
     exact_ok, exact_reason, exact_detail = _exact_secret_preflight(
         exp,
         behavior_ir=behavior_ir,
@@ -359,7 +369,7 @@ for _name in dir(_core):
         globals()[_name] = getattr(_core, _name)
 
 # Preserve established public identities. The private core path remains graph-
-# aware, account-strict and proof-set aware.
+# aware, account-strict, comparison-strict and proof-set aware.
 preflight_experiment_executable = _original_preflight
 load_actor_tokens = _identity_safe_load_actor_tokens
 _resolve_token = _strict_resolve_token
@@ -408,9 +418,13 @@ def execute_one_experiment(
 ) -> dict[str, Any]:
     """Execute through the unchanged core with governed graph authorities."""
     _sync_core_hooks()
+    runtime_behavior_ir = bind_runtime_actor_identity_context(
+        behavior_ir,
+        _test_account_rows(root, project),
+    )
     return _execute_one_core(
         experiment,
-        behavior_ir=behavior_ir,
+        behavior_ir=runtime_behavior_ir,
         root=root,
         project=project,
         base_url=base_url,
