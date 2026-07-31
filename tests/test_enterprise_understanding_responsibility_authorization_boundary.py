@@ -314,3 +314,30 @@ def test_empty_explicit_authorization_declaration_is_unknown() -> None:
     assert behaviors[0]["status"] == "INCOMPLETE"
     assert len(unknowns) == 1
     assert gate["entry_allowed"] is False
+
+
+def test_incomplete_coordinate_preserves_declared_authorization() -> None:
+    fact = _fact(
+        "仓库员无权执行受控登记",
+        modality="MUST_NOT",
+        authorization_semantics={
+            "decision": "DENY",
+            "source_backed": True,
+        },
+    )
+    fact["subject"]["entity_refs"] = []
+    fact["object"]["entity_refs"] = []
+
+    model = _understanding_model(fact)
+    actor = _only_actor(model)
+    assert actor["permissions"] == []
+    assert actor["restrictions"] == []
+    assert len(actor["permission_unknowns"]) == 1
+    contract = actor["permission_unknowns"][0]
+    assert contract["decision"] == "UNKNOWN"
+    assert contract["declared_decision"] == "DENY"
+    assert contract["coordinate_complete"] is False
+    assert contract["resolution_reason"] == "ACTOR_AUTHORIZATION_COORDINATE_INCOMPLETE"
+    assert actor["authorization_status"] == "UNRESOLVED"
+    assert len(model["authorization_unknowns"]) == 1
+    assert model["authorization_unknowns"][0]["reason_code"] == "ACTOR_AUTHORIZATION_COORDINATE_INCOMPLETE"
