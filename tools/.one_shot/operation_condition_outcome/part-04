@@ -1,0 +1,106 @@
+XCEPT"
+    assert expression["guard"]["child"]["node_type"] == "ALL"
+    assert condition_expression_combinator(expression) == "AND"
+    assert condition_expression_complete(expression) is True
+    assert len(iter_condition_predicates(expression)) == 2
+
+
+def test_signature_ignores_source_slot_identity() -> None:
+    left = build_condition_expression([_slot("left", "状态", "草稿")])
+    right = build_condition_expression([_slot("right", "状态", "草稿")])
+    assert condition_expression_signature(left) == condition_expression_signature(right)
+
+
+def test_unparsed_multi_condition_never_defaults_to_and() -> None:
+    expression = build_condition_expression(
+        [
+            {
+                "slot_id": "u1",
+                "raw_value": "资料完整",
+                "field_candidate": "",
+                "operator_candidate": "UNPARSED_EXPLICIT_CONDITION",
+                "value_candidate": {"raw": "资料完整", "value_type": "TEXT"},
+            },
+            _slot("u2", "状态", "草稿"),
+        ],
+        combinator="",
+    )
+    assert expression["node_type"] == "UNRESOLVED"
+    assert condition_expression_combinator(expression) == "UNRESOLVED"
+    assert condition_expression_complete(expression) is False
+
+
+def test_fact_compiles_operation_expression_and_outcomes_together() -> None:
+    fact = {
+        "fact_id": "fact:refund",
+        "status": "ACCEPTED",
+        "kind": "STATE_TRANSITION",
+        "action": {"canonical": "退款"},
+        "subject": {"actor_refs": ["财务"], "entity_refs": ["订单"]},
+        "object": {"entity_refs": ["订单"]},
+        "conditions": ["订单状态为PAID"],
+        "condition_combinator": "SINGLE_CONDITION",
+        "condition_frame": {"kind": "LEAF", "combinator": "SINGLE_CONDITION"},
+        "state_effects": [
+            {"from_state": "PAID", "to_state": "REFUNDED", "raw": "订单变为REFUNDED"}
+        ],
+        "data_effects": [],
+        "postconditions": [],
+        "modality": "MUST",
+        "polarity": "POSITIVE",
+        "source_spans": [
+            {"source_id": "source:rules", "locator": "rules.md#1", "quote": "退款规则"}
+        ],
+    }
+    behavior = _behavior_from_fact(fact)
+    assert behavior is not None
+    assert behavior["operation_clause"]["operation_ref"] == "退款"
+    assert behavior["condition_expression"]["node_type"] == "PREDICATE"
+    assert behavior["outcome_contracts"][0]["outcome_type"] == "STATE_TRANSITION"
+    assert any(
+        row["outcome_type"] == "PERMISSION_DECISION"
+        for row in behavior["outcome_contracts"]
+    )
+    assert outcome_contracts_complete(behavior["outcome_contracts"]) is True
+    assert behavior["status"] == "CONFIRMED"
+
+
+def test_source_text_only_mandatory_outcome_blocks_formal_rule() -> None:
+    fact = {
+        "fact_id": "fact:notify",
+        "status": "ACCEPTED",
+        "kind": "RULE",
+        "action": {"canonical": "审批"},
+        "subject": {"actor_refs": ["审批人"], "entity_refs": ["申请单"]},
+        "object": {"entity_refs": ["申请单"]},
+        "conditions": [],
+        "condition_combinator": "",
+        "postconditions": ["通知相关人员"],
+        "state_effects": [],
+        "data_effects": [],
+        "modality": "ASSERTS",
+        "polarity": "POSITIVE",
+        "source_spans": [
+            {"source_id": "source:rules", "locator": "rules.md#2", "quote": "审批后通知"}
+        ],
+    }
+    behavior = _behavior_from_fact(fact)
+    assert behavior is not None
+    assert outcome_contracts_complete(behavior["outcome_contracts"]) is False
+    assert "BEHAVIOR_MANDATORY_OUTCOME_UNRESOLVED" in behavior["unresolved_semantics"]
+    assert behavior["formal_business_rule"] is False
+''',
+    encoding="utf-8",
+)
+
+# Parse every modified Python file before tests, so malformed textual edits fail loudly.
+import ast
+
+for path in (
+    behavior_path,
+    governance_path,
+    gate_path,
+    binding_path,
+    "tests/test_operation_condition_outcome_authority.py",
+):
+    ast.parse(read(path), filename=path)
