@@ -21,6 +21,7 @@ from .database_mapping_authority import (
     ACTION_REJECT_MAPPING,
     DATABASE_MAPPING_AUDIT_SCHEMA,
     DATABASE_MAPPING_DECISION_SCHEMA,
+    _load_current_asset,
     load_database_mapping_authority_ledger,
     save_database_mapping_authority_ledger,
 )
@@ -68,9 +69,22 @@ def _candidate_projection(candidate: dict[str, Any]) -> dict[str, Any]:
         "path": _text(candidate.get("path")),
         "database_relationship_id": _text(candidate.get("database_relationship_id")),
         "parent_table_id": _text(candidate.get("parent_table_id")),
-        "parent_columns": [_text(value) for value in _list(candidate.get("parent_columns")) if _text(value)],
+        "parent_columns": [
+            _text(value)
+            for value in _list(candidate.get("parent_columns"))
+            if _text(value)
+        ],
+        "root_selected_identity_key": [
+            _text(value)
+            for value in _list(candidate.get("root_selected_identity_key"))
+            if _text(value)
+        ],
         "child_table_id": _text(candidate.get("child_table_id")),
-        "child_columns": [_text(value) for value in _list(candidate.get("child_columns")) if _text(value)],
+        "child_columns": [
+            _text(value)
+            for value in _list(candidate.get("child_columns"))
+            if _text(value)
+        ],
         "predicate_pairs": [
             {
                 "ordinal": row.get("ordinal"),
@@ -106,7 +120,9 @@ def _candidate_projection(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def database_relation_candidate_fingerprint(candidate: dict[str, Any]) -> str:
-    return hashlib.sha256(_canonical(_candidate_projection(candidate)).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        _canonical(_candidate_projection(candidate)).encode("utf-8")
+    ).hexdigest()
 
 
 def _find_candidate(asset: dict[str, Any], candidate_id: str) -> dict[str, Any] | None:
@@ -135,7 +151,9 @@ def record_database_relation_authority_decision(
     if selected_action not in _ALLOWED_ACTIONS:
         raise ValueError("database_relation_authority_action_invalid")
     identity = _require_manage_actor(actor)
-    current_asset = dict(asset or {})
+    current_asset = dict(
+        asset if isinstance(asset, dict) else _load_current_asset(project, resolved_root)
+    )
     candidate = _find_candidate(current_asset, _text(candidate_id))
     if candidate is None:
         raise ValueError("database_relation_candidate_not_found_or_ambiguous")
@@ -196,7 +214,10 @@ def record_database_relation_authority_decision(
 def _latest_decision(decisions: Iterable[Any], candidate_id: str) -> dict[str, Any] | None:
     for raw in reversed(list(decisions)):
         row = _dict(raw)
-        if _text(row.get("candidate_kind")) == "relation" and _text(row.get("candidate_id")) == candidate_id:
+        if (
+            _text(row.get("candidate_kind")) == "relation"
+            and _text(row.get("candidate_id")) == candidate_id
+        ):
             return dict(row)
     return None
 
@@ -237,9 +258,15 @@ def apply_database_relation_authority_decisions(
 ) -> dict[str, Any]:
     """Apply current relation decisions to freshly rebuilt FK candidates."""
     result = dict(asset or {})
-    project = _safe_project_id(project_id or _text(result.get("project_id")) or "real_project_demo")
+    project = _safe_project_id(
+        project_id or _text(result.get("project_id")) or "real_project_demo"
+    )
     loaded = ledger or load_database_mapping_authority_ledger(project, root)
-    decisions = [dict(row) for row in _list(loaded.get("decisions")) if isinstance(row, dict)]
+    decisions = [
+        dict(row)
+        for row in _list(loaded.get("decisions"))
+        if isinstance(row, dict)
+    ]
     rows: list[dict[str, Any]] = []
     stale_gaps: list[dict[str, Any]] = []
     approved = rejected = unresolved = 0
@@ -324,8 +351,16 @@ def apply_database_relation_authority_decisions(
     result["coverage_gaps"] = [*retained_gaps, *stale_gaps]
     result["database_relation_authority_receipt"] = {
         "schema": DATABASE_RELATION_AUTHORITY_RECEIPT_SCHEMA,
-        "status": "NOT_APPLICABLE" if not rows else "PARTIAL" if stale_gaps or unresolved else "COMPLETE",
-        "decision_count": sum(1 for row in decisions if _text(row.get("candidate_kind")) == "relation"),
+        "status": (
+            "NOT_APPLICABLE"
+            if not rows
+            else "PARTIAL"
+            if stale_gaps or unresolved
+            else "COMPLETE"
+        ),
+        "decision_count": sum(
+            1 for row in decisions if _text(row.get("candidate_kind")) == "relation"
+        ),
         "applied_decision_count": len(applied_ids),
         "approved_relation_count": approved,
         "rejected_relation_count": rejected,
@@ -351,6 +386,7 @@ def apply_database_relation_authority_decisions(
             "database_relation_authority_uses_existing_mapping_ledger": True,
             "database_relation_decisions_are_durable": True,
             "database_relation_candidate_drift_invalidates_decision": True,
+            "database_relation_root_identity_changes_invalidate_decision": True,
             "database_relation_approval_is_read_only_scope": True,
             "database_relation_approval_never_authorizes_writes": True,
             "database_relation_approval_never_authorizes_oracles": True,
