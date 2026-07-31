@@ -34,6 +34,7 @@ _SOURCE_EVIDENCE_FIELDS = {
 _EVIDENCE_ONLY_KEYS = _SOURCE_EVIDENCE_FIELDS | {
     "block_id",
     "block_ids",
+    "parent_id",
     "source_ids",
     "source_locators",
     "json_pointers",

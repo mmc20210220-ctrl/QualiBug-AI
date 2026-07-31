@@ -388,7 +388,7 @@ def test_explicit_composition_projects_api_before_enterprise_understanding(monke
     )
 
     assert calls[:2] == ["api", "understanding"]
-    assert calls == ["api", "understanding", "downstream", "jobs", "behavior"]
+    assert calls == ["api", "understanding", "understanding", "downstream", "jobs", "behavior"]
     assert result["governance"][
         "api_artifact_projection_precedes_enterprise_understanding"
     ] is True

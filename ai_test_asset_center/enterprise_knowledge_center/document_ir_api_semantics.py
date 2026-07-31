@@ -510,7 +510,10 @@ def enrich_parsed_api_artifact_semantics(
 
     result = dict(parsed or {})
     receipt = _dict(document_ir.get("structure_receipt"))
-    artifact_kind = _text(receipt.get("artifact_kind")).lower()
+    artifact_kind = (
+        _text(_dict(document_ir.get("artifact_structure")).get("artifact_kind"))
+        or _text(receipt.get("artifact_kind"))
+    ).lower()
     if artifact_kind not in {"openapi", "postman", "har"}:
         return result
 

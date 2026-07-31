@@ -26,6 +26,7 @@ import os
 import pytest
 
 from ai_test_asset_center import experiment_cleanup_executor as cleanup_mod
+from ai_test_asset_center import experiment_cleanup_executor_core as cleanup_core
 
 # An approved non-production target-policy contract, injected so these tests
 # exercise the real ownership/DSN guards without also having to stand up a
@@ -47,7 +48,7 @@ def test_the_adapter_branch_precedes_the_http_path_logic() -> None:
     If the HTTP branch sees it first it records cleanup_compensation_unresolved and the
     row is left behind, which is exactly what happened.
     """
-    source = inspect.getsource(cleanup_mod.execute_experiment_cleanup_compensation)
+    source = inspect.getsource(cleanup_core.execute_experiment_cleanup_compensation)
     loop_at = source.index("for cleanup_index in reversed(range(len(cleanup_plan)))")
     adapter_at = source.index('adapter")) == "db_sql"', loop_at)
     # The HTTP fallback INSIDE the same loop, not an earlier unrelated occurrence.
@@ -57,7 +58,7 @@ def test_the_adapter_branch_precedes_the_http_path_logic() -> None:
 
 def test_the_branch_is_inside_the_cleanup_plan_loop() -> None:
     """It must run per step, not once per experiment."""
-    source = inspect.getsource(cleanup_mod.execute_experiment_cleanup_compensation)
+    source = inspect.getsource(cleanup_core.execute_experiment_cleanup_compensation)
     loop_at = source.index("for cleanup_index in reversed(range(len(cleanup_plan)))")
     adapter_at = source.index('adapter")) == "db_sql"')
     assert loop_at < adapter_at
@@ -95,7 +96,7 @@ def test_a_db_step_produces_a_receipt_and_deletes(monkeypatch) -> None:
         _fake_execute,
     )
     monkeypatch.setattr(
-        cleanup_mod, "_project_database_dsn", lambda root, project: ("postgresql://x/y", "")
+        cleanup_core, "_project_database_dsn", lambda root, project: ("postgresql://x/y", "")
     )
 
     step = {
@@ -227,7 +228,7 @@ def test_an_undeclared_database_is_refused_not_skipped() -> None:
 def test_a_credential_decrypt_failure_is_not_collapsed_into_not_configured(monkeypatch) -> None:
     """A declared-but-broken credential is a different fault than "not configured"."""
     monkeypatch.setattr(
-        cleanup_mod,
+        cleanup_core,
         "_project_database_dsn",
         lambda root, project: ("", "CREDENTIAL_DECRYPT_FAILED:ValueError"),
     )
@@ -397,7 +398,7 @@ def test_row_delete_surfaces_rollback_failure() -> None:
 
 def test_a_failed_adapter_cleanup_counts_as_a_cleanup_failure() -> None:
     """Pinned in source: the branch must increment cleanup_failures, not continue quietly."""
-    source = inspect.getsource(cleanup_mod.execute_experiment_cleanup_compensation)
+    source = inspect.getsource(cleanup_core.execute_experiment_cleanup_compensation)
     start = source.index('adapter")) == "db_sql"')
     # The branch ends at its `continue`; take everything up to and including it.
     end = source.index("continue", start) + len("continue")

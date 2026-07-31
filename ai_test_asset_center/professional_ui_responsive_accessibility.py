@@ -118,7 +118,7 @@ def _validate_extension_step(raw: dict[str, Any], action: str) -> None:
 
 def _accessibility_audit(page: Any, rules: list[str]) -> dict[str, Any]:
     return _dict(page.evaluate(
-        """rules => {
+        r"""rules => {
           const selected = new Set(rules || []);
           const findings = [];
           const push = (rule, el, extra='') => {

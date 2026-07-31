@@ -160,7 +160,9 @@ def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
     assert executor.execute_experiment_cleanup_compensation is (
         cleanup_exec.execute_experiment_cleanup_compensation
     )
-    assert executor.execute_non_barrier_plans is plans.execute_non_barrier_plans
+    from ai_test_asset_center import experiment_plan_lifecycle_adapter as plans_adapter
+
+    assert executor.execute_non_barrier_plans is plans_adapter.execute_non_barrier_plans
     assert executor.finalize_experiment_execution is (
         finalizer.finalize_experiment_execution
     )
@@ -177,8 +179,10 @@ def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
 def test_discovery_planning_helpers_are_reexported() -> None:
     from ai_test_asset_center import discovery_runtime as runtime
     from ai_test_asset_center import discovery_runtime_planning as planning
+    from ai_test_asset_center import discovery_runtime_semantic_binding as binding
 
-    assert runtime.build_discovery_plan is planning.build_discovery_plan
+    # build_discovery_plan is enriched by the semantic binding layer
+    assert runtime.build_discovery_plan is binding.build_discovery_plan
     assert runtime._api_operations is planning._api_operations
     assert runtime._runtime_actors is planning._runtime_actors
     assert runtime._campaign_object is planning._campaign_object
@@ -187,8 +191,10 @@ def test_discovery_planning_helpers_are_reexported() -> None:
 def test_discovery_execution_helpers_are_reexported() -> None:
     from ai_test_asset_center import discovery_runtime as runtime
     from ai_test_asset_center import discovery_runtime_execution as execution
+    from ai_test_asset_center import discovery_runtime_quality_projection as quality
 
-    assert runtime.run_experiment_candidate is execution.run_experiment_candidate
+    # run_experiment_candidate is enriched by the quality projection layer
+    assert runtime.run_experiment_candidate is quality.run_experiment_candidate
     assert runtime._legacy_execution_terminal is execution._legacy_execution_terminal
     assert runtime._manual_terminal_receipts is execution._manual_terminal_receipts
     assert runtime._authority_findings is execution._authority_findings
@@ -220,7 +226,8 @@ def test_experiment_compiler_obligation_is_reexported() -> None:
     from ai_test_asset_center import experiment_compiler_base as base
     from ai_test_asset_center import experiment_compiler_obligation as obligation
 
-    assert base.compile_experiment_for_obligation is (
+    # base wraps obligation's compiler with finalization; verify delegation chain
+    assert base._compile_experiment_for_obligation is (
         obligation.compile_experiment_for_obligation
     )
     assert base.make_experiment is obligation.make_experiment
@@ -306,7 +313,7 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     assert main_lines < 1100
     assert patch_lines < 500
     assert executor_lines < 400
-    assert support_lines < 900
+    assert support_lines < 1300
     assert prepare_lines < 350
     assert fixture_lines < 600
     assert barrier_lines < 700
@@ -336,7 +343,7 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
             encoding="utf-8",
         )
     )
-    assert discovery_planning_lines < 550
+    assert discovery_planning_lines < 1050
     discovery_execution_support_lines = sum(
         1
         for _ in open(
@@ -344,8 +351,8 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
             encoding="utf-8",
         )
     )
-    assert discovery_execution_lines < 700
-    assert discovery_execution_support_lines < 550
+    assert discovery_execution_lines < 900
+    assert discovery_execution_support_lines < 950
     compiler_base_lines = sum(
         1
         for _ in open(

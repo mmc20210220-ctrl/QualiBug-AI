@@ -7,6 +7,7 @@ does not introduce a second compiler or receipt store.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 from typing import Any, Callable
@@ -340,6 +341,7 @@ def install_source_job_obligation_binding() -> Callable[..., dict[str, Any]]:
     else:
         original = current
 
+        @functools.wraps(original)
         def obligation_wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
             behavior_ir = args[0] if args else kwargs.get("behavior_ir")
             baseline = original(*args, **kwargs)
@@ -356,6 +358,7 @@ def install_source_job_obligation_binding() -> Callable[..., dict[str, Any]]:
     if not getattr(experiment_current, _EXPERIMENT_INSTALL_MARKER, False):
         experiment_original = experiment_current
 
+        @functools.wraps(experiment_original)
         def experiment_wrapper(*args: Any, **kwargs: Any) -> Any:
             obligations = args[0] if args else kwargs.get("obligations")
             result = experiment_original(*args, **kwargs)

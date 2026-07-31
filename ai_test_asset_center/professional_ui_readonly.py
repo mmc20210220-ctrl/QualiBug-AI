@@ -380,7 +380,7 @@ def _require_unique(locator: Any, action: str) -> None:
 
 def _accessible_name(locator: Any) -> str:
     value = locator.evaluate(
-        """el => {
+        r"""el => {
           const labelledBy = (el.getAttribute('aria-labelledby') || '')
             .split(/\s+/).filter(Boolean)
             .map(id => document.getElementById(id)?.innerText || '')
