@@ -1,10 +1,9 @@
 """Dependency-aware facade for process-graph cleanup.
 
-The original governed compensation implementation remains unchanged in
+The governed compensation implementation remains unchanged in
 ``process_graph_cleanup_executor_core``. This facade invokes that core one
-already-declared cleanup step at a time, using the frozen rollback dependency
-contract to prevent unsafe ancestor compensation after a descendant restoration
-failure.
+already-declared cleanup step at a time. The frozen rollback dependency contract
+prevents unsafe ancestor compensation after a descendant restoration failure.
 
 No compensator, binding, target or cleanup order is created at runtime.
 """
@@ -27,7 +26,9 @@ GRAPH_CLEANUP_DEPENDENCY_NOT_RESTORED = (
 GRAPH_CLEANUP_SOURCE_WRITE_NOT_REACHED = (
     "PROCESS_GRAPH_SOURCE_WRITE_NOT_REACHED_TRANSPORT"
 )
-
+GRAPH_CLEANUP_RECEIPT_CARDINALITY_INVALID = (
+    "PROCESS_GRAPH_CLEANUP_RECEIPT_CARDINALITY_INVALID"
+)
 
 for _name in dir(_core):
     if not _name.startswith("__"):
@@ -114,6 +115,36 @@ def _append_scoped_receipt(
         )
 
 
+def _record_nontransport_timeline(
+    observations: dict[str, Any],
+    *,
+    source_step_id: str,
+    receipt: dict[str, Any],
+) -> None:
+    ledger = observations.get("process_step_ledger")
+    if ledger is None or not hasattr(ledger, "record_timeline_event"):
+        return
+    status = _core._text(receipt.get("status")).upper()
+    event_type = {
+        "NOT_REQUIRED": "CLEANUP_NOT_REQUIRED",
+        "BLOCKED": "CLEANUP_BLOCKED",
+        "FAILED": "CLEANUP_FAILED",
+    }.get(status)
+    if not event_type:
+        return
+    evidence = _core._dict(receipt.get("evidence"))
+    ledger.record_timeline_event(
+        step_id=source_step_id,
+        phase="cleanup",
+        event_type=event_type,
+        operation_ref=_core._text(
+            evidence.get("cleanup_operation_ref")
+        ),
+        actor_ref="",
+        receipt_id=_core._text(receipt.get("receipt_id")),
+    )
+
+
 def _manual_receipt(
     *,
     cleanup: dict[str, Any],
@@ -155,6 +186,11 @@ def _record_manual_receipt(
         source_step_id=source_step_id,
         receipt=receipt,
     )
+    _record_nontransport_timeline(
+        observations,
+        source_step_id=source_step_id,
+        receipt=receipt,
+    )
 
 
 def _contract_drift_result(
@@ -167,6 +203,7 @@ def _contract_drift_result(
     contract_evidence_receipts = kwargs["contract_evidence_receipts"]
     receipts: list[dict[str, Any]] = []
     cleanup_failures = int(kwargs.get("cleanup_failures") or 0)
+    outcomes: dict[str, str] = {}
     for cleanup in cleanup_steps:
         source_step_id = _core._text(cleanup.get("source_step_id"))
         receipt = _manual_receipt(
@@ -189,14 +226,12 @@ def _contract_drift_result(
             receipts=receipts,
             contract_evidence_receipts=contract_evidence_receipts,
         )
+        outcomes[source_step_id] = "FAILED"
         cleanup_failures += 1
     observations["process_graph_cleanup_receipts"] = receipts
     observations["process_graph_cleanup_steps"] = []
     observations["cleanup_status"] = "failed"
-    observations["process_graph_rollback_outcomes"] = {
-        _core._text(row.get("source_step_id")): "FAILED"
-        for row in cleanup_steps
-    }
+    observations["process_graph_rollback_outcomes"] = outcomes
     return {
         "steps_out": kwargs["steps_out"],
         "observations": observations,
@@ -352,25 +387,51 @@ def execute_process_graph_cleanup(**kwargs: Any) -> dict[str, Any]:
             )
             if isinstance(row, dict)
         ]
-        receipts.extend(one_receipts)
         cleanup_rows.extend(
             row
             for row in steps_out[before_step_count:]
             if isinstance(row, dict)
             and _core._text(row.get("phase")) == "cleanup"
         )
-        outcome = (
-            _core._text(one_receipts[-1].get("status")).upper()
-            if one_receipts
-            else "FAILED"
-        )
-        outcomes[source_step_id] = outcome
-        for receipt in one_receipts:
-            _append_scoped_receipt(
-                observations,
+        if len(one_receipts) != 1:
+            receipts.extend(one_receipts)
+            receipt = _manual_receipt(
+                cleanup=cleanup,
                 source_step_id=source_step_id,
-                receipt=receipt,
+                status="FAILED",
+                reason_code=GRAPH_CLEANUP_RECEIPT_CARDINALITY_INVALID,
+                evidence={
+                    "effectful_write_count": 1
+                    if execution_state == "GOVERNED"
+                    else 0,
+                    "cleanup_write_count": 0,
+                    "request_reached_transport": bool(
+                        cleanup_rows[before_step_count:]
+                    ),
+                    "returned_receipt_count": len(one_receipts),
+                },
+                kwargs=kwargs,
             )
+            _record_manual_receipt(
+                receipt,
+                source_step_id=source_step_id,
+                observations=observations,
+                receipts=receipts,
+                contract_evidence_receipts=contract_evidence_receipts,
+            )
+            outcomes[source_step_id] = "FAILED"
+            cleanup_failures += 1
+            continue
+
+        receipt = one_receipts[0]
+        receipts.append(receipt)
+        _append_scoped_receipt(
+            observations,
+            source_step_id=source_step_id,
+            receipt=receipt,
+        )
+        outcome = _core._text(receipt.get("status")).upper() or "FAILED"
+        outcomes[source_step_id] = outcome
 
     observations["process_graph_cleanup_receipts"] = receipts
     observations["process_graph_cleanup_steps"] = cleanup_rows
