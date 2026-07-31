@@ -87,6 +87,9 @@ def install_database_relation_causality_runtime() -> None:
             approved.get("causal_scope_fingerprint")
             or causal_contract.get("causal_scope_fingerprint")
         )
+        relation_mapping_decision_id = _text(
+            approved.get("relation_mapping_decision_id")
+        )
         if len(attribution) != 1:
             return _refusal(
                 reason_code="DATABASE_RELATION_CAUSAL_PREDICATE_COUNT_INVALID",
@@ -99,14 +102,28 @@ def install_database_relation_causality_runtime() -> None:
         child_id = _text(predicate.get("child_database_field_id"))
         value_source = _text(predicate.get("value_source"))
         mapping_decision_id = _text(predicate.get("mapping_decision_id"))
+        contract_mapping_decision_id = _text(
+            causal_contract.get("mapping_decision_id")
+        )
         operation_ref = _text(predicate.get("operation_ref"))
+        authority_match = bool(
+            mapping_decision_id
+            and mapping_decision_id == contract_mapping_decision_id
+            and mapping_decision_id == relation_mapping_decision_id
+        )
+        if not authority_match:
+            return _refusal(
+                reason_code="DATABASE_RELATION_CAUSAL_RELATION_AUTHORITY_MISMATCH",
+                campaign_id=campaign_id,
+                execution_id=execution_id,
+                detail="causal_mapping_decision_not_relation_authority",
+            )
         if (
             not child_id
             or not child_name
             or _sensitive_field(child_name)
             or _text(predicate.get("operator")) != "="
             or not value_source.startswith("request.body.")
-            or not mapping_decision_id
             or not operation_ref
             or not causal_scope_fingerprint
             or _text(causal_contract.get("status")) != "BOUND"
@@ -184,6 +201,8 @@ def install_database_relation_causality_runtime() -> None:
             "child_database_field_id": child_id,
             "child_database_field_name": child_name,
             "mapping_decision_id": mapping_decision_id,
+            "relation_mapping_decision_id": relation_mapping_decision_id,
+            "relation_authority_match": True,
             "attribution_mode": "EXACT_REQUEST_CORRELATION",
             "timestamp_window_attribution_used": False,
             "response_generated_identifier_used": False,
