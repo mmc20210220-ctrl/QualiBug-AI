@@ -99,6 +99,7 @@ def _relation_phase(
             }
         },
         "draft_id": draft_id,
+        "relation_pair_id": "pair-1",
         "relation_observer_contract_ref": "relation-observer:ledger",
         "root_observer_contract_ref": "observer:accounts",
         "observation_phase": phase,
@@ -181,6 +182,7 @@ def _experiment() -> dict:
             {
                 "schema": "qualibug.database-relation-observer-execution-draft.v1",
                 "draft_id": "draft:relation:before",
+                "relation_pair_id": "pair-1",
                 "relation_observer_contract_ref": "relation-observer:ledger",
                 "root_observer_contract_ref": "observer:accounts",
                 "observation_phase": "BEFORE",
@@ -189,6 +191,7 @@ def _experiment() -> dict:
             {
                 "schema": "qualibug.database-relation-observer-execution-draft.v1",
                 "draft_id": "draft:relation:after",
+                "relation_pair_id": "pair-1",
                 "relation_observer_contract_ref": "relation-observer:ledger",
                 "root_observer_contract_ref": "observer:accounts",
                 "observation_phase": "AFTER",
@@ -238,6 +241,12 @@ def test_contract_oracle_owns_cross_table_delta_violation() -> None:
     assert root_aggregate["status"] == "OBSERVED"
     assert relation_aggregate["status"] == "OBSERVED"
     assert relation_aggregate["evidence"]["oracle_verdict_emitted"] is False
+    assert {
+        row["relation_pair_id"]
+        for row in relation_aggregate["evidence"][
+            "approved_database_relation_snapshots"
+        ]
+    } == {"pair-1"}
 
     treatment = build_contract_evidence_receipt(
         kind="treatment",
@@ -273,6 +282,7 @@ def test_contract_oracle_owns_cross_table_delta_violation() -> None:
     assert failed["reason_code"] == (
         "DATABASE_RELATION_DELTA_CONSERVATION_VIOLATED"
     )
+    assert failed["actual"]["relation_pair_match"] is True
     assert failed["actual"]["root_delta"] == "-15"
     assert failed["actual"]["relation_delta"] == "10"
     assert failed["actual"]["observer_performed_oracle_verdict"] is False
