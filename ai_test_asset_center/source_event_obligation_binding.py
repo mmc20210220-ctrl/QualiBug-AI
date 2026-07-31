@@ -2,7 +2,8 @@
 
 The established obligation compiler remains the base authority. This extension removes only
 its generic/misclassified obligation for the same event invariant and emits one registered
-event family obligation with exact operation, actor, relation and cleanup identities.
+event family obligation with exact operation, actor, relation, cleanup and durable binding
+identities.
 """
 from __future__ import annotations
 
@@ -68,6 +69,10 @@ def compile_obligations_with_source_event(
 ) -> dict[str, Any]:
     baseline = dict(base_compile(behavior_ir))
     invariants = _event_invariants(behavior_ir)
+    identity_receipt = _dict(
+        _dict(behavior_ir).get("formal_event_binding_identity_receipt")
+    )
+    identity_required = bool(identity_receipt.get("identity_required"))
     if not invariants:
         baseline["source_event_obligation_receipt"] = {
             "schema_version": "qualibug.source-event-obligation-binding.v1",
@@ -75,6 +80,8 @@ def compile_obligations_with_source_event(
             "invariant_count": 0,
             "obligation_count": 0,
             "misclassified_obligation_count_removed": 0,
+            "binding_identity_required": identity_required,
+            "binding_identity_obligation_count": 0,
             "complete_family_vector": True,
         }
         by_family = dict(baseline.get("by_family") or {})
@@ -113,9 +120,24 @@ def compile_obligations_with_source_event(
     ]
     additions: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
+    identity_obligation_count = 0
 
     for invariant in invariants:
         invariant_ref = _text(invariant.get("id"))
+        formal_identity = copy.deepcopy(
+            _dict(invariant.get("formal_event_binding_identity"))
+        )
+        if identity_required and (
+            _text(invariant.get("event_binding_identity_status")) != "BOUND"
+            or _text(formal_identity.get("status")) != "BOUND"
+        ):
+            skipped.append({
+                "invariant_ref": invariant_ref,
+                "reason_code": _text(
+                    invariant.get("event_binding_identity_reason_code")
+                ) or "FORMAL_EVENT_BINDING_IDENTITY_NOT_CLOSED",
+            })
+            continue
         operation_refs = [
             _text(value)
             for value in _list(invariant.get("operation_refs"))
@@ -162,6 +184,18 @@ def compile_obligations_with_source_event(
             "actor_ref": actor_ref,
             "event_contract_id": _text(invariant.get("event_contract_id")),
             "event_contract": event_contract,
+            "formal_event_binding_identity": formal_identity,
+            "observer_binding_ref": formal_identity.get("observer_binding_ref"),
+            "action_surface_binding_ref": formal_identity.get(
+                "action_surface_binding_ref"
+            ),
+            "implementation_binding_ref": formal_identity.get(
+                "implementation_binding_ref"
+            ),
+            "runtime_plan_ref": formal_identity.get("runtime_plan_ref"),
+            "runtime_materialization_ref": formal_identity.get(
+                "runtime_materialization_ref"
+            ),
             "field_rule_binding": {
                 "rule_id": invariant_ref,
                 "rule_fingerprint": invariant_ref,
@@ -171,9 +205,21 @@ def compile_obligations_with_source_event(
                 "operation_id": operation_ref,
             },
         }
+        subject_refs = [invariant_ref, operation_ref, actor_ref]
+        subject_refs.extend(
+            _text(formal_identity.get(key))
+            for key in (
+                "implementation_binding_ref",
+                "action_surface_binding_ref",
+                "observer_binding_ref",
+                "runtime_plan_ref",
+                "runtime_materialization_ref",
+            )
+            if _text(formal_identity.get(key))
+        )
         additions.append(make_obligation(
             risk_family=RISK_FAMILY,
-            subject_refs=[invariant_ref, operation_ref, actor_ref],
+            subject_refs=list(dict.fromkeys(subject_refs)),
             property_spec=property_spec,
             required_actors=[actor_ref],
             required_operations=[operation_ref],
@@ -191,6 +237,8 @@ def compile_obligations_with_source_event(
                 float(actor.get("confidence") or 1.0),
             ),
         ))
+        if formal_identity:
+            identity_obligation_count += 1
 
     obligations = dedupe_obligations([*retained, *additions])
     gaps = [
@@ -241,6 +289,9 @@ def compile_obligations_with_source_event(
                 for reason in sorted({_text(row.get("reason_code")) for row in skipped})
                 if reason
             },
+            "binding_identity_required": identity_required,
+            "binding_identity_status": identity_receipt.get("status"),
+            "binding_identity_obligation_count": identity_obligation_count,
             "complete_family_vector": True,
         },
     })
