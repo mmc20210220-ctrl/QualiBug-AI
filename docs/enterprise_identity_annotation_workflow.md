@@ -138,8 +138,8 @@ Resolve every disagreement in a third complete submission:
 ```
 
 The adjudicator must be independent from both original annotators and must explicitly
-use role `ADJUDICATOR`. A裁决 submission is rejected when the two original partitions
-already agree.
+use role `ADJUDICATOR`. An adjudication submission is rejected when the two original
+partitions already agree.
 
 In Settings, file order is irrelevant. The browser automatically identifies the one
 optional adjudication file by `annotator.role=ADJUDICATOR`; the remaining one or two
