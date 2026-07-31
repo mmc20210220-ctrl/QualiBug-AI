@@ -1,8 +1,8 @@
 """Enterprise-understanding builder with one identity authority.
 
 The mature semantic projection remains in the historical sibling ``builder.py``.
-Identity evidence, stable registry drift, existing operator decisions, technical
-bindings and optional external measurement are closed before semantic projection.
+Business-object type, identity evidence, stable registry drift, technical bindings,
+authority receipts and optional external measurement are closed before projection.
 """
 from __future__ import annotations
 
@@ -12,6 +12,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ..business_object_recognition import (
+    apply_recognition_to_model,
+    project_asset_for_recognized_objects,
+    publish_recognition_and_identity,
+    recognize_business_objects,
+)
 from ..identity_authority_projection import project_identity_authority_receipt
 from ..identity_benchmark import project_identity_benchmark
 from ..identity_evidence_policy import apply_identity_evidence_policy
@@ -34,8 +40,8 @@ _legacy = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault(_LEGACY_NAME, _legacy)
 _spec.loader.exec_module(_legacy)
 
-# Preserve private/public helpers used by existing tests and modules. Identity
-# authority is overridden below; all other semantic projection code is reused.
+# Preserve private/public helpers used by existing tests and modules. Object-type
+# and identity authority are overridden below; semantic projection is reused.
 for _name, _value in vars(_legacy).items():
     if _name.startswith("__") or _name == "build_enterprise_understanding_model":
         continue
@@ -63,15 +69,19 @@ def _govern_identity_conflicts(resolution: dict[str, Any]) -> None:
 def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any]:
     prior_registry = deepcopy(asset.get("enterprise_identity_registry") or {})
     apply_identity_evidence_policy(asset)
-    resolution = resolve_enterprise_identities(asset)
-    resolution = govern_identity_registry(prior_registry, resolution, asset=asset)
-    resolution = augment_technical_identity_projection(asset, resolution)
-    resolution = project_identity_authority_receipt(asset, resolution)
-    resolution = project_identity_benchmark(asset, resolution)
+    recognition = recognize_business_objects(asset)
+    recognized_asset = project_asset_for_recognized_objects(asset, recognition)
+    resolution = resolve_enterprise_identities(recognized_asset)
+    resolution = govern_identity_registry(prior_registry, resolution, asset=recognized_asset)
+    resolution = augment_technical_identity_projection(recognized_asset, resolution)
+    resolution = project_identity_authority_receipt(recognized_asset, resolution)
+    resolution = project_identity_benchmark(recognized_asset, resolution)
     _govern_identity_conflicts(resolution)
-    projected_asset = project_asset_for_legacy_builder(asset, resolution)
+    publish_recognition_and_identity(asset, recognized_asset, resolution)
+    projected_asset = project_asset_for_legacy_builder(recognized_asset, resolution)
     model = _legacy.build_enterprise_understanding_model(projected_asset)
-    return apply_identity_resolution_to_model(model, resolution)
+    model = apply_identity_resolution_to_model(model, resolution)
+    return apply_recognition_to_model(model, recognition)
 
 
 __all__ = ["build_enterprise_understanding_model"]
