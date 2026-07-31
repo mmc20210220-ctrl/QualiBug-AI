@@ -64,6 +64,7 @@ SEMANTIC_PENDING_OBSERVATION = "PENDING_OBSERVATION"
 SEMANTIC_TARGET_REACHED = "TARGET_REACHED"
 SEMANTIC_TARGET_NOT_REACHED = "TARGET_NOT_REACHED"
 SEMANTIC_TRANSPORT_FAILED = "TRANSPORT_FAILED"
+SEMANTIC_OPERATION_REJECTED = "OPERATION_REJECTED"
 SEMANTIC_BLOCKED = "BLOCKED"
 SEMANTIC_FAILED = "FAILED"
 
@@ -116,16 +117,19 @@ def _operation_accepted(status_code: int, final_status: str) -> bool:
 def _semantic_step_status(
     *,
     final_status: str,
+    response_received: bool,
     operation_accepted: bool,
     target_state_observed: bool,
     target_reached: bool | None,
 ) -> str:
     if final_status == "BLOCKED":
         return SEMANTIC_BLOCKED
+    if not response_received:
+        return SEMANTIC_TRANSPORT_FAILED
+    if not operation_accepted:
+        return SEMANTIC_OPERATION_REJECTED
     if final_status == "FAILED":
         return SEMANTIC_FAILED
-    if not operation_accepted:
-        return SEMANTIC_TRANSPORT_FAILED
     if not target_state_observed:
         return SEMANTIC_PENDING_OBSERVATION
     return (
@@ -212,6 +216,8 @@ class ProcessStepLedger:
         status_code: int = 0,
         final_status: str = "EXECUTED",
         mutation_occurred: bool | None = None,
+        operation_accepted: bool | None = None,
+        business_effect_observed: bool | None = None,
         target_reached: bool | None = None,
     ) -> dict[str, Any]:
         """Record one terminal attempt without inventing business-state facts.
@@ -243,16 +249,33 @@ class ProcessStepLedger:
             )
             if rid != response_id
         ]
-        operation_accepted = _operation_accepted(observed_status, normalized_final)
+        response_received = observed_status > 0 or bool(response_id)
+        transport_attempted = bool(
+            _text(request_receipt_id)
+            or _text(transport_receipt_id)
+            or response_received
+        )
+        accepted = (
+            operation_accepted
+            if isinstance(operation_accepted, bool)
+            else _operation_accepted(observed_status, normalized_final)
+        )
         target_state_observed = (
             target_reached is not None and bool(independent_state_receipts)
+        )
+        effect_observed = (
+            bool(business_effect_observed)
+            if isinstance(business_effect_observed, bool)
+            and bool(independent_state_receipts)
+            else target_state_observed
         )
         reached: bool | None = (
             bool(target_reached) if target_state_observed else None
         )
         semantic_status = _semantic_step_status(
             final_status=normalized_final,
-            operation_accepted=operation_accepted,
+            response_received=response_received,
+            operation_accepted=accepted,
             target_state_observed=target_state_observed,
             target_reached=reached,
         )
@@ -260,6 +283,7 @@ class ProcessStepLedger:
         step_failed = semantic_status in {
             SEMANTIC_TARGET_NOT_REACHED,
             SEMANTIC_TRANSPORT_FAILED,
+            SEMANTIC_OPERATION_REJECTED,
             SEMANTIC_BLOCKED,
             SEMANTIC_FAILED,
         }
@@ -291,11 +315,13 @@ class ProcessStepLedger:
             "scoped_oracle_receipt_ids": list(oracle_ids),
             "scoped_cleanup_receipt_ids": list(cleanup_ids),
             "cleanup_contract_id": cleanup_contract_id,
-            "transport_started": now,
-            "transport_completed": now,
-            "response_received": observed_status > 0 or bool(response_id),
-            "operation_accepted": operation_accepted,
-            "business_effect_observed": target_state_observed,
+            "transport_attempted": transport_attempted,
+            "transport_started": now if transport_attempted else None,
+            "transport_completed": now if response_received else None,
+            "transport_failed": bool(transport_attempted and not response_received),
+            "response_received": response_received,
+            "operation_accepted": accepted,
+            "business_effect_observed": effect_observed,
             "target_state_observed": target_state_observed,
             "target_reached": reached,
             "semantic_step_status": semantic_status,
@@ -424,11 +450,39 @@ class ProcessStepLedger:
     def recorded_step_ids(self) -> list[str]:
         return list(self._rows.keys())
 
+    def attempted_step_ids(self) -> list[str]:
+        return [
+            sid
+            for sid, row in self._rows.items()
+            if row.get("transport_attempted") is True
+        ]
+
     def executed_step_ids(self) -> list[str]:
+        """Steps that received a real target response.
+
+        This is deliberately independent from semantic completion. A 4xx/5xx
+        response is still a real execution attempt and must remain available to
+        Oracle, evidence-completeness, and bug-discovery accounting.
+        """
+        return [
+            sid
+            for sid, row in self._rows.items()
+            if row.get("response_received") is True
+            and _text(row.get("final_status")).upper() == "EXECUTED"
+        ]
+
+    def completed_step_ids(self) -> list[str]:
         return [
             sid
             for sid, row in self._rows.items()
             if row.get("semantic_step_status") == SEMANTIC_TARGET_REACHED
+        ]
+
+    def accepted_step_ids(self) -> list[str]:
+        return [
+            sid
+            for sid, row in self._rows.items()
+            if row.get("operation_accepted") is True
         ]
 
     def successful_write_step_ids(self) -> list[str]:
@@ -436,7 +490,6 @@ class ProcessStepLedger:
             sid
             for sid, row in self._rows.items()
             if row.get("operation_accepted") is True
-            and row.get("semantic_step_status") == SEMANTIC_TARGET_REACHED
             and row.get("mutation_occurred") is not False
         ]
 
@@ -582,7 +635,10 @@ def attach_ledger_refs_to_observations(
     required = list(ledger.required_step_ids)
     target["required_step_ids"] = required
     target["planned_step_ids"] = list(required)
+    target["attempted_step_ids"] = list(ledger.attempted_step_ids())
     target["executed_step_ids"] = list(ledger.executed_step_ids())
+    target["accepted_step_ids"] = list(ledger.accepted_step_ids())
+    target["completed_step_ids"] = list(ledger.completed_step_ids())
     target["recorded_step_ids"] = list(ledger.recorded_step_ids())
     target["process_timeline"] = ledger.build_timeline_receipt()
     target["process_step_receipt_scope_rejections"] = (
@@ -766,15 +822,16 @@ def evaluate_process_completion(
 ) -> dict[str, Any]:
     expected = set(_unique_texts(expected_step_ids))
     executed = set(ledger.executed_step_ids())
+    completed = set(ledger.completed_step_ids())
     failed = set(ledger.failed_step_ids())
     skipped = expected - executed
     if failed:
         result = PROCESS_FAILED
-    elif expected and executed == expected and evidence_complete:
+    elif expected and completed == expected and evidence_complete:
         result = PROCESS_COMPLETED
     elif executed and not evidence_complete:
         result = PROCESS_EVIDENCE_INCOMPLETE
-    elif executed and skipped:
+    elif executed and (skipped or completed != expected):
         result = PROCESS_PARTIALLY_EXECUTED
     else:
         result = PROCESS_FAILED
@@ -784,7 +841,7 @@ def evaluate_process_completion(
         "result": result,
         "expected_step_ids": sorted(expected),
         "executed_step_ids": sorted(executed),
-        "completed_step_ids": sorted(executed),
+        "completed_step_ids": sorted(completed),
         "failed_step_ids": sorted(failed),
         "skipped_step_ids": sorted(skipped),
         "evidence_complete": evidence_complete,
