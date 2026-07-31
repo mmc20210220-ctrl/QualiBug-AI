@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -117,10 +118,9 @@ def _quarantine_ground_truth(path: Path) -> Iterator[dict[str, Any]]:
             state["ground_truth_recreated_by_product_phase"] = recreated
             if recreated:
                 if path.is_dir():
-                    raise SourceBackedWorkflowError(
-                        "product_phase_recreated_ground_truth_path_as_directory"
-                    )
-                path.unlink()
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
             restored = private_path.read_bytes()
             if hashlib.sha256(restored).hexdigest() != content_sha256:
                 raise SourceBackedWorkflowError("ground_truth_private_copy_changed")
