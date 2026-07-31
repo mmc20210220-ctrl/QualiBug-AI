@@ -14,6 +14,12 @@ from .database_numeric_finding_bridge import (
 from .database_observer_experiment_projection import (
     project_database_observers_to_experiment_pack,
 )
+from .database_relation_delta_experiment_projection import (
+    project_database_relation_delta_assertions,
+)
+from .database_relation_delta_finding_bridge import (
+    install_database_relation_delta_finding_bridge,
+)
 from .database_relation_experiment_bridge import (
     attach_captured_database_relation_contracts,
     install_database_relation_asset_capture,
@@ -49,6 +55,7 @@ install_database_relation_asset_capture()
 install_database_state_transition_finding_bridge()
 install_database_numeric_finding_bridge()
 install_database_relation_numeric_finding_bridge()
+install_database_relation_delta_finding_bridge()
 install_runtime_materialization_operation_matching()
 
 
@@ -313,7 +320,10 @@ def compile_experiments(
         behavior_ir=behavior_ir,
     )
     state_bound = project_database_state_transition_assertions(relation_contract_bound)
-    # Structured cross-table rules must bind before the legacy same-row numeric projector,
-    # otherwise a relation rule is preserved as an unsupported generic conservation rule.
-    relation_numeric_bound = project_database_relation_numeric_assertions(state_bound)
+    # Delta relations require exact BEFORE/AFTER root pairs and must bind before
+    # final-value relation rules or the legacy same-row numeric projector.
+    relation_delta_bound = project_database_relation_delta_assertions(state_bound)
+    relation_numeric_bound = project_database_relation_numeric_assertions(
+        relation_delta_bound
+    )
     return project_database_numeric_assertions(relation_numeric_bound)
