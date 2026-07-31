@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .implicit_rule_authority_decisions import _decision_id
 from .implicit_rule_governance import (
     enrich_asset_with_governed_implicit_rule_projection as _enrich,
 )
@@ -31,7 +32,7 @@ def _list(value: Any) -> list[Any]:
 
 def _decision_content(row: dict[str, Any]) -> dict[str, Any]:
     return {
-        "decision_id": _text(row.get("decision_id")),
+        "decision_id": _decision_id(row),
         "rule_ref": _text(row.get("rule_ref") or row.get("rule_id")),
         "decision_type": _text(row.get("decision_type")).upper(),
         "counterexample_classification": _text(
@@ -67,15 +68,15 @@ def _canonical(value: Any) -> str:
 def _filter_replayed_commands(asset: dict[str, Any]) -> list[dict[str, Any]]:
     ledger = _dict(asset.get("implicit_rule_authority_decision_ledger"))
     persisted = {
-        _text(row.get("decision_id")): _decision_content(row)
+        _decision_id(row): _decision_content(row)
         for row in _list(ledger.get("items"))
-        if isinstance(row, dict) and _text(row.get("decision_id"))
+        if isinstance(row, dict) and _decision_id(row)
     }
     result: list[dict[str, Any]] = []
     for raw in _list(asset.get("implicit_rule_authority_decisions")):
         if not isinstance(raw, dict):
             continue
-        decision_id = _text(raw.get("decision_id"))
+        decision_id = _decision_id(raw)
         prior = persisted.get(decision_id)
         if prior is not None and _canonical(prior) == _canonical(_decision_content(raw)):
             continue
@@ -95,29 +96,43 @@ def enrich_asset_with_governed_implicit_rule_projection(
 ) -> dict[str, Any]:
     """Normalize command/evidence ingress, then delegate to governance authority."""
 
+    submitted_commands = [
+        dict(row)
+        for row in _list(asset.get("implicit_rule_authority_decisions"))
+        if isinstance(row, dict)
+    ]
+    filtered_commands = _filter_replayed_commands(asset)
+    runtime_receipts = {
+        field: dict(_dict(asset.get(field)))
+        for field in (
+            "implicit_rule_runtime_evolution",
+            "latest_implicit_rule_runtime_evolution",
+        )
+        if _dict(asset.get(field))
+    }
+
     working = dict(asset)
-    working["implicit_rule_authority_decisions"] = _filter_replayed_commands(asset)
-    for field in (
-        "implicit_rule_runtime_evolution",
-        "latest_implicit_rule_runtime_evolution",
-    ):
-        if field in working:
-            working[field] = _runtime_receipt_without_batch_identity(working.get(field))
+    working["implicit_rule_authority_decisions"] = filtered_commands
+    for field, receipt in runtime_receipts.items():
+        working[field] = _runtime_receipt_without_batch_identity(receipt)
+
     result = _enrich(working)
+    # Governance validation sees only per-rule evidence IDs, while persistence keeps the
+    # full immutable batch receipt and its content-addressed receipt_id.
+    for field, receipt in runtime_receipts.items():
+        result[field] = receipt
+
     result["implicit_rule_governance_ingress_receipt"] = {
         "schema_version": "qualibug.implicit-rule-governance-ingress.v1",
-        "submitted_decision_count": len(
-            _list(asset.get("implicit_rule_authority_decisions"))
-        ),
-        "new_or_conflicting_decision_count": len(
-            _list(working.get("implicit_rule_authority_decisions"))
-        ),
+        "submitted_decision_count": len(submitted_commands),
+        "new_or_conflicting_decision_count": len(filtered_commands),
         "exact_replayed_decisions_ignored": (
-            len(_list(asset.get("implicit_rule_authority_decisions")))
-            - len(_list(working.get("implicit_rule_authority_decisions")))
+            len(submitted_commands) - len(filtered_commands)
         ),
         "runtime_evidence_ref_requires_per_rule_evidence_id": True,
         "batch_receipt_id_is_not_runtime_evidence_id": True,
+        "runtime_batch_receipt_preserved": bool(runtime_receipts),
+        "derived_decision_identity_used_for_replay_detection": True,
     }
     return result
 
