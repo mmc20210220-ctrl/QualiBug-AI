@@ -1,0 +1,157 @@
+# 在线企业资料源接入
+
+## 主链定位
+
+在线企业资料是 QualiBug 的主要资料采集方式；本地文件上传是无法在线读取时的补充方式。两者不会进入两套知识系统，而是统一收敛到：
+
+```text
+Connector / Upload
+  → Source Occurrence
+  → Content Asset / Interpretation Asset
+  → Document IR
+  → 企业业务理解
+  → Campaign / Execution / Evidence
+```
+
+## 当前支持
+
+第一条正式在线资料 Adapter 为飞书知识库，只读访问：
+
+- 知识空间与节点完整分页发现
+- 父子节点递归枚举
+- DOC/DOCX 官方 DOCX 导出
+- Sheet/Bitable 官方 XLSX 导出
+- Drive 文件原始下载
+- 显式开启时允许 DOCX 纯文本降级
+
+Adapter 不解析业务语义，不创建独立知识库，不写回飞书。
+
+## 前端入口
+
+正式控制台入口：
+
+```text
+/materials?project={project_id}
+```
+
+页面按以下顺序呈现：
+
+1. 在线资料源配置、连接测试与立即同步
+2. 同步运行状态与遗留运行中止
+3. 离线资料补充上传
+4. 在线和上传资料的统一 Source Occurrence 清单
+
+## 私有服务 API
+
+所有接口均要求登录、租户校验和项目范围校验。配置、测试、同步与中止要求知识资料管理角色：
+
+- `knowledge_admin`
+- `project_owner`
+- `qa_lead`
+- `admin`
+
+### 查询资料源
+
+```http
+GET /api/v1/projects/{project_id}/knowledge-connectors
+GET /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}
+GET /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/runs/{sync_epoch_id}
+```
+
+返回值只包含连接状态、加密配置状态、同步状态和来源身份，不返回密钥、访问令牌、原始 cursor 或资料正文。
+
+### 配置飞书资料源
+
+```http
+POST /api/v1/projects/{project_id}/knowledge-connectors
+Content-Type: application/json
+```
+
+企业自建应用示例：
+
+```json
+{
+  "connector_instance_id": "feishu-main",
+  "display_name": "飞书企业资料",
+  "resource_scope": "wiki-all-accessible",
+  "status": "ACTIVE",
+  "connection_profile": {
+    "auth_mode": "internal_app",
+    "app_id": "cli_xxx",
+    "app_secret": "..."
+  }
+}
+```
+
+支持的资料范围：
+
+```text
+wiki-all-accessible
+wiki-space:{space_id}
+wiki-spaces:{space_id1},{space_id2}
+wiki-node:{space_id}:{parent_node_token}
+```
+
+更新已有配置时，前端可以用 `********` 表示保留当前加密字段。鉴权方式发生变化时，必须提交新方式所需的真实凭据。
+
+### 测试连接
+
+```http
+POST /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/test
+```
+
+该操作验证 Profile 解密、飞书鉴权和资料范围读取能力，不导入资料。
+
+### 手动同步
+
+```http
+POST /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/sync
+Content-Type: application/json
+```
+
+安全默认请求：
+
+```json
+{
+  "deletion_policy": "RETAIN",
+  "allow_raw_text_fallback": false,
+  "max_retire_count": 100,
+  "max_retire_ratio": 0.25
+}
+```
+
+只有完整全量枚举、全部资料处理成功并通过缺失比例/数量门禁时，`RETIRE_MISSING` 才能回收远端已缺失的 occurrence。前端默认使用 `RETAIN`。
+
+同步检查点使用两层治理：
+
+- Sync Registry 保存 SHA-256 指纹，用作 CAS 权威
+- Connection Profile Store 加密保存可恢复 checkpoint
+
+服务重启后会先校验两者一致，再发起飞书网络请求。失败或部分同步不会推进 checkpoint。
+
+### 中止遗留同步
+
+```http
+POST /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/abort
+Content-Type: application/json
+
+{
+  "reason": "operator requested recovery"
+}
+```
+
+中止操作不推进 cursor，不删除现有资料快照，只清理遗留运行状态和对应租约。
+
+## 凭据和并发治理
+
+- Connector Instance 只保存 `vault-ref://connectors/{id}`
+- Profile Store 中的 App ID、App Secret、Token 和 checkpoint 均加密落盘
+- 前端永不回显密钥明文
+- Profile 配置和 checkpoint 提交复用项目级 Enterprise Knowledge Transaction Lease
+- 同一 Connector Instance 的同步批次使用独占文件系统租约
+- 在线访问固定限制到 `https://open.feishu.cn/open-apis`
+- 所有重定向继续经过 SSRF 校验
+
+## 离线补充
+
+无法在线读取的 PRD、接口文档、历史缺陷、数据库说明、测试资料和设计稿可在同一 `/materials` 页面上传。上传资料继续进入同一 Source Occurrence 权威，不建立第二套解析、存储或知识链。
