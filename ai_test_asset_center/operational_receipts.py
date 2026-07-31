@@ -1,11 +1,8 @@
 """Receipt-backed operational accounting for discovery execution attempts.
 
-Only explicit HTTP-step and governed-write receipts are counted. This module
-never walks arbitrary result JSON looking for status-like fields.
-
-Canonical Receipt Envelope, Execution Receipt Bundle, lifecycle reduction, and
-Finalization Receipt derivation live on this existing authority spine. There is
-no parallel lifecycle ledger and callers cannot author terminal states.
+Only explicit HTTP-step and governed-write receipts are counted. Canonical
+Receipt Envelope, Execution Receipt Bundle, lifecycle reduction, and
+Finalization Receipt derivation live on this existing authority spine.
 """
 from __future__ import annotations
 
@@ -13,6 +10,8 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any
+
+from .process_step_bundle_audit import audit_process_step_receipt_bundle
 
 
 EXECUTION_OPERATIONAL_RECEIPT_SCHEMA = "qualibug.execution-operational-receipt.v1"
@@ -79,12 +78,9 @@ _TRUE_COMPLETED_REQUIRED_GROUPS = (
     "environment_restoration_receipt_id",
 )
 
-# Keep the existing public derivation version for receipt compatibility.
 DERIVATION_VERSION = "v1.6.2-receipt-bundle-finalizer"
-LIFECYCLE_DERIVATION_VERSION = "v1.7.0-single-authority-reducer"
+LIFECYCLE_DERIVATION_VERSION = "v1.8.0-ledger-balanced-reducer"
 
-# Canonical lifecycle states. Intermediate states are exported for reporting,
-# while terminal derivation always uses one of the terminal states below.
 LIFECYCLE_PLANNED = "PLANNED"
 LIFECYCLE_COMPILED = "COMPILED"
 LIFECYCLE_FIXTURE_MATERIALIZED = "FIXTURE_MATERIALIZED"
@@ -276,8 +272,6 @@ def build_execution_operational_receipt(
     steps: list[dict[str, Any]],
     cleanup_failures: int,
 ) -> dict[str, Any]:
-    """Build one terminal operational receipt from explicit execution steps."""
-
     normalized_status = _text(execution_status).upper()
     if normalized_status not in _EXECUTION_STATUSES:
         raise OperationalReceiptError("operational_execution_status_invalid")
@@ -377,8 +371,6 @@ def build_execution_operational_receipt_from_counts(
     cleanup_completed_count: int,
     cleanup_failure_count: int,
 ) -> dict[str, Any]:
-    """Seal explicit adapter counters without scanning arbitrary result JSON."""
-
     accepted_non_cleanup = _non_negative_int(
         accepted_non_cleanup_write_count,
         "accepted_non_cleanup_write_count",
@@ -428,8 +420,6 @@ def build_execution_operational_receipt_from_counts(
 def aggregate_execution_operational_receipts(
     receipts: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Aggregate validated terminal receipts without scanning unrelated JSON."""
-
     rows = [validate_execution_operational_receipt(row) for row in _list(receipts)]
     receipt_ids = [_text(row.get("receipt_id")) for row in rows]
     if len(receipt_ids) != len(set(receipt_ids)):
@@ -497,8 +487,6 @@ def build_canonical_receipt_envelope(
     status: str = RECEIPT_STATUS_VALID,
     produced_at: str | None = None,
 ) -> dict[str, Any]:
-    """Build a unified Canonical Receipt Envelope."""
-
     if not _text(receipt_type):
         raise OperationalReceiptError("receipt_type_missing")
     if not _text(receipt_id):
@@ -549,8 +537,6 @@ def validate_canonical_receipt_envelope(
     expected_code_commit_sha: str | None = None,
     expected_tree_hash: str | None = None,
 ) -> dict[str, Any]:
-    """Validate envelope integrity, hashes, and required identity fields."""
-
     value = dict(_dict(receipt))
     if value.get("schema_version") != CANONICAL_RECEIPT_ENVELOPE_SCHEMA:
         raise OperationalReceiptError("canonical_receipt_schema_invalid")
@@ -601,8 +587,6 @@ def validate_canonical_receipt_envelope(
 def validate_parent_receipt_chain(
     receipts: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Fail closed when a parent receipt is not present in the supplied set."""
-
     rows = [validate_canonical_receipt_envelope(row) for row in _list(receipts)]
     by_id = {_text(row.get("receipt_id")): row for row in rows}
     if len(by_id) != len(rows):
@@ -633,8 +617,6 @@ def validate_parent_receipt_chain(
 
 
 def detect_receipt_tamper(receipt: dict[str, Any]) -> dict[str, Any]:
-    """Return a tamper audit row; never silently accept mutated payloads."""
-
     value = dict(_dict(receipt))
     try:
         validate_canonical_receipt_envelope(value)
@@ -665,8 +647,6 @@ def build_correction_receipt(
     corrected_payload: dict[str, Any],
     reason_code: str,
 ) -> dict[str, Any]:
-    """Append-only correction; callers retain the original receipt."""
-
     original = validate_canonical_receipt_envelope(original_receipt)
     if _text(original.get("receipt_id")) != _text(supersedes_receipt_id):
         raise OperationalReceiptError("correction_supersedes_id_mismatch")
@@ -722,8 +702,6 @@ def build_execution_receipt_bundle(
     cleanup_verification_receipt_ids: list[str] | None = None,
     environment_restoration_receipt_id: str = "",
 ) -> dict[str, Any]:
-    """Assemble and validate an Execution Receipt Bundle."""
-
     if not _text(bundle_id):
         raise OperationalReceiptError("bundle_id_missing")
     validated = [validate_canonical_receipt_envelope(row) for row in _list(receipts)]
@@ -807,13 +785,22 @@ def build_execution_receipt_bundle(
     if invalid_receipt_ids:
         validation_errors.append("invalid_receipts")
 
-    # Extra receipts are allowed. Required coverage must be complete and valid.
+    process_step_audit = audit_process_step_receipt_bundle(
+        receipts_by_id=by_id,
+        process_step_receipt_ids=groups["required_step_receipt_ids"],
+    )
+    for error in _list(process_step_audit.get("validation_errors")):
+        code = _text(error)
+        if code and code not in validation_errors:
+            validation_errors.append(code)
+
     complete = (
         bool(required_ids)
         and not missing_receipt_ids
         and identity_consistent
         and protocol_consistent
         and not invalid_receipt_ids
+        and process_step_audit.get("complete") is True
     )
     bundle = {
         "schema_version": EXECUTION_RECEIPT_BUNDLE_SCHEMA,
@@ -829,6 +816,19 @@ def build_execution_receipt_bundle(
         "actual_receipt_set_hash": actual_set_hash,
         "identity_consistent": identity_consistent,
         "protocol_consistent": protocol_consistent,
+        "process_step_audit": process_step_audit,
+        "process_step_ledger_identity_consistent": bool(
+            process_step_audit.get("ledger_identity_consistent")
+        ),
+        "process_step_ledger_hash_consistent": bool(
+            process_step_audit.get("ledger_hash_consistent")
+        ),
+        "process_step_fact_hashes_valid": bool(
+            process_step_audit.get("step_fact_hashes_valid")
+        ),
+        "process_step_sets_balanced": bool(
+            process_step_audit.get("step_sets_balanced")
+        ),
         "complete": complete,
         "validation_errors": validation_errors,
         "missing_receipt_ids": missing_receipt_ids,
@@ -838,6 +838,24 @@ def build_execution_receipt_bundle(
         ),
         "protocol_mismatch_receipt_ids": sorted(
             set(protocol_mismatch_receipt_ids)
+        ),
+        "process_step_ledger_identity_mismatch_receipt_ids": _normalize_id_list(
+            process_step_audit.get("ledger_identity_mismatch_receipt_ids")
+        ),
+        "process_step_ledger_hash_mismatch_receipt_ids": _normalize_id_list(
+            process_step_audit.get("ledger_hash_mismatch_receipt_ids")
+        ),
+        "process_step_fact_hash_mismatch_receipt_ids": _normalize_id_list(
+            process_step_audit.get("step_fact_hash_mismatch_receipt_ids")
+        ),
+        "process_step_declaration_mismatch_receipt_ids": _normalize_id_list(
+            process_step_audit.get("declaration_mismatch_receipt_ids")
+        ),
+        "process_step_set_mismatch_fields": _normalize_id_list(
+            process_step_audit.get("set_mismatch_fields")
+        ),
+        "process_step_invariant_errors": _normalize_id_list(
+            process_step_audit.get("invariant_errors")
         ),
         "receipts": validated,
     }
@@ -867,8 +885,15 @@ def _bundle_facts(bundle: dict[str, Any] | None) -> dict[str, Any]:
             "invalid_receipt_ids": [],
             "identity_mismatch_receipt_ids": [],
             "protocol_mismatch_receipt_ids": [],
+            "process_step_audit_complete": False,
+            "process_step_ledger_identity_mismatch_receipt_ids": [],
+            "process_step_ledger_hash_mismatch_receipt_ids": [],
+            "process_step_fact_hash_mismatch_receipt_ids": [],
+            "process_step_set_mismatch_fields": [],
+            "process_step_invariant_errors": [],
         }
     schema_valid = value.get("schema_version") == EXECUTION_RECEIPT_BUNDLE_SCHEMA
+    audit = _dict(value.get("process_step_audit"))
     return {
         "provided": True,
         "schema_valid": schema_valid,
@@ -881,6 +906,23 @@ def _bundle_facts(bundle: dict[str, Any] | None) -> dict[str, Any]:
         "protocol_mismatch_receipt_ids": _normalize_id_list(
             value.get("protocol_mismatch_receipt_ids")
         ),
+        "process_step_audit_complete": audit.get("complete") is True,
+        "process_step_ledger_identity_mismatch_receipt_ids": _normalize_id_list(
+            value.get("process_step_ledger_identity_mismatch_receipt_ids")
+        ),
+        "process_step_ledger_hash_mismatch_receipt_ids": _normalize_id_list(
+            value.get("process_step_ledger_hash_mismatch_receipt_ids")
+        ),
+        "process_step_fact_hash_mismatch_receipt_ids": _normalize_id_list(
+            value.get("process_step_fact_hash_mismatch_receipt_ids")
+        ),
+        "process_step_set_mismatch_fields": _normalize_id_list(
+            value.get("process_step_set_mismatch_fields")
+        ),
+        "process_step_invariant_errors": _normalize_id_list(
+            value.get("process_step_invariant_errors")
+        ),
+        "process_step_audit": audit,
     }
 
 
@@ -904,13 +946,6 @@ def derive_execution_lifecycle(
     receipt_bundle: dict[str, Any] | None = None,
     finalizer_block_reason: str = "",
 ) -> dict[str, Any]:
-    """Reduce lifecycle facts exactly once using fail-closed precedence.
-
-    Callers provide facts; this function alone authors ``lifecycle_state``.
-    Receipt completeness is mandatory for TRUE_COMPLETED and can never be
-    overridden by transport status, oracle status, or legacy lifecycle fields.
-    """
-
     status = _text(execution_status).upper()
     block_reason = _text(finalizer_block_reason).upper()
     bundle = _bundle_facts(receipt_bundle)
@@ -1010,13 +1045,35 @@ def derive_execution_lifecycle(
                                 elif bundle["identity_mismatch_receipt_ids"]:
                                     lifecycle_state = LIFECYCLE_IDENTITY_MISMATCH
                                     reason_code = "PROCESS_RECEIPT_IDENTITY_MISMATCH"
+                                elif bundle[
+                                    "process_step_ledger_identity_mismatch_receipt_ids"
+                                ]:
+                                    lifecycle_state = LIFECYCLE_IDENTITY_MISMATCH
+                                    reason_code = "PROCESS_STEP_LEDGER_IDENTITY_MISMATCH"
                                 elif bundle["protocol_mismatch_receipt_ids"]:
                                     lifecycle_state = LIFECYCLE_PROTOCOL_MISMATCH
                                     reason_code = "PROCESS_RECEIPT_PROTOCOL_MISMATCH"
+                                elif bundle[
+                                    "process_step_ledger_hash_mismatch_receipt_ids"
+                                ]:
+                                    lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
+                                    reason_code = "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+                                elif bundle[
+                                    "process_step_fact_hash_mismatch_receipt_ids"
+                                ]:
+                                    lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
+                                    reason_code = "PROCESS_STEP_FACT_HASH_MISMATCH"
+                                elif (
+                                    bundle["process_step_set_mismatch_fields"]
+                                    or bundle["process_step_invariant_errors"]
+                                ):
+                                    lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
+                                    reason_code = "PROCESS_STEP_SET_MISMATCH"
                                 elif (
                                     not bundle["provided"]
                                     or not bundle["schema_valid"]
                                     or not bundle["structurally_complete"]
+                                    or not bundle["process_step_audit_complete"]
                                     or bundle["missing_receipt_ids"]
                                     or bundle["invalid_receipt_ids"]
                                 ):
@@ -1052,8 +1109,6 @@ def derive_true_completed_from_bundle(
     cleanup_verified: bool,
     environment_restored: bool,
 ) -> dict[str, Any]:
-    """Backward-compatible bundle API delegated to the lifecycle reducer."""
-
     value = dict(_dict(bundle))
     if value.get("schema_version") != EXECUTION_RECEIPT_BUNDLE_SCHEMA:
         raise OperationalReceiptError("execution_receipt_bundle_schema_invalid")
@@ -1082,8 +1137,6 @@ def derive_true_completed_from_bundle(
         compatibility_terminal == LIFECYCLE_ORACLE_INDETERMINATE
         and not oracle_evaluated
     ):
-        # Preserve the v1.6.2 public result while the canonical lifecycle uses
-        # the normalized ORACLE_INDETERMINATE terminal.
         compatibility_terminal = "ORACLE_NOT_EVALUATED"
     return {
         "receipt_bundle_valid": lifecycle["true_completed"],
@@ -1096,6 +1149,7 @@ def derive_true_completed_from_bundle(
         "protocol_mismatch_receipt_ids": bundle_facts[
             "protocol_mismatch_receipt_ids"
         ],
+        "process_step_audit": bundle_facts.get("process_step_audit", {}),
         "oracle_evaluated": bool(oracle_evaluated),
         "cleanup_verified": bool(cleanup_verified),
         "environment_restored": bool(environment_restored),
@@ -1121,8 +1175,6 @@ def build_execution_finalization_receipt(
     execution_status: str = "EXECUTED",
     finalizer_block_reason: str = "",
 ) -> dict[str, Any]:
-    """Build the only authoritative execution finalization receipt."""
-
     if not _text(finalization_receipt_id):
         raise OperationalReceiptError("finalization_receipt_id_missing")
 
@@ -1177,6 +1229,7 @@ def build_execution_finalization_receipt(
             "protocol_mismatch_receipt_ids": bundle_state[
                 "protocol_mismatch_receipt_ids"
             ],
+            "process_step_audit": bundle_state.get("process_step_audit", {}),
             "oracle_evaluated": bool(
                 facts.get("oracle_evaluated", oracle_evaluated)
             ),
@@ -1267,8 +1320,6 @@ def build_fixture_provenance_receipt(
     code_commit_sha: str = NOT_APPLICABLE,
     tree_hash: str = NOT_APPLICABLE,
 ) -> dict[str, Any]:
-    """Lifecycle fixture provenance with identity and scope stability checks."""
-
     identities = {
         "create_identity": _text(create_identity),
         "readback_identity": _text(readback_identity),
@@ -1335,8 +1386,6 @@ def build_report_metric_receipt(
     code_commit_sha: str = NOT_APPLICABLE,
     tree_hash: str = NOT_APPLICABLE,
 ) -> dict[str, Any]:
-    """Formal metrics bind to receipt IDs and a sealed denominator."""
-
     source_ids = _normalize_id_list(source_receipt_ids)
     if not _text(metric_name):
         raise OperationalReceiptError("report_metric_name_missing")
@@ -1379,8 +1428,6 @@ def audit_report_metric_ledger_balance(
     *,
     expected_ledger_hash: str,
 ) -> dict[str, Any]:
-    """Fail closed when formal metric receipts disagree with the ledger hash."""
-
     rows = [validate_canonical_receipt_envelope(row) for row in _list(metric_receipts)]
     mismatches: list[dict[str, Any]] = []
     for row in rows:
@@ -1415,8 +1462,6 @@ def unique_oracle_evaluation_key(
     assertion_fingerprint: str,
     observation_pair_fingerprint: str,
 ) -> str:
-    """Canonical unique evaluation key for oracle traces."""
-
     payload = {
         "rule_id": _text(rule_id),
         "experiment_id": _text(experiment_id),
@@ -1432,8 +1477,6 @@ def unique_oracle_evaluation_key(
 def deduplicate_oracle_traces(
     traces: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Classify raw traces and count unique evaluations only once."""
-
     raw = [dict(_dict(row)) for row in _list(traces)]
     unique: dict[str, dict[str, Any]] = {}
     classified = {
@@ -1509,8 +1552,6 @@ def assemble_bundle_from_finalizer_observations(
     cleanup_verification_receipts: list[dict[str, Any]],
     environment_restoration_receipt: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Wrap heterogeneous finalizer evidence into canonical envelopes."""
-
     def _ensure_envelope(
         receipt_type: str,
         raw: dict[str, Any],
