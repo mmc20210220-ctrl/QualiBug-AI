@@ -12,7 +12,7 @@ from .database_observer_experiment_runtime import (
 from .database_relation_causality_runtime import (
     install_database_relation_causality_runtime,
 )
-from .database_relation_delta_causality_integrity import (
+from .database_relation_delta_causality_authority import (
     install_database_relation_causal_delta_assertion,
 )
 from .database_relation_delta_lineage import (
