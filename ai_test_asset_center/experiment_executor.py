@@ -195,17 +195,26 @@ def execute_one_experiment(
             if _dict(experiment.get("authorization_comparison_contract"))
             else result
         )
-        if targets:
-            binding_identity_proofs_for_targets(
-                _list(prepared.get("binding_materialization_receipts")),
-                targets,
-            )
         governed = enforce_authorization_oracle_causality(
             result=prepared,
             experiment=experiment,
             behavior_ir=behavior_ir,
             account_rows=_governance._test_account_rows(root, project),
         )
+        causal_passed = (
+            str(
+                _dict(governed.get("authorization_causality_receipt")).get(
+                    "status"
+                )
+                or ""
+            ).upper()
+            == "PASSED"
+        )
+        if causal_passed and targets:
+            binding_identity_proofs_for_targets(
+                _list(governed.get("binding_materialization_receipts")),
+                targets,
+            )
         _verify_authorization_compile_identity(governed, experiment)
         return attach_authorization_delivery_evidence(
             governed,
