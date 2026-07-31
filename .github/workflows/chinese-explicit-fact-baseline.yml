@@ -8,6 +8,7 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/**"
       - "benchmark_evaluator/enterprise_understanding/**"
       - "tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py"
+      - "tests/test_enterprise_understanding_explicit_fact_commit_status.py"
       - "tests/test_enterprise_understanding_ground_truth_quarantine.py"
       - "tests/test_enterprise_understanding_fact_probe_policy.py"
       - "tests/test_enterprise_understanding_fact_slots.py"
@@ -20,6 +21,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   measure:
@@ -27,6 +29,20 @@ jobs:
     timeout-minutes: 35
 
     steps:
+      - name: Publish pending explicit fact status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: "pending",
+              context: "qualibug/chinese-explicit-fact-baseline",
+              description: "running isolated Chinese explicit fact baseline",
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+
       - name: Checkout exact commit
         uses: actions/checkout@v4
 
@@ -51,6 +67,7 @@ jobs:
         run: |
           pytest -q \
             tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py \
+            tests/test_enterprise_understanding_explicit_fact_commit_status.py \
             tests/test_enterprise_understanding_ground_truth_quarantine.py \
             tests/test_enterprise_understanding_fact_probe_policy.py \
             tests/test_enterprise_understanding_fact_slots.py \
@@ -60,10 +77,63 @@ jobs:
             tests/test_enterprise_understanding_versioned_product_snapshot.py
 
       - name: Run isolated explicit fact baseline
+        id: explicit_fact_baseline
+        continue-on-error: true
+        shell: bash
         run: |
+          set +e
           python -m benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline \
             --workspace-root "$RUNNER_TEMP/chinese-explicit-fact-workspace" \
             --output "$RUNNER_TEMP/chinese-explicit-fact-result"
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Publish final explicit fact status
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          BASELINE_EXIT_CODE: ${{ steps.explicit_fact_baseline.outputs.exit_code }}
+          BASELINE_SUMMARY_PATH: ${{ runner.temp }}/chinese-explicit-fact-result/chinese_explicit_fact_baseline_summary.json
+        with:
+          script: |
+            const fs = require("fs");
+            const exitCode = Number.parseInt(process.env.BASELINE_EXIT_CODE || "2", 10);
+            let summary = {};
+            try {
+              summary = JSON.parse(
+                fs.readFileSync(process.env.BASELINE_SUMMARY_PATH, "utf8")
+              );
+            } catch (_error) {
+              summary = {};
+            }
+            const metrics = summary.metrics || {};
+            const formatMetric = (value) => {
+              const number = Number(value);
+              return Number.isFinite(number) ? number.toFixed(3) : "n/a";
+            };
+            const fallbackStatus =
+              exitCode === 0 ? "PASS" : exitCode === 3 ? "BELOW_TARGET" : "BLOCKED";
+            const resultStatus = String(summary.status || fallbackStatus).toUpperCase();
+            const state = exitCode === 0 ? "success" : exitCode === 3 ? "failure" : "error";
+            const loss = summary.highest_impact_first_loss
+              ? ` loss=${summary.highest_impact_first_loss}`
+              : "";
+            const description = (
+              `${resultStatus} recall=${formatMetric(metrics.fact_recall)}` +
+              ` slots=${formatMetric(metrics.slot_exact_accuracy)}` +
+              ` p0=${formatMetric(metrics.p0_exact_fact_recall)}` +
+              loss
+            ).slice(0, 140);
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: "qualibug/chinese-explicit-fact-baseline",
+              description,
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
 
       - name: Run isolated versioned implicit rule baseline
         run: |
@@ -98,3 +168,15 @@ jobs:
           path: ${{ runner.temp }}/implicit-rule-result
           if-no-files-found: error
           retention-days: 30
+
+      - name: Enforce explicit fact baseline result
+        if: always()
+        shell: bash
+        env:
+          BASELINE_EXIT_CODE: ${{ steps.explicit_fact_baseline.outputs.exit_code }}
+        run: |
+          code="${BASELINE_EXIT_CODE:-2}"
+          if ! [[ "$code" =~ ^[0-9]+$ ]]; then
+            code=2
+          fi
+          exit "$code"
