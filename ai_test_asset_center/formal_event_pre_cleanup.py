@@ -167,7 +167,12 @@ def install_formal_event_pre_cleanup_observer() -> None:
         precomputed = _dict(observations.get(_PRE_RECEIPT_KEY))
         if precomputed:
             return copy.deepcopy(precomputed)
-        return original_handler(envelope)
+        authority = getattr(
+            _surface,
+            _ORIGINAL_HANDLER_MARKER,
+            _surface._event_observer_handler,
+        )
+        return authority(envelope)
 
     def cleanup_after_event_observation(*args: Any, **kwargs: Any) -> dict[str, Any]:
         exp = _dict(kwargs.get("exp"))
