@@ -6,6 +6,7 @@ import re
 from collections import defaultdict
 from typing import Any, Iterable
 
+from .authorization_semantics import resolve_fact_authorization
 from .gate import assess_understanding_model
 from .lifecycle_builder import build_lifecycles
 from .object_graph import build_object_graph
@@ -1345,9 +1346,12 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
             "authorization_model": {
                 "schema": "qualibug.enterprise-authorization-model.v1",
                 "decision_contract": "ALLOW_DENY_UNKNOWN_THREE_WAY",
+                "fact_authorization_resolver": "SINGLE_SOURCE_BACKED_FAIL_CLOSED",
                 "responsibility_is_permission": False,
+                "workflow_governance_is_actor_permission": False,
                 "unknown_is_allow": False,
                 "unknown_is_deny": False,
+                "explicit_unknown_can_fallback_to_text": False,
                 "formal_decision_requires_complete_coordinate": True,
                 "mixed_allow_and_deny_rows_are_split": True,
                 "automatic_inference_allowed": False,
@@ -1787,19 +1791,6 @@ def _normalize_authorization_decision(value: Any) -> str:
     return "UNKNOWN"
 
 
-def _authorization_fact_decision(fact: dict[str, Any]) -> str:
-    modality = text(fact.get("modality")).upper()
-    polarity = text(fact.get("polarity")).lower()
-    frame = as_dict(fact.get("semantic_frame") or fact.get("business_semantic_frame"))
-    modality = modality or text(frame.get("modality")).upper()
-    polarity = polarity or text(frame.get("polarity")).lower()
-    if modality in {"MUST_NOT", "PROHIBITED"} or polarity == "negative":
-        return "DENY"
-    if modality in {"MAY", "EXCLUSIVE", "ONLY_IF"}:
-        return "ALLOW"
-    return ""
-
-
 def _authorization_contract(
     *,
     decision: str,
@@ -2023,7 +2014,13 @@ def _build_actors(
             )
 
     for fact in _accepted_facts(facts):
-        fact_decision = _authorization_fact_decision(fact)
+        authorization = resolve_fact_authorization(fact)
+        if (
+            text(authorization.get("semantic_kind")) != "AUTHORIZATION"
+            or not bool(authorization.get("authority_declared"))
+        ):
+            continue
+        fact_decision = text(authorization.get("decision")) or "UNKNOWN"
         action = text(
             as_dict(fact.get("action")).get("canonical")
             or as_dict(fact.get("action")).get("raw")
@@ -2031,25 +2028,36 @@ def _build_actors(
         object_refs = _fact_object_refs(fact)
         for actor_name in _fact_actor_refs(fact):
             row = ensure(actor_name, evidence_from_fact(fact), "business_fact")
-            if not row or not fact_decision:
+            if not row:
                 continue
+            contract_decision = (
+                fact_decision
+                if fact_decision in {"ALLOW", "DENY"} and action and object_refs
+                else "UNKNOWN"
+            )
             contract = _authorization_contract(
-                decision=fact_decision if action and object_refs else "UNKNOWN",
+                decision=contract_decision,
                 resource_refs=object_refs,
                 actions=[action],
                 scope=as_dict(fact.get("scope")),
                 source_ref=fact.get("fact_id"),
                 evidence=evidence_from_fact(fact),
-                derivation="explicit_business_fact_authorization",
+                derivation=text(authorization.get("derivation"))
+                or "explicit_business_fact_authorization",
                 conditions=as_list(fact.get("conditions")),
             )
             add_contract(row, contract)
             if text(contract.get("decision")) == "UNKNOWN":
+                reason_code = (
+                    text(authorization.get("reason_code"))
+                    if fact_decision == "UNKNOWN"
+                    else "ACTOR_AUTHORIZATION_COORDINATE_INCOMPLETE"
+                ) or "ACTOR_AUTHORIZATION_DECISION_UNRESOLVED"
                 authorization_unknowns.append(
                     _authorization_unknown(
                         actor_name=text(row.get("name")),
                         contract=contract,
-                        reason_code="ACTOR_AUTHORIZATION_COORDINATE_INCOMPLETE",
+                        reason_code=reason_code,
                     )
                 )
 
