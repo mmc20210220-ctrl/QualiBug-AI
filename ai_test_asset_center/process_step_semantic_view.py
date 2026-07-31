@@ -1,15 +1,20 @@
 """Read-only semantic view over a ProcessStepLedger.
 
-Execution keeps the live ledger. Finalization receives this view, which
-projects facts from receipts that contain both an exact step identity and an
-explicit boolean semantic verdict. Transport execution and business completion
-remain separate public sets.
+Execution keeps the live ledger. Finalization receives this view, which binds
+observation, oracle, and cleanup receipts only when each receipt declares one
+exact recorded step. Semantic completion additionally requires an explicit
+boolean verdict. Transport execution and business completion remain separate.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from .process_step_execution import ProcessStepLedger
+from .process_step_receipt_scope import (
+    extract_receipt_step_scope,
+    receipt_id as _scope_receipt_id,
+    synchronize_scoped_receipts_from_observations,
+)
 from .process_step_semantic_projection import apply_semantic_verdict, project_step_sets
 
 
@@ -22,13 +27,6 @@ _VERDICT_KEYS = (
     "passed",
     "satisfied",
 )
-_RECEIPT_ID_KEYS = (
-    "receipt_id",
-    "observer_receipt_id",
-    "oracle_receipt_id",
-    "assertion_receipt_id",
-)
-_STEP_ID_KEYS = ("step_id", "source_step_id", "subject_id")
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -43,17 +41,17 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _receipt_id(row: dict[str, Any]) -> str:
-    for key in _RECEIPT_ID_KEYS:
-        value = _text(row.get(key))
-        if value:
-            return value
-    return ""
-
-
 def _explicit_verdict(row: dict[str, Any]) -> bool | None:
-    evidence = _dict(row.get("evidence"))
-    for source in (row, evidence):
+    payload = _dict(row.get("payload"))
+    sources = (
+        row,
+        payload,
+        _dict(row.get("evidence")),
+        _dict(payload.get("evidence")),
+        _dict(row.get("verdict")),
+        _dict(payload.get("verdict")),
+    )
+    for source in sources:
         for key in _VERDICT_KEYS:
             value = source.get(key)
             if isinstance(value, bool):
@@ -61,33 +59,19 @@ def _explicit_verdict(row: dict[str, Any]) -> bool | None:
     return None
 
 
-def _scoped_step_ids(row: dict[str, Any], known: set[str]) -> list[str]:
-    found: list[str] = []
-    evidence = _dict(row.get("evidence"))
-    for source in (row, evidence):
-        for key in _STEP_ID_KEYS:
-            value = _text(source.get(key))
-            if value in known and value not in found:
-                found.append(value)
-        for key in ("step_ids", "source_step_ids", "subject_ids"):
-            for raw in _list(source.get(key)):
-                value = _text(raw)
-                if value in known and value not in found:
-                    found.append(value)
-        for window in _list(source.get("state_windows")):
-            value = _text(_dict(window).get("step_id"))
-            if value in known and value not in found:
-                found.append(value)
-    return found
-
-
 def _candidates(observations: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     out: list[tuple[str, dict[str, Any]]] = []
-    for row in _list(observations.get("observer_receipts")):
-        if isinstance(row, dict):
-            out.append(("observer", row))
+    for key in (
+        "observer_receipts",
+        "observation_receipts",
+        "process_step_observation_receipts",
+    ):
+        for row in _list(observations.get(key)):
+            if isinstance(row, dict):
+                out.append(("observer", row))
     for key in (
         "process_step_oracle_receipts",
+        "oracle_invocation_receipts",
         "oracle_receipts",
         "assertion_receipts",
     ):
@@ -124,25 +108,26 @@ class ProcessStepSemanticView:
         return getattr(self._ledger, name)
 
     def _synchronize(self) -> None:
-        known = {
-            _text(row.get("step_id"))
-            for row in self._ledger.all_rows()
-            if isinstance(row, dict) and _text(row.get("step_id"))
-        }
+        synchronize_scoped_receipts_from_observations(
+            self._ledger,
+            self._observations,
+        )
+        known = list(self._ledger.recorded_step_ids())
         for source, receipt in _candidates(self._observations):
-            receipt_id = _receipt_id(receipt)
-            if not receipt_id or receipt_id in self._processed_receipts:
+            rid = _scope_receipt_id(receipt)
+            if not rid or rid in self._processed_receipts:
                 continue
-            self._processed_receipts.add(receipt_id)
+            self._processed_receipts.add(rid)
             verdict = _explicit_verdict(receipt)
-            step_ids = _scoped_step_ids(receipt, known)
-            if verdict is None or len(step_ids) != 1:
+            scope = extract_receipt_step_scope(receipt, known_step_ids=known)
+            if verdict is None or scope.get("status") != "EXACT":
                 continue
+            step_id = _text(scope.get("step_id"))
             apply_semantic_verdict(
                 self._ledger,
-                step_id=step_ids[0],
-                receipt_step_id=step_ids[0],
-                receipt_id=receipt_id,
+                step_id=step_id,
+                receipt_step_id=step_id,
+                receipt_id=rid,
                 source=source,
                 target_reached=verdict,
             )
