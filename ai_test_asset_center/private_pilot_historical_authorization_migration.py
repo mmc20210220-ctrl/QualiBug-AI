@@ -133,8 +133,13 @@ class HistoricalAuthorizationReportMigrationMixin:
             projected_data[
                 "historical_authorization_artifact_migration"
             ] = migration
+        migration_status = _text(migration.get("status"))
+        rebuild_reason = _text(migration.get("rebuild_reason"))
         diagnostics = {
             "status": _text(quarantine.get("status")),
+            "migration_status": migration_status or "UNKNOWN",
+            "registry_rebuild_reason": rebuild_reason,
+            "canonical_registry_rebuilt": migration_status == "MIGRATED",
             "quarantine_count": int(
                 quarantine.get("quarantine_count") or 0
             ),
