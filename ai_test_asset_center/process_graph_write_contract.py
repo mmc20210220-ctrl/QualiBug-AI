@@ -1,9 +1,10 @@
 """Public process-graph write-contract authority.
 
 The existing topology, operation, observer and compensation normalization stays
-in ``process_graph_write_contract_core``.  This facade changes only the final
+in ``process_graph_write_contract_core``. This facade changes only the final
 proof scope: every graph write receives its own ordinary
-WriteReversibilityProof, and those proofs are frozen into one graph proof set.
+WriteReversibilityProof, those proofs are frozen into one graph proof set, and
+the existing topology is projected into a rollback dependency contract.
 Read-only graphs and all established exports remain unchanged.
 """
 from __future__ import annotations
@@ -14,6 +15,10 @@ from typing import Any
 from . import process_graph_write_contract_core as _core
 from .process_graph_reversibility import (
     finalize_process_graph_reversibility,
+)
+from .process_graph_rollback_contract import (
+    STATUS_FROZEN as ROLLBACK_STATUS_FROZEN,
+    freeze_process_graph_rollback_contract,
 )
 
 
@@ -26,7 +31,7 @@ def finalize_process_graph_write_contract(
     experiment: dict[str, Any],
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    """Freeze graph write safety and one proof per formal write node."""
+    """Freeze graph write safety, rollback dependencies and per-node proofs."""
     exp = deepcopy(experiment)
     if _core._text(_core._dict(exp.get("compile_receipt")).get("status")) != "COMPILED":
         return exp
@@ -44,8 +49,34 @@ def finalize_process_graph_write_contract(
     if reason:
         return _core._blocked(exp, reason, detail)
 
+    rollback_contract = freeze_process_graph_rollback_contract(
+        canonical_graph,
+        contract,
+    )
+    if _core._text(rollback_contract.get("status")) != ROLLBACK_STATUS_FROZEN:
+        return _core._blocked(
+            exp,
+            _core.GRAPH_WRITE_CONTRACT_INVALID,
+            _core._text(rollback_contract.get("detail"))
+            or "process_graph_rollback_contract_not_frozen",
+        )
+    rollback_fingerprint = _core._text(
+        rollback_contract.get("contract_fingerprint")
+    )
+    contract = {
+        **contract,
+        "rollback_contract_id": rollback_fingerprint,
+        "rollback_contract": deepcopy(rollback_contract),
+    }
+    canonical_graph = {
+        **canonical_graph,
+        "rollback_contract_id": rollback_fingerprint,
+        "rollback_contract": deepcopy(rollback_contract),
+    }
+
     exp["execution_graph"] = canonical_graph
     exp["process_graph_write_contract"] = contract
+    exp["process_graph_rollback_contract"] = deepcopy(rollback_contract)
     nodes_by_id = {
         _core._text(row.get("node_id")): row
         for row in _core._list(canonical_graph.get("nodes"))
@@ -69,6 +100,7 @@ def finalize_process_graph_write_contract(
                 "_graph_write_contract_id": _core._text(
                     contract.get("contract_id")
                 ),
+                "_graph_rollback_contract_id": rollback_fingerprint,
             }
         )
 
@@ -87,6 +119,7 @@ def finalize_process_graph_write_contract(
             "process_graph_write_contract_id": _core._text(
                 contract.get("contract_id")
             ),
+            "process_graph_rollback_contract_id": rollback_fingerprint,
         }
     )
     exp["safety_contract"] = safety
@@ -97,6 +130,7 @@ def finalize_process_graph_write_contract(
             "process_graph_write_contract_id": _core._text(
                 contract.get("contract_id")
             ),
+            "process_graph_rollback_contract_id": rollback_fingerprint,
             "graph_write_step_count": len(write_step_ids),
         }
     )
