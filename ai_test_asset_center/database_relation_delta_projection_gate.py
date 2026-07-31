@@ -14,7 +14,6 @@ from .database_relation_delta_experiment_projection import (
     _delta_operand,
     _dict,
     _list,
-    _source_kind,
     _text,
     project_database_relation_delta_assertions as _project_exact,
 )
@@ -26,6 +25,7 @@ _EXPLICIT_EXPRESSION_TYPES = frozenset(
         "cross_entity_delta_conservation",
     }
 )
+_GENERIC_BINDING_GAP = "DATABASE_RELATION_DELTA_EXACT_BINDING_MISSING"
 
 
 def _explicit_problem(assertion: dict[str, Any]) -> str:
@@ -81,6 +81,7 @@ def project_database_relation_delta_assertions(
         return projected
 
     incomplete_count = 0
+    removed_generic_count = 0
     experiments: list[dict[str, Any]] = []
     for raw_experiment in _list(projected.get("experiments")):
         experiment = deepcopy(_dict(raw_experiment))
@@ -88,13 +89,25 @@ def project_database_relation_delta_assertions(
             experiment.get("experiment_id")
             or experiment.get("obligation_id")
         )
-        gaps = [
-            dict(row)
-            for row in _list(
-                experiment.get("database_relation_delta_projection_gaps")
-            )
-            if isinstance(row, dict)
-        ]
+        problem_ids = {
+            assertion_id
+            for (candidate_experiment_id, assertion_id), _reason_code in problems.items()
+            if candidate_experiment_id == experiment_id
+        }
+        gaps: list[dict[str, Any]] = []
+        for raw_gap in _list(
+            experiment.get("database_relation_delta_projection_gaps")
+        ):
+            if not isinstance(raw_gap, dict):
+                continue
+            gap = dict(raw_gap)
+            if (
+                _text(gap.get("assertion_id")) in problem_ids
+                and _text(gap.get("reason_code")) == _GENERIC_BINDING_GAP
+            ):
+                removed_generic_count += 1
+                continue
+            gaps.append(gap)
         existing = {
             (
                 _text(row.get("assertion_id")),
@@ -138,10 +151,13 @@ def project_database_relation_delta_assertions(
     summary = _dict(
         projected.get("database_relation_delta_experiment_projection")
     )
-    summary["incomplete_assertion_count"] = int(
-        summary.get("incomplete_assertion_count") or 0
-    ) + incomplete_count
+    prior_incomplete = int(summary.get("incomplete_assertion_count") or 0)
+    summary["incomplete_assertion_count"] = max(
+        0,
+        prior_incomplete - removed_generic_count + incomplete_count,
+    )
     summary["malformed_explicit_expression_count"] = incomplete_count
+    summary["replaced_generic_gap_count"] = removed_generic_count
     summary["automatic_expression_repair_count"] = 0
     if incomplete_count and _text(summary.get("status")).upper() == "PASS":
         summary["status"] = "PARTIAL"
