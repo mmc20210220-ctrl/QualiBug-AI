@@ -81,6 +81,15 @@ def test_legacy_implementation_is_moved_not_duplicated() -> None:
     )
 
 
+def test_main_executor_imports_facade_not_core() -> None:
+    source = (
+        ROOT / "ai_test_asset_center/experiment_executor_core.py"
+    ).read_text(encoding="utf-8")
+
+    assert "from .experiment_outcome_finalizer import finalize_experiment_execution" in source
+    assert "experiment_outcome_finalizer_core" not in source
+
+
 def test_exact_scope_proxy_hides_only_legacy_append_api() -> None:
     ledger = _ledger()
     proxy = finalizer._ExactScopeFinalizerLedger(ledger)
@@ -88,6 +97,31 @@ def test_exact_scope_proxy_hides_only_legacy_append_api() -> None:
     assert hasattr(proxy, "all_rows")
     assert hasattr(proxy, "append_scoped_receipt_ref")
     assert not hasattr(proxy, "append_receipt_ref")
+
+
+def test_original_hooks_survive_facade_reinstallation() -> None:
+    original_observer = getattr(
+        finalizer._core,
+        finalizer._ORIGINAL_OBSERVER_ATTR,
+    )
+    original_oracle = getattr(
+        finalizer._core,
+        finalizer._ORIGINAL_ORACLE_ATTR,
+    )
+
+    finalizer._install_core_hooks()
+    finalizer._install_core_hooks()
+
+    assert getattr(
+        finalizer._core,
+        finalizer._ORIGINAL_OBSERVER_ATTR,
+    ) is original_observer
+    assert getattr(
+        finalizer._core,
+        finalizer._ORIGINAL_ORACLE_ATTR,
+    ) is original_oracle
+    assert original_observer is not finalizer._observe_experiment_requirements_exact
+    assert original_oracle is not finalizer._evaluate_contract_oracle_exact
 
 
 def test_observer_adapter_merges_existing_exact_receipts(monkeypatch) -> None:
@@ -140,6 +174,34 @@ def test_oracle_adapter_publishes_verdict_for_semantic_sync(monkeypatch) -> None
 
     assert result is verdict
     assert observations["oracle_verdict"] is verdict
+
+
+def test_scope_sync_receives_raw_source_ledger(monkeypatch) -> None:
+    observations = _observations()
+    raw_ledger = observations["process_step_ledger"]
+    captured: dict = {}
+
+    def capture_scope(ledger, source):
+        captured["ledger"] = ledger
+        captured["observations"] = source
+        return {"complete": True}
+
+    monkeypatch.setattr(
+        finalizer,
+        "synchronize_scoped_receipts_from_observations",
+        capture_scope,
+    )
+    monkeypatch.setattr(
+        finalizer._core,
+        "finalize_experiment_execution",
+        lambda *args, **kwargs: {"status": "EXECUTED"},
+    )
+
+    finalizer.finalize_experiment_execution(observations=observations)
+
+    assert captured["ledger"] is raw_ledger
+    assert captured["observations"] is observations
+    assert isinstance(observations["process_step_ledger"], ProcessStepSemanticView)
 
 
 def test_facade_seals_exact_scope_and_restores_semantic_view(monkeypatch) -> None:
