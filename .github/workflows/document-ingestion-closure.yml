@@ -106,7 +106,7 @@ jobs:
             tests/test_generated_structure_label_authority.py \
             tests/test_authorization_comparison_identity_symmetry.py \
             tests/test_enterprise_understanding_authorization_oracle_causality.py \
-            tests/test_enterprise_understanding_authorization_delivery_gate.py \
+            tests/test_enterprise_understanding_authorization_delivery_*.py \
             tests/test_enterprise_understanding_ingestion_evidence*.py \
             tests/test_enterprise_understanding_document_ground_truth.py \
             tests/test_enterprise_understanding_source_*.py \
