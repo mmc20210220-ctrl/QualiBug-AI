@@ -22,6 +22,10 @@ _HTTP_TIMEOUT = int(os.environ.get("QUALIBUG_HTTP_TIMEOUT", "30"))
 _REQUEST_QUEUE_SIZE = int(os.environ.get("QUALIBUG_REQUEST_QUEUE_SIZE", "128"))
 
 from . import db_persistence as db_persist  # noqa: F401
+from .connector_auto_sync import (
+    ensure_connector_auto_sync_supervisor,
+    stop_connector_auto_sync_supervisor,
+)
 from .customer_delivery_gate import (
     split_customer_delivery_tracks as _partition_delivery_tracks,
 )
@@ -286,6 +290,8 @@ class QualiBugHTTPServer(ThreadingHTTPServer):
         self._serve_thread_ident: int | None = None
         self._shutdown_dispatch_lock = threading.Lock()
         self._shutdown_dispatched = False
+        self.qualibug_private_root: Path | None = None
+        self.qualibug_connector_auto_sync: dict[str, Any] = {}
         super().__init__(server_address, handler_class)
 
     def server_bind(self) -> None:
@@ -325,6 +331,14 @@ class QualiBugHTTPServer(ThreadingHTTPServer):
                 daemon=True,
             ).start()
 
+    def server_close(self) -> None:
+        """Stop background maintenance before releasing the listening socket."""
+
+        root = self.qualibug_private_root
+        if isinstance(root, Path):
+            stop_connector_auto_sync_supervisor(root, join_timeout=5.0)
+        super().server_close()
+
 
 _global_server: QualiBugHTTPServer | None = None
 
@@ -357,6 +371,13 @@ def run_private_pilot_service(
         PrivatePilotHandler,
     )
     server.qualibug_private_root = resolved_root
+    try:
+        server.qualibug_connector_auto_sync = (
+            ensure_connector_auto_sync_supervisor(resolved_root)
+        )
+    except Exception:
+        ThreadingHTTPServer.server_close(server)
+        raise
     _global_server = server
     _dbg_report(
         hypothesis_id="A",
@@ -369,6 +390,8 @@ def run_private_pilot_service(
             "timeout": _HTTP_TIMEOUT,
             "request_queue_size": _REQUEST_QUEUE_SIZE,
             "max_request_body": MAX_REQUEST_BODY_BYTES,
+            "connector_auto_sync_started_at_service_creation": True,
+            "connector_auto_sync": server.qualibug_connector_auto_sync,
         },
     )
     return server
