@@ -3,15 +3,17 @@
 Runtime conformance or violation is evidence about the target, not authority over the
 rule. This projector therefore never promotes, demotes or rewrites a rule. It links
 attempts through obligation -> Behavior IR invariant -> source rule identity and emits
-an immutable evidence receipt. A legitimate counterexample still requires a separate,
-authority-backed operator decision.
+content-addressed immutable evidence. A legitimate counterexample still requires a
+separate, authority-backed operator decision.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter, defaultdict
 from typing import Any
 
-SCHEMA_VERSION = "qualibug.implicit-rule-runtime-evolution.v1"
+SCHEMA_VERSION = "qualibug.implicit-rule-runtime-evolution.v2"
 
 
 def _text(value: Any) -> str:
@@ -24,6 +26,21 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _canonical(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _stable_id(prefix: str, *parts: Any) -> str:
+    raw = "\x1f".join(_canonical(part) for part in parts)
+    return f"{prefix}_{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]}"
 
 
 def _obligation_rows(payload: Any) -> list[dict[str, Any]]:
@@ -130,15 +147,17 @@ def project_implicit_rule_runtime_evolution(
             invariants_by_id,
         )
         if not rule_refs:
-            unlinked.append(
-                {
-                    "obligation_id": obligation_id,
-                    "attempt_id": attempt.get("attempt_id"),
-                    "reason_code": "IMPLICIT_RULE_IDENTITY_NOT_LINKED",
-                }
+            unlinked_row = {
+                "obligation_id": obligation_id,
+                "attempt_id": attempt.get("attempt_id"),
+                "reason_code": "IMPLICIT_RULE_IDENTITY_NOT_LINKED",
+            }
+            unlinked_row["evidence_id"] = _stable_id(
+                "implicit_rule_runtime_unlinked", unlinked_row
             )
+            unlinked.append(unlinked_row)
             continue
-        evidence = {
+        evidence_base = {
             "obligation_id": obligation_id,
             "attempt_id": attempt.get("attempt_id"),
             "observation_class": _observation_class(attempt),
@@ -155,7 +174,11 @@ def project_implicit_rule_runtime_evolution(
             "authority_reason": "raw_runtime_observation_cannot_rewrite_rule_authority",
         }
         for rule_ref in rule_refs:
-            by_rule[rule_ref].append(dict(evidence))
+            evidence = {"rule_ref": rule_ref, **evidence_base}
+            evidence["evidence_id"] = _stable_id(
+                "implicit_rule_runtime_evidence", evidence
+            )
+            by_rule[rule_ref].append(evidence)
 
     rule_rows: list[dict[str, Any]] = []
     total_classes: Counter[str] = Counter()
@@ -176,8 +199,16 @@ def project_implicit_rule_runtime_evolution(
         )
 
     status = "OBSERVED" if rule_rows else "NO_IMPLICIT_RULE_ATTEMPTS"
+    receipt_material = {
+        "behavior_ir_model_id": ir.get("model_id"),
+        "source_snapshot_hash": ir.get("source_snapshot_hash"),
+        "rules": rule_rows,
+        "unlinked_attempts": unlinked,
+    }
+    receipt_id = _stable_id("implicit_rule_runtime_receipt", receipt_material)
     return {
         "schema_version": SCHEMA_VERSION,
+        "receipt_id": receipt_id,
         "status": status,
         "behavior_ir_model_id": ir.get("model_id"),
         "source_snapshot_hash": ir.get("source_snapshot_hash"),
@@ -191,6 +222,11 @@ def project_implicit_rule_runtime_evolution(
         "runtime_violation_is_target_bug_evidence_not_rule_counterevidence": True,
         "runtime_conformance_alone_can_promote_rule": False,
         "legitimate_counterexample_requires_authority_decision": True,
+        "authority_decision_reference_contract": {
+            "receipt_id": receipt_id,
+            "evidence_id_required_for_rule_counterexample": True,
+            "raw_attempt_id_is_not_authority_evidence_identity": True,
+        },
     }
 
 
