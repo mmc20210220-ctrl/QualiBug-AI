@@ -21,6 +21,9 @@ from .process_step_semantic_projection import project_step_sets
 from .process_step_semantic_view import ProcessStepSemanticView
 
 
+_NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -57,6 +60,34 @@ def _required_step_ids(experiment: dict[str, Any]) -> list[str]:
     return required
 
 
+def _fixture_requirement(experiment: dict[str, Any]) -> tuple[bool, str]:
+    """Return whether a fixture is required and its exact identity when known."""
+    exp = _dict(experiment)
+    fixture_contract = _dict(exp.get("disposable_fixture_contract"))
+    explicit_id = _text(
+        fixture_contract.get("fixture_id") or exp.get("fixture_id")
+    )
+    if explicit_id:
+        return True, explicit_id
+    if fixture_contract or _list(exp.get("setup_plan")):
+        return True, ""
+    fixture_dag = _dict(exp.get("fixture_dag"))
+    if _list(fixture_dag.get("nodes")) or _list(
+        fixture_dag.get("setup_order")
+    ):
+        return True, ""
+    for raw in _list(exp.get("binding_plan")):
+        binding = _dict(raw)
+        if binding.get("force_fixture_setup") is True:
+            return True, ""
+        if _dict(binding.get("fixture_setup")):
+            return True, ""
+        binding_fixture_id = _text(binding.get("fixture_id"))
+        if binding_fixture_id:
+            return True, binding_fixture_id
+    return False, _NOT_APPLICABLE
+
+
 def new_experiment_lifecycle_ledger(
     experiment: dict[str, Any],
     *,
@@ -66,19 +97,18 @@ def new_experiment_lifecycle_ledger(
     run_id: str,
 ) -> ProcessStepLedger:
     exp = _dict(experiment)
-    fixture_contract = _dict(exp.get("disposable_fixture_contract"))
     protocol = _dict(exp.get("protocol"))
+    fixture_required, fixture_id = _fixture_requirement(exp)
     ledger = ProcessStepLedger(
         experiment_id=experiment_id,
-        fixture_id=_text(
-            fixture_contract.get("fixture_id") or exp.get("fixture_id")
-        ),
+        fixture_id=fixture_id,
         campaign_id=campaign_id,
         run_id=run_id,
         obligation_id=obligation_id,
         protocol_id=_text(exp.get("protocol_id") or protocol.get("protocol_id")),
         required_step_ids=_required_step_ids(exp),
     )
+    ledger.fixture_required = fixture_required
     ledger.precondition_step_ids = _plan_step_ids(
         _list(exp.get("precondition_plan")), "precondition"
     )
@@ -131,6 +161,10 @@ def attach_lifecycle_ledger(
     ledger: ProcessStepLedger,
 ) -> dict[str, Any]:
     target = attach_ledger_refs_to_observations(observations, ledger)
+    target["fixture_required"] = bool(
+        getattr(ledger, "fixture_required", True)
+    )
+    target["fixture_id"] = _text(getattr(ledger, "fixture_id", ""))
     projection = project_step_sets(ledger)
     target["process_step_semantic_projection"] = projection
     target["recorded_step_ids"] = projection["recorded_step_ids"]
@@ -270,6 +304,10 @@ def _attach_projection_to_result(
     row["state_precondition_established"] = row[
         "state_precondition_receipt"
     ]["established"]
+    row["fixture_required"] = bool(
+        getattr(ledger, "fixture_required", True)
+    )
+    row["fixture_id"] = _text(getattr(ledger, "fixture_id", ""))
     return row
 
 
