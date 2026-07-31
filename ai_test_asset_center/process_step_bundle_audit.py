@@ -117,7 +117,20 @@ def audit_process_step_receipt_bundle(
 ) -> dict[str, Any]:
     """Fail closed on mixed, stale, tampered, missing, or reclassified steps."""
 
-    receipt_ids = _ids(process_step_receipt_ids)
+    grouped_receipt_ids = _ids(process_step_receipt_ids)
+    discovered_receipt_ids = sorted(
+        receipt_id
+        for receipt_id, envelope in receipts_by_id.items()
+        if _text(_dict(envelope).get("receipt_type")) == PROCESS_STEP_RECEIPT_SCHEMA
+    )
+    receipt_ids = _ids(grouped_receipt_ids + discovered_receipt_ids)
+    group_missing_receipt_ids = sorted(
+        set(discovered_receipt_ids) - set(grouped_receipt_ids)
+    )
+    group_unknown_receipt_ids = sorted(
+        set(grouped_receipt_ids) - set(discovered_receipt_ids)
+    )
+
     payloads: list[dict[str, Any]] = []
     receipt_by_step_id: dict[str, str] = {}
     invalid_type_receipt_ids: list[str] = []
@@ -236,6 +249,8 @@ def audit_process_step_receipt_bundle(
     validation_errors: list[str] = []
     if not receipt_ids:
         validation_errors.append("process_step_receipts_missing")
+    if group_missing_receipt_ids or group_unknown_receipt_ids:
+        validation_errors.append("process_step_receipt_group_mismatch")
     if invalid_type_receipt_ids:
         validation_errors.append("process_step_receipt_type_invalid")
     if incomplete_receipt_ids:
@@ -264,7 +279,11 @@ def audit_process_step_receipt_bundle(
         "fact_model_consistent": fact_model_consistent,
         "step_fact_hashes_valid": not step_fact_hash_mismatch_ids,
         "step_sets_balanced": not set_mismatch_fields and not invariant_errors,
+        "grouped_process_step_receipt_ids": grouped_receipt_ids,
+        "discovered_process_step_receipt_ids": discovered_receipt_ids,
         "process_step_receipt_ids": receipt_ids,
+        "group_missing_receipt_ids": group_missing_receipt_ids,
+        "group_unknown_receipt_ids": group_unknown_receipt_ids,
         "process_step_ledger_ids": sorted(ledger_ids),
         "process_step_ledger_hashes": sorted(ledger_hashes),
         "fact_model_versions": sorted(fact_model_versions),
