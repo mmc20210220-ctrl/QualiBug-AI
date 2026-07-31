@@ -46,9 +46,18 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/business_state_graph.py').read()); print('business_state_graph.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/semantic_scenario_generator.py').read()); print('semantic_scenario_generator.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/v12_pipeline.py').read()); print('v12_pipeline.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_compiler_base.py').read()); print('experiment_compiler_base.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_runtime.py').read()); print('process_graph_runtime.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_write_contract.py').read()); print('process_graph_write_contract.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_write_contract_core.py').read()); print('process_graph_write_contract_core.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_reversibility.py').read()); print('process_graph_reversibility.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_reversibility_core.py').read()); print('process_graph_reversibility_core.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_rollback_contract.py').read()); print('process_graph_rollback_contract.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_executor.py').read()); print('process_graph_cleanup_executor.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_executor_core.py').read()); print('process_graph_cleanup_executor_core.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_equivalence.py').read()); print('process_graph_cleanup_equivalence.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/cleanup_equivalence.py').read()); print('cleanup_equivalence.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/cleanup_equivalence_core.py').read()); print('cleanup_equivalence_core.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_plan_executor.py').read()); print('experiment_plan_executor.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_cleanup_lifecycle_adapter.py').read()); print('experiment_cleanup_lifecycle_adapter.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor.py').read()); print('experiment_executor.py OK')"
@@ -98,6 +107,9 @@ jobs:
             tests/test_process_graph_write_cleanup.py \
             tests/test_process_graph_write_fail_closed.py \
             tests/test_process_graph_target_preflight.py \
+            tests/test_process_graph_rollback_contract.py \
+            tests/test_process_graph_cleanup_rollback.py \
+            tests/test_process_graph_multi_write_equivalence.py \
             tests/test_architecture_extraction_contracts.py \
             tests/test_identity_benchmark_regression.py \
             tests/test_identity_benchmark_repository.py \
