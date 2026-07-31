@@ -121,3 +121,29 @@ def test_claimed_transport_receipt_must_match_governance_receipt() -> None:
     assert tightened["transport_receipt_id"] == "transport-receipt-1"
     assert tightened["transport_reached"] is True
     assert validate_operation_causality_transport_receipt(tightened) == tightened
+
+
+def test_earlier_ambiguous_step_reason_is_not_overwritten() -> None:
+    install_operation_causality_transport_authority()
+    experiment, observations = _prepare()
+    result = _plan_result("req-1")
+    duplicate = deepcopy(result["steps"][0])
+    duplicate["step_id"] = "treatment-2"
+    duplicate["governance_receipt"] = {"receipt_id": "transport-receipt-2"}
+    result["steps"].append(duplicate)
+
+    receipt = runtime.finalize_operation_causality_transport(
+        exp=experiment,
+        result=result,
+        observations=observations,
+        campaign_id="campaign-1",
+        execution_id="execution-1",
+    )[0]
+
+    assert receipt["status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == (
+        "OPERATION_CAUSAL_TRANSPORT_STEP_AMBIGUOUS"
+    )
+    assert receipt["transport_receipt_id"] == ""
+    assert receipt["source_value_fingerprint_match"] is False
+    assert validate_operation_causality_transport_receipt(receipt) == receipt
