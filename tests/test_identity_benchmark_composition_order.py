@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+
+def test_identity_benchmark_repository_precedes_first_understanding_pass() -> None:
+    source = Path(
+        "ai_test_asset_center/enterprise_knowledge_center/composition.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_enterprise_business_knowledge_asset"
+    )
+    calls = []
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        target = node.func
+        if isinstance(target, ast.Name):
+            calls.append((target.id, node.lineno))
+    repository_line = min(
+        line for name, line in calls if name == "apply_identity_benchmark_repository"
+    )
+    understanding_lines = sorted(
+        line for name, line in calls if name == "enrich_asset_with_enterprise_understanding"
+    )
+
+    assert len(understanding_lines) == 2
+    assert repository_line < understanding_lines[0] < understanding_lines[1]
+    assert (
+        "identity_benchmark_repository_precedes_enterprise_understanding"
+        in source
+    )
