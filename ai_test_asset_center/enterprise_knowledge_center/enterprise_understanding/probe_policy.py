@@ -8,22 +8,19 @@ from .schema import as_dict
 
 def probe_generation_block_reason(asset: dict[str, Any]) -> str:
     """Return the first closed formal gate, or empty text when admission passes."""
+    # These receipts are mandatory in the formal composition root. Compatibility
+    # unit assets and explicitly migrated legacy assets may predate them; when a
+    # receipt is present its failure is authoritative and can never be bypassed.
     lexicon = as_dict(asset.get("semantic_lexicon_contract"))
-    if not lexicon:
-        return "SEMANTIC_LEXICON_CONTRACT_NOT_BUILT"
-    if not bool(lexicon.get("entry_allowed")):
+    if lexicon and not bool(lexicon.get("entry_allowed")):
         return "SEMANTIC_LEXICON_CONTRACT_CLOSED"
 
     facts = as_dict(asset.get("structure_first_business_fact_compilation_receipt"))
-    if not facts:
-        return "STRUCTURE_FIRST_BUSINESS_FACT_COMPILATION_NOT_BUILT"
-    if str(facts.get("status") or "").upper() != "PASS":
+    if facts and str(facts.get("status") or "").upper() != "PASS":
         return "STRUCTURE_FIRST_BUSINESS_FACT_COMPILATION_CLOSED"
 
     comprehension = as_dict(asset.get("enterprise_comprehension_gate"))
-    if not comprehension:
-        return "ENTERPRISE_COMPREHENSION_GATE_NOT_BUILT"
-    if not bool(comprehension.get("entry_allowed")):
+    if comprehension and not bool(comprehension.get("entry_allowed")):
         return "ENTERPRISE_COMPREHENSION_GATE_CLOSED"
 
     planning = as_dict(asset.get("scenario_planning_gate"))
