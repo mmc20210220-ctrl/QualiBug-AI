@@ -18,6 +18,7 @@ on:
       - "ai_test_asset_center/experiment_compile_freezer.py"
       - "ai_test_asset_center/experiment_compile_freezer_core.py"
       - "ai_test_asset_center/flow_data_requirement.py"
+      - "ai_test_asset_center/flow_data_execution_contract.py"
       - "ai_test_asset_center/flow_data_materialization.py"
       - "ai_test_asset_center/flow_data_materializer_projection.py"
       - "ai_test_asset_center/experiment_precondition_executor.py"
@@ -79,6 +80,7 @@ jobs:
             ai_test_asset_center/experiment_compile_freezer.py \
             ai_test_asset_center/experiment_compile_freezer_core.py \
             ai_test_asset_center/flow_data_requirement.py \
+            ai_test_asset_center/flow_data_execution_contract.py \
             ai_test_asset_center/flow_data_materialization.py \
             ai_test_asset_center/flow_data_materializer_projection.py \
             ai_test_asset_center/experiment_precondition_executor.py \
