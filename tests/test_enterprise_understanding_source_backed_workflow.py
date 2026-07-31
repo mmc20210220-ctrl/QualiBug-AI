@@ -18,6 +18,8 @@ from benchmark_evaluator.enterprise_understanding.run_source_backed_workflow imp
 
 
 SOURCE_REF = "docs/BUSINESS_RULES.md"
+OCCURRENCE_ID = "occurrence:rules"
+CANONICAL_SOURCE_ID = "source:rules"
 
 
 def _write_manifest(root: Path, source_path: str, source_type: str = "business_rules") -> Path:
@@ -45,9 +47,17 @@ def _valid_product_phase_receipt() -> dict:
         "status": "PASS",
         "receipt_fingerprint": "product:fingerprint",
         "source_manifest_external_refs_preserved": True,
-        "source_identity_authority": "SOURCE_INVENTORY_EXTERNAL_REF",
-        "source_ref_by_source_id": {"source:rules": SOURCE_REF},
+        "source_identity_authority": "SOURCE_OCCURRENCE_REGISTRY",
+        "source_occurrence_ref_by_id": {OCCURRENCE_ID: SOURCE_REF},
+        "canonical_source_id_by_occurrence_id": {
+            OCCURRENCE_ID: CANONICAL_SOURCE_ID
+        },
+        "content_identity_separate_from_source_occurrence": True,
+        "interpretation_identity_separate_from_content_identity": True,
+        "same_interpretation_content_parsed_once": True,
         "absolute_workspace_paths_persisted_as_identity": False,
+        "content_asset_count": 1,
+        "interpretation_asset_count": 1,
     }
 
 
@@ -71,13 +81,18 @@ def test_product_phase_reuses_existing_ingest_and_composition_authorities(
         }
         return {
             "ok": True,
-            "created": [
+            "created": [{"source_id": CANONICAL_SOURCE_ID}],
+            "duplicates": [],
+            "source_occurrences": [
                 {
-                    "source_id": "source:rules",
-                    "external_ref": SOURCE_REF,
+                    "source_occurrence_id": OCCURRENCE_ID,
+                    "source_ref": SOURCE_REF,
+                    "canonical_source_id": CANONICAL_SOURCE_ID,
                 }
             ],
-            "duplicates": [],
+            "duplicate_source_occurrences": [],
+            "content_asset_count": 1,
+            "interpretation_asset_count": 1,
         }
 
     def build(project, root, options):
@@ -98,7 +113,9 @@ def test_product_phase_reuses_existing_ingest_and_composition_authorities(
                     "asset_id": "asset:ticketsla",
                     "source_inventory": [
                         {
-                            "source_id": "source:rules",
+                            "source_id": OCCURRENCE_ID,
+                            "source_occurrence_id": OCCURRENCE_ID,
+                            "canonical_source_id": CANONICAL_SOURCE_ID,
                             "external_ref": SOURCE_REF,
                         }
                     ],
@@ -142,8 +159,14 @@ def test_product_phase_reuses_existing_ingest_and_composition_authorities(
     assert receipt["composition_authority"].endswith(
         "composition.build_enterprise_business_knowledge_asset"
     )
-    assert receipt["source_ref_by_source_id"] == {"source:rules": SOURCE_REF}
+    assert receipt["source_occurrence_ref_by_id"] == {
+        OCCURRENCE_ID: SOURCE_REF
+    }
+    assert receipt["canonical_source_id_by_occurrence_id"] == {
+        OCCURRENCE_ID: CANONICAL_SOURCE_ID
+    }
     assert receipt["source_manifest_external_refs_preserved"] is True
+    assert receipt["source_identity_authority"] == "SOURCE_OCCURRENCE_REGISTRY"
     assert receipt["probe_limit"] == 0
     assert receipt["ground_truth_loaded"] is False
     assert receipt["ground_truth_path_received"] is False
@@ -295,7 +318,9 @@ def test_successful_product_phase_is_scored_only_after_identity_and_child_exit(
                 {
                     "source_inventory": [
                         {
-                            "source_id": "source:rules",
+                            "source_id": OCCURRENCE_ID,
+                            "source_occurrence_id": OCCURRENCE_ID,
+                            "canonical_source_id": CANONICAL_SOURCE_ID,
                             "external_ref": SOURCE_REF,
                             "status": "active",
                         }
@@ -341,7 +366,9 @@ def test_successful_product_phase_is_scored_only_after_identity_and_child_exit(
 
     assert receipt["status"] == "PASS"
     assert receipt["source_identity_validated_before_ground_truth_load"] is True
-    assert receipt["source_identity_authority"] == "SOURCE_INVENTORY_EXTERNAL_REF"
+    assert receipt["source_identity_authority"] == "SOURCE_OCCURRENCE_REGISTRY"
+    assert receipt["source_occurrence_count"] == 1
+    assert receipt["canonical_source_count"] == 1
     assert receipt["ground_truth_loaded_after_product_phase"] is True
     assert receipt["product_phase_command_contains_ground_truth"] is False
     assert receipt["hidden_ground_truth_entered_product_runtime"] is False
