@@ -142,6 +142,15 @@ def build_database_relation_delta_finding_evidence(
         "assertion_kind": _text(assertion.get("kind")),
         "assertion_status": _text(assertion.get("status")),
         "reason_code": _text(assertion.get("reason_code")),
+        "source_refs": _clean(_list(expected.get("source_refs"))),
+        "source_evidence_present": actual.get("source_evidence_present") is True,
+        "root_field_binding_id": _text(expected.get("root_field_binding_id")),
+        "relation_mapping_decision_id": _text(
+            expected.get("relation_mapping_decision_id")
+        ),
+        "approved_binding_ids_present": actual.get(
+            "approved_binding_ids_present"
+        ) is True,
         "semantic_pair_schema": _text(
             expected.get("semantic_pair_schema") or SEMANTIC_PAIR_SCHEMA
         ),
@@ -235,6 +244,15 @@ def enrich_database_relation_delta_finding(
     raw = _dict(enriched.get("raw_evidence"))
     raw["db_snapshot"] = {
         "schema": FINDING_EVIDENCE_SCHEMA,
+        "source_refs": evidence_payload["source_refs"],
+        "source_evidence_present": evidence_payload["source_evidence_present"],
+        "root_field_binding_id": evidence_payload["root_field_binding_id"],
+        "relation_mapping_decision_id": evidence_payload[
+            "relation_mapping_decision_id"
+        ],
+        "approved_binding_ids_present": evidence_payload[
+            "approved_binding_ids_present"
+        ],
         "semantic_pair_schema": evidence_payload["semantic_pair_schema"],
         "database_relationship_id": evidence_payload["database_relationship_id"],
         "relation_key": evidence_payload["relation_key"],
@@ -284,7 +302,7 @@ def enrich_database_relation_delta_finding(
     enriched["database_relation_delta_evidence"] = evidence_payload
     quality = _dict(enriched.get("evidence_quality"))
     quality["database_evidence_strength"] = (
-        "EXACT_FK_SCOPED_ROOT_AND_AGGREGATE_DELTA_WITH_SEMANTIC_PAIR"
+        "EXACT_SOURCE_BACKED_FK_SCOPED_ROOT_AND_AGGREGATE_DELTA"
     )
     enriched["evidence_quality"] = quality
     enriched["gate_passed"] = finding.get("gate_passed") is True
