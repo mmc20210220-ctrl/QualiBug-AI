@@ -9,6 +9,11 @@ from ai_test_asset_center.database_observer_experiment_runtime import (
 )
 from ai_test_asset_center.database_relation_delta_experiment_projection import (
     ASSERTION_KIND,
+    _stable_id,
+)
+from ai_test_asset_center.database_relation_delta_projection_gate import (
+    SEMANTIC_PAIR_SCHEMA,
+    semantic_relation_delta_pair_id,
 )
 from ai_test_asset_center.database_relation_observer_experiment_runtime import (
     aggregate_database_relation_phase_receipts,
@@ -51,6 +56,7 @@ def _relation_phase(
     count: int,
     phase: str,
     draft_id: str,
+    pair_id: str,
 ) -> dict:
     return {
         "receipt_id": f"relation-{phase.lower()}",
@@ -99,7 +105,7 @@ def _relation_phase(
             }
         },
         "draft_id": draft_id,
-        "relation_pair_id": "pair-1",
+        "relation_pair_id": pair_id,
         "relation_observer_contract_ref": "relation-observer:ledger",
         "root_observer_contract_ref": "observer:accounts",
         "observation_phase": phase,
@@ -108,10 +114,13 @@ def _relation_phase(
 
 
 def _assertion() -> dict:
-    return {
+    row = {
         "assertion_id": "assert:balance-ledger-delta",
         "kind": ASSERTION_KIND,
         "source_assertion_kind": "conservation",
+        "source_refs": [
+            {"kind": "business_rule", "locator": "BR-BALANCE-LEDGER"}
+        ],
         "require_control": False,
         "database_relation_observer_ref": "relation-observer:ledger",
         "database_relationship_id": "fk:ledger:accounts",
@@ -121,13 +130,11 @@ def _assertion() -> dict:
                 "parent_database_field_name": "id",
             }
         ],
-        "relation_pair_id": "pair-1",
-        "relation_before_draft_id": "draft:relation:before",
-        "relation_after_draft_id": "draft:relation:after",
         "root_observer_contract_ref": "observer:accounts",
         "root_before_draft_id": "draft:accounts:before",
         "root_after_draft_id": "draft:accounts:after",
         "root_table_ref": "table:accounts",
+        "root_field_binding_id": "binding:accounts:balance",
         "root_database_field_id": "field:accounts:balance",
         "root_database_field_name": "balance",
         "child_table_ref": "table:ledger_entries",
@@ -140,17 +147,53 @@ def _assertion() -> dict:
         "aggregate_on_left": False,
         "left_coefficient": -1,
         "right_coefficient": 1,
+        "comparison_phase_pair": "BEFORE_AFTER",
         "tolerance": "0",
+        "database_relation_delta_binding": {
+            "relation_mapping_decision_id": "decision:ledger",
+        },
     }
+    pair_id = semantic_relation_delta_pair_id(row)
+    before_id = _stable_id(
+        "database_relation_observer_execution_draft",
+        row["database_relation_observer_ref"],
+        row["assertion_id"],
+        "BEFORE",
+        pair_id,
+    )
+    after_id = _stable_id(
+        "database_relation_observer_execution_draft",
+        row["database_relation_observer_ref"],
+        row["assertion_id"],
+        "AFTER",
+        pair_id,
+    )
+    row.update(
+        {
+            "relation_pair_id": pair_id,
+            "relation_before_draft_id": before_id,
+            "relation_after_draft_id": after_id,
+        }
+    )
+    row["database_relation_delta_binding"].update(
+        {
+            "semantic_pair_schema": SEMANTIC_PAIR_SCHEMA,
+            "relation_pair_id": pair_id,
+            "relation_before_draft_id": before_id,
+            "relation_after_draft_id": after_id,
+            "pair_covers_complete_assertion_semantics": True,
+        }
+    )
+    return row
 
 
-def _experiment() -> dict:
+def _experiment(assertion: dict) -> dict:
     return {
         "experiment_id": "experiment:balance-ledger",
         "obligation_id": "obligation:balance-ledger",
         "campaign_id": "campaign-1",
         "execution_id": "execution-1",
-        "source_refs": [{"kind": "business_rule", "locator": "BR-BALANCE-LEDGER"}],
+        "source_refs": assertion["source_refs"],
         "control_plan": [],
         "treatment_plan": [
             {"step_id": "treatment-1", "operation_ref": "api:POST:/ledger"}
@@ -165,14 +208,14 @@ def _experiment() -> dict:
         "database_observer_execution_drafts": [
             {
                 "schema": "qualibug.database-observer-execution-draft.v1",
-                "draft_id": "draft:accounts:before",
+                "draft_id": assertion["root_before_draft_id"],
                 "observer_contract_ref": "observer:accounts",
                 "observation_phase": "BEFORE",
                 "required": True,
             },
             {
                 "schema": "qualibug.database-observer-execution-draft.v1",
-                "draft_id": "draft:accounts:after",
+                "draft_id": assertion["root_after_draft_id"],
                 "observer_contract_ref": "observer:accounts",
                 "observation_phase": "AFTER",
                 "required": True,
@@ -181,8 +224,8 @@ def _experiment() -> dict:
         "database_relation_observer_execution_drafts": [
             {
                 "schema": "qualibug.database-relation-observer-execution-draft.v1",
-                "draft_id": "draft:relation:before",
-                "relation_pair_id": "pair-1",
+                "draft_id": assertion["relation_before_draft_id"],
+                "relation_pair_id": assertion["relation_pair_id"],
                 "relation_observer_contract_ref": "relation-observer:ledger",
                 "root_observer_contract_ref": "observer:accounts",
                 "observation_phase": "BEFORE",
@@ -190,15 +233,15 @@ def _experiment() -> dict:
             },
             {
                 "schema": "qualibug.database-relation-observer-execution-draft.v1",
-                "draft_id": "draft:relation:after",
-                "relation_pair_id": "pair-1",
+                "draft_id": assertion["relation_after_draft_id"],
+                "relation_pair_id": assertion["relation_pair_id"],
                 "relation_observer_contract_ref": "relation-observer:ledger",
                 "root_observer_contract_ref": "observer:accounts",
                 "observation_phase": "AFTER",
                 "required": True,
             },
         ],
-        "assertions": [_assertion()],
+        "assertions": [assertion],
         "field_oracle_runtime_contract": {
             "schema_version": "qualibug.field-oracle-runtime-contract.v1",
             "status": "RESOLVED",
@@ -209,14 +252,27 @@ def _experiment() -> dict:
 
 
 def test_contract_oracle_owns_cross_table_delta_violation() -> None:
-    experiment = _experiment()
+    assertion = _assertion()
+    experiment = _experiment(assertion)
     root_receipts = [
-        _root_phase("100", "BEFORE", "draft:accounts:before"),
-        _root_phase("85", "AFTER", "draft:accounts:after"),
+        _root_phase("100", "BEFORE", assertion["root_before_draft_id"]),
+        _root_phase("85", "AFTER", assertion["root_after_draft_id"]),
     ]
     relation_receipts = [
-        _relation_phase("20", 1, "BEFORE", "draft:relation:before"),
-        _relation_phase("30", 2, "AFTER", "draft:relation:after"),
+        _relation_phase(
+            "20",
+            1,
+            "BEFORE",
+            assertion["relation_before_draft_id"],
+            assertion["relation_pair_id"],
+        ),
+        _relation_phase(
+            "30",
+            2,
+            "AFTER",
+            assertion["relation_after_draft_id"],
+            assertion["relation_pair_id"],
+        ),
     ]
     root_aggregate = aggregate_database_observer_phase_receipts(
         {
@@ -246,7 +302,7 @@ def test_contract_oracle_owns_cross_table_delta_violation() -> None:
         for row in relation_aggregate["evidence"][
             "approved_database_relation_snapshots"
         ]
-    } == {"pair-1"}
+    } == {assertion["relation_pair_id"]}
 
     treatment = build_contract_evidence_receipt(
         kind="treatment",
@@ -282,6 +338,8 @@ def test_contract_oracle_owns_cross_table_delta_violation() -> None:
     assert failed["reason_code"] == (
         "DATABASE_RELATION_DELTA_CONSERVATION_VIOLATED"
     )
+    assert failed["actual"]["binding_match"] is True
+    assert failed["actual"]["semantic_pair_match"] is True
     assert failed["actual"]["relation_pair_match"] is True
     assert failed["actual"]["root_delta"] == "-15"
     assert failed["actual"]["relation_delta"] == "10"
