@@ -107,5 +107,7 @@ def test_openapi_parser_decodes_operation_prose_without_creating_text_rule():
     assert operation["interface_id"] == "api:POST:/payments"
     assert operation["operation_id"] == "submitPayment"
     assert operation["openapi_description"] == IDEMPOTENCY
-    assert operation["description"] == IDEMPOTENCY
     assert IDEMPOTENCY in operation["source_excerpt"]
+    assert operation["source_excerpt_authority"] == (
+        "OPENAPI_OPERATION_SUMMARY_DESCRIPTION"
+    )
