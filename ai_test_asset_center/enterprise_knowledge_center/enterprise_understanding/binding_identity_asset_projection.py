@@ -13,6 +13,7 @@ _REQUEST_COLLECTIONS = (
     "body_fields",
     "form_fields",
 )
+_EVENT_OBSERVER_KIND = "SOURCE_EVENT_DELIVERY_OBSERVER"
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
@@ -25,6 +26,16 @@ def _plan_slots(plan: dict[str, Any]) -> Iterable[dict[str, Any]]:
         yield from _dicts(request.get(collection))
 
 
+def _observer_refs(row: dict[str, Any]) -> set[str]:
+    return {
+        text(value)
+        for value in as_list(
+            as_dict(row.get("binding_identity_refs")).get("observer_binding_refs")
+        )
+        if text(value)
+    }
+
+
 def _identity_relationships(asset: dict[str, Any]) -> list[dict[str, Any]]:
     graph = as_dict(asset.get("binding_identity_graph"))
     rows: list[dict[str, Any]] = []
@@ -35,7 +46,12 @@ def _identity_relationships(asset: dict[str, Any]) -> list[dict[str, Any]]:
             if binding_id and surface_id:
                 rows.append(
                     {
-                        "edge_id": stable_id("edge", "implementation_binding_to_action_surface", binding_id, surface_id),
+                        "edge_id": stable_id(
+                            "edge",
+                            "implementation_binding_to_action_surface",
+                            binding_id,
+                            surface_id,
+                        ),
                         "from": binding_id,
                         "to": surface_id,
                         "relation": "implementation_binding_to_action_surface",
@@ -50,7 +66,12 @@ def _identity_relationships(asset: dict[str, Any]) -> list[dict[str, Any]]:
         if surface_ref and field_id:
             rows.append(
                 {
-                    "edge_id": stable_id("edge", "action_surface_to_contract_field", surface_ref, field_id),
+                    "edge_id": stable_id(
+                        "edge",
+                        "action_surface_to_contract_field",
+                        surface_ref,
+                        field_id,
+                    ),
                     "from": surface_ref,
                     "to": field_id,
                     "relation": "action_surface_to_contract_field",
@@ -65,7 +86,12 @@ def _identity_relationships(asset: dict[str, Any]) -> list[dict[str, Any]]:
             if value_id and field_ref:
                 rows.append(
                     {
-                        "edge_id": stable_id("edge", "runtime_value_to_contract_field", value_id, field_ref),
+                        "edge_id": stable_id(
+                            "edge",
+                            "runtime_value_to_contract_field",
+                            value_id,
+                            field_ref,
+                        ),
                         "from": value_id,
                         "to": field_ref,
                         "relation": "runtime_value_to_contract_field",
@@ -74,13 +100,63 @@ def _identity_relationships(asset: dict[str, Any]) -> list[dict[str, Any]]:
                         "derivation": "binding_identity_compiler",
                     }
                 )
-    return rows
+    for observer in _dicts(graph.get("observer_bindings")):
+        observer_id = text(observer.get("observer_binding_id"))
+        binding_ref = text(observer.get("implementation_binding_ref"))
+        if observer_id and binding_ref:
+            rows.append(
+                {
+                    "edge_id": stable_id(
+                        "edge",
+                        "implementation_binding_to_observer",
+                        binding_ref,
+                        observer_id,
+                    ),
+                    "from": binding_ref,
+                    "to": observer_id,
+                    "relation": "implementation_binding_to_observer",
+                    "status": "accepted",
+                    "confidence": 1.0,
+                    "derivation": "binding_identity_compiler",
+                }
+            )
+        event_contract_ref = text(observer.get("event_contract_ref"))
+        if observer_id and event_contract_ref:
+            rows.append(
+                {
+                    "edge_id": stable_id(
+                        "edge",
+                        "observer_to_event_contract",
+                        observer_id,
+                        event_contract_ref,
+                    ),
+                    "from": observer_id,
+                    "to": event_contract_ref,
+                    "relation": "observer_to_event_contract",
+                    "status": "accepted",
+                    "confidence": 1.0,
+                    "derivation": "exact_formal_event_contract_identity",
+                }
+            )
+    return list(
+        {
+            text(row.get("edge_id")): row
+            for row in rows
+            if text(row.get("edge_id"))
+        }.values()
+    )
 
 
 def finalize_binding_identity_projection(
     asset: dict[str, Any], model: dict[str, Any]
 ) -> dict[str, Any]:
     graph = as_dict(asset.get("binding_identity_graph"))
+    observers = _dicts(graph.get("observer_bindings"))
+    event_observers = [
+        row
+        for row in observers
+        if text(row.get("binding_kind")) == _EVENT_OBSERVER_KIND
+    ]
     plans = _dicts(asset.get("runtime_plans"))
     materializations = _dicts(asset.get("runtime_materializations"))
     plan_slots = [slot for plan in plans for slot in _plan_slots(plan)]
@@ -94,6 +170,11 @@ def finalize_binding_identity_projection(
     formal_materializations = [
         row for row in materializations if bool(row.get("formal_runtime_materialization"))
     ]
+    formal_plan_by_id = {
+        text(row.get("plan_id")): row
+        for row in formal_plans
+        if text(row.get("plan_id"))
+    }
     missing_plan_action = sum(
         1
         for row in formal_plans
@@ -105,12 +186,24 @@ def finalize_binding_identity_projection(
     missing_materialization_action = sum(
         1
         for row in formal_materializations
-        if not text(as_dict(row.get("binding_identity_refs")).get("action_surface_binding_ref"))
+        if not text(
+            as_dict(row.get("binding_identity_refs")).get(
+                "action_surface_binding_ref"
+            )
+        )
     )
     missing_materialized_fields = sum(
         1
         for row in materialized_values
         if not text(row.get("contract_field_binding_ref"))
+    )
+    observer_identity_drift = sum(
+        1
+        for materialization in formal_materializations
+        if _observer_refs(materialization)
+        != _observer_refs(
+            formal_plan_by_id.get(text(materialization.get("runtime_plan_ref"))) or {}
+        )
     )
     unknowns = _dicts(asset.get("binding_identity_unknowns"))
     blocked = bool(
@@ -119,17 +212,27 @@ def finalize_binding_identity_projection(
         or missing_plan_fields
         or missing_materialization_action
         or missing_materialized_fields
+        or observer_identity_drift
     )
     prior = dict(as_dict(asset.get("binding_identity_gate")))
     status = "BLOCKED_BINDING_IDENTITY_INCOMPLETE" if blocked else "PASS"
     metrics = dict(as_dict(prior.get("metrics")))
     metrics.update(
         {
-            "action_surface_binding_count": len(_dicts(graph.get("action_surface_bindings"))),
-            "contract_field_binding_count": len(_dicts(graph.get("contract_field_bindings"))),
-            "runtime_value_binding_count": len(_dicts(graph.get("runtime_value_bindings"))),
-            "observer_binding_count": len(_dicts(graph.get("observer_bindings"))),
-            "formal_ui_surface_binding_count": len(_dicts(graph.get("formal_ui_surface_bindings"))),
+            "action_surface_binding_count": len(
+                _dicts(graph.get("action_surface_bindings"))
+            ),
+            "contract_field_binding_count": len(
+                _dicts(graph.get("contract_field_bindings"))
+            ),
+            "runtime_value_binding_count": len(
+                _dicts(graph.get("runtime_value_bindings"))
+            ),
+            "observer_binding_count": len(observers),
+            "formal_event_observer_binding_count": len(event_observers),
+            "formal_ui_surface_binding_count": len(
+                _dicts(graph.get("formal_ui_surface_bindings"))
+            ),
             "formal_runtime_plan_count": len(formal_plans),
             "runtime_plan_request_slot_count": len(plan_slots),
             "required_runtime_plan_request_slot_count": len(required_slots),
@@ -139,18 +242,29 @@ def finalize_binding_identity_projection(
             "runtime_plan_slot_with_runtime_value_ref_count": sum(
                 1 for row in plan_slots if text(row.get("runtime_value_binding_ref"))
             ),
+            "runtime_plan_with_observer_identity_count": sum(
+                1 for row in formal_plans if _observer_refs(row)
+            ),
             "formal_runtime_materialization_count": len(formal_materializations),
             "materialized_request_value_count": len(materialized_values),
             "materialized_value_with_contract_field_ref_count": sum(
-                1 for row in materialized_values if text(row.get("contract_field_binding_ref"))
+                1
+                for row in materialized_values
+                if text(row.get("contract_field_binding_ref"))
             ),
             "materialized_value_with_runtime_value_ref_count": sum(
-                1 for row in materialized_values if text(row.get("runtime_value_binding_ref"))
+                1
+                for row in materialized_values
+                if text(row.get("runtime_value_binding_ref"))
+            ),
+            "materialization_with_observer_identity_count": sum(
+                1 for row in formal_materializations if _observer_refs(row)
             ),
             "missing_runtime_plan_action_identity_count": missing_plan_action,
             "missing_required_plan_field_identity_count": missing_plan_fields,
             "missing_materialization_action_identity_count": missing_materialization_action,
             "missing_materialized_field_identity_count": missing_materialized_fields,
+            "observer_identity_drift_count": observer_identity_drift,
             "binding_identity_unknown_count": len(unknowns),
         }
     )
@@ -180,15 +294,31 @@ def finalize_binding_identity_projection(
     projected = {
         "binding_identity_status": status,
         "binding_identity_ready": status == "PASS",
-        "binding_identity_action_surface_count": metrics["action_surface_binding_count"],
-        "binding_identity_contract_field_count": metrics["contract_field_binding_count"],
-        "binding_identity_runtime_value_count": metrics["runtime_value_binding_count"],
+        "binding_identity_action_surface_count": metrics[
+            "action_surface_binding_count"
+        ],
+        "binding_identity_contract_field_count": metrics[
+            "contract_field_binding_count"
+        ],
+        "binding_identity_runtime_value_count": metrics[
+            "runtime_value_binding_count"
+        ],
         "binding_identity_observer_count": metrics["observer_binding_count"],
-        "binding_identity_formal_ui_surface_count": metrics["formal_ui_surface_binding_count"],
+        "binding_identity_formal_event_observer_count": metrics[
+            "formal_event_observer_binding_count"
+        ],
+        "binding_identity_formal_ui_surface_count": metrics[
+            "formal_ui_surface_binding_count"
+        ],
+        "binding_identity_observer_drift_count": observer_identity_drift,
         "binding_identity_unknown_count": len(unknowns),
         "runtime_plan_status": as_dict(asset.get("runtime_plan_gate")).get("status"),
-        "runtime_plan_ready": bool(as_dict(asset.get("runtime_plan_gate")).get("entry_allowed")),
-        "runtime_materialization_status": as_dict(asset.get("runtime_materialization_gate")).get("status"),
+        "runtime_plan_ready": bool(
+            as_dict(asset.get("runtime_plan_gate")).get("entry_allowed")
+        ),
+        "runtime_materialization_status": as_dict(
+            asset.get("runtime_materialization_gate")
+        ).get("status"),
         "runtime_materialization_ready": bool(
             as_dict(asset.get("runtime_materialization_gate")).get("entry_allowed")
         ),
@@ -219,9 +349,9 @@ def finalize_binding_identity_projection(
                 "binding_identity_metrics": metrics,
                 "execution_allowed": False,
                 "operator_action": (
-                    "provide one exact source-backed interface/location/schema identity for every "
-                    "required request field and preserve it through Runtime Plan and Runtime "
-                    "Materialization; do not select by leaf name or source order"
+                    "provide exact source-backed action, request-field and observer identities "
+                    "and preserve them through Runtime Plan and Runtime Materialization; do "
+                    "not select by leaf name, source order or inferred event infrastructure"
                 ),
             }
         )
@@ -234,6 +364,8 @@ def finalize_binding_identity_projection(
             "binding_identity_leaf_name_selection_allowed": False,
             "binding_identity_source_order_selection_allowed": False,
             "binding_identity_relationships_projected": True,
+            "observer_identity_relationships_projected": True,
+            "observer_identity_must_match_materialization": True,
             "binding_identity_gate_required_before_probe_compilation": True,
         }
     )
