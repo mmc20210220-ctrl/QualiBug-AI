@@ -61,19 +61,32 @@ def _required_step_ids(experiment: dict[str, Any]) -> list[str]:
 
 
 def _fixture_requirement(experiment: dict[str, Any]) -> tuple[bool, str]:
-    """Return whether a fixture is required and its exact identity when known."""
+    """Return whether a fixture is required and its exact identity when known.
+
+    ``NOT_APPLICABLE`` is emitted only when every compiled fixture surface is
+    absent. A declared-but-unresolved fixture keeps an empty identity so normal
+    materialization and receipt validation fail closed instead of being waived.
+    """
     exp = _dict(experiment)
     fixture_contract = _dict(exp.get("disposable_fixture_contract"))
+    compile_receipt = _dict(exp.get("compile_receipt"))
     explicit_id = _text(
-        fixture_contract.get("fixture_id") or exp.get("fixture_id")
+        fixture_contract.get("fixture_id")
+        or exp.get("fixture_id")
+        or compile_receipt.get("fixture_contract_id")
     )
     if explicit_id:
         return True, explicit_id
-    if fixture_contract or _list(exp.get("setup_plan")):
+    if fixture_contract:
+        return True, ""
+    if _list(exp.get("required_fixtures")) or _list(exp.get("setup_plan")):
         return True, ""
     fixture_dag = _dict(exp.get("fixture_dag"))
-    if _list(fixture_dag.get("nodes")) or _list(
-        fixture_dag.get("setup_order")
+    if fixture_dag and (
+        _list(fixture_dag.get("nodes"))
+        or _list(fixture_dag.get("setup_order"))
+        or _text(fixture_dag.get("status")).upper()
+        not in {"", "READY", "NOT_REQUIRED", "NOT_APPLICABLE"}
     ):
         return True, ""
     for raw in _list(exp.get("binding_plan")):
@@ -85,6 +98,8 @@ def _fixture_requirement(experiment: dict[str, Any]) -> tuple[bool, str]:
         binding_fixture_id = _text(binding.get("fixture_id"))
         if binding_fixture_id:
             return True, binding_fixture_id
+        if _text(binding.get("target")).startswith("fixture:"):
+            return True, ""
     return False, _NOT_APPLICABLE
 
 
