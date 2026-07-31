@@ -21,6 +21,7 @@ _FORMAL_TYPES = frozenset(
 )
 _EXACT_ADDRESS_KINDS = frozenset({"EXACT_SOURCE_LOCATOR", "PAGE_BBOX"})
 _REASON = "SUPERSEDED_BY_STRUCTURE_FIRST_TYPED_AUTHORITY"
+_BLOCK_KIND = "BLOCKED_MULTIPLE_STRUCTURE_FIRST_TYPED_AUTHORITIES"
 
 
 def _text(value: Any) -> str:
@@ -77,13 +78,14 @@ def retire_duplicate_compatibility_typed_facts(asset: dict[str, Any]) -> dict[st
     retired: list[dict[str, Any]] = []
     ambiguous_authorities: list[dict[str, Any]] = []
     for key, fact_ids in authorities.items():
-        if len(set(fact_ids)) > 1:
+        unique_ids = sorted(set(fact_ids))
+        if len(unique_ids) > 1:
             ambiguous_authorities.append(
                 {
                     "fact_type": key[0],
                     "source_locator": key[1],
                     "statement_identity": key[2],
-                    "authority_fact_ids": sorted(set(fact_ids)),
+                    "authority_fact_ids": unique_ids,
                     "reason": "MULTIPLE_STRUCTURE_FIRST_TYPED_AUTHORITIES",
                 }
             )
@@ -146,15 +148,31 @@ def retire_duplicate_compatibility_typed_facts(asset: dict[str, Any]) -> dict[st
         "cross_statement_merge_allowed": False,
         "cross_locator_merge_allowed": False,
         "automatic_winner_used": False,
+        "silent_authority_ambiguity_allowed": False,
     }
+    gaps = [
+        dict(row)
+        for row in _list(asset.get("coverage_gaps"))
+        if isinstance(row, dict) and _text(row.get("kind")) != _BLOCK_KIND
+    ]
     if ambiguous_authorities:
         gate = _dict(asset.get("enterprise_comprehension_gate"))
-        gate["status"] = "BLOCKED_MULTIPLE_STRUCTURE_FIRST_TYPED_AUTHORITIES"
+        gate["status"] = _BLOCK_KIND
         gate["entry_allowed"] = False
         gate["required_operator_action"] = (
             "resolve duplicate structure-first typed authorities before promotion"
         )
         asset["enterprise_comprehension_gate"] = gate
+        gaps.append(
+            {
+                "kind": _BLOCK_KIND,
+                "gap_type": "multiple_structure_first_typed_authorities",
+                "source_id": "*",
+                "ambiguous_structure_authorities": ambiguous_authorities,
+                "operator_action": gate["required_operator_action"],
+            }
+        )
+    asset["coverage_gaps"] = gaps
     governance = _dict(asset.get("governance"))
     governance.update(
         {
@@ -162,6 +180,7 @@ def retire_duplicate_compatibility_typed_facts(asset: dict[str, Any]) -> dict[st
             "duplicate_compatibility_typed_shells_are_retired": True,
             "typed_fact_authority_retirement_merges_cross_statement": False,
             "typed_fact_authority_retirement_merges_cross_locator": False,
+            "typed_fact_authority_ambiguity_is_visible_coverage_gap": True,
         }
     )
     asset["governance"] = governance
