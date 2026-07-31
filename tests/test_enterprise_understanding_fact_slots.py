@@ -84,6 +84,67 @@ def test_fact_slot_measurement_does_not_choose_between_duplicate_candidates() ->
     assert set(result["alignments"][0]["candidate_ids"]) == {"fact:1", "fact:2"}
 
 
+def test_fact_type_disambiguates_same_operation_and_object() -> None:
+    permission = _fact("fact:permission")
+    transition = _fact("fact:transition")
+    transition["fact_type"] = "STATE_TRANSITION"
+    transition["modality"] = "ASSERTS"
+    asset = {
+        "business_fact_ledger": {
+            "schema": "qualibug.business-fact-ledger.v2",
+            "items": [permission, transition],
+        }
+    }
+
+    result = evaluate_business_fact_slots(_ground_truth(), asset)
+
+    assert result["metrics"]["ambiguous_fact_count"] == 0
+    assert result["alignments"][0]["candidate_id"] == "fact:permission"
+    assert result["candidate_selection_contract"]["fact_type_exact"] is True
+
+
+def test_complete_object_coordinates_disambiguate_relation_targets() -> None:
+    ground_truth = {
+        "business_rules": [
+            {
+                "ground_truth_id": "gt:relation:header",
+                "annotation_status": "CONFIRMED",
+                "criticality": "P1",
+                "operation": "COMPOSED_OF",
+                "object_refs": ["采购订单", "订单头"],
+                "fact_type": "OBJECT_RELATION",
+            }
+        ],
+        "business_behaviors": [],
+    }
+    header = {
+        "fact_id": "fact:header",
+        "fact_type": "OBJECT_RELATION",
+        "status": "ACCEPTED",
+        "subject": {"actor_refs": [], "entity_refs": ["采购订单"]},
+        "object": {"entity_refs": ["订单头"]},
+        "predicate": "COMPOSED_OF",
+    }
+    line = {
+        "fact_id": "fact:line",
+        "fact_type": "OBJECT_RELATION",
+        "status": "ACCEPTED",
+        "subject": {"actor_refs": [], "entity_refs": ["采购订单"]},
+        "object": {"entity_refs": ["订单明细"]},
+        "predicate": "COMPOSED_OF",
+    }
+    asset = {"business_fact_ledger": {"items": [header, line]}}
+
+    result = evaluate_business_fact_slots(ground_truth, asset)
+
+    assert result["metrics"]["ambiguous_fact_count"] == 0
+    assert result["alignments"][0]["candidate_id"] == "fact:header"
+    assert result["alignments"][0]["slot_alignments"]["object_refs"]["status"] == "EXACT"
+    assert result["candidate_selection_contract"][
+        "ground_truth_objects_must_be_subset_of_candidate_objects"
+    ] is True
+
+
 def test_fact_slot_measurement_stays_not_measured_without_slot_annotations() -> None:
     ground_truth = {
         "business_rules": [
