@@ -93,14 +93,18 @@ def _decision(rule_id, evidence_ref):
     }
 
 
-def test_exact_decision_command_replay_is_idempotent_not_a_conflict():
+def _rule_and_receipt():
     first = enrich_asset_with_governed_implicit_rule_projection(_asset())
     rule_id = next(
         row["rule_id"]
         for row in first["rule_library"]
         if row.get("derivation") == "implicit_rule_entailment"
     )
-    receipt = _runtime(rule_id)
+    return first, rule_id, _runtime(rule_id)
+
+
+def test_exact_decision_command_replay_is_idempotent_not_a_conflict():
+    first, rule_id, receipt = _rule_and_receipt()
     evidence_id = receipt["rules"][0]["evidence"][0]["evidence_id"]
     first["implicit_rule_runtime_evolution"] = receipt
     first["implicit_rule_authority_decisions"] = [_decision(rule_id, evidence_id)]
@@ -114,17 +118,35 @@ def test_exact_decision_command_replay_is_idempotent_not_a_conflict():
     assert twice["implicit_rule_governance_ingress_receipt"][
         "exact_replayed_decisions_ignored"
     ] == 1
+    assert twice["implicit_rule_runtime_evolution"]["receipt_id"] == receipt[
+        "receipt_id"
+    ]
     assert not any(row.get("rule_id") == rule_id for row in twice["rule_library"])
 
 
+def test_derived_decision_id_replay_is_also_idempotent():
+    first, rule_id, receipt = _rule_and_receipt()
+    evidence_id = receipt["rules"][0]["evidence"][0]["evidence_id"]
+    command = _decision(rule_id, evidence_id)
+    command.pop("decision_id")
+    first["implicit_rule_runtime_evolution"] = receipt
+    first["implicit_rule_authority_decisions"] = [command]
+
+    once = enrich_asset_with_governed_implicit_rule_projection(first)
+    twice = enrich_asset_with_governed_implicit_rule_projection(deepcopy(once))
+
+    assert once["implicit_rule_authority_decision_ledger"]["applied_count"] == 1
+    assert twice["implicit_rule_authority_decision_ledger"]["conflicts"] == []
+    assert twice["implicit_rule_governance_ingress_receipt"][
+        "exact_replayed_decisions_ignored"
+    ] == 1
+    assert twice["implicit_rule_governance_ingress_receipt"][
+        "derived_decision_identity_used_for_replay_detection"
+    ] is True
+
+
 def test_batch_receipt_id_cannot_replace_per_rule_runtime_evidence_id():
-    first = enrich_asset_with_governed_implicit_rule_projection(_asset())
-    rule_id = next(
-        row["rule_id"]
-        for row in first["rule_library"]
-        if row.get("derivation") == "implicit_rule_entailment"
-    )
-    receipt = _runtime(rule_id)
+    first, rule_id, receipt = _rule_and_receipt()
     first["implicit_rule_runtime_evolution"] = receipt
     first["implicit_rule_authority_decisions"] = [
         _decision(rule_id, receipt["receipt_id"])
@@ -140,4 +162,10 @@ def test_batch_receipt_id_cannot_replace_per_rule_runtime_evidence_id():
     assert result["implicit_rule_governance_ingress_receipt"][
         "batch_receipt_id_is_not_runtime_evidence_id"
     ] is True
+    assert result["implicit_rule_governance_ingress_receipt"][
+        "runtime_batch_receipt_preserved"
+    ] is True
+    assert result["implicit_rule_runtime_evolution"]["receipt_id"] == receipt[
+        "receipt_id"
+    ]
     assert any(row.get("rule_id") == rule_id for row in result["rule_library"])
