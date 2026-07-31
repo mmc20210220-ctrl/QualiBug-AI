@@ -1,7 +1,10 @@
-"""Legacy HTML page renders and SPA static serving for PrivatePilotHandler."""
+"""Legacy page renders and SPA static serving."""
 from __future__ import annotations
 
+import json
+import mimetypes
 import os
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -9,70 +12,132 @@ from typing import Any
 from .private_pilot_project_assets import _known_project_exists
 
 
+def _within(candidate: Path, allowed: Path) -> bool:
+    try:
+        candidate.resolve().relative_to(allowed.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 class PageRenderMixin:
     def _load_scan_history(self, project: str, root: Path) -> dict[str, Any]:
-        """Load scan history from disk."""
-        import json as _json
-        history_path = root / "platform_outputs" / project / "pipeline_reports" / "scan_history.json"
-        if not history_path.exists():
-            latest_path = root / "platform_outputs" / project / "pipeline_reports" / "latest_pipeline_report.json"
-            if latest_path.exists():
-                try:
-                    latest = _json.loads(latest_path.read_text(encoding="utf-8"))
-                except Exception:
-                    latest = {}
+        history_path = (
+            root
+            / "platform_outputs"
+            / project
+            / "pipeline_reports"
+            / "scan_history.json"
+        )
+        if history_path.exists() and history_path.is_file():
+            try:
+                payload = json.loads(history_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
                 return {
-                    "ok": True,
-                    "history": [latest],
-                    "compatibility_mode": "legacy_findings_report_v1",
-                    "canonical_api_family": "/api/v1/projects/{projectId}/*",
+                    "ok": False,
+                    "error": "SCAN_HISTORY_INVALID",
+                    "message": str(exc)[:300],
+                    "history": [],
                 }
+            if not isinstance(payload, list):
+                return {
+                    "ok": False,
+                    "error": "SCAN_HISTORY_INVALID",
+                    "history": [],
+                }
+            return {"ok": True, "history": payload}
+        latest_path = (
+            root
+            / "platform_outputs"
+            / project
+            / "pipeline_reports"
+            / "latest_pipeline_report.json"
+        )
+        if not latest_path.exists() or not latest_path.is_file():
             return {"ok": True, "history": []}
         try:
-            return {"ok": True, "history": _json.loads(history_path.read_text(encoding="utf-8"))}
-        except Exception:
-            return {"ok": True, "history": []}
+            latest = json.loads(latest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return {
+                "ok": False,
+                "error": "LATEST_PIPELINE_REPORT_INVALID",
+                "message": str(exc)[:300],
+                "history": [],
+            }
+        return {
+            "ok": True,
+            "history": [latest] if isinstance(latest, dict) else [],
+            "compatibility_mode": "legacy_findings_report_v1",
+            "canonical_api_family": "/api/v1/projects/{projectId}/*",
+        }
 
     def _list_project_inputs(self, project: str, root: Path) -> dict[str, Any]:
-        """List project input files as knowledge sources from disk."""
-        import json as _json, os as _os, time as _time
-        input_dir = root / "platform_inputs" / project
-        sources = []
-        if input_dir.exists():
-            config_path = input_dir / "real_project_config.json"
-            source_dir = input_dir
-            if config_path.exists():
-                try:
-                    config = _json.loads(config_path.read_text(encoding="utf-8"))
-                    src = config.get("source_dataset", "")
-                    if src and _os.path.isdir(src):
-                        source_dir = Path(src)
-                except Exception:
-                    pass
-            for f in sorted(source_dir.iterdir()):
-                if f.is_file() and not f.name.startswith("."):
-                    ext = f.suffix.lower()
-                    if ext in (".md",):
-                        stype = "PRD" if "prd" in f.name.lower() else "\u4e1a\u52a1\u6587\u6863"
-                    elif ext in (".yaml", ".yml", ".json"):
-                        stype = "OpenAPI" if "openapi" in f.name.lower() else "\u89c4\u8303\u6587\u4ef6"
-                    elif ext == ".sql":
-                        stype = "\u6570\u636e\u5e93 Schema"
+        """List only files physically contained in this project's input root."""
+
+        project_input = (root / "platform_inputs" / project).resolve()
+        if not project_input.exists() or not project_input.is_dir():
+            return {"ok": True, "sources": []}
+        source_dir = project_input
+        config_path = project_input / "real_project_config.json"
+        ignored_external_dataset = ""
+        if config_path.exists() and config_path.is_file():
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                config = {}
+            if isinstance(config, dict):
+                declared = str(config.get("source_dataset") or "").strip()
+                if declared:
+                    candidate = Path(declared)
+                    if not candidate.is_absolute():
+                        candidate = project_input / candidate
+                    candidate = candidate.resolve()
+                    if _within(candidate, project_input) and candidate.is_dir():
+                        source_dir = candidate
                     else:
-                        stype = "\u4e1a\u52a1\u6587\u6863"
-                    sources.append({
-                        "source_id": f"input-{f.name}",
-                        "filename": f.name,
-                        "source_type": stype,
-                        "status": "active",
-                        "size_bytes": f.stat().st_size,
-                        "created_at_utc": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(f.stat().st_mtime)),
-                        "uploaded_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(f.stat().st_mtime)),
-                    })
-        return {"ok": True, "sources": sources}
+                        ignored_external_dataset = declared
+
+        sources: list[dict[str, Any]] = []
+        for path in sorted(source_dir.rglob("*")):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            if not _within(path, project_input):
+                continue
+            extension = path.suffix.lower()
+            name = path.name.lower()
+            if extension == ".md":
+                source_type = "PRD" if "prd" in name else "业务文档"
+            elif extension in {".yaml", ".yml", ".json"}:
+                source_type = "OpenAPI" if "openapi" in name else "规范文件"
+            elif extension == ".sql":
+                source_type = "数据库 Schema"
+            else:
+                source_type = "业务文档"
+            stat = path.stat()
+            relative = path.relative_to(project_input).as_posix()
+            sources.append(
+                {
+                    "source_id": f"input-{relative}",
+                    "filename": relative,
+                    "source_type": source_type,
+                    "status": "active",
+                    "size_bytes": stat.st_size,
+                    "created_at_utc": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)
+                    ),
+                    "uploaded_at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)
+                    ),
+                }
+            )
+        return {
+            "ok": True,
+            "sources": sources,
+            "external_source_dataset_ignored": ignored_external_dataset,
+            "source_root": str(source_dir.relative_to(root.resolve())).replace("\\", "/"),
+        }
 
     def _render_onboard(self, project: str, root: Path) -> None:
-        """Render a minimal project onboarding page."""
         from .product_ui import product_shell, section
 
         known = _known_project_exists(root, project)
@@ -80,110 +145,129 @@ class PageRenderMixin:
         body = section(
             "Project onboarding",
             "Import PRD, OpenAPI and business documents, then configure the target environment before running discovery.",
-            f"<p class='text-muted'>{status}</p><p><a class='btn btn-primary' href='/materials?project={project}'>Open materials</a> <a class='btn btn-secondary' href='/settings?project={project}'>Open settings</a></p>",
+            (
+                f"<p class='text-muted'>{status}</p>"
+                f"<p><a class='btn btn-primary' href='/materials?project={project}'>Open materials</a> "
+                f"<a class='btn btn-secondary' href='/settings?project={project}'>Open settings</a></p>"
+            ),
             section_id="onboarding",
         )
-        page = product_shell(
-            title="Project onboarding",
-            project_id=project,
-            active="",
-            eyebrow="Onboarding",
-            headline="Start project onboarding",
-            description="Complete the minimum inputs required for grounded discovery.",
-            body=body,
+        return self._html(
+            product_shell(
+                title="Project onboarding",
+                project_id=project,
+                active="",
+                eyebrow="Onboarding",
+                headline="Start project onboarding",
+                description="Complete the minimum grounded inputs.",
+                body=body,
+            )
         )
-        self._html(page)
 
     def _render_findings(self, project: str, root: Path) -> None:
-        """Render a minimal findings page for the private pilot server."""
+        del root
         from .product_ui import product_shell, section
 
         body = section(
             "Findings",
-            "Open the product frontend for the full evidence chain and remediation workflow.",
-            f"<p><a class='btn btn-primary' href='/findings?project={project}'>Open findings</a> <a class='btn btn-secondary' href='/evidence?project={project}'>Open evidence</a></p>",
+            "Open the product frontend for the full evidence chain and replay workflow.",
+            (
+                f"<p><a class='btn btn-primary' href='/findings?project={project}'>Open findings</a> "
+                f"<a class='btn btn-secondary' href='/evidence?project={project}'>Open evidence</a></p>"
+            ),
             section_id="findings",
         )
-        page = product_shell(
-            title="Findings",
-            project_id=project,
-            active="findings",
-            eyebrow="Evidence",
-            headline="Validated findings",
-            description="Customer-safe summary of validated product risks.",
-            body=body,
+        return self._html(
+            product_shell(
+                title="Findings",
+                project_id=project,
+                active="findings",
+                eyebrow="Evidence",
+                headline="Validated findings",
+                description="Customer-safe validated product risks.",
+                body=body,
+            )
         )
-        self._html(page)
 
     def _render_report_html(self, project: str, root: Path) -> None:
-        """Render the customer-safe HTML report and persist the delivery guard."""
         from .customer_delivery_guard import persist_customer_delivery_guard
         from .customer_report_boundary import sanitize_customer_report_html
         from .customer_safe_report import render_customer_safe_report_html
 
-        html = sanitize_customer_report_html(render_customer_safe_report_html(project, root))
-        try:
-            persist_customer_delivery_guard(project, root)
-        except Exception:
-            # Report rendering must remain available; the HTML still shows the
-            # human-readable release gate and handoff boundary if guard persistence
-            # fails due to filesystem permissions or a transient write error.
-            pass
+        html = sanitize_customer_report_html(
+            render_customer_safe_report_html(project, root)
+        )
+        persist_customer_delivery_guard(project, root)
         return self._html(html)
 
-
     def _render_settings(self, project: str, root: Path) -> None:
-        """Render a minimal settings page for the private pilot server."""
-        from .product_ui import product_shell, section, h
+        del root
+        from .product_ui import h, product_shell, section
 
         llm_health = self._llm_health()
         llm_status = str(llm_health.get("status") or "offline")
         llm_label = str(llm_health.get("label") or "Not configured")
         body = section(
             "System settings",
-            "Use the product frontend for full customer, topology, connector and LLM configuration.",
-            f"<p>LLM status: <strong>{h(llm_label)}</strong> ({h(llm_status)})</p><p><a class='btn btn-primary' href='/settings?project={project}'>Open settings</a></p>",
+            "Use the product frontend for customer, topology, connector and LLM configuration.",
+            (
+                f"<p>LLM status: <strong>{h(llm_label)}</strong> ({h(llm_status)})</p>"
+                f"<p><a class='btn btn-primary' href='/settings?project={project}'>Open settings</a></p>"
+            ),
             section_id="settings",
         )
-        page = product_shell(
-            title="System settings",
-            project_id=project,
-            active="settings",
-            eyebrow="Settings",
-            headline="System configuration",
-            description="Secrets are never rendered back to the browser.",
-            body=body,
-            llm_status=llm_status,
+        return self._html(
+            product_shell(
+                title="System settings",
+                project_id=project,
+                active="settings",
+                eyebrow="Settings",
+                headline="System configuration",
+                description="Secrets are never rendered to the browser.",
+                body=body,
+                llm_status=llm_status,
+            )
         )
-        self._html(page)
 
-    def _serve_frontend(self, parsed: "urllib.parse.ParseResult", root: Path) -> None:
-        """Serve the prebuilt customer pilot SPA (frontend/dist). Public — called before
-        the auth gate so the login page itself is reachable. Path-traversal hardened."""
-        import mimetypes
-        _dist_env = os.environ.get("QUALIBUG_FRONTEND_DIST")
-        _dist = Path(_dist_env) if _dist_env else (Path(__file__).resolve().parent.parent / "frontend" / "dist")
-        _dist_resolved = _dist.resolve()
-        _rel = parsed.path.lstrip("/")
-        if _rel in ("", "index.html"):
-            _target = _dist_resolved / "index.html"
-        elif _rel.startswith("assets/"):
-            _target = (_dist_resolved / _rel).resolve()
+    def _serve_frontend(
+        self,
+        parsed: "urllib.parse.ParseResult",
+        root: Path,
+    ) -> None:
+        del root
+        dist_value = os.environ.get("QUALIBUG_FRONTEND_DIST")
+        dist = (
+            Path(dist_value)
+            if dist_value
+            else Path(__file__).resolve().parent.parent / "frontend" / "dist"
+        ).resolve()
+        relative = parsed.path.lstrip("/")
+        if relative in {"", "index.html"}:
+            target = dist / "index.html"
+        elif relative.startswith("assets/"):
+            target = (dist / relative).resolve()
         else:
-            # SPA client-side route (e.g. /login, /settings, /scan) -> shell
-            _target = _dist_resolved / "index.html"
-        if _target != _dist_resolved and _dist_resolved not in _target.parents:
+            target = dist / "index.html"
+        if not _within(target, dist):
             return self._json({"ok": False, "error": "FORBIDDEN"}, 403)
-        if not _target.exists() or not _target.is_file():
-            return self._json({"ok": False, "error": "UI_NOT_BUILT",
-                               "message": "frontend/dist 未构建，请先构建前端或设置 QUALIBUG_FRONTEND_DIST。"}, 404)
+        if not target.exists() or not target.is_file():
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "UI_NOT_BUILT",
+                    "message": "frontend/dist 未构建或未配置。",
+                },
+                404,
+            )
         try:
-            _data = _target.read_bytes()
-        except Exception:
+            data = target.read_bytes()
+        except OSError:
             return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
-        _ctype = mimetypes.guess_type(str(_target))[0] or "application/octet-stream"
+        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         self.send_response(200)
-        self.send_header("Content-Type", _ctype)
-        self.send_header("Content-Length", str(len(_data)))
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store" if target.name == "index.html" else "public, max-age=31536000, immutable")
         self.end_headers()
-        self.wfile.write(_data)
+        self.wfile.write(data)
