@@ -24,16 +24,16 @@ def _text(value: Any) -> str:
 
 
 def _accepted(row: dict[str, Any]) -> bool:
+    explicit = row.get("operation_accepted")
+    if isinstance(explicit, bool):
+        return explicit
     try:
         code = int(row.get("status_code") or 0)
     except (TypeError, ValueError):
         code = 0
     return (
-        row.get("operation_accepted") is True
-        or (
-            _text(row.get("final_status")).upper() == "EXECUTED"
-            and 200 <= code < 400
-        )
+        _text(row.get("final_status")).upper() == "EXECUTED"
+        and 200 <= code < 400
     )
 
 
