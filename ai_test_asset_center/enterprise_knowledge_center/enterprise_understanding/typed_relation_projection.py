@@ -3,10 +3,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 RECEIPT_SCHEMA = "qualibug.typed-object-relation-projection.v1"
 _DERIVATION = "typed_fact_object_relation"
+_COORDINATE_GRAMMAR_RE = re.compile(
+    r"如果|若|一旦|则|否则|只有|仅当|必须|应当|务必|不得|严禁|禁止|"
+    r"不允许|不可|不能|可以|允许|有权|无权|并且|同时满足|以及|或者|"
+    r"其中之一|每个|每张|每条|每份|一个|多个|多条|若干|(?<![并])且(?![不])"
+)
+_CONNECTOR_ONLY_RE = re.compile(r"^(?:并|且|和|与|或|及|以及|则|否则)$")
 
 
 def _text(value: Any) -> str:
@@ -39,20 +46,69 @@ def _relation_endpoints(fact: dict[str, Any]) -> tuple[list[str], list[str]]:
     return sources, targets
 
 
+def _coordinate_is_grammar_fragment(value: str) -> bool:
+    coordinate = _text(value)
+    return bool(
+        not coordinate
+        or _CONNECTOR_ONLY_RE.fullmatch(coordinate)
+        or _COORDINATE_GRAMMAR_RE.search(coordinate)
+    )
+
+
 def _evidence(fact: dict[str, Any]) -> dict[str, Any]:
     spans = [dict(row) for row in _list(fact.get("source_spans")) if isinstance(row, dict)]
     if not spans:
         return {}
-    span = spans[0]
+    exact = next(
+        (
+            span
+            for span in spans
+            if _text(span.get("document_block_id"))
+            or _text(span.get("address_kind")) in {"EXACT_SOURCE_LOCATOR", "PAGE_BBOX"}
+        ),
+        spans[0],
+    )
     return {
-        "source_id": span.get("source_id"),
-        "source_locator": span.get("locator") or span.get("source_locator"),
-        "quote": span.get("quote") or fact.get("raw_statement"),
-        "quote_hash": span.get("quote_hash"),
-        "document_block_id": span.get("document_block_id"),
-        "address_kind": span.get("address_kind"),
+        "source_id": exact.get("source_id"),
+        "source_locator": exact.get("locator") or exact.get("source_locator"),
+        "quote": exact.get("quote") or fact.get("raw_statement"),
+        "quote_hash": exact.get("quote_hash"),
+        "document_block_id": exact.get("document_block_id"),
+        "address_kind": exact.get("address_kind"),
         "fact_id": fact.get("fact_id"),
         "derivation": _DERIVATION,
+    }
+
+
+def _reject_grammar_fragment_relation(
+    fact: dict[str, Any],
+    *,
+    sources: list[str],
+    targets: list[str],
+    relation: str,
+    invalid_coordinates: list[str],
+) -> dict[str, Any]:
+    reason = "TYPED_OBJECT_RELATION_COORDINATE_GRAMMAR_FRAGMENT"
+    fact["status"] = "REJECTED"
+    fact["formal_promotion_allowed"] = False
+    ambiguities = [_text(value) for value in _list(fact.get("ambiguities")) if _text(value)]
+    if reason not in ambiguities:
+        ambiguities.append(reason)
+    fact["ambiguities"] = ambiguities
+    fact["typed_relation_coordinate_validation"] = {
+        "status": "REJECTED",
+        "reason": reason,
+        "invalid_coordinates": invalid_coordinates,
+        "automatic_endpoint_repair_allowed": False,
+        "operator_selection_required": False,
+    }
+    return {
+        "fact_id": fact.get("fact_id"),
+        "source_candidates": sources,
+        "target_candidates": targets,
+        "relation": relation,
+        "invalid_coordinates": invalid_coordinates,
+        "reason": reason,
     }
 
 
@@ -80,12 +136,31 @@ def project_typed_object_relations(asset: dict[str, Any]) -> dict[str, Any]:
         for row in existing
     }
     projected: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
     marked = 0
     for fact in typed_facts:
         sources, targets = _relation_endpoints(fact)
         relation = _text(fact.get("predicate") or fact.get("relation_type")).upper()
         evidence = _evidence(fact)
+        invalid_coordinates = sorted(
+            {
+                coordinate
+                for coordinate in [*sources, *targets]
+                if _coordinate_is_grammar_fragment(coordinate)
+            }
+        )
+        if invalid_coordinates:
+            rejected.append(
+                _reject_grammar_fragment_relation(
+                    fact,
+                    sources=sources,
+                    targets=targets,
+                    relation=relation,
+                    invalid_coordinates=invalid_coordinates,
+                )
+            )
+            continue
         if len(sources) != 1 or len(targets) != 1 or not relation or not evidence:
             blocked.append(
                 {
@@ -134,9 +209,14 @@ def project_typed_object_relations(asset: dict[str, Any]) -> dict[str, Any]:
         fact["object_graph_projection_authority"] = "EXISTING_ENTITY_RELATIONS"
         fact["object_graph_projection_ref"] = edge_id
         fact["object_graph_text_reparse_allowed"] = False
+        fact["typed_relation_coordinate_validation"] = {
+            "status": "PASS",
+            "automatic_endpoint_repair_allowed": False,
+        }
         marked += 1
     ledger["items"] = all_facts
     ledger["typed_object_relation_projection_authority_marked_count"] = marked
+    ledger["typed_object_relation_grammar_rejected_count"] = len(rejected)
     asset["business_fact_ledger"] = ledger
     asset["entity_relations"] = [*existing, *projected]
     asset["typed_object_relation_projection_receipt"] = {
@@ -145,10 +225,14 @@ def project_typed_object_relations(asset: dict[str, Any]) -> dict[str, Any]:
         "typed_relation_fact_count": len(typed_facts),
         "projected_relation_count": len(projected),
         "authority_marked_fact_count": marked,
+        "grammar_fragment_rejected_count": len(rejected),
+        "grammar_fragment_rejected_relations": rejected,
         "blocked_relation_count": len(blocked),
         "blocked_relations": blocked,
         "raw_statement_reparsed": False,
         "automatic_endpoint_inference_allowed": False,
+        "automatic_endpoint_repair_allowed": False,
+        "deterministic_grammar_fragment_rejection_blocks_gate": False,
         "existing_object_graph_input_reused": True,
     }
     if blocked:
@@ -182,6 +266,8 @@ def project_typed_object_relations(asset: dict[str, Any]) -> dict[str, Any]:
             "typed_object_relations_feed_existing_object_graph": True,
             "typed_object_relation_projection_reparses_text": False,
             "typed_object_relation_projection_infers_endpoints": False,
+            "typed_object_relation_projection_repairs_endpoints": False,
+            "typed_object_relation_grammar_fragments_are_rejected": True,
             "typed_object_relation_fact_marks_projection_authority": True,
         }
     )
