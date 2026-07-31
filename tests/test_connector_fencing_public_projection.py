@@ -71,3 +71,15 @@ def test_public_handler_does_not_expose_private_fencing_fields_directly():
     assert '"checkpoint_fingerprints_returned_to_frontend": False' in source
     assert "_public_connector_instance(raw)" in source
     assert "_sanitize_sync_response(run)" in source
+
+
+def test_http_surface_has_no_unfenced_abort_path():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "ai_test_asset_center"
+        / "private_pilot_connector_handlers.py"
+    ).read_text(encoding="utf-8")
+    assert "abort_connector_sync_run" not in source
+    assert 'tail[1] in {"test", "sync"}' in source
+    assert 'tail[1] in {"test", "sync", "abort"}' not in source
+    assert 'if action == "abort"' not in source
