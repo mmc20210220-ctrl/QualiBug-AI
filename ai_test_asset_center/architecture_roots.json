@@ -96,7 +96,9 @@
     "ai_test_asset_center.private_pilot_ops_handlers": "core",
     "ai_test_asset_center.scan_post_hooks": "core",
     "ai_test_asset_center.real_project_defect_discovery": "compatibility",
-    "ai_test_asset_center.real_project_discovery_with_chain": "compatibility"
+    "ai_test_asset_center.real_project_discovery_with_chain": "compatibility",
+    "ai_test_asset_center.connector_source_ingestion": "core",
+    "ai_test_asset_center.connector_sync_authority": "core"
   },
   "discovery_entrypoints": [
     {
