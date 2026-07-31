@@ -1,0 +1,64 @@
+name: Connector mainline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/connector-mainline.yml"
+      - "ai_test_asset_center/connector_*.py"
+      - "ai_test_asset_center/feishu_connector_adapter.py"
+      - "ai_test_asset_center/private_pilot_connector_handlers.py"
+      - "ai_test_asset_center/private_pilot_service.py"
+      - "tests/test_connector_*.py"
+  pull_request:
+    paths:
+      - ".github/workflows/connector-mainline.yml"
+      - "ai_test_asset_center/connector_*.py"
+      - "ai_test_asset_center/feishu_connector_adapter.py"
+      - "ai_test_asset_center/private_pilot_connector_handlers.py"
+      - "ai_test_asset_center/private_pilot_service.py"
+      - "tests/test_connector_*.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: connector-mainline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  connector-mainline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package and test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Compile connector authorities
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/connector_source_ingestion.py \
+            ai_test_asset_center/connector_sync_authority.py \
+            ai_test_asset_center/connector_connection_profiles.py \
+            ai_test_asset_center/connector_write_fence.py \
+            ai_test_asset_center/connector_sync_fencing.py \
+            ai_test_asset_center/connector_sync_ownership.py \
+            ai_test_asset_center/connector_checkpoint_recovery.py \
+            ai_test_asset_center/connector_auto_sync.py \
+            ai_test_asset_center/private_pilot_connector_handlers.py \
+            ai_test_asset_center/private_pilot_service.py
+      - name: Run connector mainline regression tests
+        run: |
+          python -m pytest -q \
+            tests/test_connector_auto_sync.py \
+            tests/test_connector_auto_sync_recovery_probe.py \
+            tests/test_connector_sync_ownership.py \
+            tests/test_connector_sync_fencing.py \
+            tests/test_connector_fencing_public_projection.py \
+            tests/test_connector_supervisor_lifecycle_authority.py \
+            tests/test_frontend_materials_mainline.py
