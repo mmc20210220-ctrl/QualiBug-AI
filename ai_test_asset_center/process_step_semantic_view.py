@@ -146,17 +146,14 @@ class ProcessStepSemanticView:
         )
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
         self._ledger.ledger_id = f"psl_{digest}"
-        # ``attach_lifecycle_ledger`` populated these keys before wrapping the
-        # ledger. Publish the normalized identity immediately so the Finalizer's
-        # first live-vs-observed identity check sees one authority, not a stale
-        # pre-normalization snapshot.
-        self._observations.update(
-            {
-                "process_step_ledger_id": self._ledger.ledger_id,
-                "process_step_ledger_hash": self._ledger.compute_hash(),
-                "process_step_receipts": list(self._ledger.all_rows()),
-            }
-        )
+        # ``attach_lifecycle_ledger`` populated an old identity/hash snapshot
+        # before wrapping this ledger. Publish the normalized id immediately,
+        # but deliberately remove hash/row snapshots: exact-scoped Event,
+        # Oracle and Cleanup receipts are attached inside the Finalizer. The
+        # first requested hash must therefore be computed only after that sync.
+        self._observations["process_step_ledger_id"] = self._ledger.ledger_id
+        self._observations.pop("process_step_ledger_hash", None)
+        self._observations.pop("process_step_receipts", None)
 
     @property
     def source_ledger(self) -> ProcessStepLedger:
