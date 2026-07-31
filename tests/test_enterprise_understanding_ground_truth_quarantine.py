@@ -101,6 +101,8 @@ def test_product_runner_cannot_see_ground_truth_path_and_original_is_restored(
     assert receipt["ground_truth_original_path_absent_during_product_phase"] is True
     assert receipt["ground_truth_restored_after_product_phase"] is True
     assert receipt["ground_truth_recreated_by_product_phase"] is False
+    assert receipt["ground_truth_private_bytes_held_in_parent_memory"] is True
+    assert receipt["ground_truth_private_disk_copy_created"] is False
     assert receipt["ground_truth_private_quarantine_path_disclosed_to_product"] is False
     assert receipt["product_phase_filesystem_ground_truth_access_allowed"] is False
     assert receipt["ground_truth_loaded_after_product_phase"] is False
@@ -115,6 +117,8 @@ def test_product_phase_recreating_ground_truth_file_blocks_evaluator(
     assert receipt["reason_code"] == "PRODUCT_PHASE_RECREATED_GROUND_TRUTH_PATH"
     assert receipt["ground_truth_recreated_by_product_phase"] is True
     assert receipt["ground_truth_restored_after_product_phase"] is True
+    assert receipt["ground_truth_private_bytes_held_in_parent_memory"] is True
+    assert receipt["ground_truth_private_disk_copy_created"] is False
     assert receipt["ground_truth_loaded_after_product_phase"] is False
     assert ground_truth.is_file()
     assert ground_truth.read_bytes() == original
@@ -130,6 +134,8 @@ def test_product_phase_recreating_ground_truth_directory_still_restores_original
     assert receipt["reason_code"] == "PRODUCT_PHASE_RECREATED_GROUND_TRUTH_PATH"
     assert receipt["ground_truth_recreated_by_product_phase"] is True
     assert receipt["ground_truth_restored_after_product_phase"] is True
+    assert receipt["ground_truth_private_bytes_held_in_parent_memory"] is True
+    assert receipt["ground_truth_private_disk_copy_created"] is False
     assert ground_truth.is_file()
     assert ground_truth.read_bytes() == original
     assert not (tmp_path / "output" / "evaluation").exists()
