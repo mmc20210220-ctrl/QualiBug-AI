@@ -5,7 +5,8 @@ base source asset -> OpenAPI schema facts -> API artifact projection -> exact op
 binding -> database-model facts -> cross-source contract alignment -> operation-scoped storage
 candidates -> durable table/field mapping authority -> root database observers -> exact FK relation
 candidates -> durable relation authority -> child collection observers -> enterprise understanding ->
-downstream binding -> governed Jobs -> final Probe admission -> one final persistence receipt.
+downstream binding -> governed Jobs -> final Probe admission -> source-occurrence evidence views ->
+one final persistence receipt.
 """
 from __future__ import annotations
 
@@ -33,13 +34,9 @@ from .api_operation_schema_binding import (
 )
 from .database_mapping_authority import apply_database_mapping_authority_decisions
 from .database_model_asset_projection import enrich_asset_with_database_model_facts
-from .database_model_index_reconciliation import (
-    reconcile_database_model_index_assets,
-)
+from .database_model_index_reconciliation import reconcile_database_model_index_assets
 from .database_model_semantic_bridge import install_database_model_semantic_bridge
-from .database_observer_contract_projection import (
-    enrich_asset_with_database_observer_contracts,
-)
+from .database_observer_contract_projection import enrich_asset_with_database_observer_contracts
 from .database_relation_authority import apply_database_relation_authority_decisions
 from .database_relation_observer_contract_projection import (
     enrich_asset_with_database_relation_observer_contracts,
@@ -64,6 +61,7 @@ from .enterprise_understanding.probe_policy import (
 from .job_asset_pipeline import enrich_job_assets_with_governance
 from .job_behavior_projection import refresh_job_behavior_projection
 from .openapi_schema_fact_asset_projection import enrich_asset_with_openapi_schema_facts
+from .source_occurrence_projection import project_source_occurrence_assets
 
 
 def _probe_limit(value: Any, *, default: int = 140) -> int:
@@ -174,6 +172,9 @@ def _persist_final(
             "probe_generation_status": asset.get("probe_generation_gate", {}).get(
                 "status"
             ),
+            "source_occurrence_projection_status": (
+                asset.get("source_occurrence_projection_receipt") or {}
+            ).get("status"),
         }
     )
     _save_registry(project_id, root, registry)
@@ -210,15 +211,12 @@ def build_enterprise_business_knowledge_asset(
     asset = enrich_asset_with_database_table_alignment_candidates(asset)
     asset = enrich_asset_with_api_database_alignment_candidates(asset)
     asset = enrich_asset_with_api_operation_database_candidates(asset)
-    # Durable table/field approvals are always re-applied to freshly rebuilt candidates.
     asset = apply_database_mapping_authority_decisions(
         asset,
         project_id=project,
         root=resolved_root,
     )
     asset = enrich_asset_with_database_observer_contracts(asset)
-    # Relation candidates require the current root Observer, then reuse the same durable
-    # mapping ledger under candidate_kind=relation. Candidate drift fails closed.
     asset = enrich_asset_with_database_relation_observer_candidates(asset)
     asset = apply_database_relation_authority_decisions(
         asset,
@@ -296,9 +294,25 @@ def build_enterprise_business_knowledge_asset(
             "database_relation_observer_projection_precedes_enterprise_understanding": True,
             "database_mapping_authority_reapplied_on_every_build": True,
             "database_relation_authority_reapplied_on_every_build": True,
+            "source_occurrence_projection_runs_after_business_and_probe_compilation": True,
         }
     )
     asset["governance"] = governance
+
+    # Occurrence evidence views are the final provenance projection. They never feed back
+    # into business extraction, entity fusion, rules, Jobs, or Probe compilation.
+    asset = project_source_occurrence_assets(
+        asset,
+        project_id=project,
+        root=resolved_root,
+    )
+    occurrence_receipt = dict(asset.get("source_occurrence_projection_receipt") or {})
+    if occurrence_receipt.get("status") == "BLOCKED":
+        raise RuntimeError(
+            "source occurrence projection blocked: "
+            + str(occurrence_receipt.get("missing_canonical") or [])[:1000]
+        )
+
     _persist_final(asset, probes, project_id=project, root=resolved_root)
     return asset
 
