@@ -31,12 +31,16 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Assemble final authority files
+      - name: Assemble and verify final authority files
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p /tmp/source-occurrence-history
-          base64 -d tools/.one_shot/source_occurrence_history/bundle.b64 > /tmp/source-occurrence-history/bundle.tar.gz
+          cat tools/.one_shot/source_occurrence_history/bundle.part0{1,2,3,4} \
+            | tr -d '\r\n' \
+            | base64 -d > /tmp/source-occurrence-history/bundle.tar.gz
+          echo '06c630dcac523141924c6b9cbdac0d165821807bd7fae628d42c4e8c74a0d009  /tmp/source-occurrence-history/bundle.tar.gz' \
+            | sha256sum -c -
           tar -xzf /tmp/source-occurrence-history/bundle.tar.gz -C /tmp/source-occurrence-history
           cp /tmp/source-occurrence-history/source_occurrence_ledger.py ai_test_asset_center/enterprise_knowledge_center/source_occurrence_ledger.py
           cp /tmp/source-occurrence-history/source_occurrence_core.py ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py
