@@ -5,10 +5,15 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.i
     GROUND_TRUTH_SCHEMA,
     QUALITY_POLICY_SCHEMA,
 )
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_benchmark_regression import (
+    SNAPSHOT_SCHEMA,
+)
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_benchmark_repository import (
+    append_identity_benchmark_snapshot,
     apply_identity_benchmark_repository,
     identity_benchmark_paths,
     load_identity_benchmark_audit,
+    load_identity_benchmark_history,
     load_identity_ground_truth,
     load_identity_quality_policy,
     restore_identity_benchmark_file,
@@ -36,9 +41,25 @@ def _policy() -> dict:
     }
 
 
+def _snapshot(snapshot_id: str, recorded_at: str) -> dict:
+    return {
+        "schema": SNAPSHOT_SCHEMA,
+        "snapshot_id": snapshot_id,
+        "recorded_at_utc": recorded_at,
+        "measurement_status": "MEASURED",
+        "manifest_id": "manifest:test",
+        "ground_truth_fingerprint": "truth:fingerprint",
+        "metrics": {"pairwise_precision": 1.0},
+        "errors": [],
+    }
+
+
 def test_repository_round_trip_and_composition_injection(tmp_path) -> None:
     save_identity_ground_truth("project-a", _truth(), tmp_path)
     save_identity_quality_policy("project-a", _policy(), tmp_path)
+    append_identity_benchmark_snapshot(
+        "project-a", _snapshot("snapshot:1", "2026-07-31T12:00:00Z"), tmp_path
+    )
 
     assert load_identity_ground_truth("project-a", tmp_path) == _truth()
     assert load_identity_quality_policy("project-a", tmp_path) == _policy()
@@ -48,10 +69,29 @@ def test_repository_round_trip_and_composition_injection(tmp_path) -> None:
     )
     assert asset["enterprise_identity_ground_truth"] == _truth()
     assert asset["enterprise_identity_quality_policy"] == _policy()
+    assert asset["enterprise_identity_benchmark_history"]["snapshots"][0][
+        "snapshot_id"
+    ] == "snapshot:1"
     receipt = asset["enterprise_identity_benchmark_repository_receipt"]
     assert receipt["ground_truth_loaded"] is True
     assert receipt["quality_policy_loaded"] is True
+    assert receipt["history_snapshot_count"] == 1
     assert receipt["ground_truth_fingerprint"]
+
+
+def test_every_explicit_snapshot_is_retained_and_retry_is_idempotent(tmp_path) -> None:
+    first = _snapshot("snapshot:1", "2026-07-31T12:00:00Z")
+    second = _snapshot("snapshot:2", "2026-07-31T12:05:00Z")
+
+    append_identity_benchmark_snapshot("project-a", first, tmp_path)
+    append_identity_benchmark_snapshot("project-a", first, tmp_path)
+    append_identity_benchmark_snapshot("project-a", second, tmp_path)
+
+    history = load_identity_benchmark_history("project-a", tmp_path)
+    assert [row["snapshot_id"] for row in history["snapshots"]] == [
+        "snapshot:1",
+        "snapshot:2",
+    ]
 
 
 def test_repository_snapshot_restore_is_transactional(tmp_path) -> None:
@@ -81,4 +121,5 @@ def test_empty_repository_removes_stale_asset_inputs(tmp_path) -> None:
     )
     assert "enterprise_identity_ground_truth" not in projected
     assert "enterprise_identity_quality_policy" not in projected
+    assert projected["enterprise_identity_benchmark_history"]["snapshots"] == []
     assert load_identity_benchmark_audit("project-a", tmp_path)["events"] == []
