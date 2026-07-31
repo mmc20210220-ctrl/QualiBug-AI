@@ -8,6 +8,7 @@ compilation and public re-export surface.
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
 from .real_id_resolver import normalize_path_placeholders
@@ -52,6 +53,38 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _block_uncovered_graph_precondition_writes(
+    experiment: dict[str, Any], behavior_ir: dict[str, Any]
+) -> dict[str, Any]:
+    contract = _dict(experiment.get("process_graph_write_contract"))
+    if not _list(contract.get("write_step_ids")):
+        return experiment
+    operations = _index_by_id(_list(_dict(behavior_ir).get("operations")))
+    uncovered: list[str] = []
+    for row in _list(experiment.get("precondition_plan")):
+        if not isinstance(row, dict):
+            continue
+        step_id = _text(row.get("step_id") or row.get("id"))
+        operation_ref = _text(row.get("operation_ref"))
+        operation = _dict(operations.get(operation_ref))
+        method = _text(row.get("method") or operation.get("method")).upper()
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            uncovered.append(step_id or operation_ref or "unknown_precondition_write")
+    if not uncovered:
+        return experiment
+    blocked = deepcopy(experiment)
+    blocked["control_plan"] = []
+    blocked["treatment_plan"] = []
+    blocked["cleanup_plan"] = []
+    blocked["compile_receipt"] = {
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_STEP_CLEANUP_UNCOVERED",
+        "detail": "graph_precondition_writes_not_in_global_reverse_cleanup:"
+        + ",".join(uncovered),
+    }
+    return blocked
+
+
 def _finalize_compiled_experiment(
     experiment: dict[str, Any],
     *,
@@ -59,6 +92,10 @@ def _finalize_compiled_experiment(
 ) -> dict[str, Any]:
     graph_safe = finalize_process_graph_write_contract(
         experiment,
+        behavior_ir,
+    )
+    graph_safe = _block_uncovered_graph_precondition_writes(
+        graph_safe,
         behavior_ir,
     )
     if _text(_dict(graph_safe.get("compile_receipt")).get("status")) != "COMPILED":
