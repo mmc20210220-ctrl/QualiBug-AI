@@ -140,10 +140,14 @@ def _workspace_summary(workspace: dict[str, Any]) -> dict[str, Any]:
 def _quality_blocked(workspace: dict[str, Any]) -> bool:
     benchmark = _as_dict(workspace.get("benchmark"))
     gate = _as_dict(workspace.get("identity_quality_gate") or benchmark.get("quality_gate"))
+    if "entry_allowed" in gate:
+        return gate.get("entry_allowed") is False
+    if "enforced" in gate and gate.get("enforced") is False:
+        return False
     status = str(gate.get("status") or "").strip().upper()
     if status.startswith("BLOCKED") or status in {"FAIL", "FAILED", "REJECTED"}:
         return True
-    for key in ("entry_allowed", "admission_allowed", "allowed", "passed", "ready"):
+    for key in ("admission_allowed", "allowed", "passed", "ready"):
         if key in gate and gate.get(key) is False:
             return True
     return False
