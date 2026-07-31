@@ -26,6 +26,7 @@ from .authorization_oracle_causality import (
 )
 from .binding_materialization_identity_receipt import (
     BindingMaterializationIdentityError,
+    binding_identity_proofs_for_targets,
     seal_binding_materialization_receipts,
 )
 from .experiment_runtime_support import (
@@ -78,6 +79,10 @@ def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(
         value,
@@ -86,6 +91,17 @@ def _canonical(value: Any) -> str:
         separators=(",", ":"),
         default=str,
     )
+
+
+def _authorization_binding_targets(
+    experiment: dict[str, Any],
+) -> list[str]:
+    contract = _dict(experiment.get("authorization_comparison_contract"))
+    return [
+        str(value or "").strip()
+        for value in _list(contract.get("resource_identity_binding_targets"))
+        if str(value or "").strip()
+    ]
 
 
 def _verify_authorization_compile_identity(
@@ -173,11 +189,17 @@ def execute_one_experiment(
         actor_tokens=actor_tokens,
     )
     try:
+        targets = _authorization_binding_targets(experiment)
         prepared = (
             seal_binding_materialization_receipts(result)
             if _dict(experiment.get("authorization_comparison_contract"))
             else result
         )
+        if targets:
+            binding_identity_proofs_for_targets(
+                _list(prepared.get("binding_materialization_receipts")),
+                targets,
+            )
         governed = enforce_authorization_oracle_causality(
             result=prepared,
             experiment=experiment,
