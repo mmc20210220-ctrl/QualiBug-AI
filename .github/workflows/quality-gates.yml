@@ -61,6 +61,7 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_plan_executor.py').read()); print('experiment_plan_executor.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_cleanup_lifecycle_adapter.py').read()); print('experiment_cleanup_lifecycle_adapter.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor.py').read()); print('experiment_executor.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor_governance.py').read()); print('experiment_executor_governance.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor_core.py').read()); print('experiment_executor_core.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_annotation_tasks.py').read()); print('identity_annotation_tasks.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_annotation_operator.py').read()); print('identity_annotation_operator.py OK')"
@@ -110,8 +111,10 @@ jobs:
             tests/test_process_graph_write_fail_closed.py \
             tests/test_process_graph_target_preflight.py \
             tests/test_process_graph_rollback_contract.py \
+            tests/test_process_graph_write_rollback_integration.py \
             tests/test_process_graph_dependency_rollback.py \
             tests/test_process_graph_multi_write_equivalence.py \
+            tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_architecture_extraction_contracts.py \
             tests/test_identity_annotation_tasks.py \
             tests/test_identity_annotation_operator.py \
