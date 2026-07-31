@@ -1,5 +1,7 @@
 import { getSession } from './client';
 
+const DEV_TOKEN_KEY = 'qualibug_dev_token';
+
 export type IdentityAnnotationMention = {
   mention_ref?: string;
   raw_label?: string;
@@ -42,10 +44,17 @@ function errorMessage(status: number, payload: ApiEnvelope<unknown>): string {
   return payload.message || payload.error || `API ${status}`;
 }
 
+function controlledDevToken(): string {
+  if (!import.meta.env.DEV || import.meta.env.VITE_QUALIBUG_ENABLE_DEV_TOKEN !== 'true') return '';
+  return localStorage.getItem(DEV_TOKEN_KEY) || '';
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const session = await getSession();
   if (!session) throw new Error('未登录或会话已失效，请重新登录。');
   const headers = new Headers(init?.headers);
+  const token = controlledDevToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
   if (init?.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
