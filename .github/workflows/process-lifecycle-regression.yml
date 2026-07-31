@@ -21,6 +21,15 @@ on:
       - "ai_test_asset_center/flow_data_execution_contract.py"
       - "ai_test_asset_center/flow_data_materialization.py"
       - "ai_test_asset_center/flow_data_materializer_projection.py"
+      - "ai_test_asset_center/multi_step_protocol.py"
+      - "ai_test_asset_center/multi_step_protocol_core.py"
+      - "ai_test_asset_center/process_graph_wait_contract.py"
+      - "ai_test_asset_center/process_graph_runtime.py"
+      - "ai_test_asset_center/process_graph_read_runtime.py"
+      - "ai_test_asset_center/experiment_plan_executor.py"
+      - "ai_test_asset_center/experiment_plan_step_executor.py"
+      - "ai_test_asset_center/experiment_plan_step_executor_core.py"
+      - "ai_test_asset_center/process_graph_executor_support.py"
       - "ai_test_asset_center/experiment_precondition_executor.py"
       - "ai_test_asset_center/experiment_fixture_materializer.py"
       - "ai_test_asset_center/experiment_fixture_materializer_core.py"
@@ -41,6 +50,7 @@ on:
       - "tests/test_fixture_data_authority.py"
       - "tests/test_flow_data_materialization.py"
       - "tests/test_flow_data_materializer_projection.py"
+      - "tests/test_process_graph_wait_contract.py"
       - "tests/test_experiment_cleanup_lifecycle_adapter.py"
       - "tests/test_multi_write_cleanup_coverage.py"
       - "tests/test_async_readback_executor.py"
@@ -83,6 +93,15 @@ jobs:
             ai_test_asset_center/flow_data_execution_contract.py \
             ai_test_asset_center/flow_data_materialization.py \
             ai_test_asset_center/flow_data_materializer_projection.py \
+            ai_test_asset_center/multi_step_protocol.py \
+            ai_test_asset_center/multi_step_protocol_core.py \
+            ai_test_asset_center/process_graph_wait_contract.py \
+            ai_test_asset_center/process_graph_runtime.py \
+            ai_test_asset_center/process_graph_read_runtime.py \
+            ai_test_asset_center/experiment_plan_executor.py \
+            ai_test_asset_center/experiment_plan_step_executor.py \
+            ai_test_asset_center/experiment_plan_step_executor_core.py \
+            ai_test_asset_center/process_graph_executor_support.py \
             ai_test_asset_center/experiment_precondition_executor.py \
             ai_test_asset_center/experiment_fixture_materializer.py \
             ai_test_asset_center/experiment_fixture_materializer_core.py \
@@ -106,6 +125,7 @@ jobs:
             tests/test_fixture_data_authority.py \
             tests/test_flow_data_materialization.py \
             tests/test_flow_data_materializer_projection.py \
+            tests/test_process_graph_wait_contract.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_multi_write_cleanup_coverage.py \
             tests/test_async_readback_executor.py \
