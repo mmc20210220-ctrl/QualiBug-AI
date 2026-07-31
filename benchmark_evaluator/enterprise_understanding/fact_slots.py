@@ -267,6 +267,55 @@ def _annotated_rows(ground_truth: dict[str, Any]) -> list[tuple[str, dict[str, A
     return result
 
 
+def _source_locator_metrics(
+    annotated: list[tuple[str, dict[str, Any]]],
+    alignments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Measure exact evidence address closure across every locator-annotated fact.
+
+    A missing or ambiguous fact has no trustworthy evidence address and remains in the
+    denominator. This metric is therefore independent from the ordinary slot metric,
+    whose denominator covers slots only after one candidate has been selected.
+    """
+    annotated_ids = {
+        _text(row.get("ground_truth_id"))
+        for _collection, row in annotated
+        if _expected_slot(row, "source_locators") is not None
+        and _text(row.get("ground_truth_id"))
+    }
+    statuses: Counter[str] = Counter()
+    for alignment in alignments:
+        ground_truth_id = _text(alignment.get("ground_truth_id"))
+        if ground_truth_id not in annotated_ids:
+            continue
+        fact_status = _text(alignment.get("alignment_status")).upper()
+        if fact_status == "MISSING":
+            statuses["MISSING"] += 1
+            continue
+        if fact_status == "AMBIGUOUS":
+            statuses["AMBIGUOUS"] += 1
+            continue
+        locator_alignment = _dict(
+            _dict(alignment.get("slot_alignments")).get("source_locators")
+        )
+        locator_status = _text(locator_alignment.get("status")).upper() or "MISSING"
+        statuses[locator_status] += 1
+
+    annotated_count = len(annotated_ids)
+    exact_count = statuses["EXACT"]
+    return {
+        "source_locator_annotated_fact_count": annotated_count,
+        "source_locator_exact_fact_count": exact_count,
+        "source_locator_missing_fact_count": statuses["MISSING"],
+        "source_locator_wrong_fact_count": statuses["WRONG"],
+        "source_locator_ambiguous_fact_count": statuses["AMBIGUOUS"],
+        "source_locator_exact_accuracy": (
+            exact_count / annotated_count if annotated_count else None
+        ),
+        "source_locator_status_distribution": dict(statuses),
+    }
+
+
 def evaluate_business_fact_slots(
     ground_truth: dict[str, Any],
     product_asset: dict[str, Any],
@@ -368,6 +417,7 @@ def evaluate_business_fact_slots(
     exact_slot_count = slot_statuses["EXACT"]
     total_facts = len(annotated)
     covered_facts = fact_statuses["EXACT"] + fact_statuses["PARTIAL"]
+    evidence_metrics = _source_locator_metrics(annotated, alignments)
     return {
         "schema": FACT_SLOT_MEASUREMENT_SCHEMA,
         "status": "PASS",
@@ -390,6 +440,7 @@ def evaluate_business_fact_slots(
             "p0_fact_count": p0_total,
             "p0_exact_fact_count": p0_exact,
             "p0_exact_fact_recall": p0_exact / p0_total if p0_total else None,
+            **evidence_metrics,
             "slot_status_distribution": dict(slot_statuses),
             "fact_status_distribution": dict(fact_statuses),
         },
@@ -401,6 +452,12 @@ def evaluate_business_fact_slots(
             "annotated_nested_coordinates_must_be_exact_subsets": True,
             "unannotated_product_evidence_fields_are_ignored": True,
             "single_shared_object_is_sufficient": False,
+        },
+        "evidence_address_measurement_contract": {
+            "annotated_fact_denominator_includes_missing_facts": True,
+            "annotated_fact_denominator_includes_ambiguous_facts": True,
+            "exact_source_locator_required": True,
+            "workspace_absolute_path_allowed": False,
         },
         "alignment_authority": "DETERMINISTIC_EXACT_TYPED_SLOT_MATCHING",
         "fuzzy_or_llm_alignment_used": False,
