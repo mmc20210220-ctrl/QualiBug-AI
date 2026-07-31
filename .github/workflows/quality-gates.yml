@@ -51,6 +51,8 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_executor.py').read()); print('process_graph_cleanup_executor.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_plan_executor.py').read()); print('experiment_plan_executor.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_cleanup_lifecycle_adapter.py').read()); print('experiment_cleanup_lifecycle_adapter.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor.py').read()); print('experiment_executor.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor_core.py').read()); print('experiment_executor_core.py OK')"
       - name: Run backend and evidence truthfulness gates
         run: |
           python -m pytest \
@@ -91,6 +93,7 @@ jobs:
             tests/test_process_graph_plan_executor.py \
             tests/test_process_graph_write_cleanup.py \
             tests/test_process_graph_write_fail_closed.py \
+            tests/test_process_graph_target_preflight.py \
             tests/test_architecture_extraction_contracts.py \
             -q
 
