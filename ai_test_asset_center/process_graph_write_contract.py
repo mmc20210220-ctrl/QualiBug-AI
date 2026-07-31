@@ -1,15 +1,16 @@
-"""Finalize source-backed write safety for compiled process execution graphs.
+"""Finalize source-backed write safety for process execution graphs.
 
-The multi-step protocol owns process topology.  This module joins that topology
+The process graph remains the topology authority. This module joins that graph
 with the existing Behavior IR operation authority, declared effect observers,
-and cleanup-plan validator after the ordinary single-obligation compiler has
-assembled the experiment.  It does not create another compiler or cleanup
-registry.
+explicit compensation relations, cleanup coverage validation, and the existing
+WriteReversibilityProof.
 
-A graph write is executable only when every mutating node has exactly one
-source-declared readback observer and one explicitly scoped compensator on the
-same approved system.  No method, path, identity field, cleanup body, or target
-is guessed.
+The executable scope is intentionally narrow: every graph write must have one
+unique source-declared readback operation and a distinct, source-declared
+compensator connected by a formal compensates/inverse relation. Same-operation
+snapshot/delta restoration remains blocked until those authorities share one
+mode vocabulary. No target, method, path, identity, field, body, or cleanup
+scope is guessed.
 """
 from __future__ import annotations
 
@@ -28,15 +29,7 @@ GRAPH_WRITE_OBSERVER_UNRESOLVED = "BLOCKED_MISSING_OBSERVER"
 GRAPH_WRITE_COMPENSATION_UNRESOLVED = "BLOCKED_NON_REVERSIBLE_WRITE"
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-_SEMANTIC_MODES = frozenset(
-    {
-        "delete_created_resource",
-        "compensating_transition",
-        "restore_snapshot",
-        "field_restore",
-        "inverse_delta",
-    }
-)
+_RELATION_KINDS = frozenset({"compensates", "inverse", "compensation"})
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -80,8 +73,7 @@ def _extract_graph(experiment: dict[str, Any]) -> tuple[dict[str, Any], str]:
     ]
     if not graphs:
         return {}, ""
-    fingerprints = {_fingerprint(graph) for graph in graphs}
-    if len(fingerprints) != 1:
+    if len({_fingerprint(graph) for graph in graphs}) != 1:
         return {}, "treatment_steps_carry_different_execution_graphs"
     return deepcopy(graphs[0]), ""
 
@@ -102,9 +94,12 @@ def _blocked(
 
 
 def _observer_contract(
-    *, operation_ref: str, operation: dict[str, Any], behavior_ir: dict[str, Any]
+    *,
+    operation_ref: str,
+    operation: dict[str, Any],
+    behavior_ir: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
-    observers = declared_effect_observers(
+    candidates = declared_effect_observers(
         operation,
         behavior_ir=behavior_ir,
         max_candidates=3,
@@ -115,7 +110,7 @@ def _observer_contract(
             _text(row.get("method")).upper(),
             normalize_path_placeholders(_text(row.get("path"))),
         )
-        for row in observers
+        for row in candidates
         if isinstance(row, dict)
         and _text(row.get("operation_ref"))
         and _text(row.get("method")).upper() in {"GET", "HEAD"}
@@ -130,6 +125,58 @@ def _observer_contract(
         "path": path,
         "source_declared": True,
     }, ""
+
+
+def _relation_matches(
+    relation: dict[str, Any],
+    *,
+    write_ref: str,
+    compensator_ref: str,
+) -> bool:
+    kind = _text(relation.get("kind") or relation.get("relation_type")).lower()
+    if kind not in _RELATION_KINDS:
+        return False
+    pairs = {
+        (
+            _text(relation.get("source") or relation.get("from")),
+            _text(relation.get("target") or relation.get("to")),
+        ),
+        (
+            _text(relation.get("from_ref")),
+            _text(relation.get("to_ref")),
+        ),
+        (
+            _text(relation.get("source_operation_ref")),
+            _text(relation.get("target_operation_ref")),
+        ),
+        (
+            _text(relation.get("operation_ref")),
+            _text(relation.get("to_ref") or relation.get("to")),
+        ),
+    }
+    return (compensator_ref, write_ref) in pairs or (
+        write_ref,
+        compensator_ref,
+    ) in pairs
+
+
+def _compensation_relation(
+    behavior_ir: dict[str, Any],
+    *,
+    write_ref: str,
+    compensator_ref: str,
+) -> dict[str, Any]:
+    matches = [
+        dict(row)
+        for row in _list(_dict(behavior_ir).get("relations"))
+        if isinstance(row, dict)
+        and _relation_matches(
+            row,
+            write_ref=write_ref,
+            compensator_ref=compensator_ref,
+        )
+    ]
+    return matches[0] if len(matches) == 1 else {}
 
 
 def _output_specs(node: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -157,7 +204,9 @@ def _output_specs(node: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _cleanup_binding_specs(
-    *, node: dict[str, Any], cleanup_path: str
+    *,
+    node: dict[str, Any],
+    cleanup_path: str,
 ) -> tuple[list[dict[str, Any]], str]:
     explicit = [
         dict(row)
@@ -177,21 +226,28 @@ def _cleanup_binding_specs(
     specs: list[dict[str, Any]] = []
     missing: list[str] = []
     for target in placeholders:
-        row = _dict(by_target.get(target))
-        if row:
-            source = _text(row.get("source")) or "write_response"
-            source_path = _text(row.get("source_path") or row.get("json_path"))
-            source_field = _text(
-                row.get("canonical_field_id") or row.get("source_field")
+        declared = _dict(by_target.get(target))
+        if declared:
+            source = _text(declared.get("source")) or "write_response"
+            source_path = _text(
+                declared.get("source_path") or declared.get("json_path")
             )
-            if source not in {"write_response", "original_request", "runtime_binding"}:
+            source_field = _text(
+                declared.get("canonical_field_id")
+                or declared.get("source_field")
+            )
+            if source not in {
+                "write_response",
+                "original_request",
+                "runtime_binding",
+            }:
                 missing.append(target)
                 continue
             if source == "runtime_binding":
                 source_field = source_field or target
             elif not source_path and source_field in outputs:
                 source_path = _text(outputs[source_field].get("source_path"))
-            if source == "write_response" and not source_path:
+            if source in {"write_response", "original_request"} and not source_path:
                 missing.append(target)
                 continue
             specs.append(
@@ -203,18 +259,80 @@ def _cleanup_binding_specs(
                 }
             )
             continue
+
         output = _dict(outputs.get(target))
         if not output:
             missing.append(target)
             continue
         specs.append({"target": target, **output})
+
     if missing:
         return [], "cleanup_path_bindings_unresolved:" + ",".join(sorted(missing))
     return specs, ""
 
 
+def _operation_transport(
+    node: dict[str, Any], operation: dict[str, Any]
+) -> tuple[str, str]:
+    method = _text(node.get("method") or operation.get("method")).upper()
+    path = normalize_path_placeholders(
+        _text(
+            node.get("path")
+            or operation.get("path")
+            or operation.get("raw_path")
+            or operation.get("path_template")
+        )
+    )
+    return method, path
+
+
+def _cleanup_row(
+    *,
+    node_id: str,
+    node: dict[str, Any],
+    operation_ref: str,
+    compensator_ref: str,
+    compensator: dict[str, Any],
+    observer: dict[str, Any],
+    binding_specs: list[dict[str, Any]],
+    relation: dict[str, Any],
+) -> dict[str, Any]:
+    method = _text(compensator.get("method")).upper()
+    path = normalize_path_placeholders(
+        _text(
+            compensator.get("path")
+            or compensator.get("raw_path")
+            or compensator.get("path_template")
+        )
+    )
+    return {
+        "step_id": f"cleanup_{node_id}",
+        "source_step_id": node_id,
+        "source_operation_ref": operation_ref,
+        "compensates_operation_ref": operation_ref,
+        "operation_ref": compensator_ref,
+        "actor_ref": _text(node.get("actor_ref")),
+        "system_ref": _text(node.get("system_ref")),
+        "method": method,
+        "path": path,
+        "action": "source_declared_compensation",
+        "mode": "compensating_transition",
+        "source_declared": True,
+        "binding_specs": deepcopy(binding_specs),
+        "observer_operation": deepcopy(observer),
+        "body": deepcopy(node.get("compensation_body")),
+        "body_from_original_request": (
+            node.get("compensation_body_from_original_request") is True
+        ),
+        "authority_relation_ref": _text(relation.get("id")) or (
+            f"relation:{operation_ref}:{compensator_ref}"
+        ),
+    }
+
+
 def _canonicalize_graph(
-    graph: dict[str, Any], behavior_ir: dict[str, Any]
+    graph: dict[str, Any],
+    behavior_ir: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
     operations = _operation_index(behavior_ir)
     nodes = [
@@ -222,34 +340,40 @@ def _canonicalize_graph(
         for row in _list(graph.get("nodes"))
         if isinstance(row, dict)
     ]
-    order = [_text(value) for value in _list(graph.get("topological_order")) if _text(value)]
+    order = [
+        _text(value)
+        for value in _list(graph.get("topological_order"))
+        if _text(value)
+    ]
     by_id = {
         _text(row.get("node_id") or row.get("step_id")): row
         for row in nodes
         if _text(row.get("node_id") or row.get("step_id"))
     }
-    if not nodes or set(order) != set(by_id):
+    if not nodes or set(order) != set(by_id) or len(order) != len(by_id):
         return {}, {}, GRAPH_WRITE_CONTRACT_INVALID, "graph_order_identity_mismatch"
 
     write_contracts: dict[str, dict[str, Any]] = {}
-    cleanup_steps: list[dict[str, Any]] = []
+    cleanup_by_source: dict[str, dict[str, Any]] = {}
     for node_id in order:
         node = by_id[node_id]
         operation_ref = _text(node.get("operation_ref"))
         operation = _dict(operations.get(operation_ref))
         if not operation:
-            return {}, {}, GRAPH_WRITE_CONTRACT_INVALID, f"{node_id}:operation_not_in_ir:{operation_ref}"
-        method = _text(node.get("method") or operation.get("method")).upper()
-        path = normalize_path_placeholders(
-            _text(
-                node.get("path")
-                or operation.get("path")
-                or operation.get("raw_path")
-                or operation.get("path_template")
+            return (
+                {},
+                {},
+                GRAPH_WRITE_CONTRACT_INVALID,
+                f"{node_id}:operation_not_in_ir:{operation_ref}",
             )
-        )
+        method, path = _operation_transport(node, operation)
         if not method or not path.startswith("/"):
-            return {}, {}, GRAPH_WRITE_CONTRACT_INVALID, f"{node_id}:operation_transport_unresolved"
+            return (
+                {},
+                {},
+                GRAPH_WRITE_CONTRACT_INVALID,
+                f"{node_id}:operation_transport_unresolved",
+            )
         node["method"] = method
         node["path"] = path
         if method not in _WRITE_METHODS:
@@ -263,154 +387,110 @@ def _canonicalize_graph(
         if detail:
             return {}, {}, GRAPH_WRITE_OBSERVER_UNRESOLVED, f"{node_id}:{detail}"
 
-        compensation_ref = _text(node.get("compensation_operation_ref"))
-        compensation = _dict(operations.get(compensation_ref))
-        if not compensation_ref or not compensation:
-            return {}, {}, GRAPH_WRITE_COMPENSATION_UNRESOLVED, f"{node_id}:compensation_operation_unresolved"
-        compensation_method = _text(compensation.get("method")).upper()
-        compensation_path = normalize_path_placeholders(
-            _text(
-                compensation.get("path")
-                or compensation.get("raw_path")
-                or compensation.get("path_template")
+        compensator_ref = _text(node.get("compensation_operation_ref"))
+        compensator = _dict(operations.get(compensator_ref))
+        if not compensator_ref or not compensator:
+            return (
+                {},
+                {},
+                GRAPH_WRITE_COMPENSATION_UNRESOLVED,
+                f"{node_id}:compensation_operation_unresolved",
             )
+        if compensator_ref == operation_ref:
+            return (
+                {},
+                {},
+                GRAPH_WRITE_COMPENSATION_UNRESOLVED,
+                f"{node_id}:same_operation_restore_not_supported_by_graph_contract",
+            )
+        compensation_method, compensation_path = _operation_transport({}, compensator)
+        if (
+            compensation_method not in _WRITE_METHODS
+            or not compensation_path.startswith("/")
+        ):
+            return (
+                {},
+                {},
+                GRAPH_WRITE_COMPENSATION_UNRESOLVED,
+                f"{node_id}:compensation_transport_unresolved:{compensator_ref}",
+            )
+
+        relation = _compensation_relation(
+            behavior_ir,
+            write_ref=operation_ref,
+            compensator_ref=compensator_ref,
         )
-        if compensation_method not in _WRITE_METHODS or not compensation_path.startswith("/"):
-            return {}, {}, GRAPH_WRITE_COMPENSATION_UNRESOLVED, f"{node_id}:compensation_transport_unresolved:{compensation_ref}"
+        if not relation:
+            return (
+                {},
+                {},
+                GRAPH_WRITE_COMPENSATION_UNRESOLVED,
+                f"{node_id}:explicit_compensator_relation_unresolved:{operation_ref}:{compensator_ref}",
+            )
 
         system_ref = _text(node.get("system_ref"))
         compensation_system = _text(
-            compensation.get("system_ref")
-            or compensation.get("target_system_ref")
-            or compensation.get("approved_target_ref")
+            compensator.get("system_ref")
+            or compensator.get("target_system_ref")
+            or compensator.get("approved_target_ref")
         )
         if compensation_system and compensation_system != system_ref:
-            return {}, {}, GRAPH_WRITE_COMPENSATION_UNRESOLVED, f"{node_id}:compensation_system_mismatch:{system_ref}:{compensation_system}"
+            return (
+                {},
+                {},
+                GRAPH_WRITE_COMPENSATION_UNRESOLVED,
+                f"{node_id}:compensation_system_mismatch:{system_ref}:{compensation_system}",
+            )
 
         binding_specs, detail = _cleanup_binding_specs(
             node=node,
             cleanup_path=compensation_path,
         )
         if detail:
-            return {}, {}, GRAPH_WRITE_COMPENSATION_UNRESOLVED, f"{node_id}:{detail}"
+            return (
+                {},
+                {},
+                GRAPH_WRITE_COMPENSATION_UNRESOLVED,
+                f"{node_id}:{detail}",
+            )
 
-        requested_mode = _text(node.get("compensation_mode")).lower()
-        mode = requested_mode or (
-            "delete_created_resource"
-            if compensation_method == "DELETE"
-            else "compensating_transition"
+        cleanup = _cleanup_row(
+            node_id=node_id,
+            node=node,
+            operation_ref=operation_ref,
+            compensator_ref=compensator_ref,
+            compensator=compensator,
+            observer=observer,
+            binding_specs=binding_specs,
+            relation=relation,
         )
-        if mode not in _SEMANTIC_MODES:
-            return {}, {}, GRAPH_WRITE_COMPENSATION_UNRESOLVED, f"{node_id}:compensation_mode_invalid:{mode}"
-        if compensation_ref == operation_ref and mode not in {
-            "restore_snapshot",
-            "field_restore",
-            "inverse_delta",
-        }:
-            return {}, {}, GRAPH_WRITE_COMPENSATION_UNRESOLVED, f"{node_id}:source_write_reused_without_restore_semantics"
-
-        compensation_body = node.get("compensation_body")
-        body_from_original = node.get("compensation_body_from_original_request") is True
-        cleanup_step = {
-            "step_id": f"cleanup_{node_id}",
-            "source_step_id": node_id,
-            "source_operation_ref": operation_ref,
-            "compensates_operation_ref": operation_ref,
-            "operation_ref": compensation_ref,
-            "actor_ref": _text(node.get("actor_ref")),
-            "system_ref": system_ref,
-            "method": compensation_method,
-            "path": compensation_path,
-            "action": (
-                "reverse_order_compensation"
-                if compensation_method == "DELETE"
-                else "source_declared_compensation"
-            ),
-            "mode": mode,
-            "source_declared": True,
-            "binding_specs": binding_specs,
-            "observer_operation": observer,
-            "body": deepcopy(compensation_body),
-            "body_from_original_request": body_from_original,
-        }
-        write_contracts[node_id] = {
+        contract = {
             "source_step_id": node_id,
             "operation_ref": operation_ref,
             "actor_ref": _text(node.get("actor_ref")),
             "system_ref": system_ref,
             "method": method,
             "path": path,
-            "effect_observer": observer,
-            "cleanup_step_id": cleanup_step["step_id"],
-            "compensation_operation_ref": compensation_ref,
+            "effect_observer": deepcopy(observer),
+            "cleanup_step_id": cleanup["step_id"],
+            "compensation_operation_ref": compensator_ref,
+            "authority_relation_ref": cleanup["authority_relation_ref"],
         }
-        node["write_contract"] = deepcopy(write_contracts[node_id])
+        write_contracts[node_id] = contract
+        cleanup_by_source[node_id] = cleanup
+        node["write_contract"] = deepcopy(contract)
         node["effect_observer_operations"] = [deepcopy(observer)]
 
-    for node_id in reversed(order):
-        contract = write_contracts.get(node_id)
-        if not contract:
-            continue
-        cleanup_steps.append(
-            next(
-                row
-                for row in [
-                    {
-                        "step_id": f"cleanup_{node_id}",
-                        "source_step_id": node_id,
-                        "source_operation_ref": contract["operation_ref"],
-                        "compensates_operation_ref": contract["operation_ref"],
-                        "operation_ref": contract["compensation_operation_ref"],
-                        "actor_ref": contract["actor_ref"],
-                        "system_ref": contract["system_ref"],
-                        "method": _text(operations[contract["compensation_operation_ref"]].get("method")).upper(),
-                        "path": normalize_path_placeholders(
-                            _text(
-                                operations[contract["compensation_operation_ref"]].get("path")
-                                or operations[contract["compensation_operation_ref"]].get("raw_path")
-                            )
-                        ),
-                        "action": (
-                            "reverse_order_compensation"
-                            if _text(operations[contract["compensation_operation_ref"]].get("method")).upper() == "DELETE"
-                            else "source_declared_compensation"
-                        ),
-                        "mode": _text(by_id[node_id].get("compensation_mode")).lower()
-                        or (
-                            "delete_created_resource"
-                            if _text(operations[contract["compensation_operation_ref"]].get("method")).upper() == "DELETE"
-                            else "compensating_transition"
-                        ),
-                        "source_declared": True,
-                        "binding_specs": _cleanup_binding_specs(
-                            node=by_id[node_id],
-                            cleanup_path=normalize_path_placeholders(
-                                _text(
-                                    operations[contract["compensation_operation_ref"]].get("path")
-                                    or operations[contract["compensation_operation_ref"]].get("raw_path")
-                                )
-                            ),
-                        )[0],
-                        "observer_operation": deepcopy(contract["effect_observer"]),
-                        "body": deepcopy(by_id[node_id].get("compensation_body")),
-                        "body_from_original_request": by_id[node_id].get("compensation_body_from_original_request") is True,
-                    }
-                ]
-            )
-        )
-
+    cleanup_steps = [
+        cleanup_by_source[node_id]
+        for node_id in reversed(order)
+        if node_id in cleanup_by_source
+    ]
     canonical_graph = deepcopy(graph)
     canonical_graph["nodes"] = [by_id[node_id] for node_id in order]
     canonical_graph["write_contracts_by_node"] = deepcopy(write_contracts)
-    graph_contract = {
+    contract = {
         "schema_version": GRAPH_WRITE_CONTRACT_SCHEMA,
-        "contract_id": "pgwc_" + _fingerprint(
-            {
-                "execution_graph_id": _text(graph.get("execution_graph_id")),
-                "write_contracts": write_contracts,
-                "cleanup_steps": cleanup_steps,
-            }
-        )[:24],
         "execution_graph_id": _text(
             graph.get("execution_graph_id") or graph.get("process_id")
         ),
@@ -419,17 +499,75 @@ def _canonicalize_graph(
             node_id for node_id in order if node_id in write_contracts
         ],
         "write_contracts_by_node": deepcopy(write_contracts),
-        "cleanup_steps": cleanup_steps,
+        "cleanup_steps": deepcopy(cleanup_steps),
         "cleanup_order": [row["source_step_id"] for row in cleanup_steps],
         "target_authority": "runtime_contract.approved_targets",
         "credential_authority": "per_target_actor_token_keys",
         "identity_authority": "declared_output_and_cleanup_binding_specs",
+        "compensation_authority": "behavior_ir.explicit_compensates_relation",
     }
-    return canonical_graph, graph_contract, "", ""
+    contract["contract_id"] = "pgwc_" + _fingerprint(contract)[:24]
+    return canonical_graph, contract, "", ""
+
+
+def _merge_graph_observers(
+    experiment: dict[str, Any],
+    contract: dict[str, Any],
+) -> list[dict[str, Any]]:
+    observers = [
+        deepcopy(row)
+        for row in _list(experiment.get("observers"))
+        if isinstance(row, dict)
+    ]
+    effect_rows = [
+        deepcopy(_dict(row).get("effect_observer"))
+        for row in _dict(contract.get("write_contracts_by_node")).values()
+        if _dict(row).get("effect_observer")
+    ]
+    if not effect_rows:
+        return observers
+    after_state = next(
+        (
+            row
+            for row in observers
+            if _text(row.get("observer_id")) == "after_state"
+        ),
+        None,
+    )
+    if after_state is None:
+        after_state = {
+            "observer_id": "after_state",
+            "surface": "http_api",
+            "resolver_operations": [],
+        }
+        observers.append(after_state)
+    existing = {
+        (
+            _text(row.get("operation_ref")),
+            _text(row.get("method")).upper(),
+            _text(row.get("path")),
+        )
+        for row in _list(after_state.get("resolver_operations"))
+        if isinstance(row, dict)
+    }
+    for row in effect_rows:
+        key = (
+            _text(row.get("operation_ref")),
+            _text(row.get("method")).upper(),
+            _text(row.get("path")),
+        )
+        if all(key) and key not in existing:
+            after_state.setdefault("resolver_operations", []).append(row)
+            existing.add(key)
+    after_state["process_graph_write_contract_id"] = _text(
+        contract.get("contract_id")
+    )
+    return observers
 
 
 def finalize_process_graph_write_contract(
-    experiment: dict[str, Any], behavior_ir: dict[str, Any]
+    experiment: dict[str, Any],
+    behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
     """Freeze graph write safety onto the final compiled experiment."""
     exp = deepcopy(experiment)
@@ -450,35 +588,36 @@ def finalize_process_graph_write_contract(
 
     exp["execution_graph"] = canonical_graph
     exp["process_graph_write_contract"] = contract
+    nodes_by_id = {
+        _text(row.get("node_id")): row
+        for row in _list(canonical_graph.get("nodes"))
+        if isinstance(row, dict) and _text(row.get("node_id"))
+    }
     for step in _list(exp.get("treatment_plan")):
         if not isinstance(step, dict):
             continue
         node_id = _text(step.get("step_id"))
-        node = next(
-            (
-                row
-                for row in _list(canonical_graph.get("nodes"))
-                if _text(_dict(row).get("node_id")) == node_id
-            ),
-            {},
+        node = _dict(nodes_by_id.get(node_id))
+        if not node:
+            continue
+        step.update(
+            {
+                "method": _text(node.get("method")),
+                "path": _text(node.get("path")),
+                "effect_observer_operations": deepcopy(
+                    _list(node.get("effect_observer_operations"))
+                ),
+                "_execution_graph": deepcopy(canonical_graph),
+                "_graph_write_contract_id": _text(contract.get("contract_id")),
+            }
         )
-        if node:
-            step.update(
-                {
-                    "method": _text(_dict(node).get("method")),
-                    "path": _text(_dict(node).get("path")),
-                    "effect_observer_operations": _list(
-                        _dict(node).get("effect_observer_operations")
-                    ),
-                    "_execution_graph": deepcopy(canonical_graph),
-                    "_graph_write_contract_id": _text(contract.get("contract_id")),
-                }
-            )
 
-    if not _list(contract.get("write_step_ids")):
+    write_step_ids = _list(contract.get("write_step_ids"))
+    if not write_step_ids:
         return exp
 
     exp["cleanup_plan"] = deepcopy(_list(contract.get("cleanup_steps")))
+    exp["observers"] = _merge_graph_observers(exp, contract)
     safety = dict(_dict(exp.get("safety_contract")))
     safety.update(
         {
@@ -489,22 +628,24 @@ def finalize_process_graph_write_contract(
         }
     )
     exp["safety_contract"] = safety
-    compile_receipt = dict(_dict(exp.get("compile_receipt")))
-    compile_receipt.update(
+    receipt = dict(_dict(exp.get("compile_receipt")))
+    receipt.update(
         {
             "cleanup_present": True,
             "process_graph_write_contract_id": _text(contract.get("contract_id")),
-            "graph_write_step_count": len(_list(contract.get("write_step_ids"))),
+            "graph_write_step_count": len(write_step_ids),
         }
     )
-    exp["compile_receipt"] = compile_receipt
+    exp["compile_receipt"] = receipt
 
     validation = validate_cleanup_plan(exp, behavior_ir, phase="compile")
     if not validation.get("valid"):
         return _blocked(
             exp,
-            _text(validation.get("reason_code")) or GRAPH_WRITE_CONTRACT_INVALID,
-            _text(validation.get("detail")) or "graph_cleanup_validation_failed",
+            _text(validation.get("reason_code"))
+            or GRAPH_WRITE_CONTRACT_INVALID,
+            _text(validation.get("detail"))
+            or "graph_cleanup_validation_failed",
         )
     proof = _dict(validation.get("proof"))
     exp["write_reversibility_proof"] = proof
