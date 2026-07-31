@@ -10,6 +10,7 @@ SIDEBAR = ROOT / "frontend" / "src" / "components" / "Sidebar.tsx"
 PAGE = ROOT / "frontend" / "src" / "pages" / "Materials.tsx"
 CLIENT = ROOT / "frontend" / "src" / "api" / "knowledge-connectors.ts"
 HANDLER = ROOT / "ai_test_asset_center" / "private_pilot_connector_handlers.py"
+AUTO_SYNC = ROOT / "ai_test_asset_center" / "connector_auto_sync.py"
 ARCHITECTURE = ROOT / "ai_test_asset_center" / "architecture_roots.json"
 SIMPLICITY = ROOT / "docs" / "PRODUCT_SIMPLICITY_PRINCIPLE.md"
 
@@ -33,31 +34,30 @@ def test_sidebar_exposes_online_first_enterprise_materials_mainline():
 
 def test_materials_page_keeps_online_primary_and_upload_supplemental():
     page = _text(PAGE)
-    assert "连接一次，系统自动读取、识别和去重" in page
-    assert page.index("主要采集方式") < page.index("补充采集方式")
+    assert "连接一次，系统自动读取、识别、去重、更新和恢复" in page
+    assert page.index("自动维护") < page.index("补充方式")
     assert "listKnowledgeConnectors" in page
     assert "connectFeishuKnowledge" in page
     assert "refreshKnowledgeConnector" in page
     assert "ingestKnowledge" in page
-    assert "统一来源清单" in page
     assert "统一企业知识库" in page
 
 
-def test_normal_user_path_is_two_steps_and_one_primary_action():
+def test_normal_user_path_is_two_steps_and_daily_maintenance_disappears():
     page = _text(PAGE)
     assert "两步完成" in page
     assert "填写飞书授权" in page
     assert "选择资料范围" in page
-    assert "保存并开始同步" in page
-    assert "保存并更新资料" in page
-    assert "立即更新" in page
-    assert "重新授权" in page
+    assert "保存并开始读取" in page
+    assert "后续更新和重试由系统处理" in page
+    assert "自动更新" in page
+    assert "系统自动恢复" in page
+    assert "立即更新" not in page
     assert "测试连接" not in page
     assert "资料源标识" not in page
     assert "删除策略" not in page
     assert "降级策略" not in page
     assert "同步游标" not in page
-    assert "系统自动维护" not in page
     for term in (
         "Source Occurrence",
         "Sync Epoch",
@@ -69,9 +69,11 @@ def test_normal_user_path_is_two_steps_and_one_primary_action():
         assert term not in page
 
 
-def test_advanced_choices_are_kept_behind_disclosure():
+def test_manual_check_and_advanced_choices_are_hidden_behind_disclosure():
     page = _text(PAGE)
-    assert '<details className="materials-advanced">' in page
+    assert page.count('<details className="materials-advanced">') >= 3
+    assert "遇到问题时" in page
+    assert "现在检查一次" in page
     assert "其他授权方式" in page
     assert "高级资料范围" in page
     assert '<option value="internal_app">企业自建应用（推荐）</option>' in page
@@ -83,9 +85,11 @@ def test_frontend_connector_client_owns_safe_orchestration_and_friendly_errors()
     orchestration = client[client.index("export async function connectFeishuKnowledge"):]
     assert orchestration.index("configureFeishuConnector") < orchestration.index("testKnowledgeConnector")
     assert orchestration.index("testKnowledgeConnector") < orchestration.index("syncKnowledgeConnector")
-    assert "上次同步状态不完整，系统已保留原有资料" in client
+    assert "上次更新状态不完整，系统已保留原有资料并会自动重试" in client
     assert "飞书授权范围不足" in client
-    assert "原有资料不受影响" in client
+    assert "原有资料不受影响，系统会自动重试" in client
+    assert "KnowledgeConnectorAutoSync" in client
+    assert "maintenance_required_by_user" in client
 
 
 def test_frontend_connector_client_never_exposes_raw_checkpoint_contract():
@@ -97,16 +101,24 @@ def test_frontend_connector_client_never_exposes_raw_checkpoint_contract():
     assert "credentials: 'include'" in client
 
 
-def test_private_routes_are_project_scoped_and_registered_as_core():
+def test_http_and_background_use_one_managed_sync_authority():
     handler = _text(HANDLER)
+    auto_sync = _text(AUTO_SYNC)
     assert 'parts[:3] != ["api", "v1", "projects"]' in handler
     assert '_ROUTE_MARKER = "knowledge-connectors"' in handler
     assert "_require_project_scope(project)" in handler
     assert "_require_role" in handler
+    assert "run_managed_feishu_sync" in handler
+    assert "sync_feishu_connector(" not in handler
+    assert "commit_connector_sync_checkpoint(" not in handler
+    assert "run_managed_feishu_sync" in auto_sync
+    assert "run_connector_auto_sync_sweep" in auto_sync
+    assert "new_registry_created" in auto_sync
 
     architecture = json.loads(_text(ARCHITECTURE))
     overrides = architecture["module_class_overrides"]
     assert overrides["ai_test_asset_center.connector_connection_profiles"] == "core"
+    assert overrides["ai_test_asset_center.connector_auto_sync"] == "core"
     assert overrides["ai_test_asset_center.private_pilot_connector_handlers"] == "core"
 
 
