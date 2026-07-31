@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextvars
 import copy
 import functools
+import hashlib
 from typing import Any
 
 from .formal_event_surface import ASSERTION_KIND, RISK_FAMILY
@@ -97,6 +98,31 @@ def _receipt_id(receipt: dict[str, Any]) -> str:
     )
 
 
+def _projection_receipt_id(
+    receipt: dict[str, Any],
+    *,
+    step_id: str,
+    projection_kind: str,
+) -> tuple[str, str]:
+    """Return (id, origin) from a source id or a sealed source fingerprint."""
+    source_id = _receipt_id(receipt)
+    if source_id:
+        return source_id, "source_receipt_id"
+    fingerprint = _text(_dict(receipt).get("fingerprint"))
+    if not fingerprint or not _text(step_id) or not _text(projection_kind):
+        return "", ""
+    material = "|".join(
+        [
+            _text(projection_kind),
+            _text(step_id),
+            _text(_dict(receipt).get("schema_version")),
+            fingerprint,
+        ]
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+    return f"event_scope_{digest}", "source_fingerprint"
+
+
 def _scoped_projection(
     receipt: dict[str, Any],
     *,
@@ -105,18 +131,27 @@ def _scoped_projection(
 ) -> dict[str, Any]:
     """Repeat exact step scope around one real source receipt.
 
-    The original receipt remains immutable under ``source_receipt``. The
-    canonical bundle envelope hashes this projection, while ``receipt_id`` keeps
-    the source authority identity used by findings and runtime evidence.
+    The original receipt remains immutable under ``source_receipt``. When the
+    source authority already has a receipt id, that identity is preserved. Some
+    older cleanup verification authorities expose only a sealed fingerprint; in
+    that case this scope projection receives its own content-addressed id derived
+    solely from source fingerprint, source schema, projection kind and step id.
     """
     row = copy.deepcopy(_dict(receipt))
-    rid = _receipt_id(row)
+    rid, id_origin = _projection_receipt_id(
+        row,
+        step_id=step_id,
+        projection_kind=projection_kind,
+    )
     if not rid or not _text(step_id):
         return {}
     return {
         "receipt_id": rid,
         "step_id": _text(step_id),
         "scope_projection_kind": _text(projection_kind),
+        "scope_receipt_id_origin": id_origin,
+        "source_receipt_id": _receipt_id(row),
+        "source_fingerprint": _text(row.get("fingerprint")),
         "source_receipt": row,
         "source_schema_version": _text(row.get("schema_version")),
         "source_status": _text(
