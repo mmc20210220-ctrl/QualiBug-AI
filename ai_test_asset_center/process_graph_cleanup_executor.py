@@ -1,10 +1,10 @@
 """System-aware compensation for governed process-graph writes.
 
-The public cleanup entry point remains ``experiment_cleanup_executor``.  This
-module executes only a resolved ``process_graph_write_contract``: every cleanup
-row is scoped to one formal source step, one system, one actor credential and
-one source-declared observer.  Ordinary experiment cleanup remains in the
-existing legacy core.
+The public cleanup entry remains ``experiment_cleanup_executor``. This module
+consumes only a resolved process-graph write contract. Every cleanup is scoped
+to one source step, system, actor credential, declared binding and readback
+observer. It reuses the existing effectful-write predicate, governed transport,
+restoration comparator, cleanup receipt, and environment receipt authorities.
 """
 from __future__ import annotations
 
@@ -25,13 +25,16 @@ from .experiment_runtime_support import (
 from .process_graph_executor_support import scoped_actor_context
 from .process_graph_runtime import resolve_graph_target_context
 from .runtime_binding_materializer import (
+    _cleanup_candidate,
     materialize_body_template,
     materialize_path,
 )
 
 GRAPH_CLEANUP_SCHEMA = "qualibug.process-graph-cleanup-execution.v1"
 GRAPH_CLEANUP_BINDING_UNRESOLVED = "PROCESS_GRAPH_CLEANUP_BINDING_UNRESOLVED"
-GRAPH_CLEANUP_SOURCE_STEP_UNRESOLVED = "PROCESS_GRAPH_CLEANUP_SOURCE_STEP_UNRESOLVED"
+GRAPH_CLEANUP_SOURCE_STEP_UNRESOLVED = (
+    "PROCESS_GRAPH_CLEANUP_SOURCE_STEP_UNRESOLVED"
+)
 GRAPH_CLEANUP_RESTORATION_FAILED = "PROCESS_GRAPH_CLEANUP_RESTORATION_FAILED"
 
 
@@ -50,7 +53,11 @@ def _response_value(value: Any, path: str) -> Any:
     for part in parts:
         if isinstance(current, dict) and part in current:
             current = current[part]
-        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+        elif (
+            isinstance(current, list)
+            and part.isdigit()
+            and int(part) < len(current)
+        ):
             current = current[int(part)]
         else:
             return None
@@ -68,7 +75,7 @@ def _source_step(
         and _text(row.get("phase")) == "treatment"
         and isinstance(row.get("governance_receipt"), dict)
     ]
-    return dict(matches[-1]) if len(matches) == 1 else {}
+    return dict(matches[0]) if len(matches) == 1 else {}
 
 
 def _cleanup_bindings(
@@ -108,7 +115,7 @@ def _cleanup_bindings(
     return bindings, ""
 
 
-def _cleanup_receipt(
+def _receipt(
     *,
     cleanup: dict[str, Any],
     source_step_id: str,
@@ -126,7 +133,8 @@ def _cleanup_receipt(
         obligation_id=oid,
         campaign_id=resolved_campaign_id,
         execution_id=resolved_execution_id,
-        subject_id=_text(cleanup.get("step_id")) or f"cleanup_{source_step_id}",
+        subject_id=_text(cleanup.get("step_id"))
+        or f"cleanup_{source_step_id}",
         status=status,
         evidence={
             "schema_version": GRAPH_CLEANUP_SCHEMA,
@@ -136,6 +144,45 @@ def _cleanup_receipt(
             "reason_code": reason_code,
             **evidence,
         },
+    )
+
+
+def _append_receipt(
+    receipt: dict[str, Any],
+    *,
+    receipts: list[dict[str, Any]],
+    contract_evidence_receipts: list[dict[str, Any]],
+) -> None:
+    receipts.append(receipt)
+    contract_evidence_receipts.append(receipt)
+
+
+def _failed_receipt(
+    *,
+    cleanup: dict[str, Any],
+    source_step_id: str,
+    reason_code: str,
+    detail: str,
+    eid: str,
+    oid: str,
+    resolved_campaign_id: str,
+    resolved_execution_id: str,
+) -> dict[str, Any]:
+    return _receipt(
+        cleanup=cleanup,
+        source_step_id=source_step_id,
+        status="FAILED",
+        reason_code=reason_code,
+        evidence={
+            "effectful_write_count": 1,
+            "cleanup_write_count": 0,
+            "detail": detail,
+            "request_reached_transport": False,
+        },
+        eid=eid,
+        oid=oid,
+        resolved_campaign_id=resolved_campaign_id,
+        resolved_execution_id=resolved_execution_id,
     )
 
 
@@ -162,7 +209,7 @@ def execute_process_graph_cleanup(
     execute_governed_control_write: Any,
     sandbox_write_allowed: Any,
 ) -> dict[str, Any]:
-    """Execute every accepted graph write compensation in declared reverse order."""
+    """Compensate every effectful graph write in compiled reverse order."""
     contract = _dict(exp.get("process_graph_write_contract"))
     cleanup_steps = [
         dict(row)
@@ -171,36 +218,47 @@ def execute_process_graph_cleanup(
     ]
     receipts: list[dict[str, Any]] = []
     cleanup_rows: list[dict[str, Any]] = []
+
     for cleanup in cleanup_steps:
         source_step_id = _text(cleanup.get("source_step_id"))
         source = _source_step(steps_out, source_step_id)
         if not source:
-            receipt = _cleanup_receipt(
+            receipt = _receipt(
                 cleanup=cleanup,
                 source_step_id=source_step_id,
                 status="FAILED",
                 reason_code=GRAPH_CLEANUP_SOURCE_STEP_UNRESOLVED,
-                evidence={"accepted_write_count": 0, "cleanup_write_count": 0},
+                evidence={
+                    "effectful_write_count": 0,
+                    "cleanup_write_count": 0,
+                    "request_reached_transport": False,
+                },
                 eid=eid,
                 oid=oid,
                 resolved_campaign_id=resolved_campaign_id,
                 resolved_execution_id=resolved_execution_id,
             )
-            receipts.append(receipt)
-            contract_evidence_receipts.append(receipt)
+            _append_receipt(
+                receipt,
+                receipts=receipts,
+                contract_evidence_receipts=contract_evidence_receipts,
+            )
             cleanup_failures += 1
             continue
+
         source_governance = _dict(source.get("governance_receipt"))
         source_write = _dict(source_governance.get("write"))
-        source_status = int(source_write.get("status") or source.get("status_code") or 0)
-        if source_governance.get("accepted") is not True or not 200 <= source_status < 300:
-            receipt = _cleanup_receipt(
+        source_status = int(
+            source_write.get("status") or source.get("status_code") or 0
+        )
+        if not _cleanup_candidate(source):
+            receipt = _receipt(
                 cleanup=cleanup,
                 source_step_id=source_step_id,
                 status="NOT_REQUIRED",
-                reason_code="SOURCE_WRITE_NOT_ACCEPTED",
+                reason_code="SOURCE_WRITE_NO_OBSERVED_EFFECT",
                 evidence={
-                    "accepted_write_count": 0,
+                    "effectful_write_count": 0,
                     "cleanup_write_count": 0,
                     "source_status_code": source_status,
                 },
@@ -209,8 +267,11 @@ def execute_process_graph_cleanup(
                 resolved_campaign_id=resolved_campaign_id,
                 resolved_execution_id=resolved_execution_id,
             )
-            receipts.append(receipt)
-            contract_evidence_receipts.append(receipt)
+            _append_receipt(
+                receipt,
+                receipts=receipts,
+                contract_evidence_receipts=contract_evidence_receipts,
+            )
             continue
 
         original_request = request_bodies_for_cleanup.get(source_step_id)
@@ -223,10 +284,14 @@ def execute_process_graph_cleanup(
         cleanup_path = materialize_path(_text(cleanup.get("path")), bindings)
         observer = _dict(cleanup.get("observer_operation"))
         observation_path = materialize_path(_text(observer.get("path")), bindings)
-        unresolved_path = [
-            *_unresolved_path_placeholders(cleanup_path),
-            *_unresolved_path_placeholders(observation_path),
-        ]
+        unresolved_path = list(
+            dict.fromkeys(
+                [
+                    *_unresolved_path_placeholders(cleanup_path),
+                    *_unresolved_path_placeholders(observation_path),
+                ]
+            )
+        )
         cleanup_body = (
             deepcopy(original_request)
             if cleanup.get("body_from_original_request") is True
@@ -235,30 +300,27 @@ def execute_process_graph_cleanup(
         unresolved_body = _unresolved_body_placeholders(cleanup_body, bindings)
         if binding_error or unresolved_path or unresolved_body or not observation_path:
             detail = binding_error or (
-                "path:" + ",".join(dict.fromkeys(unresolved_path))
+                "path:" + ",".join(unresolved_path)
                 if unresolved_path
                 else "body:" + ",".join(unresolved_body)
                 if unresolved_body
                 else "observer_path_missing"
             )
-            receipt = _cleanup_receipt(
+            receipt = _failed_receipt(
                 cleanup=cleanup,
                 source_step_id=source_step_id,
-                status="FAILED",
                 reason_code=GRAPH_CLEANUP_BINDING_UNRESOLVED,
-                evidence={
-                    "accepted_write_count": 1,
-                    "cleanup_write_count": 0,
-                    "detail": detail,
-                    "request_reached_transport": False,
-                },
+                detail=detail,
                 eid=eid,
                 oid=oid,
                 resolved_campaign_id=resolved_campaign_id,
                 resolved_execution_id=resolved_execution_id,
             )
-            receipts.append(receipt)
-            contract_evidence_receipts.append(receipt)
+            _append_receipt(
+                receipt,
+                receipts=receipts,
+                contract_evidence_receipts=contract_evidence_receipts,
+            )
             cleanup_failures += 1
             continue
 
@@ -270,24 +332,22 @@ def execute_process_graph_cleanup(
             require_write=True,
         )
         if _text(target.get("status")) != "READY":
-            receipt = _cleanup_receipt(
+            receipt = _failed_receipt(
                 cleanup=cleanup,
                 source_step_id=source_step_id,
-                status="FAILED",
-                reason_code=_text(target.get("reason_code")) or "PROCESS_GRAPH_TARGET_NOT_APPROVED",
-                evidence={
-                    "accepted_write_count": 1,
-                    "cleanup_write_count": 0,
-                    "detail": _text(target.get("detail")),
-                    "request_reached_transport": False,
-                },
+                reason_code=_text(target.get("reason_code"))
+                or "PROCESS_GRAPH_TARGET_NOT_APPROVED",
+                detail=_text(target.get("detail")),
                 eid=eid,
                 oid=oid,
                 resolved_campaign_id=resolved_campaign_id,
                 resolved_execution_id=resolved_execution_id,
             )
-            receipts.append(receipt)
-            contract_evidence_receipts.append(receipt)
+            _append_receipt(
+                receipt,
+                receipts=receipts,
+                contract_evidence_receipts=contract_evidence_receipts,
+            )
             cleanup_failures += 1
             continue
 
@@ -299,29 +359,29 @@ def execute_process_graph_cleanup(
         )
         actor_ref = _text(cleanup.get("actor_ref"))
         actor = _dict(scoped_actors.get(actor_ref))
-        token_key = _text(actor.get("credential_secret_ref") or actor.get("secret_ref"))
+        token_key = _text(
+            actor.get("credential_secret_ref") or actor.get("secret_ref")
+        )
         token = _text(scoped_tokens.get(token_key)) if token_key else ""
         if credential_error:
-            receipt = _cleanup_receipt(
+            receipt = _failed_receipt(
                 cleanup=cleanup,
                 source_step_id=source_step_id,
-                status="FAILED",
                 reason_code="PROCESS_GRAPH_TARGET_ACTOR_CREDENTIAL_UNRESOLVED",
-                evidence={
-                    "accepted_write_count": 1,
-                    "cleanup_write_count": 0,
-                    "detail": credential_error,
-                    "request_reached_transport": False,
-                },
+                detail=credential_error,
                 eid=eid,
                 oid=oid,
                 resolved_campaign_id=resolved_campaign_id,
                 resolved_execution_id=resolved_execution_id,
             )
-            receipts.append(receipt)
-            contract_evidence_receipts.append(receipt)
+            _append_receipt(
+                receipt,
+                receipts=receipts,
+                contract_evidence_receipts=contract_evidence_receipts,
+            )
             cleanup_failures += 1
             continue
+
         allowed, policy_reason = sandbox_write_allowed(
             root=root,
             project=project,
@@ -330,24 +390,21 @@ def execute_process_graph_cleanup(
             actor_identity=_text(actor.get("role") or actor_ref),
         )
         if not allowed:
-            receipt = _cleanup_receipt(
+            receipt = _failed_receipt(
                 cleanup=cleanup,
                 source_step_id=source_step_id,
-                status="FAILED",
                 reason_code="BLOCKED_TARGET_POLICY",
-                evidence={
-                    "accepted_write_count": 1,
-                    "cleanup_write_count": 0,
-                    "detail": _text(policy_reason),
-                    "request_reached_transport": False,
-                },
+                detail=_text(policy_reason),
                 eid=eid,
                 oid=oid,
                 resolved_campaign_id=resolved_campaign_id,
                 resolved_execution_id=resolved_execution_id,
             )
-            receipts.append(receipt)
-            contract_evidence_receipts.append(receipt)
+            _append_receipt(
+                receipt,
+                receipts=receipts,
+                contract_evidence_receipts=contract_evidence_receipts,
+            )
             cleanup_failures += 1
             continue
 
@@ -363,7 +420,11 @@ def execute_process_graph_cleanup(
             actor_token=token,
             method=method,
             path=cleanup_path,
-            body=cleanup_body if method in {"POST", "PUT", "PATCH"} else None,
+            body=(
+                cleanup_body
+                if method in {"POST", "PUT", "PATCH"}
+                else None
+            ),
             observation_path=observation_path,
         )
         cleanup_write = _dict(governed.get("write"))
@@ -374,21 +435,22 @@ def execute_process_graph_cleanup(
         )
         audit_receipt_ids = sorted(
             {
-                receipt_id
-                for receipt_id in (
+                value
+                for value in (
                     _governance_audit_receipt_id(source_governance),
                     _governance_audit_receipt_id(governed),
                 )
-                if receipt_id
+                if value
             }
         )
         completed = bool(
-            200 <= status_code < 300
+            governed.get("accepted") is True
+            and 200 <= status_code < 300
             and restoration_verified
             and audit_receipt_ids
         )
         reason_code = "" if completed else GRAPH_CLEANUP_RESTORATION_FAILED
-        receipt = _cleanup_receipt(
+        receipt = _receipt(
             cleanup=cleanup,
             source_step_id=source_step_id,
             status="COMPLETED" if completed else "FAILED",
@@ -397,14 +459,19 @@ def execute_process_graph_cleanup(
                 "method": method,
                 "path": cleanup_path,
                 "observation_path": observation_path,
+                "source_status_code": source_status,
+                "effectful_write_count": 1,
+                "cleanup_write_count": (
+                    1 if governed.get("accepted") is True else 0
+                ),
                 "status_code": status_code,
-                "accepted_write_count": 1,
-                "cleanup_write_count": 1 if governed.get("accepted") is True else 0,
                 "restoration_verified": restoration_verified,
                 "state_unchanged": restoration_verified,
                 "audit_receipt_ids": audit_receipt_ids,
                 "target_policy_decision_id": _text(
-                    _dict(target.get("target_policy_decision")).get("decision_id")
+                    _dict(target.get("target_policy_decision")).get(
+                        "decision_id"
+                    )
                 ),
             },
             eid=eid,
@@ -412,8 +479,11 @@ def execute_process_graph_cleanup(
             resolved_campaign_id=resolved_campaign_id,
             resolved_execution_id=resolved_execution_id,
         )
-        receipts.append(receipt)
-        contract_evidence_receipts.append(receipt)
+        _append_receipt(
+            receipt,
+            receipts=receipts,
+            contract_evidence_receipts=contract_evidence_receipts,
+        )
         cleanup_row = {
             "phase": "cleanup",
             "step_id": _text(cleanup.get("step_id")),
@@ -424,12 +494,26 @@ def execute_process_graph_cleanup(
             "system_ref": _text(cleanup.get("system_ref")),
             "method": method,
             "path": cleanup_path,
+            "observation_path": observation_path,
             "status_code": status_code,
             "governance_receipt": governed,
             "restoration_verified": restoration_verified,
         }
         cleanup_rows.append(cleanup_row)
         steps_out.append(cleanup_row)
+        observations["cleanup_result"] = governed
+        after = _dict(governed.get("after"))
+        if after and int(after.get("status") or 0) > 0:
+            observations["after_cleanup_observation"] = {
+                "status_code": int(after.get("status") or 0),
+                "body": after.get("body"),
+                "path": observation_path,
+                "phase": "after_cleanup",
+                "source": "process_graph_cleanup_governance",
+                "cleanup_step_id": _text(cleanup.get("step_id")),
+                "source_step_id": source_step_id,
+                "receipt_id": _text(receipt.get("receipt_id")),
+            }
         if not completed:
             cleanup_failures += 1
 
@@ -449,9 +533,12 @@ def execute_process_graph_cleanup(
 
     observations["process_graph_cleanup_receipts"] = receipts
     observations["process_graph_cleanup_steps"] = cleanup_rows
-    observations["cleanup_status"] = (
-        "failed" if cleanup_failures else "completed"
-    )
+    if cleanup_failures:
+        observations["cleanup_status"] = "failed"
+    elif cleanup_rows:
+        observations["cleanup_status"] = "completed"
+    else:
+        observations["cleanup_status"] = "not_required"
     return {
         "steps_out": steps_out,
         "observations": observations,
@@ -467,7 +554,7 @@ def finalize_process_graph_cleanup_result(
     result: dict[str, Any],
     resolved_campaign_id: str,
 ) -> dict[str, Any]:
-    """Build the existing cleanup/environment receipts from graph evidence."""
+    """Build existing cleanup and environment receipts from graph evidence."""
     from .cleanup_execution_receipt import (
         build_cleanup_execution_receipt,
         build_environment_restoration_receipt,
@@ -486,7 +573,9 @@ def finalize_process_graph_cleanup_result(
         cleanup_failures=cleanup_failures,
         cleanup_status=_text(observations.get("cleanup_status")),
         proof=proof,
-        adapter_cleanup_receipts=_list(observations.get("adapter_cleanup_receipts")),
+        adapter_cleanup_receipts=_list(
+            observations.get("adapter_cleanup_receipts")
+        ),
     )
     observations["cleanup_execution_receipt"] = cleanup_receipt
     observations["cleanup_execution_receipts"] = [cleanup_receipt]
@@ -509,9 +598,14 @@ def finalize_process_graph_cleanup_result(
             for row in _list(observations.get("fixture_receipts"))
             if _text(_dict(row).get("receipt_id"))
         ],
-        created_rows_remaining=0 if cleanup_failures == 0 else cleanup_failures,
+        created_rows_remaining=(0 if cleanup_failures == 0 else cleanup_failures),
         cleanup_failures=(
-            [{"reason": "process_graph_cleanup_failure", "count": cleanup_failures}]
+            [
+                {
+                    "reason": "process_graph_cleanup_failure",
+                    "count": cleanup_failures,
+                }
+            ]
             if cleanup_failures
             else []
         ),
