@@ -14,6 +14,16 @@ from .database_numeric_finding_bridge import (
 from .database_observer_experiment_projection import (
     project_database_observers_to_experiment_pack,
 )
+from .database_relation_experiment_bridge import (
+    attach_captured_database_relation_contracts,
+    install_database_relation_asset_capture,
+)
+from .database_relation_numeric_experiment_projection import (
+    project_database_relation_numeric_assertions,
+)
+from .database_relation_numeric_finding_bridge import (
+    install_database_relation_numeric_finding_bridge,
+)
 from .database_state_transition_experiment_projection import (
     project_database_state_transition_assertions,
 )
@@ -32,11 +42,13 @@ from .runtime_materialization_operation_matching import (
 
 _original_compile_experiment = _base._original_compile_experiment
 
-# Additive only: capture the existing knowledge asset, bind its governed materialization drafts to
-# experiments, and extend the existing runtime preflight/finalizer. No second compiler or executor.
+# Additive only: capture the existing knowledge asset, bind its governed materialization and
+# approved database relation contracts to experiments, then extend the existing finalizer.
 install_runtime_materialization_execution_bridge()
+install_database_relation_asset_capture()
 install_database_state_transition_finding_bridge()
 install_database_numeric_finding_bridge()
+install_database_relation_numeric_finding_bridge()
 install_runtime_materialization_operation_matching()
 
 
@@ -142,8 +154,6 @@ def _conflict_is_relevant(
     if permission_scope_present:
         return True
     conflict_refs = _refs_from_mapping(_dict(conflict))
-    # An unscoped conflict is global and remains fail-closed. Only conflicts
-    # that explicitly identify other IR nodes are safe to remove here.
     if not conflict_refs or not obligation_refs:
         return True
     return bool(conflict_refs.intersection(obligation_refs))
@@ -186,12 +196,8 @@ def _scoped_behavior_ir(
 ) -> dict[str, Any]:
     ir = deepcopy(_dict(behavior_ir))
     obligation_refs = _obligation_scope_refs(obligation)
-    obligation_actor_refs = _obligation_node_refs(
-        behavior_ir, obligation, "actors"
-    )
-    obligation_actor_roles = _obligation_actor_roles(
-        behavior_ir, obligation_actor_refs
-    )
+    obligation_actor_refs = _obligation_node_refs(behavior_ir, obligation, "actors")
+    obligation_actor_roles = _obligation_actor_roles(behavior_ir, obligation_actor_refs)
     obligation_operation_refs = _obligation_node_refs(
         behavior_ir, obligation, "operations"
     )
@@ -262,10 +268,7 @@ def compile_experiment_for_obligation(
     if not _privacy_field_mode(obligation):
         problem = _base._runtime_pair_problem(obligation, behavior_ir)
         if problem:
-            obligation_id = (
-                _text(_dict(obligation).get("obligation_id"))
-                or "unknown_obligation"
-            )
+            obligation_id = _text(_dict(obligation).get("obligation_id")) or "unknown_obligation"
             return _base._base.blocked_experiment(
                 obligation_id,
                 "BLOCKED_MISSING_ACTOR",
@@ -290,13 +293,7 @@ def compile_experiments(
     policy_version: str = "",
     available_adapters: "set[str] | frozenset[str] | None" = None,
 ) -> dict[str, Any]:
-    """Compile and project one governed database observation/oracle chain.
-
-    ``available_adapters`` names the observation adapters this target may be observed
-    through. Omitting it keeps the http_api-only default, so every existing caller is
-    unaffected; ``adapter_capability.resolve_available_adapters`` supplies a wider set
-    from customer-declared configuration.
-    """
+    """Compile and project one governed database observation/oracle chain."""
     pack = _base._base.compile_experiments(
         obligations,
         behavior_ir=behavior_ir,
@@ -311,5 +308,12 @@ def compile_experiments(
         obligations=obligations,
     )
     observer_bound = project_database_observers_to_experiment_pack(bridged)
-    state_bound = project_database_state_transition_assertions(observer_bound)
-    return project_database_numeric_assertions(state_bound)
+    relation_contract_bound = attach_captured_database_relation_contracts(
+        observer_bound,
+        behavior_ir=behavior_ir,
+    )
+    state_bound = project_database_state_transition_assertions(relation_contract_bound)
+    # Structured cross-table rules must bind before the legacy same-row numeric projector,
+    # otherwise a relation rule is preserved as an unsupported generic conservation rule.
+    relation_numeric_bound = project_database_relation_numeric_assertions(state_bound)
+    return project_database_numeric_assertions(relation_numeric_bound)
