@@ -5,9 +5,18 @@ It converts exact slots already accepted by the existing business-fact ledger in
 candidate contract consumed by ``_candidate_validation``. Promotion, conflict handling
 and execution admission remain owned by the existing authorities.
 
-Only source-backed, structurally resolved facts are projected. A fact whose original
-statement already exists as an authoritative source rule is suppressed so structure
-compilation cannot duplicate the same invariant and obligation.
+Authority boundaries are deliberate:
+
+* operation + condition + outcome semantics stay in the canonical Business Behavior IR
+  authority (``enterprise_understanding.behavior_ir_logic_gate``);
+* allowed/forbidden state transitions stay in the existing state-machine/Behavior IR
+  authority;
+* this producer handles only source-backed entailments that those authorities do not
+  already represent as the same executable fact: cardinality, formula/conservation and
+  explicit idempotency/effect-cardinality rules.
+
+A fact whose original statement already exists as an authoritative source rule is
+suppressed so structure compilation cannot duplicate the same invariant and obligation.
 """
 from __future__ import annotations
 
@@ -17,6 +26,19 @@ import re
 from typing import Any, Iterable
 
 FACT_DERIVATION_SCHEMA = "qualibug.implicit-rule-fact-entailment.v2"
+CANONICAL_BEHAVIOR_OWNED_SLOTS = frozenset(
+    {
+        "action",
+        "conditions",
+        "condition_frame",
+        "condition_combinator",
+        "state_effects",
+        "time_window_constraints",
+        "permission_decision",
+        "expected_effects",
+        "data_effects",
+    }
+)
 _IDEMPOTENCY_RE = re.compile(
     r"幂等|不得重复|不能重复|不可重复|禁止重复|只能成功一次|仅成功一次|"
     r"重复提交不得|重复请求不得|重复调用不得|idempoten|exactly once|at most once",
@@ -50,17 +72,14 @@ def _stable_id(*parts: Any) -> str:
     return "rulecand_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
 
-def _refs(value: Any, field: str) -> list[str]:
-    rows = value.get(field) if isinstance(value, dict) else value
-    return list(dict.fromkeys(_text(row) for row in _list(rows) if _text(row)))
-
-
 def _entity_refs(value: Any) -> list[str]:
-    return sorted(_refs(value, "entity_refs"))
+    rows = value.get("entity_refs") if isinstance(value, dict) else value
+    return sorted({_text(row) for row in _list(rows) if _text(row)})
 
 
 def _actor_refs(value: Any) -> list[str]:
-    return sorted(_refs(value, "actor_refs"))
+    rows = value.get("actor_refs") if isinstance(value, dict) else value
+    return sorted({_text(row) for row in _list(rows) if _text(row)})
 
 
 def _source_refs(fact: dict[str, Any]) -> list[dict[str, Any]]:
@@ -116,17 +135,6 @@ def _scope(fact: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _conditions(fact: dict[str, Any]) -> list[str]:
-    frame = _dict(fact.get("condition_frame"))
-    values = frame.get("conditions") if frame else fact.get("conditions")
-    return list(dict.fromkeys(_text(value) for value in _list(values) if _text(value)))
-
-
-def _condition_combinator(fact: dict[str, Any]) -> str:
-    frame = _dict(fact.get("condition_frame"))
-    return _text(frame.get("combinator") or fact.get("condition_combinator"))
-
-
 def _exceptions(fact: dict[str, Any]) -> list[Any]:
     values = [
         value
@@ -161,7 +169,6 @@ def _candidate(
     field_refs: list[str] | None = None,
     scope: dict[str, Any] | None = None,
     exceptions: list[Any] | None = None,
-    temporal_window: dict[str, Any] | None = None,
     severity: str = "P1",
 ) -> dict[str, Any] | None:
     fact_id = _text(fact.get("fact_id") or fact.get("id"))
@@ -189,7 +196,6 @@ def _candidate(
         "field_refs": list(dict.fromkeys(field_refs or [])),
         "scope": dict(scope or {}),
         "exceptions": exception_values,
-        "temporal_window": dict(temporal_window or {}),
         "derivation_basis": ["typed_fact_entailment"],
         "supporting_fact_refs": [fact_id],
         "contradicting_fact_refs": [],
@@ -293,157 +299,6 @@ def _formula_candidates(
     return rows
 
 
-def _state_candidates(
-    fact: dict[str, Any],
-    subjects: list[str],
-    actors: list[str],
-    operations: list[str],
-) -> Iterable[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    conditions = _conditions(fact)
-    combinator = _condition_combinator(fact)
-    modality = _text(fact.get("modality")).upper()
-    polarity = _text(fact.get("polarity")).upper()
-    action = _dict(fact.get("action"))
-    action_name = _text(action.get("canonical") or action.get("raw") or fact.get("predicate"))
-    scope = _scope(fact)
-    exceptions = _exceptions(fact)
-
-    if (
-        conditions
-        and action_name
-        and combinator != "UNRESOLVED"
-        and subjects
-    ):
-        row = _candidate(
-            fact,
-            logical_form="STATE_PRECONDITION",
-            antecedents=[
-                {
-                    "operator": (combinator or "SOURCE_DECLARED"),
-                    "conditions": conditions,
-                    "entity_refs": subjects,
-                }
-            ],
-            consequent={
-                "operator": "operation_allowed_only_when",
-                "action": action_name,
-                "conditions": conditions,
-                "condition_combinator": combinator or "SOURCE_DECLARED",
-            },
-            subject_refs=subjects,
-            actor_refs=actors,
-            operation_refs=operations,
-            scope=scope,
-            exceptions=exceptions,
-            risk_type="state",
-            observation_requirements=["before_state", "operation_result", "after_state"],
-            counterexample_plan={
-                "control": "conditions_satisfied",
-                "treatment": "one_source_condition_unsatisfied",
-                "observe": "operation_decision_and_state",
-            },
-        )
-        if row:
-            rows.append(row)
-
-    for effect in _list(fact.get("state_effects")):
-        if not isinstance(effect, dict):
-            continue
-        from_state = _text(effect.get("from_state"))
-        to_state = _text(effect.get("to_state"))
-        prohibited = modality == "MUST_NOT" or polarity == "NEGATIVE"
-        if not prohibited or not from_state or not to_state or not subjects:
-            continue
-        row = _candidate(
-            fact,
-            logical_form="FORBIDDEN_STATE_TRANSITION",
-            antecedents=[
-                {
-                    "entity_refs": subjects,
-                    "from_state": from_state,
-                    "action": action_name,
-                }
-            ],
-            consequent={
-                "operator": "must_not_transition",
-                "entity_refs": subjects,
-                "from_state": from_state,
-                "to_state": to_state,
-            },
-            subject_refs=subjects,
-            actor_refs=actors,
-            operation_refs=operations,
-            scope=scope,
-            exceptions=exceptions,
-            risk_type="state",
-            observation_requirements=["before_state", "after_state", "operation_result"],
-            counterexample_plan={
-                "action": "attempt_forbidden_transition",
-                "from_state": from_state,
-                "to_state": to_state,
-                "observe": "state_and_rejection",
-            },
-        )
-        if row:
-            rows.append(row)
-    return rows
-
-
-def _temporal_candidates(
-    fact: dict[str, Any],
-    subjects: list[str],
-    actors: list[str],
-    operations: list[str],
-) -> Iterable[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    windows = [
-        dict(row)
-        for row in _list(fact.get("time_window_constraints"))
-        if isinstance(row, dict)
-        and _text(row.get("raw"))
-        and row.get("source_backed", True) is True
-    ]
-    action = _dict(fact.get("action"))
-    action_name = _text(action.get("canonical") or action.get("raw") or fact.get("predicate"))
-    if not subjects or not action_name:
-        return []
-    for window in windows:
-        row = _candidate(
-            fact,
-            logical_form="TEMPORAL_WINDOW",
-            antecedents=[
-                {
-                    "entity_refs": subjects,
-                    "anchor": window.get("anchor"),
-                    "relation": window.get("relation"),
-                    "duration": window.get("duration"),
-                }
-            ],
-            consequent={
-                "operator": "within_source_window",
-                "action": action_name,
-                "window": window,
-            },
-            subject_refs=subjects,
-            actor_refs=actors,
-            operation_refs=operations,
-            scope=_scope(fact),
-            exceptions=_exceptions(fact),
-            temporal_window=window,
-            risk_type="temporal",
-            observation_requirements=["clock", "before_state", "operation_result", "after_state"],
-            counterexample_plan={
-                "control": "inside_declared_window",
-                "treatment": "outside_declared_window",
-                "observe": "operation_decision_and_state",
-            },
-        )
-        if row:
-            rows.append(row)
-    return rows
-
-
 def _idempotency_candidates(
     fact: dict[str, Any],
     subjects: list[str],
@@ -503,8 +358,6 @@ def derive_rule_candidates_from_business_facts(asset: dict[str, Any]) -> list[di
         for producer in (
             lambda: _cardinality_candidates(fact, subjects, objects),
             lambda: _formula_candidates(fact, subjects),
-            lambda: _state_candidates(fact, subjects, actors, operations),
-            lambda: _temporal_candidates(fact, subjects, actors, operations),
             lambda: _idempotency_candidates(fact, subjects, actors, operations),
         ):
             candidates.extend(
@@ -541,6 +394,7 @@ def uncovered_rule_candidate_spans(asset: dict[str, Any]) -> list[dict[str, Any]
 
 __all__ = [
     "FACT_DERIVATION_SCHEMA",
+    "CANONICAL_BEHAVIOR_OWNED_SLOTS",
     "derive_rule_candidates_from_business_facts",
     "uncovered_rule_candidate_spans",
 ]
