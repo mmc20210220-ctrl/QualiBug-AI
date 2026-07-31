@@ -3,9 +3,9 @@
 The module owns one call graph:
 base source asset -> OpenAPI schema facts -> API artifact projection -> exact operation-schema
 binding -> database-model facts -> cross-source contract alignment -> operation-scoped storage
-candidates -> durable mapping authority -> read-only database observer contracts -> enterprise
-understanding -> downstream binding -> governed Jobs -> final Probe admission -> one final
-persistence receipt.
+candidates -> durable table/field mapping authority -> root database observers -> exact FK relation
+candidates -> durable relation authority -> child collection observers -> enterprise understanding ->
+downstream binding -> governed Jobs -> final Probe admission -> one final persistence receipt.
 """
 from __future__ import annotations
 
@@ -39,6 +39,13 @@ from .database_model_index_reconciliation import (
 from .database_model_semantic_bridge import install_database_model_semantic_bridge
 from .database_observer_contract_projection import (
     enrich_asset_with_database_observer_contracts,
+)
+from .database_relation_authority import apply_database_relation_authority_decisions
+from .database_relation_observer_contract_projection import (
+    enrich_asset_with_database_relation_observer_contracts,
+)
+from .database_relation_observer_projection import (
+    enrich_asset_with_database_relation_observer_candidates,
 )
 from .database_table_source_alignment import (
     enrich_asset_with_database_table_alignment_candidates,
@@ -203,14 +210,22 @@ def build_enterprise_business_knowledge_asset(
     asset = enrich_asset_with_database_table_alignment_candidates(asset)
     asset = enrich_asset_with_api_database_alignment_candidates(asset)
     asset = enrich_asset_with_api_operation_database_candidates(asset)
-    # Durable approvals are always re-applied to freshly rebuilt candidates. Candidate
-    # fingerprint drift fails closed, so persisted assets never smuggle old authority.
+    # Durable table/field approvals are always re-applied to freshly rebuilt candidates.
     asset = apply_database_mapping_authority_decisions(
         asset,
         project_id=project,
         root=resolved_root,
     )
     asset = enrich_asset_with_database_observer_contracts(asset)
+    # Relation candidates require the current root Observer, then reuse the same durable
+    # mapping ledger under candidate_kind=relation. Candidate drift fails closed.
+    asset = enrich_asset_with_database_relation_observer_candidates(asset)
+    asset = apply_database_relation_authority_decisions(
+        asset,
+        project_id=project,
+        root=resolved_root,
+    )
+    asset = enrich_asset_with_database_relation_observer_contracts(asset)
     asset = enrich_asset_with_enterprise_understanding(
         asset, parsed_sources=parsed_sources
     )
@@ -276,7 +291,11 @@ def build_enterprise_business_knowledge_asset(
             "api_operation_database_projection_precedes_enterprise_understanding": True,
             "database_mapping_authority_precedes_enterprise_understanding": True,
             "database_observer_contract_projection_precedes_enterprise_understanding": True,
+            "database_relation_candidate_projection_precedes_enterprise_understanding": True,
+            "database_relation_authority_precedes_enterprise_understanding": True,
+            "database_relation_observer_projection_precedes_enterprise_understanding": True,
             "database_mapping_authority_reapplied_on_every_build": True,
+            "database_relation_authority_reapplied_on_every_build": True,
         }
     )
     asset["governance"] = governance
