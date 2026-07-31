@@ -61,10 +61,10 @@ def _kwargs(observations: dict | None = None) -> dict:
     }
 
 
-def _receipt(*, status: str, semantic_status: str, reason_code: str = "") -> dict:
+def _receipt(*, semantic_status: str, reason_code: str = "") -> dict:
     return {
         "schema_version": RECEIPT_SCHEMA_VERSION,
-        "status": status,
+        "status": "CONVERGED",
         "semantic_status": semantic_status,
         "reason_code": reason_code,
         "step_id": "consume_notification",
@@ -76,7 +76,9 @@ def _receipt(*, status: str, semantic_status: str, reason_code: str = "") -> dic
         "delivery_kind": "message",
         "attempt_count": 3,
         "timed_out": False,
-        "converged": status == "CONVERGED",
+        "converged": True,
+        "coverage_complete": True,
+        "observation_window_completed": True,
         "observed_unique_event_count": 2 if reason_code else 1,
         "idempotency_mismatch_count": 0,
         "retry_limit_violation_count": 0,
@@ -134,16 +136,14 @@ def test_verified_event_precedes_business_transport_in_same_ledger(
     monkeypatch.setattr(
         step_kernel,
         "execute_process_graph_wait",
-        lambda **_: _receipt(status="CONVERGED", semantic_status="PASS"),
+        lambda **_: _receipt(semantic_status="PASS"),
     )
     monkeypatch.setattr(
         step_kernel._core,
         "execute_non_barrier_plans",
         lambda **_: _successful_child(),
     )
-
     result = step_kernel.execute_non_barrier_plans(**_kwargs(observations))
-
     events = result["process_timeline"]["events"]
     assert [row["event_type"] for row in events] == [
         "ASYNC_EVENT_VERIFIED",
@@ -157,40 +157,44 @@ def test_verified_event_precedes_business_transport_in_same_ledger(
     assert observations["process_graph_async_transition_receipts"][0][
         "receipt_id"
     ] == "event_wait_receipt_1"
+    assert observations["process_step_observation_receipts"][0]["receipt_id"] == (
+        "event_wait_receipt_1"
+    )
 
 
-def test_event_violation_blocks_target_transport_and_keeps_scoped_evidence(
+def test_measured_event_violation_still_runs_target_and_reaches_oracle_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observations: dict = {}
+    called: list[str] = []
     monkeypatch.setattr(
         step_kernel,
         "execute_process_graph_wait",
         lambda **_: _receipt(
-            status="BLOCKED",
             semantic_status="VIOLATION",
             reason_code="PROCESS_GRAPH_EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM",
         ),
     )
+
+    def execute_child(**_: object) -> dict:
+        called.append("transport")
+        return _successful_child()
+
     monkeypatch.setattr(
         step_kernel._core,
         "execute_non_barrier_plans",
-        lambda **_: pytest.fail("target transport must not run"),
+        execute_child,
     )
-
     result = step_kernel.execute_non_barrier_plans(**_kwargs(observations))
-
-    assert result["steps"][0]["status"] == "blocked_request"
-    assert result["steps"][0]["async_transition_kind"] == "message"
-    assert result["process_timeline"]["events"][0]["event_type"] == (
-        "ASYNC_EVENT_FAILED"
-    )
+    assert called == ["transport"]
+    assert result["steps"][0]["status_code"] == 200
     row = result["process_step_ledger"].get_step_row("consume_notification")
     assert "event_wait_receipt_1" in row["scoped_observation_receipt_ids"]
-    evidence = result["contract_evidence_receipts"][0]["evidence"]
-    assert evidence["request_reached_transport"] is False
-    assert evidence["async_semantic_status"] == "VIOLATION"
-    assert evidence["observed_unique_event_count"] == 2
+    receipt = observations["process_step_observation_receipts"][0]
+    assert receipt["semantic_status"] == "VIOLATION"
+    assert receipt["reason_code"] == (
+        "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
+    )
     assert observations["process_graph_async_transition_receipts"][0][
         "receipt_id"
     ] == "event_wait_receipt_1"
