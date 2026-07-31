@@ -1,9 +1,9 @@
 """Graph-aware entry point for experiment plan execution.
 
 The existing sequential transport/governance implementation remains the only
-step kernel.  This module adds source-backed dependency scheduling, exact
+step kernel. This module adds source-backed dependency scheduling, exact
 approved-target dispatch, and namespaced cross-node bindings before invoking
-that kernel one node at a time.  Ordinary plans delegate unchanged.
+that kernel one node at a time. Ordinary plans delegate unchanged.
 """
 from __future__ import annotations
 
@@ -103,6 +103,28 @@ def _blocked_graph_result(
         "process_graph_runtime": dict(runtime),
         "process_graph_binding_ledger": {},
     }
+
+
+def _apply_graph_outcome_to_master(
+    *, master: Any, node_id: str, outcome: dict[str, Any]
+) -> None:
+    status = _text(outcome.get("status"))
+    if status == "SUCCEEDED":
+        return
+    row = master.get_step_row(node_id) if hasattr(master, "get_step_row") else None
+    if not isinstance(row, dict):
+        return
+    final_status = status or "BLOCKED"
+    row["final_status"] = final_status
+    row["final_step_status"] = final_status
+    row["step_completed"] = False
+    row["step_failed"] = True
+    reason_code = _text(outcome.get("reason_code"))
+    if reason_code:
+        row["reason_code"] = reason_code
+    unresolved = _list(outcome.get("output_binding_unresolved"))
+    if unresolved:
+        row["detail"] = ",".join(_text(value) for value in unresolved if _text(value))
 
 
 def _execute_graph_node(
@@ -256,6 +278,7 @@ def _execute_graph_node(
         step=step,
         observation=observation,
     )
+    _apply_graph_outcome_to_master(master=master, node_id=node_id, outcome=outcome)
     if not observation:
         return {}
     return {
