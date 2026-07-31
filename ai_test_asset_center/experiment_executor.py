@@ -11,6 +11,8 @@ fingerprints the customer-facing payload.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +70,49 @@ def _sync_governance_hooks() -> None:
         _governance.load_actor_tokens = public_loader
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _canonical(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _verify_authorization_compile_identity(
+    result: dict[str, Any],
+    experiment: dict[str, Any],
+) -> None:
+    """Prove the causal receipt was built against the current compiled contract."""
+    receipt = _dict(result.get("authorization_causality_receipt"))
+    contract = _dict(experiment.get("authorization_comparison_contract"))
+    if not receipt or not contract or str(receipt.get("status") or "").upper() != "PASSED":
+        return
+    expected_contract_fingerprint = hashlib.sha256(
+        _canonical(contract).encode("utf-8")
+    ).hexdigest()
+    if str(receipt.get("comparison_contract_fingerprint") or "").strip() != expected_contract_fingerprint:
+        raise AuthorizationDeliveryGateError(
+            "authorization_delivery_comparison_contract_fingerprint_mismatch"
+        )
+    expected_binding_graph_fingerprint = str(
+        contract.get("shared_binding_graph_fingerprint") or ""
+    ).strip()
+    if (
+        not expected_binding_graph_fingerprint
+        or str(receipt.get("compile_binding_graph_fingerprint") or "").strip()
+        != expected_binding_graph_fingerprint
+    ):
+        raise AuthorizationDeliveryGateError(
+            "authorization_delivery_binding_graph_fingerprint_mismatch"
+        )
+
+
 def execute_one_experiment(
     experiment: dict[str, Any],
     *,
@@ -100,6 +145,7 @@ def execute_one_experiment(
         account_rows=_governance._test_account_rows(root, project),
     )
     try:
+        _verify_authorization_compile_identity(governed, experiment)
         return attach_authorization_delivery_evidence(
             governed,
             experiment=experiment,
