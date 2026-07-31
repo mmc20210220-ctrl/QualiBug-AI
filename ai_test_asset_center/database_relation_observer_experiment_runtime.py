@@ -9,9 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterable
 
-from .database_observer_experiment_runtime import (
-    _runtime_values,
-)
+from .database_observer_experiment_runtime import _runtime_values
 from .database_relation_observer_runtime import (
     ADAPTER,
     EVIDENCE_KEY,
@@ -34,7 +32,9 @@ def _text(value: Any) -> str:
 
 
 def _dict(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
+    # Phase execution mutates the caller-owned observations bag. Returning a copy here
+    # silently discards typed receipts before Assertion DSL evaluation.
+    return value if isinstance(value, dict) else {}
 
 
 def _list(value: Any) -> list[Any]:
@@ -283,6 +283,9 @@ def install_database_relation_phase_execution() -> None:
     def wrapped(exp: dict[str, Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
         root_summary = original(exp, *args, **kwargs)
         phase = kwargs.get("phase") or (args[0] if args else "")
+        observations = kwargs.get("observations")
+        if not isinstance(observations, dict):
+            raise ValueError("database_relation_observer_observations_missing")
         relation_summary = execute_database_relation_observer_phase(
             exp,
             phase=_text(phase),
@@ -290,7 +293,7 @@ def install_database_relation_phase_execution() -> None:
             project=kwargs.get("project"),
             runtime_contract=_dict(kwargs.get("runtime_contract")),
             runtime_bindings=_dict(kwargs.get("runtime_bindings")),
-            observations=_dict(kwargs.get("observations")),
+            observations=observations,
             steps_out=[dict(row) for row in _list(kwargs.get("steps_out")) if isinstance(row, dict)],
             campaign_id=_text(kwargs.get("campaign_id")),
             execution_id=_text(kwargs.get("execution_id")),
