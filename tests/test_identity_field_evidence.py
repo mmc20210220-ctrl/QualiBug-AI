@@ -49,7 +49,9 @@ def _result(*bindings: dict, unknown_artifact: str = "") -> dict:
         "unknowns": unknowns,
         "conflicts": [],
         "gate": {
-            "status": "PARTIAL_ENTERPRISE_IDENTITY_BINDING" if unknowns else "PASS",
+            "status": (
+                "PARTIAL_ENTERPRISE_IDENTITY_BINDING" if unknowns else "PASS"
+            ),
             "entry_allowed": True,
             "business_understanding_allowed": True,
             "metrics": {},
@@ -66,7 +68,9 @@ def test_exact_declared_identity_key_binds_unbound_api_to_existing_entity() -> N
                 "source_id": "db",
                 "source_locator": "schema.orders",
                 "business_object": "销售订单",
-                "evidence": _evidence("db", "schema.orders", "orders 表实现销售订单"),
+                "evidence": _evidence(
+                    "db", "schema.orders", "orders 表实现销售订单"
+                ),
                 "columns": [
                     {
                         "column_id": "orders.id",
@@ -85,7 +89,9 @@ def test_exact_declared_identity_key_binds_unbound_api_to_existing_entity() -> N
                 "path": "/orders/{orderId}",
                 "source_id": "openapi",
                 "source_locator": "GET /orders/{orderId}",
-                "evidence": _evidence("openapi", "GET /orders/{orderId}", "按订单标识读取订单"),
+                "evidence": _evidence(
+                    "openapi", "GET /orders/{orderId}", "按订单标识读取订单"
+                ),
                 "parameter_contracts": [
                     {
                         "field_id": "path.orderId",
@@ -108,14 +114,21 @@ def test_exact_declared_identity_key_binds_unbound_api_to_existing_entity() -> N
     projected = augment_identity_field_evidence(asset, result)
 
     table_binding = next(
-        row for row in projected["bindings"] if row["artifact_ref"] == "table:orders"
+        row
+        for row in projected["bindings"]
+        if row["artifact_ref"] == "table:orders"
     )
-    assert table_binding["identity_field_bindings"][0]["schema"] == IDENTITY_FIELD_BINDING_SCHEMA
+    assert (
+        table_binding["identity_field_bindings"][0]["schema"]
+        == IDENTITY_FIELD_BINDING_SCHEMA
+    )
     assert table_binding["identity_field_bindings"][0]["identity_key_refs"] == [
         "sales-order-id"
     ]
     api_binding = next(
-        row for row in projected["bindings"] if row["artifact_ref"] == "api:get-order"
+        row
+        for row in projected["bindings"]
+        if row["artifact_ref"] == "api:get-order"
     )
     assert api_binding["entity_id"] == "entity:sales-order"
     assert api_binding["relation"] == "IDENTIFIED_BY_KEY"
@@ -124,6 +137,78 @@ def test_exact_declared_identity_key_binds_unbound_api_to_existing_entity() -> N
     assert projected["unknowns"] == []
     assert projected["gate"]["status"] == "PASS"
     assert projected["identity_field_evidence"]["cross_technical_binding_count"] == 1
+
+
+def test_unbound_artifact_aggregates_all_declared_fields_for_one_entity() -> None:
+    asset = {
+        "data_tables": [
+            {
+                "table_id": "table:orders",
+                "columns": [
+                    {
+                        "column_id": "orders.id",
+                        "name": "id",
+                        "primary_key": True,
+                        "identity_key_ref": "sales-order-id",
+                    },
+                    {
+                        "column_id": "orders.external_no",
+                        "name": "external_no",
+                        "unique": True,
+                        "identity_key_ref": "sales-order-external-no",
+                    },
+                ],
+            }
+        ],
+        "interfaces": [
+            {
+                "interface_id": "api:order-detail",
+                "parameter_contracts": [
+                    {
+                        "field_id": "path.orderId",
+                        "name": "orderId",
+                        "is_identifier": True,
+                        "identity_key_ref": "sales-order-id",
+                    }
+                ],
+                "response_fields": [
+                    {
+                        "field_id": "body.externalOrderNo",
+                        "name": "externalOrderNo",
+                        "unique": True,
+                        "identity_key_ref": "sales-order-external-no",
+                    }
+                ],
+            }
+        ],
+    }
+    result = _result(
+        _binding("entity:sales-order", "DATABASE_TABLE", "table:orders"),
+        unknown_artifact="api:order-detail",
+    )
+
+    projected = augment_identity_field_evidence(asset, result)
+
+    api_binding = next(
+        row
+        for row in projected["bindings"]
+        if row["artifact_ref"] == "api:order-detail"
+    )
+    assert api_binding["entity_id"] == "entity:sales-order"
+    assert api_binding["identity_key_refs"] == [
+        "sales-order-external-no",
+        "sales-order-id",
+    ]
+    assert sorted(
+        row["technical_field_ref"]
+        for row in api_binding["identity_field_bindings"]
+    ) == ["body.externalOrderNo", "path.orderId"]
+    assert (
+        projected["identity_field_evidence"][
+            "technical_artifact_identity_decided_as_one_unit"
+        ]
+        is True
+    )
 
 
 def test_exact_field_name_without_declared_key_is_candidate_only() -> None:
@@ -203,8 +288,12 @@ def test_same_declared_identity_key_on_multiple_entities_blocks_formal_understan
         ]
     }
     result = _result(
-        _binding("entity:sales-order", "DATABASE_TABLE", "table:sales-orders"),
-        _binding("entity:purchase-order", "DATABASE_TABLE", "table:purchase-orders"),
+        _binding(
+            "entity:sales-order", "DATABASE_TABLE", "table:sales-orders"
+        ),
+        _binding(
+            "entity:purchase-order", "DATABASE_TABLE", "table:purchase-orders"
+        ),
     )
 
     projected = augment_identity_field_evidence(asset, result)
@@ -221,6 +310,79 @@ def test_same_declared_identity_key_on_multiple_entities_blocks_formal_understan
     ]
     assert conflict["automatic_resolution_allowed"] is False
     assert projected["gate"]["status"] == "BLOCKED_ENTERPRISE_IDENTITY_CONFLICT"
+    assert projected["gate"]["entry_allowed"] is False
+
+
+def test_one_artifact_with_keys_for_different_entities_is_explicit_conflict() -> None:
+    asset = {
+        "data_tables": [
+            {
+                "table_id": "table:orders",
+                "columns": [
+                    {
+                        "column_id": "orders.id",
+                        "name": "id",
+                        "primary_key": True,
+                        "identity_key_ref": "sales-order-id",
+                    }
+                ],
+            },
+            {
+                "table_id": "table:tenants",
+                "columns": [
+                    {
+                        "column_id": "tenants.id",
+                        "name": "id",
+                        "primary_key": True,
+                        "identity_key_ref": "tenant-id",
+                    }
+                ],
+            },
+        ],
+        "interfaces": [
+            {
+                "interface_id": "api:ambiguous",
+                "parameter_contracts": [
+                    {
+                        "field_id": "path.orderId",
+                        "name": "orderId",
+                        "is_identifier": True,
+                        "identity_key_ref": "sales-order-id",
+                    },
+                    {
+                        "field_id": "header.tenantId",
+                        "name": "tenantId",
+                        "is_identifier": True,
+                        "identity_key_ref": "tenant-id",
+                    },
+                ],
+            }
+        ],
+    }
+    result = _result(
+        _binding("entity:sales-order", "DATABASE_TABLE", "table:orders"),
+        _binding("entity:tenant", "DATABASE_TABLE", "table:tenants"),
+        unknown_artifact="api:ambiguous",
+    )
+
+    projected = augment_identity_field_evidence(asset, result)
+
+    assert not any(
+        row["artifact_ref"] == "api:ambiguous"
+        for row in projected["bindings"]
+    )
+    conflict = next(
+        row
+        for row in projected["conflicts"]
+        if row["kind"] == "IDENTITY_ARTIFACT_KEYS_DISAGREE"
+    )
+    assert conflict["artifact_ref"] == "api:ambiguous"
+    assert conflict["identity_key_refs"] == ["sales-order-id", "tenant-id"]
+    assert conflict["candidate_entity_ids"] == [
+        "entity:sales-order",
+        "entity:tenant",
+    ]
+    assert projected["unknowns"]
     assert projected["gate"]["entry_allowed"] is False
 
 
