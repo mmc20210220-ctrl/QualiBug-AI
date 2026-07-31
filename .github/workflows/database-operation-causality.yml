@@ -1,0 +1,104 @@
+name: Database operation causality
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ai_test_asset_center/database_relation_delta_causality_projection.py"
+      - "ai_test_asset_center/database_relation_delta_causality_mainline.py"
+      - "ai_test_asset_center/database_relation_causality_runtime.py"
+      - "ai_test_asset_center/operation_causality_runtime.py"
+      - "ai_test_asset_center/operation_causality_runtime_attachment.py"
+      - "ai_test_asset_center/operation_causality_receipt_integrity.py"
+      - "ai_test_asset_center/database_relation_delta_causality_oracle.py"
+      - "ai_test_asset_center/database_relation_delta_causality_integrity.py"
+      - "ai_test_asset_center/database_relation_delta_causality_finding_bridge.py"
+      - "ai_test_asset_center/database_relation_observer_runtime.py"
+      - "ai_test_asset_center/database_relation_observer_experiment_runtime.py"
+      - "ai_test_asset_center/database_relation_delta_lineage.py"
+      - "ai_test_asset_center/database_relation_delta_projection_gate.py"
+      - "ai_test_asset_center/experiment_compiler.py"
+      - "ai_test_asset_center/experiment_executor.py"
+      - "ai_test_asset_center/experiment_plan_executor.py"
+      - "ai_test_asset_center/non_http_observers.py"
+      - "tests/database_relation_delta_causality_fixtures.py"
+      - "tests/test_database_relation_delta_causality_projection.py"
+      - "tests/test_database_relation_causality_runtime.py"
+      - "tests/test_operation_causality_runtime.py"
+      - "tests/test_operation_causality_receipt_integrity.py"
+      - "tests/test_database_relation_delta_causality_oracle.py"
+      - "tests/test_database_relation_delta_causality_integrity.py"
+      - "tests/test_database_relation_delta_causality_contract_oracle.py"
+      - "tests/test_database_relation_delta_causality_finding_bridge.py"
+      - "tests/test_database_relation_delta_causality_runtime_integration.py"
+      - "tests/test_database_relation_delta_causality_integrity_runtime_integration.py"
+      - ".github/workflows/database-operation-causality.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  causal-closure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install product and tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile causal database mainline
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/database_relation_delta_causality_projection.py \
+            ai_test_asset_center/database_relation_delta_causality_mainline.py \
+            ai_test_asset_center/database_relation_causality_runtime.py \
+            ai_test_asset_center/operation_causality_runtime.py \
+            ai_test_asset_center/operation_causality_runtime_attachment.py \
+            ai_test_asset_center/operation_causality_receipt_integrity.py \
+            ai_test_asset_center/database_relation_delta_causality_oracle.py \
+            ai_test_asset_center/database_relation_delta_causality_integrity.py \
+            ai_test_asset_center/database_relation_delta_causality_finding_bridge.py \
+            ai_test_asset_center/database_relation_observer_runtime.py \
+            ai_test_asset_center/database_relation_observer_experiment_runtime.py \
+            ai_test_asset_center/database_relation_delta_lineage.py \
+            ai_test_asset_center/database_relation_delta_projection_gate.py \
+            ai_test_asset_center/experiment_compiler.py \
+            ai_test_asset_center/experiment_executor.py \
+            ai_test_asset_center/experiment_plan_executor.py \
+            ai_test_asset_center/non_http_observers.py
+
+      - name: Run causal database closure tests
+        run: |
+          pytest -q \
+            tests/test_database_relation_delta_experiment_projection.py \
+            tests/test_database_relation_delta_projection_gate.py \
+            tests/test_database_relation_delta_oracle.py \
+            tests/test_database_relation_delta_authority.py \
+            tests/test_database_relation_delta_contract_oracle.py \
+            tests/test_database_relation_delta_runtime_integration.py \
+            tests/test_database_relation_delta_causality_projection.py \
+            tests/test_database_relation_causality_runtime.py \
+            tests/test_operation_causality_runtime.py \
+            tests/test_operation_causality_receipt_integrity.py \
+            tests/test_database_relation_delta_causality_oracle.py \
+            tests/test_database_relation_delta_causality_integrity.py \
+            tests/test_database_relation_delta_causality_contract_oracle.py \
+            tests/test_database_relation_delta_causality_finding_bridge.py \
+            tests/test_database_relation_delta_causality_runtime_integration.py \
+            tests/test_database_relation_delta_causality_integrity_runtime_integration.py
