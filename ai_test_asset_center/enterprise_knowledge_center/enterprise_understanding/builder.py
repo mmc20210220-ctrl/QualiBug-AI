@@ -2030,13 +2030,8 @@ def _build_actors(
             row = ensure(actor_name, evidence_from_fact(fact), "business_fact")
             if not row:
                 continue
-            contract_decision = (
-                fact_decision
-                if fact_decision in {"ALLOW", "DENY"} and action and object_refs
-                else "UNKNOWN"
-            )
             contract = _authorization_contract(
-                decision=contract_decision,
+                decision=fact_decision,
                 resource_refs=object_refs,
                 actions=[action],
                 scope=as_dict(fact.get("scope")),
@@ -2051,7 +2046,8 @@ def _build_actors(
                 reason_code = (
                     text(authorization.get("reason_code"))
                     if fact_decision == "UNKNOWN"
-                    else "ACTOR_AUTHORIZATION_COORDINATE_INCOMPLETE"
+                    else text(contract.get("resolution_reason"))
+                    or "ACTOR_AUTHORIZATION_COORDINATE_INCOMPLETE"
                 ) or "ACTOR_AUTHORIZATION_DECISION_UNRESOLVED"
                 authorization_unknowns.append(
                     _authorization_unknown(
