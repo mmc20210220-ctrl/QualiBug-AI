@@ -13,6 +13,7 @@ from .gate import assess_understanding_model
 from .implementation_binding_governance import (
     build_governed_behavior_implementation_bindings,
 )
+from .process_graph_ir import build_business_process_graphs
 from .schema import (
     as_dict,
     as_list,
@@ -360,11 +361,67 @@ def apply_minimum_understanding_closure(
         gate=implementation_gate,
     )
 
+    process_graphs, process_graph_unknowns, process_graph_gate = (
+        build_business_process_graphs(model, behaviors, implementation_bindings)
+    )
+    model["process_graphs"] = process_graphs
+    model["process_graph_unknowns"] = process_graph_unknowns
+    model["process_graph_gate"] = process_graph_gate
+    model["business_behavior_ir"] = {
+        "schema": "qualibug.enterprise-business-behavior-ir.v1",
+        "behaviors": behaviors,
+        "process_graphs": process_graphs,
+        "behavior_gate": behavior_gate,
+        "process_graph_gate": process_graph_gate,
+        "semantic_authority": "enterprise_understanding",
+        "runtime_executability_claimed": False,
+    }
+    asset["business_process_graphs"] = process_graphs
+    asset["business_process_graph_gate"] = process_graph_gate
+    process_graph_metrics = as_dict(process_graph_gate.get("metrics"))
+    asset_summary = as_dict(asset.get("summary"))
+    asset_summary.update(
+        {
+            "process_graph_status": process_graph_gate.get("status"),
+            "process_graph_count": len(process_graphs),
+            "compiled_process_graph_count": int(
+                process_graph_metrics.get("compiled_process_graph_count") or 0
+            ),
+            "partial_process_graph_count": int(
+                process_graph_metrics.get("partial_process_graph_count") or 0
+            ),
+            "process_graph_unknown_count": len(process_graph_unknowns),
+        }
+    )
+    asset["summary"] = asset_summary
+    asset_gaps = [
+        dict(row)
+        for row in as_list(asset.get("coverage_gaps"))
+        if isinstance(row, dict) and text(row.get("kind")) != "PROCESS_GRAPH_IR_PARTIAL"
+    ]
+    if text(process_graph_gate.get("status")) != "PASS":
+        asset_gaps.append(
+            {
+                "kind": "PROCESS_GRAPH_IR_PARTIAL",
+                "gap_type": "understood_process_not_fully_bound_to_behavior_implementation",
+                "source_id": "*",
+                "process_graph_status": process_graph_gate.get("status"),
+                "unknown_count": len(process_graph_unknowns),
+                "semantic_understanding_is_not_changed": True,
+                "runtime_executability_claimed": False,
+            }
+        )
+    asset["coverage_gaps"] = asset_gaps
+
     # Semantic understanding and implementation binding are separate gates. Missing
     # endpoints or observers block scenario planning, not what the source materials say.
     unknowns = [
         row
-        for row in [*as_list(model.get("unknowns")), *behavior_unknowns]
+        for row in [
+            *as_list(model.get("unknowns")),
+            *behavior_unknowns,
+            *process_graph_unknowns,
+        ]
         if isinstance(row, dict)
     ]
     conflicts = [
@@ -418,8 +475,20 @@ def apply_minimum_understanding_closure(
             if isinstance(evidence, dict)
         ]
     )
+    process_graph_evidence = dedupe_evidence(
+        [
+            evidence
+            for graph in process_graphs
+            for evidence in as_list(graph.get("evidence"))
+            if isinstance(evidence, dict)
+        ]
+    )
     model["evidence_index"] = dedupe_evidence(
-        [*as_list(model.get("evidence_index")), *behavior_evidence]
+        [
+            *as_list(model.get("evidence_index")),
+            *behavior_evidence,
+            *process_graph_evidence,
+        ]
     )
     if active_sources and not as_list(model.get("evidence_index")):
         unknowns.append(
@@ -480,6 +549,15 @@ def apply_minimum_understanding_closure(
         "implementation_binding_unknown_count": len(implementation_unknowns),
         "implementation_binding_conflict_count": len(implementation_conflicts),
         "implementation_binding_status": implementation_gate.get("status"),
+        "process_graph_count": len(process_graphs),
+        "compiled_process_graph_count": int(
+            process_graph_metrics.get("compiled_process_graph_count") or 0
+        ),
+        "partial_process_graph_count": int(
+            process_graph_metrics.get("partial_process_graph_count") or 0
+        ),
+        "process_graph_unknown_count": len(process_graph_unknowns),
+        "process_graph_status": process_graph_gate.get("status"),
     }
     gate = assess_understanding_model(
         model,
@@ -490,6 +568,13 @@ def apply_minimum_understanding_closure(
     model["metrics"]["implementation_binding_status"] = implementation_gate.get("status")
     model["metrics"]["scenario_ready_binding_count"] = int(
         implementation_metrics.get("scenario_ready_binding_count") or 0
+    )
+    model["metrics"]["process_graph_status"] = process_graph_gate.get("status")
+    model["metrics"]["compiled_process_graph_count"] = int(
+        process_graph_metrics.get("compiled_process_graph_count") or 0
+    )
+    model["metrics"]["partial_process_graph_count"] = int(
+        process_graph_metrics.get("partial_process_graph_count") or 0
     )
 
     # Document-structure completeness is part of the semantic closure.
