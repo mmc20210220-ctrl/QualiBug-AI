@@ -7,79 +7,25 @@ on:
     paths:
       - "ai_test_asset_center/enterprise_material_formats.py"
       - "ai_test_asset_center/policies/semantic_lexicon.json"
-      - "ai_test_asset_center/enterprise_knowledge_center/document_ingestion/**"
-      - "ai_test_asset_center/enterprise_knowledge_center/document_ir_tabular_semantics.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/archive_expansion.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/archive_ingestion.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/archive_ingestion_core.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/atomic_ingestion.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/source_ingestion.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/_common.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/_crud.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/__init__.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/composition.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/gate.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/semantic_lexicon_contract.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/**"
+      - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
       - "ai_test_asset_center/private_pilot_project_assets.py"
       - "ai_test_asset_center/private_pilot_ingest_authority.py"
-      - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/_document_ir_fact_evidence.py"
-      - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/document_structure_gate.py"
-      - "benchmark_evaluator/enterprise_understanding/build_product_snapshot.py"
-      - "benchmark_evaluator/enterprise_understanding/document_ground_truth.py"
-      - "benchmark_evaluator/enterprise_understanding/ground_truth.py"
-      - "benchmark_evaluator/enterprise_understanding/ingestion_evidence.py"
-      - "benchmark_evaluator/enterprise_understanding/fact_slots.py"
-      - "benchmark_evaluator/enterprise_understanding/runner.py"
-      - "benchmark_evaluator/enterprise_understanding/report.py"
-      - "benchmark_evaluator/enterprise_understanding/run_source_backed_workflow.py"
-      - "benchmark_evaluator/enterprise_understanding/__init__.py"
-      - "benchmark_evaluator/enterprise_understanding/__main__.py"
-      - "tests/test_enterprise_document_ingestion_closure.py"
-      - "tests/test_enterprise_source_document_ir_bridge.py"
-      - "tests/test_enterprise_source_runtime_bridge.py"
+      - "benchmark_evaluator/enterprise_understanding/**"
+      - "tests/test_*document*.py"
+      - "tests/test_*archive*.py"
+      - "tests/test_*office*.py"
+      - "tests/test_enterprise_source_*.py"
       - "tests/test_source_registry_lifecycle.py"
-      - "tests/test_document_ingestion_text_first_planner.py"
-      - "tests/test_compatible_office_normalization.py"
-      - "tests/test_office_adapter_policy_contracts.py"
-      - "tests/test_office_format_identity_planner.py"
-      - "tests/test_document_adapter_runtime_readiness.py"
-      - "tests/test_office_runtime_capabilities.py"
-      - "tests/test_office_container_inspection.py"
-      - "tests/test_office_container_resource_limits.py"
+      - "tests/test_source_occurrence_*.py"
+      - "tests/test_enterprise_understanding_*.py"
       - "tests/test_api_artifact_document_adapter.py"
       - "tests/test_openapi_schema_projection.py"
-      - "tests/test_enterprise_archive_expansion.py"
-      - "tests/test_enterprise_archive_ingestion_transaction.py"
-      - "tests/test_archive_ingestion.py"
-      - "tests/test_archive_ingestion_atomicity.py"
-      - "tests/test_archive_transport_document_container_guard.py"
-      - "tests/test_archive_member_activation_atomicity.py"
-      - "tests/test_archive_member_reconciliation.py"
-      - "tests/test_private_pilot_ingest_authority.py"
-      - "tests/test_archive_explicit_type_override.py"
-      - "tests/test_document_ir_tabular_semantics.py"
-      - "tests/test_multi_row_test_case_semantics.py"
       - "tests/test_tabular_semantics_ingestion_bridge.py"
+      - "tests/test_multi_row_test_case_semantics.py"
       - "tests/test_test_asset_source_types.py"
-      - "tests/test_document_ir_fact_evidence_spans.py"
-      - "tests/test_document_structure_fact_receipt_gate.py"
-      - "tests/test_document_evidence_address_quality.py"
-      - "tests/test_office_visual_ocr_supplemental.py"
-      - "tests/test_document_runtime_packaging.py"
+      - "tests/test_private_pilot_ingest_authority.py"
       - "tests/test_generated_structure_label_authority.py"
-      - "tests/test_enterprise_understanding_ingestion_evidence.py"
-      - "tests/test_enterprise_understanding_ingestion_evidence_fail_closed.py"
-      - "tests/test_enterprise_understanding_document_ground_truth.py"
-      - "tests/test_enterprise_understanding_source_backed_ingestion_target.py"
-      - "tests/test_enterprise_understanding_source_backed_workflow.py"
-      - "tests/test_enterprise_understanding_source_reference_authority.py"
-      - "tests/test_enterprise_understanding_product_source_references.py"
-      - "tests/test_enterprise_understanding_actor_permission_contract.py"
-      - "tests/test_enterprise_understanding_structure_first_facts.py"
-      - "tests/test_enterprise_understanding_fact_slots.py"
       - "pyproject.toml"
       - "Dockerfile"
       - ".github/workflows/document-ingestion-closure.yml"
@@ -90,7 +36,7 @@ permissions:
 jobs:
   closure:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -111,99 +57,36 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Compile changed modules
+      - name: Compile ingestion and evaluator authorities
         run: |
-          python -m py_compile \
-            ai_test_asset_center/enterprise_material_formats.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/contract.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/office_adapters.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/compatible_office_adapter.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/native_office_policy_adapters.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/office_runtime_capabilities.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/office_container_inspection.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/guarded_compatible_office_adapter.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/api_artifact_adapter.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/guarded_api_artifact_adapter.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/openapi_schema_projection.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/page_render_registry.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/evidence_closure.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/rendered_ocr_adapter.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/pipeline.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/planner.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/registry.py \
-            ai_test_asset_center/enterprise_knowledge_center/document_ir_tabular_semantics.py \
-            ai_test_asset_center/enterprise_knowledge_center/archive_expansion.py \
-            ai_test_asset_center/enterprise_knowledge_center/archive_ingestion.py \
-            ai_test_asset_center/enterprise_knowledge_center/archive_ingestion_core.py \
-            ai_test_asset_center/enterprise_knowledge_center/atomic_ingestion.py \
-            ai_test_asset_center/enterprise_knowledge_center/source_ingestion.py \
-            ai_test_asset_center/enterprise_knowledge_center/_common.py \
-            ai_test_asset_center/enterprise_knowledge_center/_crud.py \
-            ai_test_asset_center/enterprise_knowledge_center/__init__.py \
-            ai_test_asset_center/enterprise_knowledge_center/composition.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/gate.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/semantic_lexicon_contract.py \
-            ai_test_asset_center/private_pilot_project_assets.py \
-            ai_test_asset_center/private_pilot_ingest_authority.py \
-            ai_test_asset_center/enterprise_source_registry_lifecycle.py \
-            ai_test_asset_center/enterprise_knowledge_center/_document_ir_fact_evidence.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/document_structure_gate.py \
-            benchmark_evaluator/enterprise_understanding/build_product_snapshot.py \
-            benchmark_evaluator/enterprise_understanding/document_ground_truth.py \
-            benchmark_evaluator/enterprise_understanding/ground_truth.py \
-            benchmark_evaluator/enterprise_understanding/ingestion_evidence.py \
-            benchmark_evaluator/enterprise_understanding/fact_slots.py \
-            benchmark_evaluator/enterprise_understanding/runner.py \
-            benchmark_evaluator/enterprise_understanding/report.py \
-            benchmark_evaluator/enterprise_understanding/run_source_backed_workflow.py \
-            benchmark_evaluator/enterprise_understanding/__init__.py \
-            benchmark_evaluator/enterprise_understanding/__main__.py
+          python -m compileall -q \
+            ai_test_asset_center/enterprise_knowledge_center \
+            benchmark_evaluator/enterprise_understanding
 
-      - name: Run focused closure tests
+      - name: Run document ingestion closure
         run: |
           pytest -q \
             tests/test_enterprise_document_ingestion_closure.py \
             tests/test_enterprise_source_document_ir_bridge.py \
             tests/test_enterprise_source_runtime_bridge.py \
             tests/test_source_registry_lifecycle.py \
-            tests/test_document_ingestion_text_first_planner.py \
+            tests/test_document_*.py \
+            tests/test_office_*.py \
             tests/test_compatible_office_normalization.py \
-            tests/test_office_adapter_policy_contracts.py \
-            tests/test_office_format_identity_planner.py \
-            tests/test_document_adapter_runtime_readiness.py \
-            tests/test_office_runtime_capabilities.py \
-            tests/test_office_container_inspection.py \
-            tests/test_office_container_resource_limits.py \
             tests/test_api_artifact_document_adapter.py \
             tests/test_openapi_schema_projection.py \
-            tests/test_enterprise_archive_expansion.py \
-            tests/test_enterprise_archive_ingestion_transaction.py \
-            tests/test_archive_ingestion.py \
-            tests/test_archive_ingestion_atomicity.py \
-            tests/test_archive_transport_document_container_guard.py \
-            tests/test_archive_member_activation_atomicity.py \
-            tests/test_archive_member_reconciliation.py \
+            tests/test_enterprise_archive_*.py \
+            tests/test_archive_*.py \
             tests/test_private_pilot_ingest_authority.py \
-            tests/test_archive_explicit_type_override.py \
-            tests/test_document_ir_tabular_semantics.py \
             tests/test_multi_row_test_case_semantics.py \
             tests/test_tabular_semantics_ingestion_bridge.py \
             tests/test_test_asset_source_types.py \
-            tests/test_document_ir_fact_evidence_spans.py \
-            tests/test_document_structure_fact_receipt_gate.py \
-            tests/test_document_evidence_address_quality.py \
-            tests/test_office_visual_ocr_supplemental.py \
-            tests/test_document_runtime_packaging.py \
             tests/test_generated_structure_label_authority.py \
-            tests/test_enterprise_understanding_ingestion_evidence.py \
-            tests/test_enterprise_understanding_ingestion_evidence_fail_closed.py \
+            tests/test_enterprise_understanding_ingestion_evidence*.py \
             tests/test_enterprise_understanding_document_ground_truth.py \
-            tests/test_enterprise_understanding_source_backed_ingestion_target.py \
-            tests/test_enterprise_understanding_source_backed_workflow.py \
-            tests/test_enterprise_understanding_source_reference_authority.py \
+            tests/test_enterprise_understanding_source_*.py \
             tests/test_enterprise_understanding_product_source_references.py \
             tests/test_enterprise_understanding_actor_permission_contract.py \
             tests/test_enterprise_understanding_structure_first_facts.py \
-            tests/test_enterprise_understanding_fact_slots.py
+            tests/test_enterprise_understanding_fact_slots.py \
+            tests/test_source_occurrence_*.py
