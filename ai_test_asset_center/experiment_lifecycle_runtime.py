@@ -18,6 +18,7 @@ from .process_step_execution import (
     attach_ledger_refs_to_observations,
 )
 from .process_step_semantic_projection import project_step_sets
+from .process_step_semantic_view import ProcessStepSemanticView
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -77,6 +78,15 @@ def new_experiment_lifecycle_ledger(
     return ledger
 
 
+def _finalizer_inputs_sealed(ledger: ProcessStepLedger) -> bool:
+    return any(
+        _text(event.get("phase")) == "finalizer"
+        and _text(event.get("receipt_id")) == "finalizer_inputs_sealed"
+        for event in ledger.timeline()
+        if isinstance(event, dict)
+    )
+
+
 def attach_lifecycle_ledger(
     observations: dict[str, Any],
     ledger: ProcessStepLedger,
@@ -92,6 +102,9 @@ def attach_lifecycle_ledger(
     target["pending_semantic_step_ids"] = projection[
         "pending_semantic_step_ids"
     ]
+    if _finalizer_inputs_sealed(ledger):
+        target["process_step_ledger"] = ProcessStepSemanticView(ledger)
+        target["process_step_ledger_view"] = "semantic_completion"
     return target
 
 
