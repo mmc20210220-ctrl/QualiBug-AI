@@ -80,6 +80,43 @@ def _canonical(value: Any) -> Any:
     return _norm(value)
 
 
+def _contains_expected(expected: Any, actual: Any) -> bool:
+    """Return True when actual preserves every explicitly annotated coordinate.
+
+    Ground Truth is allowed to annotate only the semantic fields under review. Product
+    rows may retain evidence metadata such as ``raw`` and ``source_backed``. Matching is
+    still exact at every annotated leaf: dictionaries use key containment and lists use
+    one-to-one deterministic element containment. No fuzzy text or automatic winner is
+    involved.
+    """
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return False
+        return all(
+            key in actual and _contains_expected(value, actual[key])
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        if not isinstance(actual, list):
+            return False
+        used: set[int] = set()
+        for expected_item in expected:
+            matched_index = next(
+                (
+                    index
+                    for index, actual_item in enumerate(actual)
+                    if index not in used
+                    and _contains_expected(expected_item, actual_item)
+                ),
+                None,
+            )
+            if matched_index is None:
+                return False
+            used.add(matched_index)
+        return True
+    return expected == actual
+
+
 def _fact_operation(fact: dict[str, Any]) -> set[str]:
     action = _dict(fact.get("action"))
     values = {
@@ -207,17 +244,8 @@ def _slot_alignment(expected: Any, actual: Any) -> str:
         return "NOT_ANNOTATED"
     if actual_canonical in (None, "", [], {}):
         return "MISSING"
-    if isinstance(expected_canonical, list) and isinstance(actual_canonical, list):
-        expected_json = {
-            json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
-            for row in expected_canonical
-        }
-        actual_json = {
-            json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
-            for row in actual_canonical
-        }
-        if expected_json.issubset(actual_json):
-            return "EXACT"
+    if _contains_expected(expected_canonical, actual_canonical):
+        return "EXACT"
     return "WRONG"
 
 
@@ -370,6 +398,8 @@ def evaluate_business_fact_slots(
             "fact_type_exact": True,
             "ground_truth_objects_must_be_subset_of_candidate_objects": True,
             "operation_alias_intersection_allowed": True,
+            "annotated_nested_coordinates_must_be_exact_subsets": True,
+            "unannotated_product_evidence_fields_are_ignored": True,
             "single_shared_object_is_sufficient": False,
         },
         "alignment_authority": "DETERMINISTIC_EXACT_TYPED_SLOT_MATCHING",
