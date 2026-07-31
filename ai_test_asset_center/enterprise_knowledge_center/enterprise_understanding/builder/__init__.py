@@ -24,6 +24,7 @@ from ..identity_authority_projection import project_identity_authority_receipt
 from ..identity_benchmark import project_identity_benchmark
 from ..identity_benchmark_regression import project_identity_benchmark_regression
 from ..identity_evidence_policy import apply_identity_evidence_policy
+from ..identity_field_evidence import augment_identity_field_evidence
 from ..identity_registry_governance import govern_identity_registry
 from ..identity_resolution import (
     apply_identity_resolution_to_model,
@@ -161,6 +162,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     resolution = resolve_enterprise_identities(recognized_asset)
     resolution = govern_identity_registry(prior_registry, resolution, asset=recognized_asset)
     resolution = augment_technical_identity_projection(recognized_asset, resolution)
+    resolution = augment_identity_field_evidence(recognized_asset, resolution)
     resolution = project_identity_authority_receipt(recognized_asset, resolution)
     resolution = project_identity_annotation_manifest(recognized_asset, resolution)
     resolution = project_identity_benchmark(recognized_asset, resolution)
