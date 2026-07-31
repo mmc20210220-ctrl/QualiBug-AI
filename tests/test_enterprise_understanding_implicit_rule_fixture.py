@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 
 from ai_test_asset_center.enterprise_knowledge_center._parsing import _parse_source
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.interface_runtime_contracts import (
+    install_interface_runtime_contract_parser,
+)
 from benchmark_evaluator.enterprise_understanding.implicit_rules import (
     load_implicit_rule_ground_truth,
 )
@@ -88,6 +91,7 @@ def test_minimal_openapi_fixture_adds_no_unannotated_rule_candidates():
 
 
 def test_openapi_parser_decodes_operation_prose_without_creating_text_rule():
+    install_interface_runtime_contract_parser()
     path = FIXTURE / "payment_api.openapi.json"
     parsed = _parse_source(
         path.read_bytes(),
@@ -104,3 +108,4 @@ def test_openapi_parser_decodes_operation_prose_without_creating_text_rule():
     assert operation["operation_id"] == "submitPayment"
     assert operation["openapi_description"] == IDEMPOTENCY
     assert operation["description"] == IDEMPOTENCY
+    assert IDEMPOTENCY in operation["source_excerpt"]
