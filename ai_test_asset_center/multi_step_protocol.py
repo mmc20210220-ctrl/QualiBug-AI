@@ -6,6 +6,10 @@ regression contracts, while the graph marks the final
 ``process_graph_write_contract`` as the executable cleanup authority. The
 single-obligation facade removes the flat compatibility projection only while
 its legacy core assembles an experiment.
+
+Observer-backed waits reuse the existing graph scheduler and bounded async
+readback executor. The facade resumes a core result blocked only for the known
+wait runtime gap after every wait contract is fully source-bound.
 """
 from __future__ import annotations
 
@@ -13,6 +17,10 @@ from copy import deepcopy
 from typing import Any
 
 from . import multi_step_protocol_core as _core
+from .process_graph_wait_contract import (
+    STATUS_COMPILED as WAIT_STATUS_COMPILED,
+    compile_process_graph_wait_contracts,
+)
 
 for _name in dir(_core):
     if not _name.startswith("__"):
@@ -37,8 +45,13 @@ def _graph_owned_cleanup(result: dict[str, Any]) -> dict[str, Any]:
         for row in list(result.get("treatment_plan") or [])
         if isinstance(row, dict)
     ]
+    waits_by_target = _core._dict(graph.get("wait_contracts_by_target"))
     for step in treatment_plan:
+        step_id = _core._text(step.get("step_id"))
         step["_execution_graph"] = deepcopy(graph)
+        wait_contract = _core._dict(waits_by_target.get(step_id))
+        if wait_contract:
+            step["wait_contract"] = deepcopy(wait_contract)
     return {
         **result,
         "execution_graph": graph,
@@ -48,12 +61,97 @@ def _graph_owned_cleanup(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _resume_wait_capable_result(
+    result: dict[str, Any],
+    *,
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    """Resume only the core's explicit wait/async runtime-capability block."""
+    if _core._text(result.get("status")) != "BLOCKED":
+        return result
+    if _core._text(result.get("reason_code")) != (
+        _core.MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE
+    ):
+        return result
+    graph = _core._dict(result.get("execution_graph"))
+    blockers = {
+        _core._text(value)
+        for value in _core._list(graph.get("runtime_blockers"))
+        if _core._text(value)
+    }
+    if not blockers or not blockers.issubset(
+        {"wait_observer_scheduler", "async_edge_scheduler"}
+    ):
+        return result
+
+    wait_result = compile_process_graph_wait_contracts(
+        graph,
+        behavior_ir=_core._dict(envelope.get("behavior_ir")),
+    )
+    if _core._text(wait_result.get("status")) != WAIT_STATUS_COMPILED:
+        return _core._blocked(
+            _core._text(wait_result.get("reason_code"))
+            or _core.MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE,
+            _core._text(wait_result.get("detail"))
+            or "observer_backed_wait_contract_not_compiled",
+            graph,
+        )
+
+    compiled_graph = _core._dict(wait_result.get("graph"))
+    treatment_plan = _core._treatment_plan(compiled_graph)
+    cleanup_plan = _core._explicit_cleanup_plan(compiled_graph)
+    prop = _core._dict(envelope.get("property_spec"))
+    expected_order = _core._list(prop.get("expected_order"))
+    if (
+        not expected_order
+        and not _core._list(compiled_graph.get("fork_groups"))
+        and not _core._list(compiled_graph.get("join_groups"))
+        and len(_core._list(compiled_graph.get("start_node_refs"))) == 1
+    ):
+        expected_order = list(compiled_graph.get("topological_order") or [])
+    source_refs = _core._list(prop.get("source_refs")) or _core._list(
+        compiled_graph.get("source_refs")
+    )
+    family = _core._text(envelope.get("risk_family"))
+    return {
+        "status": "COMPILED",
+        "execution_graph": compiled_graph,
+        "control_plan": [],
+        "treatment_plan": treatment_plan,
+        "cleanup_plan": cleanup_plan,
+        "assertion": {
+            "kind": "process_completion",
+            "expected_steps": list(
+                compiled_graph.get("topological_order") or []
+            ),
+            "expected_order": expected_order,
+            "execution_graph_id": _core._text(
+                compiled_graph.get("execution_graph_id")
+            ),
+        },
+        "observers": [
+            {"observer_id": "http_response"},
+            {"observer_id": "after_state"},
+        ],
+        "per_step_evidence": True,
+        "requires_state_precondition": bool(prop.get("from_state")),
+        "expected_order": expected_order,
+        "source_refs": source_refs,
+        "wait_runtime_contract": deepcopy(
+            compiled_graph.get("wait_runtime_contract") or {}
+        ),
+        "_registry_protocol_id": (
+            f"{family}:{_core.TEMPLATE_MULTI_STEP_PROCESS}"
+        ),
+    }
+
+
 def compile_multi_step_process_protocol(
     envelope: dict[str, Any],
 ) -> dict[str, Any]:
-    return _graph_owned_cleanup(
-        _core.compile_multi_step_process_protocol(envelope)
-    )
+    core_result = _core.compile_multi_step_process_protocol(envelope)
+    resumed = _resume_wait_capable_result(core_result, envelope=envelope)
+    return _graph_owned_cleanup(resumed)
 
 
 def compile_state_chain_protocol(envelope: dict[str, Any]) -> dict[str, Any]:
@@ -76,6 +174,18 @@ def compile_sequence_verification_protocol(
     result = compile_multi_step_process_protocol(envelope)
     if result.get("status") != "COMPILED":
         return result
+    graph = _core._dict(result.get("execution_graph"))
+    if (
+        _core._list(graph.get("fork_groups"))
+        or _core._list(graph.get("join_groups"))
+        or len(_core._list(graph.get("start_node_refs"))) != 1
+        or not _core._list(result.get("expected_order"))
+    ):
+        return _core._blocked(
+            _core.MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE,
+            "sequence_total_order_not_source_declared",
+            graph,
+        )
     result["assertion"] = {
         **(result.get("assertion") or {}),
         "kind": "step_sequence_order",
