@@ -2,8 +2,9 @@
 
 The live ledger binds evidence. This module verifies the sealed result from the
 Execution Receipt Bundle: every observation, oracle, and cleanup receipt must
-name one recorded step, be referenced by that same step only, and cover the
-steps required by its evidence class.
+name one recorded step, be referenced by that same step only, carry a successful
+typed semantic status when its schema defines one, and cover the steps required
+by its evidence class.
 """
 from __future__ import annotations
 
@@ -24,6 +25,12 @@ TYPED_OBSERVER_RECEIPT_SCHEMA = "qualibug.observer-receipt.v1"
 PROCESS_STEP_ORACLE_INVOCATION_SCHEMA = (
     "qualibug.process-step-oracle-invocation.v1"
 )
+TYPED_CLEANUP_EXECUTION_RECEIPT_SCHEMA = (
+    "qualibug.cleanup-execution-receipt.v1"
+)
+TYPED_CLEANUP_EQUIVALENCE_RECEIPT_SCHEMA = (
+    "qualibug.cleanup-equivalence-receipt.v1"
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -36,6 +43,13 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _ids(value: Any) -> list[str]:
@@ -79,7 +93,44 @@ def _filter_owners(
     allowed_receipt_ids: list[str],
 ) -> dict[str, list[str]]:
     allowed = set(allowed_receipt_ids)
-    return {rid: list(step_ids) for rid, step_ids in owners.items() if rid in allowed}
+    return {
+        rid: list(step_ids)
+        for rid, step_ids in owners.items()
+        if rid in allowed
+    }
+
+
+def _cleanup_execution_status_valid(payload: dict[str, Any]) -> bool:
+    status = _text(payload.get("status")).upper()
+    status_code = _safe_int(payload.get("status_code"))
+    if status == "ACCEPTED":
+        return bool(
+            payload.get("attempted") is True
+            and payload.get("transport_reached") is True
+            and payload.get("succeeded") is True
+            and 200 <= status_code < 300
+        )
+    if status == "NOT_REQUIRED":
+        return bool(
+            payload.get("attempted") is False
+            and payload.get("transport_reached") is False
+            and payload.get("succeeded") is False
+            and status_code == 0
+            and _text(payload.get("reason_code")).upper()
+            in {"CLEANUP_NOT_REQUIRED", "NO_CLEANUP_PLAN"}
+        )
+    return False
+
+
+def _cleanup_verification_status_valid(payload: dict[str, Any]) -> bool:
+    status = _text(payload.get("equivalence_status")).upper()
+    if status == "EQUIVALENT":
+        return True
+    return bool(
+        status == "NOT_APPLICABLE"
+        and _text(payload.get("reason_code")).upper()
+        == "CLEANUP_NOT_REQUIRED"
+    )
 
 
 def _semantic_status_valid(
@@ -105,6 +156,16 @@ def _semantic_status_valid(
             in {"PROPERTY_HELD", "VIOLATION"}
             and _text(payload.get("source_oracle_receipt_id"))
         )
+    if (
+        evidence_kind == "cleanup_execution"
+        and schema == TYPED_CLEANUP_EXECUTION_RECEIPT_SCHEMA
+    ):
+        return _cleanup_execution_status_valid(payload)
+    if (
+        evidence_kind == "cleanup_verification"
+        and schema == TYPED_CLEANUP_EQUIVALENCE_RECEIPT_SCHEMA
+    ):
+        return _cleanup_verification_status_valid(payload)
     return True
 
 
@@ -127,7 +188,10 @@ def _audit_group(
 
     for rid in discovered_receipt_ids:
         envelope = _dict(receipts_by_id.get(rid))
-        scope = extract_receipt_step_scope(envelope, known_step_ids=known_step_ids)
+        scope = extract_receipt_step_scope(
+            envelope,
+            known_step_ids=known_step_ids,
+        )
         status = _text(scope.get("status"))
         step_id = _text(scope.get("step_id"))
         receipt_owners = sorted(set(owners.get(rid, [])))
@@ -211,7 +275,9 @@ def audit_process_step_evidence_scope(
             for row in payloads
             if row.get("required_step") is True
             and row.get("response_received") is True
-            and _text(row.get("final_step_status") or row.get("final_status")).upper()
+            and _text(
+                row.get("final_step_status") or row.get("final_status")
+            ).upper()
             == "EXECUTED"
             and _text(row.get("step_id"))
         }
@@ -229,12 +295,18 @@ def audit_process_step_evidence_scope(
         }
     )
 
-    observation_ids = _discover(receipts_by_id, {OBSERVATION_RECEIPT_TYPE})
+    observation_ids = _discover(
+        receipts_by_id,
+        {OBSERVATION_RECEIPT_TYPE},
+    )
     oracle_invocation_ids = _discover(
         receipts_by_id,
         {ORACLE_INVOCATION_RECEIPT_TYPE},
     )
-    oracle_trace_ids = _discover(receipts_by_id, {ORACLE_TRACE_RECEIPT_TYPE})
+    oracle_trace_ids = _discover(
+        receipts_by_id,
+        {ORACLE_TRACE_RECEIPT_TYPE},
+    )
     cleanup_execution_ids = _discover(
         receipts_by_id,
         {CLEANUP_EXECUTION_RECEIPT_TYPE},
@@ -260,35 +332,50 @@ def audit_process_step_evidence_scope(
     observation = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=observation_ids,
-        owners=_filter_owners(observation_owners_all, observation_ids),
+        owners=_filter_owners(
+            observation_owners_all,
+            observation_ids,
+        ),
         known_step_ids=known_step_ids,
         evidence_kind="observation",
     )
     oracle_invocation = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=oracle_invocation_ids,
-        owners=_filter_owners(oracle_owners_all, oracle_invocation_ids),
+        owners=_filter_owners(
+            oracle_owners_all,
+            oracle_invocation_ids,
+        ),
         known_step_ids=known_step_ids,
         evidence_kind="oracle_invocation",
     )
     oracle_trace = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=oracle_trace_ids,
-        owners=_filter_owners(oracle_owners_all, oracle_trace_ids),
+        owners=_filter_owners(
+            oracle_owners_all,
+            oracle_trace_ids,
+        ),
         known_step_ids=known_step_ids,
         evidence_kind="oracle_trace",
     )
     cleanup_execution = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=cleanup_execution_ids,
-        owners=_filter_owners(cleanup_owners_all, cleanup_execution_ids),
+        owners=_filter_owners(
+            cleanup_owners_all,
+            cleanup_execution_ids,
+        ),
         known_step_ids=known_step_ids,
         evidence_kind="cleanup_execution",
     )
     cleanup_verification = _audit_group(
         receipts_by_id=receipts_by_id,
         discovered_receipt_ids=cleanup_verification_ids,
-        owners=_filter_owners(cleanup_owners_all, cleanup_verification_ids),
+        owners=_filter_owners(
+            cleanup_owners_all,
+            cleanup_verification_ids,
+        ),
         known_step_ids=known_step_ids,
         evidence_kind="cleanup_verification",
     )
@@ -297,7 +384,9 @@ def audit_process_step_evidence_scope(
         set(observation_owners_all) - set(observation_ids)
     )
     oracle_unknown_refs = sorted(
-        set(oracle_owners_all) - set(oracle_invocation_ids) - set(oracle_trace_ids)
+        set(oracle_owners_all)
+        - set(oracle_invocation_ids)
+        - set(oracle_trace_ids)
     )
     cleanup_unknown_refs = sorted(
         set(cleanup_owners_all)
@@ -307,8 +396,12 @@ def audit_process_step_evidence_scope(
 
     required = set(required_executed_step_ids)
     cleanup_required = set(cleanup_required_step_ids)
-    missing_observation_step_ids = sorted(required - _covered_steps(observation))
-    missing_oracle_step_ids = sorted(required - _covered_steps(oracle_invocation))
+    missing_observation_step_ids = sorted(
+        required - _covered_steps(observation)
+    )
+    missing_oracle_step_ids = sorted(
+        required - _covered_steps(oracle_invocation)
+    )
     missing_cleanup_execution_step_ids = sorted(
         cleanup_required - _covered_steps(cleanup_execution)
     )
@@ -353,32 +446,48 @@ def audit_process_step_evidence_scope(
         {
             rid
             for group in group_audits
-            for rid in _ids(group.get("invalid_semantic_status_receipt_ids"))
+            for rid in _ids(
+                group.get("invalid_semantic_status_receipt_ids")
+            )
         }
     )
 
     validation_errors: list[str] = []
     set_mismatch_fields: list[str] = []
     if broadcast_receipt_ids:
-        validation_errors.append("process_step_receipt_scope_broadcast")
+        validation_errors.append(
+            "process_step_receipt_scope_broadcast"
+        )
         set_mismatch_fields.append("receipt_scope_broadcast")
     if unbound_receipt_ids:
-        validation_errors.append("process_step_receipt_scope_unbound")
+        validation_errors.append(
+            "process_step_receipt_scope_unbound"
+        )
         set_mismatch_fields.append("receipt_scope_unbound")
     if invalid_semantic_status_receipt_ids:
-        validation_errors.append("process_step_evidence_status_invalid")
+        validation_errors.append(
+            "process_step_evidence_status_invalid"
+        )
         set_mismatch_fields.append("evidence_status")
     if missing_observation_step_ids:
-        validation_errors.append("process_step_observation_scope_incomplete")
+        validation_errors.append(
+            "process_step_observation_scope_incomplete"
+        )
         set_mismatch_fields.append("observation_scope")
     if missing_oracle_step_ids:
-        validation_errors.append("process_step_oracle_scope_incomplete")
+        validation_errors.append(
+            "process_step_oracle_scope_incomplete"
+        )
         set_mismatch_fields.append("oracle_scope")
     if missing_cleanup_execution_step_ids:
-        validation_errors.append("process_step_cleanup_execution_scope_incomplete")
+        validation_errors.append(
+            "process_step_cleanup_execution_scope_incomplete"
+        )
         set_mismatch_fields.append("cleanup_execution_scope")
     if missing_cleanup_verification_step_ids:
-        validation_errors.append("process_step_cleanup_verification_scope_incomplete")
+        validation_errors.append(
+            "process_step_cleanup_verification_scope_incomplete"
+        )
         set_mismatch_fields.append("cleanup_verification_scope")
 
     complete = not validation_errors
@@ -398,11 +507,17 @@ def audit_process_step_evidence_scope(
         "cleanup_unknown_reference_ids": cleanup_unknown_refs,
         "missing_observation_step_ids": missing_observation_step_ids,
         "missing_oracle_step_ids": missing_oracle_step_ids,
-        "missing_cleanup_execution_step_ids": missing_cleanup_execution_step_ids,
-        "missing_cleanup_verification_step_ids": missing_cleanup_verification_step_ids,
+        "missing_cleanup_execution_step_ids": (
+            missing_cleanup_execution_step_ids
+        ),
+        "missing_cleanup_verification_step_ids": (
+            missing_cleanup_verification_step_ids
+        ),
         "broadcast_receipt_ids": broadcast_receipt_ids,
         "unbound_receipt_ids": unbound_receipt_ids,
-        "invalid_semantic_status_receipt_ids": invalid_semantic_status_receipt_ids,
+        "invalid_semantic_status_receipt_ids": (
+            invalid_semantic_status_receipt_ids
+        ),
         "validation_errors": validation_errors,
         "set_mismatch_fields": set_mismatch_fields,
         "broadcast_fallback_forbidden": True,
