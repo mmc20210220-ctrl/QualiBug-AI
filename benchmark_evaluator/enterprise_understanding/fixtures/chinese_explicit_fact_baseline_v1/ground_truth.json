@@ -1,0 +1,177 @@
+{
+  "schema": "qualibug.enterprise-understanding-ground-truth.v1",
+  "project_id": "chinese_explicit_fact_baseline_v1",
+  "scope_complete": false,
+  "explicit_fact_scope_complete": true,
+  "annotation_authority": "manual_source_backed_fixture_review",
+  "minimum_profile": {
+    "business_rules": 12
+  },
+  "business_objects": [],
+  "actors": [],
+  "operations": [],
+  "object_relations": [],
+  "lifecycles": [],
+  "state_transitions": [],
+  "business_rules": [
+    {
+      "ground_truth_id": "gt:permission:approve-order",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "审批通过",
+      "object_refs": ["订单"],
+      "fact_type": "PERMISSION_RULE",
+      "actor_refs": ["经理"],
+      "modality": "MAY",
+      "condition_frame": {
+        "kind": "ALL",
+        "combinator": "AND",
+        "conditions": ["订单状态为待审批", "所属部门一致"]
+      },
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:state:approve-order",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "审批通过",
+      "object_refs": ["订单"],
+      "fact_type": "STATE_TRANSITION",
+      "state_effects": [
+        {
+          "from_state": "待审批",
+          "to_state": "已审批"
+        }
+      ],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:effect:generate-outbound",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "生成",
+      "object_refs": ["出库单"],
+      "fact_type": "DATA_EFFECT",
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:effect:deduct-inventory",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "扣减",
+      "object_refs": ["库存"],
+      "fact_type": "DATA_EFFECT",
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:effect:send-shipping-notice",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "发送",
+      "object_refs": ["发货通知"],
+      "fact_type": "DATA_EFFECT",
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:prohibition:delete-shipped-order",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "删除",
+      "object_refs": ["订单"],
+      "fact_type": "PERMISSION_RULE",
+      "actor_refs": ["仓库管理员"],
+      "modality": "MUST_NOT",
+      "exception_scope": ["测试订单"],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:temporal:issue-invoice",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P1",
+      "operation": "开具",
+      "object_refs": ["发票"],
+      "fact_type": "BUSINESS_RULE",
+      "actor_refs": ["财务人员"],
+      "modality": "MUST",
+      "time_window_constraints": [
+        {
+          "anchor": "付款成功后",
+          "duration": "24小时",
+          "relation": "WITHIN"
+        }
+      ],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:relation:purchase-order-header",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P1",
+      "operation": "COMPOSED_OF",
+      "object_refs": ["采购订单", "订单头"],
+      "fact_type": "OBJECT_RELATION",
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:relation:purchase-order-line",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P1",
+      "operation": "COMPOSED_OF",
+      "object_refs": ["采购订单", "订单明细"],
+      "fact_type": "OBJECT_RELATION",
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:cardinality:invoice-settlement",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "EXACTLY_ONE",
+      "object_refs": ["发票", "结算单"],
+      "fact_type": "CARDINALITY_CONSTRAINT",
+      "quantity_constraints": [
+        {
+          "cardinality": "EXACTLY_ONE",
+          "minimum": 1,
+          "maximum": "1"
+        }
+      ],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:cardinality:purchase-order-lines",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P1",
+      "operation": "ONE_TO_MANY",
+      "object_refs": ["采购订单", "订单明细"],
+      "fact_type": "CARDINALITY_CONSTRAINT",
+      "quantity_constraints": [
+        {
+          "cardinality": "ONE_TO_MANY",
+          "minimum": 0,
+          "maximum": "MANY"
+        }
+      ],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:formula:refund-amount",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "DERIVED_AS",
+      "object_refs": ["退款金额"],
+      "fact_type": "DERIVED_VALUE",
+      "formula_constraints": [
+        {
+          "raw": "退款金额 = 实付金额 - 优惠金额",
+          "lhs": "退款金额",
+          "rhs": "实付金额 - 优惠金额",
+          "source_backed": true
+        }
+      ],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    }
+  ],
+  "business_behaviors": [],
+  "conflicts": [],
+  "expected_unknowns": [],
+  "bug_dependencies": []
+}
