@@ -21,6 +21,10 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+function annotatorRole(value: unknown): string {
+  return text(record(record(value).annotator).role).toUpperCase();
+}
+
 function downloadJson(filename: string, payload: unknown): void {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -61,7 +65,7 @@ export function SettingsIdentityAnnotationWorkflow({ project }: Props) {
     event.target.value = '';
     if (!project || files.length === 0) return;
     if (files.length > 3) {
-      setStatus('最多选择三个文件：标注员 A、标注员 B、裁决员。');
+      setStatus('最多选择两个标注员文件和一个裁决员文件。');
       return;
     }
     setBusy(true);
@@ -71,18 +75,32 @@ export function SettingsIdentityAnnotationWorkflow({ project }: Props) {
       const parsed = await Promise.all(
         files.map(async (file) => JSON.parse(await file.text()) as JsonRecord),
       );
+      const adjudications = parsed.filter((submission) => annotatorRole(submission) === 'ADJUDICATOR');
+      const annotatorSubmissions = parsed.filter((submission) => annotatorRole(submission) !== 'ADJUDICATOR');
+      if (
+        annotatorSubmissions.length < 1
+        || annotatorSubmissions.length > 2
+        || adjudications.length > 1
+      ) {
+        setStatus('请选择一至两个普通标注文件，并可选一个 role=ADJUDICATOR 的裁决文件。');
+        return;
+      }
+      if (adjudications.length > 0 && annotatorSubmissions.length !== 2) {
+        setStatus('裁决文件必须与两个独立标注员文件一起上传。');
+        return;
+      }
       const submissions: {
         primary_submission: JsonRecord;
         secondary_submission?: JsonRecord;
         adjudication_submission?: JsonRecord;
-      } = { primary_submission: parsed[0] };
-      if (parsed[1]) submissions.secondary_submission = parsed[1];
-      if (parsed[2]) submissions.adjudication_submission = parsed[2];
+      } = { primary_submission: annotatorSubmissions[0] };
+      if (annotatorSubmissions[1]) submissions.secondary_submission = annotatorSubmissions[1];
+      if (adjudications[0]) submissions.adjudication_submission = adjudications[0];
       const result = await compileIdentityAnnotationSubmissions(project, submissions);
       const compilation = record(result.compilation);
       if (result.status === 'REVIEW_REQUIRED') {
         setReview(compilation);
-        setStatus(`双人标注存在 ${Number(compilation.disagreement_count || 0)} 组分区分歧，Ground Truth 未导入。完成裁决后同时上传三个文件。`);
+        setStatus(`双人标注存在 ${Number(compilation.disagreement_count || 0)} 组分区分歧，Ground Truth 未导入。完成裁决后同时上传两个标注文件和一个 ADJUDICATOR 文件。`);
         return;
       }
       const benchmark = record(result.workspace?.benchmark);
@@ -112,7 +130,7 @@ export function SettingsIdentityAnnotationWorkflow({ project }: Props) {
         每个 Mention 必须归入一个确认簇，单例也必须显式标注。双人标注比较的是成员分区，因此两人可以使用完全不同的簇名称。
       </div>
       <div className="settings-card-note settings-mt-10">
-        下载后分别复制 submission_template 给标注员。上传一个文件按单人模式编译；上传两个文件按选择顺序作为标注员 A、B；存在分歧时，再把完整裁决提交作为第三个文件一并上传。
+        下载后分别复制 submission_template 给标注员。上传一个普通文件按单人模式编译；上传两个普通文件按双人盲标比较；存在分歧时，再加入一个 annotator.role=ADJUDICATOR 的完整裁决提交。系统按角色自动识别，文件选择顺序不影响结果。
       </div>
       <div className="settings-compact-row settings-mt-10">
         <button
