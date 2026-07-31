@@ -62,6 +62,8 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_cleanup_lifecycle_adapter.py').read()); print('experiment_cleanup_lifecycle_adapter.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor.py').read()); print('experiment_executor.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_executor_core.py').read()); print('experiment_executor_core.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_annotation_tasks.py').read()); print('identity_annotation_tasks.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_annotation_operator.py').read()); print('identity_annotation_operator.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_benchmark_regression.py').read()); print('identity_benchmark_regression.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_benchmark_repository.py').read()); print('identity_benchmark_repository.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_benchmark_workflow.py').read()); print('identity_benchmark_workflow.py OK')"
@@ -111,6 +113,9 @@ jobs:
             tests/test_process_graph_dependency_rollback.py \
             tests/test_process_graph_multi_write_equivalence.py \
             tests/test_architecture_extraction_contracts.py \
+            tests/test_identity_annotation_tasks.py \
+            tests/test_identity_annotation_operator.py \
+            tests/test_identity_annotation_http_contract.py \
             tests/test_identity_benchmark_regression.py \
             tests/test_identity_benchmark_repository.py \
             tests/test_identity_benchmark_workflow.py \
