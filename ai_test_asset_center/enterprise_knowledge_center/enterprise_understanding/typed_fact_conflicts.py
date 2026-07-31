@@ -1,7 +1,6 @@
 """Conservative conflicts for typed atomic business-fact slots."""
 from __future__ import annotations
 
-import json
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -158,7 +157,8 @@ def _value_conflicts(facts: list[dict[str, Any]], kind: str, fields: tuple[str, 
         for value in values:
             identity = tuple(_norm(value.get(field)) for field in fields[:-1])
             outcome = _norm(value.get(fields[-1]))
-            if any(identity) and outcome:
+            identity_required = kind == "FORMULA_CONSTRAINT"
+            if outcome and (not identity_required or any(identity)):
                 groups[(_subject(fact), identity)].append((fact, outcome))
     rows: list[dict[str, Any]] = []
     conflict_kind = (
@@ -196,7 +196,7 @@ def reconcile_typed_fact_conflicts(
     conflicts = [
         *_condition_conflicts(facts),
         *_value_conflicts(facts, "FORMULA_CONSTRAINT", ("lhs", "rhs")),
-        *_value_conflicts(facts, "CARDINALITY_CONSTRAINT", ("cardinality", "maximum")),
+        *_value_conflicts(facts, "CARDINALITY_CONSTRAINT", ("maximum",)),
     ]
     conflicts = list({_text(row.get("conflict_id")): row for row in conflicts}.values())
     ids = {
@@ -225,14 +225,31 @@ def reconcile_typed_fact_conflicts(
         "conflicting_fact_count": len(ids),
         "automatic_resolution_allowed": False,
         "condition_ast_compared": True,
+        "exception_and_scope_coordinates_compared": True,
         "formula_and_cardinality_compared": True,
     }
+    gaps = [
+        dict(row)
+        for row in _list(asset.get("coverage_gaps"))
+        if isinstance(row, dict)
+        and _text(row.get("kind")) != "BLOCKED_TYPED_BUSINESS_FACT_CONFLICTS"
+    ]
     if conflicts:
         gate = _dict(asset.get("enterprise_comprehension_gate"))
         gate["status"] = "BLOCKED_TYPED_BUSINESS_FACT_CONFLICTS"
         gate["entry_allowed"] = False
         gate["required_operator_action"] = "resolve typed fact source authority explicitly"
         asset["enterprise_comprehension_gate"] = gate
+        gaps.append(
+            {
+                "kind": "BLOCKED_TYPED_BUSINESS_FACT_CONFLICTS",
+                "gap_type": "typed_business_fact_conflict",
+                "source_id": "*",
+                "conflict_ids": [_text(row.get("conflict_id")) for row in conflicts],
+                "operator_action": gate["required_operator_action"],
+            }
+        )
+    asset["coverage_gaps"] = gaps
     return apply_authority_decisions_to_conflicts(
         asset,
         project_id=project_id,
