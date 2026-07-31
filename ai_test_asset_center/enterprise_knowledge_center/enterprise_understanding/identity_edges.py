@@ -45,9 +45,48 @@ def _conflicting_aliases(facts: list[dict[str, Any]]) -> set[str]:
     return {alias for alias, canonicals in values.items() if alias and len(canonicals) > 1}
 
 
+def _identity_edge(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    *,
+    scope: dict[str, str],
+    accepted: bool,
+    authority: str,
+    reason_code: str,
+) -> dict[str, Any]:
+    return {
+        "schema": IDENTITY_EDGE_SCHEMA,
+        "edge_id": stable_id(
+            "identity_edge",
+            left.get("mention_id"),
+            right.get("mention_id"),
+            "EXACT_LABEL_SAME_SCOPE",
+        ),
+        "left_mention_id": left.get("mention_id"),
+        "right_mention_id": right.get("mention_id"),
+        "relation": "SAME_AS",
+        "evidence_class": "EXACT_LABEL_SAME_SCOPE",
+        "authority": authority,
+        "status": "ACCEPTED" if accepted else "CANDIDATE_ONLY",
+        "independent_evidence_family": "EXACT_LABEL_SAME_SCOPE",
+        "scope": scope,
+        "evidence": dedupe_evidence(
+            [*as_list(left.get("evidence")), *as_list(right.get("evidence"))]
+        ),
+        "automatic_union_allowed": accepted,
+        "reason_code": reason_code,
+    }
+
+
 def _exact_occurrence_edges(
     mentions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Close one source occurrence before comparing it with other sources.
+
+    Subject/object projections from one fact are the same occurrence. Sorting all
+    mentions globally can interleave another source between them, so closure must
+    first happen inside ``(source_id, source_locator)`` and only then across sources.
+    """
     grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for mention in mentions:
         if text(mention.get("mention_type")) != "BUSINESS_OBJECT":
@@ -64,45 +103,53 @@ def _exact_occurrence_edges(
 
     edges: list[dict[str, Any]] = []
     for key, group in grouped.items():
-        ordered = sorted(group, key=lambda row: text(row.get("mention_id")))
-        for left, right in zip(ordered, ordered[1:]):
-            scope_declared = any(key[1:])
-            same_occurrence = (
-                text(left.get("source_id")) == text(right.get("source_id"))
-                and text(left.get("source_locator")) == text(right.get("source_locator"))
+        scope = {"system": key[1], "module": key[2], "version": key[3]}
+        occurrences: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for mention in group:
+            occurrences[
+                (text(mention.get("source_id")), text(mention.get("source_locator")))
+            ].append(mention)
+
+        representatives: list[dict[str, Any]] = []
+        for occurrence in sorted(occurrences):
+            ordered = sorted(
+                occurrences[occurrence], key=lambda row: text(row.get("mention_id"))
             )
-            accepted = bool(scope_declared or same_occurrence)
+            representatives.append(ordered[0])
+            for left, right in zip(ordered, ordered[1:]):
+                edges.append(
+                    _identity_edge(
+                        left,
+                        right,
+                        scope=scope,
+                        accepted=True,
+                        authority="SAME_SOURCE_OCCURRENCE",
+                        reason_code="EXACT_LABEL_SAME_OCCURRENCE",
+                    )
+                )
+
+        scope_declared = any(key[1:])
+        ordered_representatives = sorted(
+            representatives, key=lambda row: text(row.get("mention_id"))
+        )
+        for left, right in zip(ordered_representatives, ordered_representatives[1:]):
             edges.append(
-                {
-                    "schema": IDENTITY_EDGE_SCHEMA,
-                    "edge_id": stable_id(
-                        "identity_edge",
-                        left.get("mention_id"),
-                        right.get("mention_id"),
-                        "EXACT_LABEL_SAME_SCOPE",
-                    ),
-                    "left_mention_id": left.get("mention_id"),
-                    "right_mention_id": right.get("mention_id"),
-                    "relation": "SAME_AS",
-                    "evidence_class": "EXACT_LABEL_SAME_SCOPE",
-                    "authority": (
-                        "EXPLICIT_SCOPE_OR_SAME_OCCURRENCE"
-                        if accepted
+                _identity_edge(
+                    left,
+                    right,
+                    scope=scope,
+                    accepted=scope_declared,
+                    authority=(
+                        "EXPLICIT_SCOPE"
+                        if scope_declared
                         else "CANDIDATE_ONLY_SCOPE_MISSING"
                     ),
-                    "status": "ACCEPTED" if accepted else "CANDIDATE_ONLY",
-                    "independent_evidence_family": "EXACT_LABEL_SAME_SCOPE",
-                    "scope": {"system": key[1], "module": key[2], "version": key[3]},
-                    "evidence": dedupe_evidence(
-                        [*as_list(left.get("evidence")), *as_list(right.get("evidence"))]
-                    ),
-                    "automatic_union_allowed": accepted,
-                    "reason_code": (
+                    reason_code=(
                         "EXACT_LABEL_SCOPE_PROVEN"
-                        if accepted
+                        if scope_declared
                         else "EXACT_LABEL_SCOPE_MISSING"
                     ),
-                }
+                )
             )
     return edges
 
