@@ -10,6 +10,33 @@ from ai_test_asset_center.database_relation_delta_causality_projection import (
     ASSERTION_KIND,
 )
 
+_RELATION_DECISION_ID = "decision:relation"
+
+
+def _causal_scope(phase: str) -> dict:
+    return {
+        "phase": phase,
+        "draft_id": f"draft:relation:{phase.lower()}",
+        "receipt_id": f"relation-{phase.lower()}",
+        "phase_receipt_id": f"relation-{phase.lower()}-phase",
+        "campaign_id": "campaign-1",
+        "execution_id": "execution-1",
+        "source_observer_id": "approved_database_relation_aggregate",
+        "causal_attribution_applied": True,
+        "causal_attribution_scope": {
+            "causal_scope_fingerprint": "causal-scope-1",
+            "operation_ref": "api:POST:/ledger",
+            "value_source": "request.body.request_id",
+            "child_database_field_id": "field:ledger_entries:request_id",
+            "child_database_field_name": "request_id",
+            "mapping_decision_id": _RELATION_DECISION_ID,
+            "relation_mapping_decision_id": _RELATION_DECISION_ID,
+            "relation_authority_match": True,
+            "attribution_mode": "EXACT_REQUEST_CORRELATION",
+        },
+        "causal_attribution_parameter_fingerprints": ["fp-1"],
+    }
+
 
 def _assertion() -> dict:
     return {
@@ -22,7 +49,7 @@ def _assertion() -> dict:
                 {"kind": "business_rule", "locator": "BR-BALANCE-LEDGER"}
             ],
             "root_field_binding_id": "binding:accounts:balance",
-            "relation_mapping_decision_id": "decision:relation",
+            "relation_mapping_decision_id": _RELATION_DECISION_ID,
             "semantic_pair_schema": "qualibug.database-relation-delta-semantic-pair.v1",
             "relation_pair_id": "relation-pair-1",
             "recomputed_relation_pair_id": "relation-pair-1",
@@ -49,7 +76,10 @@ def _assertion() -> dict:
             "operation_ref": "api:POST:/ledger",
             "treatment_step_id": "treatment-1",
             "value_source": "request.body.request_id",
-            "mapping_decision_id": "decision:ledger-request-id",
+            "mapping_decision_id": _RELATION_DECISION_ID,
+            "causal_mapping_decision_id": _RELATION_DECISION_ID,
+            "bound_causal_mapping_decision_id": _RELATION_DECISION_ID,
+            "authority_basis": "APPROVED_DATABASE_RELATION_FIELD_CATALOG",
             "attribution_mode": "EXACT_REQUEST_CORRELATION",
         },
         "actual": {
@@ -75,11 +105,15 @@ def _assertion() -> dict:
             "weighted_right_delta": "10",
             "difference": "5",
             "tolerance": "0",
+            "relation_authority_match": True,
+            "automatic_authority_selection_used": False,
+            "causal_scope_semantic_match": True,
+            "transport_receipt_integrity_valid": True,
             "transport_scope_match": True,
             "relation_scope_match": True,
             "causal_value_fingerprint_match": True,
             "causal_lineage_match": True,
-            "transport_receipt": {
+            "validated_transport_receipt": {
                 "schema": "qualibug.operation-causality-transport-receipt.v1",
                 "receipt_id": "causal-transport-1",
                 "causal_scope_fingerprint": "causal-scope-1",
@@ -101,46 +135,8 @@ def _assertion() -> dict:
                 "timestamp_window_attribution_used": False,
                 "raw_value": "req-1",
             },
-            "relation_before_causal_scope": {
-                "phase": "BEFORE",
-                "draft_id": "draft:relation:before",
-                "receipt_id": "relation-before",
-                "phase_receipt_id": "relation-before-phase",
-                "campaign_id": "campaign-1",
-                "execution_id": "execution-1",
-                "source_observer_id": "approved_database_relation_aggregate",
-                "causal_attribution_applied": True,
-                "causal_attribution_scope": {
-                    "causal_scope_fingerprint": "causal-scope-1",
-                    "operation_ref": "api:POST:/ledger",
-                    "value_source": "request.body.request_id",
-                    "child_database_field_id": "field:ledger_entries:request_id",
-                    "child_database_field_name": "request_id",
-                    "mapping_decision_id": "decision:ledger-request-id",
-                    "attribution_mode": "EXACT_REQUEST_CORRELATION",
-                },
-                "causal_attribution_parameter_fingerprints": ["fp-1"],
-            },
-            "relation_after_causal_scope": {
-                "phase": "AFTER",
-                "draft_id": "draft:relation:after",
-                "receipt_id": "relation-after",
-                "phase_receipt_id": "relation-after-phase",
-                "campaign_id": "campaign-1",
-                "execution_id": "execution-1",
-                "source_observer_id": "approved_database_relation_aggregate",
-                "causal_attribution_applied": True,
-                "causal_attribution_scope": {
-                    "causal_scope_fingerprint": "causal-scope-1",
-                    "operation_ref": "api:POST:/ledger",
-                    "value_source": "request.body.request_id",
-                    "child_database_field_id": "field:ledger_entries:request_id",
-                    "child_database_field_name": "request_id",
-                    "mapping_decision_id": "decision:ledger-request-id",
-                    "attribution_mode": "EXACT_REQUEST_CORRELATION",
-                },
-                "causal_attribution_parameter_fingerprints": ["fp-1"],
-            },
+            "relation_before_causal_scope": _causal_scope("BEFORE"),
+            "relation_after_causal_scope": _causal_scope("AFTER"),
             "observer_performed_oracle_verdict": False,
         },
     }
@@ -151,14 +147,25 @@ def test_causal_finding_is_exact_and_raw_identifier_free() -> None:
 
     assert evidence["causal_scope_fingerprint"] == "causal-scope-1"
     assert evidence["operation_ref"] == "api:POST:/ledger"
-    assert evidence["mapping_decision_id"] == "decision:ledger-request-id"
+    assert evidence["causal_mapping_decision_id"] == _RELATION_DECISION_ID
+    assert evidence["bound_causal_mapping_decision_id"] == _RELATION_DECISION_ID
+    assert evidence["relation_mapping_decision_id"] == _RELATION_DECISION_ID
+    assert evidence["authority_basis"] == (
+        "APPROVED_DATABASE_RELATION_FIELD_CATALOG"
+    )
+    assert evidence["relation_authority_match"] is True
+    assert evidence["automatic_authority_selection_used"] is False
+    assert evidence["causal_scope_semantic_match"] is True
+    assert evidence["transport_receipt_integrity_valid"] is True
     assert evidence["transport_scope_match"] is True
     assert evidence["causal_value_fingerprint_match"] is True
     assert evidence["causal_lineage_match"] is True
     assert evidence["transport_receipt"]["transport_receipt_id"] == "transport-1"
-    assert evidence["relation_before_causal_scope"][
-        "causal_attribution_parameter_fingerprints"
-    ] == ["fp-1"]
+    before_scope = evidence["relation_before_causal_scope"]
+    assert before_scope["mapping_decision_id"] == _RELATION_DECISION_ID
+    assert before_scope["relation_mapping_decision_id"] == _RELATION_DECISION_ID
+    assert before_scope["relation_authority_match"] is True
+    assert before_scope["causal_attribution_parameter_fingerprints"] == ["fp-1"]
     assert evidence["oracle_authority"] == "ContractOracle"
     assert evidence["operation_causality_observer_authority"] == "FACT_ONLY"
     serialized = json.dumps(evidence)
@@ -192,8 +199,9 @@ def test_enrichment_does_not_upgrade_delivery_gate() -> None:
     assert finding["customer_delivery_status"] == "candidate"
     assert finding["final_review_status"] == "PENDING_DELIVERY_GATE"
     assert finding["raw_evidence"]["legacy_http_body_used_as_db_snapshot"] is False
-    assert finding["raw_evidence"]["db_snapshot"]["actual"][
-        "causal_lineage_match"
-    ] is True
+    snapshot = finding["raw_evidence"]["db_snapshot"]
+    assert snapshot["relation_mapping_decision_id"] == _RELATION_DECISION_ID
+    assert snapshot["actual"]["relation_authority_match"] is True
+    assert snapshot["actual"]["causal_lineage_match"] is True
     serialized = json.dumps(finding["raw_evidence"])
     assert "req-1" not in serialized
