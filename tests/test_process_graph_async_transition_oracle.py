@@ -69,6 +69,21 @@ def _process_observation() -> dict:
     }
 
 
+def _async_evidence(*, semantic_status: str, reason_code: str = "") -> dict:
+    return {
+        "coverage_complete": True,
+        "declared_transition_count": 1,
+        "observed_transition_count": 1,
+        "transitions": [
+            {
+                "step_id": "consume_notification",
+                "semantic_status": semantic_status,
+                "reason_code": reason_code,
+            }
+        ],
+    }
+
+
 def test_async_transition_observer_keeps_exact_contract_scope() -> None:
     receipt = observe_async_transitions(
         {
@@ -113,26 +128,44 @@ def test_combined_assertion_reports_measured_event_violation() -> None:
             },
             "observations": {
                 "process_step_timeline": _process_observation(),
-                EVIDENCE_KEY: {
-                    "coverage_complete": True,
-                    "declared_transition_count": 1,
-                    "observed_transition_count": 1,
-                    "transitions": [
-                        {
-                            "step_id": "consume_notification",
-                            "semantic_status": "VIOLATION",
-                            "reason_code": (
-                                "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
-                            ),
-                        }
-                    ],
-                },
+                EVIDENCE_KEY: _async_evidence(
+                    semantic_status="VIOLATION",
+                    reason_code=(
+                        "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
+                    ),
+                ),
             },
         }
     )
     assert result["passed"] is False
     assert result["reason_code"] == (
         "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
+    )
+
+
+def test_proven_event_violation_survives_incomplete_downstream_process() -> None:
+    result = evaluate_process_async_completion(
+        {
+            "spec": {
+                "expected_steps": ["submit_order", "consume_notification"],
+                "expected_order": ["submit_order", "consume_notification"],
+            },
+            "observations": {
+                "process_step_timeline": {
+                    "coverage_complete": False,
+                    "observed_order": ["submit_order"],
+                    "steps_not_reaching_transport": ["consume_notification"],
+                },
+                EVIDENCE_KEY: _async_evidence(
+                    semantic_status="VIOLATION",
+                    reason_code="PROCESS_GRAPH_EVENT_IDEMPOTENCY_KEY_MISMATCH",
+                ),
+            },
+        }
+    )
+    assert result["passed"] is False
+    assert result["reason_code"] == (
+        "PROCESS_GRAPH_EVENT_IDEMPOTENCY_KEY_MISMATCH"
     )
 
 
@@ -145,18 +178,7 @@ def test_combined_assertion_passes_only_complete_process_and_events() -> None:
             },
             "observations": {
                 "process_step_timeline": _process_observation(),
-                EVIDENCE_KEY: {
-                    "coverage_complete": True,
-                    "declared_transition_count": 1,
-                    "observed_transition_count": 1,
-                    "transitions": [
-                        {
-                            "step_id": "consume_notification",
-                            "semantic_status": "PASS",
-                            "reason_code": "",
-                        }
-                    ],
-                },
+                EVIDENCE_KEY: _async_evidence(semantic_status="PASS"),
             },
         }
     )
