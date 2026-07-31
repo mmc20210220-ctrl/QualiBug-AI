@@ -14,7 +14,7 @@ from .database_numeric_finding_bridge import (
 from .database_observer_experiment_projection import (
     project_database_observers_to_experiment_pack,
 )
-from .database_relation_delta_experiment_projection import (
+from .database_relation_delta_projection_gate import (
     project_database_relation_delta_assertions,
 )
 from .database_relation_delta_finding_bridge import (
