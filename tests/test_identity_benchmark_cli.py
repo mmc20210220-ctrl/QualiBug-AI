@@ -41,7 +41,8 @@ def _workspace(*, blocked: bool) -> dict:
         "regression": {"status": "PASS", "metric_deltas": {}},
         "identity_quality_gate": {
             "status": "BLOCKED_IDENTITY_QUALITY" if blocked else "PASS",
-            "admission_allowed": not blocked,
+            "entry_allowed": not blocked,
+            "enforced": blocked,
         },
         "history": {"snapshot_count": 1, "latest_snapshot": {"snapshot_id": "snapshot:1"}},
         "error_queue": {"active_errors": [], "resolved_errors": []},
@@ -65,6 +66,7 @@ def test_export_writes_redacted_task_package(
 ) -> None:
     package = {
         "task_package_id": "package:1",
+        "batch_layout_id": "layout:1",
         "manifest_id": "manifest:1",
         "task_count": 1,
         "batch_count": 1,
@@ -100,7 +102,9 @@ def test_export_writes_redacted_task_package(
     persisted = json.loads(output.read_text(encoding="utf-8"))
     assert "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456" not in json.dumps(persisted)
     assert "REDACTED" in json.dumps(persisted)
-    assert json.loads(capsys.readouterr().out)["status"] == "EXPORTED"
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "EXPORTED"
+    assert result["batch_layout_id"] == "layout:1"
 
 
 def test_validate_returns_review_exit_without_importing(
@@ -193,7 +197,50 @@ def test_import_passes_audited_actor_and_returns_quality_blocked_exit(
     }
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "IMPORTED"
-    assert result["workspace"]["quality_gate"]["admission_allowed"] is False
+    assert result["workspace"]["quality_gate"]["entry_allowed"] is False
+
+
+def test_invalid_manager_role_fails_before_ground_truth_import(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    submission = _write(tmp_path / "a.json", _submission("annotator-a"))
+
+    def must_not_import(*args, **kwargs):
+        raise AssertionError("ground truth import must not be reached")
+
+    monkeypatch.setattr(operator, "compile_and_import_identity_annotations", must_not_import)
+
+    code = cli.main(
+        [
+            "import",
+            "--project",
+            "customer-a",
+            "--root",
+            str(tmp_path),
+            "--actor-name",
+            "viewer",
+            "--actor-role",
+            "viewer",
+            "--submission",
+            submission,
+        ]
+    )
+
+    assert code == cli.EXIT_ERROR
+    error = json.loads(capsys.readouterr().err)
+    assert error["status"] == "FAILED"
+    assert error["error_type"] == "PermissionError"
+
+
+def test_invalid_enforced_policy_is_blocked_by_entry_authority() -> None:
+    workspace = _workspace(blocked=False)
+    workspace["identity_quality_gate"] = {
+        "status": "INVALID_IDENTITY_QUALITY_POLICY",
+        "entry_allowed": False,
+        "enforced": True,
+    }
+
+    assert cli._quality_blocked(workspace) is True
 
 
 def test_status_can_fail_ci_on_blocked_gate(tmp_path: Path, monkeypatch, capsys) -> None:
