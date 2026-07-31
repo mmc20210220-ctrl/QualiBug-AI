@@ -13,6 +13,7 @@ on:
       - "ai_test_asset_center/authorization_comparison_contract.py"
       - "ai_test_asset_center/experiment_compiler.py"
       - "ai_test_asset_center/experiment_executor.py"
+      - "ai_test_asset_center/experiment_executor_governance.py"
       - "ai_test_asset_center/experiment_runtime_support.py"
       - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
       - "ai_test_asset_center/private_pilot_project_assets.py"
@@ -75,7 +76,8 @@ jobs:
             ai_test_asset_center/discovery_mainline.py \
             ai_test_asset_center/authorization_comparison_contract.py \
             ai_test_asset_center/experiment_compiler.py \
-            ai_test_asset_center/experiment_executor.py
+            ai_test_asset_center/experiment_executor.py \
+            ai_test_asset_center/experiment_executor_governance.py
 
       - name: Run document ingestion closure
         run: |
