@@ -1,0 +1,70 @@
+name: Apply operation condition outcome authority
+
+on:
+  push:
+    paths:
+      - ".github/workflows/apply-operation-condition-outcome-authority.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-operation-condition-outcome-authority-main
+  cancel-in-progress: false
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Assemble and apply one-shot migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t parts < <(find tools/.one_shot/operation_condition_outcome -maxdepth 1 -type f -name 'part-*' | sort)
+          test "${#parts[@]}" -eq 6
+          cat "${parts[@]}" > /tmp/apply_operation_condition_outcome.py
+          python -m py_compile /tmp/apply_operation_condition_outcome.py
+          python /tmp/apply_operation_condition_outcome.py
+
+      - name: Install project
+        run: python -m pip install -e .
+
+      - name: Run focused authority regression
+        run: |
+          pytest -q \
+            tests/test_operation_condition_outcome_authority.py \
+            tests/test_business_behavior_ir.py \
+            tests/test_business_behavior_ir_logic_gate.py \
+            tests/test_behavior_implementation_binding.py \
+            tests/test_behavior_implementation_binding_governance.py
+
+      - name: Commit canonical authority refactor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "qualibug-mainline-bot"
+          git config user.email "qualibug-mainline-bot@users.noreply.github.com"
+          git rm -r tools/.one_shot/operation_condition_outcome
+          git rm .github/workflows/apply-operation-condition-outcome-authority.yml
+          git add \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir_governance.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir_logic_gate.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py \
+            tests/test_operation_condition_outcome_authority.py
+          git diff --cached --check
+          git commit -m "refactor(understanding): make operation condition outcomes canonical"
+          git pull --rebase origin main
+          git push origin HEAD:main
