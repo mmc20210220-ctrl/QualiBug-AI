@@ -20,6 +20,7 @@ ORACLE_INVOCATION_RECEIPT_TYPE = "qualibug.oracle-invocation-receipt.v1"
 ORACLE_TRACE_RECEIPT_TYPE = "qualibug.oracle-trace-receipt.v1"
 CLEANUP_EXECUTION_RECEIPT_TYPE = "qualibug.cleanup-execution-receipt.v1"
 CLEANUP_VERIFICATION_RECEIPT_TYPE = "qualibug.cleanup-verification-receipt.v1"
+TYPED_OBSERVER_RECEIPT_SCHEMA = "qualibug.observer-receipt.v1"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -78,6 +79,21 @@ def _filter_owners(
     return {rid: list(step_ids) for rid, step_ids in owners.items() if rid in allowed}
 
 
+def _semantic_status_valid(
+    envelope: dict[str, Any],
+    *,
+    evidence_kind: str,
+) -> bool:
+    """Validate typed semantic status without constraining generic envelopes."""
+    payload = _dict(_dict(envelope).get("payload"))
+    if (
+        evidence_kind == "observation"
+        and _text(payload.get("schema_version")) == TYPED_OBSERVER_RECEIPT_SCHEMA
+    ):
+        return _text(payload.get("status")).upper() == "OBSERVED"
+    return True
+
+
 def _audit_group(
     *,
     receipts_by_id: dict[str, dict[str, Any]],
@@ -92,6 +108,7 @@ def _audit_group(
     unreferenced: list[str] = []
     broadcast: list[str] = []
     owner_mismatch: list[str] = []
+    invalid_semantic_status: list[str] = []
     exact_owner_by_receipt: dict[str, str] = {}
 
     for rid in discovered_receipt_ids:
@@ -100,14 +117,20 @@ def _audit_group(
         status = _text(scope.get("status"))
         step_id = _text(scope.get("step_id"))
         receipt_owners = sorted(set(owners.get(rid, [])))
+        semantic_valid = _semantic_status_valid(
+            envelope,
+            evidence_kind=evidence_kind,
+        )
         if status == "STEP_SCOPE_MISSING":
             unscoped.append(rid)
         elif status == "MULTI_STEP_SCOPE_FORBIDDEN":
             multi_step.append(rid)
         elif status == "STEP_SCOPE_UNKNOWN":
             unknown_step.append(rid)
-        elif status == "EXACT":
+        elif status == "EXACT" and semantic_valid:
             exact_owner_by_receipt[rid] = step_id
+        elif status == "EXACT":
+            invalid_semantic_status.append(rid)
 
         if not receipt_owners:
             unreferenced.append(rid)
@@ -124,6 +147,7 @@ def _audit_group(
             unreferenced,
             broadcast,
             owner_mismatch,
+            invalid_semantic_status,
         )
     )
     return {
@@ -138,6 +162,7 @@ def _audit_group(
         "unreferenced_receipt_ids": unreferenced,
         "broadcast_receipt_ids": broadcast,
         "owner_mismatch_receipt_ids": owner_mismatch,
+        "invalid_semantic_status_receipt_ids": invalid_semantic_status,
     }
 
 
@@ -310,6 +335,13 @@ def audit_process_step_evidence_scope(
             ),
         }
     )
+    invalid_semantic_status_receipt_ids = sorted(
+        {
+            rid
+            for group in group_audits
+            for rid in _ids(group.get("invalid_semantic_status_receipt_ids"))
+        }
+    )
 
     validation_errors: list[str] = []
     set_mismatch_fields: list[str] = []
@@ -319,6 +351,9 @@ def audit_process_step_evidence_scope(
     if unbound_receipt_ids:
         validation_errors.append("process_step_receipt_scope_unbound")
         set_mismatch_fields.append("receipt_scope_unbound")
+    if invalid_semantic_status_receipt_ids:
+        validation_errors.append("process_step_evidence_status_invalid")
+        set_mismatch_fields.append("evidence_status")
     if missing_observation_step_ids:
         validation_errors.append("process_step_observation_scope_incomplete")
         set_mismatch_fields.append("observation_scope")
@@ -353,6 +388,7 @@ def audit_process_step_evidence_scope(
         "missing_cleanup_verification_step_ids": missing_cleanup_verification_step_ids,
         "broadcast_receipt_ids": broadcast_receipt_ids,
         "unbound_receipt_ids": unbound_receipt_ids,
+        "invalid_semantic_status_receipt_ids": invalid_semantic_status_receipt_ids,
         "validation_errors": validation_errors,
         "set_mismatch_fields": set_mismatch_fields,
         "broadcast_fallback_forbidden": True,
