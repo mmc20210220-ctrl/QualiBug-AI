@@ -7,6 +7,7 @@ from typing import Any
 
 _PREFLIGHT_INSTALL_MARKER = "__qualibug_operation_causality_attachment_v1__"
 _PHASE_INSTALL_MARKER = "__qualibug_operation_causality_private_cleanup_v1__"
+_PLAN_INSTALL_MARKER = "__qualibug_operation_causality_plan_exception_cleanup_v1__"
 _CAUSAL_ASSERTIONS_KEY = "operation_causality_assertions"
 _CAUSAL_EXPERIMENT_KEY = "operation_causality_experiment"
 
@@ -23,6 +24,7 @@ def _clear_private_runtime_state(runtime: Any, observations: dict[str, Any]) -> 
 
 def install_operation_causality_attachment() -> None:
     from . import database_observer_experiment_runtime as phase_runtime
+    from . import experiment_plan_executor as plan_runtime
     from . import operation_causality_runtime as runtime
 
     preflight = getattr(runtime, "prepare_operation_causality_preflight", None)
@@ -72,6 +74,25 @@ def install_operation_causality_attachment() -> None:
         executor = sys.modules.get(f"{__package__}.experiment_executor")
         if executor is not None:
             executor.execute_database_observer_phase = phase_wrapped
+
+    plan = getattr(plan_runtime, "execute_non_barrier_plans", None)
+    if callable(plan) and not getattr(plan, _PLAN_INSTALL_MARKER, False):
+        @functools.wraps(plan)
+        def plan_wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            observations = kwargs.get("observations")
+            try:
+                return plan(*args, **kwargs)
+            except Exception:
+                if isinstance(observations, dict):
+                    _clear_private_runtime_state(runtime, observations)
+                raise
+
+        setattr(plan_wrapped, _PLAN_INSTALL_MARKER, True)
+        setattr(plan_wrapped, "__qualibug_original__", plan)
+        plan_runtime.execute_non_barrier_plans = plan_wrapped
+        executor = sys.modules.get(f"{__package__}.experiment_executor")
+        if executor is not None:
+            executor.execute_non_barrier_plans = plan_wrapped
 
 
 __all__ = ["install_operation_causality_attachment"]
