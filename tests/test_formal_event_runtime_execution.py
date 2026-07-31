@@ -353,12 +353,20 @@ def test_formal_event_executor_to_oracle_finding_and_evidence_chain(
 
 
 def test_formal_event_write_preflight_does_not_bypass_cleanup_safety() -> None:
-    ok, reason, detail = executor.preflight_experiment_executable(
-        _experiment(method="POST", governed_write=True),
-        behavior_ir=_behavior_ir(method="POST"),
-        actor_tokens={},
-    )
+    experiment = _experiment(method="POST", governed_write=True)
+    behavior_ir = _behavior_ir(method="POST")
 
-    assert ok is False
-    assert reason == "BLOCKED_NON_REVERSIBLE_WRITE"
-    assert detail == "cleanup_compensation_unresolved"
+    executor._sync_core_hooks()
+    preflights = (
+        executor.preflight_experiment_executable,
+        executor._core.preflight_experiment_executable,
+    )
+    for preflight in preflights:
+        ok, reason, detail = preflight(
+            experiment,
+            behavior_ir=behavior_ir,
+            actor_tokens={},
+        )
+        assert ok is False
+        assert reason == "BLOCKED_NON_REVERSIBLE_WRITE"
+        assert detail == "cleanup_compensation_unresolved"
