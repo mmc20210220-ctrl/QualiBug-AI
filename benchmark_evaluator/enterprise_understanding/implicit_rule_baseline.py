@@ -3,6 +3,10 @@
 Both product phases run in one isolated subprocess and receive only public source
 manifests. Evaluator Ground Truth is loaded only after v1 ingestion/build, v2
 supersession/build, source identity validation and final asset capture complete.
+The rule source changes between phases; one frozen OpenAPI source remains unchanged and
+contains the exact idempotency statement inside the payment operation description. This
+lets execution-bridge measurement exercise existing exact-source linking rather than
+confusing a missing interface fixture with a product failure.
 No threshold is claimed from this small contract corpus; it establishes measurable
 candidate, promotion, lifecycle and execution-bridge metrics.
 """
@@ -31,11 +35,18 @@ SOURCE_TWO_RELATIVE_PATH = (
     "benchmark_evaluator/enterprise_understanding/fixtures/"
     f"{PROJECT_ID}/source_v2.md"
 )
+INTERFACE_RELATIVE_PATH = (
+    "benchmark_evaluator/enterprise_understanding/fixtures/"
+    f"{PROJECT_ID}/payment_api.openapi.json"
+)
 GROUND_TRUTH_RELATIVE_PATH = (
     "benchmark_evaluator/enterprise_understanding/fixtures/"
     f"{PROJECT_ID}/ground_truth.json"
 )
-STABLE_SOURCE_REF = "online-docs/implicit-rules/business-rules.md"
+STABLE_RULE_SOURCE_REF = "online-docs/implicit-rules/business-rules.md"
+STABLE_INTERFACE_SOURCE_REF = "online-docs/implicit-rules/payment-api.openapi.json"
+# Backwards-compatible export for existing callers and tests.
+STABLE_SOURCE_REF = STABLE_RULE_SOURCE_REF
 BASELINE_SCHEMA = "qualibug.enterprise-understanding-implicit-rule-baseline.v1"
 
 
@@ -52,25 +63,38 @@ def _source_manifest(
     product_root: Path,
     source_relative_path: str,
 ) -> dict[str, Any]:
-    source = product_root / source_relative_path
-    if not source.is_file():
-        raise FileNotFoundError(f"frozen implicit-rule source missing: {source}")
+    rule_source = product_root / source_relative_path
+    interface_source = product_root / INTERFACE_RELATIVE_PATH
+    if not rule_source.is_file():
+        raise FileNotFoundError(f"frozen implicit-rule source missing: {rule_source}")
+    if not interface_source.is_file():
+        raise FileNotFoundError(
+            f"frozen implicit-rule interface source missing: {interface_source}"
+        )
     return {
         "schema": SOURCE_MANIFEST_SCHEMA,
         "project_id": PROJECT_ID,
         "sources": [
             {
                 "path": source_relative_path,
-                "source_ref": STABLE_SOURCE_REF,
+                "source_ref": STABLE_RULE_SOURCE_REF,
                 "source_type": "business_rules",
-                "blob_sha": _git_blob_sha(source.read_bytes()),
-            }
+                "blob_sha": _git_blob_sha(rule_source.read_bytes()),
+            },
+            {
+                "path": INTERFACE_RELATIVE_PATH,
+                "source_ref": STABLE_INTERFACE_SOURCE_REF,
+                "source_type": "openapi",
+                "blob_sha": _git_blob_sha(interface_source.read_bytes()),
+            },
         ],
         "excluded_from_product_phase": [GROUND_TRUTH_RELATIVE_PATH],
         "product_phase_may_load_ground_truth": False,
         "fixture_source_is_frozen": True,
         "manifest_generated_from_frozen_source_bytes": True,
         "stable_source_ref_separate_from_fixture_path": True,
+        "execution_interface_authority_present": True,
+        "exact_rule_statement_embedded_in_interface_description": True,
     }
 
 
@@ -97,6 +121,24 @@ def _blocked(
     }
     _write_json(output / "implicit_rule_baseline_summary.json", summary)
     return summary
+
+
+def _validate_baseline_source_transitions(
+    transitions: list[dict[str, Any]],
+) -> bool:
+    by_ref = {
+        str(row.get("source_ref") or ""): row
+        for row in transitions
+        if isinstance(row, dict) and str(row.get("source_ref") or "").strip()
+    }
+    rule_transition = by_ref.get(STABLE_RULE_SOURCE_REF) or {}
+    interface_transition = by_ref.get(STABLE_INTERFACE_SOURCE_REF) or {}
+    return bool(
+        rule_transition.get("content_changed") is True
+        and rule_transition.get("source_occurrence_supersession_authority") is True
+        and interface_transition.get("content_changed") is False
+        and interface_transition.get("source_occurrence_reuse_authority") is True
+    )
 
 
 def run_implicit_rule_baseline(
@@ -210,6 +252,12 @@ def run_implicit_rule_baseline(
             reason_code="SOURCE_VERSION_TRANSITION_RECEIPT_MISSING",
             product_exit_code=int(completed.returncode),
         )
+    if not _validate_baseline_source_transitions(transitions):
+        return _blocked(
+            output,
+            reason_code="BASELINE_CHANGED_AND_STABLE_SOURCE_CONTRACT_INVALID",
+            product_exit_code=int(completed.returncode),
+        )
 
     ground_truth_path = product / GROUND_TRUTH_RELATIVE_PATH
     ground_truth = load_implicit_rule_ground_truth(ground_truth_path)
@@ -241,7 +289,11 @@ def run_implicit_rule_baseline(
         measurement.get("execution_bridge_gaps") or [],
     )
 
-    metrics = measurement.get("metrics") if isinstance(measurement.get("metrics"), dict) else {}
+    metrics = (
+        measurement.get("metrics")
+        if isinstance(measurement.get("metrics"), dict)
+        else {}
+    )
     summary = {
         "schema": BASELINE_SCHEMA,
         "project_id": PROJECT_ID,
@@ -253,6 +305,8 @@ def run_implicit_rule_baseline(
         "metrics": metrics,
         "next_repair_target": measurement.get("next_repair_target") or "",
         "source_version_transitions": transitions,
+        "changed_source_count": product_receipt.get("changed_source_count"),
+        "unchanged_source_count": product_receipt.get("unchanged_source_count"),
         "phase_two_governance_carry_forward_receipt": product_receipt.get(
             "phase_two_governance_carry_forward_receipt"
         )
@@ -269,6 +323,8 @@ def run_implicit_rule_baseline(
         "ground_truth_entered_product_runtime": False,
         "product_model_can_self_label_true_or_false": False,
         "fuzzy_or_llm_alignment_used": False,
+        "execution_interface_authority_present": True,
+        "execution_linking_authority": "EXACT_RULE_STATEMENT_IN_INTERFACE_SOURCE_EXCERPT",
         "quality_scope": (
             "FROZEN_CONTRACT_CORPUS_ONLY_NOT_131_BUG_RECALL_OR_INDUSTRY_GENERALIZATION"
         ),
@@ -309,7 +365,10 @@ if __name__ == "__main__":
 
 __all__ = [
     "BASELINE_SCHEMA",
+    "INTERFACE_RELATIVE_PATH",
     "PROJECT_ID",
+    "STABLE_INTERFACE_SOURCE_REF",
+    "STABLE_RULE_SOURCE_REF",
     "STABLE_SOURCE_REF",
     "run_implicit_rule_baseline",
 ]
