@@ -27,6 +27,14 @@ _VERDICT_KEYS = (
     "passed",
     "satisfied",
 )
+_LEGACY_UNSCOPED_EVIDENCE_FIELDS = frozenset(
+    {
+        "observer_receipt_ids",
+        "observation_receipt_ids",
+        "oracle_receipt_ids",
+        "cleanup_receipt_ids",
+    }
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -106,6 +114,27 @@ class ProcessStepSemanticView:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._ledger, name)
+
+    def append_receipt_ref(
+        self,
+        step_id: str,
+        field: str,
+        receipt_id: str,
+    ) -> bool:
+        """Keep legacy Finalizer broadcasts from mutating exact-scope authority.
+
+        The old Finalizer still calls ``append_receipt_ref`` for observation,
+        oracle and cleanup evidence after evaluating a result. The underlying
+        ledger intentionally records those calls as identity violations because
+        the receipt did not repeat its own step identity. This semantic view
+        already synchronizes exact-scoped receipts through
+        ``append_scoped_receipt_ref``; therefore the legacy broadcast is a
+        compatibility no-op, not a second authority and not a rejection event.
+        Scalar transport/state receipts continue to delegate unchanged.
+        """
+        if _text(field) in _LEGACY_UNSCOPED_EVIDENCE_FIELDS:
+            return False
+        return self._ledger.append_receipt_ref(step_id, field, receipt_id)
 
     def _synchronize(self) -> None:
         synchronize_scoped_receipts_from_observations(
