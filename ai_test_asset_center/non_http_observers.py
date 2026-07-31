@@ -9,6 +9,12 @@ from .database_observer_experiment_runtime import (
     PHASE_AGGREGATE_OBSERVER_ID,
     install_experiment_database_observer,
 )
+from .database_relation_causality_runtime import (
+    install_database_relation_causality_runtime,
+)
+from .database_relation_delta_causality_oracle import (
+    install_database_relation_causal_delta_assertion,
+)
 from .database_relation_delta_lineage import (
     install_database_relation_delta_assertion,
 )
@@ -27,6 +33,10 @@ from .observer_contracts_base import (
     _receipt,
     register_observer,
     registered_observer_ids,
+)
+from .operation_causality_runtime import install_operation_causality_runtime
+from .operation_causality_runtime_attachment import (
+    install_operation_causality_attachment,
 )
 
 _PROCESS_OBSERVER_ID = "process_timeline"
@@ -182,16 +192,21 @@ def install_non_http_observers() -> None:
     )
     OBSERVER_REGISTRY[PHASE_AGGREGATE_OBSERVER_ID] = aggregate_contract
 
-    # FK-scoped relation aggregation has a separate direct Observer and phase aggregate.
-    # The phase wrapper extends the same executor and never runs a query in Finalizer.
+    # FK-scoped relation aggregation extends the same phase executor. Causality
+    # wrappers are installed only after that extension exists, so BEFORE/AFTER,
+    # transport proof and the approved relation query share one execution chain.
     install_database_relation_phase_observer()
     install_database_relation_phase_execution()
+    install_database_relation_causality_runtime()
+    install_operation_causality_runtime()
+    install_operation_causality_attachment()
 
     # Assertion registration happens only after all required evidence keys are declared.
     install_database_state_transition_assertion()
     install_database_numeric_assertions()
     install_database_relation_numeric_assertion()
     install_database_relation_delta_assertion()
+    install_database_relation_causal_delta_assertion()
 
     if hasattr(_experiment_compiler, _ORIGINAL_COMPILER_MARKER):
         original_compile = getattr(
