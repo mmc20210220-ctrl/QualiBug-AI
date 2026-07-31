@@ -189,6 +189,17 @@ def _event_slot(
     }
 
 
+def _unknown_identity(row: dict[str, Any]) -> str:
+    return stable_id(
+        "implementation_binding_unknown",
+        row.get("kind"),
+        row.get("behavior_ref"),
+        row.get("slot_ref"),
+        row.get("event_contract_ref"),
+        row.get("reason_code"),
+    )
+
+
 def project_formal_event_observers(
     asset: dict[str, Any],
     behaviors: Iterable[dict[str, Any]],
@@ -245,6 +256,16 @@ def project_formal_event_observers(
                 )
                 if operation_reason or text(as_dict(operation).get("id")) != interface_id:
                     continue
+
+                # An explicit actor ref scopes the contract before runtime resolution.
+                # A broken contract for actor A must not block actor B's behavior on
+                # the same operation.
+                declared_actor = text(
+                    contract.get("actor_ref") or contract.get("actor_id")
+                )
+                if behavior_actors and declared_actor and declared_actor not in behavior_actors:
+                    continue
+
                 actor, actor_reason = _resolve_event_actor(contract, actor_rows)
                 contract_actor = text(as_dict(actor).get("id"))
                 if actor_reason:
@@ -350,19 +371,13 @@ def project_formal_event_observers(
             and text(row.get("behavior_ref")) in ready_behaviors
         )
     ]
-    deduped_unknowns = list(
-        {
-            stable_id(
-                "implementation_binding_unknown",
-                row.get("kind"),
-                row.get("behavior_ref"),
-                row.get("slot_ref"),
-                row.get("event_contract_ref"),
-                row.get("reason_code"),
-            ): row
-            for row in unknown_rows
-        }.values()
-    )
+    deduped: dict[str, dict[str, Any]] = {}
+    for raw in unknown_rows:
+        row = dict(raw)
+        unknown_id = text(row.get("unknown_id")) or _unknown_identity(row)
+        row["unknown_id"] = unknown_id
+        deduped[unknown_id] = row
+    deduped_unknowns = list(deduped.values())
 
     counts: dict[str, int] = defaultdict(int)
     for binding in projected:
