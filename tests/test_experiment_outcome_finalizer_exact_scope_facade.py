@@ -204,6 +204,31 @@ def test_scope_sync_receives_raw_source_ledger(monkeypatch) -> None:
     assert isinstance(observations["process_step_ledger"], ProcessStepSemanticView)
 
 
+def test_stale_step_snapshot_is_removed_before_core(monkeypatch) -> None:
+    observations = _observations()
+    observations["required_step_ids"] = ["step-1", "step-2"]
+    for field in finalizer._DERIVED_STEP_SNAPSHOT_FIELDS:
+        observations[field] = ["stale"]
+    captured: dict = {}
+
+    def fake_core(*args, **kwargs):
+        current = kwargs["observations"]
+        captured["missing"] = [
+            field
+            for field in finalizer._DERIVED_STEP_SNAPSHOT_FIELDS
+            if field not in current
+        ]
+        captured["required"] = list(current["required_step_ids"])
+        return {"status": "EXECUTED"}
+
+    monkeypatch.setattr(finalizer._core, "finalize_experiment_execution", fake_core)
+
+    finalizer.finalize_experiment_execution(observations=observations)
+
+    assert captured["missing"] == list(finalizer._DERIVED_STEP_SNAPSHOT_FIELDS)
+    assert captured["required"] == ["step-1", "step-2"]
+
+
 def test_facade_seals_exact_scope_and_restores_semantic_view(monkeypatch) -> None:
     observations = _observations()
     captured: dict = {}
