@@ -38,6 +38,24 @@ def _is_graph_aggregate(receipt: dict[str, Any]) -> bool:
     return _receipt_schema(receipt) in _GRAPH_AGGREGATE_SCHEMAS
 
 
+def _raw_rows(
+    observations: dict[str, Any],
+    keys: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for key in keys:
+        value = observations.get(key)
+        if isinstance(value, dict):
+            rows.append(value)
+        else:
+            rows.extend(
+                row
+                for row in _core._list(value)
+                if isinstance(row, dict)
+            )
+    return rows
+
+
 def _nested_receipts(
     aggregates: list[dict[str, Any]],
     *mapping_fields: str,
@@ -53,17 +71,51 @@ def _nested_receipts(
                 for _, value in sorted(mapping.items())
                 if isinstance(value, dict)
             )
-    return _core._deduplicate_receipts(rows)
+    return rows
+
+
+def _conflicting_receipt_ids(
+    rows: list[dict[str, Any]],
+) -> tuple[set[str], list[dict[str, Any]]]:
+    owners: dict[str, set[str]] = {}
+    for row in rows:
+        receipt_id = _core.receipt_id(row)
+        scope = _core.extract_receipt_step_scope(row)
+        step_id = _core._text(scope.get("step_id"))
+        if (
+            receipt_id
+            and scope.get("status") == "EXACT"
+            and step_id
+        ):
+            owners.setdefault(receipt_id, set()).add(step_id)
+    conflicts = {
+        receipt_id
+        for receipt_id, step_ids in owners.items()
+        if len(step_ids) > 1
+    }
+    unbound = [
+        {
+            "receipt_id": receipt_id,
+            "status": "RECEIPT_REUSED_ACROSS_STEPS",
+            "step_id": "",
+            "declared_step_ids": sorted(owners[receipt_id]),
+            "explicit_scalar_step_ids": sorted(owners[receipt_id]),
+            "explicit_list_step_ids": [],
+            "evidence_kind": "cleanup",
+        }
+        for receipt_id in sorted(conflicts)
+    ]
+    return conflicts, unbound
 
 
 def _partition_cleanup_receipts(
     source: dict[str, Any],
-) -> dict[str, list[dict[str, Any]]]:
-    execution_rows = _core._rows(
+) -> dict[str, Any]:
+    execution_rows = _raw_rows(
         source,
         ("cleanup_execution_receipts", "cleanup_execution_receipt"),
     )
-    verification_rows = _core._rows(
+    verification_rows = _raw_rows(
         source,
         (
             "cleanup_verification_receipts",
@@ -71,17 +123,17 @@ def _partition_cleanup_receipts(
             "cleanup_equivalence_receipt",
         ),
     )
-    execution_aggregates = [
-        row for row in execution_rows if _is_graph_aggregate(row)
-    ]
-    verification_aggregates = [
-        row for row in verification_rows if _is_graph_aggregate(row)
-    ]
+    execution_aggregates = _core._deduplicate_receipts(
+        [row for row in execution_rows if _is_graph_aggregate(row)]
+    )
+    verification_aggregates = _core._deduplicate_receipts(
+        [row for row in verification_rows if _is_graph_aggregate(row)]
+    )
     aggregates = _core._deduplicate_receipts(
         [*execution_aggregates, *verification_aggregates]
     )
 
-    explicit_execution = _core._rows(
+    explicit_execution = _raw_rows(
         source,
         (
             "process_step_cleanup_execution_receipts",
@@ -89,7 +141,7 @@ def _partition_cleanup_receipts(
             "process_graph_cleanup_receipts",
         ),
     )
-    explicit_verification = _core._rows(
+    explicit_verification = _raw_rows(
         source,
         (
             "process_step_cleanup_verification_receipts",
@@ -106,26 +158,39 @@ def _partition_cleanup_receipts(
         "step_equivalence_receipts_by_id",
     )
 
+    raw_exact_execution = [
+        *[
+            row
+            for row in execution_rows
+            if not _is_graph_aggregate(row)
+        ],
+        *explicit_execution,
+        *nested_execution,
+    ]
+    raw_exact_verification = [
+        *[
+            row
+            for row in verification_rows
+            if not _is_graph_aggregate(row)
+        ],
+        *explicit_verification,
+        *nested_verification,
+    ]
+    conflicts, conflict_unbound = _conflicting_receipt_ids(
+        [*raw_exact_execution, *raw_exact_verification]
+    )
     exact_execution = _core._deduplicate_receipts(
         [
-            *[
-                row
-                for row in execution_rows
-                if not _is_graph_aggregate(row)
-            ],
-            *explicit_execution,
-            *nested_execution,
+            row
+            for row in raw_exact_execution
+            if _core.receipt_id(row) not in conflicts
         ]
     )
     exact_verification = _core._deduplicate_receipts(
         [
-            *[
-                row
-                for row in verification_rows
-                if not _is_graph_aggregate(row)
-            ],
-            *explicit_verification,
-            *nested_verification,
+            row
+            for row in raw_exact_verification
+            if _core.receipt_id(row) not in conflicts
         ]
     )
     return {
@@ -134,6 +199,8 @@ def _partition_cleanup_receipts(
         "aggregates": aggregates,
         "exact_execution": exact_execution,
         "exact_verification": exact_verification,
+        "conflicting_receipt_ids": sorted(conflicts),
+        "conflict_unbound": conflict_unbound,
     }
 
 
@@ -165,6 +232,56 @@ def _projection(
     return projected
 
 
+def _merge_conflict_audit(
+    audit: dict[str, Any],
+    partition: dict[str, Any],
+) -> dict[str, Any]:
+    conflict_unbound = [
+        dict(row)
+        for row in partition["conflict_unbound"]
+        if isinstance(row, dict)
+    ]
+    if not conflict_unbound:
+        return audit
+    cleanup = dict(_core._dict(audit.get("cleanup")))
+    cleanup["duplicate_receipt_ids"] = sorted(
+        {
+            *[
+                _core._text(value)
+                for value in _core._list(
+                    cleanup.get("duplicate_receipt_ids")
+                )
+                if _core._text(value)
+            ],
+            *partition["conflicting_receipt_ids"],
+        }
+    )
+    cleanup["unbound"] = [
+        *[
+            dict(row)
+            for row in _core._list(cleanup.get("unbound"))
+            if isinstance(row, dict)
+        ],
+        *conflict_unbound,
+    ]
+    cleanup["complete"] = False
+    return {
+        **audit,
+        "cleanup": cleanup,
+        "unbound_receipts": [
+            *[
+                dict(row)
+                for row in _core._list(
+                    audit.get("unbound_receipts")
+                )
+                if isinstance(row, dict)
+            ],
+            *conflict_unbound,
+        ],
+        "complete": False,
+    }
+
+
 def synchronize_scoped_receipts_from_observations(
     ledger: Any,
     observations: dict[str, Any] | None,
@@ -182,6 +299,7 @@ def synchronize_scoped_receipts_from_observations(
         ledger,
         projected,
     )
+    audit = _merge_conflict_audit(audit, partition)
 
     if isinstance(observations, dict):
         for key in (
@@ -255,6 +373,9 @@ def synchronize_scoped_receipts_from_observations(
             for row in partition["exact_verification"]
             if _core.receipt_id(row)
         ],
+        "conflicting_cleanup_receipt_ids": list(
+            partition["conflicting_receipt_ids"]
+        ),
     }
     if isinstance(observations, dict):
         observations["process_step_receipt_scope_binding"] = audit
