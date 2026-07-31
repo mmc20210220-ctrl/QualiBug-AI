@@ -177,11 +177,17 @@ def build_identity_annotation_task_package(
             }
         )
 
+    mention_refs = [row["mention_ref"] for row in tasks]
     package_id = stable_id(
         "enterprise_identity_annotation_task_package",
         manifest_id,
-        [row["mention_ref"] for row in tasks],
+        mention_refs,
+    )
+    batch_layout_id = stable_id(
+        "enterprise_identity_annotation_batch_layout",
+        package_id,
         size,
+        [row["mention_refs"] for row in batches],
     )
     submission_template = {
         "schema": SUBMISSION_SCHEMA,
@@ -204,6 +210,7 @@ def build_identity_annotation_task_package(
     package = {
         "schema": TASK_PACKAGE_SCHEMA,
         "task_package_id": package_id,
+        "batch_layout_id": batch_layout_id,
         "manifest_id": manifest_id,
         "annotation_scope": ANNOTATION_SCOPE,
         "task_count": len(tasks),
@@ -220,6 +227,7 @@ def build_identity_annotation_task_package(
             "singleton_clusters_must_be_explicit": True,
             "cluster_names_are_annotator_local": True,
             "double_blind_agreement_compares_partition_not_cluster_names": True,
+            "batch_layout_does_not_change_task_package_identity": True,
         },
         "contains_product_cluster_suggestions": False,
         "contains_predicted_entity_ids": False,
