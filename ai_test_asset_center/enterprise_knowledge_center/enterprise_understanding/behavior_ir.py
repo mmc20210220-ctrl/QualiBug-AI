@@ -11,6 +11,7 @@ import re
 from collections import defaultdict
 from typing import Any, Iterable
 
+from .authorization_semantics import resolve_fact_authorization
 from .schema import (
     as_dict,
     as_list,
@@ -53,20 +54,6 @@ _OBJECT_HEADER_RE = re.compile(
 )
 _STATE_HEADER_RE = re.compile(r"(?:状态|阶段|status|state)", re.I)
 _GENERIC_HEADER = {"判断", "条件", "输入", "结果", "输出", "动作", "condition", "input", "result", "output", "action"}
-
-# Authorization is a narrower semantic than business responsibility.  Modal verbs
-# alone are not authority: “仓库员必须登记入库” is an operational obligation, and
-# “财务不得重复退款” is a business prohibition.  Only an explicit source-backed
-# authority marker, or an explicit actor data-scope boundary, may create ALLOW/DENY.
-_EXPLICIT_AUTH_ALLOW_RE = re.compile(
-    r"(?:有权|拥有权限|授予权限|授权(?:给|由|可)?|允许|准许|permit|authori[sz]ed|has\s+permission)",
-    re.I,
-)
-_EXPLICIT_AUTH_DENY_RE = re.compile(
-    r"(?:无权|没有权限|无权限|未授权|未经授权|不允许|禁止访问|拒绝访问|"
-    r"not\s+authori[sz]ed|no\s+permission|permission\s+denied)",
-    re.I,
-)
 
 
 def _fact_object_refs(fact: dict[str, Any]) -> list[str]:
@@ -188,11 +175,7 @@ def _normalize_condition_slot(
 
 
 def _permission_decision(raw: str) -> str:
-    """Parse permission with deny-first precedence.
-
-    Source phrases like “不允许” contain the ALLOW substring “允许”. Matching every
-    pattern and treating dual hits as CONFLICTED falsely marks a clear denial incomplete.
-    """
+    """Parse matrix permission text with deny-first precedence."""
     value = text(raw)
     if not value:
         return "UNSPECIFIED"
@@ -482,57 +465,8 @@ def _operation_lookup(operations: Iterable[dict[str, Any]]) -> dict[str, list[di
     return result
 
 
-def _explicit_authorization_decision(fact: dict[str, Any]) -> str:
-    explicit = as_dict(fact.get("authorization_semantics"))
-    decision = text(explicit.get("decision")).upper()
-    if decision in {
-        "ALLOW",
-        "DENY",
-        "REQUIRE_APPROVAL",
-        "REQUIRE_CONFIRMATION",
-    }:
-        return decision
-
-    raw = text(fact.get("raw_statement"))
-    modality = text(fact.get("modality")).upper()
-    actors = [actor for actor in _fact_actor_refs(fact) if actor != "系统"]
-    scope = as_dict(fact.get("scope"))
-    scoped_boundary = bool(actors and any(text(value) for value in scope.values()))
-
-    if re.search(
-        r"(?:需要|必须|须|需).{0,8}(?:审批|审核)|require.{0,8}approval",
-        raw,
-        re.I,
-    ):
-        return "REQUIRE_APPROVAL"
-    if re.search(
-        r"(?:需要|必须|须|需).{0,8}(?:确认)|require.{0,8}confirmation",
-        raw,
-        re.I,
-    ):
-        return "REQUIRE_CONFIRMATION"
-    if not actors:
-        return "UNSPECIFIED"
-    if _EXPLICIT_AUTH_DENY_RE.search(raw):
-        return "DENY"
-    if _EXPLICIT_AUTH_ALLOW_RE.search(raw):
-        return "ALLOW"
-    if scoped_boundary and modality in {"MUST_NOT", "FORBIDDEN", "DENY"}:
-        return "DENY"
-    if scoped_boundary and modality in {"MAY", "CAN", "ALLOW", "PERMITTED", "ONLY_IF"}:
-        return "ALLOW"
-    return "UNSPECIFIED"
-
-
 def _fact_permission(fact: dict[str, Any]) -> str:
-    """Return only source-backed authorization semantics.
-
-    Business modality and authorization are orthogonal.  Generic MUST/SHALL/REQUIRED
-    remains an operational responsibility; generic MUST_NOT remains a business
-    prohibition.  Neither becomes an authorization assertion without explicit source
-    authority or data-scope evidence.
-    """
-    return _explicit_authorization_decision(fact)
+    return text(resolve_fact_authorization(fact).get("decision")) or "UNSPECIFIED"
 
 
 def _fact_conditions(fact: dict[str, Any]) -> list[dict[str, Any]]:
@@ -583,16 +517,22 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         for row in as_list(fact.get("data_effects"))
         if text(row.get("statement") if isinstance(row, dict) else row)
     ]
+    authorization = resolve_fact_authorization(fact)
+    permission_decision = text(authorization.get("decision")) or "UNSPECIFIED"
+    authorization_unresolved = (
+        bool(authorization.get("authority_declared"))
+        and text(authorization.get("resolution_status")) == "UNRESOLVED"
+    )
     missing = unique_text(
         [
             "BEHAVIOR_OPERATION_UNRESOLVED" if not operation else "",
             "BEHAVIOR_OBJECT_UNRESOLVED" if not objects else "",
             "BEHAVIOR_EVIDENCE_MISSING" if not evidence else "",
             "BEHAVIOR_CONDITION_COMBINATOR_UNRESOLVED" if combinator == "UNRESOLVED" else "",
+            "BEHAVIOR_AUTHORIZATION_DECISION_UNRESOLVED" if authorization_unresolved else "",
         ]
     )
     behavior_id = stable_id("business_behavior", "fact", fact.get("fact_id"), operation, objects)
-    permission_decision = _fact_permission(fact)
     return {
         "schema": BEHAVIOR_SCHEMA,
         "behavior_id": behavior_id,
@@ -618,7 +558,12 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         "state_effects": state_effects,
         "data_effects": data_effects,
         "permission_decision": permission_decision,
-        "authorization_semantics_explicit": permission_decision != "UNSPECIFIED",
+        "authorization_semantics_explicit": bool(authorization.get("authority_declared")),
+        "authorization_semantic_kind": text(authorization.get("semantic_kind")) or "NONE",
+        "authorization_semantics_status": text(authorization.get("resolution_status")) or "NOT_DECLARED",
+        "authorization_resolution_reason": text(authorization.get("reason_code")),
+        "authorization_derivation": text(authorization.get("derivation")),
+        "authorization_text_fallback_used": bool(authorization.get("text_fallback_used")),
         "business_modality": text(fact.get("modality")).upper(),
         "exceptions": unique_text(
             [
@@ -685,6 +630,8 @@ def _matrix_behavior(
     conditions = [dict(slot) for slot in as_list(row.get("condition_slots")) if isinstance(slot, dict)]
     status = "CONFLICTED" if permission == "CONFLICTED" else "INCOMPLETE" if unresolved else "CANDIDATE"
     behavior_id = stable_id("business_behavior", "matrix", row.get("row_ledger_id"), operation, object_refs)
+    authorization_explicit = permission in {"ALLOW", "DENY"}
+    governance_decision = permission in {"REQUIRE_APPROVAL", "REQUIRE_CONFIRMATION"}
     return {
         "schema": BEHAVIOR_SCHEMA,
         "behavior_id": behavior_id,
@@ -715,7 +662,18 @@ def _matrix_behavior(
         "state_effects": [],
         "data_effects": [],
         "permission_decision": permission,
-        "authorization_semantics_explicit": permission not in {"", "UNSPECIFIED", "CONFLICTED"},
+        "authorization_semantics_explicit": authorization_explicit,
+        "authorization_semantic_kind": (
+            "AUTHORIZATION" if authorization_explicit else "GOVERNANCE" if governance_decision else "NONE"
+        ),
+        "authorization_semantics_status": (
+            "UNRESOLVED" if permission == "CONFLICTED" else "RESOLVED" if authorization_explicit or governance_decision else "NOT_DECLARED"
+        ),
+        "authorization_resolution_reason": (
+            "BEHAVIOR_RESULT_CONFLICT" if permission == "CONFLICTED" else ""
+        ),
+        "authorization_derivation": "decision_matrix_result_cell",
+        "authorization_text_fallback_used": False,
         "exceptions": [],
         "compensations": [],
         "evidence": dedupe_evidence(as_list(row.get("evidence"))),
@@ -838,7 +796,8 @@ def _detect_behavior_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str
             text(row.get("permission_decision"))
             for row in rows
             if bool(row.get("authorization_semantics_explicit"))
-            and text(row.get("permission_decision")) not in {"", "UNSPECIFIED", "CONFLICTED"}
+            and text(row.get("authorization_semantics_status")) == "RESOLVED"
+            and text(row.get("permission_decision")) in {"ALLOW", "DENY"}
         }
         if len(decisions) <= 1:
             continue
@@ -891,7 +850,12 @@ def _behavior_unknowns(behaviors: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 severity="P1",
                 blocks_formal_understanding=False,
                 reason_code=unresolved[0],
-                details={"behavior_id": behavior.get("behavior_id"), "unresolved_semantics": unresolved},
+                details={
+                    "behavior_id": behavior.get("behavior_id"),
+                    "unresolved_semantics": unresolved,
+                    "authorization_semantics_status": behavior.get("authorization_semantics_status"),
+                    "authorization_resolution_reason": behavior.get("authorization_resolution_reason"),
+                },
             )
         )
     return unknowns
@@ -927,13 +891,25 @@ def _behavior_gate(
             "conflicted_behavior_count": len(conflicted),
             "behavior_conflict_count": len(conflicts),
             "authorization_behavior_count": sum(
-                1 for row in behaviors if bool(row.get("authorization_semantics_explicit"))
+                1
+                for row in behaviors
+                if bool(row.get("authorization_semantics_explicit"))
+                and text(row.get("authorization_semantics_status")) == "RESOLVED"
+            ),
+            "unresolved_authorization_behavior_count": sum(
+                1
+                for row in behaviors
+                if bool(row.get("authorization_semantics_explicit"))
+                and text(row.get("authorization_semantics_status")) == "UNRESOLVED"
+            ),
+            "governance_decision_behavior_count": sum(
+                1 for row in behaviors if text(row.get("authorization_semantic_kind")) == "GOVERNANCE"
             ),
             "responsibility_behavior_count": sum(
                 1
                 for row in behaviors
                 if text(row.get("business_modality")) in {"MUST", "SHALL", "REQUIRED"}
-                and not bool(row.get("authorization_semantics_explicit"))
+                and text(row.get("authorization_semantic_kind")) == "NONE"
             ),
             "source_traceability_rate": round(len(traceable) / denominator, 4) if denominator else 1.0,
         },
@@ -941,6 +917,7 @@ def _behavior_gate(
         "decision_matrix_rows_are_formal_rules": False,
         "responsibility_is_authorization": False,
         "business_prohibition_is_authorization_without_explicit_scope": False,
+        "explicit_unknown_authorization_can_fallback_to_text": False,
         "automatic_conflict_resolution_allowed": False,
     }
 
