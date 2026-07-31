@@ -1,9 +1,9 @@
 """Monotonic fencing-token authority for managed connector synchronization.
 
-The token lives on the existing connector instance registry record. Acquiring a new token never
-creates another connector registry. A healthy owner cannot be displaced; an owner whose heartbeat
-has crossed the takeover threshold is first assigned a newer token and then marked FENCED_OUT so
-its heartbeat and every durable write made by its original thread fail closed.
+The token lives on the existing connector instance registry record. Issuance is serialized by
+the existing project knowledge transaction. A healthy progressing owner cannot be displaced; an
+owner whose call stack has stopped making progress beyond the takeover threshold is assigned a
+newer token and marked FENCED_OUT before recovery continues.
 """
 from __future__ import annotations
 
@@ -31,6 +31,10 @@ from .connector_write_fence import (
 )
 from .enterprise_knowledge_center._common import ROOT
 from .enterprise_knowledge_center._utils import _now, _require_manage_actor
+from .enterprise_knowledge_center.transaction_lock import (
+    KnowledgeTransactionBusy,
+    knowledge_transaction,
+)
 from .real_project_onboarding import _safe_project_id
 
 
@@ -45,10 +49,10 @@ def _text(value: Any, limit: int = 1000) -> str:
 def _takeover_seconds() -> int:
     raw = _text(os.environ.get("QUALIBUG_CONNECTOR_SYNC_TAKEOVER_SECONDS"), 32)
     try:
-        value = int(raw) if raw else 120
+        value = int(raw) if raw else 30 * 60
     except ValueError:
-        value = 120
-    return max(30, min(value, 60 * 60))
+        value = 30 * 60
+    return max(2 * 60, min(value, 24 * 60 * 60))
 
 
 def _token(value: Any) -> int:
@@ -92,75 +96,94 @@ def acquire_connector_sync_fence(
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
     clean_actor = _require_manage_actor(actor)
-    ownership = inspect_connector_sync_ownership(
-        project,
-        connector,
-        root=resolved_root,
-        stale_after_seconds=_takeover_seconds(),
-    )
-    if ownership.get("owner_alive") is True and ownership.get("heartbeat_stale") is not True:
-        raise ConnectorSyncFenceError("connector_sync_already_running_owner_active")
-    if ownership.get("owner_alive") is None and ownership.get("state") not in {
-        "MISSING",
-        "",
-    }:
-        raise ConnectorSyncFenceError(
-            "connector_sync_lock_held_owner_unverified:"
-            + (_text(ownership.get("state"), 80) or "UNKNOWN")
-        )
-
-    registry = _load_connector_registry(project, resolved_root)
-    instance = _instance_by_id(registry, connector)
-    if instance is None:
-        raise ConnectorSyncFenceError("connector_instance_not_registered")
-    current = _token(instance.get("fencing_generation"))
-    token = current + 1
     takeover_attempt = "fence_" + uuid.uuid4().hex
-    taken_over = bool(
-        ownership.get("owner_alive") is True
-        and ownership.get("heartbeat_stale") is True
-    )
-    instance["fencing_generation"] = token
-    instance["last_fencing_token_issued_at_utc"] = _now()
-    instance["last_fencing_token_issued_by"] = clean_actor
-    instance["fencing_takeover_pending"] = taken_over
-    registry.setdefault("governance", {}).update(
-        {
-            "connector_sync_fencing_enabled": True,
-            "connector_sync_fencing_token_authority": "CONNECTOR_INSTANCE_REGISTRY",
-            "stale_connector_threads_cannot_commit_writes": True,
-            "second_fencing_registry_created": False,
-        }
-    )
-    registry.setdefault("audit_events", []).append(
-        {
-            "event": "issue_connector_sync_fencing_token",
-            "at_utc": _now(),
-            "actor": clean_actor,
-            "connector_instance_id": connector,
-            "previous_fencing_token": current,
-            "fencing_token": token,
-            "takeover": taken_over,
-            "previous_owner_state": _text(ownership.get("state"), 80),
-            "raw_credentials_persisted": False,
-            "source_content_persisted": False,
-        }
-    )
-    _save_connector_registry(project, resolved_root, registry)
-
-    if ownership.get("state") not in {"MISSING", ""}:
-        try:
-            fence_out_connector_sync_ownership(
+    try:
+        with knowledge_transaction(
+            resolved_root,
+            project,
+            operation="acquire_connector_sync_fence",
+            actor=clean_actor,
+            wait_seconds=5.0,
+        ):
+            ownership = inspect_connector_sync_ownership(
                 project,
                 connector,
                 root=resolved_root,
-                takeover_attempt_id=takeover_attempt,
-                fencing_token=token,
+                stale_after_seconds=_takeover_seconds(),
             )
-        except ConnectorSyncOwnershipError as exc:
-            raise ConnectorSyncFenceError(
-                f"connector_sync_fence_owner_invalidation_failed:{exc}"
-            ) from exc
+            progressing = ownership.get("progress_stale") is not True
+            if ownership.get("owner_alive") is True and progressing:
+                raise ConnectorSyncFenceError(
+                    "connector_sync_already_running_owner_active"
+                )
+            if ownership.get("owner_alive") is None and ownership.get("state") not in {
+                "MISSING",
+                "",
+            }:
+                raise ConnectorSyncFenceError(
+                    "connector_sync_lock_held_owner_unverified:"
+                    + (_text(ownership.get("state"), 80) or "UNKNOWN")
+                )
+
+            registry = _load_connector_registry(project, resolved_root)
+            instance = _instance_by_id(registry, connector)
+            if instance is None:
+                raise ConnectorSyncFenceError("connector_instance_not_registered")
+            current = _token(instance.get("fencing_generation"))
+            token = current + 1
+            taken_over = bool(
+                ownership.get("owner_alive") is True
+                and ownership.get("progress_stale") is True
+            )
+            instance["fencing_generation"] = token
+            instance["last_fencing_token_issued_at_utc"] = _now()
+            instance["last_fencing_token_issued_by"] = clean_actor
+            instance["fencing_takeover_pending"] = taken_over
+            registry.setdefault("governance", {}).update(
+                {
+                    "connector_sync_fencing_enabled": True,
+                    "connector_sync_fencing_token_authority": "CONNECTOR_INSTANCE_REGISTRY",
+                    "stale_connector_threads_cannot_commit_writes": True,
+                    "fencing_token_issuance_project_transaction_serialized": True,
+                    "second_fencing_registry_created": False,
+                }
+            )
+            registry.setdefault("audit_events", []).append(
+                {
+                    "event": "issue_connector_sync_fencing_token",
+                    "at_utc": _now(),
+                    "actor": clean_actor,
+                    "connector_instance_id": connector,
+                    "previous_fencing_token": current,
+                    "fencing_token": token,
+                    "takeover": taken_over,
+                    "previous_owner_state": _text(ownership.get("state"), 80),
+                    "previous_owner_progress_stale": bool(
+                        ownership.get("progress_stale")
+                    ),
+                    "raw_credentials_persisted": False,
+                    "source_content_persisted": False,
+                }
+            )
+            _save_connector_registry(project, resolved_root, registry)
+
+            if ownership.get("state") not in {"MISSING", ""}:
+                try:
+                    fence_out_connector_sync_ownership(
+                        project,
+                        connector,
+                        root=resolved_root,
+                        takeover_attempt_id=takeover_attempt,
+                        fencing_token=token,
+                    )
+                except ConnectorSyncOwnershipError as exc:
+                    raise ConnectorSyncFenceError(
+                        f"connector_sync_fence_owner_invalidation_failed:{exc}"
+                    ) from exc
+    except KnowledgeTransactionBusy as exc:
+        raise ConnectorSyncFenceError(
+            "connector_sync_fence_transaction_busy"
+        ) from exc
 
     return {
         "ok": True,
@@ -171,7 +194,9 @@ def acquire_connector_sync_fence(
         "takeover": taken_over,
         "takeover_attempt_id": takeover_attempt,
         "previous_owner_state": _text(ownership.get("state"), 80),
+        "previous_owner_progress_stale": bool(ownership.get("progress_stale")),
         "issued_at_unix": time.time(),
+        "token_issuance_serialized": True,
         "second_registry_created": False,
     }
 
