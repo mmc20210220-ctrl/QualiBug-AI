@@ -4,9 +4,9 @@ The module owns one call graph:
 base source asset -> OpenAPI schema facts -> API artifact projection -> exact operation-schema
 binding -> database-model facts -> cross-source contract alignment -> operation-scoped storage
 candidates -> durable table/field mapping authority -> root database observers -> exact FK relation
-candidates -> durable relation authority -> child collection observers -> enterprise understanding ->
-downstream binding -> governed Jobs -> final Probe admission -> source-occurrence evidence views ->
-one final persistence receipt.
+candidates -> durable relation authority -> child collection observers -> implicit rule projection ->
+enterprise understanding -> downstream binding -> governed Jobs -> final Probe admission -> source-occurrence
+evidence views -> one final persistence receipt.
 """
 from __future__ import annotations
 
@@ -36,7 +36,9 @@ from .database_mapping_authority import apply_database_mapping_authority_decisio
 from .database_model_asset_projection import enrich_asset_with_database_model_facts
 from .database_model_index_reconciliation import reconcile_database_model_index_assets
 from .database_model_semantic_bridge import install_database_model_semantic_bridge
-from .database_observer_contract_projection import enrich_asset_with_database_observer_contracts
+from .database_observer_contract_projection import (
+    enrich_asset_with_database_observer_contracts,
+)
 from .database_relation_authority import apply_database_relation_authority_decisions
 from .database_relation_observer_contract_projection import (
     enrich_asset_with_database_relation_observer_contracts,
@@ -58,6 +60,7 @@ from .enterprise_understanding.probe_policy import (
     build_gated_probes,
     probe_generation_block_reason,
 )
+from .implicit_rule_projection import enrich_asset_with_implicit_rule_projection
 from .job_asset_pipeline import enrich_job_assets_with_governance
 from .job_behavior_projection import refresh_job_behavior_projection
 from .openapi_schema_fact_asset_projection import enrich_asset_with_openapi_schema_facts
@@ -211,12 +214,15 @@ def build_enterprise_business_knowledge_asset(
     asset = enrich_asset_with_database_table_alignment_candidates(asset)
     asset = enrich_asset_with_api_database_alignment_candidates(asset)
     asset = enrich_asset_with_api_operation_database_candidates(asset)
+    # Durable table/field approvals are always re-applied to freshly rebuilt candidates.
     asset = apply_database_mapping_authority_decisions(
         asset,
         project_id=project,
         root=resolved_root,
     )
     asset = enrich_asset_with_database_observer_contracts(asset)
+    # Relation candidates require the current root Observer, then reuse the same durable
+    # mapping ledger under candidate_kind=relation. Candidate drift fails closed.
     asset = enrich_asset_with_database_relation_observer_candidates(asset)
     asset = apply_database_relation_authority_decisions(
         asset,
@@ -224,6 +230,12 @@ def build_enterprise_business_knowledge_asset(
         root=resolved_root,
     )
     asset = enrich_asset_with_database_relation_observer_contracts(asset)
+
+    # Rule inference is a projection over the facts already accepted above. It uses the
+    # existing candidate validation state machine and writes accepted rows into the
+    # existing rule library; no second Rule IR or execution path is created.
+    asset = enrich_asset_with_implicit_rule_projection(asset)
+
     asset = enrich_asset_with_enterprise_understanding(
         asset, parsed_sources=parsed_sources
     )
@@ -292,6 +304,8 @@ def build_enterprise_business_knowledge_asset(
             "database_relation_candidate_projection_precedes_enterprise_understanding": True,
             "database_relation_authority_precedes_enterprise_understanding": True,
             "database_relation_observer_projection_precedes_enterprise_understanding": True,
+            "implicit_rule_projection_precedes_enterprise_understanding": True,
+            "implicit_rule_projection_uses_existing_rule_library": True,
             "database_mapping_authority_reapplied_on_every_build": True,
             "database_relation_authority_reapplied_on_every_build": True,
             "source_occurrence_projection_runs_after_business_and_probe_compilation": True,
