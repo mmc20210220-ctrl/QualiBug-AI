@@ -6,6 +6,17 @@ from typing import Any, Callable
 from .probe_binding_lineage import attach_runtime_observer_lineage
 from .schema import as_dict
 
+_FORMAL_FACT_RECEIPTS: tuple[tuple[str, str], ...] = (
+    (
+        "explicit_fact_semantic_normalization_receipt",
+        "EXPLICIT_FACT_SEMANTIC_NORMALIZATION",
+    ),
+    ("atomic_claim_fact_projection_receipt", "ATOMIC_CLAIM_FACT_PROJECTION"),
+    ("typed_fact_value_projection_receipt", "TYPED_FACT_VALUE_PROJECTION"),
+    ("typed_object_relation_projection_receipt", "TYPED_OBJECT_RELATION_PROJECTION"),
+    ("typed_business_fact_conflict_receipt", "TYPED_BUSINESS_FACT_CONFLICT"),
+)
+
 
 def _apply_implicit_rule_governance(asset: dict[str, Any]) -> None:
     """Close source/decision lifecycle before final Probe compilation/persistence."""
@@ -33,6 +44,11 @@ def probe_generation_block_reason(asset: dict[str, Any]) -> str:
     facts = as_dict(asset.get("structure_first_business_fact_compilation_receipt"))
     if facts and str(facts.get("status") or "").upper() != "PASS":
         return "STRUCTURE_FIRST_BUSINESS_FACT_COMPILATION_CLOSED"
+
+    for key, label in _FORMAL_FACT_RECEIPTS:
+        receipt = as_dict(asset.get(key))
+        if receipt and str(receipt.get("status") or "").upper() != "PASS":
+            return f"{label}_CLOSED"
 
     rules = as_dict(asset.get("implicit_rule_projection_gate"))
     if rules and not bool(rules.get("entry_allowed")):
