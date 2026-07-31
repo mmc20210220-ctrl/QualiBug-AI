@@ -272,13 +272,11 @@ def install_database_relation_causal_delta_assertion() -> str:
     return _install_or_tighten_assertion()
 
 
-# Close import-order bypasses without adding a second assertion kind.
+# Only the installer is redirected. The base evaluator/observer remain stable inner
+# layers for direct unit tests; formal execution always reaches them through the
+# registry entries tightened above.
 from . import database_relation_delta_causality_oracle as _base  # noqa: E402
 
-_base.observe_operation_causality = observe_operation_causality_with_integrity
-_base.evaluate_database_relation_causal_delta = (
-    evaluate_database_relation_causal_delta_with_integrity
-)
 _base.install_database_relation_causal_delta_assertion = (
     install_database_relation_causal_delta_assertion
 )
