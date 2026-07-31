@@ -16,6 +16,10 @@ from .authorization_delivery_gate import (
     AuthorizationDeliveryGateError,
     validate_authorization_delivery_finding,
 )
+from .binding_materialization_identity_receipt import (
+    BindingMaterializationIdentityError,
+    validate_binding_materialization_identity_receipt,
+)
 from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
@@ -87,12 +91,23 @@ def validated_deliverable_gate_index(
                     f"formal_deliverable_gate_identity_mismatch:{occurrence_id}"
                 )
             try:
+                for proof in _list(
+                    bundled_finding.get(
+                        "authorization_causality_binding_proofs"
+                    )
+                ):
+                    validate_binding_materialization_identity_receipt(
+                        _dict(proof)
+                    )
                 validate_authorization_delivery_finding(
                     bundled_finding,
                     attempt=attempt,
                     campaign_id=campaign_id,
                 )
-            except AuthorizationDeliveryGateError as exc:
+            except (
+                AuthorizationDeliveryGateError,
+                BindingMaterializationIdentityError,
+            ) as exc:
                 raise MainlineContractError(
                     f"formal_authorization_delivery_invalid:{occurrence_id}:{exc}"
                 ) from exc
