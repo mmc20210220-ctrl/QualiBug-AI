@@ -49,6 +49,10 @@ def test_formal_fact_receipts_close_probe_admission() -> None:
     ("receipt_key", "expected_reason"),
     [
         (
+            "typed_fact_authority_retirement_receipt",
+            "TYPED_FACT_AUTHORITY_RETIREMENT_CLOSED",
+        ),
+        (
             "explicit_fact_semantic_normalization_receipt",
             "EXPLICIT_FACT_SEMANTIC_NORMALIZATION_CLOSED",
         ),
@@ -80,6 +84,24 @@ def test_each_present_formal_fact_receipt_is_authoritative(
 
     asset[receipt_key] = {"status": "PASS"}
     assert probe_generation_block_reason(asset) == ""
+
+
+def test_typed_authority_block_cannot_be_bypassed_by_open_runtime_gates() -> None:
+    asset = _ready_asset()
+    asset["typed_fact_authority_retirement_receipt"] = {
+        "status": "BLOCKED",
+        "ambiguous_structure_authorities": [
+            {
+                "fact_type": "CARDINALITY_CONSTRAINT",
+                "authority_fact_ids": ["fact:1", "fact:2"],
+            }
+        ],
+    }
+    asset["enterprise_comprehension_gate"] = {"status": "PASS", "entry_allowed": True}
+
+    assert probe_generation_block_reason(asset) == (
+        "TYPED_FACT_AUTHORITY_RETIREMENT_CLOSED"
+    )
 
 
 def test_legacy_gate_fixture_without_new_receipts_stays_compatible() -> None:
