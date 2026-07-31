@@ -7,8 +7,27 @@ from .probe_binding_lineage import attach_runtime_observer_lineage
 from .schema import as_dict
 
 
+def _apply_implicit_rule_governance(asset: dict[str, Any]) -> None:
+    """Close source/decision lifecycle before any final Probe admission decision."""
+    from ..implicit_rule_governance import (
+        enrich_asset_with_governed_implicit_rule_projection,
+    )
+
+    governed = enrich_asset_with_governed_implicit_rule_projection(asset)
+    if governed is asset:
+        return
+    # Preserve the caller-owned asset identity used by composition and persistence.
+    asset.clear()
+    asset.update(governed)
+
+
 def probe_generation_block_reason(asset: dict[str, Any]) -> str:
     """Return the first closed formal gate, or empty text when admission passes."""
+    # The final admission boundary is also the final implicit-rule governance boundary.
+    # It reuses the existing projector, removes stale/rejected rules from the active
+    # library and preserves their history before the asset is persisted or compiled.
+    _apply_implicit_rule_governance(asset)
+
     # These receipts are mandatory in the formal composition root. Compatibility
     # unit assets and explicitly migrated legacy assets may predate them; when a
     # receipt is present its failure is authoritative and can never be bypassed.
