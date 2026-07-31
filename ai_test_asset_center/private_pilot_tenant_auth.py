@@ -1,8 +1,8 @@
 """Tenant authentication helpers for the private-pilot HTTP surface.
 
 Tenant identity, actor identity and role are resolved from one authenticated
-principal. Raw actor/role/project-scope request headers are never authorization
-authorities.
+principal. JWT/cookie claims are accepted only when their role, username and
+session version still match the current server-side account state.
 """
 from __future__ import annotations
 
@@ -16,9 +16,6 @@ from . import jwt_auth
 from .private_pilot_project_assets import _root
 from .real_project_onboarding import _safe_project_id
 
-
-# Retained as a compatibility constant for clients/proxies. The private service
-# no longer trusts this header as an authorization source.
 PROJECT_SCOPE_HEADER = "X-QualiBug-Project-Scopes"
 
 
@@ -30,7 +27,7 @@ def _current_tenant() -> str:
     return os.environ.get("QUALIBUG_TENANT", "default")
 
 
-def _local_development_principal() -> dict[str, str] | None:
+def _local_development_principal() -> dict[str, str]:
     enabled = os.environ.get("QUALIBUG_LOCAL_DEV_ACTOR", "").strip().lower() in {
         "1",
         "true",
@@ -38,10 +35,10 @@ def _local_development_principal() -> dict[str, str] | None:
         "on",
     }
     if not enabled or os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1":
-        return None
+        raise TenantAuthenticationError("authentication credential is required")
     tenant_id = _current_tenant().strip()
     if not tenant_id:
-        return None
+        raise TenantAuthenticationError("local development tenant is not configured")
     return {
         "tenant_id": tenant_id,
         "name": os.environ.get("QUALIBUG_LOCAL_ACTOR", "local_dev").strip()[:120]
@@ -49,6 +46,46 @@ def _local_development_principal() -> dict[str, str] | None:
         "role": os.environ.get("QUALIBUG_LOCAL_ROLE", "viewer").strip()[:64]
         or "viewer",
         "auth_type": "local_development",
+        "session_version": "0",
+    }
+
+
+def _validated_token_principal(
+    token: str,
+    *,
+    auth_type: str,
+    root: Path,
+) -> dict[str, str]:
+    payload = jwt_auth.verify_token(token)
+    if not isinstance(payload, dict):
+        raise TenantAuthenticationError(f"invalid {auth_type} token")
+    tenant_id = str(payload.get("sub") or "").strip()
+    try:
+        token_version = int(payload.get("ver") or 0)
+    except (TypeError, ValueError) as exc:
+        raise TenantAuthenticationError(
+            f"{auth_type} token session version is invalid"
+        ) from exc
+    state = db_persist.get_tenant_auth_state(root, tenant_id)
+    if not isinstance(state, dict):
+        raise TenantAuthenticationError(f"{auth_type} account no longer exists")
+    current_version = int(state.get("session_version") or 0)
+    if token_version != current_version:
+        raise TenantAuthenticationError(f"{auth_type} session has been revoked")
+    token_role = str(payload.get("role") or "").strip()
+    current_role = str(state.get("role") or "viewer").strip()
+    token_username = str(payload.get("username") or "").strip()
+    current_username = str(state.get("username") or tenant_id).strip()
+    if token_role != current_role or token_username != current_username:
+        raise TenantAuthenticationError(
+            f"{auth_type} account authorization changed; sign in again"
+        )
+    return {
+        "tenant_id": tenant_id,
+        "name": current_username[:120] or tenant_id[:120],
+        "role": current_role[:64],
+        "auth_type": auth_type,
+        "session_version": str(current_version),
     }
 
 
@@ -57,73 +94,46 @@ def _principal_from_headers(
     *,
     root: Path | None = None,
 ) -> dict[str, str]:
-    """Authenticate one request and return its canonical principal.
+    """Authenticate one request and return its current canonical principal."""
 
-    Credential precedence is fail-closed. Once a higher-priority credential is
-    present, it must authenticate and cannot fall through to another mechanism.
-    """
-
+    resolved_root = (root or _root()).resolve()
     mapping = dict(headers)
     auth_present = "Authorization" in mapping or "authorization" in mapping
-    auth = str(mapping.get("Authorization") or mapping.get("authorization") or "").strip()
+    auth = str(
+        mapping.get("Authorization") or mapping.get("authorization") or ""
+    ).strip()
     if auth_present:
         if not auth.startswith("Bearer ") or not auth[7:].strip():
             raise TenantAuthenticationError("invalid bearer token")
-        try:
-            payload = jwt_auth.verify_token(auth[7:].strip())
-        except Exception as exc:
-            raise TenantAuthenticationError(f"bearer token verification failed: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise TenantAuthenticationError("invalid bearer token")
-        tenant_id = str(payload.get("sub") or "").strip()
-        role = str(payload.get("role") or "").strip()
-        if not tenant_id or not role:
-            raise TenantAuthenticationError("bearer token principal is incomplete")
-        return {
-            "tenant_id": tenant_id,
-            "name": str(payload.get("username") or payload.get("actor") or tenant_id).strip()[:120]
-            or tenant_id[:120],
-            "role": role[:64],
-            "auth_type": "bearer",
-        }
+        return _validated_token_principal(
+            auth[7:].strip(),
+            auth_type="bearer",
+            root=resolved_root,
+        )
 
     cookie = str(mapping.get("Cookie") or mapping.get("cookie") or "")
     if cookie:
         try:
             parsed_cookie = SimpleCookie()
             parsed_cookie.load(cookie)
-            morsel = parsed_cookie.get("qualibug_token")
-            if morsel is not None:
-                payload = jwt_auth.verify_token(morsel.value)
-                if not isinstance(payload, dict):
-                    raise TenantAuthenticationError("invalid cookie token")
-                tenant_id = str(payload.get("sub") or "").strip()
-                role = str(payload.get("role") or "").strip()
-                if not tenant_id or not role:
-                    raise TenantAuthenticationError("cookie token principal is incomplete")
-                return {
-                    "tenant_id": tenant_id,
-                    "name": str(
-                        payload.get("username") or payload.get("actor") or tenant_id
-                    ).strip()[:120]
-                    or tenant_id[:120],
-                    "role": role[:64],
-                    "auth_type": "cookie",
-                }
-        except TenantAuthenticationError:
-            raise
         except Exception as exc:
-            raise TenantAuthenticationError(f"cookie token verification failed: {exc}") from exc
+            raise TenantAuthenticationError("cookie header is invalid") from exc
+        morsel = parsed_cookie.get("qualibug_token")
+        if morsel is not None:
+            return _validated_token_principal(
+                morsel.value,
+                auth_type="cookie",
+                root=resolved_root,
+            )
 
     api_key_present = "X-API-Key" in mapping or "x-api-key" in mapping
-    api_key = str(mapping.get("X-API-Key") or mapping.get("x-api-key") or "").strip()
+    api_key = str(
+        mapping.get("X-API-Key") or mapping.get("x-api-key") or ""
+    ).strip()
     if api_key_present:
         if not api_key:
             raise TenantAuthenticationError("invalid API key")
-        try:
-            account = db_persist.authenticate_tenant(root or _root(), api_key, "")
-        except Exception as exc:
-            raise TenantAuthenticationError(f"API key verification failed: {exc}") from exc
+        account = db_persist.authenticate_tenant(resolved_root, api_key, "")
         if not isinstance(account, dict):
             raise TenantAuthenticationError("invalid API key")
         tenant_id = str(account.get("tenant_id") or "").strip()
@@ -136,12 +146,10 @@ def _principal_from_headers(
             or tenant_id[:120],
             "role": role[:64],
             "auth_type": "api_key",
+            "session_version": str(account.get("session_version") or 1),
         }
 
-    local = _local_development_principal()
-    if local is not None:
-        return local
-    raise TenantAuthenticationError("authentication credential is required")
+    return _local_development_principal()
 
 
 def _actor(headers: Any, *, root: Path | None = None) -> dict[str, str] | None:
@@ -153,12 +161,7 @@ def _actor(headers: Any, *, root: Path | None = None) -> dict[str, str] | None:
 
 
 def _parse_project_scopes(raw: str) -> tuple[set[str], bool]:
-    """Parse legacy scope text for diagnostics only.
-
-    Authorization no longer consumes caller-provided scope headers. Keeping the
-    parser avoids breaking reporting surfaces that display a trusted proxy's
-    declared scope, while strict project-id validation prevents traversal.
-    """
+    """Parse legacy scope text for diagnostics only."""
 
     items = [
         item.strip()
