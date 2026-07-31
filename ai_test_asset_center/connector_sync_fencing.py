@@ -206,6 +206,60 @@ def acquire_connector_sync_fence(
     }
 
 
+def _complete_connector_sync_fence(
+    project_id: str,
+    connector_instance_id: str,
+    fencing_token: int,
+    *,
+    root: Path,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Complete only the still-current lease without overwriting a newer generation."""
+    resolved_root = root.resolve()
+    project = _safe_project_id(project_id)
+    connector = _text(connector_instance_id, 160)
+    token = int(fencing_token)
+    clean_actor = _require_manage_actor(actor)
+    try:
+        with knowledge_transaction(
+            resolved_root,
+            project,
+            operation="complete_connector_sync_fence",
+            actor=clean_actor,
+            wait_seconds=5.0,
+        ):
+            registry = _load_connector_registry(project, resolved_root)
+            instance = _instance_by_id(registry, connector)
+            if instance is None:
+                return {"ok": True, "completed": False, "reason": "INSTANCE_MISSING"}
+            current = _token(instance.get("fencing_generation"))
+            if current != token:
+                return {
+                    "ok": True,
+                    "completed": False,
+                    "reason": "SUPERSEDED",
+                    "current_fencing_token": current,
+                }
+            instance["fencing_takeover_pending"] = False
+            instance["last_fencing_lease_completed_at_utc"] = _now()
+            registry.setdefault("audit_events", []).append(
+                {
+                    "event": "complete_connector_sync_fencing_lease",
+                    "at_utc": _now(),
+                    "actor": clean_actor,
+                    "connector_instance_id": connector,
+                    "fencing_token": token,
+                    "newer_fencing_token_overwritten": False,
+                }
+            )
+            _save_connector_registry(project, resolved_root, registry)
+    except KnowledgeTransactionBusy as exc:
+        raise ConnectorSyncFenceError(
+            "connector_sync_fence_transaction_busy"
+        ) from exc
+    return {"ok": True, "completed": True, "fencing_token": token}
+
+
 @contextmanager
 def managed_connector_sync_fence(
     project_id: str,
@@ -243,11 +297,26 @@ def managed_connector_sync_fence(
         token,
         validator=validate,
     ):
-        yield dict(lease)
+        try:
+            yield dict(lease)
+        finally:
+            try:
+                _complete_connector_sync_fence(
+                    project,
+                    connector,
+                    token,
+                    root=resolved_root,
+                    actor=actor,
+                )
+            except Exception:
+                # Lease completion is diagnostic cleanup. A newer token or shutdown must
+                # never mask the real synchronization/configuration outcome.
+                pass
 
 
 __all__ = [
     "ConnectorSyncFenceError",
+    "_complete_connector_sync_fence",
     "acquire_connector_sync_fence",
     "assert_connector_sync_fence",
     "managed_connector_sync_fence",
