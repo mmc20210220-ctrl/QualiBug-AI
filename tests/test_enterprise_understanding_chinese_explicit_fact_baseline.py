@@ -91,13 +91,19 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _facts(asset: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in _list(_dict(asset.get("business_fact_ledger")).get("items"))
+        if isinstance(row, dict)
+    ]
+
+
 def _parent_fact(asset: dict[str, Any], statement_prefix: str) -> dict[str, Any]:
-    facts = _list(_dict(asset.get("business_fact_ledger")).get("items"))
     matches = [
         row
-        for row in facts
-        if isinstance(row, dict)
-        and not _text(row.get("parent_fact_ref"))
+        for row in _facts(asset)
+        if not _text(row.get("parent_fact_ref"))
         and _text(row.get("raw_statement")).startswith(statement_prefix)
     ]
     assert len(matches) == 1, [
@@ -105,6 +111,33 @@ def _parent_fact(asset: dict[str, Any], statement_prefix: str) -> dict[str, Any]
             "fact_id": row.get("fact_id"),
             "fact_type": row.get("fact_type"),
             "raw_statement": row.get("raw_statement"),
+        }
+        for row in matches
+    ]
+    return dict(matches[0])
+
+
+def _typed_fact(
+    asset: dict[str, Any],
+    *,
+    fact_type: str,
+    predicate: str,
+    object_ref: str,
+) -> dict[str, Any]:
+    matches = [
+        row
+        for row in _facts(asset)
+        if _text(row.get("fact_type")) == fact_type
+        and _text(row.get("predicate")) == predicate
+        and object_ref in _list(_dict(row.get("object")).get("entity_refs"))
+    ]
+    assert len(matches) == 1, [
+        {
+            "fact_id": row.get("fact_id"),
+            "fact_type": row.get("fact_type"),
+            "predicate": row.get("predicate"),
+            "subject": row.get("subject"),
+            "object": row.get("object"),
         }
         for row in matches
     ]
@@ -153,15 +186,20 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     normalization = asset["explicit_fact_semantic_normalization_receipt"]
     assert normalization["status"] == "PASS"
     assert normalization["existing_ledger_reused"] is True
+    assert normalization["existing_source_backed_identity_vocabulary_reused"] is True
+    assert normalization["governed_operation_binding"] is True
     assert normalization["new_fact_discovery_allowed"] is False
+    assert normalization["overlapping_identity_coordinate_emission_allowed"] is False
+    assert normalization["formal_typed_coordinate_reinterpretation_allowed"] is False
     assert normalization["automatic_winner_used"] is False
 
     permission = _parent_fact(asset, "经理只有在订单状态为待审批")
     permission_subject = _dict(permission.get("subject"))
     assert permission["fact_type"] == "PERMISSION_RULE"
     assert permission["modality"] == "MAY"
-    assert "经理" in _list(permission_subject.get("actor_refs"))
-    assert "订单" in _list(permission_subject.get("entity_refs"))
+    assert permission_subject.get("actor_refs") == ["经理"]
+    assert permission_subject.get("entity_refs") == ["订单"]
+    assert _dict(permission.get("object")).get("entity_refs") == ["订单"]
     assert permission["action"]["canonical"] == "审批通过"
     assert permission["condition_frame"]["kind"] == "ALL"
     assert permission["condition_frame"]["combinator"] == "AND"
@@ -174,26 +212,46 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     transition_subject = _dict(transition.get("subject"))
     assert transition["fact_type"] == "STATE_TRANSITION"
     assert transition["action"]["canonical"] == "审批通过"
-    assert "订单" in _list(transition_subject.get("entity_refs"))
+    assert transition_subject.get("entity_refs") == ["订单"]
+    assert _dict(transition.get("object")).get("entity_refs") == ["订单"]
     assert any(
         _dict(row).get("from_state") == "待审批"
         and _dict(row).get("to_state") == "已审批"
         for row in _list(transition.get("state_effects"))
     )
 
+    prohibition = _parent_fact(asset, "仓库管理员不得删除")
+    prohibition_subject = _dict(prohibition.get("subject"))
+    assert prohibition_subject.get("actor_refs") == ["仓库管理员"]
+    assert prohibition_subject.get("entity_refs") == ["订单"]
+    assert _dict(prohibition.get("object")).get("entity_refs") == ["订单"]
+
     obligation = _parent_fact(asset, "财务人员必须在付款成功后")
     obligation_subject = _dict(obligation.get("subject"))
     assert obligation["fact_type"] == "BUSINESS_RULE"
     assert obligation["modality"] == "MUST"
     assert obligation["action"]["canonical"] == "开具"
-    assert "财务人员" in _list(obligation_subject.get("actor_refs"))
-    assert "发票" in _list(obligation_subject.get("entity_refs"))
+    assert obligation_subject.get("actor_refs") == ["财务人员"]
+    assert obligation_subject.get("entity_refs") == ["发票"]
+    assert _dict(obligation.get("object")).get("entity_refs") == ["发票"]
     assert any(
         _dict(row).get("anchor") == "付款成功后"
         and _dict(row).get("duration") == "24小时"
         and _dict(row).get("relation") == "WITHIN"
         for row in _list(obligation.get("time_window_constraints"))
     )
+
+    composed_of_header = _typed_fact(
+        asset,
+        fact_type="OBJECT_RELATION",
+        predicate="COMPOSED_OF",
+        object_ref="订单头",
+    )
+    assert _dict(composed_of_header.get("subject")).get("entity_refs") == [
+        "采购订单"
+    ]
+    assert _dict(composed_of_header.get("object")).get("entity_refs") == ["订单头"]
+    assert "explicit_semantic_normalization" not in composed_of_header
 
     first_loss = _first_loss_analysis(measurement)
     assert first_loss["schema"] == (
