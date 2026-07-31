@@ -16,6 +16,10 @@ from .flow_data_requirement import (
     STATUS_FROZEN as FLOW_DATA_FROZEN,
     build_flow_data_requirement,
 )
+from .real_id_resolver import (
+    infer_path_params,
+    normalize_path_placeholders,
+)
 
 for _name in dir(_core):
     if not _name.startswith("__"):
@@ -58,6 +62,17 @@ def _legacy_projection_input(frozen: dict) -> dict:
     return projection_source
 
 
+def _binding_ref_target(raw: object) -> str:
+    if isinstance(raw, dict):
+        return _text(
+            raw.get("target")
+            or raw.get("binding_target")
+            or raw.get("name")
+            or raw.get("consumer_target")
+        )
+    return _text(raw)
+
+
 def _requirement_projection_input(frozen: dict) -> dict:
     """Align compatibility aliases without mutating the compiled experiment."""
     projection_source = _legacy_projection_input(frozen)
@@ -83,6 +98,34 @@ def _requirement_projection_input(frozen: dict) -> dict:
                 output_specs.append(spec)
             if output_specs:
                 step["output_binding_specs"] = output_specs
+
+            # A wait observer path is transport input just like the business
+            # request path. Feed its placeholders into the read-only requirement
+            # projection; the stored treatment step and graph remain unchanged.
+            wait_contract = _dict(step.get("wait_contract"))
+            wait_path = normalize_path_placeholders(
+                _text(
+                    wait_contract.get("path_template")
+                    or wait_contract.get("path")
+                )
+            )
+            wait_targets = [
+                _text(value)
+                for value in infer_path_params(wait_path)
+                if _text(value)
+            ]
+            if wait_targets:
+                input_refs = deepcopy(_list(step.get("input_binding_refs")))
+                existing_targets = {
+                    _binding_ref_target(raw) for raw in input_refs
+                    if _binding_ref_target(raw)
+                }
+                for target in wait_targets:
+                    if target not in existing_targets:
+                        input_refs.append(target)
+                        existing_targets.add(target)
+                step["input_binding_refs"] = input_refs
+                step["wait_binding_targets"] = wait_targets
             normalized_steps.append(step)
         projection_source[f"{phase}_plan"] = normalized_steps
     return projection_source
