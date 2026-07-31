@@ -83,7 +83,7 @@ def _scenario(
         "actor_refs": ["仓管员"],
         "object_refs": ["订单"],
         "operation_ref": "发货",
-        "preconditions": [predicate],
+        "preconditions": [deepcopy(predicate)],
         "action_entry": {
             "interface_id": "interface:ship",
             "method": method,
