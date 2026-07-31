@@ -74,7 +74,7 @@ def test_required_business_action_is_responsibility_not_allow() -> None:
     assert _scenario_type(behavior) == ("POSITIVE", ["POSITIVE"])
 
 
-def test_generic_business_prohibition_is_not_authorization_deny() -> None:
+def test_generic_business_prohibition_is_rejection_not_unauthorized() -> None:
     behavior, gate = _behavior(
         _fact("仓库员不得重复登记入库单", modality="MUST_NOT")
     )
@@ -82,10 +82,13 @@ def test_generic_business_prohibition_is_not_authorization_deny() -> None:
     assert behavior["permission_decision"] == "UNSPECIFIED"
     assert behavior["authorization_semantics_explicit"] is False
     assert gate["metrics"]["authorization_behavior_count"] == 0
-    assert "AUTHORIZATION" not in _scenario_type(behavior)[1]
+    scenario_type, dimensions = _scenario_type(behavior)
+    assert scenario_type == "REJECTION"
+    assert "REJECTION" in dimensions
+    assert "AUTHORIZATION" not in dimensions
 
 
-def test_explicit_source_authority_still_creates_deny() -> None:
+def test_explicit_source_authority_still_creates_unauthorized() -> None:
     behavior, gate = _behavior(
         _fact("仓库员无权删除入库单", modality="MUST_NOT")
     )
@@ -96,6 +99,7 @@ def test_explicit_source_authority_still_creates_deny() -> None:
     scenario_type, dimensions = _scenario_type(behavior)
     assert scenario_type == "UNAUTHORIZED"
     assert "AUTHORIZATION" in dimensions
+    assert "REJECTION" in dimensions
 
 
 def test_explicit_authorization_semantics_is_fact_authority() -> None:
@@ -125,3 +129,6 @@ def test_scoped_actor_boundary_remains_authorization() -> None:
 
     assert behavior["permission_decision"] == "DENY"
     assert behavior["authorization_semantics_explicit"] is True
+    scenario_type, dimensions = _scenario_type(behavior)
+    assert scenario_type == "UNAUTHORIZED"
+    assert "AUTHORIZATION" in dimensions
