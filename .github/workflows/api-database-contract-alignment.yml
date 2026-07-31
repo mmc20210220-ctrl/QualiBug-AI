@@ -58,6 +58,7 @@ on:
       - "tests/test_database_numeric_experiment_projection.py"
       - "tests/test_database_numeric_contract_oracle.py"
       - "tests/test_database_numeric_finding_bridge.py"
+      - "tests/test_database_numeric_runtime_integration.py"
       - ".github/workflows/api-database-contract-alignment.yml"
 
 permissions:
@@ -145,4 +146,5 @@ jobs:
             tests/test_database_numeric_oracle.py \
             tests/test_database_numeric_experiment_projection.py \
             tests/test_database_numeric_contract_oracle.py \
-            tests/test_database_numeric_finding_bridge.py
+            tests/test_database_numeric_finding_bridge.py \
+            tests/test_database_numeric_runtime_integration.py
