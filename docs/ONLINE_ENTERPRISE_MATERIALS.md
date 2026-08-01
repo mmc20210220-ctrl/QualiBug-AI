@@ -184,7 +184,29 @@ Content-Type: application/json
 {
   "reason": "operator requested recovery"
 }
+
 ```
+
+## Generic connector acceptance (OL-012)
+
+All registered connector types use the same acceptance contract and the same managed sync
+authority. The compatibility command remains available for Feishu, while new integrations use:
+
+```text
+qualibug-connector-tenant-acceptance --project <project_id> --connector <connector_id>
+```
+
+The contract requires an available connection, an explicit read-only network observation,
+non-persisted credentials, balanced discovery accounting, zero unknown gaps and failures,
+recoverable checkpoint evidence, bounded duration, and repeat-sync reuse. A missing safety or
+completeness observation fails closed. Reports contain fingerprints rather than raw cursors,
+receipt paths, credentials, or source content.
+
+The API uses the existing routes under
+`/api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/acceptance`,
+`acceptance-reports`, and `acceptance-jobs`. Feishu keeps its legacy schema; all other registered
+connectors use the generic connector acceptance schemas. Unsupported source capabilities remain
+explicit coverage gaps and cannot be converted into an acceptance pass.
 
 中止操作不推进 cursor，不删除现有资料快照，只清理遗留运行状态和对应租约。
 

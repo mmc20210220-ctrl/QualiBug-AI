@@ -1,4 +1,4 @@
-"""Persistent asynchronous jobs for long-running Feishu tenant acceptance.
+"""Persistent asynchronous jobs for long-running connector tenant acceptance.
 
 A Pilot or enterprise acceptance can take several minutes and must not depend on one HTTP
 connection staying open. This authority creates one atomically locked job per connector, runs the
@@ -19,13 +19,19 @@ from typing import Any, Callable, Mapping
 
 from .connector_sync_authority import list_connector_instances
 from .enterprise_knowledge_center._common import ROOT
-from .feishu_tenant_acceptance import run_feishu_tenant_acceptance
+from .feishu_tenant_acceptance import (
+    CONNECTOR_TENANT_ACCEPTANCE_SCHEMA,
+    FEISHU_TENANT_ACCEPTANCE_SCHEMA,
+    run_connector_tenant_acceptance,
+    run_feishu_tenant_acceptance,
+)
 from .private_pilot_json_io import _read_json_object, _write_json_object_atomic
 from .real_project_onboarding import _safe_project_id
 
 FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA = "qualibug.feishu-tenant-acceptance-job.v1"
+CONNECTOR_TENANT_ACCEPTANCE_JOB_SCHEMA = "qualibug.connector-tenant-acceptance-job.v1"
 _CONNECTOR_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
-_JOB_ID_RE = re.compile(r"^ftaj_[a-f0-9]{24}$")
+_JOB_ID_RE = re.compile(r"^(?:ftaj|ctaj)_[a-f0-9]{24}$")
 _REPORT_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[a-f0-9]{12}$")
 _TERMINAL_STATES = {"COMPLETE", "FAILED", "INTERRUPTED"}
 _STARTUP_GRACE_SECONDS = 30.0
@@ -82,6 +88,14 @@ def _current_path(root: Path, project: str, connector: str) -> Path:
 
 
 def _history_path(root: Path, project: str, connector: str, job: str) -> Path:
+    # Keep the on-disk name compact: Windows installations can otherwise cross the
+    # MAX_PATH boundary once the project/worktree prefix and atomic-write suffix are added.
+    storage_key = _text(job, 80).rsplit("_", 1)[-1][:20]
+    return _connector_dir(root, project, connector) / "history" / f"{storage_key}.json"
+
+
+def _legacy_history_path(root: Path, project: str, connector: str, job: str) -> Path:
+    """Locate the pre-compact history name while old jobs are being read."""
     return _connector_dir(root, project, connector) / "history" / f"{job}.json"
 
 
@@ -102,6 +116,22 @@ def _process_marker(pid: int) -> str:
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if pid == os.getpid():
+        # ``os.kill(pid, 0)`` is not a non-destructive probe on Windows; on some
+        # runtimes it terminates the current process instead of checking liveness.
+        return True
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return False
+            kernel32.CloseHandle(handle)
+            return True
+        except (AttributeError, OSError):
+            return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -166,7 +196,13 @@ def _owner_alive(payload: Mapping[str, Any]) -> bool:
     return _recent_startup(payload, pid)
 
 
-def _ensure_connector_registered(project: str, connector: str, root: Path) -> None:
+def _ensure_connector_registered(
+    project: str,
+    connector: str,
+    root: Path,
+    *,
+    expected_connector_type: str | None = "feishu",
+) -> None:
     rows = list_connector_instances(
         project,
         root=root,
@@ -185,7 +221,11 @@ def _ensure_connector_registered(project: str, connector: str, root: Path) -> No
         raise FeishuTenantAcceptanceJobError(
             "acceptance_job_connector_not_registered"
         )
-    if _text(row.get("connector_type"), 80).lower() != "feishu":
+    if (
+        expected_connector_type is not None
+        and _text(row.get("connector_type"), 80).lower()
+        != _text(expected_connector_type, 80).lower()
+    ):
         raise FeishuTenantAcceptanceJobError(
             "acceptance_job_connector_type_mismatch"
         )
@@ -196,11 +236,17 @@ def _ensure_connector_registered(project: str, connector: str, root: Path) -> No
 
 
 def _persist(root: Path, project: str, connector: str, payload: dict[str, Any]) -> None:
-    _write_json_object_atomic(_current_path(root, project, connector), payload)
-    _write_json_object_atomic(
-        _history_path(root, project, connector, _job_id(payload.get("job_id"))),
-        payload,
+    current_path = _current_path(root, project, connector)
+    history_path = _history_path(
+        root,
+        project,
+        connector,
+        _job_id(payload.get("job_id")),
     )
+    current_path.parent.mkdir(parents=True, exist_ok=True)
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_object_atomic(current_path, payload)
+    _write_json_object_atomic(history_path, payload)
 
 
 def _persist_recovered(
@@ -210,8 +256,10 @@ def _persist_recovered(
     payload: dict[str, Any],
 ) -> None:
     job = _job_id(payload.get("job_id"))
+    history_path = _history_path(root, project, connector, job)
+    history_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_object_atomic(
-        _history_path(root, project, connector, job),
+        history_path,
         payload,
     )
     current_path = _current_path(root, project, connector)
@@ -222,7 +270,8 @@ def _persist_recovered(
 
 def _public_job(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        "schema": FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA,
+        "schema": _text(payload.get("schema"), 120)
+        or FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA,
         "job_id": _text(payload.get("job_id"), 80),
         "project_id": _text(payload.get("project_id"), 160),
         "connector_instance_id": _text(
@@ -313,16 +362,23 @@ def get_current_feishu_tenant_acceptance_job(
     connector_instance_id: str,
     *,
     root: Path | None = None,
+    expected_connector_type: str | None = "feishu",
+    schema: str = FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA,
 ) -> dict[str, Any]:
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _connector_id(connector_instance_id)
-    _ensure_connector_registered(project, connector, resolved_root)
+    _ensure_connector_registered(
+        project,
+        connector,
+        resolved_root,
+        expected_connector_type=expected_connector_type,
+    )
     with _LOCAL_LOCK:
         payload = _read_json_object(_current_path(resolved_root, project, connector))
         if not payload:
             return {
-                "schema": FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA,
+                "schema": schema,
                 "project_id": project,
                 "connector_instance_id": connector,
                 "status": "NOT_STARTED",
@@ -354,14 +410,27 @@ def get_feishu_tenant_acceptance_job(
     job_id: str,
     *,
     root: Path | None = None,
+    expected_connector_type: str | None = "feishu",
+    schema: str = FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA,
 ) -> dict[str, Any]:
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _connector_id(connector_instance_id)
     job = _job_id(job_id)
-    _ensure_connector_registered(project, connector, resolved_root)
+    _ensure_connector_registered(
+        project,
+        connector,
+        resolved_root,
+        expected_connector_type=expected_connector_type,
+    )
     with _LOCAL_LOCK:
-        payload = _read_json_object(_history_path(resolved_root, project, connector, job))
+        payload = _read_json_object(
+            _history_path(resolved_root, project, connector, job)
+        )
+        if not payload:
+            payload = _read_json_object(
+                _legacy_history_path(resolved_root, project, connector, job)
+            )
         if not payload:
             raise FeishuTenantAcceptanceJobError("acceptance_job_not_found")
         payload = _recover_interrupted(
@@ -412,11 +481,20 @@ def start_feishu_tenant_acceptance_job(
     options: dict[str, Any] | None = None,
     runner: AcceptanceRunner = run_feishu_tenant_acceptance,
     thread_starter: ThreadStarter = _default_thread_starter,
+    expected_connector_type: str | None = "feishu",
+    schema: str = FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA,
+    job_prefix: str = "ftaj",
+    thread_name_prefix: str = "feishu",
 ) -> dict[str, Any]:
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _connector_id(connector_instance_id)
-    _ensure_connector_registered(project, connector, resolved_root)
+    _ensure_connector_registered(
+        project,
+        connector,
+        resolved_root,
+        expected_connector_type=expected_connector_type,
+    )
     profile_name = _text(profile, 40).lower() or "pilot"
     if profile_name not in {"smoke", "pilot", "enterprise"}:
         raise FeishuTenantAcceptanceJobError("acceptance_job_profile_invalid")
@@ -425,11 +503,11 @@ def start_feishu_tenant_acceptance_job(
         "role": _text(dict(actor or {}).get("role"), 80) or "knowledge_admin",
     }
     clean_options = dict(options or {})
-    job = "ftaj_" + uuid.uuid4().hex[:24]
+    job = _text(job_prefix, 20) + "_" + uuid.uuid4().hex[:24]
     now_unix = time.time()
     now = _utc(now_unix)
     payload = {
-        "schema": FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA,
+        "schema": schema,
         "job_id": job,
         "project_id": project,
         "connector_instance_id": connector,
@@ -575,7 +653,7 @@ def start_feishu_tenant_acceptance_job(
     try:
         thread = thread_starter(
             execute,
-            f"qualibug-feishu-acceptance-{connector}",
+            f"qualibug-{thread_name_prefix}-acceptance-{connector}",
         )
         if isinstance(thread, threading.Thread) and thread.is_alive():
             with _LOCAL_LOCK:
@@ -606,13 +684,81 @@ def start_feishu_tenant_acceptance_job(
         connector,
         job,
         root=resolved_root,
+        expected_connector_type=expected_connector_type,
+        schema=schema,
+    )
+
+
+def start_connector_tenant_acceptance_job(
+    project_id: str,
+    connector_instance_id: str,
+    *,
+    root: Path | None = None,
+    profile: str = "pilot",
+    actor: dict[str, Any] | None = None,
+    options: dict[str, Any] | None = None,
+    runner: AcceptanceRunner = run_connector_tenant_acceptance,
+    thread_starter: ThreadStarter = _default_thread_starter,
+) -> dict[str, Any]:
+    """Start generic acceptance for any active registry connector."""
+    return start_feishu_tenant_acceptance_job(
+        project_id,
+        connector_instance_id,
+        root=root,
+        profile=profile,
+        actor=actor,
+        options=options,
+        runner=runner,
+        thread_starter=thread_starter,
+        expected_connector_type=None,
+        schema=CONNECTOR_TENANT_ACCEPTANCE_JOB_SCHEMA,
+        job_prefix="ctaj",
+        thread_name_prefix="connector",
+    )
+
+
+def get_current_connector_tenant_acceptance_job(
+    project_id: str,
+    connector_instance_id: str,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Return the current generic acceptance job without exposing private job state."""
+    return get_current_feishu_tenant_acceptance_job(
+        project_id,
+        connector_instance_id,
+        root=root,
+        expected_connector_type=None,
+        schema=CONNECTOR_TENANT_ACCEPTANCE_JOB_SCHEMA,
+    )
+
+
+def get_connector_tenant_acceptance_job(
+    project_id: str,
+    connector_instance_id: str,
+    job_id: str,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Return one generic acceptance job without exposing private job state."""
+    return get_feishu_tenant_acceptance_job(
+        project_id,
+        connector_instance_id,
+        job_id,
+        root=root,
+        expected_connector_type=None,
+        schema=CONNECTOR_TENANT_ACCEPTANCE_JOB_SCHEMA,
     )
 
 
 __all__ = [
+    "CONNECTOR_TENANT_ACCEPTANCE_JOB_SCHEMA",
     "FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA",
     "FeishuTenantAcceptanceJobError",
+    "get_connector_tenant_acceptance_job",
+    "get_current_connector_tenant_acceptance_job",
     "get_current_feishu_tenant_acceptance_job",
     "get_feishu_tenant_acceptance_job",
+    "start_connector_tenant_acceptance_job",
     "start_feishu_tenant_acceptance_job",
 ]

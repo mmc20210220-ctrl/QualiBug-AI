@@ -1,4 +1,4 @@
-"""Safe public projection for Feishu tenant acceptance reports.
+"""Safe public projection for connector tenant acceptance reports.
 
 Acceptance reports are operator evidence, not customer-content storage. This module owns report
 lookup, path confinement, bounded listing, and explicit public allowlists for both fields and
@@ -13,11 +13,17 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .enterprise_knowledge_center._common import ROOT
-from .feishu_tenant_acceptance import FEISHU_TENANT_ACCEPTANCE_SCHEMA
+from .feishu_tenant_acceptance import (
+    CONNECTOR_TENANT_ACCEPTANCE_SCHEMA,
+    FEISHU_TENANT_ACCEPTANCE_SCHEMA,
+)
 from .real_project_onboarding import _safe_project_id
 
 FEISHU_ACCEPTANCE_REPORT_INVENTORY_SCHEMA = (
     "qualibug.feishu-tenant-acceptance-report-inventory.v1"
+)
+CONNECTOR_ACCEPTANCE_REPORT_INVENTORY_SCHEMA = (
+    "qualibug.connector-tenant-acceptance-report-inventory.v1"
 )
 _REPORT_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[a-f0-9]{12}$")
 _CONNECTOR_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
@@ -73,7 +79,11 @@ def _reports_dir(project: str, connector: str, root: Path) -> Path:
     )
 
 
-def _read_report(path: Path) -> dict[str, Any]:
+def _read_report(
+    path: Path,
+    *,
+    expected_schema: str = FEISHU_TENANT_ACCEPTANCE_SCHEMA,
+) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -86,7 +96,7 @@ def _read_report(path: Path) -> dict[str, Any]:
         ) from exc
     if not isinstance(payload, dict):
         raise FeishuTenantAcceptanceReportError("acceptance_report_invalid")
-    if _text(payload.get("schema"), 120) != FEISHU_TENANT_ACCEPTANCE_SCHEMA:
+    if _text(payload.get("schema"), 120) != expected_schema:
         raise FeishuTenantAcceptanceReportError("acceptance_report_schema_invalid")
     return payload
 
@@ -142,7 +152,9 @@ def _safe_observation(value: Any, depth: int = 0) -> Any:
 
 def _public_run(value: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        "sync_epoch_id": _text(value.get("sync_epoch_id"), 160),
+        "sync_epoch_fingerprint": _text(
+            value.get("sync_epoch_fingerprint"), 128
+        ),
         "status": _text(value.get("status"), 40),
         "duration_seconds": _number(value.get("duration_seconds")),
         "discovered_resource_count": _integer(
@@ -226,6 +238,7 @@ def project_feishu_tenant_acceptance_report(
     payload: Mapping[str, Any],
     *,
     report_id: str,
+    schema: str = FEISHU_TENANT_ACCEPTANCE_SCHEMA,
 ) -> dict[str, Any]:
     """Return the bounded public representation of one acceptance report."""
     connection = payload.get("connection")
@@ -233,7 +246,7 @@ def project_feishu_tenant_acceptance_report(
     summary = payload.get("summary")
     governance = payload.get("governance")
     return {
-        "schema": FEISHU_TENANT_ACCEPTANCE_SCHEMA,
+        "schema": schema,
         "report_id": report_id,
         "acceptance_id": _text(payload.get("acceptance_id"), 160),
         "project_id": _text(payload.get("project_id"), 160),
@@ -387,13 +400,14 @@ def load_feishu_tenant_acceptance_report(
     report_id: str,
     *,
     root: Path | None = None,
+    schema: str = FEISHU_TENANT_ACCEPTANCE_SCHEMA,
 ) -> dict[str, Any]:
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _connector_id(connector_instance_id)
     safe_report_id = _report_id(report_id)
     path = _reports_dir(project, connector, resolved_root) / f"{safe_report_id}.json"
-    payload = _read_report(path)
+    payload = _read_report(path, expected_schema=schema)
     if _text(payload.get("project_id"), 160) != project:
         raise FeishuTenantAcceptanceReportError(
             "acceptance_report_project_mismatch"
@@ -405,6 +419,7 @@ def load_feishu_tenant_acceptance_report(
     return project_feishu_tenant_acceptance_report(
         payload,
         report_id=safe_report_id,
+        schema=schema,
     )
 
 
@@ -414,6 +429,8 @@ def list_feishu_tenant_acceptance_reports(
     *,
     root: Path | None = None,
     limit: int = 20,
+    schema: str = FEISHU_TENANT_ACCEPTANCE_SCHEMA,
+    inventory_schema: str = FEISHU_ACCEPTANCE_REPORT_INVENTORY_SCHEMA,
 ) -> dict[str, Any]:
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
@@ -433,6 +450,7 @@ def list_feishu_tenant_acceptance_reports(
                     connector,
                     path.stem,
                     root=resolved_root,
+                    schema=schema,
                 )
             except FeishuTenantAcceptanceReportError:
                 continue
@@ -454,7 +472,7 @@ def list_feishu_tenant_acceptance_reports(
                 }
             )
     return {
-        "schema": FEISHU_ACCEPTANCE_REPORT_INVENTORY_SCHEMA,
+        "schema": inventory_schema,
         "project_id": project,
         "connector_instance_id": connector,
         "reports": rows,
@@ -483,12 +501,16 @@ def latest_feishu_tenant_acceptance_summary(
     connector_instance_id: str,
     *,
     root: Path | None = None,
+    schema: str = FEISHU_TENANT_ACCEPTANCE_SCHEMA,
+    inventory_schema: str = FEISHU_ACCEPTANCE_REPORT_INVENTORY_SCHEMA,
 ) -> dict[str, Any]:
     inventory = list_feishu_tenant_acceptance_reports(
         project_id,
         connector_instance_id,
         root=root,
         limit=1,
+        schema=schema,
+        inventory_schema=inventory_schema,
     )
     reports = list(inventory.get("reports") or [])
     if not reports:
@@ -505,11 +527,66 @@ def latest_feishu_tenant_acceptance_summary(
     }
 
 
+def load_connector_tenant_acceptance_report(
+    project_id: str,
+    connector_instance_id: str,
+    report_id: str,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Load one generic acceptance report through the bounded Feishu-compatible projector."""
+    return load_feishu_tenant_acceptance_report(
+        project_id,
+        connector_instance_id,
+        report_id,
+        root=root,
+        schema=CONNECTOR_TENANT_ACCEPTANCE_SCHEMA,
+    )
+
+
+def list_connector_tenant_acceptance_reports(
+    project_id: str,
+    connector_instance_id: str,
+    *,
+    root: Path | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """List generic acceptance reports without returning raw report contents."""
+    return list_feishu_tenant_acceptance_reports(
+        project_id,
+        connector_instance_id,
+        root=root,
+        limit=limit,
+        schema=CONNECTOR_TENANT_ACCEPTANCE_SCHEMA,
+        inventory_schema=CONNECTOR_ACCEPTANCE_REPORT_INVENTORY_SCHEMA,
+    )
+
+
+def latest_connector_tenant_acceptance_summary(
+    project_id: str,
+    connector_instance_id: str,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Project the latest generic acceptance verdict for inventory consumers."""
+    return latest_feishu_tenant_acceptance_summary(
+        project_id,
+        connector_instance_id,
+        root=root,
+        schema=CONNECTOR_TENANT_ACCEPTANCE_SCHEMA,
+        inventory_schema=CONNECTOR_ACCEPTANCE_REPORT_INVENTORY_SCHEMA,
+    )
+
+
 __all__ = [
+    "CONNECTOR_ACCEPTANCE_REPORT_INVENTORY_SCHEMA",
     "FEISHU_ACCEPTANCE_REPORT_INVENTORY_SCHEMA",
     "FeishuTenantAcceptanceReportError",
+    "latest_connector_tenant_acceptance_summary",
     "latest_feishu_tenant_acceptance_summary",
+    "list_connector_tenant_acceptance_reports",
     "list_feishu_tenant_acceptance_reports",
+    "load_connector_tenant_acceptance_report",
     "load_feishu_tenant_acceptance_report",
     "project_feishu_tenant_acceptance_report",
 ]

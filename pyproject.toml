@@ -83,6 +83,7 @@ qualibug-authorization-inventory = "ai_test_asset_center.historical_authorizatio
 qualibug-authorization-rerun-plan = "ai_test_asset_center.historical_authorization_rerun_plan:main"
 qualibug-authorization-rerun-consume = "ai_test_asset_center.historical_authorization_rerun_consumer:main"
 qualibug-feishu-tenant-acceptance = "ai_test_asset_center.feishu_tenant_acceptance:main"
+qualibug-connector-tenant-acceptance = "ai_test_asset_center.connector_tenant_acceptance:main"
 qualibug-local-runner = "ai_test_asset_center.local_runner_connector:main"
 
 [tool.setuptools.packages.find]

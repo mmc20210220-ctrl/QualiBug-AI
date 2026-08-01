@@ -1,8 +1,9 @@
-"""Read-only real-tenant acceptance for the managed Feishu connector.
+"""Read-only real-tenant acceptance for registry-managed connectors.
 
 The authority reuses the fenced managed sync path, records only bounded metrics and hashes,
 and fails closed whenever a required safety or completeness claim is absent. Acceptance always
 uses the internal RETAIN lifecycle policy and never reads source bytes from the knowledge store.
+The historical Feishu entrypoint remains a compatibility wrapper around the generic contract.
 """
 from __future__ import annotations
 
@@ -18,7 +19,9 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .connector_auto_sync import (
+    run_managed_connector_sync,
     run_managed_feishu_sync,
+    test_managed_connector_connection,
     test_managed_feishu_connection,
 )
 from .enterprise_knowledge_center._common import ROOT
@@ -26,7 +29,9 @@ from .enterprise_knowledge_center._utils import _now, _write_json
 from .real_project_onboarding import _safe_project_id
 
 FEISHU_TENANT_ACCEPTANCE_SCHEMA = "qualibug.feishu-tenant-acceptance.v1"
+CONNECTOR_TENANT_ACCEPTANCE_SCHEMA = "qualibug.connector-tenant-acceptance.v1"
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
+_READ_ONLY_NETWORK_SIDE_EFFECTS = frozenset({"READ_ONLY", "READ_ONLY_GET"})
 
 ACCEPTANCE_PROFILES: dict[str, dict[str, float | int]] = {
     "smoke": {
@@ -164,7 +169,7 @@ def _project_run(run: Mapping[str, Any], duration_seconds: float) -> dict[str, A
     covered = _integer(run.get("covered_resource_count"), materialized + unchanged)
     default_ratio = covered / discovered if discovered else 1.0
     return {
-        "sync_epoch_id": _text(run.get("sync_epoch_id"), 160),
+        "sync_epoch_fingerprint": _hash(run.get("sync_epoch_id")),
         "status": _text(run.get("status"), 40),
         "duration_seconds": round(max(0.0, duration_seconds), 6),
         "discovered_resource_count": discovered,
@@ -201,7 +206,7 @@ def _project_run(run: Mapping[str, Any], duration_seconds: float) -> dict[str, A
             run.get("source_content_persisted_in_adapter_receipt")
         ),
         "next_cursor_fingerprint": _hash(run.get("next_cursor")),
-        "run_receipt_path": _text(run.get("run_receipt_path"), 1000),
+        "run_receipt_fingerprint": _hash(run.get("run_receipt_path")),
     }
 
 
@@ -238,9 +243,9 @@ def _evaluate(
         ),
         _check(
             "REMOTE_ACCESS_READ_ONLY",
-            connection.get("network_side_effect") == "READ_ONLY",
+            connection.get("network_side_effect") in _READ_ONLY_NETWORK_SIDE_EFFECTS,
             _text(connection.get("network_side_effect"), 80),
-            "READ_ONLY",
+            sorted(_READ_ONLY_NETWORK_SIDE_EFFECTS),
         ),
         _check(
             "CONNECTION_CREDENTIALS_NOT_PERSISTED",
@@ -309,8 +314,8 @@ def _evaluate(
                 ),
                 _check(
                     f"{prefix}_SYNC_RECEIPT_LINKED",
-                    bool(run["run_receipt_path"]),
-                    bool(run["run_receipt_path"]),
+                    bool(run["run_receipt_fingerprint"]),
+                    bool(run["run_receipt_fingerprint"]),
                     True,
                 ),
                 _check(
@@ -442,6 +447,8 @@ def run_feishu_tenant_acceptance(
     sync_runner: SyncRunner = run_managed_feishu_sync,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
+    report_schema: str = FEISHU_TENANT_ACCEPTANCE_SCHEMA,
+    acceptance_id_prefix: str = "fta",
 ) -> dict[str, Any]:
     """Execute repeated managed syncs and persist a fail-closed admission report."""
     resolved_root = (root or ROOT).resolve()
@@ -541,8 +548,8 @@ def run_feishu_tenant_acceptance(
         [row["source_content_persisted_in_adapter_receipt"] for row in projected_runs]
     )
     report = {
-        "schema": FEISHU_TENANT_ACCEPTANCE_SCHEMA,
-        "acceptance_id": "fta_" + uuid.uuid4().hex[:24],
+        "schema": _text(report_schema, 120),
+        "acceptance_id": _text(acceptance_id_prefix, 40) + "_" + uuid.uuid4().hex[:24],
         "project_id": project,
         "connector_instance_id": connector,
         "profile": profile_name,
@@ -597,9 +604,29 @@ def run_feishu_tenant_acceptance(
     return report
 
 
-def _parser() -> argparse.ArgumentParser:
+def run_connector_tenant_acceptance(
+    project_id: str,
+    connector_instance_id: str,
+    *,
+    connection_tester: ConnectionTester = test_managed_connector_connection,
+    sync_runner: SyncRunner = run_managed_connector_sync,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Run the generic acceptance contract through the registry-selected sync authority."""
+    return run_feishu_tenant_acceptance(
+        project_id,
+        connector_instance_id,
+        connection_tester=connection_tester,
+        sync_runner=sync_runner,
+        report_schema=CONNECTOR_TENANT_ACCEPTANCE_SCHEMA,
+        acceptance_id_prefix="cta",
+        **kwargs,
+    )
+
+
+def _parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run read-only real-tenant acceptance for a configured Feishu connector."
+        description=description
     )
     parser.add_argument("--project", required=True)
     parser.add_argument("--connector", required=True)
@@ -618,9 +645,14 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    report = run_feishu_tenant_acceptance(
+def _cli_main(
+    argv: list[str] | None,
+    *,
+    runner: Callable[..., Mapping[str, Any]],
+    description: str,
+) -> int:
+    args = _parser(description).parse_args(argv)
+    report = runner(
         args.project,
         args.connector,
         root=Path(args.root),
@@ -651,13 +683,33 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if report["acceptance_ready"] else 2
 
 
+def main(argv: list[str] | None = None) -> int:
+    return _cli_main(
+        argv,
+        runner=run_feishu_tenant_acceptance,
+        description="Run read-only real-tenant acceptance for a configured Feishu connector.",
+    )
+
+
+def connector_main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for the registry-selected generic connector acceptance contract."""
+    return _cli_main(
+        argv,
+        runner=run_connector_tenant_acceptance,
+        description="Run read-only real-tenant acceptance for a configured connector.",
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
 
 
 __all__ = [
     "ACCEPTANCE_PROFILES",
+    "CONNECTOR_TENANT_ACCEPTANCE_SCHEMA",
     "FEISHU_TENANT_ACCEPTANCE_SCHEMA",
     "FeishuTenantAcceptanceError",
+    "connector_main",
+    "run_connector_tenant_acceptance",
     "run_feishu_tenant_acceptance",
 ]

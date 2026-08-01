@@ -41,12 +41,18 @@ from .connector_sync_authority import (
 )
 from .feishu_connector_adapter import FeishuConnectorError
 from .feishu_tenant_acceptance_jobs import (
+    get_connector_tenant_acceptance_job,
+    get_current_connector_tenant_acceptance_job,
     FeishuTenantAcceptanceJobError,
     get_current_feishu_tenant_acceptance_job,
     get_feishu_tenant_acceptance_job,
+    start_connector_tenant_acceptance_job,
     start_feishu_tenant_acceptance_job,
 )
 from .feishu_tenant_acceptance_reports import (
+    latest_connector_tenant_acceptance_summary,
+    list_connector_tenant_acceptance_reports,
+    load_connector_tenant_acceptance_report,
     FeishuTenantAcceptanceReportError,
     latest_feishu_tenant_acceptance_summary,
     list_feishu_tenant_acceptance_reports,
@@ -82,6 +88,38 @@ _PRIVATE_SYNC_RESPONSE_FIELDS = {
 
 def _text(value: Any, limit: int = 1000) -> str:
     return str(value or "").strip()[:limit]
+
+
+def _registered_connector_type(
+    project: str,
+    connector: str,
+    root: Path,
+) -> str:
+    """Resolve connector kind once for generic acceptance dispatch.
+
+    ``None`` is represented as an empty string so legacy Feishu test doubles and old
+    persisted installations continue to use their compatibility entrypoints; registered
+    non-Feishu instances always use the registry-selected generic acceptance authority.
+    """
+    rows = list_connector_instances(
+        project,
+        root=root,
+        include_disabled=True,
+    ).get("connector_instances") or []
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and _text(row.get("connector_instance_id"), 160) == connector
+        ):
+            return _text(row.get("connector_type"), 160).lower()
+    return ""
+
+
+def _uses_generic_acceptance(project: str, connector: str, root: Path) -> bool:
+    return bool(
+        (connector_type := _registered_connector_type(project, connector, root))
+        and connector_type != "feishu"
+    )
 
 
 def _service():
@@ -416,12 +454,21 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             raw,
             root,
         )
-        row["acceptance"] = _acceptance_projection(
-            latest_feishu_tenant_acceptance_summary(
+        acceptance_summary = (
+            latest_connector_tenant_acceptance_summary(
                 project,
                 connector,
                 root=root,
-            ),
+            )
+            if _text(row.get("connector_type"), 160).lower() != "feishu"
+            else latest_feishu_tenant_acceptance_summary(
+                project,
+                connector,
+                root=root,
+            )
+        )
+        row["acceptance"] = _acceptance_projection(
+            acceptance_summary,
             connector,
         )
         rows.append(row)
@@ -850,36 +897,70 @@ class KnowledgeConnectorHandlersMixin:
                     }
                 )
             if len(tail) == 2 and tail[1] == "acceptance-reports":
-                reports = list_feishu_tenant_acceptance_reports(
-                    project,
-                    connector,
-                    root=root,
-                    limit=20,
-                )
-                return self._json({"ok": True, "data": reports})
-            if len(tail) == 3 and tail[1] == "acceptance-reports":
-                report = load_feishu_tenant_acceptance_report(
-                    project,
-                    connector,
-                    _text(tail[2], 80),
-                    root=root,
-                )
-                return self._json({"ok": True, "data": report})
-            if len(tail) == 3 and tail[1] == "acceptance-jobs":
-                job = (
-                    get_current_feishu_tenant_acceptance_job(
+                reports = (
+                    list_connector_tenant_acceptance_reports(
                         project,
                         connector,
                         root=root,
+                        limit=20,
                     )
-                    if tail[2] == "current"
-                    else get_feishu_tenant_acceptance_job(
+                    if _uses_generic_acceptance(project, connector, root)
+                    else list_feishu_tenant_acceptance_reports(
+                        project,
+                        connector,
+                        root=root,
+                        limit=20,
+                    )
+                )
+                return self._json({"ok": True, "data": reports})
+            if len(tail) == 3 and tail[1] == "acceptance-reports":
+                report = (
+                    load_connector_tenant_acceptance_report(
+                        project,
+                        connector,
+                        _text(tail[2], 80),
+                        root=root,
+                    )
+                    if _uses_generic_acceptance(project, connector, root)
+                    else load_feishu_tenant_acceptance_report(
                         project,
                         connector,
                         _text(tail[2], 80),
                         root=root,
                     )
                 )
+                return self._json({"ok": True, "data": report})
+            if len(tail) == 3 and tail[1] == "acceptance-jobs":
+                if _uses_generic_acceptance(project, connector, root):
+                    job = (
+                        get_current_connector_tenant_acceptance_job(
+                            project,
+                            connector,
+                            root=root,
+                        )
+                        if tail[2] == "current"
+                        else get_connector_tenant_acceptance_job(
+                            project,
+                            connector,
+                            _text(tail[2], 80),
+                            root=root,
+                        )
+                    )
+                else:
+                    job = (
+                        get_current_feishu_tenant_acceptance_job(
+                            project,
+                            connector,
+                            root=root,
+                        )
+                        if tail[2] == "current"
+                        else get_feishu_tenant_acceptance_job(
+                            project,
+                            connector,
+                            _text(tail[2], 80),
+                            root=root,
+                        )
+                    )
                 return self._json({"ok": True, "data": job})
             if len(tail) == 3 and tail[1] == "runs":
                 run = load_connector_sync_run(
@@ -1367,7 +1448,12 @@ class KnowledgeConnectorHandlersMixin:
                     body.get("timeout"), 30.0, 1.0, 60.0
                 ),
             }
-            job = start_feishu_tenant_acceptance_job(
+            start_job = (
+                start_connector_tenant_acceptance_job
+                if _uses_generic_acceptance(project, connector, root)
+                else start_feishu_tenant_acceptance_job
+            )
+            job = start_job(
                 project,
                 connector,
                 root=root,

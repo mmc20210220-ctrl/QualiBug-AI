@@ -136,6 +136,7 @@
     "ai_test_asset_center.connector_checkpoint_recovery": "core",
     "ai_test_asset_center.connector_configuration_service": "core",
     "ai_test_asset_center.local_runner_connector": "core",
+    "ai_test_asset_center.connector_tenant_acceptance": "core",
     "ai_test_asset_center.connector_workspace_maintenance": "core",
     "ai_test_asset_center.connector_auto_sync": "core",
     "ai_test_asset_center.private_pilot_connector_handlers": "core"
