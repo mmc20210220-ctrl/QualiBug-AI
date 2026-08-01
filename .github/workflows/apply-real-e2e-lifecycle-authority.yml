@@ -27,6 +27,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Verify staged payload integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/qualibug-payload.sha256 <<'EOF'
+          b5a0d0dbcbb20ff491bc32913537990ecd6e753d0456ddbb3342758abbc710b5  .github/qualibug-e2e-patch.part00
+          fcee8256f47269779784eac77a774a6bb4e4701bd94270c75bad346dc04ad7a2  .github/qualibug-e2e-patch.part01
+          0c27f4aa3a56ee9bde3b57badeb11869239bfd079a2e3ac3d291361a1429d968  .github/qualibug-e2e-patch.part02
+          32607abcd266abd1c3af7c1517fb67e4cf00fc3474afd658626a475f579bdc76  .github/qualibug-e2e-patch.part03
+          80f58e91b0e131ea04c33f973017fa89b9f54f6cb6fdf5b997987ea470406f41  .github/qualibug-e2e-patch.part04
+          EOF
+          sha256sum --check /tmp/qualibug-payload.sha256
+
       - name: Apply verified optimization patch
         shell: bash
         run: |
