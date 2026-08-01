@@ -14,8 +14,8 @@ concurrency:
 
 jobs:
   deliver-role-permission-sod:
-    if: github.head_ref == 'automation/role-permission-sod-20260801'
-    runs-on: ubuntu-latest
+    if: github.head_ref == 'automation/role-permission-sod-20260801-v2'
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - name: Clone latest main without external actions
