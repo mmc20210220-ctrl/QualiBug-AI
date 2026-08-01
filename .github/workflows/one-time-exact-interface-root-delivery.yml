@@ -1,6 +1,10 @@
 name: One-time exact interface root delivery
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/exact-interface-root-delivery.trigger'
   pull_request_target:
     branches: [main]
     types: [opened, synchronize, reopened]
@@ -16,8 +20,9 @@ concurrency:
 jobs:
   deliver:
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'automation/exact-interface-root-delivery-20260801'
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/exact-interface-root-delivery-20260801')
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -81,6 +86,7 @@ jobs:
           set -euo pipefail
           git rm .github/delivery/exact-interface-root.patch.gz.b64
           git rm .github/workflows/one-time-exact-interface-root-delivery.yml
+          git rm -f .github/exact-interface-root-delivery.trigger || true
           git add -A
           git commit -m 'fix(understanding): preserve exact interface and scope identity' \
             -m 'Carry ingestion-authored OpenAPI interface identity through Fact to Behavior evidence, prevent own-scope and tenant-scope behaviors from remerging, and let the existing governed binder consume exact source attachments without fuzzy endpoint selection.'
@@ -103,4 +109,4 @@ jobs:
             git diff --check
           fi
           git push origin HEAD:main
-          gh pr close "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --comment 'Verified exact-interface root fix delivered to main; temporary delivery assets removed in the source commit.'
+          gh pr close 115 --repo "${{ github.repository }}" --comment 'Verified exact-interface root fix delivered to main; temporary delivery assets removed in the source commit.' || true
