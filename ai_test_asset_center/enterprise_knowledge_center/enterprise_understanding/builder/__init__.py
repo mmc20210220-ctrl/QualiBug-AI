@@ -31,7 +31,13 @@ from ..identity_resolution import (
     project_asset_for_legacy_builder,
     resolve_enterprise_identities,
 )
-from ..identity_structural_evidence import project_identity_structural_candidates
+from ..identity_structural_distinctness_review import (
+    project_distinctness_structural_candidates,
+)
+from ..object_behavior_surface_binding import (
+    prepare_identity_safe_behavior_surfaces,
+    project_behavior_surface_bindings,
+)
 from ..identity_structural_review import (
     apply_identity_structural_review_decisions,
     begin_identity_structural_review_rebuild,
@@ -39,9 +45,6 @@ from ..identity_structural_review import (
     finalize_identity_structural_review_measurement,
     identity_structural_review_rebuild_in_progress,
     scrub_operator_structural_review_mentions,
-)
-from ..identity_source_governed_table_binding import (
-    augment_source_governed_table_bindings,
 )
 from ..identity_structural_review_governance import (
     attach_identity_structural_review_admission,
@@ -95,7 +98,6 @@ def _publish_identity_audit_receipts(
         "enterprise_identity_registry_recompute_receipt",
         "enterprise_identity_authority_projection_receipt",
         "enterprise_identity_field_evidence",
-        "enterprise_identity_source_governed_table_binding",
         "enterprise_identity_structural_evidence",
         "enterprise_identity_structural_review_queue",
         "enterprise_identity_structural_review_admission",
@@ -125,13 +127,6 @@ def _attach_identity_audit_receipts(
         or asset.get("enterprise_identity_field_evidence")
     )
     model["identity_field_evidence"] = field_evidence
-    source_governed_table_binding = as_dict(
-        resolution.get("source_governed_table_binding")
-        or asset.get("enterprise_identity_source_governed_table_binding")
-    )
-    model["identity_source_governed_table_binding"] = (
-        source_governed_table_binding
-    )
     structural_evidence = as_dict(
         resolution.get("identity_structural_evidence")
         or asset.get("enterprise_identity_structural_evidence")
@@ -198,12 +193,6 @@ def _attach_identity_audit_receipts(
             "enterprise_identity_field_binding_count": int(
                 field_evidence.get("field_binding_count") or 0
             ),
-            "enterprise_identity_source_governed_table_binding_count": int(
-                source_governed_table_binding.get("admitted_binding_count") or 0
-            ),
-            "enterprise_identity_source_governed_table_conflict_count": int(
-                source_governed_table_binding.get("conflict_count") or 0
-            ),
             "enterprise_identity_cross_technical_key_binding_count": int(
                 field_evidence.get("cross_technical_binding_count") or 0
             ),
@@ -260,15 +249,15 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     recognition = recognize_business_objects(asset)
     recognition = project_business_object_benchmark(asset, recognition)
     recognized_asset = project_asset_for_recognized_objects(asset, recognition)
+    recognized_asset = prepare_identity_safe_behavior_surfaces(
+        recognized_asset, recognition
+    )
     resolution = resolve_enterprise_identities(recognized_asset)
     resolution = scrub_operator_structural_review_mentions(
         recognized_asset, resolution
     )
     resolution = govern_identity_registry(prior_registry, resolution, asset=recognized_asset)
     resolution = augment_technical_identity_projection(recognized_asset, resolution)
-    resolution = augment_source_governed_table_bindings(
-        recognized_asset, resolution
-    )
     resolution = augment_identity_field_evidence(recognized_asset, resolution)
     resolution = project_identity_authority_receipt(recognized_asset, resolution)
     resolution = project_identity_annotation_manifest(recognized_asset, resolution)
@@ -278,10 +267,15 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     publish_recognition_and_identity(asset, recognized_asset, resolution)
     _publish_identity_audit_receipts(asset, recognized_asset)
     projected_asset = project_asset_for_legacy_builder(recognized_asset, resolution)
+    projected_asset = project_behavior_surface_bindings(projected_asset, recognition)
+    publish_recognition_and_identity(asset, projected_asset, resolution)
     model = _legacy.build_enterprise_understanding_model(projected_asset)
+    model["business_object_behavior_binding_receipt"] = deepcopy(
+        projected_asset.get("business_object_behavior_binding_receipt") or {}
+    )
     model = apply_identity_resolution_to_model(model, resolution)
     model = apply_recognition_to_model(model, recognition)
-    model = project_identity_structural_candidates(asset, model, resolution)
+    model = project_distinctness_structural_candidates(asset, model, resolution)
 
     if review_rebuild:
         pending = consume_identity_structural_review_pending_receipt(asset)

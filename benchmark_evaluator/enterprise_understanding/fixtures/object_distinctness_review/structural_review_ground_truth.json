@@ -1,0 +1,44 @@
+{
+  "schema": "qualibug.enterprise-object-distinctness-review-ground-truth.v1",
+  "project_id": "object_distinctness_review",
+  "annotation_scope": "CLOSED_WORLD_STRUCTURAL_REVIEW_PAIRS",
+  "ground_truth_generated_from_product_output": false,
+  "source_snapshot": [
+    {
+      "path": "benchmark/multi_source_object_distinctness/CLIENT_PROFILE_PRD.md",
+      "blob_sha": "6cf88970cc68bd48721f89225c541fc4952d8d55"
+    },
+    {
+      "path": "benchmark/multi_source_object_distinctness/CUSTOMER_ACCOUNT_PRD.md",
+      "blob_sha": "b6d79a4f3a1b6d1e26ab9689883f768f4cc2a986"
+    },
+    {
+      "path": "benchmark/multi_source_object_distinctness/SUPPLIER_ACCOUNT_PRD.md",
+      "blob_sha": "f31110f0067dbc39917adbb1c280e1746a6d2b66"
+    }
+  ],
+  "expected_review_pairs": [
+    {
+      "labels": ["客户账户", "客户档案"],
+      "required_dimensions": ["EXACT_OPERATION_SET", "EXACT_LIFECYCLE_TOPOLOGY"]
+    }
+  ],
+  "expected_suppressed_pairs": [
+    {
+      "labels": ["供应商账户", "客户账户"],
+      "reason_code": "STRUCTURAL_MATCH_REJECTED_BY_COMPLETE_LIFECYCLE_CONTRADICTION"
+    },
+    {
+      "labels": ["供应商账户", "客户档案"],
+      "reason_code": "STRUCTURAL_MATCH_REJECTED_BY_COMPLETE_LIFECYCLE_CONTRADICTION"
+    }
+  ],
+  "expected_distinct_formal_objects": ["客户账户", "客户档案", "供应商账户"],
+  "validation_receipt": {
+    "closed_world": true,
+    "generated_from_product_output": false,
+    "expected_review_pair_count": 1,
+    "expected_suppressed_pair_count": 2,
+    "automatic_entity_union_allowed": false
+  }
+}
