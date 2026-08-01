@@ -1,0 +1,113 @@
+.connector-coverage {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.28));
+  border-radius: 14px;
+  background: var(--surface-soft, rgba(15, 23, 42, 0.035));
+}
+
+.connector-coverage-partial {
+  border-style: dashed;
+}
+
+.connector-coverage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.connector-coverage-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.connector-coverage-heading span,
+.connector-coverage-list span {
+  color: var(--text-secondary, #64748b);
+  font-size: 12px;
+}
+
+.connector-coverage-heading strong {
+  font-size: 15px;
+}
+
+.connector-coverage-heading b {
+  font-size: 14px;
+}
+
+.connector-coverage-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-muted, rgba(148, 163, 184, 0.22));
+}
+
+.connector-coverage-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  transition: width 180ms ease;
+}
+
+.connector-coverage > p,
+.connector-coverage-list p {
+  margin: 0;
+  color: var(--text-secondary, #64748b);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.connector-coverage-details summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.connector-coverage-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.connector-coverage-list article {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface, rgba(255, 255, 255, 0.62));
+}
+
+.connector-coverage-list article > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.connector-coverage-list article strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.connector-coverage-list article p {
+  max-width: 46%;
+  text-align: right;
+}
+
+@media (max-width: 720px) {
+  .connector-coverage-list article {
+    display: grid;
+  }
+
+  .connector-coverage-list article p {
+    max-width: none;
+    text-align: left;
+  }
+}
