@@ -124,6 +124,10 @@ def test_default_registry_exposes_manifest_driven_website_adapter_without_networ
     } == {"session_cookie"}
     assert {row["connector_type"] for row in registry.catalog()["connector_types"]} == {
         "feishu",
+        "git",
+        "gitee",
+        "github",
+        "gitlab",
         "openapi",
         "website",
     }
