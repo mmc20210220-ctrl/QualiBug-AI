@@ -25,6 +25,9 @@ from dataclasses import replace
 from typing import Any
 
 from . import discovery_runtime_planning as _planning
+from .agent_semantic_linker_authority import (
+    enrich_knowledge_asset_with_agent_relationships as _governed_agent_semantic_linker,
+)
 from .behavior_ir_surface_reconciliation import (
     reconcile_declared_observation_surfaces,
 )
@@ -132,6 +135,12 @@ from .source_ui_obligation_compat import install_source_ui_family_vector_compat
 
 _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
+
+# Planning resolves this symbol from module globals at execution time. Reuse the mature
+# linker while ensuring only governed existing relationships can suppress a new edge.
+_planning.enrich_knowledge_asset_with_agent_relationships = (
+    _governed_agent_semantic_linker
+)
 
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
