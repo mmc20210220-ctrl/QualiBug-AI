@@ -69,6 +69,7 @@ def test_governed_attempt_preserves_exact_runtime_step_identity() -> None:
     )
 
     assert cleanup._ADAPTER_BINDING_MARKER not in source
+    assert audit["required"] is True
     assert audit["complete"] is True
     assert audit["bound_step_ids"] == ["treatment_1"]
 
@@ -84,6 +85,68 @@ def test_governed_attempt_preserves_exact_runtime_step_identity() -> None:
     # contract plus the observed create identity makes this cleanup-required.
     assert cleanup._ORIGINAL_GOVERNED_WRITE_CHANGED_STATE(attempt) is False
     assert cleanup._governed_write_changed_state_with_adapter_requirement(attempt) is True
+
+
+def test_non_adapter_experiment_binding_audit_is_not_required() -> None:
+    projected, audit = cleanup._project_adapter_cleanup_requirements(
+        experiment={
+            "cleanup_plan": [
+                {
+                    "action": "source_declared_compensation",
+                    "adapter": "http_api",
+                    "operation_ref": "delete_product",
+                }
+            ]
+        },
+        steps=[_step()],
+    )
+
+    assert projected == [_step()]
+    assert audit["required"] is False
+    assert audit["complete"] is True
+    assert audit["declared_operation_refs"] == []
+    assert audit["unbound"] == []
+
+
+def test_declared_adapter_without_runtime_step_is_explicitly_unbound() -> None:
+    projected, audit = cleanup._project_adapter_cleanup_requirements(
+        experiment=_experiment(),
+        steps=[],
+    )
+
+    assert projected == []
+    assert audit["required"] is True
+    assert audit["complete"] is False
+    assert audit["missing_runtime_operation_refs"] == [_OPERATION]
+    assert audit["unbound"] == [
+        {
+            "step_id": "",
+            "phase": "",
+            "operation_ref": _OPERATION,
+            "cleanup_contract_count": 1,
+            "status": "UNBOUND",
+            "reason_code": "ADAPTER_CLEANUP_RUNTIME_STEP_MISSING",
+        }
+    ]
+
+
+def test_conflicting_governance_identity_cannot_activate_adapter_cleanup() -> None:
+    step = _step()
+    step["governance_receipt"] = {
+        **step["governance_receipt"],
+        "operation_ref": "different_operation",
+    }
+    projected, audit = cleanup._project_adapter_cleanup_requirements(
+        experiment=_experiment(),
+        steps=[step],
+    )
+    assert audit["complete"] is True
+
+    attempt = cleanup._governed_write_attempts_with_step_identity(projected)[0]
+    assert attempt["operation_ref"] == _OPERATION
+    assert attempt[cleanup._RUNTIME_IDENTITY_CONFLICTS] == ["operation_ref"]
+    assert cleanup._ORIGINAL_GOVERNED_WRITE_CHANGED_STATE(attempt) is False
+    assert cleanup._governed_write_changed_state_with_adapter_requirement(attempt) is False
 
 
 def test_adapter_identity_never_cross_binds_another_operation() -> None:
@@ -280,3 +343,4 @@ def test_mismatched_operation_does_not_enter_adapter_cleanup_loop(
     ]
     assert binding["complete"] is False
     assert binding["bound_step_ids"] == []
+    assert binding["missing_runtime_operation_refs"] == [_OPERATION]
