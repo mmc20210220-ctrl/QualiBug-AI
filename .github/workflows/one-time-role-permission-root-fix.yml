@@ -1,160 +1,145 @@
-name: One-time role permission root fix
+name: One-time exact table semantic identity binding
 
 on:
-  issues:
-    types: [opened]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: one-time-role-permission-root-fix
+  group: one-time-exact-table-semantic-identity-binding
   cancel-in-progress: false
 
 jobs:
   apply-test-and-push:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.issue.title == '[internal] apply verified role permission root fix'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 40
     steps:
       - name: Checkout latest main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-
-      - name: Reconstruct and verify patch
+      - name: Verify and apply root fix
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          chunk_00 = ''.join([
-              'H4sIAAAAAAAAA+19a28jWXbY9/4V5ZoPQ7Yotki9uaBjjUazo7in1VarZ73RCjUlsijVNsXiVpHdLWsErGPYjhEs4sQxHAdrOGvYST5NgvhDnCyQ/Jh4dmb/Rc459/2oYlFSexb2EOgWWXXvua9zzz3vO0xHo2B19SKdBfGTOI1mSTGL4qJIZtEgmcyS/Ek8n11mefo78SzNJtEgu5rGeVrQ18ksjwez9vQ6OL973UfpZJi8DdYHG7sbW1tb7XZ353x3tzPYDTpra1sbG49WV1fv07dHKysr9+rfb/xGsNrdXW9tByv4p9MJ4MkwGQXxbBYPLqOFQBqPAv0Tnhw823t2Er3YP3p+EPaC0zAeDLL5ZBblyShsBeEsmcT811lL1b09HaZXyaSAVvTHYZ4U2TwfJFE6hFGls+voHKY0nVxEszi/SGYFtMG/tR6tympFfJVEbt08+dE8zZMhVDrPsnGD12y2Hq2Iqu8FB6+T/Dqg8WXjJ7M8',
-              'iWfQM0AhfSoCNRXB1byAt8MhtFcEs8skwNZ1iOfzIp3gS9GjdvB8HA+Sy2w8THLRf5h2WLYrKBlcxfAtjceisUmSDIvv6CBH6dtkuDqNZ5dBPBlCb8bjZEBls2mSU60CwFwH0zx7nQRiBoJRnl2xPibxOBnqILURZedFksM0BOmkmCXxsK3K1Zjak3ye6GtYXMbwQi7cRR5PL6MRfE3yaZ5OZlBF/2lh1I35kyB61n645F4fJuMUFzq6gLmuvcvtWnx/b63vdjZGOxvt9kZnuBPv7HSW3t8O5No726mJe7qzhVsa/mc7Or2aZvksuIyLy3F6/kj8/iEs9iOOE9dTWALxYm9y/Sh4tEpv2mZzGez6cRIN4nkBCAooxau82P/44JO96NOD4xeHR88erSxTt8HwywTBN6UJwUU8QPBsFEk8oDrn83Q8tGiXwGmJh1QRazT5FLQHsJGzKyhiTGn0uiv6+Rp6PcRHeQK1h/MB79MgSaczmLCA',
-              '5n59e7vVXQtW1nc6rc6GIKiybsnqjVi3bHpaXTpKXuNEwHxcpQVQjcFlqOo3cQnZ3v60097uBd+7TCa0+eX+JuowDMw9TQ8nfdrGVFyulwCH0wIUBGiWtm+DWRaEcpZ9IEOiVXz+BSyb1vHZLAIgGvBjOJ8M4cBoBy9epVPqzYuP97qbWwEtXzC4TAav2mzMHK90WhL0A9g/b2cNDrUNSNIIcziPUi8V06lSs8m6mI78kPuLRttTB5LAOd4NaLDo4QSeFrP8DDoJXxu8uWRcJJ6aWtMtHzgcqYHZJkmV8GiixmkxawgUyrM3bFqss14surVhcF5WHrBnKw/bK/4HFs3Tv+DX+r617KlO5HFaJMGe3uaHfM99FxD1IM+zXOtz1Rb1tO/fpXJtluy0sab1Om5UuXvnDTBIZhiqwlYdJ7jcwxQYQ+AgkytAAbmSErgkWqwGrh0BEDwlx5oboqYbG9utdTjLNjY2W+sbleyp0wAnpriDiQoI',
-              'GjxkHSpm8WyOqINTHD7fe/Hi4EPYtWpOk9k8B25oPpvOZ4KYCm4N+yfnQYKfJ9p6jrI8oGfAR3H0lrw3I0QLudumiR5uO7cMGVWvkJQsdWbKPollYDuqF2CHT3EpkUq1AiRVSKtOz+5/qtzxDHgJKG60xAsGcSFA4Ws+fFhdQAfRFj8wcE0SQB3AosEY+VI+dW0GQLEJrL8w3oZnmXUsWu40wc/io4MtqhxmHySAtzqttEgQ23Cw0ZrmcxwsPFXox1CZ9Vv2QMy2pKEOwin4VtV06FTCwZVJjaEqqstcN7dcXNBOXGsdNGqHr7TzRR7xJlWauI/YxDmPtAlsim0pgIdNf3ma2CWm1QvEnl7v5C6YTwdws+Uh8mHLRCiLRQotfIsWUwBxyEoURc6OExTtOJ3l1z0TPXxdaNkt064zquFnCa7eU1tvvOV/bQoRxqw+sn6uer4iUjAQiBkFCAzJUKoYrOOadbMdT6fJZNi48ayZhoQ9B+eh',
-              'pQUUxIcGrC9SavYV4UdiLwg/OHr57EMvGDp+LAF+ud7cajQjeTtIgII3Tq6njEtpBZ9iA/S9WQN7NAR2ikl08qCszc1zKiIB3Y3Mcy5U67fsg9UrhlKM3Zc9J8ISl1BsgePWcalTmp6JqEj8BT8GYJtLq0lsib22psRTkStLNgfDnSTZQGXoxtb6YHs7XlpZ4gNeW1/iq0wqk9311lawgn+2dwSfWUJuOGPJGUQ+/y34EgNVLkgTsEJs6lKMGMMZwY71AkV59ybXZ6ipCFZ/nRFlJMUcx8IwPGb9YLL6JJukg3gccISVSsdVqQTkonOW5YBOgEtF+9EKg6WpJVfP48ErYI80fWI8hgEOr2HLTrPC1VLyYbSDfamN5CocOBs0haUGcZgFkwwmLnlNPGQ2v7hko/DoImFkjLPk4meGus/BLMsLUWYota846Ck0kGgq10NsIZ4BHM5FYiOpVILKXillacrVubP4HOQaPot8WtTsfQeGENDA',
-              'oMvQ9gz1pgUnN5PXiIJDmgIoViSwulIFEiSTC1T3QjspapuH80EidK0h0jT2Vd/Ekldnr2AlxukgRRrIz5sbTaDWhQX51COUSAmtljwiIdnyyIpO2uGl6JwuXjNEFW80hM/GkVoBqbURHXOKkAFBdEbq6KtAeAoZQKDDgIqezsB8uQ9BYPQAdEcqzh3xcxSqwjcO2NuewGSXVoRniA+MrCzPCdlcqYe40ExyDi44BCxGrD/VKc9sPoUnVMfHGWoEaR9GBt1eFVaRWO3jVS5Y4TZdFaOUe05Soj0vDVAWDbaV2QQy5lMaanKU7zRiIFaAN0W05o0UWuWSXsYFblFBNqeahYZPaTsITrBZmlkGlWw/xSwdj4M5JytEfz77jHOCMG0Ov/TZZ0FxGU9BUC00IioIEW+s+E4QB5fzq3iyilSXkSCcpEkyRoqByBozJkUz76hGXDqiiZNSGW3jBZdF7MdikwjFiqRHoiDbY+K13FQeMc2soYta',
-          ])
-          chunk_03 = ''.join([
-              'J8YaMg6Rt296V5nph8yQVIZfu13Cr83NnTvj1x4zEJC9Xus2x4wnASJZgX95ogRuUGgUyQD4ayTFQTYZX/MJYHpcDLvzefxqRSpuEbDW5qHQxANWIg5PHq5KnF/T7vIH+Ao29IYzznhYYF08LaxWNIrjWvOxrLTk04Kur+3g0bK+ub1xxwUVH1RnpNLxkvQlZxZTwJQaJa8E5yVer/hec92BUf1WO1ElNznNuJc/nkTyoXZc8Pc0JRoALYMKO7TxvZl+BNeXzd36Js3d1lpXu7pk6cmTI/e0qfOjxsKqSnjwqF/c+h5fXOQJXjxyqk/smZXwtqSUOJPkM92651ShJTkr45/MZSyrba22RziqFIo8wpAzhaXSUF0pSO9kU21DwTq31OCsXcl3tnIaV8iWjRWiyeoc21CLSURGtKAhgEb0KDRAFWGIudlFPhEwE9iBzv22NX6YNtPY29pKiof2lqaaDlHQKlrv7Pq3lnygGws8gr4u76n9',
-              'UCLDSeEKZ65VKqF4RBEVGYDg0bpYsovIyzIMzywYNq7ro/JIeoTMZdvGg82ma2fZ/CyU0MtnbrG8SlNaXqxcGvTLbSVGw+WXwYFjSYq2CKuZnNbaO9bLEnOTAia24u4234rbILtt3Wsrlu96TzF2nGhCAz3GOCaoVVKDgRW/mqXbz69p++Y3oHVmFox+njpbsHQHCp8LP0R2hAiQPqu9rkpcpG74p75NyxfLs1F9gy9T9oWmCF6Ca0Yhg7vCDxfWOYTFUjp+hKQu9g8XyTe6W4wCbHc27kMBKGaM3Q7KplKJNQ7dYppS+cTe3wKKti8qd/c/wM6+367WdvR9d/PCnbxwFy/ewXfcvTV27hK7toSPvt9uPXPEmuV3KddH3/ZutNtwb8PFG3fZTas2rNgQdW5GrYgweBINWMqmSDr5o69Qnlyyy3oj4PNzthlfdyqyrT1gEzxV2/lWZ2tn53yr3d4ZJrtJMlirkartIbtRkeftIZshk+Z2',
-              't9PaDVbob0fLxTIHToiILCJEeQyc+YgbxjmNZTfpUeJ8j/vsLJ8PZvM8HlPoWaQKSzSNx+nFpKT6MBvMWUwihwM4LopLAIDj7DLYvuMTIV6pqEw7IubdR73cLRbD7Alu86qIDDuwwgdD805gDpv14gu8sJjHWFWPfGETKoeQHQKJQW5RMholA/sSIlikV+SAiLc0sXKA3oDp5HgibjyVMMudpJE2x5PrRnna/7J43jbTyTdkWBC151sgJ4qFNFH+ZSgboxm7573jySgvqcA4u0gHId/uG5QPtLONWo/Og253/BjezT3f1Nvuz6oq9xrucUOh4zYeyNB2zS1cByD3dE/ufD3q2B/FIV2cqsOZygGZO6znWf7KTrDNZFeTLjHlzYoc9979h6zSsyOR5fPASIG/2NtrgU+XMekYOZkKfZW9fbWXJbXwiDpH91jNYc5TXy9WBmmEVyQhEGu32iWw/v04l7JT4knJKXFH7uUOzXAOptPd2UkG',
-              '24N2uzvc7a6PNnfvycHcpSt35GLu0hTLFEH30vNkt3ScR9FoTqxBJM5pyrjNrILyqvo8WXxRfTG4hPYklIJwrIVfEONbAeKtuJi+TtlWwDX/VBETLRvHA+7bwxdual47TBBz7X736NOD42d7z/YPSmsdH/zWy8Pjg2jv+fPjo0/3niIA8Wz/6NlHh8efsFPplinitrfwjNje4v4TRpno+IBYlTa/40zcVxc2/lnvlz/98df/+Xc///L//v4vf/bzz+nfT3/cbN+stXZu4fVXP/vi6y/+uvk5d5tnz0lxmF+JgHTOQrUP4WsTM/sevTyGkX1y9CEmGcHRux1YkR348t/8t7//+d98/uXv/+7XX/zd57/46R/94i9+7/Mv//AP8NcPzq/i6x+cw184U+gvSX6zWTL8wXlTEEjW9Io3F9RQHhredFCU2ZCSlexuttal5wln5yTHsSCfhJZ48czOScJOvzqZSGSkFkc/X3CV4YWp+dzUO3ib',
-              'dgINI5Kn1iCZo4sMsHO7aofYmeF1bnkrwI4PTdtpGptu6SIe8+25RJCXrFI/xOtMkwCEm3JZ6IwInCmfSubnqg+V2HfN/ceHerp9EgMAbczyvncXt6kPhSG6TPbO/F8ED8MSuFSMgNoSIfhkHcQvkvtm+V9cgyDm0OkzxOUVZW4lfiCQxbmzrnn3RCLUlZMtg3lj3sTcMUvyO/pTVwzq0RjEHXfQF5iv8Rj91yPMY8de2/7igYeXNnMUaa5xeqSEivKgAeJFPh0Y4Ua3tb1bNkSC4QpdPS0+vWWUxIsKIsz7jGWMdwarqH5opsfQnQKjKIWYymtCSk50K22RB6CdWHhJ+I45wm1E+LqbRcnnmjaZW0OPzjTEmvksw+NtEKUTyoSItxEwEzGM5KMYQPLit4rec4dyvulKxsFnwUcfREyCjWNUQUuugr5BIuu79IpnwVqmdiLDRCvxROVZIaprJFYZzSfs1BlmCcsWOcCLE5MgZokuKABs',
-              'hBd6M1s+cUtCSMUbTmFM6ZTJHAzsIe+gSMBCmSJldnnebX5rKnX6CaNjTzzRd3QvI9+m4ipFmUJHRgRAY5Q2paC0M0XR0t+QCV69wds74zyHR/zMVfe7PkFfp1XmW3aOeTXj/LodfBfTvqSD4JOXL06e4H8RiGhqBrLzcXrBXfVYWhgGVxZAIb3wXOJKTnALMgRJtoCFm1edDCpxpEgK7gTtCSp1K/pA6Z9/+/nTw/3DE2JlI2RQgVVrF0mcDy4bVkJISeZMxyU9KIw43BLPpqr4IJNKlREDDCcjlsBpwnMEo1BZ75zWD/vbsqkRbOzd54aLAe9qcog8vfvZke7GQklbrqM1s8mIPHsejtHItJcuYkqsdD6yKxSGI3YoSksfHR1/cPghoCRdeXJ89PHhB4eYb0dKYv4cdJ4A1YU4XncpPcvJ9jP3iDeXRFAhb2sPtqh8YcundO/7OGX7ezSPUphlAU98Po+ePf1+dPjRXafUuzX+Ecyp',
-          ])
-          root = Path('.github/delivery/role-permission')
-          content = ''.join([
-              chunk_00,
-              (root / 'chunk-01.b64').read_text(),
-              (root / 'chunk-02.b64').read_text(),
-              chunk_03,
-              (root / 'chunk-04.b64').read_text(),
-              (root / 'chunk-05.b64').read_text(),
-              (root / 'chunk-06.b64').read_text(),
-              (root / 'chunk-07.b64').read_text(),
-              '\n',
-          ])
-          Path('/tmp/role_permission.patch.gz.b64').write_text(content)
-          PY
-          echo "eb56cb0c13b47aceec96643878c0cfe8af709c864f6d8e62a0c08fcd9a4e640a  /tmp/role_permission.patch.gz.b64" | sha256sum -c -
-          base64 -d /tmp/role_permission.patch.gz.b64 | gzip -d > /tmp/role_permission.patch
-          echo "7f64625392005c005f6fd28e9c3ac4aa9fe4d6993aede9a330f238d34c03fde2  /tmp/role_permission.patch" | sha256sum -c -
-
-      - name: Apply with three-way conflict detection
-        shell: bash
-        run: |
-          set -euo pipefail
-          git apply --3way --check /tmp/role_permission.patch
-          git apply --3way /tmp/role_permission.patch
+          PATCH_B64=.github/patches/identity_exact_table_semantic_binding.patch.gz.b64
+          echo 'cab9dd98b5a729d00105196ecf861edd4bd8257183e11e9a25d60d16cf8403dd  '"${PATCH_B64}" | sha256sum -c -
+          base64 -d "${PATCH_B64}" | gzip -d > /tmp/identity-table-binding.patch
+          echo 'b821d5f4274a3896efdda93c8a0e921a56a9f009c631318839ade335b57695cb  /tmp/identity-table-binding.patch' | sha256sum -c -
+          git apply --3way --check /tmp/identity-table-binding.patch
+          git apply --3way /tmp/identity-table-binding.patch
           git diff --check
-
-      - name: Verify exact role permission scope
+      - name: Verify exact identity scope
         shell: bash
         run: |
           set -euo pipefail
           cat > /tmp/expected-files.txt <<'EOF'
-          ai_test_asset_center/authorization_comparison_contract.py
-          ai_test_asset_center/authorization_delivery_gate.py
-          ai_test_asset_center/authorization_oracle_causality.py
-          ai_test_asset_center/behavior_ir.py
-          ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/authorization_semantics.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_resolution.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py
-          ai_test_asset_center/historical_authorization_quarantine.py
-          tests/test_enterprise_understanding_actor_permission_contract.py
-          tests/test_enterprise_understanding_authorization_delivery_gate.py
-          tests/test_enterprise_understanding_authorization_oracle_causality.py
-          tests/test_enterprise_understanding_historical_authorization_quarantine.py
-          tests/test_enterprise_understanding_role_permission_executor_e2e.py
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_technical_projection.py
+          tests/test_enterprise_identity_governance.py
           EOF
-          git status --short | awk '{print $2}' | sort > /tmp/actual-files.txt
+          git diff --name-only | sort > /tmp/actual-files.txt
           sort -o /tmp/expected-files.txt /tmp/expected-files.txt
           diff -u /tmp/expected-files.txt /tmp/actual-files.txt
-
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
           cache: pip
-
-      - name: Install product and test dependencies
+      - name: Install package and tests
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-
-      - name: Compile role permission authority
-        shell: bash
+          python -m pip install -r requirements.txt
+      - name: Compile identity authority
         run: |
           python -m py_compile \
-            ai_test_asset_center/authorization_comparison_contract.py \
-            ai_test_asset_center/authorization_delivery_gate.py \
-            ai_test_asset_center/authorization_oracle_causality.py \
-            ai_test_asset_center/behavior_ir.py \
-            ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/authorization_semantics.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_resolution.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py \
-            ai_test_asset_center/historical_authorization_quarantine.py \
-            tests/test_enterprise_understanding_actor_permission_contract.py \
-            tests/test_enterprise_understanding_authorization_delivery_gate.py \
-            tests/test_enterprise_understanding_authorization_oracle_causality.py \
-            tests/test_enterprise_understanding_historical_authorization_quarantine.py \
-            tests/test_enterprise_understanding_role_permission_executor_e2e.py
-
-      - name: Run role permission regressions
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_technical_projection.py
+      - name: Run focused identity regressions
+        run: |
+          python -m pytest -q \
+            tests/test_business_object_recognition_aliases.py \
+            tests/test_business_object_recognition_benchmark.py \
+            tests/test_business_object_recognition_technical.py \
+            tests/test_business_object_recognition_types.py \
+            tests/test_enterprise_identity_governance.py \
+            tests/test_enterprise_identity_scope.py \
+            tests/test_enterprise_identity_resolution.py \
+            tests/test_identity_field_evidence.py \
+            tests/test_identity_structural_evidence.py \
+            tests/test_identity_structural_review.py \
+            tests/test_identity_structural_review_governance.py \
+            tests/test_identity_benchmark_composition_order.py
+      - name: Run real benchmark twice
         shell: bash
         run: |
-          pytest -q \
-            tests/test_enterprise_understanding_actor_permission_contract.py \
-            tests/test_enterprise_understanding_role_permission_executor_e2e.py \
-            tests/test_enterprise_understanding_authorization_oracle_causality.py \
-            tests/test_enterprise_understanding_authorization_delivery_gate.py \
-            tests/test_enterprise_understanding_historical_authorization_quarantine.py \
-            tests/test_chinese_business_comprehension.py
-          pytest -q tests/test_behavior_ir_obligation_experiment.py -k 'permission or authorization or actor'
+          cat > /tmp/verify_identity_table_binding.py <<'PY'
+          import json
+          from pathlib import Path
+          from ai_test_asset_center.enterprise_knowledge_center.composition import build_enterprise_business_knowledge_asset
 
-      - name: Commit root-cause changes and remove one-time delivery artifacts
+          def summary(asset):
+              model = asset.get('enterprise_understanding_model') or {}
+              resolution = asset.get('enterprise_identity_resolution') or {}
+              gate = asset.get('enterprise_identity_gate') or model.get('identity_gate') or model.get('gate') or {}
+              clusters = resolution.get('clusters') or []
+              bindings = model.get('identity_bindings') or []
+              unknowns = model.get('identity_unknowns') or []
+              unresolved = {
+                  item.get('artifact_ref')
+                  for row in unknowns
+                  for item in (row.get('details') or {}).get('unresolved_artifacts') or []
+                  if isinstance(item, dict)
+              }
+              exact = [
+                  row for row in bindings
+                  if 'SOURCE_DECLARED_TECHNICAL_SEMANTIC_LABEL'
+                  in (row.get('identity_authorities') or [])
+              ]
+              return {
+                  'gate': gate.get('status'),
+                  'cluster_count': len(clusters),
+                  'binding_count': len(bindings),
+                  'unknown_record_count': len(unknowns),
+                  'exact_table_binding_refs': sorted(row.get('artifact_ref') for row in exact),
+                  'unresolved_refs': sorted(value for value in unresolved if value),
+                  'entity_ids': sorted(row.get('entity_id') for row in clusters if row.get('entity_id')),
+              }
+
+          runs = []
+          for _ in range(2):
+              asset = build_enterprise_business_knowledge_asset('benchmark_mall', Path.cwd(), {'probe_limit': 0})
+              runs.append(summary(asset))
+          required = {'table:products', 'table:cart_items', 'table:coupons'}
+          assert runs[0]['gate'] != 'BLOCKED_ENTERPRISE_IDENTITY_CONFLICT', runs[0]
+          assert required <= set(runs[0]['exact_table_binding_refs']), runs[0]
+          assert not required & set(runs[0]['unresolved_refs']), runs[0]
+          assert runs[0]['entity_ids'] == runs[1]['entity_ids'], runs
+          print('IDENTITY_TABLE_BINDING_RESULT=' + json.dumps({
+              'run1': {key: value for key, value in runs[0].items() if key != 'entity_ids'},
+              'run2': {key: value for key, value in runs[1].items() if key != 'entity_ids'},
+              'stable_entity_ids': True,
+          }, ensure_ascii=False, sort_keys=True))
+          PY
+          python /tmp/verify_identity_table_binding.py
+      - name: Commit verified root fix and restore registered delivery workflows
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "QualiBug Automation"
-          git config user.email "automation@qualibug.local"
-          git add -A
-          git rm .github/workflows/one-time-role-permission-root-fix.yml
-          git rm -r .github/delivery/role-permission
-          git rm .github/patches/role_permission_root_fix.patch.gz.b64
-          git commit -m 'fix(auth): unify role permission authority end to end' \
-            -m 'Derive source-backed role permissions once, preserve them through fact identity and Behavior IR, compile only exact actor-action-resource coordinates, and bind collection authorization evidence to content-addressed observer resource proofs without weakening explicit materialization requirements. Add real executor positive and negative end-to-end regressions.'
-
+          git config user.name 'QualiBug Automation'
+          git config user.email 'automation@qualibug.local'
+          git cat-file blob baf88fb571af9498e6ec139311b29aaa5dafdaf3 > .github/workflows/one-time-role-permission-root-fix.yml
+          git cat-file blob 82024328d6fdc8c216eed2bd7e99fe78f2fb9f1e > .github/workflows/dispatch-role-permission-root-fix.yml
+          git add \
+            .github/workflows/one-time-role-permission-root-fix.yml \
+            .github/workflows/dispatch-role-permission-root-fix.yml \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_technical_projection.py \
+            tests/test_enterprise_identity_governance.py
+          git rm \
+            .github/workflows/one-time-identity-table-diagnostic.yml \
+            .github/patches/identity_exact_table_semantic_binding.patch.gz.b64
+          git commit -m 'fix(identity): bind exact source-declared table semantics' \
+            -m 'Project complete structured database labels through the existing Identity Authority only when they resolve to one current business entity. Reconcile aggregate technical unknowns while preserving fail-closed behavior for prefix, suffix, plural, token, path, and source-less inference.'
       - name: Rebase and push main without force
         shell: bash
         run: |
