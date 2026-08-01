@@ -50,6 +50,33 @@ def _run_inline(target, name):
     return None
 
 
+def _pending_payload(job_id: str, requested_unix: float) -> dict:
+    return {
+        "schema": jobs.FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA,
+        "job_id": job_id,
+        "project_id": PROJECT,
+        "connector_instance_id": CONNECTOR,
+        "profile": "pilot",
+        "status": "PENDING",
+        "requested_at_utc": "2026-08-01T10:00:00Z",
+        "requested_unix": requested_unix,
+        "started_at_utc": "",
+        "completed_at_utc": "",
+        "updated_at_utc": "2026-08-01T10:00:00Z",
+        "updated_unix": requested_unix,
+        "report_id": "",
+        "verdict": "",
+        "acceptance_ready": False,
+        "error_type": "",
+        "owner_pid": jobs.os.getpid(),
+        "owner_process_marker": jobs._process_marker(jobs.os.getpid()),
+        "process_token": jobs._PROCESS_TOKEN,
+        "actor": {"name": "operator", "role": "knowledge_admin"},
+        "options": {},
+        "governance": {},
+    }
+
+
 def test_inline_job_completes_and_public_status_is_bounded(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -137,6 +164,47 @@ def test_duplicate_job_is_blocked_while_worker_is_running(
         root=tmp_path,
     )
     assert completed["status"] == "COMPLETE"
+
+
+def test_recent_same_process_pending_job_survives_startup_race(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(jobs, "list_connector_instances", _registered)
+    job_id = "ftaj_bbbbbbbbbbbbbbbbbbbbbbbb"
+    payload = _pending_payload(job_id, jobs.time.time())
+    jobs._persist(tmp_path, PROJECT, CONNECTOR, payload)
+
+    observed = get_current_feishu_tenant_acceptance_job(
+        PROJECT,
+        CONNECTOR,
+        root=tmp_path,
+    )
+
+    assert observed["status"] == "PENDING"
+    assert observed["terminal"] is False
+    assert observed["error_type"] == ""
+
+
+def test_expired_same_process_pending_job_is_interrupted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(jobs, "list_connector_instances", _registered)
+    job_id = "ftaj_cccccccccccccccccccccccc"
+    requested = jobs.time.time() - jobs._STARTUP_GRACE_SECONDS - 1
+    payload = _pending_payload(job_id, requested)
+    jobs._persist(tmp_path, PROJECT, CONNECTOR, payload)
+
+    observed = get_current_feishu_tenant_acceptance_job(
+        PROJECT,
+        CONNECTOR,
+        root=tmp_path,
+    )
+
+    assert observed["status"] == "INTERRUPTED"
+    assert observed["terminal"] is True
+    assert observed["error_type"] == "ACCEPTANCE_OWNER_DISAPPEARED"
 
 
 def test_current_job_recovers_disappeared_owner(
