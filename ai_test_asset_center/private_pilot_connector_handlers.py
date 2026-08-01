@@ -2,8 +2,8 @@
 
 The HTTP layer owns authentication, public projection, and request shaping only. Trusted sync,
 acceptance jobs, fenced configuration, checkpoint validation, automatic refresh, and retry policy
-live in connector application services. Raw credentials, source content, cursors, and report paths
-are never returned through this surface.
+live in connector application services. Raw credentials, source content, cursors, report paths, and
+remote-resource identities are never returned through this surface.
 """
 from __future__ import annotations
 
@@ -138,6 +138,111 @@ def _public_connector_instance(value: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _remote_lifecycle_projection(run: dict[str, Any]) -> dict[str, Any]:
+    raw = run.get("remote_lifecycle")
+    lifecycle = dict(raw) if isinstance(raw, dict) else {}
+    status = _text(
+        lifecycle.get("status") or run.get("remote_lifecycle_status"), 80
+    ) or "NOT_AVAILABLE"
+    receipt_value = lifecycle.get("sync_receipt_persisted")
+    receipt_persisted = (
+        receipt_value if isinstance(receipt_value, bool) else None
+    )
+    return {
+        "status": status,
+        "authoritative_snapshot_complete": (
+            lifecycle.get("authoritative_snapshot_complete") is True
+        ),
+        "present_count": int(lifecycle.get("present_count") or 0),
+        "absent_count": int(
+            lifecycle.get("absent_count")
+            or run.get("remote_absent_count")
+            or 0
+        ),
+        "unconfirmed_missing_count": int(
+            lifecycle.get("unconfirmed_missing_count")
+            or run.get("remote_unconfirmed_missing_count")
+            or 0
+        ),
+        "retirement_eligible_count": int(
+            lifecycle.get("retirement_eligible_count")
+            or run.get("remote_retirement_eligible_count")
+            or 0
+        ),
+        "retired_count": int(
+            lifecycle.get("retired_count") or run.get("retired_count") or 0
+        ),
+        "renamed_resource_count": int(
+            lifecycle.get("renamed_resource_count")
+            or run.get("renamed_resource_count")
+            or 0
+        ),
+        "moved_resource_count": int(
+            lifecycle.get("moved_resource_count")
+            or run.get("moved_resource_count")
+            or 0
+        ),
+        "reappeared_resource_count": int(
+            lifecycle.get("reappeared_resource_count")
+            or run.get("reappeared_resource_count")
+            or 0
+        ),
+        "retire_after_complete_snapshots": int(
+            lifecycle.get("retire_after_complete_snapshots") or 0
+        ),
+        "requested_deletion_policy": _text(
+            lifecycle.get("requested_deletion_policy")
+            or run.get("requested_deletion_policy"),
+            40,
+        ),
+        "effective_deletion_policy": _text(
+            lifecycle.get("effective_deletion_policy")
+            or run.get("effective_deletion_policy"),
+            80,
+        ),
+        "absence_interpretation": _text(
+            lifecycle.get("absence_interpretation"), 120
+        ),
+        "sync_receipt_persisted": receipt_persisted,
+        "evidence_persistence_status": _text(
+            lifecycle.get("evidence_persistence_status"), 40
+        ),
+        "remote_deletion_inferred": False,
+        "permission_loss_inferred": False,
+        "historical_source_bytes_retained": True,
+        "customer_material_mutation_executed": False,
+        "remote_resource_identities_returned": False,
+        "source_refs_returned": False,
+    }
+
+
+def _empty_lifecycle(status: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "authoritative_snapshot_complete": False,
+        "present_count": 0,
+        "absent_count": 0,
+        "unconfirmed_missing_count": 0,
+        "retirement_eligible_count": 0,
+        "retired_count": 0,
+        "renamed_resource_count": 0,
+        "moved_resource_count": 0,
+        "reappeared_resource_count": 0,
+        "retire_after_complete_snapshots": 0,
+        "requested_deletion_policy": "",
+        "effective_deletion_policy": "",
+        "absence_interpretation": "",
+        "sync_receipt_persisted": None,
+        "evidence_persistence_status": "",
+        "remote_deletion_inferred": False,
+        "permission_loss_inferred": False,
+        "historical_source_bytes_retained": True,
+        "customer_material_mutation_executed": False,
+        "remote_resource_identities_returned": False,
+        "source_refs_returned": False,
+    }
+
+
 def _coverage_projection(
     project: str,
     connector: str,
@@ -154,6 +259,7 @@ def _coverage_projection(
             "unsupported_count": 0,
             "coverage_ratio": 0.0,
             "unsupported_resources": [],
+            "remote_lifecycle": _empty_lifecycle("NOT_AVAILABLE"),
             "source_content_returned": False,
             "customer_material_mutation_executed": False,
         }
@@ -173,6 +279,7 @@ def _coverage_projection(
             "unsupported_count": 0,
             "coverage_ratio": 0.0,
             "unsupported_resources": [],
+            "remote_lifecycle": _empty_lifecycle("UNKNOWN"),
             "source_content_returned": False,
             "customer_material_mutation_executed": False,
         }
@@ -213,6 +320,7 @@ def _coverage_projection(
         > len(unsupported_resources),
         "last_sync_epoch_id": epoch,
         "last_completed_at_utc": _text(run.get("completed_at_utc"), 80),
+        "remote_lifecycle": _remote_lifecycle_projection(run),
         "source_content_returned": False,
         "customer_material_mutation_executed": False,
     }
@@ -284,6 +392,33 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
                 int(row.get("coverage", {}).get("unsupported_count") or 0)
                 for row in rows
             ),
+            "remote_absent_resource_count": sum(
+                int(
+                    row.get("coverage", {})
+                    .get("remote_lifecycle", {})
+                    .get("absent_count")
+                    or 0
+                )
+                for row in rows
+            ),
+            "remote_unconfirmed_missing_resource_count": sum(
+                int(
+                    row.get("coverage", {})
+                    .get("remote_lifecycle", {})
+                    .get("unconfirmed_missing_count")
+                    or 0
+                )
+                for row in rows
+            ),
+            "remote_retired_resource_count": sum(
+                int(
+                    row.get("coverage", {})
+                    .get("remote_lifecycle", {})
+                    .get("retired_count")
+                    or 0
+                )
+                for row in rows
+            ),
             "acceptance_ready_connector_count": sum(
                 int(row.get("acceptance", {}).get("acceptance_ready") is True)
                 for row in rows
@@ -302,6 +437,11 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             "automatic_refresh_uses_existing_sync_authority": True,
             "coverage_projection_uses_persisted_sync_receipt": True,
             "coverage_projection_returns_source_content": False,
+            "remote_lifecycle_projection_uses_persisted_sync_receipt": True,
+            "remote_lifecycle_projection_returns_remote_identities": False,
+            "remote_lifecycle_projection_returns_source_refs": False,
+            "remote_absence_is_not_remote_deletion_proof": True,
+            "permission_loss_is_not_inferred_from_absence": True,
             "acceptance_projection_uses_allowlisted_report_fields": True,
             "acceptance_projection_returns_source_content": False,
             "acceptance_projection_returns_raw_cursor": False,
@@ -728,5 +868,6 @@ __all__ = [
     "_connector_route",
     "_coverage_projection",
     "_public_connector_instance",
+    "_remote_lifecycle_projection",
     "_sanitize_sync_response",
 ]
