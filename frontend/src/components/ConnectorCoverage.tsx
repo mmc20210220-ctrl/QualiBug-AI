@@ -63,7 +63,7 @@ export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
         <>
           <p>
             已发现 {coverage.discovered_count} 份资料，其中 {coverage.covered_count} 份已进入企业知识库，
-            {coverage.unsupported_count} 份资料类型暂不支持。其余资料仍可正常用于分析和测试。
+            {coverage.unsupported_count} 份资料类型暂不支持。其余资料仍可正常用于分析和测试，系统不会修改飞书原资料。
           </p>
           <details className="connector-coverage-details">
             <summary>查看暂不支持的资料（{coverage.unsupported_count}）</summary>
@@ -87,7 +87,7 @@ export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
           </details>
         </>
       ) : (
-        <p>本次发现的在线资料均已读取，没有已知资料类型缺口。</p>
+        <p>本次发现的在线资料均已读取，没有已知资料类型缺口；系统不会修改飞书原资料。</p>
       )}
     </section>
   );
