@@ -22,6 +22,15 @@ def classify_identity_fact(fact: dict[str, Any]) -> str:
     if explicit:
         return explicit
     statement = text(fact.get("raw_statement"))
+    if not statement:
+        statement = next(
+            (
+                text(span.get("quote"))
+                for span in as_list(fact.get("source_spans"))
+                if isinstance(span, dict) and text(span.get("quote"))
+            ),
+            "",
+        )
     alias = text(fact.get("alias"))
     if _FORMULA.search(alias) or _FORMULA.search(statement):
         return "DEFINITION"

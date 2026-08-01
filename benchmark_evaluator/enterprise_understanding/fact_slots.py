@@ -76,17 +76,29 @@ def _canonical(value: Any) -> Any:
     return _norm(value)
 
 
-def _contains_expected(expected: Any, actual: Any) -> bool:
+def _contains_expected(
+    expected: Any,
+    actual: Any,
+    *,
+    require_exact_list_cardinality: bool = True,
+) -> bool:
     """Require every annotated leaf while allowing unannotated evidence metadata."""
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             return False
         return all(
-            key in actual and _contains_expected(value, actual[key])
+            key in actual
+            and _contains_expected(
+                value,
+                actual[key],
+                require_exact_list_cardinality=require_exact_list_cardinality,
+            )
             for key, value in expected.items()
         )
     if isinstance(expected, list):
         if not isinstance(actual, list):
+            return False
+        if require_exact_list_cardinality and len(expected) != len(actual):
             return False
         used: set[int] = set()
         for expected_item in expected:
@@ -95,7 +107,11 @@ def _contains_expected(expected: Any, actual: Any) -> bool:
                     index
                     for index, actual_item in enumerate(actual)
                     if index not in used
-                    and _contains_expected(expected_item, actual_item)
+                    and _contains_expected(
+                        expected_item,
+                        actual_item,
+                        require_exact_list_cardinality=require_exact_list_cardinality,
+                    )
                 ),
                 None,
             )
@@ -120,15 +136,26 @@ def _fact_operation(fact: dict[str, Any]) -> set[str]:
 
 
 def _fact_objects(fact: dict[str, Any]) -> set[str]:
+    """Return the governing business-object coordinate for one fact.
+
+    Atomic claims may legitimately reference effect targets, postcondition objects,
+    or evidence subjects that are not the governed object of the parent rule. The
+    canonical top-level subject/object slots therefore remain authoritative. Claims
+    are only a compatibility fallback when the fact has no top-level object coordinate.
+    """
     subject = _dict(fact.get("subject"))
     object_part = _dict(fact.get("object"))
     values = [
         *_values(subject.get("entity_refs")),
         *_values(object_part.get("entity_refs")),
     ]
+    top_level = {_norm(value) for value in values if _norm(value)}
+    if top_level:
+        return top_level
+    fallback: list[Any] = []
     for claim in _rows(fact.get("claims")):
-        values.extend(_values(claim.get("object_refs")))
-    return {_norm(value) for value in values if _norm(value)}
+        fallback.extend(_values(claim.get("object_refs")))
+    return {_norm(value) for value in fallback if _norm(value)}
 
 
 def _fact_actors(fact: dict[str, Any]) -> set[str]:
@@ -217,7 +244,12 @@ def _candidate_slot(fact: dict[str, Any], field: str) -> Any:
     return fact.get(field)
 
 
-def _slot_alignment(expected: Any, actual: Any) -> str:
+def _slot_alignment(
+    expected: Any,
+    actual: Any,
+    *,
+    require_exact_list_cardinality: bool = True,
+) -> str:
     expected_canonical = _canonical(expected)
     actual_canonical = _canonical(actual)
     if expected_canonical == actual_canonical:
@@ -226,7 +258,11 @@ def _slot_alignment(expected: Any, actual: Any) -> str:
         return "NOT_ANNOTATED"
     if actual_canonical in (None, "", [], {}):
         return "MISSING"
-    if _contains_expected(expected_canonical, actual_canonical):
+    if _contains_expected(
+        expected_canonical,
+        actual_canonical,
+        require_exact_list_cardinality=require_exact_list_cardinality,
+    ):
         return "EXACT"
     return "WRONG"
 
@@ -434,7 +470,11 @@ def evaluate_business_fact_slots(
             if expected is None:
                 continue
             actual = _candidate_slot(candidate, field)
-            status = _slot_alignment(expected, actual)
+            status = _slot_alignment(
+                expected,
+                actual,
+                require_exact_list_cardinality=(field != "source_locators"),
+            )
             slot_statuses[status] += 1
             measured_statuses.append(status)
             slot_rows[field] = {
@@ -504,9 +544,12 @@ def evaluate_business_fact_slots(
             "fact_type_exact": True,
             "ground_truth_objects_must_be_subset_of_candidate_objects": True,
             "operation_alias_intersection_allowed": True,
-            "annotated_nested_coordinates_must_be_exact_subsets": True,
-            "unannotated_product_evidence_fields_are_ignored": True,
+            "annotated_semantic_coordinate_lists_require_exact_cardinality": True,
+            "source_locator_requires_all_annotated_locators_not_exclusive_span_set": True,
+            "unannotated_nested_mapping_metadata_is_ignored": True,
             "single_shared_object_is_sufficient": False,
+            "top_level_fact_object_coordinate_is_authoritative": True,
+            "claim_objects_are_fallback_only_when_top_level_coordinate_missing": True,
         },
         "evidence_address_measurement_contract": {
             "annotated_fact_denominator_includes_missing_facts": True,

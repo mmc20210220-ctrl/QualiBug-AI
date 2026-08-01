@@ -701,3 +701,58 @@ def test_underdetermined_nested_branch_stays_unresolved() -> None:
     assert all(fact["status"] == "PENDING" for fact in pending)
     assert all(fact["condition_frame"]["kind"] == "IF_THEN_ELSE" for fact in pending)
     assert all(fact["condition_combinator"] == "UNRESOLVED" for fact in pending)
+
+
+def test_action_nouns_qualifiers_and_prohibitions_do_not_emit_fake_effects() -> None:
+    asset = {
+        **_asset(),
+        "business_objects": [
+            {"object": "订单"},
+            {"object": "退款金额"},
+            {"object": "实付金额"},
+            {"object": "优惠金额"},
+        ],
+        "roles": [
+            {"role": "仓库管理员"},
+            {"role": "订单创建人"},
+        ],
+    }
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "no-fake-effects",
+            "filename": "显式规则.md",
+            "text": (
+                "仓库管理员不得删除已出库订单。"
+                "只有订单创建人可以撤回本人创建且尚未审批的订单。"
+                "退款金额 = 实付金额 - 优惠金额。"
+            ),
+        },
+        asset=asset,
+    )
+
+    delete = next(
+        fact
+        for fact in facts
+        if fact.get("action", {}).get("canonical") == "删除"
+    )
+    assert delete["modality"] == "MUST_NOT"
+    assert delete["data_effects"] == []
+
+    withdraw = next(
+        fact
+        for fact in facts
+        if fact.get("action", {}).get("canonical") == "撤回"
+    )
+    assert withdraw["data_effects"] == []
+    assert not any(
+        effect.get("action") == "创建"
+        for effect in withdraw.get("data_effects", [])
+    )
+
+    formula = next(
+        fact for fact in facts if fact.get("formula_constraints")
+    )
+    assert not formula.get("action")
+    assert formula["data_effects"] == []
+    assert formula["compensation"] == []
+    assert formula["formula_constraints"][0]["lhs"] == "退款金额"

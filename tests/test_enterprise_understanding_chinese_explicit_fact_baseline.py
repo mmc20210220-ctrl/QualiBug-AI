@@ -108,6 +108,32 @@ def _parent_fact(asset: dict[str, Any], statement_prefix: str) -> dict[str, Any]
     return dict(matches[0])
 
 
+def _operation_fact(
+    asset: dict[str, Any],
+    *,
+    fact_type: str,
+    operation: str,
+) -> dict[str, Any]:
+    matches = [
+        row
+        for row in _facts(asset)
+        if _text(row.get("status") or "ACCEPTED") == "ACCEPTED"
+        and _text(row.get("fact_type")) == fact_type
+        and _text(_dict(row.get("action")).get("canonical")) == operation
+    ]
+    assert len(matches) == 1, [
+        {
+            "fact_id": row.get("fact_id"),
+            "fact_type": row.get("fact_type"),
+            "status": row.get("status"),
+            "action": row.get("action"),
+            "raw_statement": row.get("raw_statement"),
+        }
+        for row in matches
+    ]
+    return dict(matches[0])
+
+
 def _typed_fact(
     asset: dict[str, Any],
     *,
@@ -324,7 +350,9 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     assert _dict(belongs_to.get("subject")).get("entity_refs") == ["订单"]
     assert _dict(belongs_to.get("object")).get("entity_refs") == ["组织"]
 
-    withdrawal = _parent_fact(asset, "只有订单创建人可以撤回")
+    withdrawal = _operation_fact(
+        asset, fact_type="PERMISSION_RULE", operation="撤回"
+    )
     withdrawal_subject = _dict(withdrawal.get("subject"))
     assert withdrawal["fact_type"] == "PERMISSION_RULE"
     assert withdrawal["modality"] == "MAY"
@@ -339,7 +367,9 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
         "尚未审批",
     ]
 
-    then_branch = _parent_fact(asset, "如果库存充足则系统允许订单出库")
+    then_branch = _operation_fact(
+        asset, fact_type="PERMISSION_RULE", operation="发货"
+    )
     then_subject = _dict(then_branch.get("subject"))
     then_frame = _dict(then_branch.get("condition_frame"))
     assert then_branch["fact_type"] == "PERMISSION_RULE"
@@ -353,7 +383,9 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     assert then_frame["branch"] == "THEN"
     assert then_frame["branch_index"] == 0
 
-    else_branch = _parent_fact(asset, "否则系统必须拒绝出库")
+    else_branch = _operation_fact(
+        asset, fact_type="BUSINESS_RULE", operation="驳回"
+    )
     else_subject = _dict(else_branch.get("subject"))
     else_frame = _dict(else_branch.get("condition_frame"))
     assert else_branch["fact_type"] == "BUSINESS_RULE"

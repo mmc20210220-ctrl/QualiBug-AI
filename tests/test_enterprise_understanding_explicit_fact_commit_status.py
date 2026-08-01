@@ -37,9 +37,10 @@ def test_explicit_fact_quality_exit_code_remains_ci_authority() -> None:
     assert "id: explicit_fact_baseline" in text
     assert "continue-on-error: true" in text
     assert 'echo "exit_code=$code" >> "$GITHUB_OUTPUT"' in text
-    assert "Enforce explicit fact baseline result" in text
-    assert 'code="${BASELINE_EXIT_CODE:-2}"' in text
-    assert 'exit "$code"' in text
+    assert "Enforce baseline results" in text
+    assert 'explicit_code="${EXPLICIT_BASELINE_EXIT_CODE:-2}"' in text
+    assert 'if [ "$explicit_code" -ne 0 ]; then' in text
+    assert 'exit "$explicit_code"' in text
 
 
 def test_failed_measurement_still_publishes_summary_and_artifact() -> None:

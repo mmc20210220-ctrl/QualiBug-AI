@@ -210,3 +210,76 @@ def test_semantic_lexicon_contract_is_fail_closed(tmp_path) -> None:
     assert receipt["status"] == "BLOCKED_COMPREHENSION_POLICY_INVALID"
     assert receipt["entry_allowed"] is False
     assert receipt["errors"]
+
+
+def test_specific_cardinality_grammar_owns_relation_span_and_persists_value() -> None:
+    blocks = [
+        _block(
+            "block:exactly-one",
+            "每张发票必须关联且仅关联一个结算单。",
+            1,
+        ),
+        _block(
+            "block:one-to-many",
+            "每个采购订单可以包含多个订单明细。",
+            2,
+        ),
+    ]
+    source = {
+        "source_id": "source:rules",
+        "filename": "rules.docx",
+        "document_structure": {
+            "schema": "qualibug.document-structure-ir.v1",
+            "blocks": blocks,
+        },
+    }
+    asset = {
+        "business_fact_ledger": {
+            "schema": "qualibug.business-fact-ledger.v1",
+            "items": [],
+        },
+        "enterprise_comprehension_gate": {"status": "PASS", "entry_allowed": True},
+        "coverage_gaps": [],
+        "summary": {},
+        "governance": {},
+    }
+
+    result = compile_structure_first_business_facts(asset, [source])
+    facts = result["business_fact_ledger"]["items"]
+    cardinalities = [
+        fact for fact in facts if fact.get("fact_type") == "CARDINALITY_CONSTRAINT"
+    ]
+
+    assert len(cardinalities) == 2
+    by_predicate = {fact["predicate"]: fact for fact in cardinalities}
+
+    exactly_one = by_predicate["EXACTLY_ONE"]
+    assert exactly_one["subject"]["entity_refs"] == ["发票"]
+    assert exactly_one["object"]["entity_refs"] == ["结算单"]
+    assert exactly_one["value"] == {
+        "cardinality": "EXACTLY_ONE",
+        "minimum": 1,
+        "maximum": "1",
+    }
+    assert exactly_one["quantity_constraints"] == [exactly_one["value"]]
+
+    one_to_many = by_predicate["ONE_TO_MANY"]
+    assert one_to_many["subject"]["entity_refs"] == ["采购订单"]
+    assert one_to_many["object"]["entity_refs"] == ["订单明细"]
+    assert one_to_many["value"] == {
+        "cardinality": "ONE_TO_MANY",
+        "minimum": 0,
+        "maximum": "MANY",
+    }
+    assert one_to_many["quantity_constraints"] == [one_to_many["value"]]
+
+    # The more specific cardinality grammar is the only authority for these spans.
+    assert not [
+        fact
+        for fact in facts
+        if fact.get("fact_type") == "OBJECT_RELATION"
+        and {
+            *fact.get("subject", {}).get("entity_refs", []),
+            *fact.get("object", {}).get("entity_refs", []),
+        }.intersection({"发票", "结算单", "采购订单", "订单明细"})
+    ]

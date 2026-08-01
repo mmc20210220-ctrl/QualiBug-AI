@@ -64,7 +64,7 @@ def validate_business_fact_slot_document(document: dict[str, Any]) -> dict[str, 
             "explicit_fact_scope_complete=true requires explicit_fact_scope_locators"
         )
     missing_from_scope = sorted(annotated_locators.difference(scope_locators))
-    if missing_from_scope:
+    if scope_locators and missing_from_scope:
         raise FactSlotGroundTruthValidationError(
             "annotated source_locators must belong to explicit_fact_scope_locators: "
             + ",".join(missing_from_scope)

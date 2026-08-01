@@ -61,15 +61,26 @@ _TEMPORAL_RE = re.compile(
     r"(?P<value>(?:在)?[^，,；;。]{0,48}?"
     r"(?:之前|之后|前|后|时|期间|以内|之内|超过\d+[^，,；;。]*|至少\d+[^，,；;。]*))"
 )
+_EXPLICIT_CONDITION_HEAD_RE = re.compile(
+    r"(?:如果|若|一旦|当(?!前|期|日|月|年|次|笔|个|下|中))"
+)
+_FOLLOW_ON_CONDITION_RE = re.compile(
+    r"(?:并且|同时满足|以及|(?<![并])且(?![不]))(?P<value>[^，,；;。则]{1,48})"
+)
 _CONDITION_PATTERNS = (
-    re.compile(r"(?:当|如果|若|一旦)(?P<value>.+?)(?:时|则|，|,|；|;|$)"),
+    # ``当`` is a condition introducer, but lexical compounds such as ``当前组织``
+    # are business identities rather than condition heads.
+    re.compile(
+        r"(?:如果|若|一旦|当(?!前|期|日|月|年|次|笔|个|下|中))"
+        r"(?P<value>.+?)(?:时|则|，|,|；|;|$)"
+    ),
     re.compile(r"只有(?P<value>.+?)才"),
     re.compile(r"仅当(?P<value>.+?)才"),
     re.compile(r"除非(?P<value>.+?)(?:，|,|；|;|$)"),
-    # Explicit AND-joined follow-on clauses: 如果A，并且B，则…
-    re.compile(
-        r"(?:并且|同时满足|以及|(?<![并])且(?![不]))(?P<value>[^，,；;。则]{1,48})"
-    ),
+    # Follow-on AND clauses are conditions only inside an already explicit
+    # condition frame. A qualifier such as ``本人创建且尚未审批的订单`` belongs
+    # to the governed object and is normalized at the semantic boundary instead.
+    _FOLLOW_ON_CONDITION_RE,
     # Temporal prefix before an effect/action — do not require a delimiter after 后/之前.
     re.compile(
         r"(?P<value>[^，,；;。]{1,60}?(?:之前|之后|以前|以后|前|后))"
@@ -197,8 +208,14 @@ _DATA_EFFECT_RE = re.compile(
     r"(?:自动)?(?P<action>生成|创建|新建|写入|更新|删除|释放|扣减|增加|发送|通知)"
     r"(?P<object>[\u4e00-\u9fffA-Za-z0-9_-]{1,24})"
 )
+_ACTION_NOUN_SUFFIX_RE = re.compile(
+    r"^(?:人|人员|员|者|方|角色|金额|数量|比例|率|时间|日期|状态|编号|单号|结果|记录|信息)"
+)
+_EFFECT_CLAUSE_BOUNDARY_RE = re.compile(
+    r"(?:[，,；;、](?:并|并且|且|同时|以及|然后|随后)?|(?:并|并且|同时|然后|随后))\s*$"
+)
 _COMPENSATION_RE = re.compile(
-    r"(?P<raw>(?:补偿|回滚|冲正|冲销|红冲|退款|退货|反向冲销)"
+    r"(?P<raw>(?:补偿|回滚|冲正|冲销|红冲|退款(?!金额|数量|比例|率|时间|日期|状态|编号|单号)|退货|反向冲销)"
     r"[^，,；;。]{0,32})"
 )
 
@@ -481,20 +498,72 @@ def _extract_aliases(text: str, source_id: str, locator: str) -> list[dict[str, 
     return aliases
 
 
-def _data_effects(text: str) -> list[dict[str, Any]]:
+def _data_effects(
+    text: str,
+    *,
+    primary_action: dict[str, Any] | None = None,
+    modality: str = "ASSERTS",
+) -> list[dict[str, Any]]:
+    """Extract only independent outcome clauses, never the governed operation itself.
+
+    The compatibility parser historically treated every action-looking token as a data
+    effect. That turned prohibited operations (``不得删除``), role names (``创建人``),
+    object qualifiers (``本人创建且尚未审批``), and formula nouns (``退款金额``) into
+    executable child facts. An effect must now be source-backed by a distinct clause
+    boundary or the explicit trigger-after-effect grammar already owned by this parser.
+    """
     effects: list[dict[str, Any]] = []
     seen: set[str] = set()
+    action = dict(primary_action or {})
+    primary_raw = _text(action.get("raw"))
+    primary_canonical = _text(action.get("canonical"))
+    primary_start = text.find(primary_raw) if primary_raw else -1
+    primary_end = primary_start + len(primary_raw) if primary_start >= 0 else -1
+    trigger_effect = _TRIGGER_THEN_EFFECT_RE.search(text)
+    trigger_effect_start = (
+        trigger_effect.start("effect") if trigger_effect is not None else -1
+    )
+
     for match in _DATA_EFFECT_RE.finditer(text):
         raw = match.group(0)
+        action_raw = _text(match.group("action"))
+        suffix = text[match.end("action") :]
+        if _ACTION_NOUN_SUFFIX_RE.match(suffix):
+            continue
+
+        same_as_primary = bool(
+            primary_raw
+            and (
+                action_raw == primary_raw
+                or (primary_canonical and action_raw == primary_canonical)
+            )
+        )
+        after_primary = primary_end >= 0 and match.start() >= primary_end
+        between = text[primary_end : match.start()] if after_primary else ""
+        independent_clause = bool(
+            (trigger_effect_start >= 0 and match.start() >= trigger_effect_start)
+            or _EFFECT_CLAUSE_BOUNDARY_RE.search(between)
+        )
+        if same_as_primary and not independent_clause:
+            continue
+        if after_primary and not independent_clause:
+            continue
+        if modality in {"MAY", "MUST", "MUST_NOT", "ONLY_IF"} and not independent_clause:
+            continue
+
+        entity = _clean_term(match.group("object"))
+        if not entity or _ACTION_NOUN_SUFFIX_RE.match(entity):
+            continue
         if raw in seen:
             continue
         seen.add(raw)
         effects.append(
             {
                 "statement": raw,
-                "action": _text(match.group("action")),
-                "entity": _clean_term(match.group("object")),
+                "action": action_raw,
+                "entity": entity,
                 "source_backed": True,
+                "independent_effect_clause": True,
             }
         )
     return effects
@@ -552,6 +621,8 @@ def _action(text: str) -> dict[str, Any]:
     matches: list[tuple[int, int, str, str]] = []
     for canonical, pattern in _ACTION_REGEXES:
         for match in pattern.finditer(text):
+            if _ACTION_NOUN_SUFFIX_RE.match(text[match.end() :]):
+                continue
             matches.append((match.start(), match.end(), canonical, match.group(0)))
     if not matches:
         return {}
@@ -569,6 +640,10 @@ def _conditions(text: str) -> list[str]:
     values: list[str] = []
     for pattern in _CONDITION_PATTERNS:
         for match in pattern.finditer(text):
+            if pattern is _FOLLOW_ON_CONDITION_RE and not _EXPLICIT_CONDITION_HEAD_RE.search(
+                text[: match.start()]
+            ):
+                continue
             value = _text(match.group("value")).strip(" ，,")
             value = re.split(r"[则]", value, maxsplit=1)[0].strip(" ，,")
             if value and value not in values:
@@ -1215,7 +1290,11 @@ def _fact_from_unit(
     time_window_constraints = _time_window_constraints(raw)
     formula_constraints = _formula_constraints(raw)
     delegation = _authorization_delegation(raw, known_roles)
-    data_effects = _data_effects(raw)
+    data_effects = _data_effects(
+        raw,
+        primary_action=action,
+        modality=modality,
+    )
     compensation = _compensations(raw)
     postconditions = _postconditions(raw, data_effects=data_effects, compensations=compensation)
     scope = _scope(raw)
@@ -1243,7 +1322,11 @@ def _fact_from_unit(
         if effect_text and effect_text not in postconditions:
             postconditions = [effect_text, *postconditions]
         if not data_effects:
-            data_effects = _data_effects(effect_text)
+            data_effects = _data_effects(
+                raw,
+                primary_action=action,
+                modality=modality,
+            )
         if not compensation:
             compensation = _compensations(effect_text)
 

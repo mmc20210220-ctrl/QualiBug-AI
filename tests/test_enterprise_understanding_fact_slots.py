@@ -289,3 +289,29 @@ def test_fact_slot_measurement_stays_not_measured_without_slot_annotations() -> 
     result = evaluate_business_fact_slots(ground_truth, {"business_fact_ledger": {"items": []}})
     assert result["status"] == "NOT_MEASURED"
     assert result["metrics"] == {}
+
+
+def test_extra_semantic_condition_is_wrong_not_exact_subset() -> None:
+    fact = _fact()
+    fact["condition_frame"] = {
+        "kind": "ALL",
+        "combinator": "AND",
+        "conditions": [
+            "状态为待审批",
+            "所属部门一致",
+            "错误附加条件",
+        ],
+    }
+
+    result = evaluate_business_fact_slots(
+        _ground_truth(),
+        {"business_fact_ledger": {"items": [fact]}},
+    )
+
+    condition = result["alignments"][0]["slot_alignments"]["condition_frame"]
+    assert condition["status"] == "WRONG"
+    assert result["metrics"]["exact_fact_count"] == 0
+    assert result["metrics"]["wrong_slot_count"] == 1
+    assert result["candidate_selection_contract"][
+        "annotated_semantic_coordinate_lists_require_exact_cardinality"
+    ] is True

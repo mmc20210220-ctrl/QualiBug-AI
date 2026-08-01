@@ -47,7 +47,7 @@ def test_second_pass_classifies_identity_and_reapplies_conflicts(tmp_path) -> No
     )
 
     fact = result["business_fact_ledger"]["items"][0]
-    assert fact["identity_evidence_class"] == "SOURCE_DECLARED_ALIAS"
+    assert fact["identity_evidence_class"] == "EXPLICIT_ABBREVIATION"
     assert fact["formal_identity_union_allowed"] is True
     assert result["identity_evidence_policy_receipt"][
         "second_pass_after_structure_compilation"

@@ -105,8 +105,20 @@ _CARDINALITY_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
         "1",
         re.compile(
             r"(?:每|任一)(?:个|张|条|份)?"
-            r"(?P<subject>[\u4e00-\u9fffA-Za-z0-9_.-]{1,24})"
-            r"(?:只能|仅能|必须)(?:关联|对应|包含|拥有)?"
+            r"(?P<subject>[\u4e00-\u9fffA-Za-z0-9_.-]{1,24}?)"
+            r"(?:只能|仅能)(?:关联|对应|包含|拥有)"
+            r"(?:一个|1个|一条|1条|一份|1份)"
+            r"(?P<object>[\u4e00-\u9fffA-Za-z0-9_.-]{1,24})"
+        ),
+    ),
+    (
+        "EXACTLY_ONE",
+        "1",
+        re.compile(
+            r"(?:每|任一)(?:个|张|条|份)?"
+            r"(?P<subject>[\u4e00-\u9fffA-Za-z0-9_.-]{1,24}?)"
+            r"必须(?:关联|对应|包含|拥有)?(?:且仅|并且仅|且只能|并且只能)"
+            r"(?:关联|对应|包含|拥有)?"
             r"(?:一个|1个|一条|1条|一份|1份)"
             r"(?P<object>[\u4e00-\u9fffA-Za-z0-9_.-]{1,24})"
         ),
@@ -116,7 +128,7 @@ _CARDINALITY_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
         "MANY",
         re.compile(
             r"(?:每|一个|任一)(?:个|张|条|份)?"
-            r"(?P<subject>[\u4e00-\u9fffA-Za-z0-9_.-]{1,24})"
+            r"(?P<subject>[\u4e00-\u9fffA-Za-z0-9_.-]{1,24}?)"
             r"(?:可|可以|能够)?(?:包含|关联|对应|拥有)"
             r"(?:多个|多条|多份|若干)"
             r"(?P<object>[\u4e00-\u9fffA-Za-z0-9_.-]{1,24})"
@@ -449,7 +461,11 @@ def _atomize_existing_fact(fact: dict[str, Any]) -> dict[str, Any]:
     actor_refs = [_text(item) for item in _list(subject.get("actor_refs")) if _text(item)]
     entity_refs = [_text(item) for item in _list(subject.get("entity_refs")) if _text(item)]
     action = _dict(row.get("action"))
-    claims: list[dict[str, Any]] = []
+    claims: list[dict[str, Any]] = [
+        dict(claim)
+        for claim in _list(row.get("claims"))
+        if isinstance(claim, dict) and _text(claim.get("claim_id"))
+    ]
 
     predicate = _text(action.get("canonical") or action.get("raw"))
     if predicate:
@@ -653,6 +669,7 @@ def _new_fact_base(
         },
         "object": {"entity_refs": objects},
         "predicate": predicate,
+        "value": dict(value) if isinstance(value, dict) else value,
         "action": {},
         "conditions": [],
         "condition_combinator": "",
@@ -666,7 +683,11 @@ def _new_fact_base(
         "state_effects": [],
         "data_effects": [],
         "temporal_constraints": [],
-        "quantity_constraints": [],
+        "quantity_constraints": (
+            [dict(value)]
+            if fact_type == "CARDINALITY_CONSTRAINT" and isinstance(value, dict)
+            else []
+        ),
         "time_window_constraints": [],
         "formula_constraints": [],
         "authorization_delegation": {},
@@ -712,11 +733,25 @@ def _new_fact_base(
     return fact
 
 
+def _cardinality_match_ranges(text_value: str) -> list[tuple[int, int]]:
+    return [
+        match.span()
+        for _cardinality, _maximum, pattern in _CARDINALITY_PATTERNS
+        for match in pattern.finditer(text_value)
+    ]
+
+
 def _relation_facts(span: dict[str, Any]) -> list[dict[str, Any]]:
     text_value = _text(span.get("text"))
+    cardinality_ranges = _cardinality_match_ranges(text_value)
     rows: list[dict[str, Any]] = []
     for relation_type, pattern in _RELATION_PATTERNS:
         for match in pattern.finditer(text_value):
+            if any(
+                match.start() < end and match.end() > start
+                for start, end in cardinality_ranges
+            ):
+                continue
             subject = _clean_entity(match.group("subject"))
             objects = _split_objects(match.group("object"))
             if not subject or not objects:
