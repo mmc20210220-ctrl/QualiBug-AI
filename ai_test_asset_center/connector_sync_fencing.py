@@ -4,6 +4,7 @@ The token lives on the existing connector instance registry record. Issuance is 
 the existing project knowledge transaction. Normal synchronization cannot displace a progressing
 owner. Explicit configuration replacement may request a forced takeover: the previous writer is
 revoked first, then existing recovery safely aborts its RUNNING epoch before configuration writes.
+A still-current lease also performs bounded temporary-residue maintenance before it completes.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from .connector_sync_ownership import (
     fence_out_connector_sync_ownership,
     inspect_connector_sync_ownership,
 )
+from .connector_workspace_maintenance import maintain_connector_workspace
 from .connector_write_fence import (
     ConnectorWriteFenceRevoked,
     connector_write_fence,
@@ -300,6 +302,17 @@ def managed_connector_sync_fence(
         try:
             yield dict(lease)
         finally:
+            try:
+                maintain_connector_workspace(
+                    project,
+                    root=resolved_root,
+                    actor=actor,
+                    trigger_connector_instance_id=connector,
+                )
+            except Exception:
+                # Maintenance is bounded diagnostic cleanup. A revoked token, busy
+                # transaction, or disk error must never mask the business operation.
+                pass
             try:
                 _complete_connector_sync_fence(
                     project,
