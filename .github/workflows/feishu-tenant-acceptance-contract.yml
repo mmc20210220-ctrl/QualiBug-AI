@@ -14,6 +14,7 @@ on:
       - "tests/test_feishu_tenant_acceptance.py"
       - "tests/test_feishu_tenant_acceptance_reports.py"
       - "tests/test_feishu_tenant_acceptance_jobs.py"
+      - "tests/test_feishu_tenant_acceptance_job_integrity.py"
       - "tests/test_private_pilot_connector_acceptance_handlers.py"
       - "pyproject.toml"
       - ".github/workflows/feishu-tenant-acceptance-contract.yml"
@@ -29,6 +30,7 @@ on:
       - "tests/test_feishu_tenant_acceptance.py"
       - "tests/test_feishu_tenant_acceptance_reports.py"
       - "tests/test_feishu_tenant_acceptance_jobs.py"
+      - "tests/test_feishu_tenant_acceptance_job_integrity.py"
       - "tests/test_private_pilot_connector_acceptance_handlers.py"
       - "pyproject.toml"
       - ".github/workflows/feishu-tenant-acceptance-contract.yml"
@@ -83,4 +85,5 @@ jobs:
             tests/test_feishu_tenant_acceptance.py \
             tests/test_feishu_tenant_acceptance_reports.py \
             tests/test_feishu_tenant_acceptance_jobs.py \
+            tests/test_feishu_tenant_acceptance_job_integrity.py \
             tests/test_private_pilot_connector_acceptance_handlers.py
