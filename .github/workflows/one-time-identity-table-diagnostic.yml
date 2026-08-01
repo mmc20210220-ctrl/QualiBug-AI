@@ -1,7 +1,7 @@
 name: One-time identity table diagnostic
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
 
 permissions:
@@ -9,11 +9,14 @@ permissions:
 
 jobs:
   benchmark-current-main:
-    if: github.head_ref == 'internal-identity-table-diagnostic'
-    runs-on: ubuntu-24.04
+    if: >-
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'internal-identity-table-diagnostic' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout current main
+      - name: Checkout current main only
         uses: actions/checkout@v4
         with:
           ref: main
