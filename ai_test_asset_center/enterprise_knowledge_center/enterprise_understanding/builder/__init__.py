@@ -32,6 +32,14 @@ from ..identity_resolution import (
     resolve_enterprise_identities,
 )
 from ..identity_structural_evidence import project_identity_structural_candidates
+from ..identity_structural_review import (
+    apply_identity_structural_review_decisions,
+    begin_identity_structural_review_rebuild,
+    consume_identity_structural_review_pending_receipt,
+    finalize_identity_structural_review_measurement,
+    identity_structural_review_rebuild_in_progress,
+    scrub_operator_structural_review_mentions,
+)
 from ..identity_technical_projection import augment_technical_identity_projection
 from ..schema import as_dict, as_list, stable_id, text
 
@@ -79,6 +87,9 @@ def _publish_identity_audit_receipts(
         "enterprise_identity_registry_recompute_receipt",
         "enterprise_identity_authority_projection_receipt",
         "enterprise_identity_field_evidence",
+        "enterprise_identity_structural_evidence",
+        "enterprise_identity_structural_review_queue",
+        "enterprise_identity_structural_review_receipt",
         "enterprise_identity_annotation_manifest",
         "enterprise_identity_benchmark",
     ):
@@ -109,6 +120,16 @@ def _attach_identity_audit_receipts(
         or asset.get("enterprise_identity_structural_evidence")
     )
     model["identity_structural_evidence"] = structural_evidence
+    structural_review = as_dict(
+        model.get("identity_structural_review_receipt")
+        or asset.get("enterprise_identity_structural_review_receipt")
+    )
+    model["identity_structural_review_receipt"] = structural_review
+    model["identity_structural_review_queue"] = as_dict(
+        model.get("identity_structural_review_queue")
+        or asset.get("enterprise_identity_structural_review_queue")
+        or structural_review.get("review_queue")
+    )
     model["identity_annotation_manifest"] = as_dict(
         resolution.get("annotation_manifest")
         or asset.get("enterprise_identity_annotation_manifest")
@@ -173,6 +194,21 @@ def _attach_identity_audit_receipts(
             "enterprise_identity_strong_structural_candidate_count": int(
                 structural_evidence.get("strong_candidate_count") or 0
             ),
+            "enterprise_identity_structural_review_pending_count": int(
+                as_dict(model.get("identity_structural_review_queue")).get(
+                    "pending_count"
+                )
+                or 0
+            ),
+            "enterprise_identity_structural_review_applied_count": int(
+                structural_review.get("applied_confirmation_count") or 0
+            ),
+            "enterprise_identity_structural_review_rejected_count": int(
+                structural_review.get("rejected_count") or 0
+            ),
+            "enterprise_identity_structural_review_stale_count": int(
+                structural_review.get("stale_decision_count") or 0
+            ),
         }
     )
     if measured:
@@ -187,12 +223,16 @@ def _attach_identity_audit_receipts(
 
 
 def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any]:
+    review_rebuild = identity_structural_review_rebuild_in_progress(asset)
     prior_registry = deepcopy(asset.get("enterprise_identity_registry") or {})
     apply_identity_evidence_policy(asset)
     recognition = recognize_business_objects(asset)
     recognition = project_business_object_benchmark(asset, recognition)
     recognized_asset = project_asset_for_recognized_objects(asset, recognition)
     resolution = resolve_enterprise_identities(recognized_asset)
+    resolution = scrub_operator_structural_review_mentions(
+        recognized_asset, resolution
+    )
     resolution = govern_identity_registry(prior_registry, resolution, asset=recognized_asset)
     resolution = augment_technical_identity_projection(recognized_asset, resolution)
     resolution = augment_identity_field_evidence(recognized_asset, resolution)
@@ -208,7 +248,21 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     model = apply_identity_resolution_to_model(model, resolution)
     model = apply_recognition_to_model(model, recognition)
     model = project_identity_structural_candidates(asset, model, resolution)
-    return _attach_identity_audit_receipts(model, recognized_asset, resolution)
+
+    if review_rebuild:
+        pending = consume_identity_structural_review_pending_receipt(asset)
+        model = finalize_identity_structural_review_measurement(asset, model, pending)
+    else:
+        model = apply_identity_structural_review_decisions(asset, model, resolution)
+        review_receipt = as_dict(
+            model.get("identity_structural_review_receipt")
+            or asset.get("enterprise_identity_structural_review_receipt")
+        )
+        if bool(review_receipt.get("rebuild_required")):
+            begin_identity_structural_review_rebuild(asset, review_receipt)
+            return build_enterprise_understanding_model(asset)
+
+    return _attach_identity_audit_receipts(model, asset, resolution)
 
 
 __all__ = ["build_enterprise_understanding_model"]
