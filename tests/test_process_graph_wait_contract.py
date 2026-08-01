@@ -193,6 +193,22 @@ def test_invalid_async_policy_blocks_compile() -> None:
     assert "READBACK_ASYNC_POLICY_INVALID" in result["detail"]
 
 
+def test_invalid_wait_keeps_root_cause_and_exposes_uncovered_symptom() -> None:
+    graph = _raw_graph()
+    graph["wait_contracts"][0]["observer_operation_ref"] = "op_wait_write"
+
+    result = compile_process_graph_wait_contracts(graph, behavior_ir=IR)
+
+    assert result["status"] == STATUS_BLOCKED
+    assert result["reason_code"] == WAIT_CONTRACT_INVALID
+    assert result["semantic_reason_codes"] == [
+        WAIT_CONTRACT_INVALID,
+        WAIT_ASYNC_EDGE_UNCOVERED,
+    ]
+    assert "observer_transport_invalid:POST" in result["detail"]
+    assert "async_edge_uncovered:step_source->step_target" in result["detail"]
+
+
 @pytest.mark.parametrize(
     ("predicate", "body", "expected"),
     [
