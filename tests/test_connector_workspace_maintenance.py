@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from contextlib import contextmanager
@@ -272,3 +273,29 @@ def test_fence_runs_maintenance_before_lease_completion():
         "_complete_connector_sync_fence("
     )
     assert "must never mask the business operation" in function
+
+
+def test_maintenance_authority_is_registered_as_core():
+    architecture_path = (
+        Path(__file__).resolve().parents[1]
+        / "ai_test_asset_center"
+        / "architecture_roots.json"
+    )
+    architecture = json.loads(architecture_path.read_text(encoding="utf-8"))
+    assert architecture["module_class_overrides"][
+        "ai_test_asset_center.connector_workspace_maintenance"
+    ] == "core"
+
+
+def test_maintenance_has_no_parallel_registry_or_lifecycle_deletion_path():
+    source = Path(maintenance.__file__).read_text(encoding="utf-8")
+    assert "maintenance_registry" not in source
+    assert "_remove_sync_lock" not in source
+    assert "abort_connector_sync_run" not in source
+    assert "stop_connector_sync_ownership" not in source
+    assert "delete_enterprise_knowledge_source" not in source
+    assert "shutil.rmtree" not in source
+    assert '"second_maintenance_registry_created": False' in source
+    assert source.index("if not _is_atomic_temporary_file(") < source.index(
+        "path.unlink()"
+    )
