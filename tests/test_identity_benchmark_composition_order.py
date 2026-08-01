@@ -15,32 +15,28 @@ def _named_calls(function: ast.FunctionDef) -> list[tuple[str, int]]:
     return calls
 
 
+def _function(source: str, name: str) -> ast.FunctionDef:
+    tree = ast.parse(source)
+    return next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+
+
 def _understanding_builder() -> tuple[str, ast.FunctionDef]:
     source = Path(
         "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/"
         "builder/__init__.py"
     ).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    function = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "build_enterprise_understanding_model"
-    )
-    return source, function
+    return source, _function(source, "build_enterprise_understanding_model")
 
 
 def test_identity_benchmark_repository_precedes_first_understanding_pass() -> None:
     source = Path(
         "ai_test_asset_center/enterprise_knowledge_center/composition.py"
     ).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    function = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "build_enterprise_business_knowledge_asset"
-    )
+    function = _function(source, "build_enterprise_business_knowledge_asset")
     calls = _named_calls(function)
     repository_line = min(
         line for name, line in calls if name == "apply_identity_benchmark_repository"
@@ -119,6 +115,88 @@ def test_structural_candidates_run_only_after_final_identity_model_projection() 
     assert '"enterprise_identity_structural_evidence"' in source
 
 
+def test_structural_review_confirmation_rebuilds_through_same_identity_builder() -> None:
+    source, function = _understanding_builder()
+    calls = _named_calls(function)
+    resolve_line = next(
+        line for name, line in calls if name == "resolve_enterprise_identities"
+    )
+    scrub_line = next(
+        line
+        for name, line in calls
+        if name == "scrub_operator_structural_review_mentions"
+    )
+    registry_line = next(
+        line for name, line in calls if name == "govern_identity_registry"
+    )
+    candidate_line = next(
+        line
+        for name, line in calls
+        if name == "project_identity_structural_candidates"
+    )
+    apply_line = next(
+        line
+        for name, line in calls
+        if name == "apply_identity_structural_review_decisions"
+    )
+    begin_line = next(
+        line
+        for name, line in calls
+        if name == "begin_identity_structural_review_rebuild"
+    )
+    finalize_line = next(
+        line
+        for name, line in calls
+        if name == "finalize_identity_structural_review_measurement"
+    )
+
+    assert resolve_line < scrub_line < registry_line
+    assert candidate_line < apply_line < begin_line
+    assert finalize_line > candidate_line
+    assert source.count("return build_enterprise_understanding_model(asset)") == 1
+    assert "identity_structural_review_rebuild_in_progress(asset)" in source
+    assert "compile_and_import_identity_annotations" not in source
+    assert "import_identity_ground_truth" not in source
+
+
+def test_structural_review_decisions_load_after_final_fact_conflict_governance() -> None:
+    source = Path(
+        "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/"
+        "post_compile_fact_governance.py"
+    ).read_text(encoding="utf-8")
+    function = _function(source, "govern_compiled_business_facts")
+    calls = _named_calls(function)
+    typed_conflict_line = next(
+        line for name, line in calls if name == "reconcile_typed_fact_conflicts"
+    )
+    structural_review_line = next(
+        line
+        for name, line in calls
+        if name == "_project_structural_review_decisions"
+    )
+
+    assert typed_conflict_line < structural_review_line
+    assert "load_authority_decision_ledger" in source
+    assert "parallel_decision_ledger_created\": False" in source
+    assert "identity_structural_review_uses_blind_ground_truth\": False" in source
+
+
+def test_structural_review_public_facade_reuses_one_operator_entrypoint() -> None:
+    from ai_test_asset_center import enterprise_knowledge_center as public
+    from ai_test_asset_center.enterprise_knowledge_center import (
+        enterprise_understanding as understanding,
+    )
+
+    assert public.get_identity_structural_review_queue is (
+        understanding.get_identity_structural_review_queue
+    )
+    assert public.record_identity_structural_review_decision is (
+        understanding.record_identity_structural_review_decision
+    )
+    assert public.ACTION_CONFIRM_ALIAS == understanding.ACTION_CONFIRM_ALIAS
+    assert public.ACTION_REJECT_CANDIDATE == understanding.ACTION_REJECT_CANDIDATE
+
+
 def test_key_backed_bound_field_can_surface_name_only_candidate_without_binding() -> None:
     from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_field_evidence import (
         augment_identity_field_evidence,
@@ -172,7 +250,10 @@ def test_key_backed_bound_field_can_surface_name_only_candidate_without_binding(
             }
         ],
         "conflicts": [],
-        "gate": {"status": "PARTIAL_ENTERPRISE_IDENTITY_BINDING", "entry_allowed": True},
+        "gate": {
+            "status": "PARTIAL_ENTERPRISE_IDENTITY_BINDING",
+            "entry_allowed": True,
+        },
     }
 
     projected = augment_identity_field_evidence(asset, result)
