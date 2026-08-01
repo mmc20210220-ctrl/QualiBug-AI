@@ -1,0 +1,39 @@
+name: Dispatch verified role permission root fix from PR
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dispatch-role-permission-root-fix-pr
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/role-permission-root-cause-delivery-20260801'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch verified mainline executor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api \
+            --method POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/${REPOSITORY}/actions/workflows/one-time-role-permission-root-fix.yml/dispatches" \
+            -f ref=main
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${REPOSITORY}" \
+            --body 'Verified role-permission executor dispatched against latest main.'
