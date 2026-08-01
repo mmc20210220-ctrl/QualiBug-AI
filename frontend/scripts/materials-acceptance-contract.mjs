@@ -29,7 +29,7 @@ const page = read('src/pages/Materials.tsx');
 for (const route of [
   "'/acceptance-reports'",
   "'/acceptance'",
-  "'/acceptance-jobs/",
+  '/acceptance-jobs/${encodeURIComponent(jobId)}',
   'getConnectorAcceptanceReport',
   'getConnectorAcceptanceJob',
   'startConnectorAcceptance',
