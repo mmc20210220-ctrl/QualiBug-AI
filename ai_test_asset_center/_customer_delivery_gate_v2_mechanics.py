@@ -1371,7 +1371,19 @@ def validate_customer_delivery_gate_receipt_v2(
         "gate_receipt_id",
         "output_fingerprint",
     }
-    _strict_fields(row, required, code="delivery_gate_fields_invalid")
+    actual_fields = set(row)
+    if actual_fields == required | {"reason_detail"}:
+        if _text(row.get("status")).upper() != "HARNESS_FAILED":
+            raise DeliveryGateV2Error("delivery_gate_reason_detail_status_invalid")
+        reason_detail = row.get("reason_detail")
+        if (
+            not isinstance(reason_detail, str)
+            or not reason_detail.strip()
+            or len(reason_detail) > 1000
+        ):
+            raise DeliveryGateV2Error("delivery_gate_reason_detail_invalid")
+    else:
+        _strict_fields(row, required, code="delivery_gate_fields_invalid")
     if row.get("schema_version") != CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
         raise DeliveryGateV2Error("delivery_gate_schema_invalid")
     status = _text(row.get("status"))

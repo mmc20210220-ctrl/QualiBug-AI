@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ai_test_asset_center.blocker_attribution import profile_reason_code
 from ai_test_asset_center.discovery_funnel import (
+    _reason_details,
     build_funnel,
     build_funnel_comparison_report,
     build_funnel_conservation,
@@ -324,6 +325,29 @@ def test_report_exposes_top_blockers_without_claiming_external_quality() -> None
     assert "BLOCKED_MISSING_OBSERVER" in markdown
     assert "NOT_MEASURED" in markdown
     assert "stack_trace" not in markdown.lower()
+
+
+def test_report_projects_captured_oracle_detail_for_legacy_gate_receipts() -> None:
+    blockers, unregistered = _reason_details([
+        {
+            "obligation_id": "obl-harness",
+            "reason_code": "CONTRACT_ORACLE_HARNESS_FAILED",
+            "delivery_evidence_bundle": {
+                "oracle_receipt": {
+                    "activation_receipt": {
+                        "reason_codes": [
+                            "CLEANUP_RECEIPT_FAILED:cleanup:cleanup-1",
+                        ],
+                    },
+                },
+            },
+        },
+    ])
+
+    assert not unregistered
+    assert blockers[0]["examples"][0]["reason_detail"] == (
+        "CLEANUP_RECEIPT_FAILED:cleanup:cleanup-1"
+    )
 
 
 def test_unknown_reason_is_visible_and_never_inferred_from_detail() -> None:
