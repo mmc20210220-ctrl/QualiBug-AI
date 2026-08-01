@@ -15,7 +15,7 @@ Connector / Upload
 
 ## 当前支持
 
-第一条正式在线资料 Adapter 为飞书知识库，只读访问：
+当前正式在线资料 Adapter 均只读访问，并统一进入同一条资料主链：
 
 - 知识空间与节点完整分页发现
 - 父子节点递归枚举
@@ -23,8 +23,10 @@ Connector / Upload
 - Sheet/Bitable 官方 XLSX 导出
 - Drive 文件原始下载
 - 显式开启时允许 DOCX 纯文本降级
+- `openapi`：在线 OpenAPI/Swagger JSON 或 YAML，支持 ETag、Last-Modified、内容哈希和有界 `$ref` 解析
+- `gitee`、`gitlab`、`github`、`git`：使用同一份 Manifest 驱动的 Git 仓库资料适配器，读取分支树、提交变化和显式开启的 Issue/Wiki/Release/Commit 资料
 
-Adapter 不解析业务语义，不创建独立知识库，不写回飞书。
+Adapter 不解析业务语义，不创建独立知识库，不写回远端资料系统，也不执行仓库代码、构建脚本或测试脚本。
 
 ## 前端入口
 
@@ -94,6 +96,23 @@ wiki-node:{space_id}:{parent_node_token}
 
 更新已有配置时，前端可以用 `********` 表示保留当前加密字段。鉴权方式发生变化时，必须提交新方式所需的真实凭据。
 
+### 配置 Git 仓库资料源
+
+Gitee、GitLab、GitHub 和 generic Git 使用同一套配置形状；`connector_type` 只选择平台 API 适配策略，不创建平行的资料模型：
+
+```json
+{
+  "connector_instance_id": "gitlab-main",
+  "connector_type": "gitlab",
+  "display_name": "企业仓库资料",
+  "resource_scope": "{\"repository_url\":\"https://gitlab.com/acme/orders\",\"branch\":\"main\",\"include_paths\":[\"docs/**\",\"openapi.yaml\"],\"include_commits\":true}",
+  "auth_mode": "personal_access_token",
+  "token": "仅提交到加密凭据入口的真实令牌"
+}
+```
+
+支持的范围字段包括默认/指定分支、包含/排除路径、文件类型、单文件/总字节数、最大文件数，以及是否读取 Issue、Wiki、Release 和 Commit。同步 cursor 绑定仓库、分支 ref、commit SHA、tree hash、平台事件 ID 和范围指纹；普通提交只物化变化文件，重命名、删除、分支删除和 force-push 会产生可追踪生命周期事件或可见覆盖缺口。私有仓库的 Local Runner 尚未纳入本项完成范围。
+
 ### 测试连接
 
 ```http
@@ -127,7 +146,7 @@ Content-Type: application/json
 - Sync Registry 保存 SHA-256 指纹，用作 CAS 权威
 - Connection Profile Store 加密保存可恢复 checkpoint
 
-服务重启后会先校验两者一致，再发起飞书网络请求。失败或部分同步不会推进 checkpoint。
+服务重启后会先校验两者一致，再发起远端网络请求。失败或部分同步不会推进 checkpoint。
 
 资料物化遵循“只处理变化、最终一次提交”的固定策略：
 

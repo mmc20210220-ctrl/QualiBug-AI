@@ -196,3 +196,40 @@ def test_configure_without_nested_profile_uses_selected_manifest_fields(monkeypa
         "auth_mode": "bearer_token",
         "token": "opaque-token",
     }
+
+
+def test_git_configure_uses_the_shared_manifest_and_preserves_token_boundary(monkeypatch, tmp_path):
+    import ai_test_asset_center.private_pilot_connector_handlers as handlers
+
+    captured: dict[str, Any] = {}
+
+    def fake_configure(project, **kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "created": True,
+            "connector_instance": {"connector_type": kwargs["connector_type"]},
+            "connection_profile": {"credentials_configured": True},
+            "credential_storage": {"mode": "encrypted_at_rest"},
+        }
+
+    monkeypatch.setattr(handlers, "configure_managed_connector", fake_configure)
+    result = DummyHandler()._handle_knowledge_connector_configure(
+        PROJECT,
+        {
+            "connector_instance_id": "gitlab-main",
+            "connector_type": "gitlab",
+            "resource_scope": '{"repository_url":"https://gitlab.com/acme/orders","branch":"main"}',
+            "auth_mode": "personal_access_token",
+            "token": "opaque-token",
+        },
+        tmp_path,
+        ACTOR,
+    )
+
+    assert result["status"] == 201
+    assert captured["connector_type"] == "gitlab"
+    assert captured["profile"] == {
+        "auth_mode": "personal_access_token",
+        "token": "opaque-token",
+    }
