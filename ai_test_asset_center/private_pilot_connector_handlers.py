@@ -1,8 +1,9 @@
 """Private-pilot HTTP surface for enterprise knowledge connectors.
 
-The HTTP layer owns authentication, public projection, and request shaping only. Trusted sync
-execution, fenced configuration, checkpoint validation, automatic refresh, and retry policy live
-in connector application services. Stranded-run abort remains an internal recovery action.
+The HTTP layer owns authentication, public projection, and request shaping only. Trusted sync,
+acceptance, fenced configuration, checkpoint validation, automatic refresh, and retry policy live
+in connector application services. Raw credentials, source content, cursors, and report paths are
+never returned through this surface.
 """
 from __future__ import annotations
 
@@ -26,6 +27,16 @@ from .connector_sync_authority import (
     load_connector_sync_run,
 )
 from .feishu_connector_adapter import FeishuConnectorError
+from .feishu_tenant_acceptance import (
+    FeishuTenantAcceptanceError,
+    run_feishu_tenant_acceptance,
+)
+from .feishu_tenant_acceptance_reports import (
+    FeishuTenantAcceptanceReportError,
+    latest_feishu_tenant_acceptance_summary,
+    list_feishu_tenant_acceptance_reports,
+    load_feishu_tenant_acceptance_report,
+)
 from .real_project_onboarding import _safe_project_id
 
 _ROUTE_MARKER = "knowledge-connectors"
@@ -86,6 +97,26 @@ def _bounded_float(
             f"connector numeric option must be between {minimum} and {maximum}"
         )
     return parsed
+
+
+def _optional_bounded_int(
+    value: Any,
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    if value in (None, ""):
+        return None
+    return _bounded_int(value, minimum, minimum, maximum)
+
+
+def _optional_bounded_float(
+    value: Any,
+    minimum: float,
+    maximum: float,
+) -> float | None:
+    if value in (None, ""):
+        return None
+    return _bounded_float(value, minimum, minimum, maximum)
 
 
 def _profile_index(project: str, root: Path) -> dict[str, dict[str, Any]]:
@@ -176,7 +207,8 @@ def _coverage_projection(
         "unsupported_count": unsupported_count,
         "coverage_ratio": ratio,
         "unsupported_resources": unsupported_resources,
-        "unsupported_resources_truncated": unsupported_count > len(unsupported_resources),
+        "unsupported_resources_truncated": unsupported_count
+        > len(unsupported_resources),
         "last_sync_epoch_id": epoch,
         "last_completed_at_utc": _text(run.get("completed_at_utc"), 80),
         "source_content_returned": False,
@@ -217,6 +249,11 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             raw,
             root,
         )
+        row["acceptance"] = latest_feishu_tenant_acceptance_summary(
+            project,
+            connector,
+            root=root,
+        )
         rows.append(row)
     return {
         "schema": "qualibug.knowledge-connector-inventory.v1",
@@ -237,11 +274,20 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
                 bool(row.get("auto_sync", {}).get("enabled")) for row in rows
             ),
             "partial_coverage_connector_count": sum(
-                row.get("coverage", {}).get("status") == "PARTIAL_UNSUPPORTED"
+                row.get("coverage", {}).get("status")
+                == "PARTIAL_UNSUPPORTED"
                 for row in rows
             ),
             "unsupported_resource_count": sum(
                 int(row.get("coverage", {}).get("unsupported_count") or 0)
+                for row in rows
+            ),
+            "acceptance_ready_connector_count": sum(
+                int(row.get("acceptance", {}).get("acceptance_ready") is True)
+                for row in rows
+            ),
+            "acceptance_not_run_connector_count": sum(
+                int(row.get("acceptance", {}).get("status") == "NOT_RUN")
                 for row in rows
             ),
         },
@@ -254,6 +300,11 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             "automatic_refresh_uses_existing_sync_authority": True,
             "coverage_projection_uses_persisted_sync_receipt": True,
             "coverage_projection_returns_source_content": False,
+            "acceptance_projection_uses_allowlisted_report_fields": True,
+            "acceptance_projection_returns_source_content": False,
+            "acceptance_projection_returns_raw_cursor": False,
+            "acceptance_projection_returns_credentials": False,
+            "acceptance_always_uses_retain_policy": True,
             "customer_material_mutation_executed": False,
             "second_connector_registry_created": False,
             "second_fencing_registry_created": False,
@@ -323,16 +374,21 @@ class KnowledgeConnectorHandlersMixin:
     """Authenticated project-scoped online knowledge connector HTTP routes."""
 
     def _knowledge_connector_error(self, exc: Exception) -> Any:
+        error = (
+            "KNOWLEDGE_CONNECTOR_PROFILE_ERROR"
+            if isinstance(exc, ConnectorProfileError)
+            else "KNOWLEDGE_CONNECTOR_SYNC_ERROR"
+            if isinstance(exc, ConnectorSyncError)
+            else "FEISHU_ACCEPTANCE_REPORT_ERROR"
+            if isinstance(exc, FeishuTenantAcceptanceReportError)
+            else "FEISHU_ACCEPTANCE_ERROR"
+            if isinstance(exc, FeishuTenantAcceptanceError)
+            else "FEISHU_CONNECTOR_ERROR"
+        )
         return self._json(
             {
                 "ok": False,
-                "error": (
-                    "KNOWLEDGE_CONNECTOR_PROFILE_ERROR"
-                    if isinstance(exc, ConnectorProfileError)
-                    else "KNOWLEDGE_CONNECTOR_SYNC_ERROR"
-                    if isinstance(exc, ConnectorSyncError)
-                    else "FEISHU_CONNECTOR_ERROR"
-                ),
+                "error": error,
                 "message": _text(exc, 600),
             },
             _error_status(exc),
@@ -374,6 +430,22 @@ class KnowledgeConnectorHandlersMixin:
                 if row is None:
                     raise KeyError("knowledge_connector_not_found")
                 return self._json({"ok": True, "data": row})
+            if len(tail) == 2 and tail[1] == "acceptance-reports":
+                reports = list_feishu_tenant_acceptance_reports(
+                    project,
+                    connector,
+                    root=root,
+                    limit=20,
+                )
+                return self._json({"ok": True, "data": reports})
+            if len(tail) == 3 and tail[1] == "acceptance-reports":
+                report = load_feishu_tenant_acceptance_report(
+                    project,
+                    connector,
+                    _text(tail[2], 80),
+                    root=root,
+                )
+                return self._json({"ok": True, "data": report})
             if len(tail) == 3 and tail[1] == "runs":
                 run = load_connector_sync_run(
                     project,
@@ -391,7 +463,12 @@ class KnowledgeConnectorHandlersMixin:
                     }
                 )
             return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
-        except (ConnectorProfileError, ConnectorSyncError, KeyError) as exc:
+        except (
+            ConnectorProfileError,
+            ConnectorSyncError,
+            FeishuTenantAcceptanceReportError,
+            KeyError,
+        ) as exc:
             return self._knowledge_connector_error(exc)
 
     def _handle_knowledge_connector_configure(
@@ -495,6 +572,60 @@ class KnowledgeConnectorHandlersMixin:
                 },
                 200 if run.get("status") == "COMPLETE" else 409,
             )
+        if action == "acceptance":
+            report = run_feishu_tenant_acceptance(
+                project,
+                connector,
+                root=root,
+                profile=_text(body.get("profile"), 40) or "pilot",
+                runs=_optional_bounded_int(body.get("runs"), 2, 10),
+                min_discovered_resources=_optional_bounded_int(
+                    body.get("min_discovered_resources"), 0, 1_000_000
+                ),
+                min_coverage_ratio=_optional_bounded_float(
+                    body.get("min_coverage_ratio"), 0.0, 1.0
+                ),
+                max_unsupported_ratio=_optional_bounded_float(
+                    body.get("max_unsupported_ratio"), 0.0, 1.0
+                ),
+                max_run_duration_seconds=_optional_bounded_float(
+                    body.get("max_run_duration_seconds"), 1.0, 3600.0
+                ),
+                max_nodes=_bounded_int(
+                    body.get("max_nodes"), 100_000, 1, 100_000
+                ),
+                max_export_polls=_bounded_int(
+                    body.get("max_export_polls"), 40, 1, 120
+                ),
+                export_poll_interval=_bounded_float(
+                    body.get("export_poll_interval"), 0.5, 0.0, 5.0
+                ),
+                allow_raw_text_fallback=bool(
+                    body.get("allow_raw_text_fallback") is True
+                ),
+                timeout=_bounded_float(
+                    body.get("timeout"), 30.0, 1.0, 60.0
+                ),
+                actor=actor,
+            )
+            report_id = Path(_text(report.get("report_path"), 1000)).stem
+            public_report = load_feishu_tenant_acceptance_report(
+                project,
+                connector,
+                report_id,
+                root=root,
+            )
+            return self._json(
+                {
+                    "ok": True,
+                    "accepted": public_report.get("acceptance_ready") is True,
+                    "data": public_report,
+                    "source_content_returned": False,
+                    "raw_cursor_returned": False,
+                    "credential_values_returned": False,
+                    "filesystem_path_returned": False,
+                }
+            )
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
 
     def do_GET(self) -> None:  # noqa: N802
@@ -549,7 +680,11 @@ class KnowledgeConnectorHandlersMixin:
                     root,
                     actor,
                 )
-            if len(tail) == 2 and tail[1] in {"test", "sync"}:
+            if len(tail) == 2 and tail[1] in {
+                "test",
+                "sync",
+                "acceptance",
+            }:
                 return self._handle_knowledge_connector_action(
                     project,
                     _text(tail[0], 160),
@@ -563,6 +698,8 @@ class KnowledgeConnectorHandlersMixin:
             ConnectorProfileError,
             ConnectorSyncError,
             FeishuConnectorError,
+            FeishuTenantAcceptanceError,
+            FeishuTenantAcceptanceReportError,
             ValueError,
             TypeError,
         ) as exc:
