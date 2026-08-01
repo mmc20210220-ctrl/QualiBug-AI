@@ -237,10 +237,10 @@ def _validate_declared_join_groups(
 ) -> str:
     """Validate optional join metadata against the executable edge authority.
 
-    Edges remain the scheduler authority.  A source-declared join may enrich that
-    structure, but it must identify exactly one existing node and exactly the
-    incoming edge set.  Duplicate or partial join declarations are blocked before
-    transport so runtime never silently changes an AND-join scope.
+    Edges remain the scheduler authority. A source-declared join may enrich
+    that structure, but it must identify exactly one existing node and exactly
+    the incoming edge set. Duplicate or partial join declarations are blocked
+    before transport so runtime never silently changes an AND-join scope.
     """
     seen_nodes: set[str] = set()
     for index, raw in enumerate(_list(graph.get("join_groups"))):
@@ -494,7 +494,9 @@ def graph_step_context(
             "detail": f"{node_id}:{','.join(failed)}",
         }
     node = _dict(_dict(runtime.get("nodes")).get(node_id))
-    bindings = dict(initial_bindings)
+    ambient_bindings = dict(initial_bindings)
+    bindings = dict(ambient_bindings)
+    explicit_bindings: dict[str, Any] = {}
     consumptions: list[dict[str, Any]] = []
     for index, ref in enumerate(_binding_refs_for_node(graph, node)):
         producer = _text(
@@ -526,22 +528,32 @@ def graph_step_context(
                 "reason_code": GRAPH_INPUT_BINDING_UNRESOLVED,
                 "detail": f"{node_id}:{producer}.{source_field}->{target}",
             }
-        if target in bindings and bindings[target] != value:
+        if target in explicit_bindings and explicit_bindings[target] != value:
             return {
                 "status": "BLOCKED",
                 "reason_code": GRAPH_INPUT_BINDING_CONFLICT,
                 "detail": f"{node_id}:{target}",
             }
-        bindings[target] = value
-        consumptions.append(
-            {
-                "consumer_node_id": node_id,
-                "producer_node_id": producer,
-                "producer_output_field": source_field,
-                "consumer_target": target,
-                "value_fingerprint": _stable_hash(value),
-            }
+        ambient_value = ambient_bindings.get(target)
+        ambient_shadowed = (
+            target in ambient_bindings and ambient_value != value
         )
+        explicit_bindings[target] = value
+        bindings[target] = value
+        consumption = {
+            "consumer_node_id": node_id,
+            "producer_node_id": producer,
+            "producer_output_field": source_field,
+            "consumer_target": target,
+            "value_fingerprint": _stable_hash(value),
+            "binding_authority": "process_graph_edge",
+            "initial_binding_shadowed": ambient_shadowed,
+        }
+        if ambient_shadowed:
+            consumption["initial_value_fingerprint"] = _stable_hash(
+                ambient_value
+            )
+        consumptions.append(consumption)
     _dict(runtime.get("binding_ledger")).setdefault("consumptions", []).extend(
         consumptions
     )
