@@ -216,23 +216,41 @@ def _attach_migration_view(
     quarantine: dict[str, Any],
     migration: dict[str, Any],
     rebuilt_registry: dict[str, Any] | None,
+    rebuilt_authority: dict[str, Any] | None = None,
+    rebuilt_formal_projection: dict[str, Any] | None = None,
+    rebuilt_identity_consistency: dict[str, Any] | None = None,
+    rebuilt_funnel: dict[str, Any] | None = None,
+    rebuilt_pipeline_health: dict[str, Any] | None = None,
+    rebuilt_funnel_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output = dict(result)
     output["historical_authorization_quarantine"] = quarantine
     output["historical_authorization_artifact_migration"] = migration
-    if rebuilt_registry is None:
-        output.pop("canonical_defect_registry", None)
-    else:
-        output["canonical_defect_registry"] = rebuilt_registry
+
+    derived = {
+        "canonical_defect_registry": rebuilt_registry,
+        "formal_delivery_authority": rebuilt_authority,
+        "formal_count_projection": rebuilt_formal_projection,
+        "defect_identity_consistency": rebuilt_identity_consistency,
+        "discovery_funnel": rebuilt_funnel,
+        "pipeline_health": rebuilt_pipeline_health,
+        "discovery_funnel_report": rebuilt_funnel_report,
+    }
+
+    def apply_view(view: dict[str, Any]) -> dict[str, Any]:
+        projected = dict(view)
+        projected["historical_authorization_quarantine"] = quarantine
+        projected["historical_authorization_artifact_migration"] = migration
+        for key, value in derived.items():
+            if value is None:
+                projected.pop(key, None)
+            else:
+                projected[key] = value
+        return projected
+
+    output = apply_view(output)
     if isinstance(output.get("v12"), dict):
-        nested = dict(output["v12"])
-        nested["historical_authorization_quarantine"] = quarantine
-        nested["historical_authorization_artifact_migration"] = migration
-        if rebuilt_registry is None:
-            nested.pop("canonical_defect_registry", None)
-        else:
-            nested["canonical_defect_registry"] = rebuilt_registry
-        output["v12"] = nested
+        output["v12"] = apply_view(output["v12"])
     return output
 
 
@@ -329,11 +347,152 @@ def migrate_historical_authorization_scan_result(
 
     try:
         validated_mainline = validate_mainline_run_contract(mainline)
+        formal_occurrences = [
+            value
+            for value in occurrences
+            if _finding_id(value) in formal_occurrence_ids
+        ]
         rebuilt_registry = build_canonical_defect_registry(
             mainline_run=validated_mainline,
-            deliverable_occurrences=occurrences,
+            deliverable_occurrences=formal_occurrences,
             obligation_attempt_ledger=ledger,
         )
+
+        # Historical quarantine changes only the derived publication scope. The
+        # source occurrence list and immutable attempt ledger remain untouched,
+        # while every derived authority that consumes that scope is rebuilt from
+        # the same exact non-quarantined rows.
+        derived_keys = (
+            "formal_delivery_authority",
+            "formal_count_projection",
+        )
+        rebuild_formal_views = any(
+            key in result or key in v12 for key in derived_keys
+        )
+        rebuilt_authority: dict[str, Any] | None = None
+        rebuilt_formal_projection: dict[str, Any] | None = None
+        rebuilt_identity_consistency: dict[str, Any] | None = None
+        rebuilt_funnel: dict[str, Any] | None = None
+        rebuilt_pipeline_health: dict[str, Any] | None = None
+        rebuilt_funnel_report: dict[str, Any] | None = None
+        if rebuild_formal_views:
+            from . import discovery_quality_projection as quality_projection
+            from . import formal_delivery_authority as delivery_authority
+
+            candidate_findings = _list(
+                result.get("candidate_findings")
+                or v12.get("candidate_findings")
+            )
+            rebuilt_authority = (
+                delivery_authority.build_formal_delivery_authority_receipt(
+                    mainline_run=validated_mainline,
+                    findings=formal_occurrences,
+                    obligation_attempt_ledger=ledger,
+                )
+            )
+            rebuilt_formal_projection = (
+                quality_projection.build_formal_count_projection(
+                    findings=formal_occurrences,
+                    candidate_findings=candidate_findings,
+                    discovery_funnel={},
+                    obligation_attempt_ledger=ledger,
+                    mainline_run=validated_mainline,
+                    canonical_defect_registry=rebuilt_registry,
+                )
+            )
+
+            identity_source = _dict(
+                result.get("defect_identity_consistency")
+                or v12.get("defect_identity_consistency")
+            )
+            if identity_source:
+                from .canonical_defect_registry import (
+                    build_defect_identity_consistency,
+                    canonical_representative_findings,
+                )
+
+                occurrence_ids = list(
+                    rebuilt_authority["delivery_occurrence_finding_ids"]
+                )
+                canonical_ids = list(
+                    rebuilt_registry["canonical_defect_ids"]
+                )
+                representatives = canonical_representative_findings(
+                    rebuilt_registry,
+                    deliverable_occurrences=formal_occurrences,
+                )
+                representative_ids = sorted(
+                    _text(item.get("canonical_defect_id"))
+                    for item in representatives
+                    if _text(item.get("canonical_defect_id"))
+                )
+                occurrence_scopes = {
+                    "delivery_gate_ids": occurrence_ids,
+                    "formal_authority_occurrence_ids": occurrence_ids,
+                    "registry_occurrence_ids": occurrence_ids,
+                    "formal_projection_occurrence_ids": occurrence_ids,
+                }
+                if "trace_ledger_occurrence_ids" in _dict(
+                    identity_source.get("occurrence_scopes")
+                ):
+                    occurrence_scopes["trace_ledger_occurrence_ids"] = (
+                        occurrence_ids
+                    )
+                rebuilt_identity_consistency = (
+                    build_defect_identity_consistency(
+                        occurrence_scopes=occurrence_scopes,
+                        canonical_scopes={
+                            "canonical_registry_ids": canonical_ids,
+                            "formal_projection_ids": canonical_ids,
+                            "product_projection_ids": representative_ids,
+                        },
+                    )
+                )
+
+            funnel_keys = (
+                "discovery_funnel",
+                "pipeline_health",
+                "discovery_funnel_report",
+            )
+            rebuild_funnel_views = any(
+                key in result or key in v12 for key in funnel_keys
+            )
+            if rebuild_funnel_views:
+                from .discovery_funnel import build_funnel, build_funnel_report
+
+                working = dict(result)
+                working["canonical_defect_registry"] = rebuilt_registry
+                working["formal_delivery_authority"] = rebuilt_authority
+                working["formal_count_projection"] = rebuilt_formal_projection
+                if rebuilt_identity_consistency is not None:
+                    working[
+                        "defect_identity_consistency"
+                    ] = rebuilt_identity_consistency
+                rebuilt_funnel = build_funnel(working)
+                # The first funnel pass supplies the exact post-quarantine
+                # validated count used by the formal projection's diagnostic
+                # consistency field. Rebuild once so no stale count survives.
+                rebuilt_formal_projection = (
+                    quality_projection.build_formal_count_projection(
+                        findings=formal_occurrences,
+                        candidate_findings=candidate_findings,
+                        discovery_funnel=rebuilt_funnel,
+                        obligation_attempt_ledger=ledger,
+                        mainline_run=validated_mainline,
+                        canonical_defect_registry=rebuilt_registry,
+                    )
+                )
+                working["formal_count_projection"] = rebuilt_formal_projection
+                rebuilt_funnel = build_funnel(working)
+                rebuilt_pipeline_health = _dict(
+                    rebuilt_funnel.get("pipeline_health")
+                )
+                working["discovery_funnel"] = rebuilt_funnel
+                working["pipeline_health"] = rebuilt_pipeline_health
+                rebuilt_funnel_report = build_funnel_report(
+                    working,
+                    funnel=rebuilt_funnel,
+                )
     except Exception as exc:
         raise HistoricalAuthorizationArtifactMigrationError(
             f"historical_authorization_registry_rebuild_failed:{type(exc).__name__}:{exc}"
@@ -357,6 +516,12 @@ def migrate_historical_authorization_scan_result(
         quarantine=quarantine,
         migration=migration,
         rebuilt_registry=rebuilt_registry,
+        rebuilt_authority=rebuilt_authority,
+        rebuilt_formal_projection=rebuilt_formal_projection,
+        rebuilt_identity_consistency=rebuilt_identity_consistency,
+        rebuilt_funnel=rebuilt_funnel,
+        rebuilt_pipeline_health=rebuilt_pipeline_health,
+        rebuilt_funnel_report=rebuilt_funnel_report,
     )
 
 

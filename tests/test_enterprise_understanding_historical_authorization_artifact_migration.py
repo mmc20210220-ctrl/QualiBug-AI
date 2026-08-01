@@ -7,7 +7,9 @@ import pytest
 
 from ai_test_asset_center import canonical_defect_registry as canonical_registry
 from ai_test_asset_center import discovery_mainline_contract as mainline_contract
+from ai_test_asset_center import discovery_quality_projection as quality_projection
 from ai_test_asset_center import formal_delivery_scope
+from ai_test_asset_center import formal_delivery_authority as delivery_authority
 from ai_test_asset_center import historical_authorization_artifact_migration as migration
 from ai_test_asset_center.historical_authorization_artifact_migration import (
     HistoricalAuthorizationArtifactMigrationError,
@@ -133,6 +135,95 @@ def test_migration_rebuilds_only_derived_registry_and_preserves_source(
     assert validate_historical_authorization_artifact_migration_receipt(
         receipt
     ) == receipt
+
+
+def test_migration_rebuilds_present_formal_views_from_non_quarantined_rows(
+    monkeypatch,
+) -> None:
+    source = _scan_result()
+    source["formal_delivery_authority"] = {"status": "STALE"}
+    source["formal_count_projection"] = {"status": "STALE"}
+    source["v12"]["formal_delivery_authority"] = {"status": "STALE"}
+    source["v12"]["formal_count_projection"] = {"status": "STALE"}
+    snapshot = deepcopy(source)
+    quarantine = _quarantine_projection()
+    rebuilt = {
+        "registry_fingerprint": "e" * 64,
+        "delivery_occurrence_count": 1,
+        "delivery_occurrence_finding_ids": ["finding:valid"],
+    }
+    observed: dict[str, list[list[str]]] = {
+        "registry": [],
+        "authority": [],
+        "projection": [],
+    }
+
+    _install_common_mocks(monkeypatch, quarantine)
+    monkeypatch.setattr(
+        formal_delivery_scope,
+        "validated_delivery_gate_finding_ids",
+        lambda ledger: ["finding:valid"],
+    )
+
+    def rebuild_registry(**kwargs):
+        observed["registry"].append(
+            [item["finding_id"] for item in kwargs["deliverable_occurrences"]]
+        )
+        return deepcopy(rebuilt)
+
+    monkeypatch.setattr(
+        canonical_registry,
+        "build_canonical_defect_registry",
+        rebuild_registry,
+    )
+    monkeypatch.setattr(
+        delivery_authority,
+        "build_formal_delivery_authority_receipt",
+        lambda **kwargs: (
+            observed["authority"].append(
+                [item["finding_id"] for item in kwargs["findings"]]
+            )
+            or {
+                "status": "VERIFIED",
+                "delivery_occurrence_count": 1,
+                "delivery_occurrence_finding_ids": ["finding:valid"],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        quality_projection,
+        "build_formal_count_projection",
+        lambda **kwargs: (
+            observed["projection"].append(
+                [item["finding_id"] for item in kwargs["findings"]]
+            )
+            or {
+                "schema_version": "qualibug.discovery-quality-projection.v2",
+                "formal_customer_deliverable_count": 1,
+                "canonical_defect_count": 1,
+                "canonical_defect_ids": ["cdef:valid"],
+                "delivery_occurrence_count": 1,
+                "delivery_occurrence_finding_ids": ["finding:valid"],
+            }
+        ),
+    )
+
+    output = migrate_historical_authorization_scan_result(source)
+
+    assert source == snapshot
+    assert observed == {
+        "registry": [["finding:valid"]],
+        "authority": [["finding:valid"]],
+        "projection": [["finding:valid"]],
+    }
+    assert output["delivery_occurrences"] == snapshot["delivery_occurrences"]
+    assert output["formal_delivery_authority"]["status"] == "VERIFIED"
+    assert output["formal_count_projection"]["delivery_occurrence_finding_ids"] == [
+        "finding:valid"
+    ]
+    assert output["v12"]["formal_count_projection"] == output[
+        "formal_count_projection"
+    ]
 
 
 def test_missing_formal_occurrence_removes_old_registry_and_blocks_rebuild(

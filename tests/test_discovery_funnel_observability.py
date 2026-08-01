@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import pytest
 
+from ai_test_asset_center import discovery_funnel as funnel_module
 from ai_test_asset_center.discovery_funnel import (
     DiscoveryFunnelError,
     build_funnel,
@@ -152,6 +153,59 @@ def test_pipeline_health_rejects_formal_ids_not_backed_by_attempts() -> None:
 
     with pytest.raises(DiscoveryFunnelError, match="formal_projection_attempt_id_mismatch"):
         build_pipeline_health(result)
+
+
+def test_conservation_uses_validated_formal_scope_for_quarantined_attempts(
+    monkeypatch,
+) -> None:
+    ledger = {
+        "selected_count": 1,
+        "terminal_count": 1,
+        "attempts": [
+            {
+                "obligation_id": "obl-quarantined",
+                "terminal_status": "DELIVERABLE",
+                "finding_id": "finding-quarantined",
+                "stages": [
+                    {"stage": "compile", "status": "COMPILED"},
+                    {"stage": "execution", "status": "EXECUTED"},
+                    {"stage": "gate", "status": "DELIVERABLE"},
+                ],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        funnel_module,
+        "validate_obligation_attempt_ledger",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        funnel_module,
+        "validated_delivery_gate_finding_ids",
+        lambda value: ["finding-formal"],
+    )
+
+    conservation = funnel_module.build_funnel_conservation(
+        {
+            "obligation_attempt_ledger": ledger,
+            "formal_count_projection": {
+                "schema_version": "qualibug.discovery-quality-projection.v2",
+                "formal_customer_deliverable_count": 1,
+                "canonical_defect_ids": ["cdef-formal"],
+                "delivery_occurrence_count": 1,
+                "delivery_occurrence_finding_ids": ["finding-formal"],
+            },
+        }
+    )
+
+    identity_check = next(
+        row
+        for row in conservation["checks"]
+        if row["name"] == "delivery_identity_conservation"
+    )
+    assert identity_check["status"] == "PASS"
+    assert identity_check["expected"] == ["finding-formal"]
+    assert identity_check["observed"] == ["finding-formal"]
 
 
 def test_shadow_attempt_cannot_use_legacy_deliverable_gate() -> None:
