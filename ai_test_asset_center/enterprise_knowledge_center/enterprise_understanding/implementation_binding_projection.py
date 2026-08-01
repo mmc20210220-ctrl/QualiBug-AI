@@ -19,6 +19,7 @@ from .schema import as_dict, as_list, text
 
 SCENARIO_PLANNING_GATE_SCHEMA = "qualibug.business-behavior-scenario-planning-gate.v1"
 _SEMANTIC_SCENARIO_GAP = "BLOCKED_SCENARIO_PLANNING_SEMANTIC_GATE"
+_WORLD_MODEL_GAP = "BLOCKED_BUSINESS_WORLD_MODEL_INTEGRITY"
 _PARTIAL_PASS = "PARTIAL_PASS_SCENARIO_PLANNING"
 
 
@@ -104,6 +105,13 @@ def _project_event_observer_authority(
 
 def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
     semantic_gate = as_dict(model.get("gate"))
+    world = as_dict(model.get("business_world_model"))
+    world_gate = as_dict(world.get("gate"))
+    world_declared = bool(text(world.get("world_model_id")))
+    world_ready = (
+        not world_declared
+        or bool(world_gate.get("world_model_ready"))
+    )
     implementation_gate = as_dict(model.get("implementation_binding_gate"))
     implementation_metrics = dict(as_dict(implementation_gate.get("metrics")))
     semantic_ready = bool(semantic_gate.get("entry_allowed"))
@@ -124,7 +132,9 @@ def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
         and ready_binding_count > 0
     )
 
-    if not semantic_ready:
+    if not world_ready:
+        status = _WORLD_MODEL_GAP
+    elif not semantic_ready:
         status = _SEMANTIC_SCENARIO_GAP
     elif implementation_full_ready:
         status = "PASS"
@@ -148,6 +158,11 @@ def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
         "execution_allowed": False,
         "semantic_understanding_status": text(semantic_gate.get("status")) or "UNKNOWN",
         "semantic_understanding_ready": semantic_ready,
+        "business_world_model_status": (
+            text(world_gate.get("status")) if world_declared else "LEGACY_NOT_DECLARED"
+        ),
+        "business_world_model_ready": world_ready,
+        "business_world_model_declared": world_declared,
         "implementation_binding_status": implementation_status,
         "implementation_binding_ready": implementation_full_ready,
         "implementation_binding_full_ready": implementation_full_ready,
@@ -158,10 +173,11 @@ def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
         "blocking_reasons": [
             reason
             for reason in (
+                "BUSINESS_WORLD_MODEL_NOT_READY" if not world_ready else "",
                 "SEMANTIC_UNDERSTANDING_NOT_CLOSED" if not semantic_ready else "",
                 (
                     "NO_SCENARIO_READY_IMPLEMENTATION_BINDING"
-                    if semantic_ready and not ready
+                    if world_ready and semantic_ready and not ready
                     else ""
                 ),
             )
@@ -185,6 +201,8 @@ def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
             if reason
         ],
         "required_contract": {
+            "business_world_model_reference_integrity_required": True,
+            "business_world_model_semantic_payload_copy_allowed": False,
             "business_behavior_confirmed": True,
             "authoritative_action_entry_required": True,
             "all_preconditions_observable": True,
@@ -212,8 +230,26 @@ def project_final_scenario_planning_gate(
     gaps = [
         dict(row)
         for row in as_list(asset.get("coverage_gaps"))
-        if isinstance(row, dict) and text(row.get("kind")) != _SEMANTIC_SCENARIO_GAP
+        if isinstance(row, dict)
+        and text(row.get("kind")) not in {_SEMANTIC_SCENARIO_GAP, _WORLD_MODEL_GAP}
     ]
+    if not bool(scenario_gate.get("business_world_model_ready")):
+        gaps.append(
+            {
+                "kind": _WORLD_MODEL_GAP,
+                "gap_type": "business_world_model_reference_integrity_not_closed",
+                "source_id": "*",
+                "scenario_planning_status": scenario_gate.get("status"),
+                "business_world_model_status": scenario_gate.get(
+                    "business_world_model_status"
+                ),
+                "operator_action": (
+                    "repair unresolved business-world node, edge, hypothesis, or evidence "
+                    "references before scenario planning"
+                ),
+                "semantic_payload_rebuild_allowed": False,
+            }
+        )
     if not bool(scenario_gate.get("semantic_understanding_ready")):
         gaps.append(
             {
@@ -243,6 +279,12 @@ def project_final_scenario_planning_gate(
             "scenario_planning_ready": bool(scenario_gate.get("entry_allowed")),
             "scenario_planning_allowed": bool(
                 scenario_gate.get("scenario_planning_allowed")
+            ),
+            "business_world_model_status": scenario_gate.get(
+                "business_world_model_status"
+            ),
+            "business_world_model_ready": bool(
+                scenario_gate.get("business_world_model_ready")
             ),
             "implementation_binding_status": scenario_gate.get(
                 "implementation_binding_status"
