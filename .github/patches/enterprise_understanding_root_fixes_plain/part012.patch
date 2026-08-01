@@ -1,0 +1,821 @@
+@@ -548,15 +606,17 @@ def test_root_cause_source_matching_uses_formal_source_mapping_not_basename_guess
+             "business_behaviors": [],
+         },
+     }
++
+     alignment = {
+         "alignments": [
+             {
+                 "ground_truth_id": "rule:create",
+                 "collection": "business_rules",
+                 "alignment_status": "NOT_FOUND",
+-                "details": {},
++                "details": {"candidate_not_confirmed": True},
+             }
+         ]
+     }
+ 
+     result = analyse_miss_root_causes(ground_truth, asset, alignment)
+ 
+-    assert result["misses"][0]["root_cause"] == "SOURCE_NOT_PARSED"
++    assert result["misses"][0]["source_stage_cause"] == ""
++    assert result["misses"][0]["root_cause"] == "RULE_NOT_COMPILED"
++    assert result["highest_impact_root_cause"] == "RULE_NOT_COMPILED"
++
++
++def test_root_cause_still_reports_source_not_parsed_when_inventory_has_no_exact_mapping():
++    ground_truth = {
++        "project_id": "demo",
++        "business_rules": [
++            {
++                "ground_truth_id": "rule:create",
++                "source_refs": ["source://demo/missing"],
++            }
++        ],
++    }
++    asset = {
++        "source_inventory": [
++            {
++                "canonical_source_id": "api-contract",
++                "external_ref": "source://demo/api",
++            }
++        ],
++        "enterprise_understanding_model": {"rules": []},
++    }
++    alignment = {
++        "alignments": [
++            {
++                "ground_truth_id": "rule:create",
++                "collection": "business_rules",
++                "alignment_status": "NOT_FOUND",
++                "details": {},
++            }
++        ]
++    }
++
++    result = analyse_miss_root_causes(ground_truth, asset, alignment)
++
++    assert result["misses"][0]["root_cause"] == "SOURCE_NOT_PARSED"
++
++
+ def test_ticketsla_business_object_baseline_loads_truth_only_after_capture(tmp_path):
+     root = tmp_path / "repo"
+     for relative, _source_type in TICKETSLA_SOURCE_SPECS:
+diff --git a/tests/test_enterprise_understanding_structure_first_facts.py b/tests/test_enterprise_understanding_structure_first_facts.py
+index 9401957..67f3354 100644
+--- a/tests/test_enterprise_understanding_structure_first_facts.py
++++ b/tests/test_enterprise_understanding_structure_first_facts.py
+@@ -586,3 +586,35 @@ def test_post_compile_fact_governance_preserves_candidate_truth_and_reference_int
+         == result["business_fact_ledger"]["fact_authority"]
+         == "original_chinese_source_span"
+     )
++
++
++def test_structure_first_merge_preserves_all_exact_interface_attachments() -> None:
++    first = _raw_fact("fact:api-1", "客户只能查看本租户的工单")
++    second = _raw_fact("fact:api-2", "客户只能查看本租户的工单")
++    first["interface_id"] = "api:GET:/tickets"
++    first["interface_refs"] = ["api:GET:/tickets"]
++    second["interface_id"] = "api:GET:/tickets/{ticketId}"
++    second["interface_refs"] = ["api:GET:/tickets/{ticketId}"]
++
++    asset = {
++        "asset_id": "asset:interfaces",
++        "business_fact_ledger": {
++            "schema": "qualibug.business-fact-ledger.v1",
++            "fact_authority": "original_chinese_source_span",
++            "items": [first, second],
++        },
++    }
++
++    result = compile_structure_first_business_facts(asset, [])
++
++    assert len(result["business_fact_ledger"]["items"]) == 1
++    row = result["business_fact_ledger"]["items"][0]
++    assert row["interface_id"] == ""
++    assert row["interface_refs"] == [
++        "api:GET:/tickets",
++        "api:GET:/tickets/{ticketId}",
++    ]
++    assert {span["interface_id"] for span in row["source_spans"]} == {
++        "api:GET:/tickets",
++        "api:GET:/tickets/{ticketId}",
++    }
++    assert result["structure_first_fact_compilation_receipt"]["semantic_merge_count"] == 1
++
++
++def test_structure_first_does_not_merge_under_specified_actor_rules_before_normalization() -> None:
++    first = _raw_fact("fact:customer-close", "只有客户可以关闭工单")
++    second = _raw_fact("fact:admin-close", "只有管理员可以关闭工单")
++    for row in (first, second):
++        row["action"] = {"canonical": "关闭", "raw": "关闭"}
++        row["subject"] = {"actor_refs": [], "entity_refs": ["工单"]}
++        row["object"] = {"entity_refs": ["工单"]}
++
++    asset = {
++        "asset_id": "asset:actors",
++        "business_fact_ledger": {
++            "schema": "qualibug.business-fact-ledger.v1",
++            "fact_authority": "original_chinese_source_span",
++            "items": [first, second],
++        },
++    }
++
++    result = compile_structure_first_business_facts(asset, [])
++
++    assert len(result["business_fact_ledger"]["items"]) == 2
++    assert result["structure_first_fact_compilation_receipt"]["semantic_merge_count"] == 0
++
++
+ def test_structure_first_conflict_reason_family_matches_decision_matrix_gate():
+     asset = _asset()
+     asset["business_rules"][1]["rule_id"] = "rule:overlap-synonym"
+diff --git a/tests/test_technical_source_understanding_attachment.py b/tests/test_technical_source_understanding_attachment.py
+index 29656d7..5fc1d05 100644
+--- a/tests/test_technical_source_understanding_attachment.py
++++ b/tests/test_technical_source_understanding_attachment.py
+@@ -1,6 +1,9 @@
+ from __future__ import annotations
+ 
+ from ai_test_asset_center.enterprise_knowledge_center.composition import _attach_understanding_relationships
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.behavior_ir import (
++    build_business_behavior_ir,
++)
+ from ai_test_asset_center.enterprise_knowledge_center._parsing import _interface_relationships
+ 
+ 
+@@ -18,6 +21,7 @@ def test_interface_to_rule_attachment_uses_explicit_rule_id():
+                 "method": "POST",
+                 "path": "/orders",
+                 "operation_id": "createOrder",
++                "summary": "创建订单",
+                 "source_id": "api",
+                 "explicit_rule_refs": ["BR-001"],
+                 "rule_refs": ["BR-001"],
+@@ -99,6 +103,20 @@ def test_interface_to_rule_attachment_uses_explicit_rule_id():
+     assert edge["evidence"]["rule_id"] == "BR-001"
+     assert edge["evidence"]["endpoint"] == "POST /orders"
+     assert edge["evidence"]["operation_id"] == "createOrder"
++    fact = result["business_fact_ledger"]["items"][0]
++    assert fact["interface_id"] == "api:POST:/orders"
++    assert fact["interface_refs"] == ["api:POST:/orders"]
++    assert fact["source_spans"][0]["interface_id"] == "api:POST:/orders"
++
++    behavior_asset = {
++        **result,
++        "business_fact_ledger": result["business_fact_ledger"],
++        "interfaces": asset["interfaces"],
++    }
++    behavior_result = build_business_behavior_ir(behavior_asset, [])
++    behavior = next(
++        row for row in behavior_result["business_behavior_ir"]["behaviors"]
++        if "rule:1" in row["source_refs"]
++    )
++    assert behavior["interface_refs"] == ["api:POST:/orders"]
++    assert behavior["operation_ref"] == "createOrder"
+ 
+ 
+ def test_relationships_attach_without_legacy_shadow_metadata():
+@@ -298,3 +316,52 @@ def test_fk_relation_attaches_when_both_tables_are_understood_objects():
+     )
+     assert relation["source_refs"] == ["fk:items.order_id"]
+     assert relation["evidence"][0]["evidence_kind"] == "technical_structural_relation"
++
++
++def test_authorization_context_composes_into_exact_state_behavior_branch():
++    interface_id = "api:POST:/orders/{id}/close"
++    asset = {
++        "interfaces": [
++            {
++                "interface_id": interface_id,
++                "operation_id": "closeOrder",
++                "method": "POST",
++                "path": "/orders/{id}/close",
++                "summary": "关闭订单",
++                "source_id": "openapi",
++            }
++        ]
++    }
++    authorization = {
++        "fact_id": "fact:auth-close",
++        "status": "ACCEPTED",
++        "kind": "RULE",
++        "raw_statement": "只有客户可以关闭订单",
++        "subject": {"actor_refs": ["CUSTOMER"], "entity_refs": ["订单"]},
++        "object": {"entity_refs": ["订单"]},
++        "action": {"canonical": "关闭", "raw": "关闭订单"},
++        "conditions": [],
++        "condition_slots": [],
++        "state_effects": [],
++        "data_effects": [],
++        "modality": "MAY",
++        "authorization_semantics": {"decision": "ALLOW"},
++        "interface_id": interface_id,
++        "interface_refs": [interface_id],
++        "source_spans": [{"source_id": "rules", "locator": "BR-AUTH", "quote": "只有客户可以关闭订单"}],
++    }
++    state = {
++        "fact_id": "fact:state-close",
++        "status": "ACCEPTED",
++        "kind": "RULE",
++        "raw_statement": "只有RESOLVED状态的订单可以关闭",
++        "subject": {"actor_refs": [], "entity_refs": ["订单"]},
++        "object": {"entity_refs": ["订单"]},
++        "action": {"canonical": "关闭", "raw": "关闭订单"},
++        "conditions": ["Order.status EQUALS RESOLVED"],
++        "condition_slots": [{"field_candidate": "Order.status", "operator_candidate": "EQUALS", "value_candidate": {"normalized_value": "RESOLVED"}}],
++        "state_effects": [{"from_state": "RESOLVED", "to_state": "CLOSED"}],
++        "data_effects": [],
++        "modality": "MAY",
++        "interface_id": interface_id,
++        "interface_refs": [interface_id],
++        "source_spans": [{"source_id": "rules", "locator": "BR-STATE", "quote": "RESOLVED -> CLOSED"}],
++    }
++
++    result = build_business_behavior_ir(asset, [authorization, state])
++
++    rows = [row for row in result["business_behavior_ir"]["behaviors"] if row["operation_ref"] == "closeOrder"]
++    assert len(rows) == 1
++    behavior = rows[0]
++    assert behavior["actor_refs"] == ["CUSTOMER"]
++    assert behavior["permission_decision"] == "ALLOW"
++    assert behavior["preconditions"][0]["field_candidate"] == "Order.status"
++    assert behavior["state_effects"][0]["to_state"] == "CLOSED"
++    assert behavior["authorization_context_source_refs"] == ["fact:auth-close"]
++    assert set(behavior["source_refs"]) == {"fact:auth-close", "fact:state-close"}
+diff --git a/tests/test_source_backed_condition_state_semantics.py b/tests/test_source_backed_condition_state_semantics.py
+new file mode 100644
+index 0000000..7415dc9
+--- /dev/null
++++ b/tests/test_source_backed_condition_state_semantics.py
+@@ -0,0 +1,194 @@
++from __future__ import annotations
++
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.behavior_ir import (
++    _behavior_from_fact,
++)
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.explicit_fact_semantic_normalization import (
++    normalize_explicit_business_fact_semantics,
++)
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.lifecycle_builder import (
++    build_lifecycles,
++    source_declared_state_catalog,
++)
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.structured_fact_compiler import (
++    _merge_same_signature,
++)
++
++
++def _span(rule: str, statement: str) -> list[dict]:
++    return [{"source_id": "source:rules", "locator": f"rules.md#{rule}", "quote": statement}]
++
++
++def _fact(rule: str, rule_type: str, statement: str, *, interface_id: str = "") -> dict:
++    refs = [interface_id] if interface_id else []
++    return {
++        "fact_id": f"fact:{rule}",
++        "status": "ACCEPTED",
++        "kind": "RULE",
++        "fact_type": "PERMISSION_RULE",
++        "raw_statement": f"| {rule} | {rule_type} | {statement} |",
++        "subject": {"actor_refs": [], "entity_refs": ["订单"]},
++        "object": {"entity_refs": ["订单"]},
++        "action": {},
++        "predicate": "",
++        "conditions": [],
++        "condition_combinator": "",
++        "state_effects": [],
++        "data_effects": [],
++        "postconditions": [],
++        "modality": "MAY",
++        "interface_id": interface_id,
++        "interface_refs": refs,
++        "source_spans": _span(rule, statement),
++    }
++
++
++def _asset(facts: list[dict]) -> dict:
++    return {
++        "business_objects": [{"name": "订单"}],
++        "roles": [
++            {"role": "CUSTOMER", "canonical_role": "CUSTOMER", "aliases": ["客户"]}
++        ],
++        "interfaces": [
++            {
++                "interface_id": "api:POST:/orders/{id}/ship",
++                "operation_id": "shipOrder",
++                "method": "POST",
++                "path": "/orders/{id}/ship",
++                "summary": "发货",
++                "source_id": "source:openapi",
++            }
++        ],
++        "state_machines": [
++            {
++                "state_machine_id": "state:order",
++                "source_id": "source:rules",
++                "object": "order",
++                "states": ["OPEN", "SHIPPED", "CLOSED"],
++                "transitions": [
++                    {"from": "OPEN", "to": "SHIPPED"},
++                    {"from": "SHIPPED", "to": "CLOSED"},
++                ],
++            }
++        ],
++        "term_alias_identity_merge": {
++            "alias_to_canonical": {"Order": "订单"},
++            "merge_policy": "source_backed_term_alias_only",
++        },
++        "business_fact_ledger": {
++            "items": [
++                {
++                    "fact_id": "fact:alias",
++                    "status": "ACCEPTED",
++                    "kind": "TERM_ALIAS",
++                    "fact_type": "TERM_ALIAS",
++                    "canonical_term": "订单",
++                    "alias": "Order",
++                    "source_spans": _span("TERM-1", "Order | 订单"),
++                },
++                *facts,
++            ]
++        },
++        "document_semantic_trees": {
++            "items": [
++                {
++                    "nodes": [
++                        {
++                            "node_id": "heading:order-status",
++                            "block_type": "HEADING",
++                            "title": "Order.status",
++                            "path_titles": ["状态字段定义", "Order.status"],
++                            "source_id": "source:rules",
++                        },
++                        {
++                            "node_id": "state:open",
++                            "parent_id": "heading:order-status",
++                            "block_type": "LIST_ITEM",
++                            "title": "- OPEN: 待发货",
++                            "path_titles": ["状态字段定义", "Order.status"],
++                            "source_id": "source:rules",
++                        },
++                        {
++                            "node_id": "state:closed",
++                            "parent_id": "heading:order-status",
++                            "block_type": "LIST_ITEM",
++                            "title": "- CLOSED: 已关闭",
++                            "path_titles": ["状态字段定义", "Order.status"],
++                            "source_id": "source:rules",
++                        },
++                    ]
++                }
++            ]
++        },
++    }
++
++
++def test_under_specified_state_rules_do_not_merge_without_positive_equivalence() -> None:
++    first = _fact("BR-STATE-1", "STATE_TRANSITION", "只有OPEN状态的订单可以发货")
++    second = _fact("BR-STATE-2", "STATE_TRANSITION", "只有CLOSED状态的订单可以归档")
++
++    rows, merge_count = _merge_same_signature([first, second])
++
++    assert len(rows) == 2
++    assert merge_count == 0
++
++
++def test_source_declared_state_guard_becomes_typed_condition_and_effect() -> None:
++    raw = _fact(
++        "BR-STATE-1",
++        "STATE_TRANSITION",
++        "只有OPEN状态的订单可以发货",
++        interface_id="api:POST:/orders/{id}/ship",
++    )
++
++    result = normalize_explicit_business_fact_semantics(_asset([raw]))
++    row = next(item for item in result["business_fact_ledger"]["items"] if item["fact_id"] == raw["fact_id"])
++
++    assert row["condition_slots"] == [
++        {
++            "field_candidate": "Order.status",
++            "operator_candidate": "EQUALS",
++            "value_candidate": {"raw": "OPEN", "value_type": "ENUM", "normalized_value": "OPEN"},
++            "source_kind": "SOURCE_DECLARED_STATE_GUARD",
++            "status": "CONFIRMED_SOURCE_TEXT",
++        }
++    ]
++    assert row["state_effects"][0]["from_state"] == "OPEN"
++    assert row["state_effects"][0]["to_state"] == "SHIPPED"
++
++
++def test_source_state_alias_supports_negative_guard_without_guessing() -> None:
++    raw = _fact("BR-STATE-2", "STATE_TRANSITION", "已关闭的订单不能评论")
++
++    result = normalize_explicit_business_fact_semantics(_asset([raw]))
++    row = next(item for item in result["business_fact_ledger"]["items"] if item["fact_id"] == raw["fact_id"])
++
++    assert row["condition_slots"][0]["field_candidate"] == "Order.status"
++    assert row["condition_slots"][0]["operator_candidate"] == "NOT_EQUALS"
++    assert row["condition_slots"][0]["value_candidate"]["normalized_value"] == "CLOSED"
++
++
++def test_behavior_ir_consumes_fact_owned_typed_condition_slots() -> None:
++    fact = _fact("BR-STATE-1", "STATE_TRANSITION", "只有OPEN状态的订单可以发货")
++    fact.update(
++        {
++            "action": {"canonical": "发货", "raw": "发货"},
++            "condition_slots": [
++                {
++                    "field_candidate": "Order.status",
++                    "operator_candidate": "EQUALS",
++                    "value_candidate": {"raw": "OPEN", "value_type": "ENUM", "normalized_value": "OPEN"},
++                    "source_kind": "SOURCE_DECLARED_STATE_GUARD",
++                    "status": "CONFIRMED_SOURCE_TEXT",
++                }
++            ],
++            "conditions": ["OPEN"],
++        }
++    )
++
++    behavior = _behavior_from_fact(fact)
++
++    assert behavior is not None
++    assert behavior["preconditions"][0]["field_candidate"] == "Order.status"
++    assert behavior["preconditions"][0]["operator_candidate"] == "EQUALS"
++
++
++def test_state_machine_object_resolves_only_through_source_alias() -> None:
++    lifecycles, unknowns = build_lifecycles(_asset([]), [], ["订单"])
++
++    assert any(row["object_ref"] == "订单" and "OPEN" in row["states"] for row in lifecycles)
++    assert not any(row.get("reason_code") == "STATE_MACHINE_OBJECT_UNRESOLVED" for row in unknowns)
++
++
++def test_state_catalog_prefers_source_business_alias_over_exact_technical_label() -> None:
++    catalog = source_declared_state_catalog(_asset([]), ["订单", "Order"])
++
++    assert set(catalog) == {"订单"}
++    assert catalog["订单"][0]["field"] == "Order.status"
++
++
++def test_explicit_authorization_row_declares_allow_but_generic_may_does_not() -> None:
++    explicit = _fact("BR-AUTH-1", "AUTHORIZATION", "只有客户可以创建订单")
++    generic = _fact("BR-RULE-1", "BUSINESS_RULE", "客户可以查看订单")
++    result = normalize_explicit_business_fact_semantics(_asset([explicit, generic]))
++    by_id = {row["fact_id"]: row for row in result["business_fact_ledger"]["items"]}
++
++    assert by_id[explicit["fact_id"]]["authorization_semantics"]["decision"] == "ALLOW"
++    assert "authorization_semantics" not in by_id[generic["fact_id"]]
+diff --git a/tests/test_source_declared_operation_identity.py b/tests/test_source_declared_operation_identity.py
+new file mode 100644
+index 0000000..bde4082
+--- /dev/null
++++ b/tests/test_source_declared_operation_identity.py
+@@ -0,0 +1,103 @@
++from __future__ import annotations
++
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.behavior_ir import (
++    _behaviors_from_fact,
++)
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.builder_legacy_v1 import (
++    _build_operations,
++)
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.implementation_binding import (
++    exact_interface_operation_identities,
++)
++
++
++def _interface(interface_id: str, operation_id: str, summary: str) -> dict:
++    method, path = interface_id.removeprefix("api:").split(":", 1)
++    return {
++        "interface_id": interface_id,
++        "operation_id": operation_id,
++        "summary": summary,
++        "method": method,
++        "path": path,
++        "source_id": "openapi",
++    }
++
++
++def _asset() -> dict:
++    return {
++        "interfaces": [
++            _interface("api:GET:/tickets", "listTickets", "获取工单列表"),
++            _interface("api:GET:/tickets/{ticketId}", "getTicket", "获取工单详情"),
++        ]
++    }
++
++
++def _fact(interface_refs: list[str]) -> dict:
++    return {
++        "fact_id": "fact:tenant-filter",
++        "kind": "RULE",
++        "fact_type": "PERMISSION_RULE",
++        "status": "ACCEPTED",
++        "action": {"canonical": "查看", "raw": "查看"},
++        "subject": {"actor_refs": ["客户"], "entity_refs": ["Ticket"]},
++        "object": {"entity_refs": ["Ticket"]},
++        "interface_refs": interface_refs,
++        "conditions": ["本租户"],
++        "condition_combinator": "SINGLE_CONDITION",
++        "modality": "ONLY_IF",
++        "polarity": "POSITIVE",
++        "source_spans": [
++            {
++                "source_id": "openapi",
++                "locator": "openapi.yaml#operation",
++                "quote": "客户只能查看本租户的工单",
++            }
++        ],
++        "raw_statement": "客户只能查看本租户的工单",
++    }
++
++
++def test_exact_interface_operation_identity_uses_only_source_declared_operation_id() -> None:
++    identities = exact_interface_operation_identities(
++        _asset(),
++        ["api:GET:/tickets", "api:GET:/missing"],
++    )
++
++    assert [row["operation_ref"] for row in identities] == ["listTickets"]
++    assert identities[0]["operation_aliases"] == ["listTickets", "获取工单列表"]
++    assert identities[0]["authority"] == "OPENAPI_OPERATION_ID"
++
++
++def test_operation_model_projects_one_semantic_rule_into_each_exact_interface_operation() -> None:
++    operations, unknowns = _build_operations(
++        [_fact(["api:GET:/tickets", "api:GET:/tickets/{ticketId}"])],
++        asset=_asset(),
++    )
++
++    assert unknowns == []
++    assert {row["operation_ref"] for row in operations} == {"listTickets", "getTicket"}
++    assert all(row["name"] != "查看" for row in operations)
++    by_ref = {row["operation_ref"]: row for row in operations}
++    assert by_ref["listTickets"]["interface_refs"] == ["api:GET:/tickets"]
++    assert by_ref["getTicket"]["interface_refs"] == ["api:GET:/tickets/{ticketId}"]
++    assert "获取工单列表" in by_ref["listTickets"]["raw_action_names"]
++    assert "Ticket" in by_ref["listTickets"]["object_refs"]
++
++
++def test_behavior_ir_fans_out_exact_operations_without_endpoint_guessing() -> None:
++    behaviors = _behaviors_from_fact(
++        _asset(),
++        _fact(["api:GET:/tickets", "api:GET:/tickets/{ticketId}"]),
++    )
++
++    assert {row["operation_ref"] for row in behaviors} == {"listTickets", "getTicket"}
++    assert len({row["behavior_id"] for row in behaviors}) == 2
++    assert {tuple(row["interface_refs"]) for row in behaviors} == {
++        ("api:GET:/tickets",),
++        ("api:GET:/tickets/{ticketId}",),
++    }
++    assert all(row["operation_identity_authority"] == "OPENAPI_OPERATION_ID" for row in behaviors)
++    assert all(row["status"] == "CONFIRMED" for row in behaviors)
+diff --git a/tests/test_source_declared_role_identity.py b/tests/test_source_declared_role_identity.py
+new file mode 100644
+index 0000000..3616d98
+--- /dev/null
++++ b/tests/test_source_declared_role_identity.py
+@@ -0,0 +1,126 @@
++from __future__ import annotations
++
++from ai_test_asset_center.enterprise_knowledge_center._parsing import _roles_from_text
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.behavior_ir import (
++    _behavior_from_fact,
++)
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.builder_legacy_v1 import (
++    _build_actors,
++)
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.explicit_fact_semantic_normalization import (
++    normalize_explicit_business_fact_semantics,
++)
++
++
++ROLE_TABLE = """
++| 角色 | 权限说明 |
++|------|----------|
++| CUSTOMER | 客户，可创建工单、查看自己的工单 |
++| AGENT | 客服代理，可处理分配的工单 |
++| SUPERVISOR | 主管，可分配和升级工单 |
++| ADMIN | 管理员，拥有全部权限 |
++"""
++
++
++def _fact(statement: str, actor: str) -> dict:
++    return {
++        "fact_id": "fact:role",
++        "kind": "RULE",
++        "status": "ACCEPTED",
++        "raw_statement": statement,
++        "subject": {"actor_refs": [actor], "entity_refs": ["工单"]},
++        "object": {"entity_refs": ["工单"]},
++        "action": {"canonical": "操作", "raw": "操作"},
++        "conditions": [],
++        "condition_combinator": "",
++        "condition_frame": {},
++        "state_effects": [],
++        "data_effects": [],
++        "postconditions": [],
++        "source_spans": [
++            {"source_id": "source:rules", "locator": "line:1", "quote": statement}
++        ],
++    }
++
++
++def test_source_declared_role_table_outranks_lexicon_role_translation() -> None:
++    roles = _roles_from_text(ROLE_TABLE + "\ncustomer tenant 客服", "source:rules")
++
++    assert [row["role"] for row in roles] == [
++        "CUSTOMER",
++        "AGENT",
++        "SUPERVISOR",
++        "ADMIN",
++    ]
++    assert roles[0]["aliases"] == ["客户"]
++    assert roles[1]["aliases"] == ["客服代理", "代理"]
++    assert roles[2]["aliases"] == ["主管"]
++    assert roles[3]["aliases"] == ["管理员"]
++    assert all(row["identity_authority"] == "SOURCE_DECLARED_ROLE_TABLE" for row in roles)
++    assert not {"buyer", "operator", "support", "tenant_user"} & {
++        row["role"] for row in roles
++    }
++
++
++def test_source_preserving_blank_lines_do_not_destroy_role_table_identity() -> None:
++    projected = "\n\n".join(line for line in ROLE_TABLE.strip().splitlines())
++
++    roles = _roles_from_text(projected, "source:projected")
++
++    assert [row["role"] for row in roles] == [
++        "CUSTOMER",
++        "AGENT",
++        "SUPERVISOR",
++        "ADMIN",
++    ]
++    assert roles[1]["aliases"] == ["客服代理", "代理"]
++
++
++def test_fact_actor_coordinate_uses_source_declared_canonical_role() -> None:
++    roles = _roles_from_text(ROLE_TABLE, "source:rules")
++    asset = {
++        "roles": roles,
++        "business_fact_ledger": {
++            "items": [_fact("只有被分配的代理可以操作", "代理")]
++        },
++    }
++
++    normalized = normalize_explicit_business_fact_semantics(asset)
++    fact = normalized["business_fact_ledger"]["items"][0]
++    behavior = _behavior_from_fact(fact)
++
++    assert fact["subject"]["actor_refs"] == ["AGENT"]
++    assert "被分配" in fact["conditions"]
++    assert behavior is not None
++    assert behavior["actor_refs"] == ["AGENT"]
++
++
++def test_actor_model_uses_role_table_as_single_identity_authority() -> None:
++    explicit = _roles_from_text(ROLE_TABLE, "source:rules")
++    asset = {
++        "roles": [
++            *explicit,
++            {
++                "role_id": "role:api:buyer",
++                "source_id": "source:api",
++                "role": "buyer",
++                "aliases": ["customer"],
++                "identity_authority": "LEXICON_FALLBACK",
++            },
++            {
++                "role_id": "role:api:admin",
++                "source_id": "source:api",
++                "role": "admin",
++                "aliases": ["管理员"],
++                "identity_authority": "LEXICON_FALLBACK",
++            },
++        ],
++        "permission_matrix": [
++            {
++                "permission_id": "permission:admin",
++                "role": "admin",
++                "resource": "SLA",
++                "actions": ["create"],
++                "decision": "allow",
++            }
++        ],
++    }
++    facts = [_fact("只有客户可以操作工单", "CUSTOMER")]
++    operations = [
++        {
++            "operation_id": "operation:create-ticket",
++            "actor_refs": ["客户"],
++            "evidence": [],
++        }
++    ]
++
++    actors, _unknowns = _build_actors(asset, facts, operations)
++    by_name = {row["name"]: row for row in actors}
++
++    assert set(by_name) == {"CUSTOMER", "AGENT", "SUPERVISOR", "ADMIN"}
++    assert by_name["CUSTOMER"]["aliases"] == ["客户"]
++    assert set(by_name["AGENT"]["aliases"]) == {"客服代理", "代理"}
++    assert set(by_name["ADMIN"]["aliases"]) == {"管理员", "admin"}
++    assert by_name["CUSTOMER"]["responsibility_operation_refs"] == [
++        "operation:create-ticket"
++    ]
++    assert by_name["ADMIN"]["authorization_decision_counts"]["ALLOW"] == 1
+diff --git a/tests/test_term_alias_identity_pipeline.py b/tests/test_term_alias_identity_pipeline.py
+new file mode 100644
+index 0000000..5b93e8f
+--- /dev/null
++++ b/tests/test_term_alias_identity_pipeline.py
+@@ -0,0 +1,84 @@
++from __future__ import annotations
++
++from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension_extractor_v1 import (
++    analyze_chinese_business_source,
++)
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.structured_fact_compiler import (
++    compile_structure_first_business_facts,
++)
++
++
++def _alias(fact_id: str, canonical: str, alias: str) -> dict:
++    statement = f"实体={alias};说明={canonical}"
++    return {
++        "fact_id": fact_id,
++        "kind": "TERM_ALIAS",
++        "status": "ACCEPTED",
++        "canonical_term": canonical,
++        "alias": alias,
++        "raw_statement": statement,
++        "source_spans": [
++            {
++                "source_id": "business-rules",
++                "locator": f"BUSINESS_RULES.md#alias={fact_id}",
++                "quote": statement,
++                "quote_hash": f"hash-{fact_id}",
++            }
++        ],
++        "ambiguities": [],
++    }
++
++
++def test_markdown_table_headers_do_not_leak_into_later_tables() -> None:
++    text = """\
++| 实体 | 说明 |
++| --- | --- |
++| Ticket | 工单，核心业务实体 |
++| Comment | 工单评论 |
++
++## 规则
++
++| 规则ID | 规则类型 | 规则描述 |
++| --- | --- | --- |
++| BR-001 | AUTHORIZATION | 客户只能查看自己的工单 |
++| BR-002 | STATE_TRANSITION | 已关闭工单不能评论 |
++"""
++
++    _, _, glossary = analyze_chinese_business_source(
++        {"source_id": "business-rules", "filename": "BUSINESS_RULES.md", "text": text},
++        asset={"business_objects": [], "roles": [], "permission_matrix": [], "data_tables": []},
++    )
++
++    assert {(row["canonical_term"], row["alias"]) for row in glossary} == {
++        ("工单", "Ticket"),
++        ("工单评论", "Comment"),
++    }
++    assert not any(str(row.get("alias", "")).startswith("BR-") for row in glossary)
++    assert not any(row.get("canonical_term") == "AUTHORIZATION" for row in glossary)
++
++
++def test_structure_first_signature_preserves_every_term_alias_pair() -> None:
++    aliases = [
++        _alias("ticket", "工单", "Ticket"),
++        _alias("comment", "工单评论", "Comment"),
++        _alias("attachment", "工单附件", "Attachment"),
++    ]
++    asset = {
++        "asset_id": "term-alias-pipeline",
++        "business_fact_ledger": {
++            "schema": "qualibug.business-fact-ledger.v1",
++            "fact_authority": "original_chinese_source_span",
++            "items": aliases,
++        },
++    }
++
++    result = compile_structure_first_business_facts(asset, [])
++    rows = [
++        row
++        for row in result["business_fact_ledger"]["items"]
++        if row.get("fact_type") == "TERM_ALIAS"
++    ]
++
++    assert len(rows) == 3
++    assert {(row["canonical_term"], row["alias"]) for row in rows} == {
++        ("工单", "Ticket"),
++        ("工单评论", "Comment"),
++        ("工单附件", "Attachment"),
++    }
++    assert len({row["semantic_signature"] for row in rows}) == 3
