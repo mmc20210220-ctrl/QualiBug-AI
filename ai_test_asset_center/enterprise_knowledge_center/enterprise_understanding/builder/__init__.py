@@ -40,6 +40,10 @@ from ..identity_structural_review import (
     identity_structural_review_rebuild_in_progress,
     scrub_operator_structural_review_mentions,
 )
+from ..identity_structural_review_governance import (
+    govern_identity_structural_review_decision_admission,
+    preserve_identity_structural_review_registry_merges,
+)
 from ..identity_technical_projection import augment_technical_identity_projection
 from ..schema import as_dict, as_list, stable_id, text
 
@@ -89,6 +93,7 @@ def _publish_identity_audit_receipts(
         "enterprise_identity_field_evidence",
         "enterprise_identity_structural_evidence",
         "enterprise_identity_structural_review_queue",
+        "enterprise_identity_structural_review_admission",
         "enterprise_identity_structural_review_receipt",
         "enterprise_identity_annotation_manifest",
         "enterprise_identity_benchmark",
@@ -120,6 +125,11 @@ def _attach_identity_audit_receipts(
         or asset.get("enterprise_identity_structural_evidence")
     )
     model["identity_structural_evidence"] = structural_evidence
+    structural_admission = as_dict(
+        model.get("identity_structural_review_admission")
+        or asset.get("enterprise_identity_structural_review_admission")
+    )
+    model["identity_structural_review_admission"] = structural_admission
     structural_review = as_dict(
         model.get("identity_structural_review_receipt")
         or asset.get("enterprise_identity_structural_review_receipt")
@@ -200,6 +210,9 @@ def _attach_identity_audit_receipts(
                 )
                 or 0
             ),
+            "enterprise_identity_structural_review_blocked_decision_count": len(
+                as_list(structural_admission.get("blocked_decision_ids"))
+            ),
             "enterprise_identity_structural_review_applied_count": int(
                 structural_review.get("applied_confirmation_count") or 0
             ),
@@ -253,12 +266,20 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
         pending = consume_identity_structural_review_pending_receipt(asset)
         model = finalize_identity_structural_review_measurement(asset, model, pending)
     else:
+        model = govern_identity_structural_review_decision_admission(asset, model)
         model = apply_identity_structural_review_decisions(asset, model, resolution)
         review_receipt = as_dict(
             model.get("identity_structural_review_receipt")
             or asset.get("enterprise_identity_structural_review_receipt")
         )
         if bool(review_receipt.get("rebuild_required")):
+            review_receipt = preserve_identity_structural_review_registry_merges(
+                asset, review_receipt
+            )
+            asset["enterprise_identity_structural_review_receipt"] = deepcopy(
+                review_receipt
+            )
+            model["identity_structural_review_receipt"] = deepcopy(review_receipt)
             begin_identity_structural_review_rebuild(asset, review_receipt)
             return build_enterprise_understanding_model(asset)
 
