@@ -1,4 +1,4 @@
-"""Real TicketSLA business-object baseline using the shared evaluator authority."""
+"""Real Warehouse WMS business-object baseline using shared evaluator authority."""
 from __future__ import annotations
 
 import argparse
@@ -9,29 +9,28 @@ from typing import Any, Callable
 from .business_object_baseline import (
     BusinessObjectBaselineError,
     BusinessObjectBaselineSpec,
-    git_blob_sha,
     run_business_object_baseline,
     verify_frozen_source_snapshot as _verify_frozen_source_snapshot,
 )
 
-PROJECT_ID = "ticketsla_d"
-BASELINE_SCHEMA = "qualibug.ticketsla-business-object-baseline.v1"
+PROJECT_ID = "warehouse_e"
+BASELINE_SCHEMA = "qualibug.warehouse-business-object-baseline.v1"
 SOURCE_SPECS = (
-    ("projects/ticketsla_d/input/BUSINESS_RULES.md", "business_rules"),
-    ("projects/ticketsla_d/input/TEST_ACCOUNTS.md", "config"),
-    ("projects/ticketsla_d/input/openapi.yaml", "openapi"),
+    ("projects/warehouse_e/input/BUSINESS_RULES.md", "business_rules"),
+    ("projects/warehouse_e/input/DATA_DICTIONARY.md", "data_dictionary"),
+    ("projects/warehouse_e/input/TEST_ACCOUNTS.md", "config"),
+    ("projects/warehouse_e/input/openapi.yaml", "openapi"),
 )
 SPEC = BusinessObjectBaselineSpec(
     project_id=PROJECT_ID,
     baseline_schema=BASELINE_SCHEMA,
     source_specs=SOURCE_SPECS,
-    actor_name="ticketsla_object_baseline",
-    error_prefix="ticketsla",
-    source_snapshot_schema="qualibug.ticketsla-source-snapshot-verification.v1",
-    source_drift_reason_code="TICKETSLA_PUBLIC_SOURCE_SNAPSHOT_DRIFT",
+    actor_name="warehouse_object_baseline",
+    error_prefix="warehouse",
+    source_snapshot_schema="qualibug.warehouse-source-snapshot-verification.v1",
+    source_drift_reason_code="WAREHOUSE_PUBLIC_SOURCE_SNAPSHOT_DRIFT",
 )
-TicketSLAObjectBaselineError = BusinessObjectBaselineError
-_git_blob_sha = git_blob_sha
+WarehouseObjectBaselineError = BusinessObjectBaselineError
 
 
 def verify_frozen_source_snapshot(
@@ -41,7 +40,7 @@ def verify_frozen_source_snapshot(
     return _verify_frozen_source_snapshot(root, business_object_ground_truth, SPEC)
 
 
-def run_ticketsla_object_baseline(
+def run_warehouse_object_baseline(
     *,
     root: str | Path,
     output_dir: str | Path | None = None,
@@ -65,17 +64,17 @@ def run_ticketsla_object_baseline(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build and measure TicketSLA business-object recognition."
+        description="Build and measure Warehouse WMS business-object recognition."
     )
     parser.add_argument("--root", default=".")
     parser.add_argument("--output")
     args = parser.parse_args(argv)
     try:
-        summary = run_ticketsla_object_baseline(
+        summary = run_warehouse_object_baseline(
             root=args.root,
             output_dir=args.output,
         )
-    except (TicketSLAObjectBaselineError, OSError, ValueError, TypeError) as exc:
+    except (WarehouseObjectBaselineError, OSError, ValueError, TypeError) as exc:
         print(json.dumps({
             "schema": BASELINE_SCHEMA,
             "project_id": PROJECT_ID,
@@ -95,7 +94,7 @@ __all__ = [
     "BASELINE_SCHEMA",
     "PROJECT_ID",
     "SOURCE_SPECS",
-    "TicketSLAObjectBaselineError",
-    "run_ticketsla_object_baseline",
+    "WarehouseObjectBaselineError",
+    "run_warehouse_object_baseline",
     "verify_frozen_source_snapshot",
 ]

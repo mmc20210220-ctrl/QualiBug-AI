@@ -1,0 +1,390 @@
+{
+  "schema": "qualibug.enterprise-business-object-ground-truth.v1",
+  "project_id": "warehouse_e",
+  "benchmark_id": "warehouse-business-object-types-v1",
+  "annotation_version": "1.0.0",
+  "annotation_scope": "CLOSED_WORLD_SOURCE_LABELS",
+  "scope_statement": "人工仅依据冻结的 WMS 业务规则、数据字典、测试账号与 OpenAPI 标注对象类型。核心实体标题与实体关系图节点属于显式对象声明；关系限定语、动作、状态、字段和技术章节不属于对象。Customer/客户与 Warehouse/仓库允许同时具有对象和角色语义。任何未标注产品候选使评测返回 NOT_MEASURED。",
+  "ground_truth_generated_from_product_output": false,
+  "source_snapshot": [
+    {
+      "path": "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "blob_sha": "8bb44a140b13ef730e3df610ca182630996aa138",
+      "authority": "public_enterprise_business_source"
+    },
+    {
+      "path": "projects/warehouse_e/input/DATA_DICTIONARY.md",
+      "blob_sha": "3833524fb39869f2b1738cc440b35355cd1c06ba",
+      "authority": "public_enterprise_data_dictionary"
+    },
+    {
+      "path": "projects/warehouse_e/input/TEST_ACCOUNTS.md",
+      "blob_sha": "50e6c35b1572da3fb57b6f14275bd9c966ed01ac",
+      "authority": "public_test_environment_source"
+    },
+    {
+      "path": "projects/warehouse_e/input/openapi.yaml",
+      "blob_sha": "eed984a73ef99a53a86109861e4b1b752d1c4afa",
+      "authority": "public_interface_contract"
+    }
+  ],
+  "labels": [
+    {
+      "ground_truth_id": "gt:warehouse:object-type:product",
+      "canonical_label": "Product",
+      "aliases": [
+        "商品"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L23-L33",
+        "projects/warehouse_e/input/TEST_ACCOUNTS.md#L51-L56"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:warehouse",
+      "canonical_label": "Warehouse",
+      "aliases": [
+        "仓库"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "ACTOR",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L7-L16",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L35-L43",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L27-L33"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:inventory-batch",
+      "canonical_label": "InventoryBatch",
+      "aliases": [
+        "库存批次"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L7-L18",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L45-L56",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L57-L66"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:order",
+      "canonical_label": "Order",
+      "aliases": [
+        "订单"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L9-L17",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L58-L70",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L42-L55"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:order-line",
+      "canonical_label": "OrderLine",
+      "aliases": [
+        "订单行"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L9-L12",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L72-L80",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L89-L94"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:pick-list",
+      "canonical_label": "PickList",
+      "aliases": [
+        "拣货单"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L15-L16",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L82-L91",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L79-L87"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:shipment",
+      "canonical_label": "Shipment",
+      "aliases": [
+        "发货单"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L16",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L93-L104",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L25-L25"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:return",
+      "canonical_label": "Return",
+      "aliases": [
+        "退货",
+        "退货记录"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L17-L18",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L106-L116",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L37-L40",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L68-L77"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:restock-order",
+      "canonical_label": "RestockOrder",
+      "aliases": [
+        "补货单"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P1",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L6",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L118-L128",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L98-L100"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:supplier",
+      "canonical_label": "Supplier",
+      "aliases": [
+        "供应商"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P1",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L6",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L130-L137",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L99-L99"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:reservation",
+      "canonical_label": "Reservation",
+      "aliases": [
+        "库存预留"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L13-L14",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L139-L148",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L104-L105"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:batch-surface",
+      "canonical_label": "批次",
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L64-L66",
+        "projects/warehouse_e/input/TEST_ACCOUNTS.md#L58-L63",
+        "projects/warehouse_e/input/openapi.yaml#L233-L249"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:reservation-surface",
+      "canonical_label": "预留",
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "ACTION",
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L104-L105",
+        "projects/warehouse_e/input/TEST_ACCOUNTS.md#L76-L77",
+        "projects/warehouse_e/input/openapi.yaml#L541-L556"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:customer",
+      "canonical_label": "Customer",
+      "aliases": [
+        "CUSTOMER",
+        "客户"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT",
+        "ACTOR"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L10",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L63-L63",
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L111-L111",
+        "projects/warehouse_e/input/TEST_ACCOUNTS.md#L25-L36"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:inventory-surface",
+      "labels": [
+        "库存"
+      ],
+      "expected_business_object": true,
+      "semantic_roles": [
+        "BUSINESS_OBJECT"
+      ],
+      "criticality": "P1",
+      "source_locators": [
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L29-L33",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L64-L66",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L91-L93"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:actions",
+      "labels": [
+        "申请",
+        "拣货",
+        "发货",
+        "补货"
+      ],
+      "expected_business_object": false,
+      "semantic_roles": [
+        "ACTION"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L12-L16",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L54-L55",
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L98-L100",
+        "projects/warehouse_e/input/openapi.yaml#L410-L458"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:actor-only",
+      "labels": [
+        "ADMIN",
+        "MANAGER",
+        "ORDER_MANAGER",
+        "OPERATOR",
+        "AUDITOR",
+        "管理员",
+        "经理",
+        "操作员",
+        "审计员"
+      ],
+      "expected_business_object": false,
+      "semantic_roles": [
+        "ACTOR"
+      ],
+      "criticality": "P0",
+      "source_locators": [
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L9-L16",
+        "projects/warehouse_e/input/TEST_ACCOUNTS.md#L19-L37"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:generic-data",
+      "labels": [
+        "数据"
+      ],
+      "expected_business_object": false,
+      "semantic_roles": [
+        "OTHER_NON_OBJECT"
+      ],
+      "criticality": "P1",
+      "source_locators": [
+        "projects/warehouse_e/input/BUSINESS_RULES.md#L16-L23"
+      ],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:warehouse:object-type:technical-section",
+      "labels": [
+        "关键业务约束"
+      ],
+      "expected_business_object": false,
+      "semantic_roles": [
+        "TECHNICAL_ARTIFACT"
+      ],
+      "criticality": "P1",
+      "source_locators": [
+        "projects/warehouse_e/input/DATA_DICTIONARY.md#L150-L157"
+      ],
+      "annotation_status": "CONFIRMED"
+    }
+  ]
+}
