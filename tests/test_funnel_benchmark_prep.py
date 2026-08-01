@@ -27,14 +27,29 @@ def test_resolve_benchmark_target_root_uses_env_override(tmp_path: Path):
     assert root == tmp_path
 
 
-def test_should_skip_target_db_reset_is_explicit_only():
+def test_should_skip_target_db_reset_requires_independent_confirmation():
     assert should_skip_target_db_reset({}) is False
-    assert should_skip_target_db_reset({"QUALIBUG_SKIP_TARGET_DB_RESET": "1"}) is True
-    assert should_skip_target_db_reset({"QUALIBUG_SKIP_TARGET_DB_RESET": "yes"}) is True
+    assert should_skip_target_db_reset(
+        {"QUALIBUG_SKIP_TARGET_DB_RESET": "1"}
+    ) is False
+    assert should_skip_target_db_reset(
+        {"QUALIBUG_BENCHMARK_ACCEPT_DIRTY_TARGET": "1"}
+    ) is False
+    assert should_skip_target_db_reset(
+        {
+            "QUALIBUG_SKIP_TARGET_DB_RESET": "yes",
+            "QUALIBUG_BENCHMARK_ACCEPT_DIRTY_TARGET": "yes",
+        }
+    ) is True
 
 
-def test_reset_benchmark_target_db_skip_is_loud_and_recorded():
-    result = reset_benchmark_target_db(env={"QUALIBUG_SKIP_TARGET_DB_RESET": "1"})
+def test_reset_benchmark_target_db_confirmed_skip_is_loud_and_recorded():
+    result = reset_benchmark_target_db(
+        env={
+            "QUALIBUG_SKIP_TARGET_DB_RESET": "1",
+            "QUALIBUG_BENCHMARK_ACCEPT_DIRTY_TARGET": "1",
+        }
+    )
     assert result["status"] == "skipped"
     assert "polluted" in result["operator_note"]
 
