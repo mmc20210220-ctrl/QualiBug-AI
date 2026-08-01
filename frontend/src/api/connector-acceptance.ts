@@ -48,6 +48,7 @@ export type ConnectorAcceptanceReport = ConnectorAcceptanceReportSummary & {
   raw_cursor_returned: false;
   credential_values_returned: false;
   filesystem_path_returned: false;
+  arbitrary_diagnostic_text_returned: false;
 };
 
 export type ConnectorAcceptanceInventory = {
@@ -213,6 +214,7 @@ function toReport(value: unknown): ConnectorAcceptanceReport {
       'raw_cursor_returned',
       'credential_values_returned',
       'filesystem_path_returned',
+      'arbitrary_diagnostic_text_returned',
     ],
     '验收报告',
   );
@@ -242,6 +244,7 @@ function toReport(value: unknown): ConnectorAcceptanceReport {
     raw_cursor_returned: false,
     credential_values_returned: false,
     filesystem_path_returned: false,
+    arbitrary_diagnostic_text_returned: false,
   };
 }
 
