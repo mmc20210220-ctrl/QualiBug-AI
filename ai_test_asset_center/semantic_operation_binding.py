@@ -12,6 +12,8 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from .enterprise_knowledge_center._linking import _relationship_is_authoritative
+
 from .behavior_ir import (
     BehaviorIRError,
     _content_addressed_id,
@@ -56,12 +58,11 @@ def _accepted_rule_interface_edges(asset: dict[str, Any]) -> list[dict[str, Any]
     for raw in _list(asset.get("relationships")):
         edge = _dict(raw)
         relation = _text(edge.get("relation") or edge.get("relation_type")).lower()
-        status = _text(edge.get("status") or "accepted").lower()
         rule_ref = _text(edge.get("from") or edge.get("from_ref"))
         interface_ref = _text(edge.get("to") or edge.get("to_ref"))
         if (
             relation != "rule_to_interface"
-            or status != "accepted"
+            or not _relationship_is_authoritative(edge)
             or not rule_ref
             or not interface_ref
         ):
