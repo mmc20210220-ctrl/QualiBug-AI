@@ -91,7 +91,16 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const passed = '${{ needs.root-contracts.result }}' === 'success';
+            const result = '${{ needs.root-contracts.result }}';
+            if (result === 'cancelled' || result === 'skipped') {
+              core.notice(`Root regression ${result}; no pass/fail status published`);
+              return;
+            }
+            if (result !== 'success' && result !== 'failure') {
+              core.notice(`Root regression result ${result} is not terminally classifiable`);
+              return;
+            }
+            const passed = result === 'success';
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
