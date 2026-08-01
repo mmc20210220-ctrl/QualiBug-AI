@@ -1,0 +1,307 @@
++    The set is restricted to interfaces that actually exist in the compiled asset.
++    Unknown/stale IDs remain non-bindable instead of creating synthetic endpoints.
++    """
++    known = {
++        text(row.get("interface_id"))
++        for row in _dicts(asset.get("interfaces"))
++        if text(row.get("interface_id"))
++    }
++    return {
++        text(value)
++        for value in as_list(behavior.get("interface_refs"))
++        if text(value) in known
++    }
++
++
++def exact_interface_operation_identities(
++    asset: dict[str, Any],
++    interface_refs: Iterable[Any],
++) -> list[dict[str, Any]]:
++    """Resolve exact source-declared interface refs to OpenAPI operation identities.
++
++    This is the single operation-identity bridge used by the understanding model,
++    Behavior IR, and implementation binding.  It never token-matches, infers from a
++    path, or chooses one interface from many.  Every returned identity is backed by
++    one concrete interface already present in the compiled asset.
++    """
++    by_id = {
++        text(row.get("interface_id")): row
++        for row in _dicts(asset.get("interfaces"))
++        if text(row.get("interface_id"))
++    }
++    model_operations = [
++        row
++        for row in _dicts(as_dict(asset.get("enterprise_understanding_model")).get("operations"))
++        if text(row.get("name"))
++    ]
++    result: list[dict[str, Any]] = []
++    for interface_id in unique_text(interface_refs):
++        interface = by_id.get(interface_id)
++        if not interface:
++            continue
++        operation_ref = text(interface.get("operation_id"))
++        if not operation_ref:
++            continue
++        operation_matches = [
++            row
++            for row in model_operations
++            if text(row.get("name")) == operation_ref
++            and interface_id in unique_text(as_list(row.get("interface_refs")))
++        ]
++        result.append(
++            {
++                "interface_id": interface_id,
++                "operation_ref": operation_ref,
++                "operation_aliases": unique_text(
++                    [
++                        operation_ref,
++                        interface.get("summary"),
++                        interface.get("name"),
++                    ]
++                ),
++                "method": text(interface.get("method")).upper(),
++                "path": text(interface.get("path")),
++                "object_refs": (
++                    unique_text(as_list(operation_matches[0].get("object_refs")))
++                    if len(operation_matches) == 1
++                    else []
++                ),
++                "evidence": [_interface_evidence(interface, "source_declared_operation_identity")],
++                "authority": "OPENAPI_OPERATION_ID",
++                "source_backed": True,
++            }
++        )
++    return result
++
++
++def _relationship_interface_ids(asset: dict[str, Any], behavior: dict[str, Any]) -> set[str]:
+     source_refs = {text(value) for value in as_list(behavior.get("source_refs")) if text(value)}
+     source_refs |= _source_rule_ids(asset, behavior)
++    known = {
++        text(row.get("interface_id"))
++        for row in _dicts(asset.get("interfaces"))
++        if text(row.get("interface_id"))
++    }
+     result: set[str] = set()
+     for edge in _dicts(asset.get("relationships")):
+         if text(edge.get("relation")) not in {
+@@ -115,11 +199,19 @@ def _authoritative_interface_ids(asset: dict[str, Any], behavior: dict[str, Any]
+             continue
+         if text(edge.get("from")) not in source_refs:
+             continue
+-        if _authoritative_relationship(edge) and text(edge.get("to")):
+-            result.add(text(edge.get("to")))
++        target = text(edge.get("to"))
++        if _authoritative_relationship(edge) and target in known:
++            result.add(target)
+     return result
+ 
+ 
++def _authoritative_interface_ids(asset: dict[str, Any], behavior: dict[str, Any]) -> set[str]:
++    """All exact source-backed interface identities, retained for compatibility."""
++    return _relationship_interface_ids(asset, behavior) | _declared_interface_ids(
++        asset, behavior
++    )
++
++
+ def _interface_labels(interface: dict[str, Any]) -> set[str]:
+     path = text(interface.get("path")).rstrip("/")
+     terminal = path.rsplit("/", 1)[-1].strip("{}") if path else ""
+@@ -208,38 +300,103 @@ def _bind_action(
+     asset: dict[str, Any], behavior: dict[str, Any], interfaces: list[dict[str, Any]]
+ ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+     by_id = {text(row.get("interface_id")): row for row in interfaces if text(row.get("interface_id"))}
+-    authoritative_ids = _authoritative_interface_ids(asset, behavior)
+-    authoritative = [by_id[value] for value in sorted(authoritative_ids) if value in by_id]
++    declared_ids = _declared_interface_ids(asset, behavior)
++    relationship_ids = _relationship_interface_ids(asset, behavior)
++    # An accepted relationship is the most specific downstream source authority.
++    # Without one, exact interface attachments preserved on the fact/behavior are
++    # authoritative.  Neither source may silently choose the first of many IDs.
++    source_ids = relationship_ids or declared_ids
+     exact = _exact_operation_interfaces(behavior, interfaces)
++    exact_ids = {text(row.get("interface_id")) for row in exact if text(row.get("interface_id"))}
+     conflicts: list[dict[str, Any]] = []
+     unknowns: list[dict[str, Any]] = []
+ 
+-    if authoritative and len(exact) == 1 and text(exact[0].get("interface_id")) not in authoritative_ids:
++    relationship_declared_conflict = bool(
++        relationship_ids and declared_ids and not relationship_ids.issubset(declared_ids)
++    )
++    exact_conflict = bool(
++        source_ids and len(exact_ids) == 1 and not exact_ids.issubset(source_ids)
++    )
++    if relationship_declared_conflict or exact_conflict:
+         conflicts.append(
+             {
+                 "conflict_id": stable_id(
+                     "implementation_binding_conflict",
+                     behavior.get("behavior_id"),
+-                    sorted(authoritative_ids),
+-                    exact[0].get("interface_id"),
++                    sorted(declared_ids),
++                    sorted(relationship_ids),
++                    sorted(exact_ids),
+                 ),
+                 "kind": "BEHAVIOR_API_BINDING_CONFLICT",
+                 "status": "UNRESOLVED",
+                 "severity": "P0",
+                 "behavior_ref": behavior.get("behavior_id"),
+-                "authoritative_interface_refs": sorted(authoritative_ids),
+-                "exact_operation_interface_ref": exact[0].get("interface_id"),
++                "declared_interface_refs": sorted(declared_ids),
++                "authoritative_interface_refs": sorted(relationship_ids),
++                "exact_operation_interface_refs": sorted(exact_ids),
+                 "automatic_resolution_allowed": False,
+                 "evidence": dedupe_evidence(
+                     [
+-                        *[_interface_evidence(row, "authoritative_relationship") for row in authoritative],
+-                        _interface_evidence(exact[0], "exact_operation_identity"),
++                        *[
++                            _interface_evidence(by_id[value], "source_fact_interface_attachment")
++                            for value in sorted(declared_ids)
++                            if value in by_id
++                        ],
++                        *[
++                            _interface_evidence(by_id[value], "authoritative_relationship")
++                            for value in sorted(relationship_ids)
++                            if value in by_id
++                        ],
++                        *[
++                            _interface_evidence(row, "exact_operation_identity")
++                            for row in exact
++                        ],
+                     ]
+                 ),
+             }
+         )
+ 
+-    selected = authoritative or exact if len(exact) == 1 else authoritative
++    selected: list[dict[str, Any]] = []
++    selected_derivation = ""
++    if not conflicts:
++        if len(source_ids) == 1:
++            selected = [by_id[next(iter(source_ids))]]
++            selected_derivation = (
++                "authoritative_relationship"
++                if relationship_ids
++                else "source_fact_interface_attachment"
++            )
++        elif len(source_ids) > 1:
++            narrowed = source_ids & exact_ids
++            if len(narrowed) == 1 and len(exact_ids) == 1:
++                selected = [by_id[next(iter(narrowed))]]
++                selected_derivation = "exact_operation_identity_narrows_source_interfaces"
++            else:
++                unknowns.append(
++                    {
++                        "kind": "BEHAVIOR_API_BINDING_AMBIGUOUS",
++                        "reason_code": "BEHAVIOR_API_BINDING_AMBIGUOUS",
++                        "behavior_ref": behavior.get("behavior_id"),
++                        "candidate_interface_refs": sorted(source_ids),
++                        "source_interface_refs": sorted(declared_ids),
++                        "relationship_interface_refs": sorted(relationship_ids),
++                        "blocks_scenario_planning": True,
++                    }
++                )
++        elif len(exact) == 1:
++            selected = [exact[0]]
++            selected_derivation = "exact_operation_identity"
++        elif len(exact) > 1:
++            unknowns.append(
++                {
++                    "kind": "BEHAVIOR_API_BINDING_AMBIGUOUS",
++                    "reason_code": "BEHAVIOR_API_BINDING_AMBIGUOUS",
++                    "behavior_ref": behavior.get("behavior_id"),
++                    "candidate_interface_refs": sorted(exact_ids),
++                    "blocks_scenario_planning": True,
++                }
++            )
++
+     bindings = [
+         {
+             "binding_id": stable_id(
+@@ -252,36 +409,25 @@ def _bind_action(
+             "summary": row.get("summary"),
+             "status": "BOUND",
+             "authoritative": True,
+-            "derivation": (
+-                "authoritative_relationship" if text(row.get("interface_id")) in authoritative_ids else "exact_operation_identity"
+-            ),
++            "derivation": selected_derivation,
+             "contract_fields": sorted(_contract_fields_for_interface(row)),
+             "evidence": [_interface_evidence(row, "behavior_action_binding")],
+         }
+         for row in selected
+     ]
+-    if not bindings:
+-        if len(exact) > 1:
+-            unknowns.append(
+-                {
+-                    "kind": "BEHAVIOR_API_BINDING_AMBIGUOUS",
+-                    "reason_code": "BEHAVIOR_API_BINDING_AMBIGUOUS",
+-                    "behavior_ref": behavior.get("behavior_id"),
+-                    "candidate_interface_refs": [row.get("interface_id") for row in exact],
+-                    "blocks_scenario_planning": True,
+-                }
+-            )
+-        else:
+-            unknowns.append(
+-                {
+-                    "kind": "BEHAVIOR_API_BINDING_UNRESOLVED",
+-                    "reason_code": "BEHAVIOR_API_BINDING_UNRESOLVED",
+-                    "behavior_ref": behavior.get("behavior_id"),
+-                    "operation_ref": behavior.get("operation_ref"),
+-                    "blocks_scenario_planning": True,
+-                }
+-            )
+-            bindings.extend(_token_overlap_candidates(behavior, interfaces))
++    if not bindings and not conflicts and not any(
++        row.get("kind") == "BEHAVIOR_API_BINDING_AMBIGUOUS" for row in unknowns
++    ):
++        unknowns.append(
++            {
++                "kind": "BEHAVIOR_API_BINDING_UNRESOLVED",
++                "reason_code": "BEHAVIOR_API_BINDING_UNRESOLVED",
++                "behavior_ref": behavior.get("behavior_id"),
++                "operation_ref": behavior.get("operation_ref"),
++                "blocks_scenario_planning": True,
++            }
++        )
++        bindings.extend(_token_overlap_candidates(behavior, interfaces))
+     return bindings, unknowns, conflicts
+ 
+ 
+@@ -679,5 +825,6 @@ def build_behavior_implementation_bindings(
+ __all__ = [
+     "IMPLEMENTATION_BINDING_SCHEMA",
+     "IMPLEMENTATION_BINDING_GATE_SCHEMA",
++    "exact_interface_operation_identities",
+     "build_behavior_implementation_bindings",
+ ]
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/lifecycle_builder.py b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/lifecycle_builder.py
+index 7693786..46139d6 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/lifecycle_builder.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/lifecycle_builder.py
+@@ -21,6 +21,12 @@ from .schema import (
+ _TRANSITION_TEXT_RE = re.compile(
+     r"^\s*(?P<from>[^>→\-]{1,48}?)\s*(?:->|→|=>|至|到)\s*(?P<to>[^>→]{1,48}?)\s*$"
+ )
++_STATE_FIELD_HEADING_RE = re.compile(
++    r"^(?P<object>[A-Za-z_][A-Za-z0-9_.:-]{0,127})\.(?P<field>[A-Za-z_][A-Za-z0-9_.:-]{0,127})$"
++)
++_STATE_DEFINITION_RE = re.compile(
++    r"^\s*[-*+]?\s*(?P<state>[A-Z][A-Z0-9_]{0,63})\s*[:：]\s*(?P<description>.+?)\s*$"
++)
+ 
+ 
+ def _accepted_fact(fact: dict[str, Any]) -> bool:
+@@ -41,7 +47,44 @@ def _fact_objects(fact: dict[str, Any], known_objects: set[str]) -> list[str]:
+     return sorted(set([*explicit, *mentions]), key=lambda name: (statement.find(name), -len(name), name))
+ 
+ 
+-def _resolve_machine_object(row: dict[str, Any], known_objects: set[str]) -> str:
++def _source_term_aliases(asset: dict[str, Any]) -> dict[str, str]:
++    """Return only unambiguous source-declared term aliases, case-insensitively.
++
++    The lifecycle layer consumes the same TERM_ALIAS authority as object identity. It
