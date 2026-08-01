@@ -81,11 +81,3 @@ jobs:
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "repos/${REPOSITORY}/actions/workflows/one-time-lifecycle-root-fix.yml/dispatches" \
             -f ref=main
-
-  online-source-direct:
-    if: github.head_ref == 'online-source-ingestion-root-fix-v2'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Confirm online-source runner
-        run: echo online-source-runner-ok
