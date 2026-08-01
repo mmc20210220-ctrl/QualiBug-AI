@@ -985,12 +985,43 @@ def _validate_active_chain(
     verified_observers = {
         _text(value) for value in _list(verified.get("observer")) if _text(value)
     }
-    if verified_observers != observer_ids:
+    # V1.8: The gate enforces reference integrity, not set equality. Soft
+    # field-oracle activation may legitimately verify a SUBSET of the required
+    # observers (the rest delivered as INDETERMINATE), and the runtime may
+    # deliver supplementary observer receipts (authorization_comparison,
+    # redundant effect observers) that were never part of the activation
+    # contract. Both shapes are valid evidence. What must hold:
+    #   1. every required observer was attempted (delivered), and
+    #   2. every receipt the activation verified actually exists in the
+    #      delivered observer evidence.
+    # A verified reference that is missing from delivery remains a hard
+    # mismatch (fail closed), mirroring the subject-scoped contract checks.
+    required_observer_ids = {
+        _text(value) for value in _list(required.get("observer")) if _text(value)
+    }
+    delivered_observer_ids = {
+        _text(value.get("receipt_id")) for value in observers if _text(value.get("receipt_id"))
+    }
+    delivered_observer_kinds = {
+        _text(value.get("observer_id")) for value in observers if _text(value.get("observer_id"))
+    }
+    if not required_observer_ids.issubset(delivered_observer_kinds):
+        _missing_kinds = sorted(required_observer_ids - delivered_observer_kinds)
+        raise DeliveryGateV2Error(
+            "delivery_observer_activation_reference_mismatch"
+            f":missing_required_observers={_missing_kinds[:8]}"
+        )
+    if not verified_observers.issubset(delivered_observer_ids):
         # Soft field-oracle may activate before observer receipts are sealed.
         if soft_field_oracle and not verified_observers and observer_ids:
             return "BLOCKED", ["OBSERVER_PROOF_DEFERRED_FIELD_ORACLE"]
+        _extra = sorted(delivered_observer_ids - verified_observers)
+        _missing = sorted(verified_observers - delivered_observer_ids)
         raise DeliveryGateV2Error(
             "delivery_observer_activation_reference_mismatch"
+            f":required={sorted(required_observer_ids)[:8]}"
+            f":verified={sorted(verified_observers)[:8]}"
+            f":delivered_extra={_extra[:8]}:delivered_missing={_missing[:8]}"
         )
     if not contract_ids.issubset(set(execution["observation_receipt_ids"])):
         raise DeliveryGateV2Error("execution_contract_receipts_missing")

@@ -23,6 +23,20 @@ from .observer_contracts_base import validate_observer_receipt
 CONTRACT_EVIDENCE_RECEIPT_SCHEMA = "qualibug.contract-evidence-receipt.v1"
 ACTIVATION_RECEIPT_SCHEMA = "qualibug.contract-oracle-activation-receipt.v1"
 CONTRACT_ORACLE_RECEIPT_SCHEMA = "qualibug.contract-oracle-receipt.v1"
+
+# V1.7 enrichment fields that the authorization causality / delivery gates
+# append to an oracle receipt AFTER its receipt_id was computed. Validation
+# recomputes the fingerprint over the original payload only, so every reseal
+# path must apply the same exclusion. Single source of truth for the validator
+# and sealed_receipt_reseal.reseal_oracle_receipt.
+CONTRACT_ORACLE_POST_HOC_FIELDS = frozenset({
+    "authorization_causality_gate",
+    "authorization_causality_reason_codes",
+    "authorization_causality_receipt_id",
+    "pre_causality_oracle_verdict",
+    "authorization_delivery_gate",
+    "authorization_delivery_reason",
+})
 _CONTRACT_EVIDENCE_KINDS = frozenset({
     "actor",
     "cleanup",
@@ -806,12 +820,7 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         optional_fields = {
             "field_oracle_traces",
             "field_oracle_trace_count",
-            "authorization_causality_gate",
-            "authorization_causality_reason_codes",
-            "authorization_causality_receipt_id",
-            "pre_causality_oracle_verdict",
-            "authorization_delivery_gate",
-            "authorization_delivery_reason",
+            *CONTRACT_ORACLE_POST_HOC_FIELDS,
         }
         unexpected = sorted(set(row) - required_fields - optional_fields)
         absent = sorted(required_fields - set(row))
@@ -943,14 +952,7 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     # V1.7: The authorization causality gate (PASSED path) appends enrichment
     # fields AFTER the receipt_id was computed. Strip them to recover the
     # original payload, verify the fingerprint, then accept the full row.
-    _post_hoc_fields = {
-        "authorization_causality_gate",
-        "authorization_causality_reason_codes",
-        "authorization_causality_receipt_id",
-        "pre_causality_oracle_verdict",
-        "authorization_delivery_gate",
-        "authorization_delivery_reason",
-    }
+    _post_hoc_fields = CONTRACT_ORACLE_POST_HOC_FIELDS
     payload = {
         key: value
         for key, value in row.items()

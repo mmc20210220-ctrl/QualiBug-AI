@@ -780,7 +780,14 @@ def validate_obligation_attempt_ledger(
                     != _text(attempt.get("finding_id")),
                 )):
                     raise ObligationAttemptLedgerError(
-                        f"obligation_attempt_gate_projection_mismatch:{_text(attempt.get('obligation_id'))}"
+                        "obligation_attempt_gate_projection_mismatch:"
+                        f"{_text(attempt.get('obligation_id'))}"
+                        f":status={_text(validated_gate.get('status'))}"
+                        f"/{_text(attempt.get('terminal_status'))}"
+                        f":gate_id={_text(validated_gate.get('gate_receipt_id'))[:16]}"
+                        f"/{_text(attempt.get('gate_receipt_id'))[:16]}"
+                        f":finding_id={_text(identity.get('finding_id'))[:16]}"
+                        f"/{_text(attempt.get('finding_id'))[:16]}"
                     )
             else:
                 raise ObligationAttemptLedgerError(

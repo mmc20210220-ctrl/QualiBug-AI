@@ -16,6 +16,7 @@ from .contract_oracles import (
     _content_receipt,
     build_contract_evidence_receipt,
 )
+from ._contract_oracles_mechanics import CONTRACT_ORACLE_POST_HOC_FIELDS
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
     DELIVERY_EXECUTION_RECEIPT_SCHEMA,
@@ -97,7 +98,7 @@ def reseal_assertion_receipt(
     id_map: dict[str, str],
 ) -> dict[str, Any]:
     row = _dict(receipt)
-    return _assertion_receipt(
+    resealed = _assertion_receipt(
         assertion_id=_text(row.get("assertion_id")),
         kind=_text(row.get("kind")),
         status=_text(row.get("status")),
@@ -113,6 +114,14 @@ def reseal_assertion_receipt(
         campaign_id=_text(row.get("campaign_id")),
         execution_id=_text(row.get("execution_id")),
     )
+    # V1.6.1: field_oracle_trace is appended AFTER the assertion receipt_id was
+    # computed (the validator recomputes the fingerprint over the base fields
+    # only and re-attaches the trace). Dropping it during reseal made rebuilt
+    # oracle receipts lose their trace, so the delivery gate failed the
+    # otherwise identical experiment as FIELD_ORACLE_TRACE_MISSING.
+    if isinstance(row.get("field_oracle_trace"), dict):
+        resealed["field_oracle_trace"] = dict(row["field_oracle_trace"])
+    return resealed
 
 
 def reseal_activation_receipt(
@@ -167,8 +176,20 @@ def reseal_oracle_receipt(
         _text(item.get("receipt_id")) for item in indeterminate
     ]
     row["failed_assertions"] = [dict(item) for item in violations]
-    payload = {key: value for key, value in row.items() if key != "receipt_id"}
-    return _content_receipt("oracle_", payload)
+    # V1.7: authorization causality / delivery gates enrich the oracle receipt
+    # AFTER its receipt_id was computed. Validation strips those fields when
+    # recomputing the fingerprint, so the reseal must do the same or the
+    # resealed receipt fails contract_oracle_receipt_fingerprint_invalid.
+    payload = {
+        key: value
+        for key, value in row.items()
+        if key != "receipt_id" and key not in CONTRACT_ORACLE_POST_HOC_FIELDS
+    }
+    resealed = _content_receipt("oracle_", payload)
+    for field in CONTRACT_ORACLE_POST_HOC_FIELDS:
+        if field in row:
+            resealed[field] = row[field]
+    return resealed
 
 
 def reseal_delivery_execution_receipt(
