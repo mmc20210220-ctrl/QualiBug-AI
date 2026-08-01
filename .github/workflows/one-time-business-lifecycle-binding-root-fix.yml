@@ -18,33 +18,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout exact latest main
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Verify and decode lifecycle binding patch
+      - name: Verify and apply exact patch
         shell: bash
         run: |
+          echo "LIFECYCLE_STAGE=verify-and-apply" >> "$GITHUB_ENV"
           set -euo pipefail
           PATCH_B64=.github/patches/business_lifecycle_binding_root_fix.patch.gz.b64
           echo "f588561cd56d497e9701be77b532a053a860e27405078db324ed80e0e841b308  ${PATCH_B64}" | sha256sum -c -
           base64 -d "${PATCH_B64}" | gzip -d > /tmp/business-lifecycle-binding.patch
           echo "b54133f0e96cb9a50abd5157a5350960f6b8b40f592e851232b068df13c3a9fe  /tmp/business-lifecycle-binding.patch" | sha256sum -c -
-
-      - name: Apply with three-way conflict detection
-        shell: bash
-        run: |
-          set -euo pipefail
           git apply --3way --check /tmp/business-lifecycle-binding.patch
           git apply --3way /tmp/business-lifecycle-binding.patch
-          git diff --check
-
-      - name: Freeze exact source scope
-        shell: bash
-        run: |
-          set -euo pipefail
           cat > /tmp/expected-files.txt <<'EOF'
           ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/binding_identity_projection.py
           ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py
@@ -60,16 +50,20 @@ jobs:
           diff -u /tmp/expected-files.txt /tmp/actual-files.txt
           git diff --cached --check
 
-      - name: Install focused test dependencies
+      - name: Install focused dependencies
         shell: bash
         run: |
+          echo "LIFECYCLE_STAGE=install-dependencies" >> "$GITHUB_ENV"
           set -euo pipefail
-          python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
-      - name: Compile lifecycle binding authorities
+      - name: Create reusable verification authority
         shell: bash
         run: |
+          echo "LIFECYCLE_STAGE=create-verifier" >> "$GITHUB_ENV"
+          set -euo pipefail
+          cat > /tmp/verify-lifecycle-binding.sh <<'VERIFY'
+          #!/usr/bin/env bash
           set -euo pipefail
           python -m py_compile \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py \
@@ -79,11 +73,6 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/runtime_plan.py \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/runtime_materialization.py \
             tests/test_entity_lifecycle_behavior_binding.py
-
-      - name: Run business behavior binding regressions
-        shell: bash
-        run: |
-          set -euo pipefail
           pytest -q \
             tests/test_entity_lifecycle_behavior_binding.py \
             tests/test_behavior_implementation_binding_object_identity.py \
@@ -92,68 +81,43 @@ jobs:
             tests/test_runtime_materialization_v1.py \
             tests/test_binding_identity_projection.py \
             tests/test_event_observer_implementation_mainline.py
-
-      - name: Measure benchmark mall binding closure
-        shell: bash
-        run: |
-          set -euo pipefail
           python - <<'PY'
-          from ai_test_asset_center.enterprise_knowledge_center import (
-              build_enterprise_business_knowledge_asset,
-          )
-          from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding import (
-              build_governed_behavior_implementation_bindings,
-          )
-
+          from ai_test_asset_center.enterprise_knowledge_center import build_enterprise_business_knowledge_asset
+          from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding import build_governed_behavior_implementation_bindings
           asset = build_enterprise_business_knowledge_asset("benchmark_mall")
           model = asset.get("enterprise_understanding_model") or {}
-          behaviors = [
-              dict(row)
-              for row in model.get("business_behaviors") or []
-              if isinstance(row, dict) and row.get("status") == "CONFIRMED"
-          ]
-          bindings, unknowns, conflicts, gate = (
-              build_governed_behavior_implementation_bindings(asset, behaviors)
-          )
+          behaviors = [dict(row) for row in model.get("business_behaviors") or [] if isinstance(row, dict) and row.get("status") == "CONFIRMED"]
+          bindings, unknowns, conflicts, gate = build_governed_behavior_implementation_bindings(asset, behaviors)
           metrics = gate.get("metrics") or {}
           ready = int(metrics.get("scenario_ready_binding_count") or 0)
           bound_outcomes = int(metrics.get("bound_mandatory_outcome_count") or 0)
-          lifecycle_rows = [
-              row
-              for binding in bindings
-              for row in binding.get("lifecycle_observer_bindings") or []
-              if isinstance(row, dict) and row.get("status") == "BOUND"
-          ]
-          targets = {
-              str(row.get("observer_interface_id") or "")
-              for row in lifecycle_rows
-          }
-          strategies = {
-              str(row.get("observation_strategy") or "")
-              for row in lifecycle_rows
-          }
+          rows = [row for binding in bindings for row in binding.get("lifecycle_observer_bindings") or [] if isinstance(row, dict) and row.get("status") == "BOUND"]
+          targets = {str(row.get("observer_interface_id") or "") for row in rows}
+          strategies = {str(row.get("observation_strategy") or "") for row in rows}
           assert not conflicts, conflicts
           assert ready >= 3, metrics
           assert bound_outcomes >= 3, metrics
-          assert len(lifecycle_rows) >= 3, lifecycle_rows
+          assert len(rows) >= 3, rows
           assert "COLLECTION_DELTA_CREATED_ENTITY" in strategies, strategies
           assert "REQUEST_IDENTITY_ABSENT_FROM_COLLECTION" in strategies, strategies
           assert any("products" in value for value in targets), targets
           assert any("cart/items" in value for value in targets), targets
           assert any("users/addresses" in value for value in targets), targets
-          print({
-              "confirmed_behavior_count": len(behaviors),
-              "scenario_ready_binding_count": ready,
-              "bound_mandatory_outcome_count": bound_outcomes,
-              "bound_lifecycle_observer_count": len(lifecycle_rows),
-              "lifecycle_observer_targets": sorted(targets),
-              "unknown_count": len(unknowns),
-          })
+          print({"confirmed": len(behaviors), "scenario_ready": ready, "bound_outcomes": bound_outcomes, "lifecycle_observers": len(rows), "unknowns": len(unknowns)})
           PY
+          VERIFY
+          chmod +x /tmp/verify-lifecycle-binding.sh
 
-      - name: Restore generated state and verify clean source scope
+      - name: Run focused and real-project verification
         shell: bash
         run: |
+          echo "LIFECYCLE_STAGE=focused-and-real-project-verification" >> "$GITHUB_ENV"
+          /tmp/verify-lifecycle-binding.sh
+
+      - name: Freeze clean verified source commit
+        shell: bash
+        run: |
+          echo "LIFECYCLE_STAGE=freeze-source-commit" >> "$GITHUB_ENV"
           set -euo pipefail
           git checkout -- qualibug_ai.egg-info 2>/dev/null || true
           git checkout -- .
@@ -162,11 +126,6 @@ jobs:
           git diff --cached --name-only | sort > /tmp/actual-files-after-tests.txt
           diff -u /tmp/expected-files.txt /tmp/actual-files-after-tests.txt
           git diff --cached --check
-
-      - name: Commit verified source and remove one-time delivery files
-        shell: bash
-        run: |
-          set -euo pipefail
           git rm \
             .github/business-lifecycle-binding-root-fix-trigger \
             .github/patches/business_lifecycle_binding_root_fix.patch.gz.b64 \
@@ -174,4 +133,37 @@ jobs:
           git config user.name "mmc20210220-ctrl"
           git config user.email "mmc20210220@gmail.com"
           git commit -m "fix(binding): close entity lifecycle outcome observers" -m "Bind source-declared entity creation and deletion outcomes to exact collection observers, carry one ObserverBinding identity through Scenario, Execution Contract, Runtime Plan and materialization, and keep HTTP status or collection count alone ineligible as lifecycle proof."
-          git push origin HEAD:main
+
+      - name: Rebase safely, reverify and push
+        shell: bash
+        run: |
+          echo "LIFECYCLE_STAGE=rebase-reverify-push" >> "$GITHUB_ENV"
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            git fetch origin main
+            if ! git merge-base --is-ancestor origin/main HEAD; then
+              git rebase origin/main
+              /tmp/verify-lifecycle-binding.sh
+              git diff --check
+            fi
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+          done
+          exit 1
+
+      - name: Publish fail-closed diagnostic
+        if: failure()
+        shell: bash
+        run: |
+          set -u
+          git rebase --abort 2>/dev/null || true
+          git fetch origin main || true
+          git reset --hard origin/main || true
+          git clean -fd || true
+          printf 'stage=%s\nevent_sha=%s\nrun_id=%s\n' "${LIFECYCLE_STAGE:-unknown}" "$GITHUB_SHA" "$GITHUB_RUN_ID" > .github/business-lifecycle-binding-failure.txt
+          git config user.name "mmc20210220-ctrl"
+          git config user.email "mmc20210220@gmail.com"
+          git add .github/business-lifecycle-binding-failure.txt
+          git commit -m "chore(binding): report lifecycle binding delivery failure" || true
+          git push origin HEAD:main || true
