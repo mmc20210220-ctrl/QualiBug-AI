@@ -237,21 +237,35 @@ def compile_process_graph_wait_contracts(
             )
 
     if issues:
-        # An invalid declaration naturally leaves an async edge uncovered. Keep
-        # that derived symptom, but never let it hide the source-contract error.
-        has_duplicate = any("duplicate_target_wait" in value for value in issues)
-        has_contract_error = any(
-            not value.startswith("async_edge_uncovered") for value in issues
+        reason_codes: list[str] = []
+        if any("duplicate_target_wait" in value for value in issues):
+            reason_codes.append(WAIT_CONTRACT_AMBIGUOUS)
+        if any(
+            not value.startswith("async_edge_uncovered")
+            and "duplicate_target_wait" not in value
+            for value in issues
+        ):
+            reason_codes.append(WAIT_CONTRACT_INVALID)
+        if any(value.startswith("async_edge_uncovered") for value in issues):
+            reason_codes.append(WAIT_ASYNC_EDGE_UNCOVERED)
+
+        # An uncovered async edge is often only the downstream symptom of a
+        # source-declared wait that failed validation and therefore never made
+        # it into ``compiled``.  Keep the malformed/ambiguous contract as the
+        # primary cause; report uncovered coverage only when it is the sole
+        # problem.  This preserves fail-closed behaviour without hiding the
+        # actionable root cause from callers.
+        primary_reason = (
+            WAIT_CONTRACT_AMBIGUOUS
+            if WAIT_CONTRACT_AMBIGUOUS in reason_codes
+            else WAIT_CONTRACT_INVALID
+            if WAIT_CONTRACT_INVALID in reason_codes
+            else WAIT_ASYNC_EDGE_UNCOVERED
         )
         return {
             "status": STATUS_BLOCKED,
-            "reason_code": (
-                WAIT_CONTRACT_AMBIGUOUS
-                if has_duplicate
-                else WAIT_CONTRACT_INVALID
-                if has_contract_error
-                else WAIT_ASYNC_EDGE_UNCOVERED
-            ),
+            "reason_code": primary_reason,
+            "semantic_reason_codes": reason_codes,
             "detail": ";".join(issues[:16]),
             "issues": issues,
         }
