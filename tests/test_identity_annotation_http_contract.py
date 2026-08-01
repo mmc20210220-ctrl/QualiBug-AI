@@ -15,6 +15,22 @@ def test_annotation_compile_route_is_project_scoped() -> None:
     )
 
 
+def test_structural_review_queue_route_is_project_scoped() -> None:
+    assert _route("/api/v1/projects/demo/identity-benchmark/structural-review") == (
+        "demo",
+        "structural-review",
+    )
+
+
+def test_structural_review_decision_route_is_project_scoped() -> None:
+    assert _route(
+        "/api/v1/projects/demo/identity-benchmark/structural-review-decision"
+    ) == (
+        "demo",
+        "structural-review-decision",
+    )
+
+
 def test_unknown_identity_annotation_route_falls_through() -> None:
     assert _route("/api/v1/projects/demo/identity-benchmark/predicted-clusters") == (
         "",
