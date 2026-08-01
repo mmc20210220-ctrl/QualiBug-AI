@@ -56,6 +56,8 @@ def _runtime_receipt(*, semantic_status: str, reason_code: str = "") -> dict:
         "observed_unique_event_count": 2 if reason_code else 1,
         "distinct_delivery_overflow_count": 1 if reason_code else 0,
         "event_id_reuse_conflict_count": 0,
+        "event_identity_type_conflict_count": 0,
+        "correlation_identity_mismatch_count": 0,
         "idempotency_mismatch_count": 0,
         "retry_limit_violation_count": 0,
     }
@@ -100,6 +102,26 @@ def test_async_transition_observer_keeps_exact_contract_scope() -> None:
     assert evidence["coverage_complete"] is True
     assert evidence["transitions"][0]["step_id"] == "consume_notification"
     assert evidence["transitions"][0]["semantic_status"] == "PASS"
+
+
+def test_async_transition_observer_preserves_typed_identity_evidence() -> None:
+    runtime = _runtime_receipt(
+        semantic_status="VIOLATION",
+        reason_code="PROCESS_GRAPH_EVENT_CORRELATION_IDENTITY_MISMATCH",
+    )
+    runtime["correlation_identity_mismatch_count"] = 1
+    runtime["event_identity_type_conflict_count"] = 2
+    receipt = observe_async_transitions(
+        {
+            "experiment": _experiment(),
+            "observations": {
+                "process_graph_async_transition_receipts": [runtime]
+            },
+        }
+    )
+    transition = receipt["evidence"][EVIDENCE_KEY]["transitions"][0]
+    assert transition["correlation_identity_mismatch_count"] == 1
+    assert transition["event_identity_type_conflict_count"] == 2
 
 
 def test_async_transition_observer_rejects_receipt_contract_drift() -> None:

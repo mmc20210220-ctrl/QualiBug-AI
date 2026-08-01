@@ -41,6 +41,10 @@ EVENT_DELIVERY_COUNT_BELOW_MINIMUM = "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_BELOW_M
 EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM = "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
 EVENT_ID_REUSE_CONFLICT = "PROCESS_GRAPH_EVENT_ID_REUSE_CONFLICT"
 EVENT_IDEMPOTENCY_KEY_MISMATCH = "PROCESS_GRAPH_EVENT_IDEMPOTENCY_KEY_MISMATCH"
+EVENT_CORRELATION_IDENTITY_MISMATCH = (
+    "PROCESS_GRAPH_EVENT_CORRELATION_IDENTITY_MISMATCH"
+)
+EVENT_IDENTITY_TYPE_CONFLICT = "PROCESS_GRAPH_EVENT_IDENTITY_TYPE_CONFLICT"
 EVENT_RETRY_LIMIT_EXCEEDED = "PROCESS_GRAPH_EVENT_RETRY_LIMIT_EXCEEDED"
 
 BROKER_DELIVERY_INVALID = _broker.BROKER_DELIVERY_INVALID
@@ -96,6 +100,11 @@ def _canonical(value: Any) -> str:
 
 def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
+
+
+def _identity(value: Any) -> str:
+    """Return a type-sensitive scalar identity without leaking raw values."""
+    return _canonical(value)
 
 
 def _extract(value: Any, path: str) -> tuple[bool, Any]:
@@ -454,9 +463,14 @@ def execute_event_transition(
     attempts: list[dict[str, Any]] = []
     events_by_id: dict[str, dict[str, Any]] = {}
     event_id_payloads: dict[str, str] = {}
+    event_id_values: dict[str, Any] = {}
+    event_id_aliases: dict[str, set[str]] = {}
+    correlation_alias_event_ids: set[str] = set()
     broker_observation_rows: list[dict[str, Any]] = []
     event_id_reuse_conflicts = 0
     idempotency_mismatches = 0
+    correlation_identity_mismatches = 0
+    event_identity_type_conflicts = 0
     retry_limit_violations = 0
     poll_replay_count = 0
     invalid_collection_count = 0
@@ -473,28 +487,46 @@ def execute_event_transition(
             rows, collection_error = _event_rows(response.get("body"), spec)
             if collection_error:
                 invalid_collection_count += 1
-        correlated = [
-            row
-            for row in rows
-            if str(row.get("correlation")) == str(correlation)
-            and _text(row.get("event_type")) == _text(spec.get("expected_event_type"))
-        ]
+        expected_event_type = _text(spec.get("expected_event_type"))
+        correlation_identity = _identity(correlation)
+        correlated: list[dict[str, Any]] = []
+        for row in rows:
+            if _text(row.get("event_type")) != expected_event_type:
+                continue
+            observed_correlation = row.get("correlation")
+            observed_identity = _identity(observed_correlation)
+            if observed_identity == correlation_identity:
+                correlated.append(row)
+                continue
+            # A textual alias with a different JSON scalar type is not the same
+            # cross-system object identity. Count it once per event identity so
+            # repeated polling cannot inflate the semantic evidence.
+            if str(observed_correlation) == str(correlation):
+                correlation_alias_event_ids.add(_identity(row.get("event_id")))
+        correlation_identity_mismatches = len(correlation_alias_event_ids)
         matching_rows_seen += len(correlated)
         newly_unique = 0
         for row in correlated:
             observed_row = {**row, "poll_number": attempt_number}
             broker_observation_rows.append(observed_row)
-            raw_id = str(row.get("event_id"))
+            raw_event_id = row.get("event_id")
+            event_identity = _identity(raw_event_id)
             payload_fp = _text(row.get("payload_fingerprint"))
-            if raw_id in events_by_id:
+            if event_identity in events_by_id:
                 poll_replay_count += 1
-                if event_id_payloads.get(raw_id) != payload_fp:
+                if event_id_payloads.get(event_identity) != payload_fp:
                     event_id_reuse_conflicts += 1
                 continue
-            events_by_id[raw_id] = observed_row
-            event_id_payloads[raw_id] = payload_fp
+            display_identity = str(raw_event_id)
+            aliases = event_id_aliases.setdefault(display_identity, set())
+            if aliases and event_identity not in aliases:
+                event_identity_type_conflicts += 1
+            aliases.add(event_identity)
+            events_by_id[event_identity] = observed_row
+            event_id_payloads[event_identity] = payload_fp
+            event_id_values[event_identity] = raw_event_id
             newly_unique += 1
-            if idempotency_key and str(row.get("idempotency_value")) != str(
+            if idempotency_key and _identity(row.get("idempotency_value")) != _identity(
                 expected_idempotency
             ):
                 idempotency_mismatches += 1
@@ -547,8 +579,12 @@ def execute_event_transition(
         semantic_status = "INDETERMINATE"
         reason_codes.extend(broker_reason_codes or [BROKER_METADATA_INCOMPLETE])
     else:
+        if correlation_identity_mismatches:
+            reason_codes.append(EVENT_CORRELATION_IDENTITY_MISMATCH)
         if event_id_reuse_conflicts:
             reason_codes.append(EVENT_ID_REUSE_CONFLICT)
+        if event_identity_type_conflicts:
+            reason_codes.append(EVENT_IDENTITY_TYPE_CONFLICT)
         if idempotency_mismatches:
             reason_codes.append(EVENT_IDEMPOTENCY_KEY_MISMATCH)
         if retry_limit_violations:
@@ -593,6 +629,8 @@ def execute_event_transition(
         "poll_replay_count": poll_replay_count,
         "distinct_delivery_overflow_count": max(0, unique_count - maximum),
         "event_id_reuse_conflict_count": event_id_reuse_conflicts,
+        "event_identity_type_conflict_count": event_identity_type_conflicts,
+        "correlation_identity_mismatch_count": correlation_identity_mismatches,
         "idempotency_mismatch_count": idempotency_mismatches,
         "retry_limit_violation_count": retry_limit_violations,
         "broker_contract_fingerprint": _text(
@@ -613,7 +651,7 @@ def execute_event_transition(
             _fingerprint(expected_idempotency) if idempotency_key else ""
         ),
         "event_id_fingerprints": sorted(
-            _fingerprint(value) for value in events_by_id
+            _fingerprint(value) for value in event_id_values.values()
         ),
         "attempts": attempts,
         "converged": observation_complete,
@@ -640,6 +678,8 @@ __all__ = [
     "EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM",
     "EVENT_ID_REUSE_CONFLICT",
     "EVENT_IDEMPOTENCY_KEY_MISMATCH",
+    "EVENT_CORRELATION_IDENTITY_MISMATCH",
+    "EVENT_IDENTITY_TYPE_CONFLICT",
     "EVENT_RETRY_LIMIT_EXCEEDED",
     "BROKER_DELIVERY_INVALID",
     "BROKER_EXPECTATION_BINDING_UNRESOLVED",

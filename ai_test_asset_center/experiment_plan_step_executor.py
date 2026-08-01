@@ -205,6 +205,12 @@ def _blocked_wait_result(
             "observed_unique_event_count": int(
                 wait_receipt.get("observed_unique_event_count") or 0
             ),
+            "correlation_identity_mismatch_count": int(
+                wait_receipt.get("correlation_identity_mismatch_count") or 0
+            ),
+            "event_identity_type_conflict_count": int(
+                wait_receipt.get("event_identity_type_conflict_count") or 0
+            ),
             "idempotency_mismatch_count": int(
                 wait_receipt.get("idempotency_mismatch_count") or 0
             ),
