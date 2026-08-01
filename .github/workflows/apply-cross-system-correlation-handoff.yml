@@ -14,7 +14,7 @@ permissions:
 jobs:
   apply-verify:
     if: github.event.pull_request.head.ref == 'delivery/cross-system-correlation-handoff-20260801'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout latest main
         uses: actions/checkout@v4
