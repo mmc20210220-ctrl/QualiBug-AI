@@ -225,7 +225,7 @@ export function Dashboard() {
         evidenceTrust={evidenceTrust}
       />
 
-      <DiscoveryFunnelPanel funnel={record.discovery_funnel} />
+      <DiscoveryFunnelPanel funnel={record.discovery_funnel} report={record.discovery_funnel_report} />
 
       {/* 决策卡片 */}
       <DecisionCards cards={[

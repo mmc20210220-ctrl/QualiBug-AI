@@ -3,6 +3,7 @@ import { asNum, asRecord, asText } from '../../lib/dashboard-utils';
 
 type Props = {
   funnel: unknown;
+  report?: unknown;
 };
 
 function listText(value: unknown, limit = 8): string[] {
@@ -11,13 +12,19 @@ function listText(value: unknown, limit = 8): string[] {
     : [];
 }
 
-export function DiscoveryFunnelPanel({ funnel }: Props) {
+export function DiscoveryFunnelPanel({ funnel, report }: Props) {
   const value = asRecord(funnel);
-  const health = asRecord(value.pipeline_health);
-  const conservation = asRecord(value.conservation || health.funnel_conservation);
+  const reportValue = asRecord(report);
+  const health = asRecord(value.pipeline_health || reportValue.pipeline_health);
+  const conservation = asRecord(value.conservation || health.funnel_conservation || reportValue.conservation);
+  const reportMetrics = asRecord(reportValue.metrics);
   const details = (Array.isArray(value.top_blocking_reason_details)
     ? value.top_blocking_reason_details
-    : [])
+    : Array.isArray(reportValue.unresolved_top_10)
+      ? reportValue.unresolved_top_10
+      : Array.isArray(reportValue.top_blocking_reasons)
+        ? reportValue.top_blocking_reasons
+        : [])
     .map(asRecord)
     .filter((row) => row.is_blocking !== false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -26,21 +33,24 @@ export function DiscoveryFunnelPanel({ funnel }: Props) {
     ? (Array.isArray(selected.examples) ? selected.examples : []).map(asRecord)
     : [];
   const selectedExample = selectedExamples[0] || {};
-  const receiptCount = (field: string): number | string => (
-    typeof conservation[field] === 'number' && Number.isFinite(conservation[field])
-      ? conservation[field] as number
-      : 'NOT_MEASURED'
-  );
-  const selectedCount = receiptCount('selected_count');
-  const totalCount = receiptCount('generated_count');
-  const compiledCount = receiptCount('compile_success_count');
-  const executedCount = receiptCount('execution_count');
-  const executionBlockedCount = receiptCount('execution_blocked_count');
-  const compileBlockedCount = receiptCount('compile_blocked_count');
-  const compileDeferredCount = receiptCount('compile_deferred_count');
-  const oracleResolvedCount = receiptCount('oracle_resolved_count');
-  const oracleViolationCount = receiptCount('oracle_violation_count');
-  const deliverableCount = receiptCount('customer_deliverable_finding_count');
+  const receiptCount = (field: string, reportField: string): number | string => {
+    if (typeof conservation[field] === 'number' && Number.isFinite(conservation[field])) {
+      return conservation[field] as number;
+    }
+    return typeof reportMetrics[reportField] === 'number' && Number.isFinite(reportMetrics[reportField])
+      ? reportMetrics[reportField] as number
+      : 'NOT_MEASURED';
+  };
+  const selectedCount = receiptCount('selected_count', 'selected_count');
+  const totalCount = receiptCount('generated_count', 'generated_count');
+  const compiledCount = receiptCount('compile_success_count', 'compiled_count');
+  const executedCount = receiptCount('execution_count', 'executed_count');
+  const executionBlockedCount = receiptCount('execution_blocked_count', 'execution_blocked_count');
+  const compileBlockedCount = receiptCount('compile_blocked_count', 'compile_blocked_count');
+  const compileDeferredCount = receiptCount('compile_deferred_count', 'compile_deferred_count');
+  const oracleResolvedCount = receiptCount('oracle_resolved_count', 'oracle_resolved_count');
+  const oracleViolationCount = receiptCount('oracle_violation_count', 'oracle_violation_count');
+  const deliverableCount = receiptCount('customer_deliverable_finding_count', 'formal_delivery_count');
   const counts = useMemo(() => ([
     ['Total obligations', totalCount],
     ['Compiled', compiledCount],
@@ -54,7 +64,12 @@ export function DiscoveryFunnelPanel({ funnel }: Props) {
     ['Deliverable findings', deliverableCount],
   ]), [compileBlockedCount, compileDeferredCount, compiledCount, deliverableCount, executedCount, executionBlockedCount, oracleResolvedCount, oracleViolationCount, selectedCount, totalCount]);
   const healthStatus = asText(health.status) || 'UNKNOWN';
-  const qualityStatus = asText(asRecord(value.quality).status) || 'NOT_MEASURED';
+  const qualityStatus = asText(asRecord(reportValue.quality).status) || asText(asRecord(value.quality).status) || 'NOT_MEASURED';
+  const reportStatus = asText(reportValue.report_status) || 'NOT_AVAILABLE';
+  const conservationStatus = asText(conservation.status) || 'NOT_MEASURED';
+  const identityStatus = asText(conservation.identity_status) || 'NOT_MEASURED';
+  const reasonRegistry = asRecord(value.reason_registry || reportValue.reason_registry);
+  const reasonRegistryStatus = asText(reasonRegistry.status) || 'NOT_MEASURED';
 
   return (
     <section className="customer-secondary-card" aria-label="Discovery funnel">
@@ -70,6 +85,12 @@ export function DiscoveryFunnelPanel({ funnel }: Props) {
       <p>
         Counts below come from the obligation-attempt ledger. External quality remains {qualityStatus}; internal funnel counts are not recall or precision.
       </p>
+      <div className="customer-secondary-meta">
+        <span><em>Loss report</em><b>{reportStatus}</b></span>
+        <span><em>Funnel conservation</em><b>{conservationStatus}</b></span>
+        <span><em>Identity continuity</em><b>{identityStatus}</b></span>
+        <span><em>Reason registry</em><b>{reasonRegistryStatus}</b></span>
+      </div>
       <div className="customer-secondary-meta">
         {counts.map(([label, count]) => (
           <span key={label}><em>{label}</em><b>{count}</b></span>
