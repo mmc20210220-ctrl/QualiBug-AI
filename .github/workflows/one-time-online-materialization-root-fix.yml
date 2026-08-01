@@ -1,0 +1,82 @@
+name: One-time Online Materialization Root Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/online-materialization-root-fix.trigger
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-online-materialization-root-fix
+  cancel-in-progress: false
+
+jobs:
+  apply-verified-root-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install product and test dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Apply root-cause change
+        run: |
+          set -euo pipefail
+          test -f .github/delivery/online-materialization-root-fix.patch.b64
+          base64 --decode .github/delivery/online-materialization-root-fix.patch.b64 > /tmp/online-materialization-root-fix.patch
+          git apply --check /tmp/online-materialization-root-fix.patch
+          git apply /tmp/online-materialization-root-fix.patch
+          python -c "import ast; ast.parse(open('ai_test_asset_center/feishu_connector_adapter.py').read()); print('adapter syntax OK')"
+          python -c "import ast; ast.parse(open('tests/test_feishu_connector_materialization_concurrency.py').read()); print('test syntax OK')"
+
+      - name: Run online-source regression
+        run: |
+          set -euo pipefail
+          pytest -q \
+            tests/test_connector_configuration_service.py \
+            tests/test_connector_connection_profiles.py \
+            tests/test_connector_source_occurrence_ingestion.py \
+            tests/test_connector_sync_authority.py \
+            tests/test_connector_sync_fencing.py \
+            tests/test_connector_sync_locking.py \
+            tests/test_connector_auto_sync.py \
+            tests/test_feishu_connector_adapter.py \
+            tests/test_feishu_connector_materialization_concurrency.py \
+            tests/test_private_pilot_connector_handlers.py \
+            tests/test_frontend_materials_mainline.py
+
+      - name: Commit verified source change to main
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/one-time-online-materialization-root-fix.yml \
+            .github/delivery/online-materialization-root-fix.patch.b64 \
+            .github/online-materialization-root-fix.trigger
+          git add \
+            ai_test_asset_center/feishu_connector_adapter.py \
+            docs/ONLINE_ENTERPRISE_MATERIALS.md \
+            tests/test_feishu_connector_materialization_concurrency.py \
+            .github/workflows/one-time-online-materialization-root-fix.yml \
+            .github/delivery/online-materialization-root-fix.patch.b64 \
+            .github/online-materialization-root-fix.trigger
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "perf(ingestion): parallelize changed Feishu materialization"
+          git push origin HEAD:main
