@@ -1,2 +1,2 @@
 validation-only: process graph broker delivery semantics
-retry: authoritative backend test manifest
+retry: validated current backend test inventory
