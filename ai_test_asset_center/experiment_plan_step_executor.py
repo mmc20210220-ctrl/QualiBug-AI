@@ -27,6 +27,11 @@ from .process_graph_wait_contract import (
     WAIT_CONTRACT_INVALID,
     execute_process_graph_wait,
 )
+from .process_graph_wait_termination import (
+    WAIT_TERMINATION_EPOCH_ACTIVE,
+    WAIT_TERMINATION_RECEIPT_INVALID,
+    resolve_wait_termination_receipt,
+)
 from .process_step_execution import (
     ProcessStepLedger,
     attach_ledger_refs_to_observations,
@@ -34,8 +39,6 @@ from .process_step_execution import (
 
 
 WAIT_DISPATCH_SCOPE_INVALID = "PROCESS_GRAPH_WAIT_DISPATCH_SCOPE_INVALID"
-
-
 for _name in dir(_core):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_core, _name)
@@ -66,6 +69,7 @@ def _is_event_receipt(receipt: dict[str, Any]) -> bool:
     return str(receipt.get("schema_version") or "").strip() == (
         EVENT_RECEIPT_SCHEMA_VERSION
     )
+
 
 
 def _append_unique_receipt(
@@ -205,17 +209,23 @@ def _blocked_wait_result(
             "observed_unique_event_count": int(
                 wait_receipt.get("observed_unique_event_count") or 0
             ),
-            "correlation_identity_mismatch_count": int(
-                wait_receipt.get("correlation_identity_mismatch_count") or 0
-            ),
-            "event_identity_type_conflict_count": int(
-                wait_receipt.get("event_identity_type_conflict_count") or 0
-            ),
             "idempotency_mismatch_count": int(
                 wait_receipt.get("idempotency_mismatch_count") or 0
             ),
             "retry_limit_violation_count": int(
                 wait_receipt.get("retry_limit_violation_count") or 0
+            ),
+            "termination_epoch_authority": str(
+                wait_receipt.get("termination_epoch_authority") or ""
+            ).strip(),
+            "termination_epoch_contract_fingerprint": str(
+                wait_receipt.get(
+                    "termination_epoch_contract_fingerprint"
+                )
+                or ""
+            ).strip(),
+            "termination_cleanup_receipt_ids": list(
+                wait_receipt.get("termination_cleanup_receipt_ids") or []
             ),
         },
     )
@@ -302,6 +312,20 @@ def _wait_step(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
             "converged": False,
             "timed_out": False,
         }
+    termination_receipt = resolve_wait_termination_receipt(
+        step=step,
+        observations=(
+            kwargs.get("observations")
+            if isinstance(kwargs.get("observations"), dict)
+            else {}
+        ),
+        experiment_id=str(kwargs.get("eid") or "").strip(),
+        obligation_id=str(kwargs.get("oid") or "").strip(),
+        campaign_id=str(kwargs.get("resolved_campaign_id") or "").strip(),
+        execution_id=str(kwargs.get("resolved_execution_id") or "").strip(),
+    )
+    if termination_receipt:
+        return step, termination_receipt
     receipt = execute_process_graph_wait(
         graph=graph_row,
         step=step,
