@@ -5,19 +5,27 @@ on:
     branches: [main]
     paths:
       - "ai_test_asset_center/feishu_tenant_acceptance.py"
+      - "ai_test_asset_center/feishu_tenant_acceptance_reports.py"
+      - "ai_test_asset_center/private_pilot_connector_handlers.py"
       - "ai_test_asset_center/connector_auto_sync.py"
       - "ai_test_asset_center/feishu_connector_capability_sync.py"
       - "ai_test_asset_center/connector_sync_authority.py"
       - "tests/test_feishu_tenant_acceptance.py"
+      - "tests/test_feishu_tenant_acceptance_reports.py"
+      - "tests/test_private_pilot_connector_acceptance_handlers.py"
       - "pyproject.toml"
       - ".github/workflows/feishu-tenant-acceptance-contract.yml"
   pull_request:
     paths:
       - "ai_test_asset_center/feishu_tenant_acceptance.py"
+      - "ai_test_asset_center/feishu_tenant_acceptance_reports.py"
+      - "ai_test_asset_center/private_pilot_connector_handlers.py"
       - "ai_test_asset_center/connector_auto_sync.py"
       - "ai_test_asset_center/feishu_connector_capability_sync.py"
       - "ai_test_asset_center/connector_sync_authority.py"
       - "tests/test_feishu_tenant_acceptance.py"
+      - "tests/test_feishu_tenant_acceptance_reports.py"
+      - "tests/test_private_pilot_connector_acceptance_handlers.py"
       - "pyproject.toml"
       - ".github/workflows/feishu-tenant-acceptance-contract.yml"
   workflow_dispatch:
@@ -44,8 +52,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Compile acceptance authority
-        run: python -m py_compile ai_test_asset_center/feishu_tenant_acceptance.py
+      - name: Compile acceptance authorities
+        run: |
+          python -m py_compile ai_test_asset_center/feishu_tenant_acceptance.py
+          python -m py_compile ai_test_asset_center/feishu_tenant_acceptance_reports.py
+          python -m py_compile ai_test_asset_center/private_pilot_connector_handlers.py
 
       - name: Verify CLI registration
         run: |
@@ -62,4 +73,8 @@ jobs:
           PY
 
       - name: Run focused acceptance regressions
-        run: python -m pytest -q tests/test_feishu_tenant_acceptance.py
+        run: |
+          python -m pytest -q \
+            tests/test_feishu_tenant_acceptance.py \
+            tests/test_feishu_tenant_acceptance_reports.py \
+            tests/test_private_pilot_connector_acceptance_handlers.py
