@@ -1,13 +1,13 @@
 name: One-time enterprise understanding root fixes
 
 on:
-  pull_request_target:
+  push:
     branches: [main]
-    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/root-fix-trigger"
 
 permissions:
   contents: write
-  pull-requests: read
 
 concurrency:
   group: one-time-enterprise-understanding-root-fixes
@@ -15,9 +15,6 @@ concurrency:
 
 jobs:
   apply-and-push:
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'automation/apply-enterprise-understanding-root-fixes-20260801'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -30,7 +27,7 @@ jobs:
       - name: Fetch and verify fixed source patch
         shell: bash
         env:
-          PATCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PATCH_HEAD_SHA: efb8a7397a8bbc3949918f584ebcdb1070f491c6
         run: |
           set -euo pipefail
           git fetch origin "${PATCH_HEAD_SHA}"
@@ -88,7 +85,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
           cache: pip
 
       - name: Install test dependencies
@@ -165,10 +162,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'QualiBug Automation'
-          git config user.email 'automation@qualibug.local'
+          git config user.name "QualiBug Automation"
+          git config user.email "automation@qualibug.local"
           git add -A
           git rm .github/workflows/one-time-enterprise-understanding-root-fixes.yml
+          git rm .github/root-fix-trigger
           git commit -m 'fix(understanding): preserve source identities through behavior compilation' \
             -m 'Root-cause fixes across source identity, Markdown table structure, term/role/object resolution, OpenAPI operation identity, lifecycle conditions, conflict recalculation, authorization semantics, and safe complementary behavior composition. Adds source-backed regressions and keeps evaluation truth isolated from product runtime.'
 
