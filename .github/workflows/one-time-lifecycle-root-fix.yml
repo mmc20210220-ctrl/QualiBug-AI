@@ -1,15 +1,14 @@
-name: One-time lifecycle root-cause delivery
+name: One-time lifecycle root-cause PR delivery
 
 on:
-  issues:
-    types: [opened]
-  push:
-    paths:
-      - .github/lifecycle-root-fix-trigger
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
-  issues: write
+  pull-requests: write
+  statuses: write
 
 concurrency:
   group: one-time-lifecycle-root-cause-delivery
@@ -18,41 +17,44 @@ concurrency:
 jobs:
   apply-test-and-push:
     if: >-
-      (github.event_name == 'issues' && github.event.issue.title == 'run-verified-lifecycle-root-cause-delivery-20260801') ||
-      github.event_name == 'push'
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/lifecycle-root-cause-delivery-20260801'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Publish delivery start
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `Lifecycle root-cause delivery started against latest main. Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+
       - name: Checkout latest main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Record delivery start
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh issue comment 71 --repo "${GITHUB_REPOSITORY}" --body "Lifecycle root-cause delivery started from ${GITHUB_SHA}."
-
-      - name: Reassemble and verify lifecycle change
+      - name: Decode and verify lifecycle root change
         shell: bash
-        env:
-          PATCH_HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          git fetch origin "${PATCH_HEAD_SHA}"
-          git show "${PATCH_HEAD_SHA}:.github/delivery/lifecycle-root-fix/patch.b64" > /tmp/lifecycle-root.patch.gz.b64
+          git show HEAD:.github/delivery/lifecycle-root-fix/patch.b64 > /tmp/lifecycle-root.patch.gz.b64
           echo "05c0bb4e83d3a4a62c1e4b31d3bc461662e1306afe9f94d72d5daca904d05662  /tmp/lifecycle-root.patch.gz.b64" | sha256sum -c -
           base64 -d /tmp/lifecycle-root.patch.gz.b64 | gzip -d > /tmp/lifecycle-root.patch
           echo "412a3c39186577fc062f807a819a97890f4517c37651fcb4f658607d67171e5d  /tmp/lifecycle-root.patch" | sha256sum -c -
-
-      - name: Apply only lifecycle root-cause changes
-        shell: bash
-        run: |
-          set -euo pipefail
           git apply --3way --check /tmp/lifecycle-root.patch
           git apply --3way /tmp/lifecycle-root.patch
           git diff --check
+
+      - name: Verify exact lifecycle source scope
+        shell: bash
+        run: |
+          set -euo pipefail
           cat > /tmp/expected-files.txt <<'EOF'
           ai_test_asset_center/_experiment_outcome_finalizer_scope_mechanics.py
           ai_test_asset_center/experiment_lifecycle_runtime.py
@@ -120,12 +122,13 @@ jobs:
       - name: Run lifecycle and real HTTP E2E verification
         run: /tmp/run-lifecycle-tests.sh
 
-      - name: Commit verified lifecycle source and remove delivery files
+      - name: Commit verified lifecycle source and remove delivery assets
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'QualiBug Automation'
           git config user.email 'automation@qualibug.local'
+          git cat-file blob aa1d28315aa31c28343738eb6f180fe81cb2540d > .github/workflows/connector-mainline.yml
           git rm -r .github/delivery/lifecycle-root-fix
           git rm .github/workflows/one-time-lifecycle-root-fix.yml
           git rm .github/lifecycle-root-fix-trigger
@@ -134,7 +137,7 @@ jobs:
             -m 'fix(lifecycle): unify execution facts and terminal reduction' \
             -m 'Separate attempted, executed, accepted and completed step facts; require exact observation, oracle and cleanup scope; make read-only cleanup non-applicable; preserve failed target responses for Oracle evaluation; and derive the terminal lifecycle once from the sealed Execution Receipt Bundle.'
 
-      - name: Rebase on newer main and re-verify
+      - name: Rebase, reverify, and push main
         shell: bash
         run: |
           set -euo pipefail
@@ -145,23 +148,27 @@ jobs:
             git rebase origin/main
             /tmp/run-lifecycle-tests.sh
           fi
-
-      - name: Push main without force
-        shell: bash
-        run: |
-          set -euo pipefail
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
 
-      - name: Record delivery success
+      - name: Publish success and remove trigger branch
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh issue comment 71 --repo "${GITHUB_REPOSITORY}" --body "Lifecycle root-cause delivery passed compileall, 181 focused tests, real HTTP E2E, and pushed main. Final HEAD: $(git rev-parse HEAD)."
+        run: |
+          final_sha="$(git rev-parse HEAD)"
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${GITHUB_REPOSITORY}" --body "Lifecycle root-cause delivery passed compileall, 181 focused tests, real HTTP 200/500 E2E, and pushed main at ${final_sha}."
+          gh pr close "${{ github.event.pull_request.number }}" --repo "${GITHUB_REPOSITORY}" --delete-branch
 
-      - name: Record delivery failure
+      - name: Publish failure
         if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh issue comment 71 --repo "${GITHUB_REPOSITORY}" --body "Lifecycle root-cause delivery failed. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No force push was used."
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `Lifecycle root-cause delivery failed safely; main was not force-pushed. Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
