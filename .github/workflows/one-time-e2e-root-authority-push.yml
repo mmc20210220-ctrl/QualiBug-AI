@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/e2e-root-authority-delivery.trigger'
   workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
