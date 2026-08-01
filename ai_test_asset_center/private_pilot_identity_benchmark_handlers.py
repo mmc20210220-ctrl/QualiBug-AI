@@ -208,7 +208,7 @@ class IdentityBenchmarkHttpMixin:
                 status = 201 if result.get("ground_truth_imported") is True else 200
                 return self._json({"ok": True, "data": result}, status)
             if action == "structural-review-decision":
-                from .enterprise_knowledge_center.enterprise_understanding.identity_structural_review import (
+                from .enterprise_knowledge_center.enterprise_understanding.identity_structural_review_command import (
                     record_identity_structural_review_decision,
                 )
 
