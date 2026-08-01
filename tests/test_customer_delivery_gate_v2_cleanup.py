@@ -4,6 +4,7 @@ import pytest
 
 from ai_test_asset_center.customer_delivery_gate_v2 import (
     _cleanup_gate_decision,
+    _oracle_harness_reason_detail,
     _reproduction_decision,
     _validate_active_chain,
 )
@@ -62,6 +63,23 @@ def test_cleanup_failure_is_harness_failure() -> None:
     )
 
     assert decision == ("HARNESS_FAILED", ["CLEANUP_COMPENSATION_FAILED"], "FAILED")
+
+
+def test_oracle_harness_detail_preserves_activation_failure_reasons() -> None:
+    detail = _oracle_harness_reason_detail(
+        {
+            "status": "HARNESS_FAILED",
+            "reason_codes": ["ORACLE_REASON"],
+            "activation_receipt": {
+                "reason_codes": [
+                    "CLEANUP_RECEIPT_FAILED:cleanup:cleanup-1",
+                    "ORACLE_REASON",
+                ],
+            },
+        }
+    )
+
+    assert detail == "ORACLE_REASON,CLEANUP_RECEIPT_FAILED:cleanup:cleanup-1"
 
 
 def test_cleanup_receipt_must_cover_every_accepted_write() -> None:

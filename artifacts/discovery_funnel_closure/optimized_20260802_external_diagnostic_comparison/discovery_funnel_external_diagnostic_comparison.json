@@ -23,6 +23,65 @@
     "runtime_fingerprint_match": true,
     "policy_identity_is_intentionally_different": true
   },
+  "follow_up_same_condition_diagnostic": {
+    "date": "2026-08-02",
+    "baseline": {
+      "policy_id": "policy-baseline-001",
+      "run_id": "RUN_eaca0351e56b9afbb2760e69",
+      "external_report": "D:\\QF\\d12\\funnel-closure-20260802-baseline-v3\\reports\\policy-baseline-001.replay.json",
+      "claim_status": "NOT_MEASURED",
+      "not_measured_reason": "obligation_campaign_degraded",
+      "funnel": {
+        "selected": 471,
+        "terminal": 471,
+        "compiled": 130,
+        "executed": 105,
+        "harness_failed": 56,
+        "cleanup_write_coverage_mismatch": 20,
+        "funnel_conservation_status": "PASS"
+      },
+      "operations": {
+        "request_count": 757,
+        "production_http_requests": 0,
+        "cleanup_failures": 0,
+        "estimated_cost_usd": null
+      }
+    },
+    "candidate": {
+      "policy_id": "policy-eval-8385734a62e5",
+      "run_id": "RUN_8a556dbb4197f3d9034b00f8",
+      "external_report": "D:\\QF\\d13\\funnel-closure-20260802-candidate-v3\\reports\\policy-eval-8385734a62e5.replay.json",
+      "claim_status": "NOT_MEASURED",
+      "not_measured_reason": "obligation_campaign_degraded",
+      "funnel": {
+        "selected": 517,
+        "terminal": 517,
+        "compiled": 139,
+        "executed": 98,
+        "harness_failed": 47,
+        "cleanup_write_coverage_mismatch": 11,
+        "funnel_conservation_status": "PASS"
+      },
+      "operations": {
+        "request_count": 667,
+        "production_http_requests": 0,
+        "cleanup_failures": 0,
+        "estimated_cost_usd": null
+      }
+    },
+    "same_condition_fingerprints": true,
+    "interpretation": "Both follow-up runs are authenticated diagnostic-only evidence. Their campaigns are degraded and cost coverage is missing, so raw funnel deltas are not a quality or promotion result."
+  },
+  "root_fix_validation": {
+    "change": "Auto fixture setup and cleanup route matching now requires ordered source-declared resource-collection tokens; token intersection cannot select login or an unrelated resource surface.",
+    "local_regression": "test_auto_fixture_does_not_cross_resource_surface_for_action_probe",
+    "read_only_reproduction": {
+      "action_probe_setup_requests": 0,
+      "action_probe_cleanup_requests": 0,
+      "writes_sent": 0
+    },
+    "external_quality_credit": "NONE_PENDING_MEASURED_RECEIPT"
+  },
   "baseline": {
     "policy_id": "policy-baseline-001",
     "run_id": "RUN_d8aa69a2dcdb825b3b105ae8",

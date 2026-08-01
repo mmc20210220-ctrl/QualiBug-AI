@@ -38,6 +38,12 @@ Evidence:
 
 - Baseline: `D:\QF\d3\reports\policy-baseline-001.replay.json`
 - Candidate: `D:\QF\d9\reports\policy-eval-8385734a62e5.replay.json`
+- Same-condition follow-up baseline: `D:\QF\d12\funnel-closure-20260802-baseline-v3\reports\policy-baseline-001.replay.json`
+- Same-condition follow-up candidate: `D:\QF\d13\funnel-closure-20260802-candidate-v3\reports\policy-eval-8385734a62e5.replay.json`
 - Machine-readable comparison: `discovery_funnel_external_diagnostic_comparison.json`
+
+The 2026-08-02 follow-up used matching input, fixture, context, and runtime fingerprints. Both authenticated runs remained `NOT_MEASURED` because their obligation campaigns were degraded and estimated cost was absent. The baseline had 471 selected / 471 terminal / 130 compiled / 105 executed, with 56 harness failures and 20 cleanup-write-coverage mismatches. The candidate had 517 / 517 / 139 / 98, with 47 harness failures and 11 cleanup-write-coverage mismatches. These raw funnel differences are diagnostic only and receive no quality or promotion credit.
+
+The root fix validated in this iteration is bounded to fixture safety: setup and cleanup route selection now requires ordered source-declared resource-collection tokens. A read-only action-probe reproduction produced zero setup requests and zero cleanup requests, so an authentication route or unrelated balance route cannot be used as a disposable fixture lifecycle. This does not invent a compensator, request body, or customer finding.
 
 Commercial/generalization status remains blocked because this diagnostic has no held-out targets, no intentionally clean target, no three-industry held-out split, no cost baseline, and no paired replay/shadow promotion evidence.

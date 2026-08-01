@@ -577,6 +577,20 @@ class CommandCenterBuilderMixin:
         # Discovery funnel observability (five-stage + blockers). Prefer the
         # freshest scan report; never invent numbers when absent.
         discovery_funnel = None
+        discovery_funnel_report = None
+        for source in (current_scan_report, report, real_discovery_payload):
+            if not isinstance(source, dict):
+                continue
+            candidate_report = source.get("discovery_funnel_report")
+            if isinstance(candidate_report, dict):
+                discovery_funnel_report = candidate_report
+                break
+            nested = source.get("v12")
+            if isinstance(nested, dict) and isinstance(
+                nested.get("discovery_funnel_report"), dict
+            ):
+                discovery_funnel_report = nested["discovery_funnel_report"]
+                break
         for source in (current_scan_report, report, real_discovery_payload):
             if isinstance(source, dict) and isinstance(source.get("discovery_funnel"), dict):
                 discovery_funnel = source.get("discovery_funnel")
@@ -605,6 +619,9 @@ class CommandCenterBuilderMixin:
                 data["scan_meta"]["pipeline_health"] = pipeline_health
                 data["scan_meta"]["pipeline_health_status"] = str(pipeline_health.get("status") or "")
                 data["scan_meta"]["empty_findings_means_no_bugs"] = bool(pipeline_health.get("empty_findings_means_no_bugs"))
+        if isinstance(discovery_funnel_report, dict):
+            data["discovery_funnel_report"] = discovery_funnel_report
+            data["scan_meta"]["discovery_funnel_report"] = discovery_funnel_report
         if knowledge_summary:
             data["knowledge_summary"] = knowledge_summary
         if real_discovery_payload and isinstance(discovery_payload.get("continuous_discovery_campaign"), dict):
