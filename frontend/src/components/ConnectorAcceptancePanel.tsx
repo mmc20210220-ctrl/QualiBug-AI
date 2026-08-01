@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  getConnectorAcceptanceJob,
   getConnectorAcceptanceReport,
   listConnectorAcceptanceReports,
-  runConnectorAcceptance,
+  startConnectorAcceptance,
+  type ConnectorAcceptanceJob,
   type ConnectorAcceptanceReport,
   type ConnectorAcceptanceReportSummary,
 } from '../api/connector-acceptance';
@@ -25,6 +27,10 @@ function formatTime(value?: string): string {
 function percent(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, Math.round(value * 100)));
+}
+
+function isActiveJob(job: ConnectorAcceptanceJob | null): boolean {
+  return job?.status === 'PENDING' || job?.status === 'RUNNING';
 }
 
 function checkLabel(checkId: string): string {
@@ -54,33 +60,86 @@ export function ConnectorAcceptancePanel({
   const toast = useToast();
   const [latest, setLatest] = useState<ConnectorAcceptanceReportSummary | null>(null);
   const [report, setReport] = useState<ConnectorAcceptanceReport | null>(null);
+  const [job, setJob] = useState<ConnectorAcceptanceJob | null>(null);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
+
+  const loadReport = useCallback(async (reportId: string) => {
+    const loaded = await getConnectorAcceptanceReport(projectId, connectorId, reportId);
+    setLatest(loaded);
+    setReport(loaded);
+    return loaded;
+  }, [projectId, connectorId]);
 
   const load = useCallback(async () => {
     if (!projectId || !connectorId) return;
     setLoading(true);
     setError('');
     try {
-      const inventory = await listConnectorAcceptanceReports(projectId, connectorId);
+      const [inventory, currentJob] = await Promise.all([
+        listConnectorAcceptanceReports(projectId, connectorId),
+        getConnectorAcceptanceJob(projectId, connectorId),
+      ]);
+      setJob(currentJob);
+      setRunning(isActiveJob(currentJob));
       const nextLatest = inventory.reports[0] || null;
       setLatest(nextLatest);
-      if (nextLatest) {
-        setReport(await getConnectorAcceptanceReport(projectId, connectorId, nextLatest.report_id));
+      const reportId = currentJob.report_id || nextLatest?.report_id;
+      if (reportId) {
+        await loadReport(reportId);
       } else {
         setReport(null);
+      }
+      if (currentJob.status === 'FAILED' || currentJob.status === 'INTERRUPTED') {
+        setError('上一次验收任务未完整结束，可重新运行 Pilot 验收。');
       }
     } catch (loadError: unknown) {
       setError(loadError instanceof Error ? loadError.message : '验收状态加载失败。');
     } finally {
       setLoading(false);
     }
-  }, [projectId, connectorId]);
+  }, [projectId, connectorId, loadReport]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!job?.job_id || !isActiveJob(job)) return undefined;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const next = await getConnectorAcceptanceJob(projectId, connectorId, job.job_id);
+        if (cancelled) return;
+        setJob(next);
+        setRunning(isActiveJob(next));
+        if (next.status === 'COMPLETE' && next.report_id) {
+          const completed = await loadReport(next.report_id);
+          if (cancelled) return;
+          if (completed.acceptance_ready) {
+            toast.show('飞书真实租户 Pilot 验收已通过。', 'success');
+          } else {
+            toast.show(`验收完成，发现 ${completed.summary.blocker_failure_count} 个阻断项。`, 'warning');
+          }
+        } else if (next.status === 'FAILED' || next.status === 'INTERRUPTED') {
+          setError('验收任务未完整结束，已有资料不受影响，可重新运行。');
+          toast.show('验收任务未完整结束，已有资料不受影响。', 'warning');
+        }
+      } catch (pollError: unknown) {
+        if (cancelled) return;
+        setError(pollError instanceof Error ? pollError.message : '验收任务状态读取失败。');
+      }
+    };
+
+    const timer = window.setInterval(() => void poll(), 2000);
+    void poll();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [job?.job_id, job?.status, projectId, connectorId, loadReport, toast]);
 
   const blockers = useMemo(
     () => (report?.checks || []).filter((check) => check.severity === 'BLOCKER' && check.status === 'FAIL'),
@@ -91,25 +150,30 @@ export function ConnectorAcceptancePanel({
     setRunning(true);
     setError('');
     try {
-      const result = await runConnectorAcceptance(projectId, connectorId, 'pilot');
-      setLatest(result);
-      setReport(result);
-      if (result.acceptance_ready) {
-        toast.show('飞书真实租户 Pilot 验收已通过。', 'success');
-      } else {
-        toast.show(`验收完成，发现 ${result.summary.blocker_failure_count} 个阻断项。`, 'warning');
-      }
+      const started = await startConnectorAcceptance(projectId, connectorId, 'pilot');
+      setJob(started);
+      setRunning(isActiveJob(started));
+      toast.show('Pilot 验收任务已启动，可刷新页面后继续查看进度。', 'success');
     } catch (runError: unknown) {
-      const message = runError instanceof Error ? runError.message : '验收执行失败。';
+      const message = runError instanceof Error ? runError.message : '验收任务启动失败。';
+      setRunning(false);
       setError(message);
       toast.show(message, 'danger');
-    } finally {
-      setRunning(false);
     }
   };
 
-  const tone = latest?.acceptance_ready ? 'pass' : latest ? 'fail' : 'idle';
-  const status = latest?.acceptance_ready ? '已通过' : latest ? '未通过' : '尚未验收';
+  const active = isActiveJob(job) || running;
+  const interrupted = job?.status === 'FAILED' || job?.status === 'INTERRUPTED';
+  const tone = active ? 'running' : interrupted ? 'fail' : latest?.acceptance_ready ? 'pass' : latest ? 'fail' : 'idle';
+  const status = active
+    ? '验收运行中'
+    : interrupted
+      ? '任务未完整结束'
+      : latest?.acceptance_ready
+        ? '已通过'
+        : latest
+          ? '未通过'
+          : '尚未验收';
   const coverage = percent(latest?.summary.minimum_coverage_ratio || 0);
 
   return (
@@ -123,9 +187,9 @@ export function ConnectorAcceptancePanel({
           className="btn btn-secondary"
           type="button"
           onClick={() => void runPilot()}
-          disabled={disabled || loading || running}
+          disabled={disabled || loading || active}
         >
-          {running ? '正在执行两轮验收…' : latest ? '重新运行 Pilot 验收' : '运行 Pilot 验收'}
+          {active ? '正在后台执行两轮验收…' : latest ? '重新运行 Pilot 验收' : '运行 Pilot 验收'}
         </button>
       </div>
 
@@ -133,6 +197,12 @@ export function ConnectorAcceptancePanel({
         连续执行两轮只读同步，验证连接、覆盖率、增量复用、检查点和客户资料非修改边界。
         验收固定使用 RETAIN，不删除或修改飞书原资料。
       </p>
+
+      {active && (
+        <div className="connector-acceptance-running-note">
+          任务在服务端持续运行，关闭或刷新页面不会中断；页面会自动恢复并查询最新状态。
+        </div>
+      )}
 
       {error && <div className="connector-acceptance-error">{error}</div>}
 
@@ -159,13 +229,13 @@ export function ConnectorAcceptancePanel({
 
       {latest && (
         <div className="connector-acceptance-meta">
-          <span>验收等级：{latest.profile || 'pilot'}</span>
+          <span>{active ? '上次报告等级' : '验收等级'}：{latest.profile || 'pilot'}</span>
           <span>最近完成：{formatTime(latest.completed_at_utc)}</span>
           <span>报告仅含指标与哈希，不含正文、凭据或原始游标</span>
         </div>
       )}
 
-      {blockers.length > 0 && (
+      {blockers.length > 0 && !active && (
         <details className="connector-acceptance-blockers" open>
           <summary>查看阻断项（{blockers.length}）</summary>
           <div>
@@ -179,7 +249,7 @@ export function ConnectorAcceptancePanel({
         </details>
       )}
 
-      {latest?.acceptance_ready && (
+      {latest?.acceptance_ready && !active && (
         <div className="connector-acceptance-success">
           当前连接已满足 Pilot 真实租户准入门槛，可进入试点运行。
         </div>
