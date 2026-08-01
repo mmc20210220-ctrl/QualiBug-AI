@@ -1,6 +1,6 @@
 """Composition facade for capability-aware Feishu synchronization.
 
-The implementation remains in ``feishu_connector_capability_sync_core``.  This facade binds its
+The implementation remains in ``feishu_connector_capability_sync_core``. This facade binds its
 snapshot and remote-lifecycle steps to the recoverable commit authorities without duplicating
 discovery, capability classification, export, ingestion, or coverage logic.
 """
@@ -12,9 +12,11 @@ from typing import Any, Iterator
 
 from . import feishu_connector_capability_sync_core as _core
 from .connector_checkpoint_commit_authority import (
+    ConnectorCheckpointCommitError,
     reconcile_connector_remote_lifecycle_with_checkpoint,
     sync_connector_snapshot_batch_deferred,
 )
+from .connector_lifecycle_commit_authority import ConnectorLifecycleCommitError
 
 # Preserve the existing public and test injection surface while keeping one implementation body.
 for _name, _value in vars(_core).items():
@@ -40,6 +42,8 @@ _FACADE_OWNED_NAMES = {
     "wraps",
     "Any",
     "Iterator",
+    "ConnectorCheckpointCommitError",
+    "ConnectorLifecycleCommitError",
 }
 
 
@@ -91,8 +95,13 @@ def _project_committed_checkpoint(result: dict[str, Any]) -> dict[str, Any]:
 
 @wraps(_core.sync_feishu_connector)
 def sync_feishu_connector(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    with _temporary_core_overrides():
-        result = _core.sync_feishu_connector(*args, **kwargs)
+    try:
+        with _temporary_core_overrides():
+            result = _core.sync_feishu_connector(*args, **kwargs)
+    except (ConnectorCheckpointCommitError, ConnectorLifecycleCommitError) as exc:
+        raise FeishuConnectorError(
+            f"feishu_lifecycle_checkpoint_commit_failed:{exc}"
+        ) from exc
     return _project_committed_checkpoint(result)
 
 
