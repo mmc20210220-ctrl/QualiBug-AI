@@ -36,6 +36,7 @@ from ai_test_asset_center.state_path_exploration import (
 from ai_test_asset_center.cross_entity_chain_planning import (
     plan_cross_entity_experiments,
     build_chain_proof,
+    build_cross_entity_planning_context,
     detect_cross_entity_requirement,
 )
 from ai_test_asset_center.idempotency_replay_planning import (
@@ -43,7 +44,6 @@ from ai_test_asset_center.idempotency_replay_planning import (
     build_idempotency_proof,
 )
 
-# ─── Helpers ───────────────────────────────────────────────────────────────────
 
 def _dict(v: Any) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
@@ -69,8 +69,6 @@ def _stable_id(*parts: str) -> str:
     return "deep_" + hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-# ─── Experiment Mechanisms ─────────────────────────────────────────────────────
-
 MECHANISM_BOUNDARY = "BOUNDARY"
 MECHANISM_STATE_NEGATIVE = "STATE_NEGATIVE"
 MECHANISM_IDEMPOTENCY = "IDEMPOTENCY"
@@ -79,12 +77,12 @@ MECHANISM_CAUSAL_SIDE_EFFECT = "CAUSAL_SIDE_EFFECT"
 MECHANISM_TEMPORAL = "TEMPORAL"
 MECHANISM_ROLE_TENANT = "ROLE_TENANT"
 MECHANISM_NEGATIVE_PRECONDITION = "NEGATIVE_PRECONDITION"
-# New mechanisms for missing experiment planning (SPEC: Missing Mechanism Planning)
 MECHANISM_UNIQUENESS_VIOLATION = "UNIQUENESS_VIOLATION"
 MECHANISM_FIELD_INVARIANT_VIOLATION = "FIELD_INVARIANT_VIOLATION"
 MECHANISM_PRECONDITION_VIOLATION = "PRECONDITION_VIOLATION"
 MECHANISM_AUTHORIZATION_MATRIX = "AUTHORIZATION_MATRIX"
 MECHANISM_TENANT_ISOLATION_MATRIX = "TENANT_ISOLATION_MATRIX"
+MECHANISM_CROSS_ENTITY_PROCESS_GRAPH = "CROSS_ENTITY_PROCESS_GRAPH"
 
 ALL_MECHANISMS = frozenset({
     MECHANISM_BOUNDARY,
@@ -100,9 +98,9 @@ ALL_MECHANISMS = frozenset({
     MECHANISM_PRECONDITION_VIOLATION,
     MECHANISM_AUTHORIZATION_MATRIX,
     MECHANISM_TENANT_ISOLATION_MATRIX,
+    MECHANISM_CROSS_ENTITY_PROCESS_GRAPH,
 })
 
-# Rule type → mechanism mapping (generic, based on expression semantics)
 _RULE_TYPE_MECHANISM: dict[str, str] = {
     "UNIQUENESS": MECHANISM_UNIQUENESS_VIOLATION,
     "DUPLICATE_ENTITY": MECHANISM_UNIQUENESS_VIOLATION,
@@ -120,6 +118,9 @@ _RULE_TYPE_MECHANISM: dict[str, str] = {
     "REQUIRES": MECHANISM_PRECONDITION_VIOLATION,
     "STATE_DEPENDENCY": MECHANISM_PRECONDITION_VIOLATION,
     "CROSS_ENTITY_PRECONDITION": MECHANISM_PRECONDITION_VIOLATION,
+    "CROSS_ENTITY_OPERATION_CHAIN": MECHANISM_CROSS_ENTITY_PROCESS_GRAPH,
+    "CROSS_OBJECT_PROCESS": MECHANISM_CROSS_ENTITY_PROCESS_GRAPH,
+    "CROSS_SYSTEM_PROCESS": MECHANISM_CROSS_ENTITY_PROCESS_GRAPH,
     "AUTHORIZATION": MECHANISM_AUTHORIZATION_MATRIX,
     "ROLE_PERMISSION": MECHANISM_AUTHORIZATION_MATRIX,
     "ACTION_PERMISSION": MECHANISM_AUTHORIZATION_MATRIX,
@@ -136,7 +137,6 @@ _RULE_TYPE_MECHANISM: dict[str, str] = {
     "CUMULATIVE": MECHANISM_CUMULATIVE,
 }
 
-# Expression type hints → mechanism
 _EXPRESSION_HINT_MECHANISM: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)(unique|duplicate|same.*number|重复|唯一)"), MECHANISM_UNIQUENESS_VIOLATION),
     (re.compile(r"(?i)(negative|non.?negative|不得为负|非负|positive.*required|must.*positive)"), MECHANISM_FIELD_INVARIANT_VIOLATION),
@@ -151,8 +151,6 @@ _EXPRESSION_HINT_MECHANISM: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
-# ─── Mechanism Selection ───────────────────────────────────────────────────────
-
 def select_experiment_mechanism(
     rule_type: str,
     expression: Any,
@@ -164,7 +162,6 @@ def select_experiment_mechanism(
     if rt in _RULE_TYPE_MECHANISM:
         return _RULE_TYPE_MECHANISM[rt]
 
-    # Try expression text hints
     expr_text = ""
     if isinstance(expression, dict):
         expr_text = " ".join(
@@ -177,7 +174,6 @@ def select_experiment_mechanism(
         if pattern.search(expr_text):
             return mechanism
 
-    # Fallback by risk_family
     family_map = {
         "isolation": MECHANISM_ROLE_TENANT,
         "authorization": MECHANISM_ROLE_TENANT,
@@ -186,6 +182,9 @@ def select_experiment_mechanism(
         "temporal": MECHANISM_TEMPORAL,
         "conservation": MECHANISM_CUMULATIVE,
         "visibility": MECHANISM_ROLE_TENANT,
+        "cross_entity_chain": MECHANISM_CROSS_ENTITY_PROCESS_GRAPH,
+        "cross_object": MECHANISM_CROSS_ENTITY_PROCESS_GRAPH,
+        "cross_system": MECHANISM_CROSS_ENTITY_PROCESS_GRAPH,
     }
     if risk_family in family_map:
         return family_map[risk_family]
@@ -193,26 +192,23 @@ def select_experiment_mechanism(
     return MECHANISM_CAUSAL_SIDE_EFFECT
 
 
-# ─── State Path Planning ───────────────────────────────────────────────────────
-
 def plan_state_path(
     behavior_ir: dict[str, Any],
     target_state: str,
     entity_ref: str = "",
 ) -> list[dict[str, Any]]:
-    """Plan a sequence of operations to reach target_state from initial state.
-
-    Uses the Behavior IR state graph. Returns list of steps:
-    [{"operation_ref", "from_state", "to_state", "step_index"}]
-    """
+    """Plan a sequence of operations to reach target_state from initial state."""
     ir = _dict(behavior_ir)
     states = _list(ir.get("states"))
     relations = _list(ir.get("relations"))
     operations = _list(ir.get("operations"))
 
-    # Build transition graph from relations
     transitions: list[dict[str, Any]] = []
-    ops_by_id = {_text(op.get("id")): op for op in operations if isinstance(op, dict)}
+    ops_by_id = {
+        _text(op.get("id")): op
+        for op in operations
+        if isinstance(op, dict)
+    }
 
     for rel in relations:
         if not isinstance(rel, dict):
@@ -231,13 +227,11 @@ def plan_state_path(
     if not transitions:
         return []
 
-    # Find initial state (state with no incoming transitions, or marked initial)
     all_to_states = {t["to_state"] for t in transitions}
     all_from_states = {t["from_state"] for t in transitions}
     initial_states = all_from_states - all_to_states
     initial = next(iter(initial_states), "") if initial_states else ""
 
-    # Also check states list for initial marker
     for st in states:
         if isinstance(st, dict) and st.get("initial"):
             initial = _text(st.get("id") or st.get("state_id"))
@@ -246,13 +240,10 @@ def plan_state_path(
     if not initial or not target_state:
         return []
 
-    # BFS to find shortest path
     from collections import deque
     queue: deque[list[dict[str, Any]]] = deque([[{"state": initial, "steps": []}]])
     visited: set[str] = {initial}
-    max_depth = 12  # Hard limit per SPEC §10
-
-    # Flatten queue structure
+    max_depth = 12
     queue = deque()
     queue.append((initial, []))
 
@@ -280,21 +271,13 @@ def plan_state_path(
     return []
 
 
-# ─── Boundary Mutation ─────────────────────────────────────────────────────────
-
 def generate_boundary_mutation(
     field_spec: dict[str, Any],
     expression: Any,
 ) -> list[dict[str, Any]]:
-    """Generate boundary value mutations: at-limit, over-limit, under-limit.
-
-    Returns list of mutation descriptors:
-    [{"mutation_id", "field", "value", "mutation_type", "expected_outcome"}]
-    """
+    """Generate boundary value mutations: at-limit, over-limit, under-limit."""
     mutations: list[dict[str, Any]] = []
     expr = _dict(expression) if isinstance(expression, dict) else {}
-
-    # Extract limit from expression
     limit_value = None
     limit_field = _text(field_spec.get("field") or field_spec.get("name"))
 
@@ -304,7 +287,6 @@ def generate_boundary_mutation(
             break
 
     if limit_value is None:
-        # Try to extract from expression text
         expr_str = _text(expr.get("expression") or expr.get("rule") or expr.get("description"))
         m = re.search(r"(?:max|limit|threshold|cap|<=?|≤)\s*(\d+(?:\.\d+)?)", expr_str, re.IGNORECASE)
         if m:
@@ -313,7 +295,7 @@ def generate_boundary_mutation(
     if limit_value is None or limit_value <= 0:
         return []
 
-    step = max(1, limit_value * 0.01)  # 1% step
+    step = max(1, limit_value * 0.01)
     mutations = [
         {
             "mutation_id": _stable_id("boundary", limit_field, "at_limit"),
@@ -347,17 +329,12 @@ def generate_boundary_mutation(
     return mutations
 
 
-# ─── Cumulative Mutation ───────────────────────────────────────────────────────
-
 def generate_cumulative_mutation(
     entity_ref: str,
     limit_field: str,
     expression: Any,
 ) -> list[dict[str, Any]]:
-    """Generate cumulative mutations: two operations where second causes overflow.
-
-    Returns mutation descriptors for a two-step cumulative test.
-    """
+    """Generate cumulative mutations: two operations where second causes overflow."""
     expr = _dict(expression) if isinstance(expression, dict) else {}
     limit_value = None
 
@@ -375,8 +352,6 @@ def generate_cumulative_mutation(
     if limit_value is None or limit_value <= 0:
         return []
 
-    # First operation: 60% of limit (safe)
-    # Second operation: 60% of limit (causes cumulative overflow at 120%)
     safe_amount = limit_value * 0.6
     overflow_amount = limit_value * 0.6
 
@@ -400,16 +375,11 @@ def generate_cumulative_mutation(
     ]
 
 
-# ─── Temporal Mutation ─────────────────────────────────────────────────────────
-
 def generate_temporal_mutation(
     date_field: str,
     bounds: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Generate date boundary mutations: before/after/within range.
-
-    Returns mutation descriptors for temporal boundary testing.
-    """
+    """Generate date boundary mutations: before/after/within range."""
     mutations: list[dict[str, Any]] = []
     start = _text(bounds.get("start") or bounds.get("min") or bounds.get("from"))
     end = _text(bounds.get("end") or bounds.get("max") or bounds.get("to"))
@@ -459,36 +429,20 @@ def generate_cross_entity_temporal_mutation(
     operation: dict[str, Any],
     actor_ref: str,
 ) -> list[dict[str, Any]]:
-    """Generate cross-entity temporal boundary mutations.
-
-    Uses temporal_experiment_planning module to generate Control/Violation
-    pairs for rules like "field A must not be later than field B" where
-    A and B are from different entities.
-
-    Returns mutation descriptors compatible with build_control_violation_pair.
-    """
+    """Generate cross-entity temporal boundary mutations."""
     planner = TemporalExperimentPlanner()
-
-    # Extract target operation ID
     target_op = _text(
         _dict(expression).get("target_operation")
         or _dict(expression).get("operation_id")
         or operation.get("id")
         or operation.get("operation_ref")
     )
-
-    # For cross-entity temporal rules, we need a reference value.
-    # In production, this comes from fixture receipt or observer.
-    # For planning, we use a placeholder that will be resolved at execution time.
     reference_value = _text(
         _dict(expression).get("reference_value")
         or _dict(expression).get("reference_date")
     )
 
-    # If no reference value provided, we cannot generate concrete boundary values
-    # Return empty to indicate this needs runtime resolution
     if not reference_value:
-        # Return a marker mutation indicating temporal planning is needed
         return [{
             "mutation_id": _stable_id("temporal_cross", internal_rule_id, "needs_resolution"),
             "field": _text(_dict(expression).get("subject_field") or _dict(expression).get("date_field")),
@@ -502,7 +456,6 @@ def generate_cross_entity_temporal_mutation(
             "target_operation": target_op,
         }]
 
-    # Plan experiments using the temporal module
     result = planner.plan_experiments(
         internal_rule_id=internal_rule_id,
         expression=expression,
@@ -513,15 +466,12 @@ def generate_cross_entity_temporal_mutation(
     )
 
     if not result.get("complete"):
-        # Planning blocked - return empty
         return []
 
-    # Convert boundary solution to mutation format
     mutations: list[dict[str, Any]] = []
     solution = result.get("boundary_solution", {})
     subject_field = _text(_dict(expression).get("subject_field") or _dict(expression).get("date_field"))
 
-    # Control cases
     for case in solution.get("control_cases", []):
         mutations.append({
             "mutation_id": case.get("case_id", _stable_id("temporal_ctrl", internal_rule_id, case.get("subject_value", ""))),
@@ -534,7 +484,6 @@ def generate_cross_entity_temporal_mutation(
             "temporal_plan_proof": True,
         })
 
-    # Violation cases
     for case in solution.get("violation_cases", []):
         mutations.append({
             "mutation_id": case.get("case_id", _stable_id("temporal_viol", internal_rule_id, case.get("subject_value", ""))),
@@ -550,22 +499,15 @@ def generate_cross_entity_temporal_mutation(
     return mutations
 
 
-# ─── Uniqueness Violation Mutation ─────────────────────────────────────────────
-
 def generate_uniqueness_mutation(
     entity_ref: str,
     unique_fields: list[str],
     expression: Any,
 ) -> list[dict[str, Any]]:
-    """Generate duplicate-entity mutations: submit same identifying fields twice.
-
-    Control: first creation succeeds.
-    Violation: second creation with same unique fields must be rejected.
-    """
+    """Generate duplicate-entity mutations: submit same identifying fields twice."""
     expr = _dict(expression) if isinstance(expression, dict) else {}
     fields = unique_fields or []
     if not fields:
-        # Try to extract from expression
         field_text = _text(expr.get("unique_field") or expr.get("field") or expr.get("fields"))
         if field_text:
             fields = [f.strip() for f in field_text.split(",") if f.strip()]
@@ -592,16 +534,11 @@ def generate_uniqueness_mutation(
     ]
 
 
-# ─── Field Invariant Violation Mutation ────────────────────────────────────────
-
 def generate_field_invariant_mutation(
     field_spec: dict[str, Any],
     expression: Any,
 ) -> list[dict[str, Any]]:
-    """Generate field invariant violations: negative, zero, wrong-type values.
-
-    For constraints like 'amount must not be negative' or 'field must be positive'.
-    """
+    """Generate field invariant violations: negative, zero, wrong-type values."""
     expr = _dict(expression) if isinstance(expression, dict) else {}
     target_field = _text(
         field_spec.get("field") or field_spec.get("name")
@@ -635,18 +572,12 @@ def generate_field_invariant_mutation(
     ]
 
 
-# ─── Precondition Violation Mutation ──────────────────────────────────────────
-
 def generate_precondition_mutation(
     entity_ref: str,
     precondition_desc: str,
     expression: Any,
 ) -> list[dict[str, Any]]:
-    """Generate precondition violation: attempt operation when precondition unmet.
-
-    Control: operation with precondition satisfied → accepted.
-    Violation: operation with precondition NOT satisfied → rejected.
-    """
+    """Generate precondition violation: attempt operation when precondition unmet."""
     expr = _dict(expression) if isinstance(expression, dict) else {}
     required_state = _text(
         expr.get("required_state") or expr.get("expected_state")
@@ -656,7 +587,7 @@ def generate_precondition_mutation(
         expr.get("wrong_state") or expr.get("violation_state")
     )
     if not wrong_state:
-        wrong_state = "DRAFT"  # Generic non-qualifying state
+        wrong_state = "DRAFT"
 
     return [
         {
@@ -678,17 +609,12 @@ def generate_precondition_mutation(
     ]
 
 
-# ─── Authorization Matrix Mutation ────────────────────────────────────────────
-
 def generate_authorization_mutation(
     operation_ref: str,
     expression: Any,
     actors: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Generate authorization matrix: authorized role succeeds, others rejected.
-
-    Uses real actor references from Behavior IR when available.
-    """
+    """Generate authorization matrix: authorized role succeeds, others rejected."""
     expr = _dict(expression) if isinstance(expression, dict) else {}
     authorized_role = _text(
         expr.get("authorized_role") or expr.get("required_role")
@@ -705,7 +631,6 @@ def generate_authorization_mutation(
         },
     ]
 
-    # Generate unauthorized attempts for each non-authorized actor
     unauthorized_count = 0
     for actor in actors:
         if not isinstance(actor, dict):
@@ -728,7 +653,6 @@ def generate_authorization_mutation(
         if unauthorized_count >= 3:
             break
 
-    # Fallback if no actors available
     if unauthorized_count == 0:
         mutations.append({
             "mutation_id": _stable_id("authz", operation_ref, "unauth_generic"),
@@ -741,20 +665,13 @@ def generate_authorization_mutation(
     return mutations
 
 
-# ─── Tenant Isolation Matrix Mutation ─────────────────────────────────────────
-
 def generate_tenant_isolation_mutation(
     entity_ref: str,
     expression: Any,
     actors: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Generate tenant isolation matrix: same-tenant access OK, cross-tenant rejected.
-
-    Uses real actor references from different tenants when available.
-    """
+    """Generate tenant isolation matrix: same-tenant access OK, cross-tenant rejected."""
     expr = _dict(expression) if isinstance(expression, dict) else {}
-
-    # Group actors by tenant
     tenants: dict[str, list[dict[str, Any]]] = {}
     for actor in actors:
         if not isinstance(actor, dict):
@@ -775,7 +692,6 @@ def generate_tenant_isolation_mutation(
     ]
 
     if len(tenants) >= 2:
-        # Use actors from different tenants for cross-tenant test
         tenant_list = list(tenants.keys())
         cross_tenant = tenant_list[1]
         cross_actor = tenants[cross_tenant][0]
@@ -799,18 +715,13 @@ def generate_tenant_isolation_mutation(
     return mutations
 
 
-# ─── Multi-Step Sequence Builder ──────────────────────────────────────────────
-
 def build_multi_step_sequence(
     fixture_plan: list[dict[str, Any]],
     target_operation: dict[str, Any],
     *,
     max_steps: int = 8,
 ) -> list[dict[str, Any]]:
-    """Build a multi-step execution sequence: fixtures → target operation.
-
-    Each step: {"step_id", "operation_ref", "intent", "input_sources", "expected_state"}
-    """
+    """Build a multi-step execution sequence: fixtures → target operation."""
     steps: list[dict[str, Any]] = []
     for i, fixture in enumerate(fixture_plan[:max_steps - 1]):
         steps.append({
@@ -823,7 +734,6 @@ def build_multi_step_sequence(
             "actor_ref": _text(fixture.get("actor_ref")),
         })
 
-    # Final step: the target operation
     steps.append({
         "step_id": f"target_{len(steps) + 1}",
         "operation_ref": _text(target_operation.get("id") or target_operation.get("operation_ref")),
@@ -836,8 +746,6 @@ def build_multi_step_sequence(
     return steps
 
 
-# ─── Control/Violation Pair Builder ───────────────────────────────────────────
-
 def build_control_violation_pair(
     rule: dict[str, Any],
     mechanism: str,
@@ -846,12 +754,7 @@ def build_control_violation_pair(
     actor_ref: str = "",
     mutations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build a Control + Violation experiment pair.
-
-    Control: proves fixture and operation work (valid input → success).
-    Violation: changes ONE critical variable (invalid input → expected failure).
-    Control failure blocks Violation finding.
-    """
+    """Build a Control + Violation experiment pair."""
     rule_id = _text(rule.get("rule_id") or rule.get("invariant_ref") or rule.get("obligation_id"))
     op_ref = _text(operation.get("id") or operation.get("operation_ref"))
     body = operation.get("request_example") or operation.get("body") or {}
@@ -874,7 +777,6 @@ def build_control_violation_pair(
             field = _text(mut.get("field"))
             if field and isinstance(mutated_body, dict) and field != "actor_relation":
                 mutated_body[field] = mut.get("value")
-            # Use per-mutation actor_ref for actor matrix experiments (SPEC §16 fixture isolation)
             step_actor = _text(mut.get("actor_ref")) or actor_ref
             violation_steps.append({
                 "step_id": f"violation_{i + 1}",
@@ -914,18 +816,10 @@ def build_control_violation_pair(
     }
 
 
-# ─── Semantic Deduplication ────────────────────────────────────────────────────
-
 def deduplicate_experiments(
     experiments: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Remove semantically duplicate experiments.
-
-    Signature: (rule_id, operation_sequence, mutation_dimension, target_field,
-                actor_relation, tenant_relation, ownership_relation)
-    Same mechanism + same rule + same actor relation dimensions = duplicate.
-    Preserves tenant, owner, and assignment differences (SPEC §23).
-    """
+    """Remove semantically duplicate experiments."""
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
 
@@ -935,14 +829,12 @@ def deduplicate_experiments(
         rule_id = _text(exp.get("rule_id"))
         mechanism = _text(exp.get("mechanism"))
 
-        # Build operation sequence signature
         op_seq = []
         for step in _list(exp.get("treatment_plan")):
             if isinstance(step, dict):
                 op_seq.append(_text(step.get("operation_ref")))
         op_sig = ",".join(op_seq)
 
-        # Mutation dimension
         mutation_dim = ""
         target_field = ""
         actor_relation = ""
@@ -954,13 +846,12 @@ def deduplicate_experiments(
                 if mut:
                     mutation_dim = _text(mut.get("mutation_type"))
                     target_field = _text(mut.get("field"))
-                    # Include actor relation dimensions in signature (SPEC §23)
                     actor_relation = _text(mut.get("value")) if target_field == "actor_relation" else ""
                     actor_ref = _text(mut.get("actor_ref"))
                     control_ref = _text(mut.get("control_actor_ref"))
                     if actor_ref:
                         tenant_relation = _text(mut.get("dimension_under_test"))
-                        ownership_relation = control_ref  # Distinguishes owner vs non-owner
+                        ownership_relation = control_ref
                     break
 
         sig = f"{rule_id}|{mechanism}|{op_sig}|{mutation_dim}|{target_field}|{actor_relation}|{tenant_relation}|{ownership_relation}"
@@ -972,8 +863,6 @@ def deduplicate_experiments(
     return unique
 
 
-# ─── Main Entry Point ─────────────────────────────────────────────────────────
-
 def plan_deep_experiments(
     obligations: list[dict[str, Any]],
     experiments_by_obligation: dict[str, dict[str, Any]],
@@ -981,33 +870,19 @@ def plan_deep_experiments(
     *,
     budget: int = 100,
 ) -> dict[str, Any]:
-    """Generate rich executable experiment plans for deep business rules.
-
-    Consumes compiled obligations and Behavior IR. For obligations that are
-    blocked or shallow (single-step only), generates deep experiments using
-    appropriate mechanisms (boundary, state, temporal, cumulative, etc.).
-
-    Returns:
-        {
-            "deep_experiments": [...],
-            "by_obligation": {oid: experiment},
-            "mechanism_counts": {mechanism: count},
-            "planned_count": int,
-            "skipped_count": int,
-        }
-    """
+    """Generate rich executable experiment plans for deep business rules."""
     ir = _dict(behavior_ir)
+    cross_entity_context = build_cross_entity_planning_context(ir)
     operations = _list(ir.get("operations"))
     actors = _list(ir.get("actors"))
     states = _list(ir.get("states"))
     relations = _list(ir.get("relations"))
     invariants = _list(ir.get("invariants"))
 
-    ops_by_id = {_text(op.get("id")): op for op in operations if isinstance(op, dict)}
+    ops_by_id = dict(_dict(cross_entity_context.get("operations")))
     actors_by_id = {_text(a.get("id")): a for a in actors if isinstance(a, dict)}
     invariants_by_id = {_text(inv.get("id")): inv for inv in invariants if isinstance(inv, dict)}
 
-    # Find executable actor: prefer actors with real credentials (non-template)
     default_actor_ref = ""
     _admin_actor_ref = ""
     for a in actors:
@@ -1015,14 +890,12 @@ def plan_deep_experiments(
             continue
         _role = _text(a.get("role"))
         _secret = _text(a.get("credential_secret_ref") or a.get("secret_ref"))
-        # Skip template actors (role/secret contains { or is empty)
         if not _role or _role.startswith("{") or not _secret or _secret.startswith("{") or ":{" in _secret:
             continue
         if not default_actor_ref:
             default_actor_ref = _text(a.get("id"))
         if _role.lower() in {"admin", "administrator", "superuser", "root"}:
             _admin_actor_ref = _text(a.get("id"))
-    # Prefer admin if available
     if _admin_actor_ref:
         default_actor_ref = _admin_actor_ref
 
@@ -1030,6 +903,8 @@ def plan_deep_experiments(
     by_obligation: dict[str, dict[str, Any]] = {}
     mechanism_counts: dict[str, int] = {}
     _actor_matrix_meta: dict[str, dict[str, Any]] = {}
+    _process_graph_meta: dict[str, dict[str, Any]] = {}
+    planning_blockers: list[dict[str, Any]] = []
     skipped = 0
 
     for obl in obligations:
@@ -1047,7 +922,6 @@ def plan_deep_experiments(
         operation_ref = _text(prop.get("operation_ref"))
         actor_ref = _text(prop.get("actor_ref")) or default_actor_ref
 
-        # Determine rule type from invariant or expression (moved before skip check)
         inv = _dict(invariants_by_id.get(invariant_ref))
         rule_type = _text(
             inv.get("rule_type")
@@ -1056,41 +930,94 @@ def plan_deep_experiments(
             or _dict(expr).get("type")
         )
 
-        # Check if already has a correct deep experiment for this rule type
         existing = _dict(experiments_by_obligation.get(oid))
         existing_mechanism = _text(existing.get("mechanism"))
         if existing_mechanism in ALL_MECHANISMS:
-            # Only skip if existing mechanism matches what this rule type needs
             target_mechanism = _RULE_TYPE_MECHANISM.get(_text(rule_type).upper(), "")
             if not target_mechanism or existing_mechanism == target_mechanism:
-                continue  # Correctly planned already
-            # Otherwise: wrong mechanism was used, allow re-planning
+                continue
 
-        # Select mechanism
         mechanism = select_experiment_mechanism(
             rule_type, expr, risk_family=family,
         )
 
-        # Resolve operation
+        mutations: list[dict[str, Any]] = []
+        multi_step_fixture: list[dict[str, Any]] = []
+        graph_backed_plan: dict[str, Any] | None = None
+
+        _xce_detection = detect_cross_entity_requirement(
+            obl, ir, context=cross_entity_context
+        )
+        if _xce_detection.get("is_cross_entity"):
+            _xce_result = plan_cross_entity_experiments(
+                obl,
+                ir,
+                budget=8,
+                context=cross_entity_context,
+            )
+            if (
+                _xce_result.get("status") == "EXPLORED"
+                and _xce_result.get("experiments")
+            ):
+                mechanism = MECHANISM_CROSS_ENTITY_PROCESS_GRAPH
+                graph_backed_plan = _dict(_xce_result.get("experiments")[0])
+                mutations = [{
+                    "mutation_id": _text(graph_backed_plan.get("experiment_id")),
+                    "field": "execution_graph",
+                    "value": _text(
+                        _dict(graph_backed_plan.get("execution_graph")).get(
+                            "execution_graph_id"
+                        )
+                    ),
+                    "mutation_type": "source_declared_process_graph",
+                    "expected_outcome": _text(
+                        graph_backed_plan.get("expected_outcome")
+                    ),
+                    "cross_entity_chain": True,
+                    "cross_system": bool(graph_backed_plan.get("cross_system")),
+                }]
+                _process_graph_meta[oid] = {
+                    "status": "CROSS_ENTITY_PROCESS_GRAPH_COMPILED",
+                    "chain_type": _xce_result.get("chain_type"),
+                    "chain_proof": _xce_result.get("chain_proof"),
+                    "dependency_proof": _xce_result.get("dependency_proof"),
+                    "execution_graph_id": _text(
+                        _dict(_xce_result.get("execution_graph")).get(
+                            "execution_graph_id"
+                        )
+                    ),
+                    "detection_signals": _xce_result.get("detection_signals"),
+                }
+            else:
+                planning_blockers.append({
+                    "obligation_id": oid,
+                    "mechanism": MECHANISM_CROSS_ENTITY_PROCESS_GRAPH,
+                    "reason": _text(_xce_result.get("reason")),
+                    "blockers": _list(_xce_result.get("blockers")),
+                    "detection_signals": _list(
+                        _xce_detection.get("signals")
+                    ),
+                })
+                skipped += 1
+                continue
+
+        if graph_backed_plan is not None and not operation_ref:
+            operation_ref = _text(graph_backed_plan.get("target_operation"))
         operation = _dict(ops_by_id.get(operation_ref))
         if not operation:
-            # Try to find from required_operations
             for ref in _list(obl.get("required_operations")):
                 op = _dict(ops_by_id.get(_text(ref)))
                 if op:
                     operation = op
                     operation_ref = _text(ref)
                     break
-
-        if not operation:
+        if not operation and graph_backed_plan is None:
             skipped += 1
             continue
 
-        # Generate mutations based on mechanism
-        mutations: list[dict[str, Any]] = []
-        multi_step_fixture: list[dict[str, Any]] = []
-
-        if mechanism == MECHANISM_BOUNDARY:
+        if graph_backed_plan is not None:
+            pass
+        elif mechanism == MECHANISM_BOUNDARY:
             field_spec = _dict(expr).get("field_spec") or _dict(expr)
             mutations = generate_boundary_mutation(field_spec, expr)
 
@@ -1104,14 +1031,12 @@ def plan_deep_experiments(
             mutations = generate_cumulative_mutation(entity_ref, limit_field, expr)
 
         elif mechanism == MECHANISM_TEMPORAL:
-            # Check for cross-entity temporal structure
             subject_entity = _text(_dict(expr).get("subject_entity") or _dict(expr).get("left", {}).get("entity"))
             reference_entity = _text(_dict(expr).get("reference_entity") or _dict(expr).get("right", {}).get("entity"))
             has_cross_entity = bool(subject_entity and reference_entity and subject_entity != reference_entity)
             has_operator = bool(_text(_dict(expr).get("operator")))
 
             if has_cross_entity and has_operator:
-                # Use new temporal experiment planning for cross-entity rules
                 mutations = generate_cross_entity_temporal_mutation(
                     internal_rule_id=invariant_ref or oid,
                     expression=expr,
@@ -1120,7 +1045,6 @@ def plan_deep_experiments(
                     actor_ref=actor_ref,
                 )
             else:
-                # Fall back to simple range boundary for single-entity rules
                 date_field = _text(
                     _dict(expr).get("date_field")
                     or _dict(expr).get("field")
@@ -1130,16 +1054,13 @@ def plan_deep_experiments(
                 mutations = generate_temporal_mutation(date_field, bounds)
 
         elif mechanism == MECHANISM_STATE_NEGATIVE:
-            # STATE_PATH_NOT_EXPLORED fix: Use state_path_exploration for forbidden source states
             _sp_result = explore_state_paths(obl, ir, budget=8)
             if _sp_result.get("status") == "EXPLORED" and _sp_result.get("experiments"):
-                # Use state path exploration results
                 _sp_experiments = _sp_result.get("experiments", [])
                 _sp_state_rule = _sp_result.get("state_rule", {})
                 for _sp_exp in _sp_experiments:
                     _forbidden_state = _text(_sp_exp.get("forbidden_source_state"))
                     _fixture_steps = _list(_sp_exp.get("fixture_steps"))
-                    # Build multi-step fixture from state path
                     multi_step_fixture = [
                         {
                             "operation_ref": step.get("operation_ref"),
@@ -1158,7 +1079,6 @@ def plan_deep_experiments(
                         "state_path_id": _sp_exp.get("state_path_id"),
                         "state_path_proof": _sp_result.get("proofs", [{}])[0].get("proof_id") if _sp_result.get("proofs") else None,
                     })
-                # Store state path metadata
                 _actor_matrix_meta[oid] = {
                     "status": "STATE_PATH_EXPLORED",
                     "state_rule": _sp_state_rule,
@@ -1167,7 +1087,6 @@ def plan_deep_experiments(
                     "reachability_proof": build_reachability_proof(_sp_state_rule, _sp_result.get("state_paths", [])),
                 }
             else:
-                # Fallback to legacy behavior
                 target_state = _text(
                     _dict(expr).get("target_state")
                     or _dict(expr).get("state")
@@ -1185,7 +1104,6 @@ def plan_deep_experiments(
                             }
                             for step in path
                         ]
-                # Negative: attempt operation from wrong state
                 mutations = [{
                     "mutation_id": _stable_id("state_neg", oid, "wrong_state"),
                     "field": "state",
@@ -1195,13 +1113,10 @@ def plan_deep_experiments(
                 }]
 
         elif mechanism == MECHANISM_IDEMPOTENCY:
-            # IDEMPOTENCY_REPETITION_NOT_GENERATED fix: build concrete replay sequence
             _idem_result = plan_idempotency_replay(obl, ir, budget=8)
             if _idem_result.get("status") == "REPLAY_PLANNED" and _idem_result.get("experiments"):
-                # Use concrete replay experiments
                 _idem_experiments = _idem_result.get("experiments", [])
                 _idem_sequence = _list(_idem_result.get("replay_sequence"))
-                # Build multi_step_fixture from replay sequence
                 if _idem_sequence:
                     multi_step_fixture = [
                         {
@@ -1225,7 +1140,6 @@ def plan_deep_experiments(
                         "side_effect_proof": _idem_result.get("side_effect_proof", {}).get("proof_id"),
                         "oracle": _idem_exp.get("oracle"),
                     })
-                # Store idempotency metadata
                 _actor_matrix_meta[oid] = {
                     "status": "IDEMPOTENCY_REPLAY_PLANNED",
                     "replay_proof": _idem_result.get("replay_proof"),
@@ -1237,7 +1151,6 @@ def plan_deep_experiments(
                     "replay_variants": _idem_result.get("replay_variants"),
                 }
             else:
-                # Fallback to legacy abstract descriptors
                 mutations = [
                     {
                         "mutation_id": _stable_id("idem", oid, "first"),
@@ -1258,7 +1171,6 @@ def plan_deep_experiments(
                 ]
 
         elif mechanism == MECHANISM_ROLE_TENANT:
-            # Different role/tenant combinations
             mutations = [
                 {
                     "mutation_id": _stable_id("role", oid, "authorized"),
@@ -1284,7 +1196,6 @@ def plan_deep_experiments(
             ]
 
         elif mechanism == MECHANISM_NEGATIVE_PRECONDITION:
-            # Break one precondition at a time
             preconditions = _list(_dict(expr).get("preconditions") or _dict(inv.get("causal_chain")).get("preconditions"))
             if preconditions:
                 for i, precond in enumerate(preconditions[:3]):
@@ -1317,60 +1228,22 @@ def plan_deep_experiments(
             mutations = generate_field_invariant_mutation(field_spec, expr)
 
         elif mechanism == MECHANISM_PRECONDITION_VIOLATION:
-            # CROSS_ENTITY_OPERATION_CHAIN_NOT_BUILT fix: detect cross-entity scenarios
-            _xce_result = plan_cross_entity_experiments(obl, ir, budget=8)
-            if _xce_result.get("status") == "EXPLORED" and _xce_result.get("experiments"):
-                # Use cross-entity chain experiments
-                _xce_experiments = _xce_result.get("experiments", [])
-                for _xce_exp in _xce_experiments:
-                    _xce_setup = _list(_xce_exp.get("setup_chain"))
-                    if _xce_setup:
-                        multi_step_fixture = [
-                            {
-                                "operation_ref": _text(step.get("operation_ref")),
-                                "intent": _text(step.get("intent")),
-                                "expected_state": _text(step.get("expected_state")),
-                                "entity_role": _text(step.get("entity_role")),
-                                "actor_ref": actor_ref,
-                            }
-                            for step in _xce_setup
-                        ]
-                    mutations.append({
-                        "mutation_id": _text(_xce_exp.get("experiment_id")),
-                        "field": "cross_entity_precondition",
-                        "value": _text(_xce_exp.get("experiment_type")),
-                        "mutation_type": f"cross_entity_{_xce_exp.get('experiment_type', 'violation').lower()}",
-                        "expected_outcome": _text(_xce_exp.get("expected_outcome")),
-                        "cross_entity_chain": True,
-                        "chain_proof": _xce_result.get("chain_proof", {}).get("proof_id"),
-                        "dependency_proof": _xce_result.get("dependency_proof", {}).get("proof_id"),
-                    })
-                # Store cross-entity metadata
-                _actor_matrix_meta[oid] = {
-                    "status": "CROSS_ENTITY_CHAIN_BUILT",
-                    "chain_type": _xce_result.get("chain_type"),
-                    "chain_proof": _xce_result.get("chain_proof"),
-                    "dependency_proof": _xce_result.get("dependency_proof"),
-                    "entity_chains": _xce_result.get("entity_chains"),
-                    "detection_signals": _xce_result.get("detection_signals"),
-                }
-            else:
-                # Fallback to simple precondition mutation
-                entity_ref = _text(inv.get("entity_ref") or prop.get("entity_ref"))
-                precond_desc = _text(
-                    _dict(expr).get("description") or _dict(expr).get("precondition")
-                    or inv.get("description")
-                )
-                mutations = generate_precondition_mutation(entity_ref, precond_desc, expr)
+            entity_ref = _text(inv.get("entity_ref") or prop.get("entity_ref"))
+            precond_desc = _text(
+                _dict(expr).get("description")
+                or _dict(expr).get("precondition")
+                or inv.get("description")
+            )
+            mutations = generate_precondition_mutation(
+                entity_ref, precond_desc, expr
+            )
 
         elif mechanism == MECHANISM_AUTHORIZATION_MATRIX:
-            # Use actor matrix planning for discriminating actor combinations
             _am_result = plan_actor_matrix(
                 expr, inv, ir, operation,
                 max_candidates=8,
             )
             if _am_result.get("status") == "COMPLETE":
-                # Generate mutations from discriminating pairs
                 for _pair in _am_result.get("discriminating_pairs", []):
                     _ctrl = _dict(_pair.get("control_actor"))
                     _viol = _dict(_pair.get("violation_actor"))
@@ -1387,14 +1260,11 @@ def plan_deep_experiments(
                         "discrimination_quality": _text(_pair.get("discrimination_quality")),
                         "actor_relation_proof": _pair.get("pair_id"),
                     })
-                # Store matrix metadata on obligation for downstream use
                 _actor_matrix_meta[oid] = _am_result
             else:
-                # Fallback to legacy fixed-role mutations
                 mutations = generate_authorization_mutation(operation_ref, expr, actors)
 
         elif mechanism == MECHANISM_TENANT_ISOLATION_MATRIX:
-            # Use actor matrix planning for tenant isolation
             entity_ref = _text(inv.get("entity_ref") or prop.get("entity_ref"))
             _am_result = plan_actor_matrix(
                 expr, inv, ir, operation,
@@ -1419,20 +1289,20 @@ def plan_deep_experiments(
                     })
                 _actor_matrix_meta[oid] = _am_result
             else:
-                # Fallback to legacy tenant mutations
                 mutations = generate_tenant_isolation_mutation(entity_ref, expr, actors)
 
-        # Build multi-step sequence if fixtures needed
         treatment_plan: list[dict[str, Any]] = []
-        if multi_step_fixture:
+        if graph_backed_plan is not None:
+            treatment_plan = deepcopy(
+                _list(graph_backed_plan.get("treatment_plan"))
+            )
+        elif multi_step_fixture:
             sequence = build_multi_step_sequence(
                 multi_step_fixture,
                 {"id": operation_ref, "actor_ref": actor_ref},
             )
             treatment_plan = sequence
         else:
-            # Build Control/Violation pair
-            # For actor matrix experiments, use control_actor_ref from mutation
             _effective_actor_ref = actor_ref
             if mutations and _text(mutations[0].get("control_actor_ref")):
                 _effective_actor_ref = _text(mutations[0].get("control_actor_ref"))
@@ -1445,25 +1315,47 @@ def plan_deep_experiments(
             )
             treatment_plan = pair.get("treatment_plan") or []
 
-        # Assemble deep experiment
-        # Include actor matrix metadata if available
         _am_meta = _actor_matrix_meta.get(oid)
-        _actor_proofs = _list(_dict(_am_meta).get("proofs")) if _am_meta else []
+        _graph_meta = _process_graph_meta.get(oid)
+        _is_actor_matrix = mechanism in {
+            MECHANISM_AUTHORIZATION_MATRIX,
+            MECHANISM_TENANT_ISOLATION_MATRIX,
+        }
+        _actor_matrix_expanded = bool(_am_meta and _is_actor_matrix)
+        _actor_proofs = (
+            _list(_dict(_am_meta).get("proofs"))
+            if _actor_matrix_expanded
+            else []
+        )
 
-        # Enhanced observers for actor matrix experiments (SPEC §19, §20)
         _observers = [
             {"observer_id": "http_response"},
             {"observer_id": "entity_state"},
             {"observer_id": "business_effect"},
         ]
-        if _am_meta:
-            # Actor matrix experiments need side-effect verification on rejection
+        if _actor_matrix_expanded:
             _observers.append({"observer_id": "rejection_side_effect", "config": {
                 "check_root_unchanged": True,
                 "check_related_unchanged": True,
                 "check_no_async_side_effect": True,
                 "separate_authn_vs_authz": True,
             }})
+
+        _graph_control_plan = (
+            deepcopy(_list(graph_backed_plan.get("control_plan")))
+            if graph_backed_plan is not None
+            else None
+        )
+        _graph_assertion = (
+            deepcopy(_dict(graph_backed_plan.get("assertion")))
+            if graph_backed_plan is not None
+            else None
+        )
+        _graph_observers = (
+            deepcopy(_list(graph_backed_plan.get("observers")))
+            if graph_backed_plan is not None
+            else None
+        )
 
         deep_exp = {
             "experiment_id": _stable_id("deep", oid, mechanism),
@@ -1476,9 +1368,10 @@ def plan_deep_experiments(
                 "status": "COMPILED",
                 "reason_code": "DEEP_PLANNER_COMPILED",
                 "mechanism": mechanism,
-                "actor_matrix_expanded": bool(_am_meta),
+                "actor_matrix_expanded": _actor_matrix_expanded,
+                "process_graph_compiled": bool(_graph_meta),
             },
-            "control_plan": [{
+            "control_plan": _graph_control_plan if _graph_control_plan is not None else [{
                 "step_id": "control_1",
                 "actor_ref": _text(mutations[0].get("control_actor_ref")) if mutations and mutations[0].get("control_actor_ref") else actor_ref,
                 "operation_ref": operation_ref,
@@ -1488,8 +1381,18 @@ def plan_deep_experiments(
                 "expected_status_class": 2,
             }],
             "treatment_plan": treatment_plan,
-            "observers": _observers,
-            "assertion": {
+            "cleanup_plan": (
+                deepcopy(_list(graph_backed_plan.get("cleanup_plan")))
+                if graph_backed_plan is not None
+                else []
+            ),
+            "execution_graph": (
+                deepcopy(_dict(graph_backed_plan.get("execution_graph")))
+                if graph_backed_plan is not None
+                else {}
+            ),
+            "observers": _graph_observers if _graph_observers is not None else _observers,
+            "assertion": _graph_assertion if _graph_assertion is not None else {
                 "kind": "deep_mechanism_contrast",
                 "mechanism": mechanism,
                 "control_must_succeed": True,
@@ -1497,14 +1400,28 @@ def plan_deep_experiments(
             "source_refs": obl.get("source_refs") or [],
             "deep_planner": True,
             "actor_relation_proofs": _actor_proofs,
-            "actor_matrix_result": _am_meta.get("status") if _am_meta else None,
+            "actor_matrix_result": (
+                _am_meta.get("status") if _actor_matrix_expanded else None
+            ),
+            "process_graph_result": (
+                _graph_meta.get("status") if _graph_meta else None
+            ),
+            "chain_proof": (
+                deepcopy(_dict(_graph_meta.get("chain_proof")))
+                if _graph_meta
+                else {}
+            ),
+            "dependency_proof": (
+                deepcopy(_dict(_graph_meta.get("dependency_proof")))
+                if _graph_meta
+                else {}
+            ),
         }
 
         deep_experiments.append(deep_exp)
         by_obligation[oid] = deep_exp
         mechanism_counts[mechanism] = mechanism_counts.get(mechanism, 0) + 1
 
-    # Deduplicate
     deep_experiments = deduplicate_experiments(deep_experiments)
 
     return {
@@ -1514,5 +1431,6 @@ def plan_deep_experiments(
         "mechanism_counts": mechanism_counts,
         "planned_count": len(deep_experiments),
         "skipped_count": skipped,
+        "planning_blockers": planning_blockers,
         "budget": budget,
     }
