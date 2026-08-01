@@ -31,8 +31,8 @@ def _archive_audit(
     """Atomically retire the active audit after its contents were evaluated.
 
     Keeping a copied audit in the active location makes the next campaign treat
-    already-reset writes as current dirty state.  The evaluated audit therefore
-    has exactly one terminal location: the immutable archive.  A content change
+    already-reset writes as current dirty state. The evaluated audit therefore
+    has exactly one terminal location: the immutable archive. A content change
     between evaluation and retirement fails closed instead of silently archiving
     unverified concurrent writes.
     """
@@ -64,7 +64,7 @@ def assert_benchmark_target_clean(
     target_base_url: str,
     reset_receipt_path: str = "",
 ) -> dict[str, Any]:
-    """Require a post-audit target reset receipt after any incomplete cleanup."""
+    """Require a real post-audit target reset after any incomplete cleanup."""
     root = Path(root)
     audit_path = root / "platform_workspace" / project / "defect_discovery" / "sandbox_write_audit.jsonl"
     if not audit_path.is_file():
@@ -86,8 +86,6 @@ def assert_benchmark_target_clean(
     for row in rows:
         status = str(row.get("cleanup_status") or "").strip().lower()
         strategy = str(row.get("cleanup_strategy") or "").strip().lower()
-        # completed/verified = compensated. Observer-proven no-mutation writes
-        # leave the target unchanged and do not require a reset receipt.
         if status in {"completed", "verified"}:
             continue
         if status == "not_required" and strategy in {
@@ -136,9 +134,16 @@ def assert_benchmark_target_clean(
         for key, expected_value in expected.items()
         if str(receipt.get(key) or "").rstrip("/") != str(expected_value).rstrip("/")
     ]
+    reset_detail = receipt.get("target_db_reset")
+    if (
+        not isinstance(reset_detail, dict)
+        or str(reset_detail.get("status") or "").strip().lower() != "ok"
+        or receipt.get("cleanliness_proof_eligible") is not True
+    ):
+        mismatches.append("target_db_reset.status")
     if mismatches or not str(receipt.get("receipt_id") or "").strip():
         raise RuntimeError(
-            f"benchmark_reset_receipt_invalid:{receipt_path}:mismatches={','.join(mismatches) or 'receipt_id'}"
+            f"benchmark_reset_receipt_invalid:{receipt_path}:mismatches={','.join(sorted(set(mismatches))) or 'receipt_id'}"
         )
     latest_audit = max(_parse_utc(row.get("timestamp")) for row in rows)
     reset_at = _parse_utc(receipt.get("reset_at_utc"))
