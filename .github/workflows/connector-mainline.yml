@@ -52,6 +52,7 @@ jobs:
             ai_test_asset_center/connector_sync_ownership.py \
             ai_test_asset_center/connector_checkpoint_recovery.py \
             ai_test_asset_center/connector_configuration_service.py \
+            ai_test_asset_center/connector_workspace_maintenance.py \
             ai_test_asset_center/connector_auto_sync.py \
             ai_test_asset_center/private_pilot_connector_handlers.py \
             ai_test_asset_center/private_pilot_service.py
@@ -63,6 +64,7 @@ jobs:
             tests/test_connector_sync_ownership.py \
             tests/test_connector_sync_fencing.py \
             tests/test_connector_configuration_service.py \
+            tests/test_connector_workspace_maintenance.py \
             tests/test_connector_fencing_public_projection.py \
             tests/test_connector_supervisor_lifecycle_authority.py \
             tests/test_private_pilot_connector_handlers.py \
