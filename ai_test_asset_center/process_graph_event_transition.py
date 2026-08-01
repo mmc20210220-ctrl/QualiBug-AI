@@ -466,15 +466,17 @@ def execute_event_transition(
     event_id_values: dict[str, Any] = {}
     event_id_aliases: dict[str, set[str]] = {}
     correlation_alias_event_ids: set[str] = set()
+    out_of_scope_idempotency_event_ids: set[str] = set()
+    missing_idempotency_event_ids: set[str] = set()
     broker_observation_rows: list[dict[str, Any]] = []
     event_id_reuse_conflicts = 0
-    idempotency_mismatches = 0
     correlation_identity_mismatches = 0
     event_identity_type_conflicts = 0
     retry_limit_violations = 0
     poll_replay_count = 0
     invalid_collection_count = 0
     successful_polls = 0
+    correlated_rows_seen = 0
     matching_rows_seen = 0
 
     for attempt_number in range(1, max_attempts + 1):
@@ -498,15 +500,33 @@ def execute_event_transition(
             if observed_identity == correlation_identity:
                 correlated.append(row)
                 continue
-            # A textual alias with a different JSON scalar type is not the same
-            # cross-system object identity. Count it once per event identity so
-            # repeated polling cannot inflate the semantic evidence.
             if str(observed_correlation) == str(correlation):
                 correlation_alias_event_ids.add(_identity(row.get("event_id")))
         correlation_identity_mismatches = len(correlation_alias_event_ids)
-        matching_rows_seen += len(correlated)
-        newly_unique = 0
+        correlated_rows_seen += len(correlated)
+
+        in_scope: list[dict[str, Any]] = []
+        foreign_in_poll = 0
+        missing_in_poll = 0
         for row in correlated:
+            if not idempotency_key:
+                in_scope.append(row)
+                continue
+            event_identity = _identity(row.get("event_id"))
+            idempotency_value = row.get("idempotency_value")
+            if not _scalar(idempotency_value):
+                missing_idempotency_event_ids.add(event_identity)
+                missing_in_poll += 1
+                continue
+            if _identity(idempotency_value) != _identity(expected_idempotency):
+                out_of_scope_idempotency_event_ids.add(event_identity)
+                foreign_in_poll += 1
+                continue
+            in_scope.append(row)
+
+        matching_rows_seen += len(in_scope)
+        newly_unique = 0
+        for row in in_scope:
             observed_row = {**row, "poll_number": attempt_number}
             broker_observation_rows.append(observed_row)
             raw_event_id = row.get("event_id")
@@ -526,10 +546,6 @@ def execute_event_transition(
             event_id_payloads[event_identity] = payload_fp
             event_id_values[event_identity] = raw_event_id
             newly_unique += 1
-            if idempotency_key and _identity(row.get("idempotency_value")) != _identity(
-                expected_idempotency
-            ):
-                idempotency_mismatches += 1
             retry_limit = int(spec.get("expected_max_delivery_attempt") or 0)
             if retry_limit:
                 delivery_attempt = row.get("delivery_attempt")
@@ -541,7 +557,10 @@ def execute_event_transition(
                 "elapsed_ms": max(0, int((monotonic() - started) * 1000)),
                 "status_code": status_code,
                 "collection_valid": not collection_error,
-                "matching_row_count": len(correlated),
+                "correlated_row_count": len(correlated),
+                "matching_row_count": len(in_scope),
+                "out_of_scope_idempotency_row_count": foreign_in_poll,
+                "missing_idempotency_row_count": missing_in_poll,
                 "new_unique_event_count": newly_unique,
                 "unique_event_count": len(events_by_id),
             }
@@ -552,6 +571,9 @@ def execute_event_transition(
     unique_count = len(events_by_id)
     minimum = int(spec.get("expected_min_count") or 0)
     maximum = int(spec.get("expected_max_count") or 0)
+    idempotency_mismatches = len(missing_idempotency_event_ids)
+    if unique_count < minimum:
+        idempotency_mismatches += len(out_of_scope_idempotency_event_ids)
     base_coverage_complete = bool(
         len(attempts) == max_attempts
         and successful_polls == len(attempts)
@@ -624,6 +646,12 @@ def execute_event_transition(
         "expected_event_type": _text(spec.get("expected_event_type")),
         "expected_min_count": minimum,
         "expected_max_count": maximum,
+        "event_scope_mode": (
+            "correlation_and_idempotency"
+            if idempotency_key
+            else "correlation_only"
+        ),
+        "observed_correlated_row_count": correlated_rows_seen,
         "observed_matching_row_count": matching_rows_seen,
         "observed_unique_event_count": unique_count,
         "poll_replay_count": poll_replay_count,
@@ -632,6 +660,12 @@ def execute_event_transition(
         "event_identity_type_conflict_count": event_identity_type_conflicts,
         "correlation_identity_mismatch_count": correlation_identity_mismatches,
         "idempotency_mismatch_count": idempotency_mismatches,
+        "out_of_scope_idempotency_event_count": len(
+            out_of_scope_idempotency_event_ids
+        ),
+        "missing_idempotency_event_count": len(
+            missing_idempotency_event_ids
+        ),
         "retry_limit_violation_count": retry_limit_violations,
         "broker_contract_fingerprint": _text(
             broker_contract.get("contract_fingerprint")
