@@ -13,10 +13,17 @@ from ._object_recognition_projection import (
     project_asset_for_recognized_objects,
     publish_recognition_and_identity,
 )
+from ._object_source_preparation import (
+    finalize_source_declared_recognition,
+    prepare_source_declared_asset,
+)
 
 
 def recognize_business_objects(asset: dict[str, Any]) -> dict[str, Any]:
-    return govern_object_candidates(asset)
+    prepared, authority = prepare_source_declared_asset(asset)
+    return finalize_source_declared_recognition(
+        govern_object_candidates(prepared), authority
+    )
 
 
 __all__ = [
