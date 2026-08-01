@@ -66,21 +66,21 @@ pytest -q \
   tests/test_authorization_comparison_identity_symmetry.py
 pytest -q tests/test_behavior_ir_obligation_experiment.py -k 'permission or authorization or actor'
 
-# Remove only temporary role-permission delivery assets. Preserve unrelated lifecycle delivery.
 python - <<'PY'
 from pathlib import Path
 p = Path('.github/workflows/quality-gates.yml')
 if p.exists():
     text = p.read_text(encoding='utf-8')
     start = '  role-permission-direct:\n'
-    end = '\n  lifecycle-root-dispatch:\n'
-    if start in text and end in text:
-        i = text.index(start)
-        j = text.index(end, i)
-        text = text[:i] + text[j + 1:]
-        p.write_text(text, encoding='utf-8')
+    end = '\n  # BEGIN SINGLE_OBJECT_COMPLEX_DELIVERY\n'
+    if start not in text or end not in text:
+        raise SystemExit('quality-gates role job boundary missing')
+    i = text.index(start)
+    j = text.index(end, i)
+    p.write_text(text[:i] + text[j + 1:], encoding='utf-8')
 PY
 
+git cat-file blob f629a6b58ba199a8657d165066af808ef2f6adb4 > .github/workflows/connector-mainline.yml
 git cat-file blob 5f9e44da83210706c5b04a12720657b480952bec > .github/workflows/one-time-e2e-root-authority-pr.yml
 rm -f \
   .github/workflows/dispatch-role-permission-root-fix.yml \
@@ -89,6 +89,7 @@ rm -f \
   .github/workflows/role-permission-main-delivery.yml \
   .github/role-permission-root-fix-trigger \
   .github/role-permission-main-delivery.trigger \
+  .github/role-permission-connector-delivery.request \
   .github/patches/role_permission_root_fix.patch.gz.b64
 rm -rf .github/delivery/role-permission .github/delivery/role-permission-v2
 
@@ -98,7 +99,4 @@ git add -A
 git commit \
   -m 'fix(auth): unify role permission authority end to end' \
   -m 'Project source-backed role permissions into the existing permission-matrix authority, preserve authorization identity through the enterprise model, and bind collection authorization evidence to content-addressed observer resource proofs without weakening explicit materialization requirements. Add real executor positive and negative end-to-end regressions.'
-
-git fetch origin main
-git rebase origin/main
-git push origin HEAD:main
+git push origin HEAD:role-permission-root-fix
