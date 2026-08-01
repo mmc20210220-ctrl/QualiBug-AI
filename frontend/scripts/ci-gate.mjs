@@ -47,6 +47,7 @@ for (const script of [
   "test:autonomous-ux",
   "test:materials-coverage",
   "test:materials-acceptance",
+  "test:materials-remote-lifecycle",
 ]) {
   await run(process.execPath, [npmCli, "run", script]);
 }
