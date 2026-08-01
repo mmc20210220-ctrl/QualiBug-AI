@@ -84,6 +84,41 @@ def test_field_key_evidence_extends_the_single_identity_authority_before_measure
     assert '"enterprise_identity_field_evidence"' in source
 
 
+def test_structural_candidates_run_only_after_final_identity_model_projection() -> None:
+    source, function = _understanding_builder()
+    calls = _named_calls(function)
+    legacy_line = next(
+        node.lineno
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "build_enterprise_understanding_model"
+    )
+    identity_line = next(
+        line for name, line in calls if name == "apply_identity_resolution_to_model"
+    )
+    recognition_line = next(
+        line for name, line in calls if name == "apply_recognition_to_model"
+    )
+    structural_line = next(
+        line
+        for name, line in calls
+        if name == "project_identity_structural_candidates"
+    )
+    receipt_line = next(
+        line for name, line in calls if name == "_attach_identity_audit_receipts"
+    )
+
+    assert legacy_line < identity_line < recognition_line < structural_line < receipt_line
+    assert source.count("project_identity_structural_candidates(") == 1
+    assert (
+        "project_identity_structural_candidates(asset, model, resolution)"
+        in source
+    )
+    assert 'model["identity_structural_evidence"]' in source
+    assert '"enterprise_identity_structural_evidence"' in source
+
+
 def test_key_backed_bound_field_can_surface_name_only_candidate_without_binding() -> None:
     from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_field_evidence import (
         augment_identity_field_evidence,
