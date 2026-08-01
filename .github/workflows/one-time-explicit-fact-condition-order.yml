@@ -1,0 +1,101 @@
+name: One-time explicit fact condition order
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/explicit-fact-condition-order.trigger'
+
+permissions:
+  contents: write
+  statuses: write
+
+concurrency:
+  group: one-time-explicit-fact-condition-order
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply source-order authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py')
+          old = '''    rows = _ordered_unique([*(row for row in existing if row), *qualified])
+              if qualified:
+          '''
+          new = '''    rows = _ordered_unique([*(row for row in existing if row), *qualified])
+              source_positions = {row: statement.find(row) for row in rows}
+              original_order = {row: index for index, row in enumerate(rows)}
+              rows.sort(
+                  key=lambda row: (
+                      source_positions[row] if source_positions[row] >= 0 else len(statement) + 1,
+                      original_order[row],
+                  )
+              )
+              if qualified:
+          '''
+          text = path.read_text(encoding='utf-8')
+          if text.count(old) != 1:
+              raise SystemExit(f'condition_order_replacement_scope_invalid:{text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git diff --check
+          test "$(git diff --name-only)" = "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install package and tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Compile changed authority
+        run: |
+          python -m py_compile ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py
+
+      - name: Run explicit fact regressions
+        run: |
+          python -m pytest -q \
+            tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py \
+            tests/test_enterprise_understanding_post_compile_governance.py \
+            tests/test_enterprise_understanding_typed_fact_authority.py \
+            tests/test_chinese_business_comprehension.py
+
+      - name: Run frozen source-backed baseline
+        run: |
+          rm -rf /tmp/qualibug-explicit-fact-baseline
+          python -m benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline \
+            --product-root . \
+            --workspace-root /tmp/qualibug-explicit-fact-baseline/workspace \
+            --output /tmp/qualibug-explicit-fact-baseline/report
+
+      - name: Commit verified root fix and self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'QualiBug Automation'
+          git config user.email 'automation@qualibug.local'
+          git rm \
+            .github/workflows/one-time-explicit-fact-condition-order.yml \
+            .github/explicit-fact-condition-order.trigger
+          git add ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py
+          git diff --cached --check
+          git commit -m 'fix(comprehension): preserve explicit condition source order' \
+            -m 'Order normalized condition coordinates by first source occurrence after stable deduplication. This preserves exact evidence semantics for qualified objects without inventing conditions or changing formal typed facts.'
+          git push origin HEAD:main
