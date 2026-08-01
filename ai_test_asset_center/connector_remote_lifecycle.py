@@ -8,7 +8,8 @@ internal retirement after consecutive complete snapshots and explicit RETIRE_MIS
 
 The module creates no second source registry and never touches the customer system. Content,
 interpretation, occurrence identity, runtime activation and historical bytes remain owned by the
-existing enterprise knowledge authorities.
+existing enterprise knowledge authorities. All lifecycle mutations share the project knowledge
+transaction lease so they cannot overwrite ingestion or observation commits.
 """
 from __future__ import annotations
 
@@ -34,6 +35,10 @@ from .enterprise_knowledge_center._utils import (
 )
 from .enterprise_knowledge_center.source_occurrence_lifecycle import (
     delete_enterprise_knowledge_source,
+)
+from .enterprise_knowledge_center.transaction_lock import (
+    KnowledgeTransactionBusy,
+    knowledge_transaction,
 )
 
 CONNECTOR_REMOTE_LIFECYCLE_SCHEMA = "qualibug.connector-remote-lifecycle.v1"
@@ -278,7 +283,7 @@ def _attach_to_sync_receipt(
         return False
 
 
-def reconcile_connector_remote_lifecycle(
+def _reconcile_connector_remote_lifecycle_unlocked(
     project_id: str,
     *,
     connector_instance_id: str,
@@ -292,12 +297,6 @@ def reconcile_connector_remote_lifecycle(
     max_retire_count: int = 100,
     max_retire_ratio: float = 0.25,
 ) -> dict[str, Any]:
-    """Record scope-presence evidence and optionally retire confirmed absences.
-
-    Missing resources are labelled as absent from the configured scope, never as remotely deleted.
-    A permission or traversal error must prevent this function from being called with an
-    authoritative snapshot; therefore it cannot advance an absence counter.
-    """
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _connector_id(connector_instance_id)
@@ -466,6 +465,7 @@ def reconcile_connector_remote_lifecycle(
             "permission_errors_do_not_advance_absence_counters": True,
             "remote_scope_retirement_requires_consecutive_complete_snapshots": True,
             "remote_scope_retirement_is_internal_only": True,
+            "remote_lifecycle_mutations_use_knowledge_transaction": True,
             "customer_material_mutation_executed": False,
         }
     )
@@ -489,6 +489,7 @@ def reconcile_connector_remote_lifecycle(
             "remote_deletion_inferred": False,
             "permission_loss_inferred": False,
             "customer_source_modified": False,
+            "knowledge_transaction_serialized": True,
         }
     )
     _save_registry(project, resolved_root, registry)
@@ -606,6 +607,7 @@ def reconcile_connector_remote_lifecycle(
         "historical_source_bytes_retained": True,
         "customer_material_access": "NON_MUTATING_READ_ONLY",
         "customer_material_mutation_executed": False,
+        "knowledge_transaction_serialized": True,
         "second_source_registry_created": False,
     }
     persisted = _attach_to_sync_receipt(
@@ -626,6 +628,51 @@ def reconcile_connector_remote_lifecycle(
             else f"{status}_RECEIPT_NOT_PERSISTED"
         )
     return lifecycle
+
+
+def reconcile_connector_remote_lifecycle(
+    project_id: str,
+    *,
+    connector_instance_id: str,
+    present_resources: list[dict[str, Any]],
+    sync_epoch_id: str,
+    root: Path | None = None,
+    actor: dict[str, Any] | None = None,
+    deletion_policy: str = "RETAIN",
+    authoritative_snapshot_complete: bool = False,
+    retire_after_complete_snapshots: int = 2,
+    max_retire_count: int = 100,
+    max_retire_ratio: float = 0.25,
+    transaction_wait_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Serialize and reconcile one complete connector-scope lifecycle observation."""
+    resolved_root = (root or ROOT).resolve()
+    project = _safe_project_id(project_id)
+    try:
+        with knowledge_transaction(
+            resolved_root,
+            project,
+            operation="reconcile_connector_remote_lifecycle",
+            actor=dict(actor or {}),
+            wait_seconds=float(transaction_wait_seconds),
+        ):
+            return _reconcile_connector_remote_lifecycle_unlocked(
+                project,
+                connector_instance_id=connector_instance_id,
+                present_resources=present_resources,
+                sync_epoch_id=sync_epoch_id,
+                root=resolved_root,
+                actor=actor,
+                deletion_policy=deletion_policy,
+                authoritative_snapshot_complete=authoritative_snapshot_complete,
+                retire_after_complete_snapshots=retire_after_complete_snapshots,
+                max_retire_count=max_retire_count,
+                max_retire_ratio=max_retire_ratio,
+            )
+    except KnowledgeTransactionBusy as exc:
+        raise ConnectorRemoteLifecycleError(
+            "connector_remote_lifecycle_transaction_busy"
+        ) from exc
 
 
 __all__ = [
