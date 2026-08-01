@@ -1,9 +1,9 @@
 """Canonical public entrypoint for Feishu enterprise-material synchronization.
 
-Transport and export primitives remain in ``feishu_connector_adapter``. All product code that
-needs to reconcile a Feishu snapshot must import synchronization from this module, which delegates
-to the capability-aware application service. The legacy adapter-level sync function remains only
-as a temporary compatibility surface and is not an authorized product entrypoint.
+Transport and export primitives remain in ``feishu_connector_adapter``. The capability-aware
+application service owns the single authoritative synchronization implementation; this module is
+the stable public facade for new integrations. The legacy adapter-level sync function remains only
+as a temporary compatibility surface and is not an authorized product dependency.
 """
 from __future__ import annotations
 
