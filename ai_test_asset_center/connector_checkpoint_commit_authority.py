@@ -49,6 +49,11 @@ def _restore_optional_fields(
             target.pop(key, None)
 
 
+def _clear_pending_fields(run: dict[str, Any]) -> None:
+    run["cursor_checkpoint_pending_lifecycle_commit"] = False
+    run["pending_cursor_fingerprint"] = ""
+
+
 def _pending_finish(
     original_finish: Callable[..., str],
     project: str,
@@ -59,6 +64,9 @@ def _pending_finish(
     next_cursor_hash: str,
 ) -> str:
     """Run the canonical finish path without committing, then mark the hash pending."""
+    complete = run.get("status") == "COMPLETE"
+    if not complete:
+        _clear_pending_fields(run)
     before_registry = _sync._load_connector_registry(project, root)
     before_instance = _sync._instance_by_id(before_registry, connector)
     if before_instance is None:
@@ -83,7 +91,6 @@ def _pending_finish(
         actor,
         "",
     )
-    complete = run.get("status") == "COMPLETE"
     pending_hash = _text(next_cursor_hash, 128)
     if not complete or not pending_hash:
         return receipt_path
@@ -92,80 +99,103 @@ def _pending_finish(
             "checkpoint_pending_cursor_fingerprint_invalid"
         )
 
-    registry = _sync._load_connector_registry(project, root)
-    instance = _sync._instance_by_id(registry, connector)
-    if instance is None:
-        raise ConnectorCheckpointCommitError(
-            "checkpoint_pending_connector_instance_disappeared"
-        )
-    _restore_optional_fields(instance, prior_success)
     completed_at = _text(run.get("completed_at_utc"), 80) or _now()
     epoch = _text(run.get("sync_epoch_id"), 160)
-    run.update(
-        {
-            "cursor_checkpoint_committed": False,
-            "committed_cursor_fingerprint": "",
-            "previous_cursor_checkpoint_preserved": True,
-            "cursor_checkpoint_pending_lifecycle_commit": True,
-            "pending_cursor_fingerprint": pending_hash,
-            "checkpoint_commit_authority": CONNECTOR_CHECKPOINT_COMMIT_SCHEMA,
-            "checkpoint_commit_requires_lifecycle_transaction": True,
-        }
-    )
-    instance.update(
-        {
-            "pending_lifecycle_sync_epoch_id": epoch,
-            "pending_cursor_fingerprint": pending_hash,
-            "pending_checkpoint_since_utc": completed_at,
-            "last_materialization_sync_epoch_id": epoch,
-            "last_materialization_sync_at_utc": completed_at,
-        }
-    )
-    path = _sync._write_run_receipt(project, connector, epoch, root, run)
-    _sync._run_summary(registry, run, path)
-    summary = next(
-        (
-            row
-            for row in registry.get("sync_runs") or []
-            if row.get("sync_epoch_id") == epoch
-        ),
-        None,
-    )
-    if summary is None:
-        raise ConnectorCheckpointCommitError(
-            "checkpoint_pending_sync_summary_missing"
+    try:
+        registry = _sync._load_connector_registry(project, root)
+        instance = _sync._instance_by_id(registry, connector)
+        if instance is None:
+            raise ConnectorCheckpointCommitError(
+                "checkpoint_pending_connector_instance_disappeared"
+            )
+        _restore_optional_fields(instance, prior_success)
+        run.update(
+            {
+                "cursor_checkpoint_committed": False,
+                "committed_cursor_fingerprint": "",
+                "previous_cursor_checkpoint_preserved": True,
+                "cursor_checkpoint_pending_lifecycle_commit": True,
+                "pending_cursor_fingerprint": pending_hash,
+                "checkpoint_commit_authority": CONNECTOR_CHECKPOINT_COMMIT_SCHEMA,
+                "checkpoint_commit_requires_lifecycle_transaction": True,
+            }
         )
-    summary.update(
-        {
-            "cursor_checkpoint_committed": False,
-            "cursor_checkpoint_pending_lifecycle_commit": True,
-            "checkpoint_commit_authority": CONNECTOR_CHECKPOINT_COMMIT_SCHEMA,
-        }
-    )
-    registry.setdefault("governance", {}).update(
-        {
-            "cursor_checkpoint_requires_committed_remote_lifecycle": True,
-            "raw_cursor_values_persisted": False,
-            "customer_material_mutation_executed": False,
-        }
-    )
-    registry.setdefault("audit_events", []).append(
-        {
-            "event": "defer_connector_cursor_checkpoint",
-            "at_utc": completed_at,
-            "actor": actor,
-            "connector_instance_id": connector,
-            "sync_epoch_id": epoch,
-            "superseded_pending_lifecycle_sync_epoch_id": (
-                prior_pending_epoch if prior_pending_epoch != epoch else ""
+        instance.update(
+            {
+                "pending_lifecycle_sync_epoch_id": epoch,
+                "pending_cursor_fingerprint": pending_hash,
+                "pending_checkpoint_since_utc": completed_at,
+                "last_materialization_sync_epoch_id": epoch,
+                "last_materialization_sync_at_utc": completed_at,
+            }
+        )
+        path = _sync._write_run_receipt(project, connector, epoch, root, run)
+        _sync._run_summary(registry, run, path)
+        summary = next(
+            (
+                row
+                for row in registry.get("sync_runs") or []
+                if row.get("sync_epoch_id") == epoch
             ),
-            "cursor_fingerprint_persisted": True,
-            "raw_cursor_value_persisted": False,
-            "customer_material_mutation_executed": False,
-        }
-    )
-    _sync._save_connector_registry(project, root, registry)
-    return path
+            None,
+        )
+        if summary is None:
+            raise ConnectorCheckpointCommitError(
+                "checkpoint_pending_sync_summary_missing"
+            )
+        summary.update(
+            {
+                "cursor_checkpoint_committed": False,
+                "cursor_checkpoint_pending_lifecycle_commit": True,
+                "checkpoint_commit_authority": CONNECTOR_CHECKPOINT_COMMIT_SCHEMA,
+            }
+        )
+        registry.setdefault("governance", {}).update(
+            {
+                "cursor_checkpoint_requires_committed_remote_lifecycle": True,
+                "raw_cursor_values_persisted": False,
+                "customer_material_mutation_executed": False,
+            }
+        )
+        registry.setdefault("audit_events", []).append(
+            {
+                "event": "defer_connector_cursor_checkpoint",
+                "at_utc": completed_at,
+                "actor": actor,
+                "connector_instance_id": connector,
+                "sync_epoch_id": epoch,
+                "superseded_pending_lifecycle_sync_epoch_id": (
+                    prior_pending_epoch if prior_pending_epoch != epoch else ""
+                ),
+                "cursor_fingerprint_persisted": True,
+                "raw_cursor_value_persisted": False,
+                "customer_material_mutation_executed": False,
+            }
+        )
+        _sync._save_connector_registry(project, root, registry)
+        return path
+    except Exception:
+        registry = _sync._load_connector_registry(project, root)
+        instance = _sync._instance_by_id(registry, connector)
+        if instance is not None:
+            _restore_optional_fields(instance, prior_success)
+            if _text(instance.get("pending_lifecycle_sync_epoch_id"), 160) == epoch:
+                instance["pending_lifecycle_sync_epoch_id"] = prior_pending_epoch
+                instance["pending_cursor_fingerprint"] = ""
+                instance["pending_checkpoint_since_utc"] = ""
+            registry.setdefault("audit_events", []).append(
+                {
+                    "event": "defer_connector_cursor_checkpoint_failed",
+                    "at_utc": _now(),
+                    "actor": actor,
+                    "connector_instance_id": connector,
+                    "sync_epoch_id": epoch,
+                    "previous_success_pointer_restored": True,
+                    "cursor_checkpoint_committed": False,
+                }
+            )
+            _sync._save_connector_registry(project, root, registry)
+        raise
 
 
 def sync_connector_snapshot_batch_deferred(
@@ -242,30 +272,26 @@ def _finalize_connector_sync_checkpoint_unlocked(
         raise ConnectorCheckpointCommitError(
             "checkpoint_lifecycle_commit_decision_missing"
         )
-    pending_hash = _text(run.get("pending_cursor_fingerprint"), 128)
-    if run.get("cursor_checkpoint_committed") is True:
+    already_committed = run.get("cursor_checkpoint_committed") is True
+    if already_committed:
+        checkpoint_hash = _text(run.get("committed_cursor_fingerprint"), 128)
         if not (
-            _text(run.get("committed_cursor_fingerprint"), 128) == pending_hash
+            _SHA256_RE.fullmatch(checkpoint_hash)
             and run.get("checkpoint_committed_by_lifecycle_transaction_id")
             == lifecycle_transaction_id
         ):
             raise ConnectorCheckpointCommitError(
                 "checkpoint_existing_commit_identity_mismatch"
             )
-        return {
-            "schema": CONNECTOR_CHECKPOINT_COMMIT_SCHEMA,
-            "status": "ALREADY_COMMITTED",
-            "sync_epoch_id": sync_epoch_id,
-            "lifecycle_transaction_id": lifecycle_transaction_id,
-            "cursor_checkpoint_committed": True,
-        }
-    if not (
-        run.get("cursor_checkpoint_pending_lifecycle_commit") is True
-        and _SHA256_RE.fullmatch(pending_hash)
-    ):
-        raise ConnectorCheckpointCommitError(
-            "checkpoint_pending_state_missing_or_invalid"
-        )
+    else:
+        checkpoint_hash = _text(run.get("pending_cursor_fingerprint"), 128)
+        if not (
+            run.get("cursor_checkpoint_pending_lifecycle_commit") is True
+            and _SHA256_RE.fullmatch(checkpoint_hash)
+        ):
+            raise ConnectorCheckpointCommitError(
+                "checkpoint_pending_state_missing_or_invalid"
+            )
 
     registry = _sync._load_connector_registry(project, root)
     instance = _sync._instance_by_id(registry, connector)
@@ -277,11 +303,14 @@ def _finalize_connector_sync_checkpoint_unlocked(
     run.update(
         {
             "cursor_checkpoint_committed": True,
-            "committed_cursor_fingerprint": pending_hash,
+            "committed_cursor_fingerprint": checkpoint_hash,
             "previous_cursor_checkpoint_preserved": False,
             "cursor_checkpoint_pending_lifecycle_commit": False,
             "pending_cursor_fingerprint": "",
-            "checkpoint_committed_at_utc": _now(),
+            "checkpoint_committed_at_utc": _text(
+                run.get("checkpoint_committed_at_utc"), 80
+            )
+            or _now(),
             "checkpoint_committed_by_lifecycle_transaction_id": (
                 lifecycle_transaction_id
             ),
@@ -289,7 +318,7 @@ def _finalize_connector_sync_checkpoint_unlocked(
     )
     instance.update(
         {
-            "last_committed_cursor_fingerprint": pending_hash,
+            "last_committed_cursor_fingerprint": checkpoint_hash,
             "last_successful_sync_epoch_id": sync_epoch_id,
             "last_successful_sync_at_utc": completed_at,
         }
@@ -328,18 +357,19 @@ def _finalize_connector_sync_checkpoint_unlocked(
             "checkpoint_commit_authority": CONNECTOR_CHECKPOINT_COMMIT_SCHEMA,
         }
     )
-    registry.setdefault("audit_events", []).append(
-        {
-            "event": "commit_connector_cursor_after_remote_lifecycle",
-            "at_utc": _now(),
-            "actor": actor,
-            "connector_instance_id": connector,
-            "sync_epoch_id": sync_epoch_id,
-            "lifecycle_transaction_id": lifecycle_transaction_id,
-            "raw_cursor_value_persisted": False,
-            "customer_material_mutation_executed": False,
-        }
-    )
+    if not already_committed:
+        registry.setdefault("audit_events", []).append(
+            {
+                "event": "commit_connector_cursor_after_remote_lifecycle",
+                "at_utc": _now(),
+                "actor": actor,
+                "connector_instance_id": connector,
+                "sync_epoch_id": sync_epoch_id,
+                "lifecycle_transaction_id": lifecycle_transaction_id,
+                "raw_cursor_value_persisted": False,
+                "customer_material_mutation_executed": False,
+            }
+        )
     _sync._save_connector_registry(project, root, registry)
     verified_run = _sync.load_connector_sync_run(
         project,
@@ -352,19 +382,21 @@ def _finalize_connector_sync_checkpoint_unlocked(
     if not (
         verified_run.get("cursor_checkpoint_committed") is True
         and verified_run.get("cursor_checkpoint_pending_lifecycle_commit") is False
-        and verified_run.get("committed_cursor_fingerprint") == pending_hash
+        and verified_run.get("committed_cursor_fingerprint") == checkpoint_hash
         and isinstance(verified_instance, dict)
-        and verified_instance.get("last_committed_cursor_fingerprint") == pending_hash
+        and verified_instance.get("last_committed_cursor_fingerprint")
+        == checkpoint_hash
     ):
         raise ConnectorCheckpointCommitError(
             "checkpoint_commit_verification_failed"
         )
     return {
         "schema": CONNECTOR_CHECKPOINT_COMMIT_SCHEMA,
-        "status": "COMMITTED",
+        "status": "ALREADY_COMMITTED" if already_committed else "COMMITTED",
         "sync_epoch_id": sync_epoch_id,
         "lifecycle_transaction_id": lifecycle_transaction_id,
         "cursor_checkpoint_committed": True,
+        "registry_reconciled": True,
         "raw_cursor_value_persisted": False,
         "customer_material_mutation_executed": False,
     }
