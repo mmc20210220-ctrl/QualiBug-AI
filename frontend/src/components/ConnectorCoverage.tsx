@@ -1,4 +1,7 @@
-import type { KnowledgeConnectorCoverage } from '../api/knowledge-connectors';
+import type {
+  KnowledgeConnectorCoverage,
+  KnowledgeConnectorRemoteLifecycle,
+} from '../api/knowledge-connectors';
 import './ConnectorCoverage.css';
 
 type ConnectorCoverageProps = {
@@ -17,6 +20,78 @@ function reasonLabel(reason?: string): string {
     default:
       return reason || '当前版本暂时无法读取';
   }
+}
+
+function hasLifecycleActivity(lifecycle?: KnowledgeConnectorRemoteLifecycle): boolean {
+  if (!lifecycle || lifecycle.status === 'NOT_AVAILABLE' || lifecycle.status === 'UNKNOWN') return false;
+  return Boolean(
+    lifecycle.absent_count
+    || lifecycle.unconfirmed_missing_count
+    || lifecycle.retirement_eligible_count
+    || lifecycle.retired_count
+    || lifecycle.renamed_resource_count
+    || lifecycle.moved_resource_count
+    || lifecycle.reappeared_resource_count
+    || lifecycle.evidence_persistence_status === 'FAILED',
+  );
+}
+
+function ConnectorRemoteLifecycle({ lifecycle }: { lifecycle?: KnowledgeConnectorRemoteLifecycle }) {
+  if (!hasLifecycleActivity(lifecycle) || !lifecycle) return null;
+
+  const evidenceIncomplete = lifecycle.evidence_persistence_status === 'FAILED'
+    || lifecycle.sync_receipt_persisted === false;
+  return (
+    <div className="connector-remote-lifecycle" aria-label="在线资料远端状态摘要">
+      <div className="connector-remote-lifecycle-title">
+        <strong>远端状态核验</strong>
+        <span>仅根据当前配置范围内的完整快照判断</span>
+      </div>
+
+      {lifecycle.unconfirmed_missing_count > 0 && (
+        <p>
+          {lifecycle.unconfirmed_missing_count} 份资料本次未在配置范围内发现，系统仍保留原资料并继续核验；
+          单次未发现不用于判断远端原因。
+        </p>
+      )}
+      {lifecycle.retirement_eligible_count > 0 && lifecycle.retired_count === 0 && (
+        <p>
+          {lifecycle.retirement_eligible_count} 份资料已连续多次未在配置范围内发现，但尚未改变内部使用状态。
+        </p>
+      )}
+      {lifecycle.retired_count > 0 && (
+        <p>
+          {lifecycle.retired_count} 份资料连续多次未在配置范围内发现，已停止作为最新资料使用；
+          历史内容和证据仍完整保留。
+        </p>
+      )}
+
+      {(lifecycle.renamed_resource_count > 0
+        || lifecycle.moved_resource_count > 0
+        || lifecycle.reappeared_resource_count > 0) && (
+        <div className="connector-remote-lifecycle-events">
+          {lifecycle.renamed_resource_count > 0 && (
+            <span>已重命名 {lifecycle.renamed_resource_count}</span>
+          )}
+          {lifecycle.moved_resource_count > 0 && (
+            <span>范围内移动 {lifecycle.moved_resource_count}</span>
+          )}
+          {lifecycle.reappeared_resource_count > 0 && (
+            <span>重新出现并恢复 {lifecycle.reappeared_resource_count}</span>
+          )}
+        </div>
+      )}
+
+      {evidenceIncomplete && (
+        <p className="connector-remote-lifecycle-warning">
+          本次远端状态证据未完整写入同步收据，系统已保留原资料并将在后续同步中重新核验。
+        </p>
+      )}
+      <small>
+        系统不会根据一次缺失推断远端原因，也不会修改飞书原资料。
+      </small>
+    </div>
+  );
 }
 
 export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
@@ -58,7 +133,7 @@ export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
       )}
 
       {unknown ? (
-        <p>最近一次同步收据暂不可用，系统会自动恢复；已有资料不会被覆盖或删除。</p>
+        <p>最近一次同步收据暂不可用，系统会自动恢复；已有资料不会被覆盖或移除。</p>
       ) : partial ? (
         <>
           <p>
@@ -89,6 +164,8 @@ export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
       ) : (
         <p>本次发现的在线资料均已读取，没有已知资料类型缺口；系统不会修改飞书原资料。</p>
       )}
+
+      <ConnectorRemoteLifecycle lifecycle={coverage.remote_lifecycle} />
     </section>
   );
 }
