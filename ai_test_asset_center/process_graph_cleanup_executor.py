@@ -29,6 +29,15 @@ GRAPH_CLEANUP_SOURCE_WRITE_NOT_REACHED = (
 GRAPH_CLEANUP_RECEIPT_CARDINALITY_INVALID = (
     "PROCESS_GRAPH_CLEANUP_RECEIPT_CARDINALITY_INVALID"
 )
+GRAPH_CLEANUP_SOURCE_WRITE_EFFECT_UNPROVEN = (
+    "PROCESS_GRAPH_SOURCE_WRITE_EFFECT_UNPROVEN"
+)
+GRAPH_CLEANUP_SOURCE_EXECUTION_AMBIGUOUS = (
+    "PROCESS_GRAPH_SOURCE_EXECUTION_AMBIGUOUS"
+)
+GRAPH_CLEANUP_SOURCE_EXECUTION_EVIDENCE_MISSING = (
+    "PROCESS_GRAPH_SOURCE_EXECUTION_EVIDENCE_MISSING"
+)
 
 for _name in dir(_core):
     if not _name.startswith("__"):
@@ -53,18 +62,20 @@ def _source_execution_state(
     steps_out: list[dict[str, Any]],
     observations: dict[str, Any],
     source_step_id: str,
-) -> tuple[str, dict[str, Any]]:
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Classify source execution from transport facts, not graph status alone.
+
+    A graph node may be marked BLOCKED after a request reached transport (for
+    example when a write response cannot satisfy a declared output binding).
+    Such a node is not equivalent to a pre-transport block.  Cleanup may be
+    waived only when the step rows prove zero transport.
+    """
     rows = _source_rows(steps_out, source_step_id)
     governed = [
         row
         for row in rows
         if isinstance(row.get("governance_receipt"), dict)
     ]
-    if len(governed) == 1:
-        return "GOVERNED", dict(governed[0])
-    if len(governed) > 1:
-        return "AMBIGUOUS", {}
-
     node_status = _core._text(
         _core._dict(
             _core._dict(observations.get("process_graph_runtime")).get(
@@ -72,26 +83,77 @@ def _source_execution_state(
             )
         ).get(source_step_id)
     ).upper()
+    status_codes = [int(row.get("status_code") or 0) for row in rows]
+    transport_rows = [
+        row
+        for row in rows
+        if int(row.get("status_code") or 0) > 0
+        or row.get("request_reached_transport") is True
+        or row.get("target_reached") is True
+        or bool(_core._text(row.get("transport_receipt_id")))
+    ]
     explicit_blocks = [
         row
         for row in rows
         if _core._text(row.get("status")).upper()
         in {"BLOCKED", "BLOCKED_REQUEST", "BLOCKED_WRITE"}
         or _core._text(row.get("reason")).upper().startswith("BLOCKED_")
+        or _core._text(row.get("reason_code")).upper().startswith(
+            "PROCESS_GRAPH_"
+        )
         or _core._text(row.get("skipped_reason")).upper().startswith(
             "BLOCKED_"
         )
     ]
-    if node_status == "BLOCKED" or (
-        explicit_blocks
-        and all(
-            int(row.get("status_code") or 0) == 0
-            and not isinstance(row.get("governance_receipt"), dict)
-            for row in explicit_blocks
+    evidence = {
+        "source_execution_state": "",
+        "source_node_status": node_status,
+        "source_row_count": len(rows),
+        "governed_receipt_count": len(governed),
+        "source_status_codes": status_codes,
+        "request_reached_transport": (
+            True
+            if transport_rows
+            else False
+            if rows and explicit_blocks
+            else None
+        ),
+    }
+    if len(governed) == 1:
+        governance = _core._dict(governed[0].get("governance_receipt"))
+        governance_write = _core._dict(governance.get("write"))
+        evidence["source_execution_state"] = "GOVERNED"
+        evidence["request_reached_transport"] = bool(
+            transport_rows
+            or int(
+                governance_write.get("status")
+                or governance_write.get("status_code")
+                or 0
+            )
+            > 0
         )
-    ):
-        return "NOT_REACHED", dict(explicit_blocks[0]) if explicit_blocks else {}
-    return "MISSING", {}
+        return "GOVERNED", dict(governed[0]), evidence
+    if len(governed) > 1:
+        evidence["source_execution_state"] = "AMBIGUOUS"
+        return "AMBIGUOUS", {}, evidence
+    if transport_rows:
+        evidence["source_execution_state"] = "EFFECT_UNPROVEN"
+        return "EFFECT_UNPROVEN", dict(transport_rows[0]), evidence
+
+    zero_transport_proven = bool(rows) and bool(explicit_blocks) and all(
+        int(row.get("status_code") or 0) == 0
+        and row.get("request_reached_transport") is not True
+        and row.get("target_reached") is not True
+        and not _core._text(row.get("transport_receipt_id"))
+        for row in rows
+    )
+    if zero_transport_proven:
+        evidence["source_execution_state"] = "NOT_REACHED"
+        evidence["request_reached_transport"] = False
+        return "NOT_REACHED", dict(explicit_blocks[0]), evidence
+
+    evidence["source_execution_state"] = "MISSING"
+    return "MISSING", {}, evidence
 
 
 def _append_scoped_receipt(
@@ -193,6 +255,34 @@ def _record_manual_receipt(
     )
 
 
+def _record_rollback_decision(
+    decisions: dict[str, dict[str, Any]],
+    *,
+    source_step_id: str,
+    cleanup: dict[str, Any],
+    action: str,
+    execution_evidence: dict[str, Any],
+    outcome: str = "",
+    required_downstream_step_ids: list[str] | None = None,
+    unsafe_downstream_outcomes: dict[str, str] | None = None,
+) -> None:
+    decisions[source_step_id] = {
+        "source_step_id": source_step_id,
+        "cleanup_step_id": _core._text(cleanup.get("step_id")),
+        "cleanup_operation_ref": _core._text(cleanup.get("operation_ref")),
+        "system_ref": _core._text(cleanup.get("system_ref")),
+        "action": action,
+        "outcome": _core._text(outcome).upper(),
+        **dict(execution_evidence),
+        "required_downstream_step_ids": list(
+            required_downstream_step_ids or []
+        ),
+        "unsafe_downstream_outcomes": dict(
+            unsafe_downstream_outcomes or {}
+        ),
+    }
+
+
 def _contract_drift_result(
     *,
     kwargs: dict[str, Any],
@@ -287,12 +377,13 @@ def execute_process_graph_cleanup(**kwargs: Any) -> dict[str, Any]:
     } or set(SAFE_ROLLBACK_OUTCOMES)
 
     outcomes: dict[str, str] = {}
+    decisions: dict[str, dict[str, Any]] = {}
     receipts: list[dict[str, Any]] = []
     cleanup_rows: list[dict[str, Any]] = []
 
     for cleanup in cleanup_steps:
         source_step_id = _core._text(cleanup.get("source_step_id"))
-        execution_state, source = _source_execution_state(
+        execution_state, source, execution_evidence = _source_execution_state(
             steps_out=steps_out,
             observations=observations,
             source_step_id=source_step_id,
@@ -307,13 +398,7 @@ def execute_process_graph_cleanup(**kwargs: Any) -> dict[str, Any]:
                     "effectful_write_count": 0,
                     "cleanup_write_count": 0,
                     "request_reached_transport": False,
-                    "source_node_status": _core._text(
-                        _core._dict(
-                            _core._dict(
-                                observations.get("process_graph_runtime")
-                            ).get("node_status")
-                        ).get(source_step_id)
-                    ),
+                    **execution_evidence,
                 },
                 kwargs=kwargs,
             )
@@ -325,9 +410,62 @@ def execute_process_graph_cleanup(**kwargs: Any) -> dict[str, Any]:
                 contract_evidence_receipts=contract_evidence_receipts,
             )
             outcomes[source_step_id] = "NOT_REQUIRED"
+            _record_rollback_decision(
+                decisions,
+                source_step_id=source_step_id,
+                cleanup=cleanup,
+                action="SKIP_NOT_REACHED",
+                execution_evidence=execution_evidence,
+                outcome="NOT_REQUIRED",
+            )
             continue
 
-        if execution_state == "GOVERNED" and _core._cleanup_candidate(source):
+        if execution_state in {"AMBIGUOUS", "EFFECT_UNPROVEN", "MISSING"}:
+            reason_code = {
+                "AMBIGUOUS": GRAPH_CLEANUP_SOURCE_EXECUTION_AMBIGUOUS,
+                "EFFECT_UNPROVEN": GRAPH_CLEANUP_SOURCE_WRITE_EFFECT_UNPROVEN,
+                "MISSING": GRAPH_CLEANUP_SOURCE_EXECUTION_EVIDENCE_MISSING,
+            }[execution_state]
+            action = {
+                "AMBIGUOUS": "FAIL_CLOSED_EXECUTION_AMBIGUOUS",
+                "EFFECT_UNPROVEN": "FAIL_CLOSED_EFFECT_UNPROVEN",
+                "MISSING": "FAIL_CLOSED_EXECUTION_EVIDENCE_MISSING",
+            }[execution_state]
+            receipt = _manual_receipt(
+                cleanup=cleanup,
+                source_step_id=source_step_id,
+                status="FAILED",
+                reason_code=reason_code,
+                evidence={
+                    "effectful_write_count": 0,
+                    "effectful_write_count_proven": False,
+                    "cleanup_write_count": 0,
+                    **execution_evidence,
+                },
+                kwargs=kwargs,
+            )
+            _record_manual_receipt(
+                receipt,
+                source_step_id=source_step_id,
+                observations=observations,
+                receipts=receipts,
+                contract_evidence_receipts=contract_evidence_receipts,
+            )
+            outcomes[source_step_id] = "FAILED"
+            cleanup_failures += 1
+            _record_rollback_decision(
+                decisions,
+                source_step_id=source_step_id,
+                cleanup=cleanup,
+                action=action,
+                execution_evidence=execution_evidence,
+                outcome="FAILED",
+            )
+            continue
+
+        effectful_write = _core._cleanup_candidate(source)
+        prerequisites: list[str] = []
+        if execution_state == "GOVERNED" and effectful_write:
             prerequisites = [
                 _core._text(value)
                 for value in _core._list(
@@ -364,8 +502,23 @@ def execute_process_graph_cleanup(**kwargs: Any) -> dict[str, Any]:
                 )
                 outcomes[source_step_id] = "BLOCKED"
                 cleanup_failures += 1
+                _record_rollback_decision(
+                    decisions,
+                    source_step_id=source_step_id,
+                    cleanup=cleanup,
+                    action="BLOCK_DEPENDENCY_NOT_RESTORED",
+                    execution_evidence=execution_evidence,
+                    outcome="BLOCKED",
+                    required_downstream_step_ids=prerequisites,
+                    unsafe_downstream_outcomes=unsafe,
+                )
                 continue
 
+        intended_action = (
+            "EXECUTE_COMPENSATION"
+            if effectful_write
+            else "VERIFY_NO_OBSERVED_EFFECT"
+        )
         one_exp = deepcopy(exp)
         one_contract = deepcopy(write_contract)
         one_contract["cleanup_steps"] = [deepcopy(cleanup)]
@@ -387,12 +540,13 @@ def execute_process_graph_cleanup(**kwargs: Any) -> dict[str, Any]:
             )
             if isinstance(row, dict)
         ]
-        cleanup_rows.extend(
+        new_cleanup_rows = [
             row
             for row in steps_out[before_step_count:]
             if isinstance(row, dict)
             and _core._text(row.get("phase")) == "cleanup"
-        )
+        ]
+        cleanup_rows.extend(new_cleanup_rows)
         if len(one_receipts) != 1:
             receipts.extend(one_receipts)
             receipt = _manual_receipt(
@@ -405,9 +559,7 @@ def execute_process_graph_cleanup(**kwargs: Any) -> dict[str, Any]:
                     if execution_state == "GOVERNED"
                     else 0,
                     "cleanup_write_count": 0,
-                    "request_reached_transport": bool(
-                        cleanup_rows[before_step_count:]
-                    ),
+                    "request_reached_transport": bool(new_cleanup_rows),
                     "returned_receipt_count": len(one_receipts),
                 },
                 kwargs=kwargs,
@@ -421,6 +573,15 @@ def execute_process_graph_cleanup(**kwargs: Any) -> dict[str, Any]:
             )
             outcomes[source_step_id] = "FAILED"
             cleanup_failures += 1
+            _record_rollback_decision(
+                decisions,
+                source_step_id=source_step_id,
+                cleanup=cleanup,
+                action="FAIL_CLOSED_RECEIPT_CARDINALITY",
+                execution_evidence=execution_evidence,
+                outcome="FAILED",
+                required_downstream_step_ids=prerequisites,
+            )
             continue
 
         receipt = one_receipts[0]
@@ -432,10 +593,24 @@ def execute_process_graph_cleanup(**kwargs: Any) -> dict[str, Any]:
         )
         outcome = _core._text(receipt.get("status")).upper() or "FAILED"
         outcomes[source_step_id] = outcome
+        _record_rollback_decision(
+            decisions,
+            source_step_id=source_step_id,
+            cleanup=cleanup,
+            action=(
+                "SKIP_NO_OBSERVED_EFFECT"
+                if outcome == "NOT_REQUIRED" and not effectful_write
+                else intended_action
+            ),
+            execution_evidence=execution_evidence,
+            outcome=outcome,
+            required_downstream_step_ids=prerequisites,
+        )
 
     observations["process_graph_cleanup_receipts"] = receipts
     observations["process_graph_cleanup_steps"] = cleanup_rows
     observations["process_graph_rollback_outcomes"] = outcomes
+    observations["process_graph_rollback_decisions"] = decisions
     observations["process_graph_rollback_contract_id"] = _core._text(
         rollback_contract.get("contract_fingerprint")
     )

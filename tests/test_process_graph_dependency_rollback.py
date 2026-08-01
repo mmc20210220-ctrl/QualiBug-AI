@@ -81,6 +81,75 @@ def _experiment() -> dict:
     }
 
 
+def _fan_in_experiment() -> dict:
+    graph = {
+        "execution_graph_id": "graph_partial_fan_in",
+        "process_id": "process_partial_fan_in",
+        "nodes": [
+            {"node_id": "write_a"},
+            {"node_id": "write_b"},
+            {"node_id": "write_join"},
+        ],
+        "edges": [
+            {"source_node_id": "write_a", "target_node_id": "write_join"},
+            {"source_node_id": "write_b", "target_node_id": "write_join"},
+        ],
+        "topological_order": ["write_a", "write_b", "write_join"],
+    }
+    cleanup_steps = [
+        {
+            "step_id": "cleanup_join",
+            "source_step_id": "write_join",
+            "operation_ref": "undo_join",
+            "system_ref": "procurement",
+        },
+        {
+            "step_id": "cleanup_b",
+            "source_step_id": "write_b",
+            "operation_ref": "undo_b",
+            "system_ref": "inventory",
+        },
+        {
+            "step_id": "cleanup_a",
+            "source_step_id": "write_a",
+            "operation_ref": "undo_a",
+            "system_ref": "erp",
+        },
+    ]
+    write_contract = {
+        "contract_id": "write_contract_partial_fan_in",
+        "proof_set_id": "proof_set_partial_fan_in",
+        "write_step_ids": ["write_a", "write_b", "write_join"],
+        "cleanup_steps": cleanup_steps,
+    }
+    rollback = freeze_process_graph_rollback_contract(graph, write_contract)
+    write_contract["rollback_contract"] = deepcopy(rollback)
+    write_contract["rollback_contract_id"] = rollback["contract_fingerprint"]
+    graph["rollback_contract"] = deepcopy(rollback)
+    graph["rollback_contract_id"] = rollback["contract_fingerprint"]
+    return {
+        "execution_graph": graph,
+        "process_graph_write_contract": write_contract,
+        "process_graph_rollback_contract": rollback,
+        "cleanup_plan": cleanup_steps,
+        "safety_contract": {
+            "cleanup_authority": "process_graph_write_contract"
+        },
+    }
+
+
+def _transport_reached_without_governance(step_id: str) -> dict:
+    return {
+        "phase": "treatment",
+        "step_id": step_id,
+        "operation_ref": f"op_{step_id}",
+        "status": "blocked_request",
+        "status_code": 201,
+        "request_reached_transport": True,
+        "target_reached": True,
+        "reason": "PROCESS_GRAPH_OUTPUT_BINDING_UNRESOLVED",
+    }
+
 def _governed_step(step_id: str) -> dict:
     return {
         "phase": "treatment",
@@ -317,3 +386,110 @@ def test_rollback_contract_drift_blocks_all_cleanup_transport(monkeypatch) -> No
         and row["evidence"]["reason_code"] == "PROCESS_GRAPH_ROLLBACK_CONTRACT_DRIFT"
         for row in result["process_graph_cleanup_receipts"]
     )
+
+
+def test_partial_fan_in_failure_compensates_only_proven_effectful_branch(
+    monkeypatch,
+) -> None:
+    called: list[str] = []
+    _install_fake_core(monkeypatch, {}, called)
+    observations = {
+        "process_graph_runtime": {
+            "node_status": {
+                "write_a": "SUCCEEDED",
+                "write_b": "BLOCKED",
+                "write_join": "BLOCKED",
+            }
+        }
+    }
+    kwargs = _kwargs(
+        steps_out=[
+            _governed_step("write_a"),
+            _transport_reached_without_governance("write_b"),
+            _blocked_step("write_join"),
+        ],
+        observations=observations,
+    )
+    kwargs["exp"] = _fan_in_experiment()
+
+    result = cleanup_runtime.execute_process_graph_cleanup(**kwargs)
+
+    # The proven ERP write is independent of the uncertain inventory branch and
+    # is restored.  The blocked join never reached transport.  The inventory
+    # write reached transport without a governed effect receipt, so it is not
+    # silently waived and no compensator is guessed or executed for it.
+    assert called == ["write_a"]
+    receipts = {
+        _receipt_source(row): row
+        for row in result["process_graph_cleanup_receipts"]
+    }
+    assert receipts["write_join"]["status"] == "NOT_REQUIRED"
+    assert receipts["write_b"]["status"] == "FAILED"
+    assert receipts["write_b"]["evidence"]["reason_code"] == (
+        cleanup_runtime.GRAPH_CLEANUP_SOURCE_WRITE_EFFECT_UNPROVEN
+    )
+    assert receipts["write_b"]["evidence"]["request_reached_transport"] is True
+    assert receipts["write_a"]["status"] == "COMPLETED"
+    assert result["cleanup_failures"] == 1
+    assert observations["process_graph_rollback_outcomes"] == {
+        "write_join": "NOT_REQUIRED",
+        "write_b": "FAILED",
+        "write_a": "COMPLETED",
+    }
+    decisions = observations["process_graph_rollback_decisions"]
+    assert decisions["write_join"]["action"] == "SKIP_NOT_REACHED"
+    assert decisions["write_b"]["action"] == "FAIL_CLOSED_EFFECT_UNPROVEN"
+    assert decisions["write_a"]["action"] == "EXECUTE_COMPENSATION"
+
+
+def test_uncertain_descendant_transport_blocks_ancestor_compensation(
+    monkeypatch,
+) -> None:
+    called: list[str] = []
+    _install_fake_core(monkeypatch, {}, called)
+    observations = {
+        "process_graph_runtime": {
+            "node_status": {
+                "write_a": "SUCCEEDED",
+                "write_b": "BLOCKED",
+                "write_c": "BLOCKED",
+                "write_d": "BLOCKED",
+            }
+        }
+    }
+    result = cleanup_runtime.execute_process_graph_cleanup(
+        **_kwargs(
+            steps_out=[
+                _governed_step("write_a"),
+                _transport_reached_without_governance("write_b"),
+                _blocked_step("write_c"),
+                _blocked_step("write_d"),
+            ],
+            observations=observations,
+        )
+    )
+
+    # B may have changed state but lacks the governed before/write/after receipt.
+    # A must not be compensated until B is proven restored; D is an independent
+    # blocked root and C never reached transport.
+    assert called == []
+    outcomes = observations["process_graph_rollback_outcomes"]
+    assert outcomes == {
+        "write_d": "NOT_REQUIRED",
+        "write_c": "NOT_REQUIRED",
+        "write_b": "FAILED",
+        "write_a": "BLOCKED",
+    }
+    receipts = {
+        _receipt_source(row): row
+        for row in result["process_graph_cleanup_receipts"]
+    }
+    assert receipts["write_b"]["evidence"]["reason_code"] == (
+        cleanup_runtime.GRAPH_CLEANUP_SOURCE_WRITE_EFFECT_UNPROVEN
+    )
+    assert receipts["write_a"]["evidence"]["reason_code"] == (
+        cleanup_runtime.GRAPH_CLEANUP_DEPENDENCY_NOT_RESTORED
+    )
+    assert receipts["write_a"]["evidence"]["unsafe_downstream_outcomes"] == {
+        "write_b": "FAILED"
+    }
