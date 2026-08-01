@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .identity_unknown_reconciliation import (
+    reconcile_resolved_technical_identity_unknowns,
+)
 from .schema import as_dict, as_list, stable_id, text, unique_text
 
 
@@ -27,6 +30,52 @@ def _is_identity_conflict(conflict: dict[str, Any]) -> bool:
 def project_identity_authority_receipt(
     asset: dict[str, Any], result: dict[str, Any]
 ) -> dict[str, Any]:
+    bound_artifacts = {
+        text(row.get("artifact_ref"))
+        for row in as_list(result.get("bindings"))
+        if isinstance(row, dict)
+        and text(row.get("status")).upper() == "RESOLVED"
+        and text(row.get("artifact_ref"))
+    }
+    result["unknowns"] = reconcile_resolved_technical_identity_unknowns(
+        [
+            dict(row)
+            for row in as_list(result.get("unknowns"))
+            if isinstance(row, dict)
+        ],
+        bound_artifacts,
+    )
+    gate = dict(as_dict(result.get("gate")))
+    conflicts = [
+        row for row in as_list(result.get("conflicts")) if isinstance(row, dict)
+    ]
+    if conflicts:
+        gate.update(
+            {
+                "status": "BLOCKED_ENTERPRISE_IDENTITY_CONFLICT",
+                "entry_allowed": False,
+            }
+        )
+    elif result["unknowns"]:
+        gate.update(
+            {
+                "status": "PARTIAL_ENTERPRISE_IDENTITY_BINDING",
+                "entry_allowed": True,
+            }
+        )
+    else:
+        gate.update({"status": "PASS", "entry_allowed": True})
+    metrics = dict(as_dict(gate.get("metrics")))
+    metrics.update(
+        {
+            "technical_identity_unknown_count": len(result["unknowns"]),
+            "unknown_count": len(result["unknowns"]),
+        }
+    )
+    gate["metrics"] = metrics
+    result["gate"] = gate
+    asset["enterprise_identity_gate"] = gate
+
     conflicts = [
         row
         for row in as_list(asset.get("cross_document_conflicts"))
