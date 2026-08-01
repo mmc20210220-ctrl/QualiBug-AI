@@ -82,6 +82,7 @@ qualibug-identity-benchmark = "ai_test_asset_center.identity_benchmark_cli:main"
 qualibug-authorization-inventory = "ai_test_asset_center.historical_authorization_inventory:main"
 qualibug-authorization-rerun-plan = "ai_test_asset_center.historical_authorization_rerun_plan:main"
 qualibug-authorization-rerun-consume = "ai_test_asset_center.historical_authorization_rerun_consumer:main"
+qualibug-feishu-tenant-acceptance = "ai_test_asset_center.feishu_tenant_acceptance:main"
 
 [tool.setuptools.packages.find]
 include = ["aitestops*", "ai_test_asset_center*"]
