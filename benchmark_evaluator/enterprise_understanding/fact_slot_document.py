@@ -51,9 +51,9 @@ def validate_business_fact_slot_document(document: dict[str, Any]) -> dict[str, 
                 annotated_count += 1
                 if _text(item.get("annotation_status") or "CONFIRMED").upper() == "CONFIRMED":
                     confirmed_count += 1
-            for locator in item.get("source_locators") or []:
-                if _text(locator):
-                    annotated_locators.add(_text(locator))
+                for locator in item.get("source_locators") or []:
+                    if _text(locator):
+                        annotated_locators.add(_text(locator))
             normalized_rows.append(item)
         normalized[collection] = normalized_rows
 
@@ -85,6 +85,7 @@ def validate_business_fact_slot_document(document: dict[str, Any]) -> dict[str, 
             "business_fact_ground_truth_generated_from_product_output": False,
             "explicit_fact_scope_complete": scope_complete,
             "explicit_fact_scope_locator_count": len(scope_locators),
+            "explicit_fact_scope_membership_enforced": bool(scope_locators),
             "annotated_fact_locator_count": len(annotated_locators),
             "all_annotated_fact_locators_inside_explicit_scope": not missing_from_scope,
         }

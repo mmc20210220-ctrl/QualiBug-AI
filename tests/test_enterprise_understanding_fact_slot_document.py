@@ -104,3 +104,28 @@ def test_incomplete_scope_keeps_precision_authority_optional() -> None:
     receipt = result["validation_receipt"]
     assert receipt["explicit_fact_scope_complete"] is False
     assert receipt["explicit_fact_scope_locator_count"] == 0
+
+
+def test_legacy_behavior_locators_do_not_activate_typed_fact_scope() -> None:
+    document = {
+        "business_rules": [],
+        "business_behaviors": [
+            {
+                "ground_truth_id": "gt:legacy:list-own",
+                "annotation_status": "CONFIRMED",
+                "criticality": "P0",
+                "operation": "listTickets",
+                "object_refs": ["Ticket"],
+                "actor_refs": ["CUSTOMER"],
+                "source_locators": ["rules.md#L79"],
+            }
+        ],
+    }
+
+    result = validate_business_fact_slot_document(document)
+    receipt = result["validation_receipt"]
+
+    assert receipt["business_fact_slot_annotation_count"] == 0
+    assert receipt["annotated_fact_locator_count"] == 0
+    assert receipt["explicit_fact_scope_locator_count"] == 0
+    assert receipt["all_annotated_fact_locators_inside_explicit_scope"] is True

@@ -45,6 +45,16 @@ EXTENDED_SLOT_FIELDS = {
     "source_locators",
 }
 
+# These fields establish that a row opts into the typed fact-slot contract.
+# ``actor_refs`` and ``source_locators`` predate that contract and are common in
+# legacy Ground Truth rows; using either as an opt-in signal silently converted
+# every legacy business behavior into a slot annotation and required a closed
+# explicit-fact scope that the document never declared. They remain validated
+# whenever a real typed slot is present, but cannot activate the contract alone.
+SLOT_DECLARATION_FIELDS = EXTENDED_SLOT_FIELDS.difference(
+    {"actor_refs", "source_locators"}
+)
+
 
 class FactSlotGroundTruthValidationError(ValueError):
     """Raised when an optional typed fact annotation is structurally invalid."""
@@ -94,7 +104,10 @@ def _validate_condition_frame(value: Any, *, context: str) -> None:
 
 
 def slot_annotation_declared(row: dict[str, Any]) -> bool:
-    return any(row.get(field) not in (None, "", [], {}) for field in EXTENDED_SLOT_FIELDS)
+    return any(
+        row.get(field) not in (None, "", [], {})
+        for field in SLOT_DECLARATION_FIELDS
+    )
 
 
 def validate_business_fact_slot_row(row: dict[str, Any], *, context: str) -> dict[str, Any]:
@@ -140,6 +153,7 @@ __all__ = [
     "FACT_SLOT_GROUND_TRUTH_SCHEMA",
     "FactSlotGroundTruthValidationError",
     "EXTENDED_SLOT_FIELDS",
+    "SLOT_DECLARATION_FIELDS",
     "slot_annotation_declared",
     "validate_business_fact_slot_row",
 ]
