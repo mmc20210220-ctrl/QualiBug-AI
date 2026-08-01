@@ -69,21 +69,51 @@ def _normalized_context_key(value: Any) -> str:
     ).lower()
 
 
-def is_evaluator_private_context_key(value: Any) -> bool:
-    """Classify answer-authority fields before they enter product runtime."""
+def _is_content_bearing(value: Any) -> bool:
+    """Whether a field value can actually carry answer-authority content."""
+
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    if isinstance(value, str):
+        return bool(str(value).strip())
+    return value not in (None, False, 0)
+
+
+def is_evaluator_private_context_key(value: Any, child: Any = None) -> bool:
+    """Classify answer-authority fields before they enter product runtime.
+
+    Evaluator-private vocabulary is only answer authority when the field
+    actually carries content. The product's own knowledge-asset schema
+    legitimately uses bookkeeping names such as ``is_ground_truth``,
+    ``ground_truth_loaded``, ``ground_truth_generated_from_product_output``
+    and empty ``ground_truth_fingerprint`` fields; those carry no hidden-GT
+    content and must not fail the agent semantic linker. A non-empty
+    ``ground_truth_ref`` / ``ground_truth_path`` / ``ground_truth_fingerprint``
+    / ``expected_defects`` value remains fail-closed. When the value is
+    unknown (``child is None``) the key stays conservatively private.
+    """
 
     normalized = _normalized_context_key(value)
     if normalized in _EVALUATOR_PRIVATE_CONTEXT_KEYS:
-        return True
+        if child is None or _is_content_bearing(child):
+            return True
     if "ground_truth" in normalized:
-        return True
+        if child is None or _is_content_bearing(child):
+            return True
     if normalized.startswith(("private_evaluator_", "evaluator_private_")):
-        return True
+        if child is None or _is_content_bearing(child):
+            return True
     if normalized.startswith("trusted_observation_"):
-        return True
-    return normalized.startswith("evaluator_") and normalized.endswith(
+        if child is None or _is_content_bearing(child):
+            return True
+    if normalized.startswith("evaluator_") and normalized.endswith(
         ("_receipt", "_receipts", "_report", "_reports", "_observation", "_observations")
-    )
+    ):
+        if child is None or _is_content_bearing(child):
+            return True
+    return False
 
 
 def find_evaluator_private_context_paths(value: Any) -> list[str]:
@@ -102,7 +132,7 @@ def find_evaluator_private_context_paths(value: Any) -> list[str]:
             for raw_key, child in item.items():
                 key = str(raw_key)
                 child_path = f"{path}.{key}"
-                if is_evaluator_private_context_key(key):
+                if is_evaluator_private_context_key(key, child):
                     found.append(child_path)
                 walk(child, child_path)
         elif isinstance(item, list):
