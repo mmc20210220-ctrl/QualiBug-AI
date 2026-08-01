@@ -5,12 +5,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .._chinese_business_authority_decision import (
+    load_authority_decision_ledger,
+)
 from .._chinese_business_conflicts import reconcile_chinese_business_fact_conflicts
 from .atomic_claim_projection import project_atomic_claim_facts
 from .explicit_fact_semantic_normalization import (
     normalize_explicit_business_fact_semantics,
 )
 from .identity_evidence_policy import apply_identity_evidence_policy
+from .identity_structural_review import DECISION_KIND
 from .typed_fact_authority import retire_duplicate_compatibility_typed_facts
 from .typed_fact_conflicts import reconcile_typed_fact_conflicts
 from .typed_relation_projection import project_typed_object_relations
@@ -97,7 +101,9 @@ def _normalize_typed_fact_values(asset: dict[str, Any]) -> dict[str, Any]:
             fact["status"] = "PENDING"
             fact["formal_promotion_allowed"] = False
             ambiguities = [
-                _text(value) for value in _list(fact.get("ambiguities")) if _text(value)
+                _text(value)
+                for value in _list(fact.get("ambiguities"))
+                if _text(value)
             ]
             if "TYPED_VALUE_MULTIPLE_CLAIMS" not in ambiguities:
                 ambiguities.append("TYPED_VALUE_MULTIPLE_CLAIMS")
@@ -147,6 +153,31 @@ def _normalize_typed_fact_values(asset: dict[str, Any]) -> dict[str, Any]:
     return asset
 
 
+def _project_structural_review_decisions(
+    asset: dict[str, Any],
+    *,
+    project_id: str,
+    root: Path,
+) -> None:
+    """Expose only structural-candidate rows from the existing authority ledger."""
+    ledger = load_authority_decision_ledger(project_id, root)
+    decisions = [
+        dict(row)
+        for row in _list(ledger.get("decisions"))
+        if isinstance(row, dict)
+        and _text(row.get("decision_kind")) == DECISION_KIND
+    ]
+    asset["identity_structural_review_decisions"] = decisions
+    asset["identity_structural_review_decision_ledger_receipt"] = {
+        "schema": "qualibug.enterprise-identity-structural-review-ledger-receipt.v1",
+        "project_id": project_id,
+        "decision_count": len(decisions),
+        "uses_existing_operator_authority_ledger": True,
+        "parallel_decision_ledger_created": False,
+        "updated_at_utc": _text(ledger.get("updated_at_utc")),
+    }
+
+
 def govern_compiled_business_facts(
     asset: dict[str, Any],
     *,
@@ -177,6 +208,11 @@ def govern_compiled_business_facts(
         project_id=project_id,
         root=root,
     )
+    _project_structural_review_decisions(
+        asset,
+        project_id=project_id,
+        root=root,
+    )
     receipt = dict(asset.get("identity_evidence_policy_receipt") or {})
     receipt.update(
         {
@@ -190,6 +226,7 @@ def govern_compiled_business_facts(
             "cardinality_formal_slot_closed": True,
             "conflict_authority_reapplied": True,
             "typed_fact_conflicts_reconciled": True,
+            "structural_review_decisions_loaded_from_existing_authority_ledger": True,
             "parallel_identity_engine_created": False,
         }
     )
@@ -211,6 +248,8 @@ def govern_compiled_business_facts(
             "identity_policy_runs_after_structure_fact_compilation": True,
             "conflict_authority_reapplied_after_structure_fact_compilation": True,
             "typed_fact_conflicts_use_existing_operator_authority": True,
+            "identity_structural_review_uses_existing_operator_authority": True,
+            "identity_structural_review_uses_blind_ground_truth": False,
         }
     )
     asset["governance"] = governance
