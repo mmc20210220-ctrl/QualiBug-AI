@@ -3,7 +3,8 @@
 The user-visible source is a source occurrence, not a canonical interpretation record. Removing
 one occurrence never deletes shared bytes, chunks, or runtime source state. Removing the final
 occurrence deactivates the canonical interpretation while retaining historical bytes by default;
-physical deletion requires an explicit ``purge_bytes`` request.
+physical deletion requires an explicit ``purge_bytes`` request. Connector scope retirement is a
+separate internal lifecycle state and must never be represented as customer-source deletion.
 """
 from __future__ import annotations
 
@@ -47,11 +48,40 @@ def _active_occurrences(registry: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in _occurrences(registry) if row.get("status") == "active"]
 
 
+def _safe_retirement_evidence(value: dict[str, Any] | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("source occurrence retirement evidence must be an object")
+    if len(value) > 30:
+        raise ValueError("source occurrence retirement evidence field limit exceeded")
+    result: dict[str, Any] = {}
+    for raw_key, raw_value in value.items():
+        key = _text(raw_key)[:120]
+        if not key or not all(ch.isalnum() or ch in "_.:-" for ch in key):
+            raise ValueError("source occurrence retirement evidence key invalid")
+        if raw_value is None or raw_value == "":
+            continue
+        if isinstance(raw_value, bool):
+            result[key] = raw_value
+        elif isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+            result[key] = raw_value
+        elif isinstance(raw_value, str):
+            result[key] = raw_value[:500]
+        else:
+            raise ValueError(
+                f"source occurrence retirement evidence value invalid: {key}"
+            )
+    return result
+
+
 def _project_occurrence(
     occurrence: dict[str, Any], canonical: dict[str, Any] | None
 ) -> dict[str, Any]:
     occurrence_id = _text(occurrence.get("source_occurrence_id"))
     canonical_source_id = _text(occurrence.get("canonical_source_id"))
+    metadata = copy.deepcopy(occurrence.get("source_metadata") or {})
+    remote_title = _text(metadata.get("remote_display_title"))
     base = copy.deepcopy(canonical or {})
     base.update(
         {
@@ -67,12 +97,24 @@ def _project_occurrence(
             or (canonical or {}).get("content_hash"),
             "source_type": occurrence.get("source_type")
             or (canonical or {}).get("source_type"),
-            "original_name": occurrence.get("filename")
+            "original_name": remote_title
+            or occurrence.get("filename")
             or (canonical or {}).get("original_name"),
             "version": occurrence.get("version"),
             "occurrence_version": occurrence.get("version"),
             "status": occurrence.get("status"),
             "tags": list(occurrence.get("tags") or []),
+            "source_metadata": metadata,
+            "remote_lifecycle_state": _text(
+                metadata.get("remote_lifecycle_state")
+            ),
+            "remote_missing_complete_snapshot_count": int(
+                metadata.get("remote_missing_complete_snapshot_count") or 0
+            ),
+            "retired_reason": _text(occurrence.get("retired_reason")),
+            "retirement_evidence": copy.deepcopy(
+                occurrence.get("retirement_evidence") or {}
+            ),
             "inventory_role": "SOURCE_OCCURRENCE",
             "parse_reused": bool(occurrence.get("parse_reused")),
             "independent_evidence_identity": True,
@@ -118,6 +160,9 @@ def list_enterprise_knowledge_sources(
             "superseded_source_count": status_counts.get("superseded", 0),
             "failed_source_count": status_counts.get("failed", 0),
             "deleted_source_count": status_counts.get("deleted", 0),
+            "retired_remote_scope_count": status_counts.get(
+                "retired_remote_scope", 0
+            ),
             "retired_archive_member_count": status_counts.get(
                 "retired_archive_member", 0
             ),
@@ -141,6 +186,7 @@ def list_enterprise_knowledge_sources(
             "public_source_inventory_identity": "SOURCE_OCCURRENCE",
             "canonical_interpretations_hidden_from_source_count": True,
             "historical_source_bytes_retained_by_default": True,
+            "remote_scope_retirement_is_not_customer_source_deletion": True,
         },
     }
 
@@ -241,12 +287,23 @@ def delete_enterprise_knowledge_source(
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
     purge_bytes: bool = False,
+    retirement_reason: str = "",
+    retirement_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     resolved_root = root or ROOT
     project = _safe_project_id(project_id)
     clean_actor = _require_manage_actor(actor)
+    reason = _text(retirement_reason)[:240]
+    retiring = bool(reason)
+    evidence = _safe_retirement_evidence(retirement_evidence)
+    if retiring and purge_bytes:
+        raise ValueError("remote-scope retirement cannot purge source bytes")
     registry = _load_registry(project, resolved_root)
     if not registry.get("source_occurrences"):
+        if retiring:
+            raise ValueError(
+                "remote-scope retirement requires source occurrence registry"
+            )
         return _crud.delete_enterprise_knowledge_source(
             project,
             source_id,
@@ -258,25 +315,46 @@ def delete_enterprise_knowledge_source(
     occurrence = _resolve_active_occurrence(registry, _text(source_id))
     occurrence_id = _text(occurrence.get("source_occurrence_id"))
     canonical_source_id = _text(occurrence.get("canonical_source_id"))
-    occurrence["status"] = "deleted"
-    occurrence["deleted_at_utc"] = _now()
-    occurrence["deleted_by"] = clean_actor
+    changed_at = _now()
+    if retiring:
+        occurrence["status"] = "retired_remote_scope"
+        occurrence["retired_at_utc"] = changed_at
+        occurrence["retired_by"] = clean_actor
+        occurrence["retired_reason"] = reason
+        occurrence["retirement_evidence"] = evidence
+    else:
+        occurrence["status"] = "deleted"
+        occurrence["deleted_at_utc"] = changed_at
+        occurrence["deleted_by"] = clean_actor
     _occurrence_core._unlink_occurrence(registry, occurrence)
     remaining = [
         row
         for row in _active_occurrences(registry)
         if _text(row.get("canonical_source_id")) == canonical_source_id
     ]
+    registry.setdefault("governance", {}).update(
+        {
+            "remote_scope_retirement_is_not_customer_source_deletion": True,
+            "remote_scope_retirement_never_purges_bytes": True,
+        }
+    )
     registry.setdefault("audit_events", []).append(
         {
-            "event": "delete_source_occurrence",
-            "at_utc": _now(),
+            "event": (
+                "retire_remote_scope_source_occurrence"
+                if retiring
+                else "delete_source_occurrence"
+            ),
+            "at_utc": changed_at,
             "actor": clean_actor,
             "source_occurrence_id": occurrence_id,
             "source_ref": occurrence.get("source_ref"),
             "canonical_source_id": canonical_source_id,
             "remaining_active_occurrence_count": len(remaining),
+            "retirement_reason": reason if retiring else "",
+            "retirement_evidence": evidence if retiring else {},
             "purge_bytes_requested": bool(purge_bytes),
+            "customer_source_modified": False,
         }
     )
     _save_registry(project, resolved_root, registry)
@@ -300,7 +378,11 @@ def delete_enterprise_knowledge_source(
                         [canonical_source_id],
                         root=resolved_root,
                         actor=clean_actor,
-                        reason="final_source_occurrence_deleted",
+                        reason=(
+                            "final_source_occurrence_retired_remote_scope"
+                            if retiring
+                            else "final_source_occurrence_deleted"
+                        ),
                     )
                 )
                 if canonical_deactivation_result.get("errors"):
@@ -319,6 +401,10 @@ def delete_enterprise_knowledge_source(
         "source_occurrence_id": occurrence_id,
         "source_ref": occurrence.get("source_ref"),
         "canonical_source_id": canonical_source_id,
+        "lifecycle_status": occurrence.get("status"),
+        "retired_remote_scope": retiring,
+        "retirement_reason": reason if retiring else "",
+        "retirement_evidence": evidence if retiring else {},
         "remaining_active_occurrence_count": len(remaining),
         "canonical_source_deleted": canonical_delete_result is not None,
         "canonical_source_deactivated": canonical_deactivation_result is not None,
@@ -329,6 +415,7 @@ def delete_enterprise_knowledge_source(
         "purge_bytes_executed": bool(canonical_delete_result),
         "canonical_delete_result": canonical_delete_result or {},
         "canonical_deactivation_result": canonical_deactivation_result or {},
+        "customer_source_modified": False,
         "rebuild_recommended": True,
     }
 
