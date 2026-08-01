@@ -15,7 +15,10 @@ from .connector_connection_profiles import (
     configure_connector_profile,
     configure_feishu_connector,
 )
-from .connector_sync_authority import list_connector_instances
+from .connector_sync_authority import (
+    list_connector_instances,
+    register_connector_instance,
+)
 from .connector_sync_fencing import managed_connector_sync_fence
 from .enterprise_knowledge_center._common import ROOT
 from .real_project_onboarding import _safe_project_id
@@ -197,7 +200,40 @@ def configure_managed_feishu_connector(
     )
 
 
+def set_managed_connector_status(
+    project_id: str,
+    *,
+    connector_instance_id: str,
+    status: str,
+    root: Path | None = None,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Change lifecycle state through the existing connector registry authority."""
+    resolved_root = (root or ROOT).resolve()
+    project = _safe_project_id(project_id)
+    connector = _text(connector_instance_id, 160)
+    existing = _existing_connector(project, connector, resolved_root)
+    if existing is None:
+        raise ValueError("connector_instance_not_registered")
+    return register_connector_instance(
+        project,
+        root=resolved_root,
+        actor=actor,
+        connector_instance_id=connector,
+        connector_type=_text(existing.get("connector_type"), 160),
+        display_name=_text(existing.get("display_name"), 240),
+        resource_scope=_text(existing.get("resource_scope"), 1000),
+        connection_profile_ref=_text(
+            existing.get("connection_profile_ref"),
+            500,
+        ),
+        metadata=dict(existing.get("metadata") or {}),
+        status=_text(status, 32).upper(),
+    )
+
+
 __all__ = [
     "configure_managed_connector",
     "configure_managed_feishu_connector",
+    "set_managed_connector_status",
 ]

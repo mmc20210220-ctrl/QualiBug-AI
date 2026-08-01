@@ -52,13 +52,13 @@ for (const wording of [
   '已重命名',
   '范围内移动',
   '重新出现并恢复',
-  '不会修改飞书原资料',
+  '不会修改原资料',
 ]) {
   requireText(component, wording, 'remote lifecycle user wording');
 }
 
 for (const forbidden of [
-  '飞书已删除',
+  '已被远端删除',
   '权限丢失',
   'remote_resource_id',
   'source_ref',

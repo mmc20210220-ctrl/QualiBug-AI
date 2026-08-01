@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from .connector_auto_sync import (
     connector_auto_sync_status,
@@ -25,14 +25,18 @@ from .connector_registry import (
 from .connector_configuration_service import (
     configure_managed_connector,
     configure_managed_feishu_connector,
+    set_managed_connector_status,
 )
 from .connector_connection_profiles import (
     ConnectorProfileError,
+    MASKED_SECRET,
     list_connector_connection_profiles,
+    mark_connector_reauthorization_required,
 )
 from .connector_sync_authority import (
     ConnectorSyncError,
     list_connector_instances,
+    list_connector_sync_runs,
     load_connector_sync_run,
 )
 from .feishu_connector_adapter import FeishuConnectorError
@@ -48,6 +52,7 @@ from .feishu_tenant_acceptance_reports import (
     list_feishu_tenant_acceptance_reports,
     load_feishu_tenant_acceptance_report,
 )
+from .enterprise_knowledge_center import list_enterprise_knowledge_sources
 from .real_project_onboarding import _safe_project_id
 
 _ROUTE_MARKER = "knowledge-connectors"
@@ -337,7 +342,7 @@ def _coverage_projection(
     ratio = covered_count / discovered_count if discovered_count else 1.0
     unsupported_resources = [
         {
-            "remote_resource_id": _text(row.get("remote_resource_id"), 1000),
+            "resource_index": index,
             "resource_kind": _text(row.get("resource_kind"), 160),
             "remote_object_type": _text(row.get("remote_object_type"), 80),
             "display_title": _text(row.get("display_title"), 300),
@@ -347,7 +352,7 @@ def _coverage_projection(
             "source_occurrence_created": False,
             "customer_source_modified": False,
         }
-        for row in (run.get("coverage_observations") or [])[:100]
+        for index, row in enumerate((run.get("coverage_observations") or [])[:100])
         if isinstance(row, dict)
     ]
     status = _text(run.get("knowledge_coverage_status"), 80) or (
@@ -404,10 +409,13 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             raw,
             root,
         )
-        row["acceptance"] = latest_feishu_tenant_acceptance_summary(
-            project,
+        row["acceptance"] = _acceptance_projection(
+            latest_feishu_tenant_acceptance_summary(
+                project,
+                connector,
+                root=root,
+            ),
             connector,
-            root=root,
         )
         rows.append(row)
     return {
@@ -497,6 +505,133 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
     }
 
 
+def _connector_inventory_row(
+    project: str,
+    connector: str,
+    root: Path,
+) -> dict[str, Any]:
+    inventory = _connector_inventory(project, root)
+    row = next(
+        (
+            dict(item)
+            for item in inventory.get("connectors") or []
+            if isinstance(item, dict)
+            and _text(item.get("connector_instance_id"), 160) == connector
+        ),
+        None,
+    )
+    if row is None:
+        raise KeyError("knowledge_connector_not_found")
+    return row
+
+
+def _acceptance_projection(
+    value: Any,
+    connector: str = "",
+) -> dict[str, Any]:
+    acceptance = dict(value) if isinstance(value, dict) else {}
+    latest = acceptance.get("latest_report")
+    latest_report = dict(latest) if isinstance(latest, dict) else None
+    if latest_report is not None:
+        latest_report = {
+            key: latest_report.get(key)
+            for key in (
+                "report_id",
+                "acceptance_id",
+                "profile",
+                "verdict",
+                "acceptance_ready",
+                "started_at_utc",
+                "completed_at_utc",
+                "summary",
+            )
+            if key in latest_report
+        }
+    return {
+        "schema": "qualibug.knowledge-connector-acceptance.v1",
+        "connector_instance_id": connector,
+        "status": _text(acceptance.get("status"), 40) or "NOT_RUN",
+        "acceptance_ready": acceptance.get("acceptance_ready") is True,
+        "latest_report": latest_report,
+        "source_content_returned": False,
+        "raw_cursor_returned": False,
+        "credential_values_returned": False,
+        "filesystem_path_returned": False,
+    }
+
+
+def _connector_resources_projection(
+    project: str,
+    connector: str,
+    root: Path,
+) -> dict[str, Any]:
+    row = _connector_inventory_row(project, connector, root)
+    coverage = dict(row.get("coverage") or {})
+    prefix = f"connector://{quote(connector, safe='._-')}/"
+    source_inventory = list_enterprise_knowledge_sources(
+        project,
+        root=root,
+        include_deleted=False,
+    )
+    resources: list[dict[str, Any]] = []
+    for source in source_inventory.get("sources") or []:
+        if not isinstance(source, dict):
+            continue
+        if not _text(source.get("source_ref"), 2000).startswith(prefix):
+            continue
+        resources.append(
+            {
+                "resource_index": len(resources),
+                "display_title": _text(
+                    source.get("original_name"),
+                    300,
+                ) or "UNNAMED_RESOURCE",
+                "resource_kind": _text(source.get("source_type"), 120),
+                "state": "MATERIALIZED",
+                "updated_at_utc": _text(source.get("updated_at_utc"), 80),
+            }
+        )
+        if len(resources) >= 100:
+            break
+    materialized_count = len(resources)
+    for unsupported in coverage.get("unsupported_resources") or []:
+        if not isinstance(unsupported, dict) or len(resources) >= 100:
+            break
+        resources.append(
+            {
+                "resource_index": len(resources),
+                "display_title": _text(unsupported.get("display_title"), 300),
+                "resource_kind": _text(
+                    unsupported.get("resource_kind"),
+                    120,
+                ),
+                "remote_object_type": _text(
+                    unsupported.get("remote_object_type"),
+                    80,
+                ),
+                "state": "UNSUPPORTED",
+                "reason_code": _text(unsupported.get("reason_code"), 160),
+            }
+        )
+    return {
+        "schema": "qualibug.knowledge-connector-resources.v1",
+        "project_id": project,
+        "connector_instance_id": connector,
+        "status": _text(coverage.get("status"), 80) or "NOT_AVAILABLE",
+        "discovered_count": _safe_int(coverage.get("discovered_count")),
+        "covered_count": _safe_int(coverage.get("covered_count")),
+        "unsupported_count": _safe_int(coverage.get("unsupported_count")),
+        "materialized_preview_count": materialized_count,
+        "resources": resources,
+        "preview_truncated": len(resources) >= 100,
+        "source_content_returned": False,
+        "raw_cursor_returned": False,
+        "credential_values_returned": False,
+        "remote_resource_identities_returned": False,
+        "source_refs_returned": False,
+    }
+
+
 def _sanitize_sync_response(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload)
     for field in _PRIVATE_SYNC_RESPONSE_FIELDS:
@@ -572,7 +707,7 @@ class KnowledgeConnectorHandlersMixin:
             if isinstance(exc, FeishuTenantAcceptanceJobError)
             else "FEISHU_ACCEPTANCE_REPORT_ERROR"
             if isinstance(exc, FeishuTenantAcceptanceReportError)
-            else "FEISHU_CONNECTOR_ERROR"
+            else "KNOWLEDGE_CONNECTOR_ERROR"
         )
         return self._json(
             {
@@ -646,6 +781,53 @@ class KnowledgeConnectorHandlersMixin:
                 if row is None:
                     raise KeyError("knowledge_connector_not_found")
                 return self._json({"ok": True, "data": row})
+            if len(tail) == 2 and tail[1] == "resources":
+                return self._json(
+                    {
+                        "ok": True,
+                        "data": _connector_resources_projection(
+                            project,
+                            connector,
+                            root,
+                        ),
+                    }
+                )
+            if len(tail) == 2 and tail[1] == "coverage":
+                row = _connector_inventory_row(project, connector, root)
+                coverage = dict(row.get("coverage") or {})
+                coverage.update(
+                    {
+                        "schema": "qualibug.knowledge-connector-coverage.v1",
+                        "connector_instance_id": connector,
+                        "source_content_returned": False,
+                        "raw_cursor_returned": False,
+                        "credential_values_returned": False,
+                    }
+                )
+                return self._json({"ok": True, "data": coverage})
+            if len(tail) == 2 and tail[1] == "runs":
+                return self._json(
+                    {
+                        "ok": True,
+                        "data": list_connector_sync_runs(
+                            project,
+                            connector_instance_id=connector,
+                            root=root,
+                            limit=20,
+                        ),
+                    }
+                )
+            if len(tail) == 2 and tail[1] == "acceptance":
+                row = _connector_inventory_row(project, connector, root)
+                return self._json(
+                    {
+                        "ok": True,
+                        "data": _acceptance_projection(
+                            row.get("acceptance"),
+                            connector,
+                        ),
+                    }
+                )
             if len(tail) == 2 and tail[1] == "acceptance-reports":
                 reports = list_feishu_tenant_acceptance_reports(
                     project,
@@ -764,6 +946,109 @@ class KnowledgeConnectorHandlersMixin:
             201 if result["created"] else 200,
         )
 
+    def _connector_update_profile(
+        self,
+        project: str,
+        connector: str,
+        body: dict[str, Any],
+        root: Path,
+    ) -> dict[str, Any]:
+        current = _connector_inventory_row(project, connector, root)
+        current_type = _text(current.get("connector_type"), 160)
+        requested_type = _text(body.get("connector_type"), 160)
+        if requested_type and requested_type != current_type:
+            raise ValueError("connector_instance_type_is_immutable")
+        current_profile = dict(current.get("connection_profile") or {})
+        incoming = body.get("connection_profile")
+        if incoming is None:
+            incoming = {}
+        if not isinstance(incoming, dict):
+            raise ConnectorProfileError("connector_profile_must_be_object")
+        profile = dict(incoming)
+        profile.setdefault(
+            "auth_mode",
+            _text(current_profile.get("auth_mode"), 64),
+        )
+        if not incoming:
+            for field, configured in dict(
+                current_profile.get("configured_fields") or {}
+            ).items():
+                if configured is True:
+                    profile[field] = MASKED_SECRET
+        elif "auth_mode" not in incoming:
+            for field, configured in dict(
+                current_profile.get("configured_fields") or {}
+            ).items():
+                if configured is True and field not in profile:
+                    profile[field] = MASKED_SECRET
+        return {
+            "connector_type": current_type,
+            "connector_instance_id": connector,
+            "resource_scope": (
+                _text(body.get("resource_scope"), 1000)
+                if "resource_scope" in body
+                else _text(current.get("resource_scope"), 1000)
+            ),
+            "profile": profile,
+            "root": root,
+            "actor": body.get("_actor"),
+            "display_name": (
+                _text(body.get("display_name"), 240)
+                if "display_name" in body
+                else _text(current.get("display_name"), 240)
+            ),
+            "status": (
+                _text(body.get("status"), 32).upper()
+                if "status" in body
+                else _text(current.get("status"), 32).upper()
+            ),
+            "credential_expires_at_utc": body.get(
+                "credential_expires_at_utc",
+                current_profile.get("credential_expires_at_utc", ""),
+            ),
+            "sync_policy": body.get("sync_policy"),
+        }
+
+    def _handle_knowledge_connector_patch(
+        self,
+        project: str,
+        connector: str,
+        body: dict[str, Any],
+        root: Path,
+        actor: dict[str, Any],
+    ) -> Any:
+        allowed = {
+            "connector_type",
+            "display_name",
+            "resource_scope",
+            "status",
+            "connection_profile",
+            "credential_expires_at_utc",
+            "sync_policy",
+        }
+        unknown = sorted(set(body) - allowed)
+        if unknown:
+            raise ValueError(f"connector_patch_field_not_supported:{unknown[0]}")
+        update_body = dict(body)
+        update_body["_actor"] = actor
+        kwargs = self._connector_update_profile(
+            project,
+            connector,
+            update_body,
+            root,
+        )
+        result = configure_managed_connector(project, **kwargs)
+        public_result = {
+            "ok": bool(result.get("ok")),
+            "created": False,
+            "connector_instance": _public_connector_instance(
+                dict(result.get("connector_instance") or {})
+            ),
+            "connection_profile": dict(result.get("connection_profile") or {}),
+            "credential_storage": dict(result.get("credential_storage") or {}),
+        }
+        return self._json({"ok": True, "data": public_result})
+
     def _handle_knowledge_connector_action(
         self,
         project: str,
@@ -783,6 +1068,82 @@ class KnowledgeConnectorHandlersMixin:
                 ),
             )
             return self._json({"ok": True, "data": result})
+        if action in {"pause", "resume"}:
+            result = set_managed_connector_status(
+                project,
+                connector_instance_id=connector,
+                status="PAUSED" if action == "pause" else "ACTIVE",
+                root=root,
+                actor=actor,
+            )
+            row = _connector_inventory_row(project, connector, root)
+            return self._json(
+                {
+                    "ok": True,
+                    "data": {
+                        "action": action,
+                        "connector_instance": _public_connector_instance(
+                            dict(result.get("connector_instance") or row)
+                        ),
+                        "connection_profile": dict(
+                            row.get("connection_profile") or {}
+                        ),
+                        "credential_values_returned": False,
+                    },
+                }
+            )
+        if action == "reauthorize":
+            incoming_profile = body.get("connection_profile")
+            if incoming_profile is not None:
+                update_body = dict(body)
+                update_body.setdefault("status", "ACTIVE")
+                update_body["_actor"] = actor
+                kwargs = self._connector_update_profile(
+                    project,
+                    connector,
+                    update_body,
+                    root,
+                )
+                result = configure_managed_connector(project, **kwargs)
+                return self._json(
+                    {
+                        "ok": True,
+                        "data": {
+                            "action": action,
+                            "connector_instance": _public_connector_instance(
+                                dict(result.get("connector_instance") or {})
+                            ),
+                            "connection_profile": dict(
+                                result.get("connection_profile") or {}
+                            ),
+                            "credential_storage": dict(
+                                result.get("credential_storage") or {}
+                            ),
+                        },
+                    }
+                )
+            result = mark_connector_reauthorization_required(
+                project,
+                connector,
+                required=True,
+                reason=_text(body.get("reason"), 300),
+                root=root,
+                actor=actor,
+            )
+            row = _connector_inventory_row(project, connector, root)
+            return self._json(
+                {
+                    "ok": True,
+                    "data": {
+                        "action": action,
+                        "connector_instance": _public_connector_instance(row),
+                        "connection_profile": dict(
+                            result.get("connection_profile") or {}
+                        ),
+                        "credential_values_returned": False,
+                    },
+                }
+            )
         if action == "sync":
             run = _managed_sync_runner()(
                 project,
@@ -900,6 +1261,47 @@ class KnowledgeConnectorHandlersMixin:
             return None
         return self._handle_knowledge_connector_get(project, route[1], root)
 
+    def do_PATCH(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        route = _connector_route(parsed.path)
+        if route is None or len(route[1]) != 1:
+            fallback = getattr(super(), "do_PATCH", None)
+            if callable(fallback):
+                return fallback()
+            return self.send_error(501, "PATCH is not supported for this route")
+        self._init_request_context()
+        root = self._root()
+        actor = self._require_actor()
+        if actor is None or self._require_tenant(root) is None:
+            return None
+        try:
+            project = _safe_project_id(route[0])
+        except ValueError:
+            return self._json(
+                {"ok": False, "error": "PROJECT_NOT_FOUND"}, 404
+            )
+        if not self._require_project_scope(project):
+            return None
+        if not self._require_connector_manager(
+            actor, "knowledge connector configuration"
+        ):
+            return None
+        try:
+            return self._handle_knowledge_connector_patch(
+                project,
+                _text(route[1][0], 160),
+                self._body(),
+                root,
+                actor,
+            )
+        except (
+            ConnectorProfileError,
+            ConnectorSyncError,
+            ValueError,
+            TypeError,
+        ) as exc:
+            return self._knowledge_connector_error(exc)
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = _connector_route(parsed.path)
@@ -936,6 +1338,9 @@ class KnowledgeConnectorHandlersMixin:
                 "test",
                 "sync",
                 "acceptance",
+                "pause",
+                "resume",
+                "reauthorize",
             }:
                 return self._handle_knowledge_connector_action(
                     project,

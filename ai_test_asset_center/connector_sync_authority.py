@@ -371,6 +371,72 @@ def list_connector_instances(
     }
 
 
+def list_connector_sync_runs(
+    project_id: str,
+    *,
+    connector_instance_id: str,
+    root: Path | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Return bounded, cursor-free run summaries for one connector instance."""
+    resolved_root = root or ROOT
+    project = _safe_project_id(project_id)
+    connector = _identifier(connector_instance_id, "connector_instance_id")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ConnectorSyncError("connector_sync_run_limit_invalid")
+    registry = _load_connector_registry(project, resolved_root)
+    runs = [
+        dict(row)
+        for row in registry.get("sync_runs") or []
+        if isinstance(row, dict)
+        and _text(row.get("connector_instance_id"), 160) == connector
+    ]
+    runs.sort(
+        key=lambda row: _text(
+            row.get("completed_at_utc") or row.get("started_at_utc"),
+            80,
+        ),
+        reverse=True,
+    )
+    public_fields = {
+        "sync_epoch_id",
+        "connector_instance_id",
+        "sync_mode",
+        "status",
+        "started_at_utc",
+        "completed_at_utc",
+        "item_count",
+        "success_count",
+        "materialized_success_count",
+        "unchanged_success_count",
+        "coverage_observation_count",
+        "knowledge_coverage_status",
+        "failure_count",
+        "retired_count",
+        "cursor_checkpoint_committed",
+    }
+    safe_runs: list[dict[str, Any]] = []
+    for row in runs[:limit]:
+        safe = {
+            key: row[key]
+            for key in public_fields
+            if key in row
+        }
+        safe["raw_cursor_returned"] = False
+        safe["source_content_returned"] = False
+        safe_runs.append(safe)
+    return {
+        "schema": "qualibug.connector-sync-run-inventory.v1",
+        "project_id": project,
+        "connector_instance_id": connector,
+        "runs": safe_runs,
+        "truncated": len(runs) > len(safe_runs),
+        "raw_cursor_returned": False,
+        "source_content_returned": False,
+        "credential_values_returned": False,
+    }
+
+
 def _new_epoch(project: str, connector: str) -> str:
     return "sync_" + _short_hash(
         {
@@ -1228,6 +1294,7 @@ __all__ = [
     "ConnectorSyncError",
     "abort_connector_sync_run",
     "list_connector_instances",
+    "list_connector_sync_runs",
     "load_connector_sync_run",
     "register_connector_instance",
     "sync_connector_snapshot_batch",
