@@ -1,0 +1,329 @@
++                    for row in frames
++                }:
++                    frames.append(dict(frame))
++                operation["condition_frames"] = frames
++            operation["effects"] = unique_text(
++                [*as_list(operation.get("effects")), *_effect_texts(fact)]
++            )
++            operation["exceptions"] = unique_text(
++                [
++                    *as_list(operation.get("exceptions")),
++                    *as_list(fact.get("exceptions")),
++                ]
++            )
++            operation["exception_scopes"] = unique_text(
++                [
++                    *as_list(operation.get("exception_scopes")),
++                    *as_list(fact.get("exception_scope")),
++                ]
++            )
++            operation["temporal_constraints"] = unique_text(
++                [
++                    *as_list(operation.get("temporal_constraints")),
++                    *as_list(fact.get("temporal_constraints")),
++                ]
++            )
++            operation["compensations"] = unique_text(
++                [
++                    *as_list(operation.get("compensations")),
++                    *as_list(fact.get("compensations")),
++                    *as_list(fact.get("compensation")),
++                ]
++            )
++            for row in as_list(fact.get("quantity_constraints")):
++                if isinstance(row, dict) and row not in operation["quantity_constraints"]:
++                    operation["quantity_constraints"].append(dict(row))
++            for row in as_list(fact.get("time_window_constraints")):
++                if isinstance(row, dict) and row not in operation["time_window_constraints"]:
++                    operation["time_window_constraints"].append(dict(row))
++            for row in as_list(fact.get("formula_constraints")):
++                if isinstance(row, dict) and row not in operation["formula_constraints"]:
++                    operation["formula_constraints"].append(dict(row))
++            delegation = as_dict(fact.get("authorization_delegation"))
++            if delegation and delegation not in operation["authorization_delegations"]:
++                operation["authorization_delegations"].append(dict(delegation))
++            scope = {
++                name: value
++                for name, value in as_dict(fact.get("scope")).items()
++                if text(value)
++            }
++            if scope and scope not in operation["scopes"]:
++                operation["scopes"].append(scope)
++            modality_contract = {
++                "modality": text(fact.get("modality")),
++                "polarity": text(fact.get("polarity")),
++                "fact_id": text(fact.get("fact_id")),
++            }
++            if modality_contract not in operation["modality_contracts"]:
++                operation["modality_contracts"].append(modality_contract)
++            operation["fact_refs"] = unique_text(
++                [*as_list(operation.get("fact_refs")), fact.get("fact_id")]
++            )
++            operation["evidence"] = dedupe_evidence(
++                [
++                    *as_list(operation.get("evidence")),
++                    *evidence,
++                    *as_list(projection.get("evidence")),
++                ]
++            )
++            if (
++                text(operation.get("condition_combinator")) == "UNRESOLVED"
++                and len(as_list(operation.get("preconditions"))) > 1
++            ):
++                operation["status"] = "PARTIAL"
++
++    return (
++        sorted(
++            operations.values(),
++            key=lambda row: (
++                text(row.get("operation_ref") or row.get("name")),
++                tuple(as_list(row.get("object_refs"))),
++            ),
++        ),
++        unknowns,
++    )
+ 
+ 
+ _ALLOW_DECISIONS = frozenset({"allow", "allowed", "grant", "granted", "permit", "permitted"})
+@@ -1885,8 +2024,51 @@ def _build_actors(
+     actors: dict[str, dict[str, Any]] = {}
+     authorization_unknowns: list[dict[str, Any]] = []
+ 
+-    def ensure(name: Any, evidence: Iterable[dict[str, Any]], source_kind: str) -> dict[str, Any] | None:
+-        actor_name = text(name)
++    source_roles = [
++        row for row in as_list(asset.get("roles")) if isinstance(row, dict)
++    ]
++    explicit_roles = [
++        row
++        for row in source_roles
++        if text(row.get("identity_authority")) == "SOURCE_DECLARED_ROLE_TABLE"
++    ]
++    authoritative_roles = explicit_roles or source_roles
++    role_claims: dict[str, set[str]] = defaultdict(set)
++    role_aliases_by_canonical: dict[str, list[str]] = {}
++    for role_row in authoritative_roles:
++        canonical = text(
++            role_row.get("canonical_name")
++            or role_row.get("role")
++            or role_row.get("name")
++        )
++        if not canonical:
++            continue
++        aliases = unique_text(as_list(role_row.get("aliases")))
++        role_aliases_by_canonical[canonical] = unique_text(
++            [*role_aliases_by_canonical.get(canonical, []), *aliases]
++        )
++        for label in [canonical, *aliases]:
++            key = re.sub(r"\s+", "", text(label)).casefold()
++            if key:
++                role_claims[key].add(canonical)
++    role_identity = {
++        key: next(iter(values))
++        for key, values in role_claims.items()
++        if len(values) == 1
++    }
++
++    def canonical_role(value: Any) -> str:
++        raw = text(value)
++        key = re.sub(r"\s+", "", raw).casefold()
++        return role_identity.get(key, raw)
++
++    def ensure(
++        name: Any,
++        evidence: Iterable[dict[str, Any]],
++        source_kind: str,
++        aliases: Iterable[Any] = (),
++    ) -> dict[str, Any] | None:
++        actor_name = canonical_role(name)
+         if not actor_name:
+             return None
+         row = actors.setdefault(
+@@ -1895,6 +2077,8 @@ def _build_actors(
+                 "schema": ACTOR_SCHEMA,
+                 "actor_id": stable_id("business_actor", actor_name),
+                 "name": actor_name,
++                "canonical_name": actor_name,
++                "aliases": [],
+                 "responsibility_operation_refs": [],
+                 "authorization_contracts": [],
+                 "permissions": [],
+@@ -1906,6 +2090,14 @@ def _build_actors(
+                 "authorization_status": "NOT_DECLARED",
+             },
+         )
++        row["aliases"] = unique_text(
++            [
++                *as_list(row.get("aliases")),
++                *role_aliases_by_canonical.get(actor_name, []),
++                *(text(value) for value in aliases),
++                text(name) if text(name) != actor_name else "",
++            ]
++        )
+         row["source_kinds"] = unique_text([*as_list(row.get("source_kinds")), source_kind])
+         row["evidence"] = dedupe_evidence([*as_list(row.get("evidence")), *evidence])
+         return row
+@@ -1920,17 +2112,16 @@ def _build_actors(
+         else:
+             _append_unique_contract(row["permission_unknowns"], contract)
+ 
+-    for index, raw in enumerate(as_list(asset.get("roles"))):
+-        if not isinstance(raw, dict):
+-            continue
++    for index, raw in enumerate(authoritative_roles):
+         ensure(
+-            raw.get("role") or raw.get("name"),
++            raw.get("canonical_name") or raw.get("role") or raw.get("name"),
+             _asset_evidence(
+                 raw,
+                 text(raw.get("role_id")) or f"roles[{index}]",
+                 "source_backed_role",
+             ),
+             "role_asset",
++            as_list(raw.get("aliases")),
+         )
+ 
+     for index, raw in enumerate(as_list(asset.get("permission_matrix"))):
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py
+index 88c903d..9f6aeda 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py
+@@ -23,6 +23,8 @@ import re
+ from collections import defaultdict
+ from typing import Any, Iterable
+ 
++from .implementation_binding import exact_interface_operation_identities
++from .lifecycle_builder import source_declared_state_catalog
+ from .structured_fact_compiler import _semantic_signature
+ 
+ RECEIPT_SCHEMA = "qualibug.explicit-fact-semantic-normalization.v1"
+@@ -55,6 +57,11 @@ _ROLE_HEADS = tuple(
+             "客服",
+             "仓管员",
+             "仓库员",
++            "客户",
++            "代理",
++            "成员",
++            "专员",
++            "所有者",
+         },
+         key=lambda value: (-len(value), value),
+     )
+@@ -119,6 +126,17 @@ _ACTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+         ("审核", r"审批|审核"),
+         ("保存", r"保存"),
+         ("关闭", r"关闭"),
++        ("分配", r"分配"),
++        ("开始处理", r"开始处理|开始"),
++        ("解决", r"解决"),
++        ("重开", r"重开|重新打开"),
++        ("升级", r"升级"),
++        ("转移", r"转移"),
++        ("添加评论", r"添加评论|评论"),
++        ("上传附件", r"上传附件|上传"),
++        ("合并", r"合并"),
++        ("更新", r"更新"),
++        ("归档", r"归档"),
+     )
+ )
+ # Negative *modality* markers only. ``拒绝`` is an operation: ``必须拒绝`` is a
+@@ -147,7 +165,15 @@ _STATE_FROM_TO_RE = re.compile(
+ )
+ _ONLY_IF_FRAME_RE = re.compile(r"(?:只有|仅当)(?P<body>.+?)才")
+ _ONLY_ACTOR_PERMISSION_RE = re.compile(
+-    r"(?:只有|仅)(?P<actor>[^，,；;。]{1,24}?)(?:才)?(?:可以|允许|有权)"
++    r"(?:只有|仅)(?P<actor>[^|｜\n，,；;。：:{}\[\]]{1,32}?)(?:才)?(?:可以|允许|有权)"
++)
++_LEADING_ACTOR_MODAL_RE = re.compile(
++    r"(?:^|[|｜\n，,；;。])\s*(?P<actor>[^|｜\n，,；;。：:{}\[\]]{1,32}?)"
++    r"(?P<modal>只能|仅能|不得|严禁|禁止|不允许|不可|不能|无权|必须|应当|可以|允许|有权)"
++)
++_ACTOR_COORDINATE_SPLIT_RE = re.compile(r"或者|或|以及|和|与|及|、|/|／")
++_ACTOR_QUALIFIER_PREFIX_RE = re.compile(
++    r"^(?:被|由|本|当前|指定|所属|负责|创建|分配|处理|审批|审核|值班|当班|发起|申请)"
+ )
+ _IF_BRANCH_RE = re.compile(r"^(?:如果|若|一旦)(?P<condition>.+?)(?:时)?[，,]?则")
+ _ELSE_BRANCH_RE = re.compile(r"^否则")
+@@ -188,6 +214,155 @@ def _ordered_unique(values: Iterable[Any]) -> list[str]:
+     return result
+ 
+ 
++def _source_grammar_text(value: Any) -> str:
++    """Decode only transport-level text escapes before applying source grammar.
++
++    OpenAPI/JSON descriptions often arrive as literal ``\n`` sequences. Treating
++    those two characters as business text causes bullets and JSON prefixes to be
++    captured as actors or conditions. This normalizes layout escapes only; the raw
++    statement and evidence quote remain unchanged.
++    """
++    result = _text(value)
++    return (
++        result.replace("\\r\\n", "\n")
++        .replace("\\n", "\n")
++        .replace("\\r", "\n")
++        .replace("\\t", "\t")
++        .replace('\\"', '"')
++    )
++
++
++
++def _source_rule_cells(value: Any) -> list[str]:
++    statement = _text(value)
++    if not (statement.startswith("|") and statement.endswith("|")):
++        return []
++    return [_text(cell) for cell in statement.strip("|").split("|")]
++
++
++def _source_rule_type(value: Any) -> str:
++    cells = _source_rule_cells(value)
++    return cells[1].upper() if len(cells) >= 3 else ""
++
++
++def _source_rule_statement(value: Any) -> str:
++    cells = _source_rule_cells(value)
++    return cells[2] if len(cells) >= 3 else _source_grammar_text(value)
++
++
++def _state_slots_for_fact(
++    statement: str,
++    fact: dict[str, Any],
++    entities: Iterable[str],
++    state_catalog: dict[str, list[dict[str, Any]]],
++) -> tuple[list[dict[str, Any]], str]:
++    """Project exact source-declared state labels into typed condition slots."""
++    declared_type = _source_rule_type(fact.get("raw_statement"))
++    negative = bool(_NEGATIVE_RE.search(statement))
++    slots: list[dict[str, Any]] = []
++    seen: set[tuple[str, str, str]] = set()
++    for entity in _ordered_unique(entities):
++        for field_contract in state_catalog.get(entity, []):
++            aliases = _dict(field_contract.get("aliases"))
++            matches: list[tuple[int, str]] = []
++            for alias, canonical in aliases.items():
++                alias_text = _text(alias)
++                canonical_text = _text(canonical)
++                if not alias_text or not canonical_text:
++                    continue
++                for match in re.finditer(re.escape(alias_text), statement, re.I):
++                    local = statement[max(0, match.start() - 3) : match.end() + 3]
++                    if (
++                        declared_type == "STATE_TRANSITION"
++                        or "状态" in local
++                        or alias_text.startswith(("已", "待"))
++                    ):
++                        matches.append((match.start(), canonical_text))
++            for _position, canonical in sorted(matches):
++                operator = "NOT_EQUALS" if negative else "EQUALS"
++                identity = (_text(field_contract.get("field")), operator, canonical)
++                if identity in seen:
++                    continue
++                seen.add(identity)
++                slots.append(
++                    {
++                        "field_candidate": identity[0],
++                        "operator_candidate": operator,
++                        "value_candidate": {
++                            "raw": canonical,
++                            "value_type": "ENUM",
++                            "normalized_value": canonical,
++                        },
