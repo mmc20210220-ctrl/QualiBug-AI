@@ -4,6 +4,10 @@ This module owns neither scheduling nor target selection. The existing graph
 wait gate invokes it for a compile-frozen message/callback transition. Runtime
 observes the entire bounded window, separates observation completeness from the
 business verdict, and emits only counts and content fingerprints.
+
+Optional partitioned-log semantics are delegated to
+``process_graph_broker_delivery``. That semantic subcontract does not create a
+second scheduler, transport, ledger, observer registry, or finalizer.
 """
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ from copy import deepcopy
 from typing import Any, Callable
 from urllib.parse import urlencode
 
+from . import process_graph_broker_delivery as _broker
 from .async_readback_executor import normalize_async_policy
 from .experiment_runtime_support import _resolve_token, _run_http_step
 from .real_id_resolver import path_has_placeholders
@@ -37,6 +42,23 @@ EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM = "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_ABOVE_M
 EVENT_ID_REUSE_CONFLICT = "PROCESS_GRAPH_EVENT_ID_REUSE_CONFLICT"
 EVENT_IDEMPOTENCY_KEY_MISMATCH = "PROCESS_GRAPH_EVENT_IDEMPOTENCY_KEY_MISMATCH"
 EVENT_RETRY_LIMIT_EXCEEDED = "PROCESS_GRAPH_EVENT_RETRY_LIMIT_EXCEEDED"
+
+BROKER_DELIVERY_INVALID = _broker.BROKER_DELIVERY_INVALID
+BROKER_EXPECTATION_BINDING_UNRESOLVED = (
+    _broker.BROKER_EXPECTATION_BINDING_UNRESOLVED
+)
+BROKER_METADATA_INCOMPLETE = _broker.BROKER_METADATA_INCOMPLETE
+BROKER_TOPIC_MISMATCH = _broker.BROKER_TOPIC_MISMATCH
+BROKER_CONSUMER_GROUP_MISMATCH = _broker.BROKER_CONSUMER_GROUP_MISMATCH
+BROKER_PARTITION_OFFSET_CONFLICT = _broker.BROKER_PARTITION_OFFSET_CONFLICT
+BROKER_CHECKPOINT_CONFLICT = _broker.BROKER_CHECKPOINT_CONFLICT
+BROKER_CHECKPOINT_REGRESSION = _broker.BROKER_CHECKPOINT_REGRESSION
+BROKER_CHECKPOINT_BEHIND_OBSERVED = _broker.BROKER_CHECKPOINT_BEHIND_OBSERVED
+BROKER_DLQ_DELIVERY_UNEXPECTED = _broker.BROKER_DLQ_DELIVERY_UNEXPECTED
+BROKER_SEQUENCE_ORDER_VIOLATION = _broker.BROKER_SEQUENCE_ORDER_VIOLATION
+BROKER_RESTART_DEDUPLICATION_VIOLATION = (
+    _broker.BROKER_RESTART_DEDUPLICATION_VIOLATION
+)
 
 _EVENT_RELATIONS = frozenset(
     {"AWAITS", "NOTIFIES", "TRIGGERS", "MESSAGE", "ASYNC_MESSAGE"}
@@ -88,6 +110,22 @@ def _extract(value: Any, path: str) -> tuple[bool, Any]:
             return False, None
         current = current[part]
     return True, current
+
+
+def _delete_path(value: Any, path: str) -> None:
+    token = _text(path)
+    if token.startswith("$."):
+        token = token[2:]
+    parts = [item for item in token.split(".") if item]
+    if not parts or not isinstance(value, dict):
+        return
+    current = value
+    for part in parts[:-1]:
+        if not isinstance(current, dict):
+            return
+        current = current.get(part)
+    if isinstance(current, dict):
+        current.pop(parts[-1], None)
 
 
 def _event_spec(raw_wait: dict[str, Any]) -> dict[str, Any]:
@@ -180,6 +218,10 @@ def compile_event_transition_contract(
         if retry_limit < 1 or retry_limit > 100:
             return {}, "event_delivery_attempt_limit_invalid"
 
+    broker_contract, broker_error = _broker.compile_broker_delivery_contract(event)
+    if broker_error:
+        return {}, f"broker_delivery_invalid:{broker_error}"
+
     contract = {
         "schema_version": CONTRACT_SCHEMA_VERSION,
         "status": STATUS_COMPILED,
@@ -201,11 +243,40 @@ def compile_event_transition_contract(
         "idempotency_key_field": idempotency_field,
         "delivery_attempt_field": retry_field,
         "expected_max_delivery_attempt": retry_limit,
+        "broker_delivery_contract": broker_contract,
         "async_policy": policy,
         "source_refs": _list(event.get("source_refs")),
     }
     contract["contract_fingerprint"] = _fingerprint(contract)
     return contract, ""
+
+
+def _payload_fingerprint(
+    raw: dict[str, Any],
+    contract: dict[str, Any],
+) -> str:
+    payload = deepcopy(raw)
+    mutable_paths = [_text(contract.get("delivery_attempt_field"))]
+    broker = _dict(contract.get("broker_delivery_contract"))
+    for field_name in (
+        "topic_field",
+        "partition_field",
+        "offset_field",
+        "checkpoint_field",
+        "consumer_group_field",
+        "delivery_state_field",
+        "dead_letter_topic_field",
+        "ordering_key_field",
+        "sequence_field",
+        "consumer_epoch_field",
+        "deduplication_key_field",
+        "effect_applied_field",
+    ):
+        mutable_paths.append(_text(broker.get(field_name)))
+    for path in mutable_paths:
+        if path:
+            _delete_path(payload, path)
+    return _fingerprint(payload)
 
 
 def _event_rows(
@@ -218,6 +289,7 @@ def _event_rows(
     if len(raw_events) > _MAX_EVENTS_PER_POLL:
         return [], EVENT_COLLECTION_INVALID
     rows: list[dict[str, Any]] = []
+    broker_contract = _dict(contract.get("broker_delivery_contract"))
     for raw in raw_events:
         if not isinstance(raw, dict):
             continue
@@ -247,6 +319,11 @@ def _event_rows(
                 delivery_attempt = int(raw_attempt) if attempt_found else None
             except (TypeError, ValueError):
                 delivery_attempt = None
+        broker_metadata, broker_error = _broker.extract_broker_metadata(
+            raw,
+            broker_contract,
+            extractor=_extract,
+        )
         rows.append(
             {
                 "event_id": event_id,
@@ -254,7 +331,9 @@ def _event_rows(
                 "correlation": correlation,
                 "idempotency_value": idempotency_value,
                 "delivery_attempt": delivery_attempt,
-                "payload_fingerprint": _fingerprint(raw),
+                "broker": broker_metadata,
+                "broker_metadata_error": broker_error,
+                "payload_fingerprint": _payload_fingerprint(raw, contract),
             }
         )
     return rows, ""
@@ -266,16 +345,24 @@ def _blocked_receipt(
     *,
     detail: str,
 ) -> dict[str, Any]:
+    broker = _dict(contract.get("broker_delivery_contract"))
     receipt = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "status": STATUS_BLOCKED,
         "semantic_status": "INDETERMINATE",
         "reason_code": reason_code,
+        "semantic_reason_codes": [reason_code] if reason_code else [],
         "detail": detail,
         "wait_id": _text(contract.get("wait_id")),
         "source_node_id": _text(contract.get("source_node_id")),
         "target_node_id": _text(contract.get("target_node_id")),
         "contract_fingerprint": _text(contract.get("contract_fingerprint")),
+        "broker_contract_fingerprint": _text(
+            broker.get("contract_fingerprint")
+        ),
+        "broker_semantic_status": (
+            _broker.STATUS_INDETERMINATE if broker else ""
+        ),
         "attempt_count": 0,
         "coverage_complete": False,
         "observation_window_completed": False,
@@ -284,6 +371,19 @@ def _blocked_receipt(
     }
     receipt["receipt_id"] = "event_wait_" + _fingerprint(receipt)[:24]
     return receipt
+
+
+def _broker_receipt_projection(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in _dict(result).items()
+        if key
+        not in {
+            "status",
+            "reason_codes",
+            "unresolved_binding_fingerprints",
+        }
+    }
 
 
 def execute_event_transition(
@@ -354,6 +454,7 @@ def execute_event_transition(
     attempts: list[dict[str, Any]] = []
     events_by_id: dict[str, dict[str, Any]] = {}
     event_id_payloads: dict[str, str] = {}
+    broker_observation_rows: list[dict[str, Any]] = []
     event_id_reuse_conflicts = 0
     idempotency_mismatches = 0
     retry_limit_violations = 0
@@ -381,6 +482,8 @@ def execute_event_transition(
         matching_rows_seen += len(correlated)
         newly_unique = 0
         for row in correlated:
+            observed_row = {**row, "poll_number": attempt_number}
+            broker_observation_rows.append(observed_row)
             raw_id = str(row.get("event_id"))
             payload_fp = _text(row.get("payload_fingerprint"))
             if raw_id in events_by_id:
@@ -388,7 +491,7 @@ def execute_event_transition(
                 if event_id_payloads.get(raw_id) != payload_fp:
                     event_id_reuse_conflicts += 1
                 continue
-            events_by_id[raw_id] = row
+            events_by_id[raw_id] = observed_row
             event_id_payloads[raw_id] = payload_fp
             newly_unique += 1
             if idempotency_key and str(row.get("idempotency_value")) != str(
@@ -417,40 +520,59 @@ def execute_event_transition(
     unique_count = len(events_by_id)
     minimum = int(spec.get("expected_min_count") or 0)
     maximum = int(spec.get("expected_max_count") or 0)
-    coverage_complete = bool(
+    base_coverage_complete = bool(
         len(attempts) == max_attempts
         and successful_polls == len(attempts)
         and invalid_collection_count == 0
     )
-    semantic_status = "PASS"
-    reason_code = ""
-    if not coverage_complete:
-        semantic_status = "INDETERMINATE"
-        reason_code = EVENT_OBSERVATION_INCOMPLETE
-    elif event_id_reuse_conflicts:
-        semantic_status = "VIOLATION"
-        reason_code = EVENT_ID_REUSE_CONFLICT
-    elif idempotency_mismatches:
-        semantic_status = "VIOLATION"
-        reason_code = EVENT_IDEMPOTENCY_KEY_MISMATCH
-    elif retry_limit_violations:
-        semantic_status = "VIOLATION"
-        reason_code = EVENT_RETRY_LIMIT_EXCEEDED
-    elif unique_count < minimum:
-        semantic_status = "VIOLATION"
-        reason_code = EVENT_DELIVERY_COUNT_BELOW_MINIMUM
-    elif unique_count > maximum:
-        semantic_status = "VIOLATION"
-        reason_code = EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM
+    broker_result = _broker.evaluate_broker_delivery_window(
+        contract=_dict(spec.get("broker_delivery_contract")),
+        rows=broker_observation_rows,
+        unique_rows=list(events_by_id.values()),
+        bindings=bindings,
+    )
+    broker_status = _text(broker_result.get("status"))
+    broker_reason_codes = [
+        _text(value)
+        for value in _list(broker_result.get("reason_codes"))
+        if _text(value)
+    ]
 
-    # A measured violation is a completed observation and must reach the Oracle.
-    # Only unresolved/incomplete evidence blocks the target transport.
+    semantic_status = "PASS"
+    reason_codes: list[str] = []
+    if not base_coverage_complete:
+        semantic_status = "INDETERMINATE"
+        reason_codes.append(EVENT_OBSERVATION_INCOMPLETE)
+    elif broker_status == _broker.STATUS_INDETERMINATE:
+        semantic_status = "INDETERMINATE"
+        reason_codes.extend(broker_reason_codes or [BROKER_METADATA_INCOMPLETE])
+    else:
+        if event_id_reuse_conflicts:
+            reason_codes.append(EVENT_ID_REUSE_CONFLICT)
+        if idempotency_mismatches:
+            reason_codes.append(EVENT_IDEMPOTENCY_KEY_MISMATCH)
+        if retry_limit_violations:
+            reason_codes.append(EVENT_RETRY_LIMIT_EXCEEDED)
+        if broker_status == _broker.STATUS_VIOLATION:
+            reason_codes.extend(broker_reason_codes)
+        if unique_count < minimum:
+            reason_codes.append(EVENT_DELIVERY_COUNT_BELOW_MINIMUM)
+        if unique_count > maximum:
+            reason_codes.append(EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM)
+        if reason_codes:
+            semantic_status = "VIOLATION"
+
+    reason_codes = list(dict.fromkeys(reason_codes))
+    reason_code = reason_codes[0] if reason_codes else ""
     observation_complete = semantic_status in {"PASS", "VIOLATION"}
+    broker_projection = _broker_receipt_projection(broker_result)
+    broker_contract = _dict(spec.get("broker_delivery_contract"))
     receipt = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "status": STATUS_CONVERGED if observation_complete else STATUS_BLOCKED,
         "semantic_status": semantic_status,
         "reason_code": reason_code,
+        "semantic_reason_codes": reason_codes,
         "wait_id": _text(spec.get("wait_id")),
         "source_node_id": _text(spec.get("source_node_id")),
         "target_node_id": _text(spec.get("target_node_id")),
@@ -473,9 +595,18 @@ def execute_event_transition(
         "event_id_reuse_conflict_count": event_id_reuse_conflicts,
         "idempotency_mismatch_count": idempotency_mismatches,
         "retry_limit_violation_count": retry_limit_violations,
+        "broker_contract_fingerprint": _text(
+            broker_contract.get("contract_fingerprint")
+        ),
+        "broker_semantic_status": broker_status if broker_contract else "",
+        "broker_reason_codes": broker_reason_codes,
+        "broker_evidence": broker_projection if broker_contract else {},
         "successful_poll_count": successful_polls,
         "attempt_count": len(attempts),
-        "coverage_complete": coverage_complete,
+        "coverage_complete": (
+            base_coverage_complete
+            and broker_status != _broker.STATUS_INDETERMINATE
+        ),
         "observation_window_completed": len(attempts) == max_attempts,
         "correlation_fingerprint": _fingerprint(correlation),
         "idempotency_key_fingerprint": (
@@ -510,6 +641,18 @@ __all__ = [
     "EVENT_ID_REUSE_CONFLICT",
     "EVENT_IDEMPOTENCY_KEY_MISMATCH",
     "EVENT_RETRY_LIMIT_EXCEEDED",
+    "BROKER_DELIVERY_INVALID",
+    "BROKER_EXPECTATION_BINDING_UNRESOLVED",
+    "BROKER_METADATA_INCOMPLETE",
+    "BROKER_TOPIC_MISMATCH",
+    "BROKER_CONSUMER_GROUP_MISMATCH",
+    "BROKER_PARTITION_OFFSET_CONFLICT",
+    "BROKER_CHECKPOINT_CONFLICT",
+    "BROKER_CHECKPOINT_REGRESSION",
+    "BROKER_CHECKPOINT_BEHIND_OBSERVED",
+    "BROKER_DLQ_DELIVERY_UNEXPECTED",
+    "BROKER_SEQUENCE_ORDER_VIOLATION",
+    "BROKER_RESTART_DEDUPLICATION_VIOLATION",
     "has_event_transition",
     "compile_event_transition_contract",
     "execute_event_transition",
