@@ -251,8 +251,11 @@ def reconcile_typed_fact_conflicts(
         fact
         for fact in all_facts
         if _text(fact.get("fact_id"))
-        and _text(fact.get("status") or "ACCEPTED") in _ACTIVE_STATUSES
+        and _text(fact.get("status")) in _ACTIVE_STATUSES
     ]
+    statusless_fact_count = sum(
+        1 for fact in all_facts if _text(fact.get("fact_id")) and not _text(fact.get("status"))
+    )
     conflicts = [
         *_condition_conflicts(active_facts),
         *_value_conflicts(active_facts, "FORMULA_CONSTRAINT", ("lhs", "rhs")),
@@ -284,6 +287,8 @@ def reconcile_typed_fact_conflicts(
         "status": "BLOCKED" if conflicts else "PASS",
         "fact_count_before_reconciliation": len(all_facts),
         "active_fact_count": len(active_facts),
+        "statusless_fact_count": statusless_fact_count,
+        "statusless_fact_defaulted_to_accepted": False,
         "fact_count_after_reconciliation": len(all_facts),
         "all_fact_statuses_preserved": True,
         "conflict_count": len(conflicts),
