@@ -4,6 +4,9 @@ from typing import Any
 
 import pytest
 
+# The product composition installs stable event receipt identity, cardinality,
+# reason-code and execution-outcome bridges on the one public runtime authority.
+from ai_test_asset_center import discovery_runtime as _runtime_install  # noqa: F401
 from ai_test_asset_center import formal_event_surface as events
 from ai_test_asset_center.formal_event_pre_cleanup import (
     _pre_observe_event,
@@ -106,17 +109,31 @@ def test_event_protocol_compiles_source_grounded_contract() -> None:
         compile_experiment_for_obligation,
     )
 
+    operation_ref = "bir_op_read_event_trigger"
     obligation = {
         "obligation_id": "obl_event_1",
         "risk_family": events.RISK_FAMILY,
+        "required_operations": [operation_ref],
+        "required_actors": ["actor_public"],
+        "required_observers": [events.OBSERVER_ID],
+        "property": {
+            "template": events.PROTOCOL_TEMPLATE,
+            "invariant_ref": "inv_order_created_event",
+            "operation_ref": operation_ref,
+            "actor_ref": "actor_public",
+            "event_contract": _event_contract(),
+            "formal_event_binding_identity": _binding_identity(),
+        },
         "source_refs": [_source_ref()],
-        "formal_event_contract": _event_contract(),
-        "formal_event_binding_identity": _binding_identity(),
     }
     behavior_ir = {
-        "actors": [{"id": "actor_public", "role": "public"}],
+        "actors": [{
+            "id": "actor_public",
+            "role": "public",
+            "status": "accepted",
+        }],
         "operations": [{
-            "id": "bir_op_read_event_trigger",
+            "id": operation_ref,
             "operation_id": "read_event_trigger",
             "source_operation_refs": ["read_event_trigger"],
             "method": "GET",
@@ -127,6 +144,8 @@ def test_event_protocol_compiles_source_grounded_contract() -> None:
     experiment = compile_experiment_for_obligation(
         obligation,
         behavior_ir=behavior_ir,
+        environment_type="test",
+        available_adapters={"http_api", events.ADAPTER},
     )
     assert experiment["compile_receipt"]["status"] == "COMPILED"
     assert events.ADAPTER in experiment["compiled_adapters"]
