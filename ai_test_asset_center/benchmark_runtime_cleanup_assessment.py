@@ -168,6 +168,27 @@ def _receipt_rows(observations: dict[str, Any], key: str) -> list[dict[str, Any]
     return [dict(row) for row in _list(value) if isinstance(row, dict)]
 
 
+def _execution_counters_valid(receipt: dict[str, Any]) -> bool:
+    fields = [
+        key
+        for key in ("rows_deleted", "rows_updated")
+        if key in receipt
+    ]
+    if not fields:
+        return False
+    for field in fields:
+        value = receipt.get(field)
+        if isinstance(value, bool):
+            return False
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return False
+        if parsed < 0:
+            return False
+    return True
+
+
 def _valid_cleaned_adapter_receipt(receipt: dict[str, Any]) -> bool:
     mode = _text(receipt.get("mode"))
     return bool(
@@ -178,9 +199,7 @@ def _valid_cleaned_adapter_receipt(receipt: dict[str, Any]) -> bool:
         and _text(receipt.get("identity_column"))
         and _text(receipt.get("ownership_basis"))
         and mode in {"row_delete", "adapter_row_delete", "field_restore"}
-        and _safe_int(receipt.get("rows_deleted"))
-        + _safe_int(receipt.get("rows_updated"))
-        >= 0
+        and _execution_counters_valid(receipt)
     )
 
 
