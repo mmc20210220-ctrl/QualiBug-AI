@@ -20,9 +20,9 @@ from .identity_structural_review import (
     DECISION_KIND as IDENTITY_STRUCTURAL_REVIEW_DECISION_KIND,
     REVIEW_QUEUE_SCHEMA as IDENTITY_STRUCTURAL_REVIEW_QUEUE_SCHEMA,
     REVIEW_RECEIPT_SCHEMA as IDENTITY_STRUCTURAL_REVIEW_RECEIPT_SCHEMA,
-    get_identity_structural_review_queue,
     record_identity_structural_review_decision,
 )
+from .identity_structural_review_query import get_identity_structural_review_queue
 from .implementation_binding import (
     IMPLEMENTATION_BINDING_GATE_SCHEMA,
     IMPLEMENTATION_BINDING_SCHEMA,
