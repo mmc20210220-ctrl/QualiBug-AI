@@ -44,100 +44,53 @@ jobs:
               raise SystemExit('\n'.join(failures))
           print('Python syntax check passed')
           PY
+      - name: Validate backend test manifest
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+
+          manifest = Path('.github/quality-gates-backend-tests.txt')
+          if not manifest.is_file():
+              raise SystemExit('backend test manifest missing')
+          entries = [
+              line.strip()
+              for line in manifest.read_text(encoding='utf-8').splitlines()
+              if line.strip() and not line.lstrip().startswith('#')
+          ]
+          duplicates = sorted(
+              path for path, count in Counter(entries).items() if count > 1
+          )
+          missing = sorted(path for path in entries if not Path(path).is_file())
+          invalid = sorted(
+              path
+              for path in entries
+              if not path.startswith('tests/test_') or not path.endswith('.py')
+          )
+          issues = []
+          if not entries:
+              issues.append('backend test manifest is empty')
+          if duplicates:
+              issues.append('duplicate tests: ' + ', '.join(duplicates))
+          if missing:
+              issues.append('missing tests: ' + ', '.join(missing))
+          if invalid:
+              issues.append('invalid test paths: ' + ', '.join(invalid))
+          if issues:
+              raise SystemExit('\n'.join(issues))
+          print(f'Backend test manifest valid: {len(entries)} files')
+          PY
       - name: Install runtime and test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
       - name: Run backend, guardrail, and evidence truthfulness gates
         run: |
-          python -m pytest \
-            tests/test_backend_main_auth.py \
-            tests/test_backend_main_enterprise_api.py \
-            tests/test_backend_main_access_policy.py \
-            tests/test_backend_main_jwt_identity_policy.py \
-            tests/test_phase104c_api_contract_acceptance.py \
-            tests/test_core_engine_evidence_truthfulness.py \
-            tests/test_observer_evidence_truthfulness.py \
-            tests/test_customer_delivery_gate_v2_cleanup.py \
-            tests/test_family_experiment_protocols.py \
-            tests/test_typed_observer_authorization.py \
-            tests/test_nonproduction_write_contract.py \
-            tests/test_behavior_ir_source_relationships.py \
-            tests/test_behavior_ir_obligation_experiment.py \
-            tests/test_discovery_evaluation_contract.py \
-            tests/test_reasoner_hypothesis_guardrail.py \
-            tests/test_reasoner_static_guardrails.py \
-            tests/test_reasoner_prompt_contract.py \
-            tests/test_reasoner_quality_report.py \
-            tests/test_reasoner_report_wiring.py \
-            tests/test_render_reasoner_quality_report.py \
-            tests/test_enforce_reasoner_quality_threshold.py \
-            tests/test_execution_evidence_report.py \
-            tests/test_render_execution_evidence_report.py \
-            tests/test_enforce_execution_evidence_threshold.py \
-            tests/test_confirmed_bug_gate.py \
-            tests/test_render_confirmed_bug_evidence_report.py \
-            tests/test_enforce_confirmed_bug_evidence_threshold.py \
-            tests/test_end_to_end_bug_promotion_chain.py \
-            tests/test_bug_risk_scoring.py \
-            tests/test_render_bug_risk_report.py \
-            tests/test_reasoner_hypothesis_quality.py \
-            tests/test_discovery_execution_chain.py \
-            tests/test_discovery_verifier_evidence.py \
-            tests/test_phase109_incremental_behavior_slices.py \
-            tests/test_phase109_behavior_slice_policy_registry.py \
-            tests/test_phase110_enterprise_campaign.py \
-            tests/test_phase110_unified_scan_contract.py \
-            tests/test_phase110_enterprise_source_registry.py \
-            tests/test_phase110_evidence_artifact_store.py \
-            tests/test_phase110_browser_execution_contract.py \
-            tests/test_phase110_test_data_receipts.py \
-            tests/test_phase110_execution_approvals.py \
-            tests/test_phase110_v12_execution_approval.py \
-            tests/test_phase110_scan_execution_approval.py \
-            tests/test_phase110_release_gate.py \
-            tests/test_phase111_enterprise_access_policy.py \
-            tests/test_phase111_change_impact.py \
-            tests/test_phase111_connector_source_ingestion.py \
-            tests/test_phase111_delivery_package.py \
-            tests/test_v150_multi_step_protocol.py \
-            tests/test_process_graph_runtime.py \
-            tests/test_process_graph_plan_executor.py \
-            tests/test_process_graph_write_cleanup.py \
-            tests/test_process_graph_write_fail_closed.py \
-            tests/test_process_graph_target_preflight.py \
-            tests/test_process_graph_rollback_contract.py \
-            tests/test_process_graph_write_rollback_integration.py \
-            tests/test_process_graph_dependency_rollback.py \
-            tests/test_process_graph_multi_write_equivalence.py \
-            tests/test_process_graph_cleanup_equivalence_scope.py \
-            tests/test_process_graph_environment_receipt_truth.py \
-            tests/test_process_graph_event_transition.py \
-            tests/test_process_graph_event_transition_scope.py \
-            tests/test_process_graph_event_transition_ledger.py \
-            tests/test_process_graph_async_transition_oracle.py \
-            tests/test_process_graph_broker_delivery.py \
-            tests/test_process_graph_broker_oracle.py \
-            tests/test_process_graph_experiment_contract.py \
-            tests/test_process_graph_event_finalizer_scope.py \
-            tests/test_compiled_http_observer_bundle_scope.py \
-            tests/test_experiment_cleanup_lifecycle_adapter.py \
-            tests/test_adapter_cleanup_runtime_identity.py \
-            tests/test_architecture_extraction_contracts.py \
-            tests/test_identity_annotation_tasks.py \
-            tests/test_identity_annotation_package_identity.py \
-            tests/test_identity_annotation_operator.py \
-            tests/test_identity_annotation_http_contract.py \
-            tests/test_identity_field_evidence.py \
-            tests/test_identity_structural_evidence.py \
-            tests/test_identity_benchmark_cli.py \
-            tests/test_identity_benchmark_regression.py \
-            tests/test_identity_benchmark_repository.py \
-            tests/test_identity_benchmark_workflow.py \
-            tests/test_private_pilot_identity_benchmark_handlers.py \
-            tests/test_identity_benchmark_composition_order.py \
-            tests/test_identity_benchmark_http_busy_contract.py \
-            -q
+          mapfile -t test_files < <(
+            grep -Ev '^[[:space:]]*(#|$)' \
+              .github/quality-gates-backend-tests.txt
+          )
+          python -m pytest "${test_files[@]}" -q
 
   frontend-quality:
     name: Frontend typecheck and lint
