@@ -1,0 +1,142 @@
+name: One-time Chinese explicit fact root fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/chinese-explicit-fact-root-fix-trigger"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-chinese-explicit-fact-root-fix
+  cancel-in-progress: false
+
+jobs:
+  apply-test-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Verify and decode root fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_B64=.github/patches/chinese_explicit_fact_root_fix.patch.gz.b64
+          echo "c3591127bf576c3485ac8103374e390a548947c76fa0d57589c7c34b89b725e6  ${PATCH_B64}" | sha256sum -c -
+          base64 -d "${PATCH_B64}" | gzip -d > /tmp/chinese-explicit-fact-root-fix.patch
+          echo "4f133af1bb0a00149ca3fc42c09a668c77b3a095bab558e53b39b0974351cc32  /tmp/chinese-explicit-fact-root-fix.patch" | sha256sum -c -
+
+      - name: Apply against latest main with conflict detection
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --3way --check /tmp/chinese-explicit-fact-root-fix.patch
+          git apply --3way /tmp/chinese-explicit-fact-root-fix.patch
+          git diff --check
+
+      - name: Verify exact Chinese explicit fact scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected-files.txt <<'EOF'
+          ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_evidence_policy.py
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/typed_fact_authority.py
+          benchmark_evaluator/enterprise_understanding/fact_slot_document.py
+          benchmark_evaluator/enterprise_understanding/fact_slots.py
+          tests/test_chinese_business_comprehension.py
+          tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py
+          tests/test_enterprise_understanding_explicit_fact_commit_status.py
+          tests/test_enterprise_understanding_fact_slots.py
+          tests/test_enterprise_understanding_post_compile_governance.py
+          tests/test_enterprise_understanding_structure_first_facts.py
+          tests/test_enterprise_understanding_typed_fact_authority.py
+          EOF
+          git status --short | awk '{print $2}' | grep -v '^.github/' | sort > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile Chinese explicit fact authorities
+        run: |
+          python -m compileall -q \
+            ai_test_asset_center/enterprise_knowledge_center \
+            benchmark_evaluator/enterprise_understanding
+
+      - name: Run focused Chinese explicit fact suite
+        run: |
+          python -m pytest -q \
+            tests/test_chinese_business_comprehension.py \
+            tests/test_enterprise_understanding_structure_first_facts.py \
+            tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py \
+            tests/test_enterprise_understanding_explicit_fact_bug_dependency.py \
+            tests/test_enterprise_understanding_explicit_fact_commit_status.py \
+            tests/test_enterprise_understanding_ground_truth_quarantine.py \
+            tests/test_enterprise_understanding_fact_probe_policy.py \
+            tests/test_enterprise_understanding_fact_slot_document.py \
+            tests/test_enterprise_understanding_fact_slots.py \
+            tests/test_enterprise_understanding_fact_slot_report.py \
+            tests/test_enterprise_understanding_post_compile_governance.py \
+            tests/test_enterprise_understanding_public_import_contract.py \
+            tests/test_enterprise_understanding_typed_fact_authority.py \
+            tests/test_enterprise_understanding_typed_relation_projection.py
+
+      - name: Run clean isolated end-to-end baseline
+        run: |
+          rm -rf "$RUNNER_TEMP/chinese-explicit-fact-workspace" "$RUNNER_TEMP/chinese-explicit-fact-result"
+          python -m benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline \
+            --workspace-root "$RUNNER_TEMP/chinese-explicit-fact-workspace" \
+            --output "$RUNNER_TEMP/chinese-explicit-fact-result"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "chinese-explicit-fact-result" / "chinese_explicit_fact_baseline_summary.json").read_text(encoding="utf-8")
+          )
+          metrics = summary["metrics"]
+          assert summary["status"] == "PASS", summary
+          assert metrics["annotated_fact_count"] == 16, metrics
+          assert metrics["exact_fact_count"] == 16, metrics
+          assert metrics["measured_slot_count"] == 71, metrics
+          assert metrics["exact_slot_count"] == 71, metrics
+          assert metrics["fact_recall"] == 1.0, metrics
+          assert metrics["slot_exact_accuracy"] == 1.0, metrics
+          assert metrics["p0_exact_fact_recall"] == 1.0, metrics
+          assert metrics["source_locator_exact_accuracy"] == 1.0, metrics
+          assert metrics["accepted_fact_precision"] == 1.0, metrics
+          assert metrics["false_accepted_fact_count"] == 0, metrics
+          PY
+
+      - name: Commit verified root fix to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/chinese-explicit-fact-root-fix-trigger \
+            .github/patches/chinese_explicit_fact_root_fix.patch.gz.b64 \
+            .github/workflows/one-time-chinese-explicit-fact-root-fix.yml
+          git config user.name "mmc20210220-ctrl"
+          git config user.email "mmc20210220@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(understanding): close Chinese explicit fact authority gaps"
+          git push origin HEAD:main
