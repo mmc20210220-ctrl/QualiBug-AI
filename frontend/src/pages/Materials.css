@@ -156,6 +156,48 @@
   overflow-wrap: anywhere;
 }
 
+.materials-health-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.materials-health-summary > div,
+.materials-health-summary > span {
+  display: grid;
+  gap: 4px;
+}
+
+.materials-health-summary strong {
+  font-size: 13px;
+}
+
+.materials-health-summary span {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.materials-health-summary.tone-success {
+  border-color: rgba(14, 165, 113, .24);
+  background: var(--success-muted);
+}
+
+.materials-health-summary.tone-warning {
+  border-color: rgba(217, 119, 6, .24);
+  background: var(--warning-muted);
+}
+
+.materials-health-summary.tone-danger {
+  border-color: rgba(217, 31, 69, .24);
+  background: var(--danger-muted);
+}
+
 .materials-operation-note {
   border-radius: var(--radius-xs);
   background: var(--primary-muted);
@@ -232,6 +274,32 @@
 
 .materials-form-wide {
   grid-column: 1 / -1;
+}
+
+.materials-scope-editor .form-group {
+  min-width: 0;
+}
+
+.materials-scope-editor textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.materials-scope-editor input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+}
+
+.materials-scope-preview {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .materials-choice-grid {

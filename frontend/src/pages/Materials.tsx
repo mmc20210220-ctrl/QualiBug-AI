@@ -14,6 +14,7 @@ import {
   type ConnectorManifest,
   type ConnectorResourceInventory,
   type KnowledgeConnectorActionResult,
+  type KnowledgeConnectorHealth,
   type KnowledgeConnectorRecord,
 } from '../api/knowledge-connectors';
 import { ConnectorAcceptancePanel } from '../components/ConnectorAcceptancePanel';
@@ -32,6 +33,10 @@ type KnowledgeSource = {
   status: string;
   version?: number;
 };
+
+type ScopeProperty = Record<string, unknown>;
+type ScopeValues = Record<string, unknown>;
+type ParsedScopeValues = { values: ScopeValues; error?: string };
 
 const DEFAULT_CONNECTOR_ID = 'connector-main';
 const DEFAULT_CONNECTOR_NAME = '在线资料连接器';
@@ -80,7 +85,53 @@ function syncCompletionMessage(prefix: string, result: KnowledgeConnectorActionR
   return `${prefix}，已读取 ${covered} 份在线资料。`;
 }
 
+function connectorHealthLabel(health?: KnowledgeConnectorHealth): string {
+  switch (health?.status) {
+    case 'HEALTHY': return '连接正常';
+    case 'SYNCING': return '正在更新';
+    case 'REAUTHORIZATION_REQUIRED': return '需要重新授权';
+    case 'PERMISSION_INSUFFICIENT': return '授权范围不足';
+    case 'AUTHORIZATION_EXPIRING': return '授权即将过期';
+    case 'STALE': return '资料需要更新';
+    case 'DUE': return '等待自动更新';
+    case 'NOT_SYNCED': return '等待首次更新';
+    case 'DOWNSTREAM_DEGRADED': return '资料已读取，语义刷新未完成';
+    case 'PARTIAL_COVERAGE': return '部分资料未读取';
+    case 'RETRYING': return '系统正在重试';
+    case 'DISABLED': return '连接已关闭';
+    case 'PAUSED': return '自动更新已暂停';
+    case 'DEGRADED': return '最近一次更新未完成';
+    default: return '健康状态待确认';
+  }
+}
+
+function connectorFreshnessLabel(health?: KnowledgeConnectorHealth): string {
+  switch (health?.freshness.status) {
+    case 'FRESH': return '资料保持最新';
+    case 'DUE': return '已到自动更新时间';
+    case 'STALE': return '资料新鲜度已过期';
+    default: return '尚未测得资料新鲜度';
+  }
+}
+
+function connectorHealthActionLabel(health?: KnowledgeConnectorHealth): string {
+  switch (health?.recommended_action) {
+    case 'RUN_SYNC': return '建议立即检查一次';
+    case 'RUN_CONNECTION_TEST': return '建议先验证连接';
+    case 'REAUTHORIZE_CONNECTOR': return '请重新授权';
+    case 'REVIEW_SEMANTIC_REFRESH': return '请检查语义刷新';
+    case 'REVIEW_UNSUPPORTED_RESOURCES': return '请查看未支持的资料类型';
+    case 'WAIT_FOR_AUTOMATIC_RETRY': return '系统会自动重试';
+    case 'WAIT_FOR_SYNC': return '系统完成后自动显示';
+    default: return '';
+  }
+}
+
 function connectorTone(connector: KnowledgeConnectorRecord): string {
+  const healthStatus = connector.health?.status;
+  if (healthStatus === 'REAUTHORIZATION_REQUIRED' || healthStatus === 'PERMISSION_INSUFFICIENT' || healthStatus === 'AUTHORIZATION_EXPIRING' || healthStatus === 'DOWNSTREAM_DEGRADED' || healthStatus === 'DEGRADED') return 'danger';
+  if (healthStatus === 'STALE' || healthStatus === 'DUE' || healthStatus === 'PARTIAL_COVERAGE' || healthStatus === 'RETRYING' || healthStatus === 'SYNCING') return 'warning';
+  if (healthStatus === 'HEALTHY') return 'success';
   if (connector.active_sync_epoch_id || connector.auto_sync?.state === 'running') return 'warning';
   if (connector.auto_sync?.maintenance_required_by_user || connector.connection_profile?.reauthorization_required) return 'danger';
   if (connector.auto_sync?.state === 'retrying') return 'warning';
@@ -90,6 +141,7 @@ function connectorTone(connector: KnowledgeConnectorRecord): string {
 }
 
 function connectorLabel(connector: KnowledgeConnectorRecord): string {
+  if (connector.health) return connectorHealthLabel(connector.health);
   if (connector.active_sync_epoch_id || connector.auto_sync?.state === 'running') return '正在自动更新';
   if (connector.auto_sync?.maintenance_required_by_user || connector.connection_profile?.reauthorization_required) {
     return connector.auto_sync?.message || '需要重新授权';
@@ -127,6 +179,98 @@ function scopeSchemaHint(manifest: ConnectorManifest | undefined): string {
     shorthand ? `支持格式：${shorthand}` : '',
     required.length > 0 ? `必填字段：${required.join('、')}` : '',
   ].filter(Boolean).join('；');
+}
+
+function scopeProperties(manifest: ConnectorManifest | undefined): Array<[string, ScopeProperty]> {
+  const properties = asRecord(asRecord(manifest?.scope_schema).properties);
+  return Object.entries(properties).map(([name, value]) => [name, asRecord(value)]);
+}
+
+function isObjectScope(manifest: ConnectorManifest | undefined): boolean {
+  return asString(asRecord(manifest?.scope_schema).type) === 'object'
+    && scopeProperties(manifest).length > 0;
+}
+
+function defaultScopeValues(manifest: ConnectorManifest | undefined): ScopeValues {
+  const values: ScopeValues = {};
+  for (const [name, property] of scopeProperties(manifest)) {
+    if (Object.prototype.hasOwnProperty.call(property, 'default')) {
+      values[name] = property.default;
+      continue;
+    }
+    const type = asString(property.type);
+    values[name] = type === 'array' ? [] : type === 'boolean' ? false : '';
+  }
+  return values;
+}
+
+function parseScopeValues(manifest: ConnectorManifest | undefined, raw: string): ParsedScopeValues {
+  const defaults = defaultScopeValues(manifest);
+  if (!isObjectScope(manifest)) return { values: defaults };
+  const shorthand = raw.trim();
+  if (shorthand.startsWith('http://') || shorthand.startsWith('https://')) {
+    const required = asArray(asRecord(manifest?.scope_schema).required)
+      .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+    const target = required.find((name) => {
+      const property = scopeProperties(manifest).find(([key]) => key === name)?.[1];
+      return asString(property?.type) === 'array' || asString(property?.type) === 'string';
+    });
+    if (target) {
+      const property = scopeProperties(manifest).find(([name]) => name === target)?.[1];
+      return {
+        values: {
+          ...defaults,
+          [target]: asString(property?.type) === 'array' ? [shorthand] : shorthand,
+        },
+      };
+    }
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { values: { ...defaults, ...(parsed as ScopeValues) } };
+    }
+  } catch {
+    return {
+      values: defaults,
+      error: '已保存的资料范围不是有效的 JSON；请修正范围后再保存。',
+    };
+  }
+  return {
+    values: defaults,
+    error: '已保存的资料范围不是对象格式；请按 Manifest 字段重新填写。',
+  };
+}
+
+function serializeScope(
+  manifest: ConnectorManifest | undefined,
+  values: ScopeValues,
+  raw: string,
+): string {
+  if (!isObjectScope(manifest)) return raw.trim();
+  const properties = Object.fromEntries(
+    Object.entries(values)
+      .filter(([, value]) => (
+        value !== undefined
+        && value !== null
+        && value !== ''
+        && (!Array.isArray(value) || value.length > 0)
+      )),
+  );
+  return JSON.stringify(properties);
+}
+
+function missingRequiredScopeFields(
+  manifest: ConnectorManifest | undefined,
+  values: ScopeValues,
+): string[] {
+  const required = asArray(asRecord(manifest?.scope_schema).required)
+    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  return required.filter((name) => {
+    const value = values[name];
+    return value === undefined || value === null || value === ''
+      || (Array.isArray(value) && value.length === 0);
+  });
 }
 
 function ConnectorResourcePreview({ preview }: { preview?: ConnectorResourceInventory }) {
@@ -172,6 +316,8 @@ export function Materials() {
   const [editingId, setEditingId] = useState('');
   const [connectorType, setConnectorType] = useState('');
   const [resourceScope, setResourceScope] = useState('');
+  const [scopeValues, setScopeValues] = useState<ScopeValues>({});
+  const [scopeParseError, setScopeParseError] = useState('');
   const [authMode, setAuthMode] = useState('');
   const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -245,6 +391,8 @@ export function Materials() {
     const firstManifest = manifests[0];
     setConnectorType(firstManifest?.connector_type || '');
     setResourceScope(scopePresets(firstManifest)[0] || '');
+    setScopeValues(defaultScopeValues(firstManifest));
+    setScopeParseError('');
     setAuthMode(firstManifest?.auth_modes[0] || '');
     setCredentialValues({});
   };
@@ -258,6 +406,10 @@ export function Materials() {
     setEditingId(connector.connector_instance_id);
     setConnectorType(connector.connector_type);
     setResourceScope(connector.resource_scope);
+    const manifest = manifests.find((item) => item.connector_type === connector.connector_type);
+    const parsedScope = parseScopeValues(manifest, connector.resource_scope);
+    setScopeValues(parsedScope.values);
+    setScopeParseError(parsedScope.error || '');
     const mode = connector.connection_profile?.auth_mode
       || manifests.find((manifest) => manifest.connector_type === connector.connector_type)?.auth_modes[0]
       || '';
@@ -284,13 +436,22 @@ export function Materials() {
 
   const saveAndStart = async () => {
     if (!project) return;
-    const scope = resourceScope.trim();
+    if (scopeParseError) {
+      toast.show(scopeParseError, 'warning');
+      return;
+    }
+    const scope = serializeScope(selectedManifest, scopeValues, resourceScope);
     if (!scope) {
       toast.show('请选择同步范围，或填写Manifest声明的范围值。', 'warning');
       return;
     }
     if (!selectedManifest) {
       toast.show('请先选择一个可用的连接器类型。', 'warning');
+      return;
+    }
+    const missingScopeFields = missingRequiredScopeFields(selectedManifest, scopeValues);
+    if (missingScopeFields.length > 0) {
+      toast.show(`请填写范围必填字段：${missingScopeFields.join('、')}`, 'warning');
       return;
     }
     if (!credentialsReady()) {
@@ -436,6 +597,8 @@ export function Materials() {
               const needsHelp = Boolean(
                 connector.auto_sync?.maintenance_required_by_user
                 || connector.connection_profile?.reauthorization_required
+                || connector.health?.status === 'PERMISSION_INSUFFICIENT'
+                || connector.health?.status === 'AUTHORIZATION_EXPIRING'
                 || !connector.connection_profile?.credentials_configured,
               );
               return (
@@ -455,6 +618,21 @@ export function Materials() {
                     <div><span>最近失败</span><strong>{formatTime(connector.last_failed_sync_at_utc, '暂无记录')}</strong></div>
                     <div><span>授权状态</span><strong>{needsHelp ? '需要处理' : '正常'}</strong></div>
                   </div>
+
+                  {connector.health && (
+                    <div className={`materials-health-summary tone-${connectorTone(connector)}`}>
+                      <div>
+                        <strong>{connectorHealthLabel(connector.health)}</strong>
+                        <span>{connectorFreshnessLabel(connector.health)}</span>
+                      </div>
+                      <span>
+                        {connector.health.evidence.measured ? '已根据同步收据核验' : '等待首次同步收据'}
+                        {connectorHealthActionLabel(connector.health)
+                          ? ` · ${connectorHealthActionLabel(connector.health)}`
+                          : ''}
+                      </span>
+                    </div>
+                  )}
 
                   {connector.last_failed_sync_epoch_id && (
                     <div className="materials-operation-note">
@@ -544,6 +722,8 @@ export function Materials() {
                   setConnectorType(next);
                   setAuthMode(manifest?.auth_modes[0] || '');
                   setResourceScope(scopePresets(manifest)[0] || '');
+                  setScopeValues(defaultScopeValues(manifest));
+                  setScopeParseError('');
                   setCredentialValues({});
                 }}
               >
@@ -597,7 +777,10 @@ export function Materials() {
             </div>
           </div>
 
-          <div className="materials-form-grid">
+          {scopeParseError && <div className="materials-alert tone-danger">{scopeParseError}</div>}
+
+          {!isObjectScope(selectedManifest) && (
+            <div className="materials-form-grid">
             {scopePresets(selectedManifest).length > 0 && (
               <label className="form-group">
                 <span className="form-label">范围预设</span>
@@ -611,7 +794,82 @@ export function Materials() {
               <input className="form-input form-input-mono" value={resourceScope} onChange={(event: ChangeEvent<HTMLInputElement>) => setResourceScope(event.target.value)} placeholder="填写Manifest声明的范围值" />
               {scopeSchemaHint(selectedManifest) && <small>{scopeSchemaHint(selectedManifest)}</small>}
             </label>
-          </div>
+            </div>
+          )}
+
+          {isObjectScope(selectedManifest) && (
+            <div className="materials-form-grid materials-scope-editor">
+              {scopeProperties(selectedManifest).map(([name, property]) => {
+                const required = asArray(asRecord(selectedManifest?.scope_schema).required)
+                  .includes(name);
+                const type = asString(property.type);
+                const format = asString(property.format);
+                const value = scopeValues[name];
+                const enumValues = asArray(property.enum)
+                  .filter((item): item is string => typeof item === 'string');
+                const setValue = (next: unknown) => {
+                  setScopeValues((current) => ({ ...current, [name]: next }));
+                };
+                return (
+                  <label className="form-group" key={name}>
+                    <span className="form-label">{name}{required ? ' *' : ''}</span>
+                    {enumValues.length > 0 ? (
+                      <select
+                        className="form-input"
+                        value={asString(value)}
+                        onChange={(event) => setValue(event.target.value)}
+                      >
+                        <option value="">请选择</option>
+                        {enumValues.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    ) : type === 'array' ? (
+                      <textarea
+                        className="form-input form-input-mono"
+                        rows={3}
+                        value={Array.isArray(value) ? value.join('\n') : ''}
+                        onChange={(event) => setValue(
+                          event.target.value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean),
+                        )}
+                        placeholder="每行填写一个值"
+                      />
+                    ) : type === 'boolean' ? (
+                      <input
+                        type="checkbox"
+                        checked={value === true}
+                        onChange={(event) => setValue(event.target.checked)}
+                      />
+                    ) : (
+                      <input
+                        className="form-input"
+                        type={type === 'integer' || type === 'number' ? 'number' : format === 'uri' ? 'url' : 'text'}
+                        min={asNumber(property.minimum)}
+                        max={asNumber(property.maximum)}
+                        step={type === 'integer' ? 1 : type === 'number' ? 'any' : undefined}
+                        value={typeof value === 'number' ? value : asString(value)}
+                        onChange={(event) => setValue(
+                          type === 'integer' || type === 'number'
+                            ? (event.target.value === '' ? '' : Number(event.target.value))
+                            : event.target.value,
+                        )}
+                      />
+                    )}
+                    {asString(property.description) && <small>{asString(property.description)}</small>}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          {isObjectScope(selectedManifest) && (
+            <details className="materials-advanced">
+              <summary>高级范围预览</summary>
+              <div className="materials-advanced-field">
+                <pre className="materials-scope-preview">
+                  {serializeScope(selectedManifest, scopeValues, resourceScope) || '{}'}
+                </pre>
+              </div>
+            </details>
+          )}
 
           <details className="materials-advanced">
             <summary>高级资料范围</summary>
