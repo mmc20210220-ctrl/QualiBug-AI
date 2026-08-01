@@ -3,8 +3,8 @@
 The runtime publishes exact-step event transition receipts and the
 ProcessStepLedger remains the timeline authority. This module projects those
 immutable receipts into the existing Observer/Assertion DSL so measured
-message, callback, retry and idempotency violations become Oracle violations
-rather than harness failures.
+message, callback, retry, idempotency, and broker-delivery violations become
+Oracle violations rather than harness failures.
 """
 from __future__ import annotations
 
@@ -50,6 +50,37 @@ def _declared_event_contracts(
     return contracts
 
 
+def _broker_projection(receipt: dict[str, Any]) -> dict[str, Any]:
+    evidence = _dict(receipt.get("broker_evidence"))
+    allowed = (
+        "contract_fingerprint",
+        "broker_model",
+        "metadata_incomplete_count",
+        "topic_mismatch_count",
+        "consumer_group_mismatch_count",
+        "partition_count",
+        "observed_offset_count",
+        "partition_offset_conflict_count",
+        "checkpoint_conflict_count",
+        "checkpoint_regression_count",
+        "checkpoint_behind_observed_count",
+        "dlq_delivery_count",
+        "unexpected_dlq_delivery_count",
+        "sequence_order_violation_count",
+        "restart_replay_count",
+        "restart_duplicate_effect_count",
+        "topic_fingerprints",
+        "consumer_group_fingerprints",
+        "consumer_epoch_fingerprints",
+        "checkpoint_state_fingerprint",
+    )
+    return {
+        key: evidence[key]
+        for key in allowed
+        if key in evidence
+    }
+
+
 def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
     """Project exactly one runtime receipt per compile-frozen event target."""
     from .observer_contracts_base import _receipt
@@ -82,6 +113,11 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
             issues.append(f"{target}:receipt_count={len(receipts)}")
             continue
         receipt = receipts[0]
+        declared_broker = _dict(contract.get("broker_delivery_contract"))
+        broker_scope_mismatch = bool(declared_broker) and (
+            _text(receipt.get("broker_contract_fingerprint"))
+            != _text(declared_broker.get("contract_fingerprint"))
+        )
         if (
             _text(receipt.get("schema_version")) != RECEIPT_SCHEMA_VERSION
             or _text(receipt.get("contract_fingerprint"))
@@ -89,9 +125,17 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
             or _text(receipt.get("source_node_id"))
             != _text(contract.get("source_node_id"))
             or _text(receipt.get("target_node_id")) != target
+            or broker_scope_mismatch
         ):
             issues.append(f"{target}:receipt_contract_scope_mismatch")
             continue
+        semantic_reason_codes = [
+            _text(value)
+            for value in _list(receipt.get("semantic_reason_codes"))
+            if _text(value)
+        ]
+        if not semantic_reason_codes and _text(receipt.get("reason_code")):
+            semantic_reason_codes = [_text(receipt.get("reason_code"))]
         rows.append(
             {
                 "step_id": target,
@@ -106,6 +150,7 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
                     receipt.get("semantic_status")
                 ).upper(),
                 "reason_code": _text(receipt.get("reason_code")),
+                "semantic_reason_codes": semantic_reason_codes,
                 "coverage_complete": (
                     receipt.get("coverage_complete") is True
                 ),
@@ -128,6 +173,18 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
                 "retry_limit_violation_count": int(
                     receipt.get("retry_limit_violation_count") or 0
                 ),
+                "broker_contract_fingerprint": _text(
+                    receipt.get("broker_contract_fingerprint")
+                ),
+                "broker_semantic_status": _text(
+                    receipt.get("broker_semantic_status")
+                ).upper(),
+                "broker_reason_codes": [
+                    _text(value)
+                    for value in _list(receipt.get("broker_reason_codes"))
+                    if _text(value)
+                ],
+                "broker_evidence": _broker_projection(receipt),
                 "receipt_id": _text(receipt.get("receipt_id")),
             }
         )
@@ -222,11 +279,24 @@ def evaluate_process_async_completion(
         if _text(row.get("semantic_status")) == "VIOLATION"
     ]
     if violations:
-        first = violations[0]
+        all_reason_codes = list(
+            dict.fromkeys(
+                _text(reason)
+                for row in violations
+                for reason in (
+                    _list(row.get("semantic_reason_codes"))
+                    or [_text(row.get("reason_code"))]
+                )
+                if _text(reason)
+            )
+        )
         return {
             "passed": False,
-            "reason_code": _text(first.get("reason_code"))
-            or "PROCESS_GRAPH_ASYNC_TRANSITION_VIOLATION",
+            "reason_code": (
+                all_reason_codes[0]
+                if all_reason_codes
+                else "PROCESS_GRAPH_ASYNC_TRANSITION_VIOLATION"
+            ),
             "expected": {
                 "all_async_transitions": "PASS",
                 "transition_count": len(transitions),
@@ -235,9 +305,15 @@ def evaluate_process_async_completion(
                 "violating_step_ids": [
                     _text(row.get("step_id")) for row in violations
                 ],
-                "violation_reason_codes": [
-                    _text(row.get("reason_code")) for row in violations
-                ],
+                "violation_reason_codes": all_reason_codes,
+                "broker_violation_reason_codes": list(
+                    dict.fromkeys(
+                        _text(reason)
+                        for row in violations
+                        for reason in _list(row.get("broker_reason_codes"))
+                        if _text(reason)
+                    )
+                ),
             },
         }
 
