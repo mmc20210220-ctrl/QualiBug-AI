@@ -121,6 +121,105 @@ def test_runtime_actor_uses_authenticated_role_for_source_lineage(tmp_path: Path
     ]
 
 
+def test_runtime_actor_uses_declared_enterprise_credential_identity(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.discovery_runtime import _runtime_actors
+
+    project = "PROJECT-1"
+    config_path = tmp_path / "platform_workspace" / project / "multi_service_config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "services": [
+                    {
+                        "name": "gateway",
+                        "base_url": "http://127.0.0.1:8080",
+                        "auth": {
+                            "type": "password_login",
+                            "login_api": "/api/auth/login",
+                            "username_field": "email",
+                            "buyer": {
+                                "username": "buyer@example.com",
+                                "password": "declared-only-in-test",
+                            },
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actors = _runtime_actors(tmp_path, project, {})
+
+    assert actors == [
+        {
+            "role": "buyer",
+            "account_ref": "buyer@example.com",
+            "tenant": None,
+            "secret_ref": "secret_ref:test_accounts:buyer@example.com",
+            "status": "active",
+        }
+    ]
+
+
+def test_registered_test_data_source_supplies_exact_account_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_test_asset_center import experiment_runtime_support as runtime_support
+    from ai_test_asset_center.enterprise_source_registry import register_source_asset
+
+    project = "PROJECT-1"
+    register_source_asset(
+        project,
+        "test-accounts",
+        "| role | email | password |\n"
+        "| --- | --- | --- |\n"
+        "| buyer | buyer@example.com | Test@123 |\n",
+        source_type="test_data",
+        root=tmp_path,
+    )
+    monkeypatch.setattr(
+        runtime_support,
+        "_http_request",
+        lambda *args, **kwargs: {
+            "status": 200,
+            "body": {"token": "buyer-token"},
+        },
+    )
+
+    tokens = runtime_support.load_actor_tokens(
+        tmp_path,
+        project,
+        base_url="http://127.0.0.1:8080",
+    )
+
+    assert tokens["buyer@example.com"] == "buyer-token"
+    assert tokens["secret_ref:test_accounts:buyer@example.com"] == "buyer-token"
+
+
+def test_registered_database_schema_source_reaches_scan_preparation(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.enterprise_source_registry import register_source_asset
+    from ai_test_asset_center.scan_source_runtime import _load_schema_assets
+
+    register_source_asset(
+        "PROJECT-1",
+        "db-schema",
+        "# Database schema\n\n- orders.id: integer\n",
+        source_type="database_schema",
+        root=tmp_path,
+    )
+
+    schema_text = _load_schema_assets(tmp_path, "PROJECT-1")
+
+    assert "orders.id" in schema_text
+
+
 def test_api_operation_extraction_does_not_invent_post_write_side_effect() -> None:
     from ai_test_asset_center.behavior_ir import build_behavior_ir_from_knowledge_asset
     from ai_test_asset_center.discovery_runtime import _api_operations

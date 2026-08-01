@@ -109,6 +109,10 @@ def _configured_body(config: dict[str, Any], candidate_id: str, method: str, pat
 
     if probe is not None and _auto_fixture_enabled(config):
         bundle = _auto_fixture_bundle(config, probe)
+        receipt = bundle.get("receipt") if isinstance(bundle.get("receipt"), dict) else {}
+        source_block = str(receipt.get("fixture_setup_blocked_reason") or "").strip()
+        if source_block:
+            return None, f"auto_fixture_source_contract_blocked:{source_block}"
         body = bundle.get("request_body") if isinstance(bundle, dict) else None
         if body not in (None, {}, [], ""):
             return body, "auto_fixture_generated_by_qualibug"
@@ -1159,6 +1163,14 @@ def _auto_fixture_requests(config: dict[str, Any], probe: dict[str, Any], key: s
         raise RuntimeError(
             f"auto_fixture_generation_failed:{probe.get('candidate_id') or 'unknown_candidate'}:{bundle.get('error')}"
         )
+    receipt = bundle.get("receipt") if isinstance(bundle.get("receipt"), dict) else {}
+    source_block = str(receipt.get("fixture_setup_blocked_reason") or "").strip()
+    if source_block and key in {"setup_requests", "cleanup_requests"}:
+        return [{
+            "status": "blocked",
+            "reason": f"auto_fixture_source_contract_blocked:{source_block}",
+            "source_contract_reason": source_block,
+        }]
     raw = bundle.get(key) if isinstance(bundle, dict) else []
     return [r for r in (raw if isinstance(raw, list) else []) if isinstance(r, dict)][:5]
 
@@ -1340,6 +1352,9 @@ def _execute_auto_fixture_requests(config: dict[str, Any], base_url: str, probe:
         if index >= len(current_items):
             break
         item = current_items[index]
+        if str(item.get("status") or "").lower() == "blocked":
+            receipts.append(dict(item))
+            continue
         method = str(item.get("method") or "POST").upper()
         if method not in WRITE_METHODS:
             receipts.append({"status": "skipped", "reason": f"auto_fixture_method_not_write:{method}", "path": item.get("path")})

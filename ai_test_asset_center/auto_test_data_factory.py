@@ -590,12 +590,6 @@ def _placeholder_body_value(name: str, seed: str, generated_id: str) -> str:
     lname = str(name or "").strip().lower()
     if not lname:
         return generated_id
-    if any(token in lname for token in ("sku", "product", "goods", "item")):
-        return "SKU-PHONE-001"
-    if "coupon" in lname:
-        return "NEW100"
-    if "address" in lname:
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"qualibug:address:{seed}"))
     if "uuid" in lname:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"qualibug:{lname}:{seed}"))
     if any(token in lname for token in ("amount", "price", "total")):
@@ -613,12 +607,11 @@ def _materialize_example_placeholders(value: Any, seed: str, generated_id: str, 
     if not isinstance(value, str):
         return value
 
-    def repl(match: re.Match[str]) -> str:
-        placeholder = str(match.group(1) or "").strip()
-        return _placeholder_body_value(placeholder or field_name, seed, generated_id)
-
-    rendered = re.sub(r"<([A-Za-z_]\w*)>", repl, value)
-    return rendered
+    # Keep source placeholders intact. Runtime binding may replace them only
+    # after an exact source-declared resolver or a governed fixture dependency
+    # has produced the concrete value. A generated UUID or benchmark sample is
+    # not evidence for a related resource.
+    return value
 
 
 def _markdown_request_example(api_doc_text: str, method: str, path: str) -> dict[str, Any]:
@@ -778,6 +771,62 @@ def _request_example_body(api_doc_text: str, method: str, path: str, seed: str, 
     return rendered if isinstance(rendered, dict) else {}
 
 
+def _source_fixture_body(
+    spec: dict[str, Any],
+    api_doc_text: str,
+    method: str,
+    path: str,
+    seed: str,
+    generated_id: str,
+) -> tuple[dict[str, Any], str, set[str]]:
+    """Return a fixture body only when the source declares its shape.
+
+    A disposable write cannot be made safe by adding generic fields such as
+    ``name`` or ``price``. The caller needs both the body provenance and the
+    source placeholder names so it can fail closed when a documented body
+    still depends on an unresolved related resource.
+    """
+
+    raw_example = _markdown_request_example(api_doc_text, method, path)
+    placeholder_fields: set[str] = set()
+
+    def collect_placeholders(value: Any, field_name: str = "") -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                collect_placeholders(child, str(key))
+            return
+        if isinstance(value, list):
+            for child in value:
+                collect_placeholders(child, field_name)
+            return
+        if isinstance(value, str):
+            placeholder_fields.update(
+                str(match.group(1) or field_name).strip()
+                for match in re.finditer(r"<([A-Za-z_]\w*)>", value)
+                if str(match.group(1) or field_name).strip()
+            )
+
+    if isinstance(raw_example, dict) and raw_example:
+        collect_placeholders(raw_example)
+        return (
+            _request_example_body(api_doc_text, method, path, seed, generated_id),
+            "documented_example",
+            placeholder_fields,
+        )
+
+    schema = _schema_for_endpoint(spec, method, path)
+    if isinstance(schema, dict) and schema:
+        schema_example = schema.get("example")
+        if isinstance(schema_example, dict) and schema_example:
+            collect_placeholders(schema_example)
+            return dict(schema_example), "documented_example", placeholder_fields
+        generated = _schema_value("fixture_body", schema, seed, spec)
+        if isinstance(generated, dict) and generated:
+            return generated, "documented_schema_generated", placeholder_fields
+
+    return {}, "not_available", placeholder_fields
+
+
 def _resource_identity_value(field: str, seed: str, generated_id: str) -> Any:
     lname = str(field or "").strip().lower()
     if "sku" in lname:
@@ -823,14 +872,6 @@ def _make_setup_body(
     # Layer auto-generated identity/inventory defaults UNDER the API doc example.
     # Use setdefault so the example's domain-specific fields (sku, qty, etc.)
     # survive — the generic IDs should never override what the customer spec says.
-    for key in ("id", "object_id", "entity_id", "name", "qualibug_test_run_id"):
-        body.setdefault(key, generated_id)
-    body.setdefault("name", f"qb_auto_fixture_{seed}")
-    body.setdefault("qualibug_test_run_id", f"qb_auto_run_{seed}")
-    for field in ("quantity", "qty"):
-        body.setdefault(field, 1)
-    for field in ("price", "amount"):
-        body.setdefault(field, 99.0)
     if str(probe.get("risk_type")) == "state_transition_probe":
         body["status"] = "cancelled"
     for field, value in _resource_identity_defaults(target_path or create_path, seed, generated_id).items():
@@ -1238,6 +1279,10 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
 
     setup_requests: list[dict[str, Any]] = []
     cleanup_requests: list[dict[str, Any]] = []
+    fixture_setup_body_provenance = "not_available"
+    fixture_setup_placeholder_fields: set[str] = set()
+    fixture_setup_blocked_reason = ""
+    fixture_cleanup_body_provenance = "not_applicable"
     snapshots: dict[str, Any] = {"before": [], "after": [], "note": "no suitable OpenAPI read endpoint discovered"}
     observer_plan: dict[str, Any] = {"planner": "snapshot_observer_planner_v1_phase92q", "observers": [], "coverage": []}
 
@@ -1248,6 +1293,16 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
         cleanup_method, cleanup_path = _find_cleanup_endpoint(spec, path)
         cleanup_path = _materialize_spec_path(spec, cleanup_path)
         if create_path:
+            _, fixture_setup_body_provenance, fixture_setup_placeholder_fields = _source_fixture_body(
+                spec,
+                _api_doc_text,
+                "POST",
+                create_path,
+                seed,
+                generated_id,
+            )
+            if fixture_setup_body_provenance == "not_available":
+                fixture_setup_blocked_reason = "CREATE_REQUEST_BODY_NOT_SOURCE_BOUND"
             primary_setup_body = _make_setup_body(
                 spec,
                 create_path,
@@ -1265,6 +1320,19 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
                 target_body=body,
                 path_params=path_params,
             )
+            dependency_bindings = {
+                str(field).strip()
+                for request in dependency_setup_requests
+                if isinstance(request, dict)
+                for field in (request.get("bind_response_id_to") or [])
+                if str(field).strip()
+            }
+            unresolved_placeholders = fixture_setup_placeholder_fields - dependency_bindings
+            if unresolved_placeholders and not fixture_setup_blocked_reason:
+                fixture_setup_blocked_reason = (
+                    "FIXTURE_REQUEST_BODY_PLACEHOLDER_UNRESOLVED:"
+                    + ",".join(sorted(unresolved_placeholders))
+                )
             setup_requests.extend(dependency_setup_requests)
             setup_requests.append({
                 "purpose": "create_disposable_qb_auto_fixture",
@@ -1302,12 +1370,23 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
         elif read_path:
             snapshot_req = {"method": "GET", "path": read_path, "path_params": _bind_path_params(read_path, generated_id), "observer_kind": "primary_resource_detail", "source": "phase92q_fallback_direct_read_endpoint"}
             snapshots = {"before": [snapshot_req], "after": [snapshot_req], "note": "auto-inferred from OpenAPI GET resource endpoint", "planner": observer_plan.get("planner"), "coverage": ["primary_resource_detail"]}
-        if cleanup_method and cleanup_path:
+        if setup_requests and cleanup_method in {"PATCH", "PUT"} and cleanup_path:
+            _, fixture_cleanup_body_provenance, _ = _source_fixture_body(
+                spec,
+                _api_doc_text,
+                cleanup_method,
+                cleanup_path,
+                seed,
+                generated_id,
+            )
+            if fixture_cleanup_body_provenance == "not_available" and not fixture_setup_blocked_reason:
+                fixture_setup_blocked_reason = "CLEANUP_REQUEST_BODY_NOT_SOURCE_BOUND"
+        if setup_requests and cleanup_method and cleanup_path:
             cleanup_request = {"method": cleanup_method, "path": cleanup_path, "path_params": _bind_path_params(cleanup_path, generated_id), "purpose": "cleanup_qb_auto_fixture"}
             if cleanup_method in {"PATCH", "PUT"}:
                 cleanup_request["body"] = _cleanup_transition_body(spec, cleanup_method, cleanup_path, seed, generated_id)
             cleanup_requests.append(cleanup_request)
-        else:
+        elif setup_requests:
             # Keep the missing-cleanup obligation explicit.  Never fabricate a
             # cleanup URL: guessed resource paths are unsafe and non-portable.
             cleanup_requests.append({
@@ -1318,7 +1397,8 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
                 "reason": "documented_cleanup_endpoint_missing",
                 "note": "No automatic cleanup endpoint was found in the supplied API contract.",
             })
-        cleanup_requests.extend(dependency_cleanup_requests if 'dependency_cleanup_requests' in locals() else [])
+        if setup_requests:
+            cleanup_requests.extend(dependency_cleanup_requests if 'dependency_cleanup_requests' in locals() else [])
 
     return {
         "mode": "auto_generated_by_qualibug",
@@ -1342,6 +1422,10 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
             ),
             "api_document_parse_diagnostics": api_document_parse_diagnostics,
             "schema_used": bool(schema),
+            "fixture_setup_body_provenance": fixture_setup_body_provenance,
+            "fixture_setup_placeholder_fields": sorted(fixture_setup_placeholder_fields),
+            "fixture_setup_blocked_reason": fixture_setup_blocked_reason,
+            "fixture_cleanup_body_provenance": fixture_cleanup_body_provenance,
             "mutation_applied": bool(mutation_application.get("applied")),
             "mutation_kind": mutation_application.get("mutation_kind"),
             "mutation_applied_fields": mutation_application.get("applied_fields") or [],

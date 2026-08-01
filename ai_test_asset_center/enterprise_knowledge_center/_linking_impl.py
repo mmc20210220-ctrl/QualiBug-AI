@@ -881,6 +881,10 @@ def _evidence_bundle(asset: dict[str, Any], probes: list[dict[str, Any]]) -> dic
 def _declared_project_source_files(project: str, root: Path) -> list[Path]:
     """Discover project-scoped source material while excluding credential/data files."""
     supported_suffixes = set(TEXT_SUFFIXES) | {".docx", ".pdf"}
+    control_plane_filenames = {
+        "real_project_config.json",
+        "multi_service_config.json",
+    }
     secret_name_tokens = {
         "credential", "credentials", "secret", "secrets", "password", "passwords",
         "token", "tokens", "private_key", "apikey", "api_key", "test_account", "test_accounts",
@@ -898,6 +902,17 @@ def _declared_project_source_files(project: str, root: Path) -> list[Path]:
             continue
         for candidate in sorted(input_root.rglob("*")):
             if not candidate.is_file() or candidate.suffix.lower() not in supported_suffixes:
+                continue
+            # These files are runtime control-plane state, not customer evidence.
+            # They live beside legacy inputs for compatibility but must not be
+            # re-ingested into the enterprise source registry.
+            if candidate.name.lower() in control_plane_filenames:
+                continue
+            # Legacy onboarding can leave an empty PRD placeholder while the
+            # canonical knowledge registry already contains the uploaded source.
+            # An empty file cannot carry evidence and is rejected by canonical
+            # ingestion, so it is not a declared material candidate here.
+            if candidate.stat().st_size == 0:
                 continue
             name_tokens = {token for token in re.split(r"[^a-z0-9_]+", candidate.stem.lower()) if token}
             normalized_stem = re.sub(r"[^a-z0-9]+", "_", candidate.stem.lower()).strip("_")

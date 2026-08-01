@@ -29,13 +29,28 @@ def _load_schema_assets(root: Path, project: str) -> str:
     """Load project-scoped database schema for data-layer observation planning.
 
     Checks, in order:
-    1. ``platform_workspace/<project>/input/*.sql`` (canonical workspace)
-    2. ``platform_inputs/<project>/schema.sql`` (ingested customer materials)
-    3. ``platform_inputs/<project>/DB_SCHEMA.md`` (markdown schema doc)
+    1. registered ``database_schema`` source assets (canonical ingest authority)
+    2. ``platform_workspace/<project>/input/*.sql`` (legacy workspace)
+    3. ``platform_inputs/<project>/schema.sql`` (legacy customer material)
+    4. ``platform_inputs/<project>/DB_SCHEMA.md`` (legacy markdown material)
+
+    The HTTP knowledge-ingest path stores uploaded files in the source registry,
+    so looking only at legacy filesystem aliases made a successfully parsed
+    schema disappear before the mainline planner received it.
     """
     safe = _safe_project(project)
     chunks: list[str] = []
     seen_hashes: set[str] = set()
+
+    def _ingest_text(text: str) -> None:
+        text = str(text or "").strip()
+        if not text:
+            return
+        digest = _sha256(text)
+        if digest in seen_hashes:
+            return
+        seen_hashes.add(digest)
+        chunks.append(text[:1_000_000])
 
     def _ingest(path: Path) -> None:
         if not path.is_file():
@@ -44,13 +59,27 @@ def _load_schema_assets(root: Path, project: str) -> str:
             text = path.read_text(encoding="utf-8", errors="replace").strip()
         except OSError:
             return
-        if not text:
-            return
-        digest = _sha256(text)
-        if digest in seen_hashes:
-            return
-        seen_hashes.add(digest)
-        chunks.append(text[:1_000_000])
+        _ingest_text(text)
+
+    from .enterprise_source_registry import (
+        SourceRegistryError,
+        list_source_assets,
+        load_source_content,
+    )
+
+    for asset in list_source_assets(project, root=root):
+        if not isinstance(asset, dict):
+            continue
+        source_type = str(asset.get("source_type") or "").strip().lower()
+        if source_type not in {"database_schema", "db_schema", "db_design", "sql"}:
+            continue
+        source_hash = str(asset.get("latest_source_hash") or "").strip().lower()
+        if not _SHA256_RE.fullmatch(source_hash):
+            raise RuntimeError("database_schema_source_hash_invalid")
+        try:
+            _ingest_text(load_source_content(project, source_hash, root=root))
+        except SourceRegistryError as exc:
+            raise RuntimeError("database_schema_source_unreadable") from exc
 
     workspace_sql = root / "platform_workspace" / safe / "input"
     if workspace_sql.exists():

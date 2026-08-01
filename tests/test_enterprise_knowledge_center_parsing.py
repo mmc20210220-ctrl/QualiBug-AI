@@ -6,6 +6,7 @@ from pathlib import Path
 from ai_test_asset_center.enterprise_knowledge_center import (
     _authoritative_rule_to_interface_edges,
     _classify_source,
+    _declared_project_source_files,
     _links_by_exact_source_section,
     _links_by_exclusive_contract_fields,
     _links_by_overlap,
@@ -491,6 +492,31 @@ def test_build_asset_includes_new_extracted_structures(tmp_path: Path) -> None:
         and row.get("status") == "accepted"
         for row in asset["relationships"]
     )
+
+
+def test_declared_source_sync_ignores_runtime_config_and_empty_legacy_placeholder(
+    tmp_path: Path,
+) -> None:
+    project_id = "declared_source_boundary_case"
+    input_dir = tmp_path / "platform_inputs" / project_id
+    input_dir.mkdir(parents=True)
+    (input_dir / "real_project_config.json").write_text(
+        json.dumps({"project_id": project_id}),
+        encoding="utf-8",
+    )
+    (input_dir / "multi_service_config.json").write_text(
+        json.dumps({"services": []}),
+        encoding="utf-8",
+    )
+    (input_dir / "prd.md").write_bytes(b"")
+    (input_dir / "customer_notes.md").write_text(
+        "# Customer notes\nThe order API is documented separately.\n",
+        encoding="utf-8",
+    )
+
+    discovered = _declared_project_source_files(project_id, tmp_path)
+
+    assert [path.name for path in discovered] == ["customer_notes.md"]
 
 
 def test_token_overlap_relationships_are_candidate_only() -> None:

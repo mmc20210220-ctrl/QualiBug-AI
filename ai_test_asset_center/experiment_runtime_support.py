@@ -340,6 +340,144 @@ def _jwt_expired(token: str, *, skew_seconds: int = 30) -> bool:
     return bool(time.time() + skew_seconds >= float(exp))
 
 
+def _credential_config_path(root: Path, project: str) -> Path | None:
+    """Return the project credential config from its existing SSOT location."""
+    for candidate in (
+        Path(root) / "platform_workspace" / str(project) / "multi_service_config.json",
+        Path(root) / "platform_inputs" / str(project) / "multi_service_config.json",
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _configured_credential_manager(root: Path, project: str) -> Any | None:
+    """Load the configured enterprise credential manager, or no manager.
+
+    The credential file is control-plane input, not a knowledge source. Keep its
+    schema and decryption authority in ``EnterpriseCredentialManager`` instead
+    of re-parsing service accounts in the execution path. Invalid JSON and an
+    unavailable decryption key are surfaced to the caller so a configured
+    credential cannot silently turn into an anonymous run.
+    """
+    config_path = _credential_config_path(root, project)
+    if config_path is None:
+        return None
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8") or "null")
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("runtime_credential_config_invalid") from exc
+    if not isinstance(config, dict):
+        raise RuntimeError("runtime_credential_config_root_invalid")
+    from .enterprise_credential_manager import EnterpriseCredentialManager
+
+    manager = EnterpriseCredentialManager(str(project), Path(root))
+    manager.load_from_dict(config)
+    return manager
+
+
+def configured_runtime_accounts(root: Path, project: str) -> list[dict[str, str]]:
+    """Project runtime actors from the existing service credential authority.
+
+    A role-to-account coordinate is executable only when the operator declared
+    the role and login identity in the credential manager. No localized display
+    label is translated here, and no account is invented from a role name.
+    """
+    manager = _configured_credential_manager(root, project)
+    if manager is None:
+        return []
+    rows: list[dict[str, str]] = []
+    credentials = sorted(
+        manager.store.all(),
+        key=lambda item: (
+            _text(getattr(item, "service", "")).lower(),
+            _text(getattr(item, "role", "")).lower(),
+            _text(getattr(item, "username", "")).lower(),
+        ),
+    )
+    for credential in credentials:
+        role = _text(getattr(credential, "role", ""))
+        service = _text(getattr(credential, "service", ""))
+        username = _text(getattr(credential, "username", ""))
+        if not role:
+            continue
+        row = {
+            "role": role,
+            "service": service,
+            "status": "active",
+        }
+        if username:
+            row.update({
+                "account_ref": username,
+                "secret_ref": f"secret_ref:test_accounts:{username}",
+            })
+        elif getattr(credential, "bearer_token", "") or getattr(credential, "api_key", ""):
+            # A pre-authenticated service credential has no login identity. Keep
+            # it role-scoped; never fabricate an account_ref for it.
+            row["secret_ref"] = f"secret_ref:service:{service}:{role}"
+        else:
+            continue
+        rows.append(row)
+    return rows
+
+
+def _configured_credential_tokens(
+    root: Path,
+    project: str,
+    *,
+    base_url: str = "",
+) -> dict[str, str]:
+    """Acquire tokens through the existing enterprise credential manager."""
+    manager = _configured_credential_manager(root, project)
+    if manager is None:
+        return {}
+    results = manager.login_all_services(timeout=8)
+    failed = [
+        f"{service}/{role}"
+        for service, role_results in results.items()
+        for role, ok in role_results.items()
+        if not ok
+    ]
+    if failed:
+        _LOGGER.warning(
+            "configured_actor_login_incomplete project=%s credential_count=%s "
+            "failed=%s",
+            project,
+            sum(len(value) for value in results.values()),
+            ",".join(sorted(failed)[:12]),
+        )
+    tokens: dict[str, str] = {}
+    role_tokens: dict[str, list[str]] = {}
+    for credential in manager.store.all():
+        service = _text(getattr(credential, "service", ""))
+        role = _text(getattr(credential, "role", ""))
+        if not service or not role:
+            continue
+        token = _text(manager.get_token(service, role, auto_refresh=False))
+        if not token:
+            continue
+        username = _text(getattr(credential, "username", ""))
+        if username:
+            tokens[username] = token
+            tokens[f"secret_ref:test_accounts:{username}"] = token
+        else:
+            tokens[f"secret_ref:service:{service}:{role}"] = token
+        role_tokens.setdefault(role, []).append(token)
+    for role, values in role_tokens.items():
+        # Role aliases are safe only when the configured authority has one
+        # active credential for that role. Account-qualified actors always use
+        # their exact secret_ref above.
+        unique_values = list(dict.fromkeys(values))
+        if len(unique_values) != 1:
+            continue
+        token = unique_values[0]
+        tokens.setdefault(role, token)
+        tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
+        tokens.setdefault(f"secret_ref:context:{role}", token)
+        tokens.setdefault(f"secret_ref:actor:{role}", token)
+    return tokens
+
+
 def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[str, str]:
     """Map role / secret_ref → bearer token from declared test accounts only.
 
@@ -405,62 +543,127 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
 
     # ── P0-4: Fallback to TEST_ACCOUNTS.md with login ──
     md_accounts = _parse_test_accounts_md(root, project)
-    if not md_accounts:
-        return {}
-    # Attempt login for each account to obtain tokens
     base_url = _text(base_url) or _text(os.environ.get("QUALIBUG_TARGET_BASE_URL") or "")
     login_path = _text(os.environ.get("QUALIBUG_LOGIN_PATH") or "/api/auth/login")
-    if not base_url:
-        # Return credential info without tokens (preflight will flag this)
-        return {}
     tokens = {}
-    for acct in md_accounts:
-        role = _text(acct.get("role"))
-        email = _text(acct.get("email"))
-        password = _text(acct.get("password"))
-        if not role or not email or not password:
-            continue
-        try:
-            resp = _http_request(
-                "POST",
-                base_url.rstrip("/") + login_path,
-                body={"email": email, "password": password},
-                timeout=8.0,
-            )
-            status = int(resp.get("status") or 0)
-            body = resp.get("body")
-            token = ""
-            if isinstance(body, dict):
-                token = _text(body.get("token") or body.get("access_token") or body.get("jwt") or _dict(body.get("data")).get("token"))
-            if status == 200 and token:
-                account_ref = email.split("@")[0] if "@" in email else email
-                tokens[account_ref] = token
-                tokens[f"secret_ref:test_accounts:{account_ref}"] = token
-                tokens.setdefault(role, token)
-                tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
-                tokens.setdefault(f"secret_ref:context:{role}", token)
-            else:
+    if base_url:
+        for acct in md_accounts:
+            role = _text(acct.get("role"))
+            email = _text(acct.get("email"))
+            password = _text(acct.get("password"))
+            if not role or not email or not password:
+                continue
+            try:
+                resp = _http_request(
+                    "POST",
+                    base_url.rstrip("/") + login_path,
+                    body={"email": email, "password": password},
+                    timeout=8.0,
+                )
+                status = int(resp.get("status") or 0)
+                body = resp.get("body")
+                token = ""
+                if isinstance(body, dict):
+                    token = _text(body.get("token") or body.get("access_token") or body.get("jwt") or _dict(body.get("data")).get("token"))
+                if status == 200 and token:
+                    account_ref = email
+                    tokens[account_ref] = token
+                    tokens[f"secret_ref:test_accounts:{account_ref}"] = token
+                    # Keep the local-part alias for legacy callers, but the
+                    # exact account coordinate is always the full declared email.
+                    if "@" in email:
+                        tokens.setdefault(email.split("@", 1)[0], token)
+                    tokens.setdefault(role, token)
+                    tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
+                    tokens.setdefault(f"secret_ref:context:{role}", token)
+                else:
+                    _LOGGER.warning(
+                        "actor_login_rejected project=%s role=%s status=%s "
+                        "token_present=%s",
+                        project,
+                        role,
+                        status,
+                        bool(token),
+                    )
+            except Exception as exc:
                 _LOGGER.warning(
-                    "actor_login_rejected project=%s role=%s status=%s "
-                    "token_present=%s",
+                    "actor_login_transport_failed project=%s role=%s error=%s",
                     project,
                     role,
-                    status,
-                    bool(token),
+                    type(exc).__name__,
                 )
-        except Exception as exc:
-            _LOGGER.warning(
-                "actor_login_transport_failed project=%s role=%s error=%s",
-                project,
-                role,
-                type(exc).__name__,
-            )
-            continue
+                continue
+    if not tokens:
+        tokens.update(_configured_credential_tokens(root, project, base_url=base_url))
     return tokens
 
 
+def _parse_test_accounts_text(text: str) -> list[dict[str, str]]:
+    """Parse one source-declared Markdown account table."""
+    accounts: list[dict[str, str]] = []
+    lines = text.splitlines()
+    header_cols: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.split("|")[1:-1]]
+        if not cells:
+            continue
+        lower_cells = [c.lower() for c in cells]
+        if any(h in lower_cells for h in ("角色", "role", "邮箱", "email")):
+            header_cols = lower_cells
+            continue
+        if all(set(c) <= set("-| ") for c in cells):
+            continue
+        if not header_cols:
+            continue
+        row: dict[str, str] = {}
+        for i, col in enumerate(header_cols):
+            val = cells[i] if i < len(cells) else ""
+            if col in ("角色", "role"):
+                row["role"] = val
+            elif col in ("邮箱", "email"):
+                row["email"] = val
+            elif col in ("密码", "password"):
+                row["password"] = val
+            elif col in ("说明", "description", "note"):
+                row["note"] = val
+        if row.get("email"):
+            accounts.append(row)
+    return accounts
+
+
 def _parse_test_accounts_md(root: Path, project: str) -> list[dict[str, str]]:
-    """Parse TEST_ACCOUNTS.md markdown table into account dicts."""
+    """Parse account tables from the registered source corpus first."""
+    registered_documents: list[str] = []
+    try:
+        from .enterprise_source_registry import (
+            SourceRegistryError,
+            list_source_assets,
+            load_source_content,
+        )
+
+        for asset in list_source_assets(str(project), root=Path(root)):
+            if _text(asset.get("source_type")).lower() != "test_data":
+                continue
+            source_hash = _text(asset.get("latest_source_hash"))
+            if not source_hash:
+                raise RuntimeError("test_account_source_hash_missing")
+            try:
+                registered_documents.append(
+                    load_source_content(str(project), source_hash, root=Path(root))
+                )
+            except SourceRegistryError as exc:
+                raise RuntimeError("test_account_source_unreadable") from exc
+    except ImportError:
+        raise
+    if registered_documents:
+        accounts: list[dict[str, str]] = []
+        for document in registered_documents:
+            accounts.extend(_parse_test_accounts_text(document))
+        return accounts
+
     search_dirs = [
         Path(root) / "projects" / str(project) / "input",
         Path(root) / "platform_inputs" / str(project),
@@ -481,40 +684,7 @@ def _parse_test_accounts_md(root: Path, project: str) -> list[dict[str, str]]:
         text = md_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
-    accounts: list[dict[str, str]] = []
-    lines = text.splitlines()
-    header_cols: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped.startswith("|"):
-            continue
-        cells = [c.strip() for c in stripped.split("|")[1:-1]]
-        if not cells:
-            continue
-        # Detect header row
-        lower_cells = [c.lower() for c in cells]
-        if any(h in lower_cells for h in ("角色", "role", "邮箱", "email")):
-            header_cols = lower_cells
-            continue
-        # Skip separator row
-        if all(set(c) <= set("-| ") for c in cells):
-            continue
-        if not header_cols:
-            continue
-        row: dict[str, str] = {}
-        for i, col in enumerate(header_cols):
-            val = cells[i] if i < len(cells) else ""
-            if col in ("角色", "role"):
-                row["role"] = val
-            elif col in ("邮箱", "email"):
-                row["email"] = val
-            elif col in ("密码", "password"):
-                row["password"] = val
-            elif col in ("说明", "description", "note"):
-                row["note"] = val
-        if row.get("email"):
-            accounts.append(row)
-    return accounts
+    return _parse_test_accounts_text(text)
 
 
 def preflight_experiment_executable(

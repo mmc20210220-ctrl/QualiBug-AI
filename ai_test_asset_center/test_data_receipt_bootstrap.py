@@ -321,6 +321,9 @@ def _probe_has_documented_fixture_lifecycle(
         input_dir=input_dir,
         config={"qualibug_auto_create_test_data": True, "api_doc_text": api_doc_text},
     )
+    receipt = bundle.get("receipt") if isinstance(bundle.get("receipt"), dict) else {}
+    if str(receipt.get("fixture_setup_blocked_reason") or "").strip():
+        return False
     setup = [item for item in (bundle.get("setup_requests") or []) if isinstance(item, dict)]
     cleanup = [item for item in (bundle.get("cleanup_requests") or []) if isinstance(item, dict)]
     if not setup or not cleanup:

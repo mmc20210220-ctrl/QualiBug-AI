@@ -154,8 +154,10 @@ def test_auto_fixture_prefers_markdown_request_example_for_setup_body() -> None:
     setup_body = bundle["setup_requests"][0]["body"]
     assert setup_body["items"] == [{"sku": "SKU-PHONE-001", "qty": 1}]
     assert setup_body["couponCode"] == "NEW100"
-    assert len(str(setup_body["addressId"])) == 36
-    assert str(setup_body["addressId"]).count("-") == 4
+    assert setup_body["addressId"] == "<address_id>"
+    assert bundle["receipt"]["fixture_setup_blocked_reason"] == (
+        "FIXTURE_REQUEST_BODY_PLACEHOLDER_UNRESOLVED:address_id"
+    )
 
 
 def test_auto_fixture_builds_fk_dependency_setup_chain_from_schema(tmp_path) -> None:

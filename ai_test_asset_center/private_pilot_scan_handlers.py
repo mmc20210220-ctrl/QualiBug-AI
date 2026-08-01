@@ -181,7 +181,14 @@ class ScanHandlersMixin:
                 _text(asset.get("source_type")).lower() for asset in assets
             }
             if not source_types.intersection(
-                {"openapi", "openapi3", "swagger", "postman", "api_spec"}
+                {
+                    "openapi",
+                    "openapi3",
+                    "swagger",
+                    "postman",
+                    "api_spec",
+                    "markdown_api",
+                }
             ):
                 reasons.append(
                     {

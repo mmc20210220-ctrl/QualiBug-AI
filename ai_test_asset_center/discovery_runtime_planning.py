@@ -40,7 +40,11 @@ from .discovery_mainline_contract import (
     build_mainline_run_contract,
 )
 from .experiment_compiler import compile_experiments
-from .experiment_runtime_support import run_environment_preflight
+from .experiment_runtime_support import (
+    _parse_test_accounts_md,
+    configured_runtime_accounts,
+    run_environment_preflight,
+)
 from .fixture_dag import attach_fixture_dag_to_experiments
 from .obligation_compiler import compile_obligations_from_behavior_ir
 from .pipeline_slices import _auto_scale_slice_budget
@@ -188,6 +192,18 @@ def _runtime_actors(root: Path, project: str, context: dict[str, Any]) -> list[d
             raise MainlineContractError("test_actor_catalog_rows_invalid")
     else:
         raise MainlineContractError("test_actor_catalog_root_invalid")
+    if not rows:
+        # Credentials saved through the enterprise settings route are the
+        # authoritative role-to-login binding when no legacy JSON catalog is
+        # present. This keeps the account identity exact and avoids translating
+        # display labels from TEST_ACCOUNTS.md into source role identities.
+        rows = configured_runtime_accounts(root, project)
+    if not rows:
+        # Keep the existing Markdown parser as a source-backed fallback for
+        # projects that have not configured a service credential manager. A
+        # localized display label remains exactly as declared; it is never
+        # guessed to be an English role.
+        rows = _parse_test_accounts_md(root, project)
     for row in rows:
         if not isinstance(row, dict):
             raise MainlineContractError("test_actor_catalog_row_invalid")
