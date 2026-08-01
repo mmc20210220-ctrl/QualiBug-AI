@@ -18,11 +18,15 @@ from urllib.parse import quote
 from .connector_source_ingestion import (
     ConnectorSnapshotError,
     build_connector_source_ref,
-    ingest_connector_snapshot,
+    ingest_connector_snapshots_batch,
 )
 from .enterprise_knowledge_center import (
     delete_enterprise_knowledge_source,
     list_enterprise_knowledge_sources,
+)
+from .enterprise_knowledge_center.source_occurrence_observation import (
+    list_source_occurrence_observations,
+    record_source_occurrence_observations_batch,
 )
 from .enterprise_knowledge_center._common import ROOT, _safe_project_id
 from .enterprise_knowledge_center._utils import (
@@ -391,6 +395,95 @@ def _active_refs(project: str, connector: str, root: Path) -> set[str]:
     }
 
 
+def connector_snapshot_observation_index(
+    project_id: str,
+    *,
+    connector_instance_id: str,
+    root: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Index active connector occurrences by remote identity without loading source bytes."""
+    resolved_root = root or ROOT
+    project = _safe_project_id(project_id)
+    connector = _identifier(connector_instance_id, "connector_instance_id")
+    payload = list_source_occurrence_observations(
+        project,
+        source_ref_prefix=_connector_prefix(connector),
+        root=resolved_root,
+    )
+    result: dict[str, dict[str, Any]] = {}
+    for row in payload.get("source_occurrences") or []:
+        if not isinstance(row, dict):
+            continue
+        metadata = dict(row.get("source_metadata") or {})
+        if _text(metadata.get("connector_instance_id"), 160) != connector:
+            continue
+        remote_id = _text(metadata.get("remote_resource_id"), 1000)
+        if not remote_id:
+            continue
+        if remote_id in result:
+            raise ConnectorSyncError(
+                f"connector_remote_identity_ambiguous:{remote_id}"
+            )
+        result[remote_id] = {
+            "source_occurrence_id": row.get("source_occurrence_id"),
+            "source_ref": row.get("source_ref"),
+            "content_hash": row.get("content_hash"),
+            "source_metadata": metadata,
+            "last_seen_at_utc": row.get("last_seen_at_utc"),
+            "observation_count": row.get("observation_count"),
+        }
+    return result
+
+
+def _normalize_unchanged_observations(
+    connector: str,
+    observations: list[dict[str, Any]] | None,
+    *,
+    changed_refs: set[str],
+) -> list[dict[str, Any]]:
+    if observations is None:
+        return []
+    if not isinstance(observations, list):
+        raise ConnectorSyncError(
+            "connector_sync_unchanged_observations_must_be_list"
+        )
+    normalized: list[dict[str, Any]] = []
+    refs: set[str] = set()
+    for index, raw in enumerate(observations):
+        if not isinstance(raw, dict):
+            raise ConnectorSyncError(
+                f"connector_sync_unchanged_observation_invalid:{index}"
+            )
+        remote_id = _text(raw.get("remote_resource_id"), 1000)
+        kind = _text(raw.get("resource_kind"), 80) or "document"
+        if not remote_id:
+            raise ConnectorSyncError(
+                f"connector_sync_remote_resource_id_required:{index}"
+            )
+        source_ref = build_connector_source_ref(
+            connector, remote_id, resource_kind=kind
+        )
+        if source_ref in refs or source_ref in changed_refs:
+            raise ConnectorSyncError(
+                f"connector_sync_duplicate_remote_identity:{source_ref}"
+            )
+        metadata = raw.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ConnectorSyncError(
+                f"connector_sync_unchanged_metadata_invalid:{index}"
+            )
+        refs.add(source_ref)
+        normalized.append(
+            {
+                "remote_resource_id": remote_id,
+                "resource_kind": kind,
+                "source_ref": source_ref,
+                "metadata": dict(metadata or {}),
+            }
+        )
+    return normalized
+
+
 def _normalize_items(connector: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(items, list):
         raise ConnectorSyncError("connector_sync_items_must_be_list")
@@ -442,6 +535,8 @@ def _run_summary(registry: dict[str, Any], run: dict[str, Any], receipt_path: st
             "completed_at_utc": run.get("completed_at_utc", ""),
             "item_count": run.get("item_count", 0),
             "success_count": run.get("success_count", 0),
+            "materialized_success_count": run.get("materialized_success_count", 0),
+            "unchanged_success_count": run.get("unchanged_success_count", 0),
             "failure_count": run.get("failure_count", 0),
             "retired_count": run.get("retired_count", 0),
             "cursor_checkpoint_committed": bool(run.get("cursor_checkpoint_committed")),
@@ -578,6 +673,7 @@ def sync_connector_snapshot_batch(
     *,
     connector_instance_id: str,
     items: list[dict[str, Any]],
+    unchanged_observations: list[dict[str, Any]] | None = None,
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
     sync_mode: str = "INCREMENTAL",
@@ -606,6 +702,12 @@ def sync_connector_snapshot_batch(
         raise ConnectorSyncError("connector_retirement_threshold_invalid")
 
     normalized = _normalize_items(connector, items)
+    changed_refs = {row["_source_ref"] for row in normalized}
+    unchanged = _normalize_unchanged_observations(
+        connector,
+        unchanged_observations,
+        changed_refs=changed_refs,
+    )
     epoch = _identifier(sync_epoch_id, "sync_epoch_id") if sync_epoch_id else _new_epoch(
         project, connector
     )
@@ -633,7 +735,9 @@ def sync_connector_snapshot_batch(
             "status": "RUNNING",
             "started_at_utc": _now(),
             "started_by": clean_actor,
-            "item_count": len(normalized),
+            "item_count": len(normalized) + len(unchanged),
+            "materialized_item_count": len(normalized),
+            "unchanged_item_count": len(unchanged),
             "previous_cursor_fingerprint": previous_hash,
             "next_cursor_fingerprint": next_hash,
             "cursor_checkpoint_committed": False,
@@ -645,6 +749,7 @@ def sync_connector_snapshot_batch(
         successes: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         seen_refs: set[str] = set()
+        unchanged_recorded_count = 0
         retired: list[dict[str, Any]] = []
         reconciliation: dict[str, Any] = {
             "status": "NOT_REQUESTED",
@@ -653,52 +758,102 @@ def sync_connector_snapshot_batch(
             "errors": [],
         }
         try:
-            for index, row in enumerate(normalized):
+            if normalized:
                 try:
-                    receipt = ingest_connector_snapshot(
+                    batch = ingest_connector_snapshots_batch(
                         project,
+                        [
+                            {
+                                "source_id": _text(
+                                    row.get("source_id")
+                                    or row["_remote_resource_id"],
+                                    160,
+                                ),
+                                "source_type": row["_source_type"],
+                                "content": row.get("content"),
+                                "remote_resource_id": row["_remote_resource_id"],
+                                "resource_kind": row["_resource_kind"],
+                                "remote_revision": _text(
+                                    row.get("remote_revision"), 240
+                                ),
+                                "remote_updated_at": _text(
+                                    row.get("remote_updated_at"), 80
+                                ),
+                                "retrieved_at": _text(
+                                    row.get("retrieved_at"), 80
+                                ),
+                                "canonical_url": _text(
+                                    row.get("canonical_url"), 1000
+                                ),
+                                "parent_remote_id": _text(
+                                    row.get("parent_remote_id"), 1000
+                                ),
+                                "export_format": _text(
+                                    row.get("export_format"), 80
+                                ),
+                                "declared_mime": _text(
+                                    row.get("declared_mime"), 160
+                                ),
+                                "remote_materialization_fingerprint": _text(
+                                    row.get(
+                                        "remote_materialization_fingerprint"
+                                    ),
+                                    128,
+                                ),
+                                "filename": _text(row.get("filename"), 500),
+                            }
+                            for row in normalized
+                        ],
                         root=resolved_root,
                         connector_id=connector,
-                        source_id=_text(
-                            row.get("source_id") or row["_remote_resource_id"], 160
-                        ),
-                        source_type=row["_source_type"],
-                        content=row.get("content"),
-                        remote_resource_id=row["_remote_resource_id"],
-                        resource_kind=row["_resource_kind"],
-                        remote_revision=_text(row.get("remote_revision"), 240),
-                        remote_updated_at=_text(row.get("remote_updated_at"), 80),
-                        retrieved_at=_text(row.get("retrieved_at"), 80),
-                        canonical_url=_text(row.get("canonical_url"), 1000),
-                        parent_remote_id=_text(row.get("parent_remote_id"), 1000),
                         sync_epoch_id=epoch,
                         sync_cursor=next_cursor,
-                        export_format=_text(row.get("export_format"), 80),
-                        declared_mime=_text(row.get("declared_mime"), 160),
                         actor=clean_actor,
-                        filename=_text(row.get("filename"), 500),
                     )
-                    occurrence = dict(receipt.get("source_occurrence") or {})
-                    success = {
-                        "remote_resource_id": row["_remote_resource_id"],
-                        "resource_kind": row["_resource_kind"],
-                        "source_ref": receipt.get("source_ref") or row["_source_ref"],
-                        "source_occurrence_id": receipt.get("source_occurrence_id"),
-                        "canonical_source_id": receipt.get("canonical_source_id"),
-                        "content_hash": receipt.get("content_hash"),
-                        "occurrence_version": occurrence.get("version"),
-                        "observation_count": occurrence.get("observation_count"),
-                        "remote_revision": _text(row.get("remote_revision"), 240),
-                        "status": "INGESTED",
+                    by_ref = {
+                        _text(item.get("source_ref"), 2000): dict(item)
+                        for item in batch.get("items") or []
+                        if isinstance(item, dict)
+                        and _text(item.get("source_ref"), 2000)
                     }
-                    successes.append(success)
-                    seen_refs.add(_text(success["source_ref"], 2000))
+                    for row in normalized:
+                        receipt = by_ref.get(row["_source_ref"])
+                        if receipt is None:
+                            raise ConnectorSnapshotError(
+                                "connector_snapshot_batch_result_missing:"
+                                + row["_source_ref"]
+                            )
+                        occurrence = dict(
+                            receipt.get("source_occurrence") or {}
+                        )
+                        success = {
+                            "remote_resource_id": row["_remote_resource_id"],
+                            "resource_kind": row["_resource_kind"],
+                            "source_ref": receipt.get("source_ref")
+                            or row["_source_ref"],
+                            "source_occurrence_id": receipt.get(
+                                "source_occurrence_id"
+                            ),
+                            "canonical_source_id": receipt.get(
+                                "canonical_source_id"
+                            ),
+                            "content_hash": receipt.get("content_hash"),
+                            "occurrence_version": occurrence.get("version"),
+                            "observation_count": occurrence.get(
+                                "observation_count"
+                            ),
+                            "remote_revision": _text(
+                                row.get("remote_revision"), 240
+                            ),
+                            "status": "INGESTED",
+                        }
+                        successes.append(success)
+                        seen_refs.add(
+                            _text(success["source_ref"], 2000)
+                        )
                 except Exception as exc:
                     errors.append(
                         {
-                            "index": index,
-                            "remote_resource_id": row["_remote_resource_id"],
-                            "source_ref": row["_source_ref"],
                             "code": (
                                 "CONNECTOR_SNAPSHOT_INGESTION_FAILED"
                                 if isinstance(exc, ConnectorSnapshotError)
@@ -707,6 +862,42 @@ def sync_connector_snapshot_batch(
                             "detail": (
                                 str(exc)[:500]
                                 if isinstance(exc, ConnectorSnapshotError)
+                                else type(exc).__name__
+                            ),
+                            "affected_item_count": len(normalized),
+                            "previous_snapshot_retained": True,
+                        }
+                    )
+
+            if unchanged:
+                try:
+                    observation_receipt = record_source_occurrence_observations_batch(
+                        project,
+                        [
+                            {
+                                "source_ref": row["source_ref"],
+                                "metadata": row["metadata"],
+                            }
+                            for row in unchanged
+                        ],
+                        root=resolved_root,
+                        actor=clean_actor,
+                    )
+                    unchanged_recorded_count = int(
+                        observation_receipt.get("recorded_count") or 0
+                    )
+                    if unchanged_recorded_count != len(unchanged):
+                        raise ConnectorSyncError(
+                            "connector_unchanged_observation_count_mismatch"
+                        )
+                    seen_refs.update(row["source_ref"] for row in unchanged)
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "code": "CONNECTOR_UNCHANGED_OBSERVATION_FAILED",
+                            "detail": (
+                                str(exc)[:500]
+                                if isinstance(exc, ConnectorSyncError)
                                 else type(exc).__name__
                             ),
                             "previous_snapshot_retained": True,
@@ -741,7 +932,7 @@ def sync_connector_snapshot_batch(
 
             status = (
                 "PARTIAL"
-                if errors and successes
+                if errors and (successes or unchanged_recorded_count)
                 else "FAILED"
                 if errors
                 else "BLOCKED"
@@ -752,7 +943,9 @@ def sync_connector_snapshot_batch(
                 {
                     "status": status,
                     "completed_at_utc": _now(),
-                    "success_count": len(successes),
+                    "success_count": len(successes) + unchanged_recorded_count,
+                    "materialized_success_count": len(successes),
+                    "unchanged_success_count": unchanged_recorded_count,
                     "failure_count": len(errors),
                     "successful_items": successes,
                     "errors": errors,
@@ -778,7 +971,9 @@ def sync_connector_snapshot_batch(
                 {
                     "status": "FAILED",
                     "completed_at_utc": _now(),
-                    "success_count": len(successes),
+                    "success_count": len(successes) + unchanged_recorded_count,
+                    "materialized_success_count": len(successes),
+                    "unchanged_success_count": unchanged_recorded_count,
                     "failure_count": len(errors) + 1,
                     "successful_items": successes,
                     "errors": [
@@ -881,6 +1076,7 @@ def abort_connector_sync_run(
 
 
 __all__ = [
+    "connector_snapshot_observation_index",
     "CONNECTOR_INSTANCE_SCHEMA",
     "CONNECTOR_SYNC_REGISTRY_SCHEMA",
     "CONNECTOR_SYNC_RUN_SCHEMA",
