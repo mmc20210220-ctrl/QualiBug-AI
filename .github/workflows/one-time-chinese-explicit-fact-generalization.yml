@@ -27,6 +27,7 @@ jobs:
       - name: Verify exact authority inputs and decode payload
         shell: bash
         run: |
+          echo "CHINESE_FACT_STAGE=verify-inputs-and-decode" >> "$GITHUB_ENV"
           set -euo pipefail
           test "$(git hash-object ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py)" = "15a2157e71f0dd9c81eee16eb378f32db7e59475"
           test "$(git hash-object ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py)" = "fa9bbd906aa5b94abf9ffdd29979fb1d27d1a16c"
@@ -40,6 +41,7 @@ jobs:
       - name: Apply root-cause generalization
         shell: bash
         run: |
+          echo "CHINESE_FACT_STAGE=apply-root-cause-generalization" >> "$GITHUB_ENV"
           set -euo pipefail
           python /tmp/chinese-generalization/apply.py
           cp /tmp/chinese-generalization/test_chinese_explicit_fact_language_mutations.py \
@@ -49,6 +51,7 @@ jobs:
       - name: Verify exact product scope
         shell: bash
         run: |
+          echo "CHINESE_FACT_STAGE=verify-exact-product-scope" >> "$GITHUB_ENV"
           set -euo pipefail
           cat > /tmp/expected-files.txt <<'EOF'
           ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py
@@ -65,21 +68,34 @@ jobs:
           cache: pip
 
       - name: Install test dependencies
+        shell: bash
         run: |
+          echo "CHINESE_FACT_STAGE=install-test-dependencies" >> "$GITHUB_ENV"
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
       - name: Compile Chinese business authorities
+        shell: bash
         run: |
+          echo "CHINESE_FACT_STAGE=compile-authorities" >> "$GITHUB_ENV"
+          set -euo pipefail
           python -m compileall -q \
             ai_test_asset_center/enterprise_knowledge_center \
             benchmark_evaluator/enterprise_understanding
 
       - name: Run language mutation regressions
-        run: python -m pytest -q tests/test_chinese_explicit_fact_language_mutations.py
+        shell: bash
+        run: |
+          echo "CHINESE_FACT_STAGE=run-31-language-mutations" >> "$GITHUB_ENV"
+          set -euo pipefail
+          python -m pytest -q tests/test_chinese_explicit_fact_language_mutations.py
 
       - name: Run focused Chinese explicit fact suite
+        shell: bash
         run: |
+          echo "CHINESE_FACT_STAGE=run-focused-explicit-fact-suite" >> "$GITHUB_ENV"
+          set -euo pipefail
           python -m pytest -q \
             tests/test_chinese_business_comprehension.py \
             tests/test_enterprise_understanding_structure_first_facts.py \
@@ -100,6 +116,7 @@ jobs:
       - name: Run clean isolated end-to-end baseline
         shell: bash
         run: |
+          echo "CHINESE_FACT_STAGE=run-clean-isolated-baseline" >> "$GITHUB_ENV"
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/chinese-explicit-fact-workspace" "$RUNNER_TEMP/chinese-explicit-fact-result"
           python -m benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline \
@@ -130,13 +147,15 @@ jobs:
           assert metrics["false_accepted_fact_count"] == 0, metrics
           PY
 
-      - name: Commit verified generalization to main
+      - name: Freeze verified source commit
         shell: bash
         run: |
+          echo "CHINESE_FACT_STAGE=freeze-verified-source-commit" >> "$GITHUB_ENV"
           set -euo pipefail
           git checkout -- qualibug_ai.egg-info 2>/dev/null || true
           rm -f \
             .github/chinese-explicit-fact-generalization-trigger \
+            .github/chinese-explicit-fact-generalization-failure.txt \
             .github/patches/chinese_explicit_fact_generalization_payload.tar.gz.b64 \
             .github/workflows/one-time-chinese-explicit-fact-generalization.yml \
             .github/workflows/one-time-export-current-main.yml \
@@ -156,11 +175,50 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "fix(understanding): generalize Chinese explicit fact semantics"
+
+      - name: Rebase safely, reverify and push
+        shell: bash
+        run: |
+          echo "CHINESE_FACT_STAGE=rebase-reverify-push" >> "$GITHUB_ENV"
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            if ! git merge-base --is-ancestor origin/main HEAD; then
+              git rebase origin/main
+              python -m pytest -q tests/test_chinese_explicit_fact_language_mutations.py
+              rm -rf "$RUNNER_TEMP/chinese-explicit-fact-reverify-workspace" "$RUNNER_TEMP/chinese-explicit-fact-reverify-result"
+              python -m benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline \
+                --workspace-root "$RUNNER_TEMP/chinese-explicit-fact-reverify-workspace" \
+                --output "$RUNNER_TEMP/chinese-explicit-fact-reverify-result"
+            fi
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+          done
+          exit 1
+
+      - name: Publish fail-closed diagnostic
+        if: failure()
+        shell: bash
+        run: |
+          set -u
+          git rebase --abort 2>/dev/null || true
+          git fetch origin main || true
+          git reset --hard origin/main || true
+          git clean -fd || true
+          printf 'stage=%s\nevent_sha=%s\nrun_id=%s\n' \
+            "${CHINESE_FACT_STAGE:-checkout-or-workflow-start}" \
+            "$GITHUB_SHA" \
+            "$GITHUB_RUN_ID" \
+            > .github/chinese-explicit-fact-generalization-failure.txt
+          git config user.name "mmc20210220-ctrl"
+          git config user.email "mmc20210220@gmail.com"
+          git add .github/chinese-explicit-fact-generalization-failure.txt
+          git commit -m "chore(understanding): report Chinese fact generalization failure" || true
           for attempt in 1 2 3 4 5; do
             if git push origin HEAD:main; then
               exit 0
             fi
-            git pull --rebase origin main
+            git pull --rebase origin main || exit 0
           done
-          echo "unable to push verified Chinese generalization after safe rebase retries" >&2
-          exit 1
+          exit 0
