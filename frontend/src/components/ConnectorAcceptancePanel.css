@@ -16,6 +16,11 @@
   background: rgba(146, 64, 14, 0.1);
 }
 
+.connector-acceptance-running {
+  border-color: rgba(56, 189, 248, 0.38);
+  background: rgba(3, 105, 161, 0.1);
+}
+
 .connector-acceptance-heading {
   display: flex;
   align-items: center;
@@ -47,7 +52,8 @@
 }
 
 .connector-acceptance-error,
-.connector-acceptance-success {
+.connector-acceptance-success,
+.connector-acceptance-running-note {
   margin-top: 12px;
   padding: 10px 12px;
   border-radius: 10px;
@@ -62,6 +68,12 @@
 .connector-acceptance-success {
   background: rgba(22, 101, 52, 0.22);
   color: #bbf7d0;
+}
+
+.connector-acceptance-running-note {
+  background: rgba(3, 105, 161, 0.18);
+  color: #bae6fd;
+  line-height: 1.55;
 }
 
 .connector-acceptance-metrics {
