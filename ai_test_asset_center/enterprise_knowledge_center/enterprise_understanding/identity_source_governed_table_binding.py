@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from .identity_exact_table_semantic_binding import (
-    _reconcile_aggregate_technical_unknowns,
+from .identity_unknown_reconciliation import (
+    reconcile_resolved_technical_identity_unknowns,
 )
 from .identity_source_governed_table_evidence import (
     API_AUTHORITY,
@@ -261,7 +261,7 @@ def project_source_governed_table_bindings(
     }
     result["source_governed_table_binding"] = receipt
     asset["enterprise_identity_source_governed_table_binding"] = receipt
-    return _reconcile_aggregate_technical_unknowns(unknowns, bound_artifacts)
+    return reconcile_resolved_technical_identity_unknowns(unknowns, bound_artifacts)
 
 
 def augment_source_governed_table_bindings(
