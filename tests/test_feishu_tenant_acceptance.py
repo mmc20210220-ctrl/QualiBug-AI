@@ -61,7 +61,6 @@ def _run(
         "source_content_persisted_in_adapter_receipt": False,
         "next_cursor": cursor,
         "run_receipt_path": f"receipts/{cursor}.json",
-        # The acceptance projection must ignore any accidental source-content field.
         "content": "CUSTOMER-SOURCE-CONTENT-MUST-NOT-BE-PERSISTED",
     }
 
@@ -71,23 +70,28 @@ def _clock(*values: float):
     return lambda: next(iterator)
 
 
-def test_pilot_acceptance_passes_and_persists_bounded_report(tmp_path: Path) -> None:
-    runs = iter(
-        [
-            _run(cursor="raw-secret-cursor", materialized=20, unchanged=0),
-            _run(cursor="raw-secret-cursor", materialized=0, unchanged=20),
-        ]
-    )
-
-    report = run_feishu_tenant_acceptance(
+def _execute(tmp_path: Path, sync_runs, *, profile="pilot", connection=None):
+    return run_feishu_tenant_acceptance(
         PROJECT,
         CONNECTOR,
         root=tmp_path,
-        profile="pilot",
-        connection_tester=lambda *args, **kwargs: _connection(),
-        sync_runner=lambda *args, **kwargs: next(runs),
-        clock=_clock(0.0, 1.0, 2.0, 3.0),
+        profile=profile,
+        connection_tester=lambda *args, **kwargs: connection or _connection(),
+        sync_runner=lambda *args, **kwargs: next(sync_runs),
+        clock=_clock(0.0, 1.0, 2.0, 3.0, 4.0, 5.0),
         sleeper=lambda _: None,
+    )
+
+
+def test_pilot_acceptance_passes_and_persists_bounded_report(tmp_path: Path) -> None:
+    report = _execute(
+        tmp_path,
+        iter(
+            [
+                _run(cursor="raw-secret-cursor", materialized=20, unchanged=0),
+                _run(cursor="raw-secret-cursor", materialized=0, unchanged=20),
+            ]
+        ),
     )
 
     assert report["verdict"] == "PASS"
@@ -96,12 +100,14 @@ def test_pilot_acceptance_passes_and_persists_bounded_report(tmp_path: Path) -> 
     assert report["summary"]["maximum_discovered_resource_count"] == 20
     assert report["governance"]["deletion_policy"] == "RETAIN"
     assert report["governance"]["customer_material_mutation_executed"] is False
+    assert report["governance"]["source_content_persisted_in_sync_receipt"] is False
 
     checks = {row["check_id"]: row for row in report["checks"]}
     assert checks["RUN_2_STABLE_SNAPSHOT_NOT_REEXPORTED"]["status"] == "PASS"
+    assert checks["CONNECTION_CREDENTIALS_NOT_PERSISTED"]["status"] == "PASS"
+    assert checks["ACCESS_TOKEN_NOT_PERSISTED"]["status"] == "PASS"
 
     path = tmp_path / report["report_path"]
-    assert path.is_file()
     persisted = path.read_text(encoding="utf-8")
     assert "raw-secret-cursor" not in persisted
     assert "CUSTOMER-SOURCE-CONTENT-MUST-NOT-BE-PERSISTED" not in persisted
@@ -109,6 +115,7 @@ def test_pilot_acceptance_passes_and_persists_bounded_report(tmp_path: Path) -> 
 
     payload = json.loads(persisted)
     assert payload["verdict"] == "PASS"
+    assert payload["report_path"] == report["report_path"]
     assert payload["connection"]["credentials_persisted"] is False
     assert payload["connection"]["access_token_persisted"] is False
 
@@ -121,47 +128,70 @@ def test_unknown_gap_and_customer_mutation_are_blockers(tmp_path: Path) -> None:
         unknown_gap=1,
         mutation=True,
     )
-    runs = iter([bad, dict(bad)])
-
-    report = run_feishu_tenant_acceptance(
-        PROJECT,
-        CONNECTOR,
-        root=tmp_path,
-        profile="smoke",
-        connection_tester=lambda *args, **kwargs: _connection(),
-        sync_runner=lambda *args, **kwargs: next(runs),
-        clock=_clock(0.0, 1.0, 2.0, 3.0),
-        sleeper=lambda _: None,
-    )
+    report = _execute(tmp_path, iter([bad, dict(bad)]), profile="smoke")
 
     assert report["verdict"] == "FAIL"
+    assert report["governance"]["customer_material_mutation_executed"] is True
     checks = {row["check_id"]: row for row in report["checks"]}
+    assert checks["RUN_1_RESOURCE_ACCOUNTING_BALANCED"]["status"] == "FAIL"
     assert checks["RUN_1_NO_UNKNOWN_GAPS"]["status"] == "FAIL"
     assert checks["RUN_1_NO_CUSTOMER_MUTATION"]["status"] == "FAIL"
 
 
-def test_stable_snapshot_reexport_fails_acceptance(tmp_path: Path) -> None:
-    runs = iter(
-        [
-            _run(cursor="stable", materialized=20, unchanged=0),
-            _run(
-                cursor="stable",
-                materialized=1,
-                unchanged=19,
-                export_avoided=19,
-            ),
-        ]
+def test_missing_safety_evidence_fails_closed(tmp_path: Path) -> None:
+    first = _run(cursor="missing", materialized=1, unchanged=0)
+    second = _run(cursor="missing", materialized=0, unchanged=1)
+    for row in (first, second):
+        row.pop("customer_material_mutation_executed")
+        row.pop("source_content_persisted_in_adapter_receipt")
+
+    report = _execute(tmp_path, iter([first, second]), profile="smoke")
+
+    assert report["verdict"] == "FAIL"
+    assert report["governance"]["customer_material_mutation_executed"] is None
+    assert report["governance"]["source_content_persisted_in_sync_receipt"] is None
+    checks = {row["check_id"]: row for row in report["checks"]}
+    assert checks["RUN_1_NO_CUSTOMER_MUTATION"]["observed"] is None
+    assert checks["RUN_1_NO_CUSTOMER_MUTATION"]["status"] == "FAIL"
+    assert checks["RUN_1_NO_SOURCE_CONTENT_IN_SYNC_RECEIPT"]["status"] == "FAIL"
+
+
+def test_persisted_connection_credentials_are_blockers(tmp_path: Path) -> None:
+    report = _execute(
+        tmp_path,
+        iter(
+            [
+                _run(cursor="cursor", materialized=1, unchanged=0),
+                _run(cursor="cursor", materialized=0, unchanged=1),
+            ]
+        ),
+        profile="smoke",
+        connection=_connection(
+            credentials_persisted=True,
+            access_token_persisted=True,
+        ),
     )
 
-    report = run_feishu_tenant_acceptance(
-        PROJECT,
-        CONNECTOR,
-        root=tmp_path,
-        profile="pilot",
-        connection_tester=lambda *args, **kwargs: _connection(),
-        sync_runner=lambda *args, **kwargs: next(runs),
-        clock=_clock(0.0, 1.0, 2.0, 3.0),
-        sleeper=lambda _: None,
+    assert report["verdict"] == "FAIL"
+    checks = {row["check_id"]: row for row in report["checks"]}
+    assert checks["CONNECTION_CREDENTIALS_NOT_PERSISTED"]["status"] == "FAIL"
+    assert checks["ACCESS_TOKEN_NOT_PERSISTED"]["status"] == "FAIL"
+
+
+def test_stable_snapshot_reexport_fails_acceptance(tmp_path: Path) -> None:
+    report = _execute(
+        tmp_path,
+        iter(
+            [
+                _run(cursor="stable", materialized=20, unchanged=0),
+                _run(
+                    cursor="stable",
+                    materialized=1,
+                    unchanged=19,
+                    export_avoided=19,
+                ),
+            ]
+        ),
     )
 
     assert report["verdict"] == "FAIL"
@@ -174,22 +204,14 @@ def test_stable_snapshot_reexport_fails_acceptance(tmp_path: Path) -> None:
 
 
 def test_remote_change_during_acceptance_is_explained_not_misclassified(tmp_path: Path) -> None:
-    runs = iter(
-        [
-            _run(cursor="revision-1", materialized=20, unchanged=0),
-            _run(cursor="revision-2", materialized=1, unchanged=19),
-        ]
-    )
-
-    report = run_feishu_tenant_acceptance(
-        PROJECT,
-        CONNECTOR,
-        root=tmp_path,
-        profile="pilot",
-        connection_tester=lambda *args, **kwargs: _connection(),
-        sync_runner=lambda *args, **kwargs: next(runs),
-        clock=_clock(0.0, 1.0, 2.0, 3.0),
-        sleeper=lambda _: None,
+    report = _execute(
+        tmp_path,
+        iter(
+            [
+                _run(cursor="revision-1", materialized=20, unchanged=0),
+                _run(cursor="revision-2", materialized=1, unchanged=19),
+            ]
+        ),
     )
 
     assert report["verdict"] == "PASS"
@@ -203,22 +225,14 @@ def test_remote_change_during_acceptance_is_explained_not_misclassified(tmp_path
 
 
 def test_partial_coverage_must_meet_profile_threshold(tmp_path: Path) -> None:
-    runs = iter(
-        [
-            _run(cursor="partial", materialized=18, unchanged=0, unsupported=2),
-            _run(cursor="partial", materialized=0, unchanged=18, unsupported=2),
-        ]
-    )
-
-    report = run_feishu_tenant_acceptance(
-        PROJECT,
-        CONNECTOR,
-        root=tmp_path,
-        profile="pilot",
-        connection_tester=lambda *args, **kwargs: _connection(),
-        sync_runner=lambda *args, **kwargs: next(runs),
-        clock=_clock(0.0, 1.0, 2.0, 3.0),
-        sleeper=lambda _: None,
+    report = _execute(
+        tmp_path,
+        iter(
+            [
+                _run(cursor="partial", materialized=18, unchanged=0, unsupported=2),
+                _run(cursor="partial", materialized=0, unchanged=18, unsupported=2),
+            ]
+        ),
     )
 
     assert report["verdict"] == "FAIL"
@@ -228,24 +242,16 @@ def test_partial_coverage_must_meet_profile_threshold(tmp_path: Path) -> None:
 
 
 def test_connection_must_prove_read_only_access(tmp_path: Path) -> None:
-    runs = iter(
-        [
-            _run(cursor="cursor", materialized=1, unchanged=0),
-            _run(cursor="cursor", materialized=0, unchanged=1),
-        ]
-    )
-
-    report = run_feishu_tenant_acceptance(
-        PROJECT,
-        CONNECTOR,
-        root=tmp_path,
-        profile="smoke",
-        connection_tester=lambda *args, **kwargs: _connection(
-            network_side_effect="UNKNOWN"
+    report = _execute(
+        tmp_path,
+        iter(
+            [
+                _run(cursor="cursor", materialized=1, unchanged=0),
+                _run(cursor="cursor", materialized=0, unchanged=1),
+            ]
         ),
-        sync_runner=lambda *args, **kwargs: next(runs),
-        clock=_clock(0.0, 1.0, 2.0, 3.0),
-        sleeper=lambda _: None,
+        profile="smoke",
+        connection=_connection(network_side_effect="UNKNOWN"),
     )
 
     assert report["verdict"] == "FAIL"
