@@ -139,6 +139,21 @@ def _install_quarantine_migration(monkeypatch, *, status: str = "MIGRATED") -> N
     )
 
 
+def _install_clear_projection(monkeypatch) -> None:
+    monkeypatch.setattr(
+        inventory,
+        "build_historical_authorization_quarantine_projection",
+        lambda ledger, superseded_registry_fingerprint="": {
+            "quarantine_count": 0
+        },
+    )
+    monkeypatch.setattr(
+        inventory,
+        "validate_historical_authorization_quarantine_projection",
+        lambda value: deepcopy(value),
+    )
+
+
 def test_discovery_covers_outputs_and_workspace_and_project_filter(
     tmp_path: Path,
 ) -> None:
@@ -258,18 +273,7 @@ def test_invalid_json_is_isolated_and_does_not_abort_other_projects(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        inventory,
-        "build_historical_authorization_quarantine_projection",
-        lambda ledger, superseded_registry_fingerprint="": {
-            "quarantine_count": 0
-        },
-    )
-    monkeypatch.setattr(
-        inventory,
-        "validate_historical_authorization_quarantine_projection",
-        lambda value: deepcopy(value),
-    )
+    _install_clear_projection(monkeypatch)
     _write_artifact(
         tmp_path,
         source_root="platform_outputs",
@@ -294,6 +298,34 @@ def test_invalid_json_is_isolated_and_does_not_abort_other_projects(
     assert report["artifact_status_counts"]["INVALID_ARTIFACT"] == 1
 
 
+def test_artifact_change_during_snapshot_is_not_audited_as_stable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    path = _write_artifact(
+        tmp_path,
+        source_root="platform_outputs",
+        project_id="moving",
+        filename="scan_result.json",
+        payload=_payload(),
+    )
+    original_read_bytes = Path.read_bytes
+
+    def _changing_read_bytes(candidate: Path) -> bytes:
+        raw = original_read_bytes(candidate)
+        if candidate.resolve() == path.resolve():
+            candidate.write_bytes(raw + b" ")
+        return raw
+
+    monkeypatch.setattr(Path, "read_bytes", _changing_read_bytes)
+
+    artifact = audit_historical_authorization_artifact(path, root=tmp_path)
+
+    assert artifact["status"] == "INVALID_ARTIFACT"
+    assert artifact["reason"] == "ARTIFACT_CHANGED_DURING_READ"
+    assert artifact["source_evidence_rewritten"] is False
+
+
 def test_missing_authority_is_unverifiable_not_a_crash(tmp_path: Path) -> None:
     _write_artifact(
         tmp_path,
@@ -314,6 +346,34 @@ def test_missing_authority_is_unverifiable_not_a_crash(tmp_path: Path) -> None:
     assert project["unverifiable_artifact_count"] == 1
     assert project["artifacts"][0]["reason"] == "MAINLINE_RUN_MISSING"
     assert project["quarantine_occurrence_count"] == 0
+
+
+def test_mainline_and_ledger_identity_mismatch_is_a_contradiction(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _install_clear_projection(monkeypatch)
+    payload = _payload()
+    payload["obligation_attempt_ledger"]["campaign_id"] = "campaign:foreign"
+    _write_artifact(
+        tmp_path,
+        source_root="platform_outputs",
+        project_id="foreign-ledger",
+        filename="scan_result.json",
+        payload=payload,
+    )
+
+    report = build_historical_authorization_inventory(
+        tmp_path,
+        generated_at_utc="2026-08-01T01:00:00Z",
+    )
+
+    artifact = report["projects"][0]["artifacts"][0]
+    assert report["status"] == "CONTRADICTION"
+    assert artifact["status"] == "CONTRADICTION"
+    assert artifact["reason"].startswith(
+        "AUTHORITY_IDENTITY_MISMATCH:campaign_id"
+    )
 
 
 def test_authorization_contradiction_is_reported_per_artifact(
@@ -362,6 +422,38 @@ def test_requested_missing_project_is_explicit(tmp_path: Path) -> None:
     assert report["status"] == "CLEAR"
 
 
+def test_resigned_project_summary_tamper_is_rejected(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _install_quarantine_migration(monkeypatch)
+    _write_artifact(
+        tmp_path,
+        source_root="platform_outputs",
+        project_id="alpha",
+        filename="scan_result.json",
+        payload=_payload(),
+    )
+    report = build_historical_authorization_inventory(
+        tmp_path,
+        generated_at_utc="2026-08-01T01:00:00Z",
+    )
+    report["projects"][0]["quarantine_occurrence_count"] = 99
+    report["inventory_fingerprint"] = inventory._fingerprint(
+        {
+            key: value
+            for key, value in report.items()
+            if key != "inventory_fingerprint"
+        }
+    )
+
+    with pytest.raises(
+        HistoricalAuthorizationInventoryError,
+        match="historical_authorization_inventory_project_summary_invalid:alpha",
+    ):
+        validate_historical_authorization_inventory(report)
+
+
 def test_inventory_fingerprint_detects_tampering(tmp_path: Path) -> None:
     report = build_historical_authorization_inventory(
         tmp_path,
@@ -371,7 +463,7 @@ def test_inventory_fingerprint_detects_tampering(tmp_path: Path) -> None:
 
     with pytest.raises(
         HistoricalAuthorizationInventoryError,
-        match="historical_authorization_inventory_count_invalid",
+        match="historical_authorization_inventory_summary_invalid:artifact_count",
     ):
         validate_historical_authorization_inventory(report)
 
