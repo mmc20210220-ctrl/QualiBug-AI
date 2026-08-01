@@ -6,6 +6,9 @@ from typing import Any
 
 from .._linking import _relationship_is_authoritative
 
+from .identity_exact_table_semantic_binding import (
+    project_exact_table_semantic_bindings,
+)
 from .identity_types import (
     IDENTITY_BINDING_SCHEMA,
     IDENTITY_EDGE_SCHEMA,
@@ -382,6 +385,17 @@ def augment_technical_identity_projection(
                         "automatic_inference_allowed": False,
                     }
                 )
+
+    unknowns = project_exact_table_semantic_bindings(
+        asset,
+        result,
+        lookup=lookup,
+        mentions=mentions,
+        edges=edges,
+        bindings=bindings,
+        bound_artifacts=bound_artifacts,
+        unknowns=unknowns,
+    )
 
     result["mentions"] = list({text(row.get("mention_id")): row for row in mentions if text(row.get("mention_id"))}.values())
     result["edges"] = list({text(row.get("edge_id")): row for row in edges if text(row.get("edge_id"))}.values())

@@ -65,6 +65,7 @@ tests/test_benchmark_reset_receipt_truth.py
 tests/test_benchmark_runtime_cleanup_assessment.py
 tests/test_architecture_extraction_contracts.py
 tests/test_enterprise_identity_governance.py
+tests/test_identity_exact_table_semantic_binding.py
 tests/test_enterprise_identity_scope.py
 tests/test_enterprise_identity_resolution.py
 tests/test_implicit_rule_identity_reconciliation.py
