@@ -1,0 +1,60 @@
+name: One-time observable Chinese fact mutation probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/chinese-fact-mutation-probe-v2-trigger"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-observable-chinese-fact-mutation-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Publish run id before execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' '${{ github.run_id }}' > .github/chinese-fact-mutation-run-id
+          git config user.name "mmc20210220-ctrl"
+          git config user.email "mmc20210220@gmail.com"
+          git add .github/chinese-fact-mutation-run-id
+          git commit -m "chore(ci): publish Chinese mutation probe run id"
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then break; fi
+            git pull --rebase origin main
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install project
+        run: python -m pip install -e .
+
+      - name: Run mutation probe
+        run: python .github/chinese_fact_mutation_probe.py
+
+      - name: Commit diagnostic report safely
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add .github/chinese-fact-mutation-report.json
+          git commit -m "test(understanding): publish Chinese fact mutation diagnostics"
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then exit 0; fi
+            git pull --rebase origin main
+          done
+          exit 1
