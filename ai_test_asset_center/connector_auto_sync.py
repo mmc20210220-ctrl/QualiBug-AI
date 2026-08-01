@@ -1,10 +1,12 @@
 """Recovery-aware facade for managed connector auto synchronization.
 
 The original scheduling, fencing, profile checkpoint and retry implementation remains in
-``connector_auto_sync_core``. This facade permanently composes the lifecycle checkpoint recovery
-authority into the existing managed path and projects persisted recovery state to operators.
-Production calls do not rewrite shared globals; explicit dependency overrides retain a narrow,
-serialized compatibility bridge for focused tests and embedders.
+``connector_auto_sync_core``. The core remains the sole owner of
+``connector_connection_profiles.json`` and ``managed_connector_sync_fence``. This facade
+permanently composes lifecycle checkpoint recovery into that existing managed path and projects
+persisted recovery state to operators. Production calls do not rewrite shared globals; explicit
+dependency overrides retain a narrow, serialized compatibility bridge for focused tests and
+embedders.
 """
 from __future__ import annotations
 
