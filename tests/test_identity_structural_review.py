@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
+
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding import (
+    identity_structural_review as review,
+)
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_registry_governance import (
+    govern_identity_registry,
+)
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_structural_review import (
     ACTION_CONFIRM_ALIAS,
     ACTION_REJECT_CANDIDATE,
@@ -43,11 +51,18 @@ def _candidate() -> dict:
         ],
         "matched_operation_names": ["创建", "审批"],
         "matched_lifecycle_states": ["草稿", "待审批", "完成"],
-        "matched_lifecycle_transitions": ["草稿>待审批|ALLOWED", "待审批>完成|ALLOWED"],
+        "matched_lifecycle_transitions": [
+            "草稿>待审批|ALLOWED",
+            "待审批>完成|ALLOWED",
+        ],
         "matched_relation_context": ["OUT|REFERENCES|entity:customer"],
         "source_refs": {
             "entity:order": ["operation:a", "lifecycle:a", "relation:a"],
-            "entity:sales-order": ["operation:b", "lifecycle:b", "relation:b"],
+            "entity:sales-order": [
+                "operation:b",
+                "lifecycle:b",
+                "relation:b",
+            ],
         },
         "evidence": _evidence("candidate:orders"),
         "status": "CANDIDATE_ONLY",
@@ -80,7 +95,10 @@ def _asset() -> dict:
             "schema": "qualibug.enterprise-identity-registry.v1",
             "entities": [
                 {"entity_id": "entity:order", "canonical_label": "订单"},
-                {"entity_id": "entity:sales-order", "canonical_label": "销售单"},
+                {
+                    "entity_id": "entity:sales-order",
+                    "canonical_label": "销售单",
+                },
             ],
         },
         "enterprise_identity_benchmark": {
@@ -99,7 +117,10 @@ def _asset() -> dict:
 def _resolution() -> dict:
     return {
         "clusters": [
-            {"entity_id": "entity:order", "member_mention_ids": ["mention:order"]},
+            {
+                "entity_id": "entity:order",
+                "member_mention_ids": ["mention:order"],
+            },
             {
                 "entity_id": "entity:sales-order",
                 "member_mention_ids": ["mention:sales-order"],
@@ -236,50 +257,64 @@ def test_operator_alias_mentions_are_removed_from_external_benchmark_universe() 
         "mentions": [
             {
                 "mention_id": "mention:order",
+                "raw_label": "订单",
                 "source_id": "prd",
                 "source_kind": "BUSINESS_FACT",
             },
             {
                 "mention_id": "mention:sales-order",
+                "raw_label": "销售单",
                 "source_id": "api",
                 "source_kind": "BUSINESS_FACT",
             },
             {
                 "mention_id": "mention:operator:canonical",
+                "raw_label": "订单",
                 "source_id": "operator-authority",
                 "source_kind": "TERM_ALIAS",
             },
             {
                 "mention_id": "mention:operator:alias",
+                "raw_label": "销售单",
                 "source_id": "operator-authority",
                 "source_kind": "TERM_ALIAS",
             },
         ],
         "edges": [
             {
+                "edge_id": "edge:source",
+                "left_mention_id": "mention:order",
+                "right_mention_id": "mention:sales-order",
+            },
+            {
                 "edge_id": "edge:operator",
                 "left_mention_id": "mention:operator:canonical",
                 "right_mention_id": "mention:operator:alias",
-            }
+            },
         ],
         "clusters": [
             {
                 "entity_id": "entity:order",
+                "canonical_label": "订单",
+                "labels": ["订单", "销售单"],
                 "member_mention_ids": [
                     "mention:order",
                     "mention:sales-order",
                     "mention:operator:canonical",
                     "mention:operator:alias",
                 ],
+                "accepted_identity_edge_ids": ["edge:source", "edge:operator"],
             }
         ],
+        "bindings": [],
+        "conflicts": [],
         "mention_to_entity": {
             "mention:order": "entity:order",
             "mention:sales-order": "entity:order",
             "mention:operator:canonical": "entity:order",
             "mention:operator:alias": "entity:order",
         },
-        "gate": {"metrics": {"mention_count": 4, "identity_edge_count": 1}},
+        "gate": {"metrics": {"mention_count": 4, "identity_edge_count": 2}},
     }
 
     scrubbed = scrub_operator_structural_review_mentions(asset, result)
@@ -288,7 +323,7 @@ def test_operator_alias_mentions_are_removed_from_external_benchmark_universe() 
         "mention:order",
         "mention:sales-order",
     ]
-    assert scrubbed["edges"] == []
+    assert [row["edge_id"] for row in scrubbed["edges"]] == ["edge:source"]
     cluster = scrubbed["clusters"][0]
     assert cluster["member_mention_ids"] == [
         "mention:order",
@@ -300,6 +335,32 @@ def test_operator_alias_mentions_are_removed_from_external_benchmark_universe() 
     projection = scrubbed["operator_structural_review_projection"]
     assert projection["synthetic_mentions_removed_from_benchmark_universe"] == 2
     assert projection["ground_truth_universe_changed"] is False
+
+    prior_registry = {
+        "schema": "qualibug.enterprise-identity-registry.v1",
+        "entities": [
+            {"entity_id": "entity:order", "canonical_label": "订单"},
+        ],
+        "operator_authorized_merge": {
+            "decision_id": "decision:confirm",
+            "canonical_entity_id": "entity:order",
+            "retired_entity_ids": ["entity:sales-order"],
+            "automatic_merge": False,
+        },
+    }
+    governed = govern_identity_registry(prior_registry, scrubbed)
+    governed_cluster = governed["clusters"][0]
+    assert governed_cluster["accepted_identity_edge_ids"] == ["edge:source"]
+    registry = governed["registry"]
+    assert registry["operator_authorized_merge"] == prior_registry[
+        "operator_authorized_merge"
+    ]
+    registry_receipt = governed["registry_recompute_receipt"]
+    assert registry_receipt["operator_authorized_retired_entity_ids"] == [
+        "entity:sales-order"
+    ]
+    assert registry_receipt["retired_entity_ids"] == ["entity:sales-order"]
+    assert registry_receipt["automatic_entity_merge_used"] is False
 
 
 def test_measurement_receipt_reports_precision_recall_delta_without_mutating_truth() -> None:
@@ -337,3 +398,63 @@ def test_measurement_receipt_reports_precision_recall_delta_without_mutating_tru
     assert projected["metrics"][
         "enterprise_identity_structural_review_measurement_comparable"
     ] is True
+
+
+def test_record_review_decision_appends_to_existing_authority_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center import composition
+
+    asset = _asset()
+    asset["enterprise_understanding_model"] = _model()
+    existing = {
+        "schema": "qualibug.operator-authority-decision-ledger.v1",
+        "project_id": "demo",
+        "decisions": [
+            {
+                "schema": "qualibug.operator-authority-decision.v1",
+                "decision_id": "decision:business-conflict",
+                "conflict_id": "conflict:business",
+                "action": "SELECT_FACT",
+            }
+        ],
+        "audit_receipts": [],
+    }
+    captured: dict = {}
+
+    monkeypatch.setattr(
+        composition,
+        "load_enterprise_business_knowledge_asset",
+        lambda *_args, **_kwargs: asset,
+    )
+    monkeypatch.setattr(
+        review,
+        "load_authority_decision_ledger",
+        lambda *_args, **_kwargs: deepcopy(existing),
+    )
+
+    def fake_save(ledger: dict, *_args: object, **_kwargs: object) -> None:
+        captured.update(deepcopy(ledger))
+
+    monkeypatch.setattr(review, "save_authority_decision_ledger", fake_save)
+
+    result = review.record_identity_structural_review_decision(
+        "demo",
+        candidate_id="candidate:orders",
+        action=ACTION_CONFIRM_ALIAS,
+        canonical_entity_id="entity:order",
+        rationale="资料结构一致，人工确认同一对象",
+        actor={"name": "owner", "role": "OWNER"},
+        rebuild=False,
+    )
+
+    assert result["ok"] is True
+    assert result["ground_truth_mutated"] is False
+    assert len(captured["decisions"]) == 2
+    assert captured["decisions"][0]["decision_id"] == "decision:business-conflict"
+    structural = captured["decisions"][1]
+    assert structural["decision_kind"] == DECISION_KIND
+    assert structural["candidate_id"] == "candidate:orders"
+    assert structural["canonical_entity_id"] == "entity:order"
+    assert structural["automatic_entity_union_allowed"] is False
+    assert len(captured["audit_receipts"]) == 1
