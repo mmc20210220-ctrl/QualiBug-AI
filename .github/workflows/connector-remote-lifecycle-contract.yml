@@ -13,7 +13,9 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
       - "tests/test_connector_remote_lifecycle.py"
       - "tests/test_connector_remote_lifecycle_reappearance_once.py"
+      - "tests/test_connector_remote_lifecycle_transaction.py"
       - "tests/test_feishu_remote_lifecycle_integration.py"
+      - "tests/test_source_occurrence_content_reversion.py"
       - "tests/test_source_occurrence_remote_retirement.py"
       - "tests/test_private_pilot_connector_remote_lifecycle_projection.py"
       - "tests/test_private_pilot_connector_remote_lifecycle_sanitization.py"
@@ -29,7 +31,9 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
       - "tests/test_connector_remote_lifecycle.py"
       - "tests/test_connector_remote_lifecycle_reappearance_once.py"
+      - "tests/test_connector_remote_lifecycle_transaction.py"
       - "tests/test_feishu_remote_lifecycle_integration.py"
+      - "tests/test_source_occurrence_content_reversion.py"
       - "tests/test_source_occurrence_remote_retirement.py"
       - "tests/test_private_pilot_connector_remote_lifecycle_projection.py"
       - "tests/test_private_pilot_connector_remote_lifecycle_sanitization.py"
@@ -71,7 +75,9 @@ jobs:
           python -m pytest -q \
             tests/test_connector_remote_lifecycle.py \
             tests/test_connector_remote_lifecycle_reappearance_once.py \
+            tests/test_connector_remote_lifecycle_transaction.py \
             tests/test_feishu_remote_lifecycle_integration.py \
+            tests/test_source_occurrence_content_reversion.py \
             tests/test_source_occurrence_remote_retirement.py \
             tests/test_private_pilot_connector_remote_lifecycle_projection.py \
             tests/test_private_pilot_connector_remote_lifecycle_sanitization.py
