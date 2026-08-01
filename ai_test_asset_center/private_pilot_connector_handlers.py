@@ -1,9 +1,9 @@
 """Private-pilot HTTP surface for enterprise knowledge connectors.
 
 The HTTP layer owns authentication, public projection, and request shaping only. Trusted sync,
-acceptance, fenced configuration, checkpoint validation, automatic refresh, and retry policy live
-in connector application services. Raw credentials, source content, cursors, and report paths are
-never returned through this surface.
+acceptance jobs, fenced configuration, checkpoint validation, automatic refresh, and retry policy
+live in connector application services. Raw credentials, source content, cursors, and report paths
+are never returned through this surface.
 """
 from __future__ import annotations
 
@@ -27,9 +27,11 @@ from .connector_sync_authority import (
     load_connector_sync_run,
 )
 from .feishu_connector_adapter import FeishuConnectorError
-from .feishu_tenant_acceptance import (
-    FeishuTenantAcceptanceError,
-    run_feishu_tenant_acceptance,
+from .feishu_tenant_acceptance_jobs import (
+    FeishuTenantAcceptanceJobError,
+    get_current_feishu_tenant_acceptance_job,
+    get_feishu_tenant_acceptance_job,
+    start_feishu_tenant_acceptance_job,
 )
 from .feishu_tenant_acceptance_reports import (
     FeishuTenantAcceptanceReportError,
@@ -305,6 +307,7 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             "acceptance_projection_returns_raw_cursor": False,
             "acceptance_projection_returns_credentials": False,
             "acceptance_always_uses_retain_policy": True,
+            "acceptance_runs_as_persistent_background_job": True,
             "customer_material_mutation_executed": False,
             "second_connector_registry_created": False,
             "second_fencing_registry_created": False,
@@ -379,10 +382,10 @@ class KnowledgeConnectorHandlersMixin:
             if isinstance(exc, ConnectorProfileError)
             else "KNOWLEDGE_CONNECTOR_SYNC_ERROR"
             if isinstance(exc, ConnectorSyncError)
+            else "FEISHU_ACCEPTANCE_JOB_ERROR"
+            if isinstance(exc, FeishuTenantAcceptanceJobError)
             else "FEISHU_ACCEPTANCE_REPORT_ERROR"
             if isinstance(exc, FeishuTenantAcceptanceReportError)
-            else "FEISHU_ACCEPTANCE_ERROR"
-            if isinstance(exc, FeishuTenantAcceptanceError)
             else "FEISHU_CONNECTOR_ERROR"
         )
         return self._json(
@@ -446,6 +449,22 @@ class KnowledgeConnectorHandlersMixin:
                     root=root,
                 )
                 return self._json({"ok": True, "data": report})
+            if len(tail) == 3 and tail[1] == "acceptance-jobs":
+                job = (
+                    get_current_feishu_tenant_acceptance_job(
+                        project,
+                        connector,
+                        root=root,
+                    )
+                    if tail[2] == "current"
+                    else get_feishu_tenant_acceptance_job(
+                        project,
+                        connector,
+                        _text(tail[2], 80),
+                        root=root,
+                    )
+                )
+                return self._json({"ok": True, "data": job})
             if len(tail) == 3 and tail[1] == "runs":
                 run = load_connector_sync_run(
                     project,
@@ -466,6 +485,7 @@ class KnowledgeConnectorHandlersMixin:
         except (
             ConnectorProfileError,
             ConnectorSyncError,
+            FeishuTenantAcceptanceJobError,
             FeishuTenantAcceptanceReportError,
             KeyError,
         ) as exc:
@@ -573,58 +593,54 @@ class KnowledgeConnectorHandlersMixin:
                 200 if run.get("status") == "COMPLETE" else 409,
             )
         if action == "acceptance":
-            report = run_feishu_tenant_acceptance(
+            options = {
+                "runs": _optional_bounded_int(body.get("runs"), 2, 10),
+                "min_discovered_resources": _optional_bounded_int(
+                    body.get("min_discovered_resources"), 0, 1_000_000
+                ),
+                "min_coverage_ratio": _optional_bounded_float(
+                    body.get("min_coverage_ratio"), 0.0, 1.0
+                ),
+                "max_unsupported_ratio": _optional_bounded_float(
+                    body.get("max_unsupported_ratio"), 0.0, 1.0
+                ),
+                "max_run_duration_seconds": _optional_bounded_float(
+                    body.get("max_run_duration_seconds"), 1.0, 3600.0
+                ),
+                "max_nodes": _bounded_int(
+                    body.get("max_nodes"), 100_000, 1, 100_000
+                ),
+                "max_export_polls": _bounded_int(
+                    body.get("max_export_polls"), 40, 1, 120
+                ),
+                "export_poll_interval": _bounded_float(
+                    body.get("export_poll_interval"), 0.5, 0.0, 5.0
+                ),
+                "allow_raw_text_fallback": bool(
+                    body.get("allow_raw_text_fallback") is True
+                ),
+                "timeout": _bounded_float(
+                    body.get("timeout"), 30.0, 1.0, 60.0
+                ),
+            }
+            job = start_feishu_tenant_acceptance_job(
                 project,
                 connector,
                 root=root,
                 profile=_text(body.get("profile"), 40) or "pilot",
-                runs=_optional_bounded_int(body.get("runs"), 2, 10),
-                min_discovered_resources=_optional_bounded_int(
-                    body.get("min_discovered_resources"), 0, 1_000_000
-                ),
-                min_coverage_ratio=_optional_bounded_float(
-                    body.get("min_coverage_ratio"), 0.0, 1.0
-                ),
-                max_unsupported_ratio=_optional_bounded_float(
-                    body.get("max_unsupported_ratio"), 0.0, 1.0
-                ),
-                max_run_duration_seconds=_optional_bounded_float(
-                    body.get("max_run_duration_seconds"), 1.0, 3600.0
-                ),
-                max_nodes=_bounded_int(
-                    body.get("max_nodes"), 100_000, 1, 100_000
-                ),
-                max_export_polls=_bounded_int(
-                    body.get("max_export_polls"), 40, 1, 120
-                ),
-                export_poll_interval=_bounded_float(
-                    body.get("export_poll_interval"), 0.5, 0.0, 5.0
-                ),
-                allow_raw_text_fallback=bool(
-                    body.get("allow_raw_text_fallback") is True
-                ),
-                timeout=_bounded_float(
-                    body.get("timeout"), 30.0, 1.0, 60.0
-                ),
                 actor=actor,
-            )
-            report_id = Path(_text(report.get("report_path"), 1000)).stem
-            public_report = load_feishu_tenant_acceptance_report(
-                project,
-                connector,
-                report_id,
-                root=root,
+                options={key: value for key, value in options.items() if value is not None},
             )
             return self._json(
                 {
                     "ok": True,
-                    "accepted": public_report.get("acceptance_ready") is True,
-                    "data": public_report,
+                    "data": job,
                     "source_content_returned": False,
                     "raw_cursor_returned": False,
                     "credential_values_returned": False,
                     "filesystem_path_returned": False,
-                }
+                },
+                202,
             )
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
 
@@ -698,7 +714,7 @@ class KnowledgeConnectorHandlersMixin:
             ConnectorProfileError,
             ConnectorSyncError,
             FeishuConnectorError,
-            FeishuTenantAcceptanceError,
+            FeishuTenantAcceptanceJobError,
             FeishuTenantAcceptanceReportError,
             ValueError,
             TypeError,
