@@ -355,6 +355,9 @@ def _blocked_receipt(
     detail: str,
 ) -> dict[str, Any]:
     broker = _dict(contract.get("broker_delivery_contract"))
+    idempotency_proof = _dict(
+        contract.get("idempotency_binding_contract")
+    )
     receipt = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "status": STATUS_BLOCKED,
@@ -366,6 +369,17 @@ def _blocked_receipt(
         "source_node_id": _text(contract.get("source_node_id")),
         "target_node_id": _text(contract.get("target_node_id")),
         "contract_fingerprint": _text(contract.get("contract_fingerprint")),
+        "idempotency_scope_authority": (
+            "source_request_binding_contract"
+            if idempotency_proof
+            else ""
+        ),
+        "idempotency_binding_contract_fingerprint": _text(
+            idempotency_proof.get("contract_fingerprint")
+        ),
+        "source_request_contract_fingerprint": _text(
+            idempotency_proof.get("source_request_contract_fingerprint")
+        ),
         "broker_contract_fingerprint": _text(
             broker.get("contract_fingerprint")
         ),
@@ -625,6 +639,7 @@ def execute_event_transition(
     observation_complete = semantic_status in {"PASS", "VIOLATION"}
     broker_projection = _broker_receipt_projection(broker_result)
     broker_contract = _dict(spec.get("broker_delivery_contract"))
+    idempotency_proof = _dict(spec.get("idempotency_binding_contract"))
     receipt = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "status": STATUS_CONVERGED if observation_complete else STATUS_BLOCKED,
@@ -683,6 +698,17 @@ def execute_event_transition(
         "correlation_fingerprint": _fingerprint(correlation),
         "idempotency_key_fingerprint": (
             _fingerprint(expected_idempotency) if idempotency_key else ""
+        ),
+        "idempotency_scope_authority": (
+            "source_request_binding_contract"
+            if idempotency_proof
+            else ""
+        ),
+        "idempotency_binding_contract_fingerprint": _text(
+            idempotency_proof.get("contract_fingerprint")
+        ),
+        "source_request_contract_fingerprint": _text(
+            idempotency_proof.get("source_request_contract_fingerprint")
         ),
         "event_id_fingerprints": sorted(
             _fingerprint(value) for value in event_id_values.values()
