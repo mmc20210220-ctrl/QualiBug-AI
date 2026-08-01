@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from .._linking import _relationship_is_authoritative
+
 from .identity_types import (
     IDENTITY_BINDING_SCHEMA,
     IDENTITY_EDGE_SCHEMA,
@@ -73,21 +75,128 @@ def _business_lookup(asset: dict[str, Any], result: dict[str, Any]) -> dict[str,
     return lookup
 
 
-def _relationship_business_refs(asset: dict[str, Any]) -> dict[str, list[tuple[str, str]]]:
-    result: dict[str, list[tuple[str, str]]] = defaultdict(list)
+def _rule_fact_refs(rule: dict[str, Any]) -> list[str]:
+    return unique_text(
+        [
+            rule.get("fact_id"),
+            rule.get("source_fact_id"),
+            as_dict(rule.get("semantic_contract")).get("fact_id"),
+            *as_list(rule.get("fact_refs")),
+        ]
+    )
+
+
+def _rule_entity_authority(asset: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Resolve rule IDs through the existing fact identity authority.
+
+    The source parser can retain a prose rule row beside its typed semantic row. They
+    are joined only by exact source ID and exact statement, never by token similarity.
+    Entity IDs come exclusively from the already-resolved business fact ledger.
+    """
+    fact_entities: dict[str, list[str]] = {}
+    fact_evidence: dict[str, list[dict[str, Any]]] = {}
+    for fact in as_list(as_dict(asset.get("business_fact_ledger")).get("items")):
+        if not isinstance(fact, dict) or not text(fact.get("fact_id")):
+            continue
+        fact_id = text(fact.get("fact_id"))
+        fact_entities[fact_id] = unique_text(
+            [
+                *as_list(fact.get("identity_resolution_refs")),
+                *as_list(as_dict(fact.get("subject")).get("resolved_entity_refs")),
+                *as_list(as_dict(fact.get("object")).get("resolved_entity_refs")),
+            ]
+        )
+        fact_evidence[fact_id] = asset_evidence(
+            fact, fact_id, "resolved_business_fact_identity"
+        )
+
+    rules = [
+        row
+        for row in as_list(asset.get("rule_library"))
+        if isinstance(row, dict) and text(row.get("rule_id"))
+    ]
+    exact_groups: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for rule in rules:
+        key = (text(rule.get("source_id")), text(rule.get("statement")))
+        if all(key):
+            exact_groups[key].update(_rule_fact_refs(rule))
+
+    authority: dict[str, dict[str, Any]] = {}
+    for rule in rules:
+        refs = set(_rule_fact_refs(rule))
+        key = (text(rule.get("source_id")), text(rule.get("statement")))
+        if all(key):
+            refs.update(exact_groups.get(key, set()))
+        entities = unique_text(
+            entity_id
+            for fact_id in sorted(refs)
+            for entity_id in fact_entities.get(fact_id, [])
+        )
+        if not entities:
+            continue
+        authority[text(rule.get("rule_id"))] = {
+            "entity_ids": entities,
+            "fact_refs": sorted(refs),
+            "evidence": dedupe_evidence(
+                evidence
+                for fact_id in sorted(refs)
+                for evidence in fact_evidence.get(fact_id, [])
+            ),
+        }
+    return authority
+
+
+def _relationship_business_refs(
+    asset: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    rule_authority = _rule_entity_authority(asset)
     for edge in as_list(asset.get("relationships")):
         if not isinstance(edge, dict):
             continue
         relation = text(edge.get("relation"))
-        status = text(edge.get("status") or "accepted").lower()
-        derivation = text(edge.get("derivation")).lower().replace("-", "_")
-        if relation not in _EXPLICIT_RELATIONS or status in _NON_AUTHORITATIVE:
-            continue
-        if derivation in {"token_overlap", "token_overlap_diagnostic"}:
-            continue
         source, target = text(edge.get("from")), text(edge.get("to"))
-        if source and target:
-            result[target].append((source, _EXPLICIT_RELATIONS[relation]))
+        if not source or not target:
+            continue
+        if relation in _EXPLICIT_RELATIONS:
+            status = text(edge.get("status") or "accepted").lower()
+            derivation = text(edge.get("derivation")).lower().replace("-", "_")
+            if status in _NON_AUTHORITATIVE:
+                continue
+            if derivation in {"token_overlap", "token_overlap_diagnostic"}:
+                continue
+            result[target].append(
+                {
+                    "business_ref": source,
+                    "relation": _EXPLICIT_RELATIONS[relation],
+                    "authority": "SOURCE_DECLARED_ASSET_RELATION",
+                    "evidence": [],
+                }
+            )
+            continue
+        if relation != "rule_to_interface" or not _relationship_is_authoritative(edge):
+            continue
+        governed = as_dict(rule_authority.get(source))
+        relationship_evidence = asset_evidence(
+            edge, text(edge.get("edge_id")) or f"{source}->{target}",
+            "source_backed_rule_implementation",
+        )
+        for entity_id in as_list(governed.get("entity_ids")):
+            result[target].append(
+                {
+                    "business_ref": entity_id,
+                    "relation": "EXPOSES_ENTITY",
+                    "authority": "SOURCE_BACKED_RULE_IMPLEMENTATION",
+                    "rule_ref": source,
+                    "fact_refs": list(as_list(governed.get("fact_refs"))),
+                    "evidence": dedupe_evidence(
+                        [
+                            *relationship_evidence,
+                            *as_list(governed.get("evidence")),
+                        ]
+                    ),
+                }
+            )
     return result
 
 
@@ -130,14 +239,71 @@ def augment_technical_identity_projection(
                 mentions.append(mention)
                 artifact_mentions.append(mention)
 
-            declared = [(value, default_relation) for value in _declared_business_refs(raw)]
+            declared = [
+                {
+                    "business_ref": value,
+                    "relation": default_relation,
+                    "authority": "SOURCE_DECLARED_ASSET_RELATION",
+                    "evidence": [],
+                }
+                for value in _declared_business_refs(raw)
+            ]
             declared.extend(relationships.get(artifact_ref, []))
-            entity_relations: dict[str, str] = {}
-            for business_ref, relation in declared:
-                entity_id = lookup.get(text(business_ref))
-                if entity_id:
-                    entity_relations[entity_id] = relation or default_relation
-            for entity_id, relation in sorted(entity_relations.items()):
+            known_entity_ids = {
+                text(row.get("entity_id"))
+                for row in as_list(result.get("clusters"))
+                if isinstance(row, dict) and text(row.get("entity_id"))
+            }
+            entity_relations: dict[str, dict[str, Any]] = {}
+            for declaration in declared:
+                business_ref = text(as_dict(declaration).get("business_ref"))
+                entity_id = (
+                    business_ref
+                    if business_ref in known_entity_ids
+                    else lookup.get(business_ref)
+                )
+                if not entity_id:
+                    continue
+                current = entity_relations.setdefault(
+                    entity_id,
+                    {
+                        "relation": text(as_dict(declaration).get("relation"))
+                        or default_relation,
+                        "authorities": [],
+                        "rule_refs": [],
+                        "fact_refs": [],
+                        "evidence": [],
+                    },
+                )
+                current["authorities"] = unique_text(
+                    [
+                        *as_list(current.get("authorities")),
+                        as_dict(declaration).get("authority"),
+                    ]
+                )
+                current["rule_refs"] = unique_text(
+                    [
+                        *as_list(current.get("rule_refs")),
+                        as_dict(declaration).get("rule_ref"),
+                    ]
+                )
+                current["fact_refs"] = unique_text(
+                    [
+                        *as_list(current.get("fact_refs")),
+                        *as_list(as_dict(declaration).get("fact_refs")),
+                    ]
+                )
+                current["evidence"] = dedupe_evidence(
+                    [
+                        *as_list(current.get("evidence")),
+                        *as_list(as_dict(declaration).get("evidence")),
+                    ]
+                )
+            for entity_id, authority_row in sorted(entity_relations.items()):
+                relation = text(authority_row.get("relation")) or default_relation
+                binding_evidence = dedupe_evidence(
+                    [*evidence, *as_list(authority_row.get("evidence"))]
+                )
                 binding_id = stable_id("identity_binding", entity_id, artifact_type, artifact_ref, relation)
                 bindings.append(
                     {
@@ -150,7 +316,16 @@ def augment_technical_identity_projection(
                         "relation": relation,
                         "status": "RESOLVED",
                         "identity_field_bindings": [],
-                        "evidence": evidence,
+                        "identity_authorities": list(
+                            as_list(authority_row.get("authorities"))
+                        ),
+                        "source_rule_refs": list(
+                            as_list(authority_row.get("rule_refs"))
+                        ),
+                        "source_fact_refs": list(
+                            as_list(authority_row.get("fact_refs"))
+                        ),
+                        "evidence": binding_evidence,
                     }
                 )
                 bound_artifacts.add(artifact_ref)
@@ -162,11 +337,27 @@ def augment_technical_identity_projection(
                             "entity_id": entity_id,
                             "right_mention_id": mention.get("mention_id"),
                             "relation": relation,
-                            "evidence_class": "EXPLICIT_TECHNICAL_BINDING",
-                            "authority": "SOURCE_DECLARED_ASSET_RELATION",
+                            "evidence_class": (
+                                "SOURCE_BACKED_RULE_IMPLEMENTATION"
+                                if "SOURCE_BACKED_RULE_IMPLEMENTATION"
+                                in as_list(authority_row.get("authorities"))
+                                else "EXPLICIT_TECHNICAL_BINDING"
+                            ),
+                            "authority": (
+                                "SOURCE_BACKED_RULE_IMPLEMENTATION"
+                                if "SOURCE_BACKED_RULE_IMPLEMENTATION"
+                                in as_list(authority_row.get("authorities"))
+                                else "SOURCE_DECLARED_ASSET_RELATION"
+                            ),
                             "status": "ACCEPTED",
                             "scope": identity_scope(raw),
-                            "evidence": evidence,
+                            "source_rule_refs": list(
+                                as_list(authority_row.get("rule_refs"))
+                            ),
+                            "source_fact_refs": list(
+                                as_list(authority_row.get("fact_refs"))
+                            ),
+                            "evidence": binding_evidence,
                             "automatic_union_allowed": False,
                         }
                     )
@@ -206,8 +397,13 @@ def augment_technical_identity_projection(
         gate.update({"status": "PASS", "entry_allowed": True})
     gate["metrics"] = {
         **as_dict(gate.get("metrics")),
+        "mention_count": len(result["mentions"]),
+        "identity_edge_count": len(result["edges"]),
+        "business_entity_count": len(as_list(result.get("clusters"))),
         "technical_binding_count": len(result["bindings"]),
         "technical_identity_unknown_count": len(result["unknowns"]),
+        "unknown_count": len(result["unknowns"]),
+        "conflict_count": len(conflicts),
     }
     result["gate"] = gate
     asset["enterprise_identity_resolution"] = result

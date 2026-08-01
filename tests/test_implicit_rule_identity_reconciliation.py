@@ -293,3 +293,43 @@ def test_missing_upgrade_target_fails_closed_before_behavior_ir():
         "BLOCKED_UPGRADE_TARGET_MISSING"
     )
     assert reconciled["implicit_rule_projection_gate"]["entry_allowed"] is False
+
+
+def test_source_chinese_rule_relationship_is_refreshed_before_understanding() -> None:
+    statement = "后台管理员删除商品记录"
+    asset = _base_asset()
+    asset["interfaces"] = [
+        {
+            "interface_id": "api:DELETE:/products/:id",
+            "source_id": "api-doc",
+            "method": "DELETE",
+            "path": "/products/:id",
+            "source_excerpt": f"DELETE /products/:id\n{statement}",
+        }
+    ]
+    asset["rule_library"] = [
+        {
+            "rule_id": "zh_business:delete-product",
+            "source_id": "api-doc",
+            "source_type": "chinese_business_semantic_contract",
+            "source_locator": "api.md#delete-product",
+            "statement": statement,
+            "derivation": "chinese_first_business_comprehension",
+            "semantic_contract": {"status": "ACCEPTED"},
+        }
+    ]
+    asset["business_fact_ledger"] = {"items": []}
+
+    reconciled = reconcile_implicit_rule_identities(asset)
+
+    edge = next(
+        row
+        for row in reconciled["relationships"]
+        if row.get("from") == "zh_business:delete-product"
+        and row.get("to") == "api:DELETE:/products/:id"
+    )
+    assert edge["status"] == "accepted"
+    assert edge["derivation"] == "exact_source_section"
+    assert reconciled["implicit_rule_identity_reconciliation_receipt"][
+        "exact_binding_refreshed_rule_count"
+    ] == 1

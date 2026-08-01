@@ -531,12 +531,39 @@ def _replace_risks_and_oracles(
 
 
 def _refresh_current_implicit_artifacts(asset: dict[str, Any]) -> int:
-    rules = _implicit_rules(asset)
-    relationships, operation_refs = _merge_relationships(asset, rules)
+    """Refresh the single relationship authority before cognition is frozen.
+
+    Source-declared Chinese rules and promoted implicit rules share the same
+    ``rule_to_interface`` linker. Previously only implicit rows were refreshed here;
+    Chinese-rule edges were added later by downstream projection, after Identity and
+    Implementation Binding had already consumed the graph. Refreshing all current
+    rules closes that ordering gap while risk/oracle replacement remains limited to
+    implicit rules.
+    """
+    all_rules = [
+        dict(row)
+        for row in _list(asset.get("rule_library"))
+        if isinstance(row, dict) and _text(row.get("rule_id"))
+    ]
+    relationships, all_operation_refs = _merge_relationships(asset, all_rules)
     asset["relationships"] = relationships
-    _replace_risks_and_oracles(asset, rules, operation_refs)
+    asset["rule_library"] = _dedupe_by_id(all_rules, "rule_id")
+
+    implicit_rules = [
+        row for row in all_rules if _text(row.get("derivation")) == _DERIVATION
+    ]
+    implicit_operation_refs = {
+        _text(rule.get("rule_id")): list(
+            all_operation_refs.get(_text(rule.get("rule_id"))) or []
+        )
+        for rule in implicit_rules
+    }
+    _replace_risks_and_oracles(
+        asset, implicit_rules, implicit_operation_refs
+    )
     return sum(
-        bool(operation_refs.get(_text(rule.get("rule_id")))) for rule in rules
+        bool(all_operation_refs.get(_text(rule.get("rule_id"))))
+        for rule in all_rules
     )
 
 

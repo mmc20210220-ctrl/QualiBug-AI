@@ -308,3 +308,26 @@ def test_regression_projection_extends_the_existing_identity_benchmark_gate() ->
 
     assert benchmark_line < regression_line < legacy_line
     assert source.count("project_identity_benchmark_regression(") == 1
+
+
+def test_two_understanding_passes_share_previous_finalized_identity_registry() -> None:
+    source = Path(
+        "ai_test_asset_center/enterprise_knowledge_center/composition.py"
+    ).read_text(encoding="utf-8")
+    function = _function(source, "build_enterprise_business_knowledge_asset")
+    calls = _named_calls(function)
+    understanding_lines = sorted(
+        line
+        for name, line in calls
+        if name == "enrich_asset_with_enterprise_understanding"
+    )
+    restore_lines = sorted(
+        line for name, line in calls if name == "_restore_previous_identity_registry"
+    )
+
+    assert len(understanding_lines) == 2
+    assert len(restore_lines) == 2
+    assert restore_lines[0] < understanding_lines[0]
+    assert understanding_lines[0] < restore_lines[1] < understanding_lines[1]
+    assert "same_finalized_baseline_used_for_all_passes" in source
+    assert '"provisional_first_pass_registry_promoted": False' in source

@@ -60,8 +60,22 @@ def asset_evidence(row: dict[str, Any], ref: str, derivation: str) -> list[dict[
 
 
 def fact_mentions(fact: dict[str, Any], side: str) -> list[str]:
+    """Return the governed identity coordinates for one fact side.
+
+    Early extraction may retain a predicate phrase such as ``取消订单`` in
+    ``entity_mentions`` while the explicit semantic normalizer has already bound the
+    selected operation to the source-backed object ``订单``. Once that governed
+    operation binding exists, carrying both values into the identity graph creates a
+    false second entity. The formal ``entity_refs`` coordinate is therefore
+    authoritative; raw extractor mentions remain available in the fact for audit.
+    """
     slot = as_dict(fact.get(side))
-    values = [*as_list(slot.get("entity_mentions")), *as_list(slot.get("entity_refs"))]
+    governed = as_dict(fact.get("explicit_semantic_normalization"))
+    entity_refs = as_list(slot.get("entity_refs"))
+    if bool(governed.get("governed_operation_binding")) and entity_refs:
+        values = [*entity_refs]
+    else:
+        values = [*as_list(slot.get("entity_mentions")), *entity_refs]
     for resolution in as_list(slot.get("resolution_evidence")):
         if isinstance(resolution, dict):
             values.extend([resolution.get("mention"), resolution.get("resolved_ref")])

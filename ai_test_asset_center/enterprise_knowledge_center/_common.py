@@ -142,7 +142,7 @@ RISK_TERMS = {
     "historical_regression": ["bug", "defect", "incident", "issue", "缺陷", "故障", "工单", "事故"],
 }
 SECRET_PATTERNS = [
-    re.compile(r"(?i)(authorization\s*[:=]\s*)([^\s,;]+)"),
+    re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+|basic\s+)?)([^\s,;]+)"),
     re.compile(r"(?i)(api[_-]?key\s*[:=]\s*)([^\s,;]+)"),
     re.compile(r"(?i)(password\s*[:=]\s*)([^\s,;]+)"),
     re.compile(r"(?i)(token\s*[:=]\s*)([^\s,;]+)"),

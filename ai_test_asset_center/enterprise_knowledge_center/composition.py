@@ -99,7 +99,12 @@ def _capture_previous_implicit_rule_governance(
     project_id: str,
     root: Path,
 ) -> dict[str, Any]:
-    """Read only durable rule-governance state before the base rebuild overwrites it."""
+    """Capture only durable authority from the previously finalized asset.
+
+    The current build has two understanding passes. The first pass is provisional and
+    must never become the historical identity registry consumed by the second pass.
+    Both passes therefore share the same registry baseline captured here.
+    """
 
     previous = _base_api.load_enterprise_business_knowledge_asset(project_id, root) or {}
     carried = {
@@ -107,9 +112,13 @@ def _capture_previous_implicit_rule_governance(
         for field in _DURABLE_IMPLICIT_RULE_GOVERNANCE_FIELDS
         if previous.get(field) not in (None, "", {}, [])
     }
+    prior_registry = previous.get("enterprise_identity_registry")
     return {
         "previous_asset_id": previous.get("asset_id"),
         "fields": carried,
+        "identity_registry": (
+            copy.deepcopy(prior_registry) if isinstance(prior_registry, dict) else {}
+        ),
     }
 
 
@@ -139,6 +148,46 @@ def _restore_previous_implicit_rule_governance(
         "prior_relationships_reused": False,
         "prior_enterprise_understanding_model_reused": False,
         "prior_probe_catalog_reused": False,
+    }
+
+
+def _restore_previous_identity_registry(
+    asset: dict[str, Any],
+    captured: dict[str, Any],
+    *,
+    pass_name: str,
+) -> None:
+    """Reset one understanding pass to the previous finalized registry baseline."""
+    prior = captured.get("identity_registry")
+    if isinstance(prior, dict) and prior:
+        asset["enterprise_identity_registry"] = copy.deepcopy(prior)
+        status = "RESTORED"
+    else:
+        asset.pop("enterprise_identity_registry", None)
+        status = "NO_PREVIOUS_FINALIZED_REGISTRY"
+    receipt = dict(asset.get("identity_registry_carry_forward_receipt") or {})
+    passes = [
+        str(value)
+        for value in receipt.get("restored_for_understanding_passes") or []
+        if str(value)
+    ]
+    if pass_name not in passes:
+        passes.append(pass_name)
+    asset["identity_registry_carry_forward_receipt"] = {
+        "schema": "qualibug.enterprise-identity-registry-carry-forward.v1",
+        "status": status,
+        "previous_asset_id": captured.get("previous_asset_id"),
+        "prior_entity_count": len(
+            [
+                row
+                for row in (prior or {}).get("entities") or []
+                if isinstance(row, dict)
+            ]
+        ),
+        "restored_for_understanding_passes": passes,
+        "same_finalized_baseline_used_for_all_passes": True,
+        "provisional_first_pass_registry_promoted": False,
+        "authority": "previous_finalized_enterprise_knowledge_asset",
     }
 
 
@@ -275,7 +324,7 @@ def build_enterprise_business_knowledge_asset(
 
     # Capture only durable implicit-rule governance before the extraction primitive
     # overwrites the persisted asset path. Current source facts are always rebuilt.
-    previous_implicit_rule_governance = _capture_previous_implicit_rule_governance(
+    previous_finalized_governance = _capture_previous_implicit_rule_governance(
         project, resolved_root
     )
 
@@ -286,7 +335,10 @@ def build_enterprise_business_knowledge_asset(
         project, resolved_root, base_options
     )
     _restore_previous_implicit_rule_governance(
-        asset, previous_implicit_rule_governance
+        asset, previous_finalized_governance
+    )
+    _restore_previous_identity_registry(
+        asset, previous_finalized_governance, pass_name="source_fact_pass"
     )
     parsed_sources = _parsed_sources_for_context(asset, resolved_root)
 
@@ -352,8 +404,11 @@ def build_enterprise_business_knowledge_asset(
     )
 
     # Rebuild cognition from the upgraded ledger without rerunning source extraction.
-    # The second call reprojects implicit rules idempotently from the final fact ledger,
-    # then builds the authoritative model and gates.
+    # Both cognition passes use the same previous-finalized identity registry baseline;
+    # the provisional first-pass registry cannot manufacture a same-build collision.
+    _restore_previous_identity_registry(
+        asset, previous_finalized_governance, pass_name="compiled_fact_pass"
+    )
     asset = enrich_asset_with_enterprise_understanding(asset, parsed_sources=None)
 
     # Downstream rule/oracle projection is still needed before Job projection, but

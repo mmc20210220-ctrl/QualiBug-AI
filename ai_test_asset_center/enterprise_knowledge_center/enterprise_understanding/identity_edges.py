@@ -78,8 +78,54 @@ def _identity_edge(
     }
 
 
+def _source_declared_identity_anchor_labels(
+    facts: list[dict[str, Any]],
+    mentions: list[dict[str, Any]],
+    conflicting_aliases: set[str],
+) -> set[str]:
+    """Return labels whose cross-source equality is backed by source authority.
+
+    Exact text alone is never enough. A label becomes an anchor only when an
+    accepted hard identity fact names it, or one unique business-object asset
+    declares it. Conflicting alias labels remain fail-closed even when their text
+    matches across sources.
+    """
+    anchors: set[str] = set()
+    for fact in facts:
+        if (
+            not isinstance(fact, dict)
+            or text(fact.get("kind")) != "TERM_ALIAS"
+            or text(fact.get("status")) != "ACCEPTED"
+            or identity_evidence_class(fact) not in HARD_IDENTITY_CLASSES
+        ):
+            continue
+        for label in (text(fact.get("canonical_term")), text(fact.get("alias"))):
+            if label and label not in conflicting_aliases:
+                anchors.add(label)
+
+    declared_occurrences: dict[str, set[tuple[str, str]]] = defaultdict(set)
+    for mention in mentions:
+        if text(mention.get("source_kind")) not in {
+            "BUSINESS_OBJECT_ASSET",
+            "BUSINESS_OBJECT_ALIAS",
+        }:
+            continue
+        label = text(mention.get("raw_label"))
+        if label:
+            declared_occurrences[label].add(
+                (text(mention.get("source_id")), text(mention.get("source_locator")))
+            )
+    anchors.update(
+        label
+        for label, occurrences in declared_occurrences.items()
+        if len(occurrences) == 1 and label not in conflicting_aliases
+    )
+    return anchors
+
+
 def _exact_occurrence_edges(
     mentions: list[dict[str, Any]],
+    identity_anchor_labels: set[str],
 ) -> list[dict[str, Any]]:
     """Close one source occurrence before comparing it with other sources.
 
@@ -129,6 +175,7 @@ def _exact_occurrence_edges(
                 )
 
         scope_declared = any(key[1:])
+        identity_anchor_declared = key[0] in identity_anchor_labels
         ordered_representatives = sorted(
             representatives, key=lambda row: text(row.get("mention_id"))
         )
@@ -138,15 +185,19 @@ def _exact_occurrence_edges(
                     left,
                     right,
                     scope=scope,
-                    accepted=scope_declared,
+                    accepted=scope_declared or identity_anchor_declared,
                     authority=(
                         "EXPLICIT_SCOPE"
                         if scope_declared
+                        else "SOURCE_DECLARED_IDENTITY_ANCHOR"
+                        if identity_anchor_declared
                         else "CANDIDATE_ONLY_SCOPE_MISSING"
                     ),
                     reason_code=(
                         "EXACT_LABEL_SCOPE_PROVEN"
                         if scope_declared
+                        else "EXACT_LABEL_IDENTITY_ANCHOR_PROVEN"
+                        if identity_anchor_declared
                         else "EXACT_LABEL_SCOPE_MISSING"
                     ),
                 )
@@ -220,7 +271,11 @@ def build_identity_edges(
             }
         )
 
-    edges.extend(_exact_occurrence_edges(mentions))
+    conflicting_aliases = _conflicting_aliases(facts)
+    identity_anchor_labels = _source_declared_identity_anchor_labels(
+        facts, mentions, conflicting_aliases
+    )
+    edges.extend(_exact_occurrence_edges(mentions, identity_anchor_labels))
 
     for index, raw in enumerate(as_list(asset.get("data_tables"))):
         if not isinstance(raw, dict):
@@ -269,7 +324,6 @@ def build_identity_edges(
             }
         )
 
-    conflicting_aliases = _conflicting_aliases(facts)
     if conflicting_aliases:
         by_id = {text(row.get("mention_id")): row for row in mentions}
         for edge in edges:
