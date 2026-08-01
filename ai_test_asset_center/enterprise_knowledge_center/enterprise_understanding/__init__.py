@@ -25,7 +25,7 @@ from .identity_structural_review_command import (
     record_identity_structural_review_decision,
 )
 from .identity_structural_review_query import get_identity_structural_review_queue
-from .implementation_binding import (
+from .implementation_binding_authority import (
     IMPLEMENTATION_BINDING_GATE_SCHEMA,
     IMPLEMENTATION_BINDING_SCHEMA,
     build_behavior_implementation_bindings,
