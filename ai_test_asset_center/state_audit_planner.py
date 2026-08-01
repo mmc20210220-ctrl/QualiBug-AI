@@ -294,6 +294,25 @@ def build_readonly_state_audit_obligations(
         # Build the audit obligation
         expr = _dict(inv.get("expression"))
 
+        # A GET can observe a current state, but it cannot establish or exercise
+        # a state transition.  Mapping an unbound forbidden/allowed transition
+        # to a guessed GET endpoint therefore creates a state-transition
+        # obligation with no causal operation and no valid before/after
+        # precondition.  Keep the source invariant as a visible coverage gap;
+        # do not turn entity-name similarity into an executable experiment.
+        expression_kind = _text(expr.get("kind")).lower()
+        if family == "state" or expression_kind in {
+            "state_transition",
+            "forbidden_state_transition",
+        }:
+            skipped_unevaluable.append({
+                "invariant_ref": inv_id,
+                "reason_code": "AUDIT_REQUIRES_EXACT_TRANSITION_OPERATION",
+                "expression_kind": expression_kind,
+                "statement": _text(inv.get("description") or expr.get("raw"))[:160],
+            })
+            continue
+
         # An audit reads the entity and checks the invariant against what came back.
         # That needs an evaluable condition. These invariants arrive as prose with
         # ``operands: []`` -- 「同一订单不能重复成功退款」 has nothing a response can be

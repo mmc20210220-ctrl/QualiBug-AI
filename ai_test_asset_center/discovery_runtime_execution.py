@@ -483,10 +483,21 @@ def run_experiment_candidate(
         )
     else:
         round_two_batch = _empty_execution_batch()
+    # ``round_two_scheduled`` is the full intent queue, while the executor can
+    # defer its tail behind the per-batch safety budget.  Only obligations that
+    # actually reached this batch may be excluded from continuation; excluding
+    # the deferred tail drops it from the pending queue and later projects it as
+    # OBLIGATION_NOT_IN_PLAN without ever offering it to execution.
+    round_two_deferred_ids = {
+        _text(row.get("obligation_id"))
+        for row in _list(round_two_batch.get("budget_deferred"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
     round_two_executed_ids = {
         _text(row.get("obligation_id"))
         for row in round_two_scheduled
         if _text(row.get("obligation_id"))
+        and _text(row.get("obligation_id")) not in round_two_deferred_ids
     }
 
     follow_on_batches: list[dict[str, Any]] = []

@@ -7,6 +7,7 @@ import json
 import re
 from typing import Any
 
+from .behavior_ir_core import _infer_operation_effect
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -445,6 +446,8 @@ def _variant_id(
 
 def _with_validation_effect_observer(
     obligation: dict[str, Any],
+    *,
+    include_business_effect: bool = True,
 ) -> dict[str, Any]:
     row = deepcopy(_dict(obligation))
     observers = [
@@ -452,7 +455,10 @@ def _with_validation_effect_observer(
         for value in _list(row.get("required_observers"))
         if _text(value)
     ]
-    for observer_id in ("http_response", "business_effect"):
+    observer_ids = ["http_response"]
+    if include_business_effect:
+        observer_ids.append("business_effect")
+    for observer_id in observer_ids:
         if observer_id not in observers:
             observers.append(observer_id)
     row["required_observers"] = observers
@@ -469,7 +475,16 @@ def expand_validation_obligation(
     obl = _dict(obligation)
     if _text(obl.get("risk_family")) != "validation":
         return [obl]
-    guarded = _with_validation_effect_observer(obl)
+    guarded = _with_validation_effect_observer(
+        obl,
+        include_business_effect=(
+            _infer_operation_effect(
+                operation,
+                _text(operation.get("method")).upper(),
+            )
+            == "write"
+        ),
+    )
     prop = _dict(guarded.get("property"))
     typed_constraint = _typed_expression_constraint(prop)
     if typed_constraint:

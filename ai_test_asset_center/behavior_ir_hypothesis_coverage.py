@@ -35,6 +35,19 @@ except ImportError:
             "quote_hash": hashlib.sha256(quote_text.encode("utf-8")).hexdigest()[:16] if quote_text else "",
         }
 
+try:
+    from .behavior_ir_core import _infer_operation_effect
+except ImportError:
+    def _infer_operation_effect(operation: dict[str, Any], method: str) -> str:
+        declared = str(
+            (operation or {}).get("read_write")
+            or (operation or {}).get("side_effect_class")
+            or ""
+        ).strip().lower()
+        if declared in {"read", "write"}:
+            return declared
+        return "write" if str(method or "").upper() in {"POST", "PUT", "PATCH", "DELETE"} else "read"
+
 
 COVERAGE_SCHEMA = "qualibug.behavior-ir-hypothesis-coverage.v1"
 
@@ -100,49 +113,14 @@ def build_behavior_ir_coverage_map(behavior_ir: dict[str, Any]) -> dict[str, Any
         _text(a.get("id")): a for a in actors if _text(a.get("id"))
     }
 
-    # ── Operation coverage nodes ──
-    for op in operations:
-        op_id = _text(op.get("id"))
-        if not op_id:
-            continue
-        method = _text(op.get("method")).upper()
-        path = _text(op.get("path"))
-        side_effect = _text(op.get("side_effect_class")).lower()
-        entity_refs = [ref for ref in _list(op.get("entity_refs")) if _text(ref)]
-        source_refs = _list(op.get("source_refs"))
-
-        families: list[str] = []
-
-        # Write operations: authorization, isolation, consistency, state, lifecycle
-        if side_effect == "write":
-            families.extend(["authorization", "isolation", "consistency", "state_integrity", "lifecycle"])
-            # Also check for invariants that reference this operation
-            families.append("invariant")
-
-        # Read operations: visibility (can others see this?)
-        if method in ("GET", "HEAD"):
-            families.append("visibility")
-
-        families = sorted(set(families))
-        if not families:
-            continue
-
-        for family in families:
-            coverage_id = f"cov_op_{op_id}_{family}"
-            if coverage_id in seen_ids:
-                continue
-            seen_ids.add(coverage_id)
-            nodes.append({
-                "coverage_id": coverage_id,
-                "node_type": "operation",
-                "ir_node_id": op_id,
-                "risk_family": family,
-                "operation_method": method,
-                "operation_path": path,
-                "entity_refs": entity_refs,
-                "source_refs": source_refs,
-                "coverage_signature": _coverage_signature(op_id, family, method, path),
-            })
+    # An operation's existence and HTTP effect do not prove an authorization,
+    # lifecycle, consistency, isolation, or invariant contract.  The previous
+    # method-only expansion treated every write as all of those risk families
+    # and every read as visibility, which created executable obligations from a
+    # route shape alone.  That is not source-backed coverage; it is a blanket
+    # business-rule claim and it consumes the same planning budget as real
+    # source-bound rules.  Operation-specific coverage is represented below by
+    # exact actor-operation, invariant, relation, and state nodes instead.
 
     # ── Actor × Operation coverage nodes ──
     active_actors = [a for a in actors if a.get("runtime_bound") is True]
@@ -161,8 +139,7 @@ def build_behavior_ir_coverage_map(behavior_ir: dict[str, Any]) -> dict[str, Any
                 continue
 
             # Authorization coverage: actor × write operation
-            side_effect = _text(op.get("side_effect_class")).lower()
-            if side_effect == "write":
+            if _infer_operation_effect(op, op_method) == "write":
                 coverage_id = f"cov_auth_{actor_id}_{op_id}"
                 if coverage_id in seen_ids:
                     continue
@@ -210,10 +187,26 @@ def build_behavior_ir_coverage_map(behavior_ir: dict[str, Any]) -> dict[str, Any
         })
 
     # ── Relation coverage nodes (state transitions, conservation, ownership) ──
+    state_ids = {
+        _text(state.get("id"))
+        for state in _list(behavior_ir.get("states"))
+        if isinstance(state, dict) and _text(state.get("id"))
+    }
     for rel in relations:
         rel_id = _text(rel.get("id"))
         rel_type = _text(rel.get("relation_type"))
         if not rel_id or not rel_type:
+            continue
+
+        # ``_derive_operation_entity_relations`` uses the existing IR relation
+        # vocabulary for an operation updating an entity.  Its ``transitions``
+        # label is not a state-machine edge.  Only a relation whose endpoints
+        # are both concrete state nodes can create state-integrity coverage.
+        # This keeps method/entity structure from becoming a lifecycle claim.
+        if rel_type == "transitions" and not (
+            _text(rel.get("from_ref")) in state_ids
+            and _text(rel.get("to_ref")) in state_ids
+        ):
             continue
         source_refs = _list(rel.get("source_refs"))
 
@@ -1033,8 +1026,19 @@ def build_source_backed_coverage_obligations(
         if not op_refs:
             continue
 
-        op_path = _text(node.get("operation_path"))
-        op_method = _text(node.get("operation_method"))
+        primary_operation = next(
+            (
+                operation
+                for operation in all_ops
+                if isinstance(operation, dict)
+                and _text(operation.get("id")) == op_refs[0]
+            ),
+            {},
+        )
+        op_path = _text(node.get("operation_path") or primary_operation.get("path"))
+        op_method = _text(
+            primary_operation.get("method") or node.get("operation_method")
+        )
         actor_id = _text(node.get("actor_id"))
         source_refs = _list(node.get("source_refs"))
         coverage_id = _text(node.get("coverage_id"))
@@ -1078,9 +1082,14 @@ def build_source_backed_coverage_obligations(
         }
         required_observers = observer_map.get(family, ["http_response"])
 
-        # Cleanup requirement for writes
-        side_effect = _text(node.get("side_effect_class") or "").lower()
-        is_write = bool(op_method and op_method.upper() in {"POST", "PUT", "PATCH", "DELETE"})
+        # Cleanup follows the source-declared semantic effect. A POST can be a
+        # read-only validation/preview action; method-only classification would
+        # create an impossible cleanup obligation for that operation.
+        effect_input = primary_operation or {
+            "side_effect_class": node.get("side_effect_class"),
+            "read_write": node.get("read_write"),
+        }
+        is_write = _infer_operation_effect(effect_input, op_method.upper()) == "write"
         cleanup_requirement = "required" if is_write else "not_required"
 
         # Build property spec
@@ -1244,7 +1253,7 @@ def _invariant_operation_refs(
 
     matched: list[str] = []
     for op in operations:
-        if _text(op.get("method")).upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        if _infer_operation_effect(op, _text(op.get("method")).upper()) != "write":
             continue
         op_fields = {
             _normalized_field(name)
@@ -1300,12 +1309,11 @@ def build_exhaustive_obligation_matrix(
 
     write_ops = [
         op for op in operations
-        if _text(op.get("side_effect_class")).lower() == "write"
-        or _text(op.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        if _infer_operation_effect(op, _text(op.get("method")).upper()) == "write"
     ]
     read_ops = [
         op for op in operations
-        if _text(op.get("method")).upper() in {"GET", "HEAD"}
+        if _infer_operation_effect(op, _text(op.get("method")).upper()) == "read"
     ]
     # Only use actors that are runtime-bound (have tokens configured)
     # This prevents generating obligations for declared-but-unbound actors
@@ -1371,9 +1379,7 @@ def build_exhaustive_obligation_matrix(
             for op_ref in required_operations:
                 op_row = op_by_id.get(_text(op_ref)) or {}
                 method = _text(op_row.get("method")).upper()
-                if method in {"POST", "PUT", "PATCH", "DELETE"} or _text(
-                    op_row.get("read_write")
-                ) == "write":
+                if _infer_operation_effect(op_row, method) == "write":
                     cleanup = "required"
                     break
         sig = _coverage_signature(risk_family, *sorted(subject_refs), *sorted(required_actors))
@@ -1539,7 +1545,7 @@ def build_exhaustive_obligation_matrix(
         inv_src = _list(inv.get("source_refs"))
         for op_id in _invariant_operation_refs(inv, op_by_id, operations):
             op = op_by_id.get(op_id) or {}
-            if _text(op.get("method")).upper() not in {"POST", "PUT", "PATCH"}:
+            if _infer_operation_effect(op, _text(op.get("method")).upper()) != "write":
                 continue
             _add_obligation(
                 "consistency",
@@ -1604,6 +1610,34 @@ def build_exhaustive_obligation_matrix(
         if not inv_id:
             continue
         inv_src = _list(inv.get("source_refs"))
+        inv_kind = _invariant_kind(inv)
+        if inv_kind == "postcondition":
+            expression = _dict(inv.get("expression"))
+            operands = _list(expression.get("operands"))
+
+            def _has_expected_value(operand: dict[str, Any]) -> bool:
+                value = operand.get("expected_value")
+                return value is not None and (
+                    not isinstance(value, str) or bool(value.strip())
+                )
+
+            has_bound_effect = any(
+                isinstance(operand, dict)
+                and (
+                    _text(operand.get("field_id") or operand.get("field"))
+                    or _has_expected_value(operand)
+                    or bool(operand.get("must_create"))
+                )
+                for operand in operands
+            )
+            if not has_bound_effect:
+                # A prose-only postcondition is evidence that a rule was
+                # extracted, not an executable oracle.  Keep it in the source
+                # and coverage-gap receipts; do not schedule a generic
+                # invariant obligation that can only fail later with a
+                # fabricated state-transition assertion.
+                skipped["invariant_postcondition_unbound"] += 1
+                continue
         inv_ops = _invariant_operation_refs(inv, op_by_id, operations)
         if not inv_ops:
             skipped["invariant_not_bound_to_operation"] += 1
@@ -1615,7 +1649,7 @@ def build_exhaustive_obligation_matrix(
                 "template": "invariant_violation_detection",
                 "invariant_ref": inv_id,
                 "operation_refs": inv_ops,
-                "invariant_kind": _invariant_kind(inv),
+                "invariant_kind": inv_kind,
                 "_strategy": "invariant_matrix",
             },
             [_text(active_actors[0].get("id"))] if active_actors else [],

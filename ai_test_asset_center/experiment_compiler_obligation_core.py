@@ -14,6 +14,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from .behavior_ir import source_identity_fields_for_operation
+from .behavior_ir_core import _infer_operation_effect
 from .experiment_protocols import compile_family_protocol
 from .observer_contracts_base import compile_observer_requirements
 from .real_id_resolver import (
@@ -46,6 +47,16 @@ _FAMILY_ASSERTION_KIND = {
     "idempotency": "idempotency",
     "temporal": "temporal",
 }
+
+_INVARIANT_ASSERTION_KINDS = frozenset({
+    "conservation",
+    "cross_entity_consistency",
+    "field_delta",
+    "forbidden_state_transition",
+    "idempotency",
+    "postcondition",
+    "state_transition",
+})
 from .runtime_binding_graph import (
     blocked_binding_reasons,
     build_binding_plan,
@@ -721,14 +732,14 @@ def compile_experiment_for_obligation(
             compile_receipt={"status": "DEFERRED", "reason_code": "MISSING_PRIMARY_OPERATION", "detail": primary_op_id or "none"},
         )
     primary_op = ops[primary_op_id]
-    # Determine write status from BOTH the IR declaration and the HTTP method.
-    # Runtime uses the actual method to decide write governance; compile must
-    # agree to avoid experiments that compile clean but block at execution.
+    # Determine write status from the source-declared semantic effect first.
+    # A POST is not inherently a mutation: source contracts can explicitly
+    # declare read-only action endpoints such as validation/preview routes.
+    # The shared helper falls back to the HTTP method only when the source did
+    # not declare an effect, keeping ordinary undeclared POSTs governed as
+    # writes while avoiding a false cleanup requirement for declared reads.
     _op_method_upper = _text(primary_op.get("method")).upper()
-    is_write = (
-        _text(primary_op.get("read_write")) == "write"
-        or _op_method_upper in {"POST", "PUT", "PATCH", "DELETE"}
-    )
+    is_write = _infer_operation_effect(primary_op, _op_method_upper) == "write"
     if (
         is_write
         and _op_method_upper in {"PUT", "PATCH"}
@@ -2004,8 +2015,26 @@ def compile_experiment_for_obligation(
     needs_control = bool(control_plan)
 
     protocol_assertion = _dict(protocol.get("assertion"))
+    protocol_kind = _text(protocol_assertion.get("kind"))
+    declared_invariant_kind = ""
+    if family == "invariant":
+        expression_kind = _text(_dict(prop.get("expression")).get("kind")).lower()
+        for candidate in (
+            _text(prop.get("invariant_kind")).lower(),
+            expression_kind,
+        ):
+            if candidate in _INVARIANT_ASSERTION_KINDS:
+                declared_invariant_kind = candidate
+                break
+        if not protocol_kind and not declared_invariant_kind:
+            return blocked_experiment(
+                oid,
+                "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+                "invariant_assertion_kind_missing",
+            )
     assertion_kind = (
-        _text(protocol_assertion.get("kind"))
+        protocol_kind
+        or declared_invariant_kind
         or _FAMILY_ASSERTION_KIND.get(family)
         or "http_status"
     )

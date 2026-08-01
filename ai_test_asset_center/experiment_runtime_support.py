@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from .behavior_ir_core import _infer_operation_effect
 from .observer_contracts_base import validate_observer_declarations
 from .real_id_resolver import (
     bind_entity_fields,
@@ -830,7 +831,7 @@ def preflight_experiment_executable(
             for obs in _list(exp.get("observers"))
         )
         if (
-            method in _WRITE_METHODS
+            _infer_operation_effect(op, method) == "write"
             and not _declared_observation_path(path, ops)
             and not _declared_effect_observer_available(op, ops)
             and not _exp_has_compiled_effect_resolvers
@@ -858,7 +859,7 @@ def preflight_experiment_executable(
         # as a pre-write observer. Block unless an independent pre-write
         # observer exists (collection GET, unique-key query, or DB adapter).
         if (
-            method == "POST"
+            _infer_operation_effect(op, method) == "write"
             and path.startswith("/")
             and not path_has_placeholders(path)
             and _has_response_bound_create_observers(op, ops)
@@ -1081,7 +1082,10 @@ def _has_response_bound_create_observers(
         _text(operation.get("path") or operation.get("raw_path"))
     )
     if (
-        _text(operation.get("method")).upper() != "POST"
+        _infer_operation_effect(
+            operation,
+            _text(operation.get("method")).upper(),
+        ) != "write"
         or not target.startswith("/")
         or path_has_placeholders(target)
     ):

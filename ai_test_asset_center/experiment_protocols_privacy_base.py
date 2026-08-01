@@ -8,6 +8,7 @@ from typing import Any
 
 from . import experiment_protocols_base as _base
 from .experiment_protocols_base import *  # noqa: F401,F403
+from .behavior_ir_core import _infer_operation_effect
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -576,15 +577,30 @@ def compile_family_protocol(
         return result
 
     assertion = dict(result.get("assertion") or {})
-    assertion.update({
-        "kind": "validation_rejection",
-        "expected_class": 4,
-        "expected_effect_count": 0,
-        "expected_control_effect_min": 1,
-        "compare_field": "status_code",
-        "effect_field": "treatment_effect_count",
-        "control_effect_field": "control_effect_count",
-    })
+    operation_effect = _infer_operation_effect(
+        operation,
+        _text(operation.get("method")).upper(),
+    )
+    if operation_effect == "write":
+        assertion.update({
+            "kind": "validation_rejection",
+            "expected_class": 4,
+            "expected_effect_count": 0,
+            "expected_control_effect_min": 1,
+            "compare_field": "status_code",
+            "effect_field": "treatment_effect_count",
+            "control_effect_field": "control_effect_count",
+        })
+    else:
+        # A source-declared read-only POST can still enforce input validation,
+        # but it has no business mutation whose zero-effect receipt can be
+        # observed. Keep the validation verdict on the transport response and
+        # do not require an impossible business-effect observer.
+        assertion.update({
+            "kind": "http_status_class",
+            "expected_class": 4,
+            "compare_field": "status_code",
+        })
     return {
         **result,
         "assertion": assertion,

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from .behavior_ir_core import _infer_operation_effect
 from .write_reversibility_contract import (
     CLEANUP_AUTHORITIES,
     build_reversibility_proof,
@@ -122,7 +123,7 @@ def _mutating_steps(
             method = _text(
                 step.get("method") or operation.get("method")
             ).upper()
-            if method not in _WRITE_METHODS:
+            if _infer_operation_effect(operation, method) != "write":
                 continue
             rows.append(
                 {

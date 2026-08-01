@@ -24,6 +24,24 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _postcondition_has_bound_effect(expression: dict[str, Any]) -> bool:
+    """Return whether a postcondition names an observable field or create effect."""
+
+    for operand in _list(_dict(expression).get("operands")):
+        if not isinstance(operand, dict):
+            continue
+        if _text(operand.get("field_id") or operand.get("field")):
+            return True
+        expected = operand.get("expected_value")
+        if expected is not None and (
+            not isinstance(expected, str) or bool(expected.strip())
+        ):
+            return True
+        if bool(operand.get("must_create")):
+            return True
+    return False
+
+
 def _accepted(nodes: list[Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for node in nodes:
@@ -1030,6 +1048,27 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
     for inv in invariants:
         expr = _dict(inv.get("expression"))
         kind = _text(expr.get("kind") or "business_rule").lower()
+        if kind == "postcondition" and not _postcondition_has_bound_effect(expr):
+            _append_gap_once(
+                coverage_gaps,
+                {
+                    **_compile_gap(
+                        subject_ref=_text(inv.get("id")),
+                        relation_types={"postcondition_effect"},
+                    ),
+                    "code": "SOURCE_POSTCONDITION_EFFECT_UNBOUND",
+                    "description": (
+                        "Source postcondition has no concrete field or create effect "
+                        "that an observer can verify"
+                    ),
+                    "source_refs": [
+                        dict(row)
+                        for row in _list(inv.get("source_refs"))
+                        if isinstance(row, dict)
+                    ],
+                },
+            )
+            continue
         family = "validation"
         if any(token in kind for token in ("idempot", "exactly_once", "deduplic")):
             family = "idempotency"
