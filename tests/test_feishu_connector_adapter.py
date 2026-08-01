@@ -431,3 +431,166 @@ def test_rate_limit_response_retries_without_leaking_token():
     assert rows == []
     assert attempts == 2
     assert sleeps
+
+
+def _descriptor(index: int, revision: str = "1") -> dict:
+    return {
+        "space_id": "space1",
+        "node_token": f"node{index}",
+        "obj_token": f"docx{index}",
+        "obj_type": "docx",
+        "title": f"Document {index}",
+        "parent_node_token": "",
+        "has_child": False,
+        "remote_revision": revision,
+        "remote_updated_at": revision,
+        "remote_resource_id": f"wiki:space1:node{index}",
+        "resource_kind": "feishu-wiki-docx",
+    }
+
+
+def _materialized(descriptor: dict) -> dict:
+    token = descriptor["node_token"]
+    return {
+        "remote_resource_id": descriptor["remote_resource_id"],
+        "resource_kind": descriptor["resource_kind"],
+        "source_type": "feishu_document",
+        "content": f"# {token}\ncontent for {token}",
+        "filename": f"{token}.txt",
+        "remote_revision": descriptor["remote_revision"],
+        "remote_updated_at": descriptor["remote_updated_at"],
+        "parent_remote_id": descriptor["parent_node_token"],
+        "export_format": "txt",
+        "declared_mime": "text/plain",
+        "adapter_degraded": False,
+        "degradation_reason": "",
+    }
+
+
+def test_unchanged_snapshot_skips_all_exports_and_batch_touches_occurrences(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    _register(tmp_path)
+    descriptors = [_descriptor(index) for index in range(3)]
+    exports: list[str] = []
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.feishu_connector_adapter.discover_feishu_wiki_resources",
+        lambda *args, **kwargs: [dict(row) for row in descriptors],
+    )
+
+    def materialize(row, *args, **kwargs):
+        exports.append(row["remote_resource_id"])
+        return _materialized(row)
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.feishu_connector_adapter.materialize_feishu_resource",
+        materialize,
+    )
+
+    first = sync_feishu_connector(
+        PROJECT,
+        connector_instance_id=CONNECTOR,
+        resolve_connection_profile=_resolver,
+        root=tmp_path,
+        actor=ACTOR,
+        sleeper=lambda _: None,
+    )
+    second = sync_feishu_connector(
+        PROJECT,
+        connector_instance_id=CONNECTOR,
+        resolve_connection_profile=_resolver,
+        root=tmp_path,
+        actor=ACTOR,
+        previous_cursor=first["next_cursor"],
+        sleeper=lambda _: None,
+    )
+
+    assert len(exports) == 3
+    assert second["status"] == "COMPLETE"
+    assert second["materialized_resource_count"] == 0
+    assert second["unchanged_resource_count"] == 3
+    assert second["export_avoided_count"] == 3
+    assert second["success_count"] == 3
+    assert second["materialized_success_count"] == 0
+    assert second["unchanged_success_count"] == 3
+
+    from ai_test_asset_center.enterprise_knowledge_center.source_occurrence_observation import (
+        list_source_occurrence_observations,
+    )
+
+    observations = list_source_occurrence_observations(
+        PROJECT,
+        source_ref_prefix="connector://feishu-prod/",
+        root=tmp_path,
+    )
+    assert observations["source_occurrence_count"] == 3
+    assert {row["observation_count"] for row in observations["source_occurrences"]} == {2}
+
+
+def test_single_revision_change_exports_only_changed_and_retires_missing(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    _register(tmp_path)
+    descriptors = [_descriptor(index) for index in range(3)]
+    exports: list[str] = []
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.feishu_connector_adapter.discover_feishu_wiki_resources",
+        lambda *args, **kwargs: [dict(row) for row in descriptors],
+    )
+
+    def materialize(row, *args, **kwargs):
+        exports.append(row["remote_resource_id"])
+        return _materialized(row)
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.feishu_connector_adapter.materialize_feishu_resource",
+        materialize,
+    )
+
+    first = sync_feishu_connector(
+        PROJECT,
+        connector_instance_id=CONNECTOR,
+        resolve_connection_profile=_resolver,
+        root=tmp_path,
+        actor=ACTOR,
+        sleeper=lambda _: None,
+    )
+    descriptors[1] = _descriptor(1, revision="2")
+    descriptors.pop(2)
+
+    second = sync_feishu_connector(
+        PROJECT,
+        connector_instance_id=CONNECTOR,
+        resolve_connection_profile=_resolver,
+        root=tmp_path,
+        actor=ACTOR,
+        previous_cursor=first["next_cursor"],
+        deletion_policy="RETIRE_MISSING",
+        max_retire_count=10,
+        max_retire_ratio=1.0,
+        sleeper=lambda _: None,
+    )
+
+    assert exports == [
+        "wiki:space1:node0",
+        "wiki:space1:node1",
+        "wiki:space1:node2",
+        "wiki:space1:node1",
+    ]
+    assert second["status"] == "COMPLETE"
+    assert second["materialized_resource_count"] == 1
+    assert second["unchanged_resource_count"] == 1
+    assert second["success_count"] == 2
+    assert second["retired_count"] == 1
+    assert second["deletion_reconciliation"]["status"] == "COMPLETE"
+
+    inventory = list_enterprise_knowledge_sources(PROJECT, root=tmp_path)
+    active_refs = {
+        row["source_ref"]
+        for row in inventory["sources"]
+        if row.get("status") == "active"
+    }
+    assert len(active_refs) == 2
+    assert all("node2" not in source_ref for source_ref in active_refs)
