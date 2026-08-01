@@ -25,6 +25,9 @@ def _ir() -> dict:
                 "method": "POST",
                 "path": "/orders",
                 "system_ref": "orders",
+                "request_example": {
+                    "idempotency_key": "<request_id>"
+                },
             },
             {
                 "id": "op_consume",
@@ -244,6 +247,11 @@ def test_observer_projects_run_scope_evidence() -> None:
     assert observed["status"] == "OBSERVED"
     row = observed["evidence"][EVIDENCE_KEY]["transitions"][0]
     assert row["event_scope_mode"] == "correlation_and_idempotency"
+    assert row["idempotency_scope_authority"] == (
+        "source_request_binding_contract"
+    )
+    assert row["idempotency_binding_contract_fingerprint"]
+    assert row["source_request_contract_fingerprint"]
     assert row["observed_correlated_row_count"] == 6
     assert row["observed_matching_row_count"] == 3
     assert row["out_of_scope_idempotency_event_count"] == 1
