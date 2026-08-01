@@ -19,6 +19,7 @@ from . import experiment_cleanup_lifecycle_adapter as _adapter
 
 _ADAPTER_BINDING_SCHEMA = "qualibug.declared-adapter-cleanup-runtime-binding.v1"
 _ADAPTER_BINDING_MARKER = "_declared_adapter_cleanup_requirement"
+_RUNTIME_IDENTITY_CONFLICTS = "_runtime_step_identity_conflicts"
 _ORIGINAL_ATTEMPTS_ATTR = "_qualibug_original_governed_write_attempts"
 _ORIGINAL_CHANGED_STATE_ATTR = "_qualibug_original_governed_write_changed_state"
 _ORIGINAL_ADAPTER_IDENTITY_ATTR = "_qualibug_original_adapter_cleanup_identity"
@@ -135,6 +136,8 @@ def _project_adapter_cleanup_requirements(
     contracts = _adapter_cleanup_contracts(experiment)
     projected: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
+    observed_operation_refs: set[str] = set()
+    measured_phases = {"control", "treatment", "precondition"}
 
     for raw in steps:
         if not isinstance(raw, dict):
@@ -142,6 +145,8 @@ def _project_adapter_cleanup_requirements(
         step = dict(raw)
         phase = _text(step.get("phase"))
         operation_ref = _text(step.get("operation_ref"))
+        if phase in measured_phases and operation_ref:
+            observed_operation_refs.add(operation_ref)
         matching = contracts.get(operation_ref, [])
         audit_row: dict[str, Any] = {
             "step_id": _text(step.get("step_id")),
@@ -151,7 +156,7 @@ def _project_adapter_cleanup_requirements(
             "status": "NOT_APPLICABLE",
             "reason_code": "",
         }
-        if phase not in {"control", "treatment", "precondition"} or not matching:
+        if phase not in measured_phases or not matching:
             projected.append(step)
             continue
         if len(matching) != 1:
@@ -250,11 +255,31 @@ def _project_adapter_cleanup_requirements(
         rows.append(audit_row)
         projected.append(step)
 
+    missing_runtime_operation_refs = sorted(
+        set(contracts) - observed_operation_refs
+    )
+    for operation_ref in missing_runtime_operation_refs:
+        rows.append(
+            {
+                "step_id": "",
+                "phase": "",
+                "operation_ref": operation_ref,
+                "cleanup_contract_count": len(contracts[operation_ref]),
+                "status": "UNBOUND",
+                "reason_code": "ADAPTER_CLEANUP_RUNTIME_STEP_MISSING",
+            }
+        )
+
     bound = [row for row in rows if row.get("status") == "BOUND"]
     unbound = [row for row in rows if row.get("status") == "UNBOUND"]
+    required = bool(contracts)
     return projected, {
         "schema_version": _ADAPTER_BINDING_SCHEMA,
+        "required": required,
         "declared_operation_refs": sorted(contracts),
+        "declared_operation_count": len(contracts),
+        "observed_operation_refs": sorted(observed_operation_refs),
+        "missing_runtime_operation_refs": missing_runtime_operation_refs,
         "bound": bound,
         "unbound": unbound,
         "bound_step_ids": [
@@ -262,7 +287,7 @@ def _project_adapter_cleanup_requirements(
         ],
         "bound_count": len(bound),
         "unbound_count": len(unbound),
-        "complete": bool(contracts) and not unbound and bool(bound),
+        "complete": (not required) or (not unbound and bool(bound)),
         "runtime_marker_persisted": False,
         "cross_operation_identity_fallback_forbidden": True,
     }
@@ -281,6 +306,7 @@ def _governed_write_attempts_with_step_identity(
         if not isinstance(governed, dict):
             continue
         attempt = dict(governed)
+        conflicts: list[str] = []
         for field in (
             "step_id",
             "phase",
@@ -291,8 +317,16 @@ def _governed_write_attempts_with_step_identity(
             "observation_path",
         ):
             value = step.get(field)
-            if value not in (None, "") and field not in attempt:
-                attempt[field] = value
+            if value in (None, ""):
+                continue
+            existing = attempt.get(field)
+            if existing not in (None, "") and _text(existing) != _text(value):
+                conflicts.append(field)
+            # The runtime step is the execution identity authority. Work on a
+            # copy so the content-addressed governance receipt is never mutated.
+            attempt[field] = value
+        if conflicts:
+            attempt[_RUNTIME_IDENTITY_CONFLICTS] = sorted(set(conflicts))
         marker = step.get(_ADAPTER_BINDING_MARKER)
         if isinstance(marker, dict):
             attempt[_ADAPTER_BINDING_MARKER] = dict(marker)
@@ -312,6 +346,7 @@ def _governed_write_changed_state_with_adapter_requirement(
         marker.get("schema_version") == _ADAPTER_BINDING_SCHEMA
         and marker.get("cleanup_required") is True
         and row.get("accepted") is True
+        and not _list(row.get(_RUNTIME_IDENTITY_CONFLICTS))
         and _text(marker.get("operation_ref"))
         and _text(marker.get("operation_ref")) == _text(row.get("operation_ref"))
         and _text(marker.get("step_id")) == _text(row.get("step_id"))
