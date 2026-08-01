@@ -17,9 +17,13 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from .enterprise_knowledge_center.source_occurrence_authority import (
     ingest_enterprise_knowledge_documents,
 )
+from .enterprise_knowledge_center.source_occurrence_core import (
+    ingest_enterprise_knowledge_document_batch,
+)
 from .enterprise_knowledge_center.source_occurrence_observation import (
     SourceOccurrenceObservationError,
     record_source_occurrence_observation,
+    record_source_occurrence_observations_batch,
 )
 
 
@@ -164,9 +168,6 @@ def _effective_actor(
     if requested_role in _ALLOWED_KNOWLEDGE_ROLES:
         return {"name": name, "role": requested_role}, "DIRECT_PRIVILEGED_ACTOR"
     if requested_role in _CONNECTOR_ROLES:
-        # This bridge is the trusted mutation boundary. The knowledge center currently accepts
-        # operator management roles only, so connector principals delegate through that authority
-        # without weakening the shared authorization helper.
         return (
             {"name": name, "role": "knowledge_admin"},
             "CONNECTOR_SERVICE_DELEGATION",
@@ -233,6 +234,7 @@ def _observation_metadata(
     sync_cursor_fingerprint: str,
     export_format: str,
     declared_mime: str,
+    remote_materialization_fingerprint: str,
 ) -> dict[str, Any]:
     return {
         "source_origin": "connector_snapshot",
@@ -250,6 +252,222 @@ def _observation_metadata(
         "sync_cursor_fingerprint": sync_cursor_fingerprint,
         "export_format": _text(export_format, 80),
         "declared_mime": _text(declared_mime, 160),
+        "remote_materialization_fingerprint": _text(
+            remote_materialization_fingerprint, 128
+        ),
+    }
+
+
+def ingest_connector_snapshots_batch(
+    project_id: str,
+    snapshots: list[dict[str, Any]],
+    *,
+    root: Path,
+    connector_id: str,
+    sync_epoch_id: str = "",
+    sync_cursor: str = "",
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Ingest changed connector snapshots through one canonical batch transaction."""
+    if not isinstance(snapshots, list) or not snapshots:
+        raise ConnectorSnapshotError("connector_snapshot_batch_required")
+    connector = _safe_connector_id(connector_id)
+    effective_actor, actor_authority = _effective_actor(
+        actor, connector_id=connector
+    )
+    cursor_fingerprint = (
+        hashlib.sha256(str(sync_cursor).encode("utf-8")).hexdigest()
+        if str(sync_cursor)
+        else ""
+    )
+    envelopes: list[dict[str, Any]] = []
+    prepared: list[dict[str, Any]] = []
+    source_refs: set[str] = set()
+    for index, raw in enumerate(snapshots):
+        if not isinstance(raw, dict):
+            raise ConnectorSnapshotError(
+                f"connector_snapshot_batch_item_invalid:{index}"
+            )
+        row = dict(raw)
+        requested_source_id = _text(
+            row.get("source_id") or row.get("remote_resource_id"), 160
+        )
+        source_kind = _text(row.get("source_type"), 80)
+        if not requested_source_id or not source_kind:
+            raise ConnectorSnapshotError(
+                f"connector_snapshot_identity_missing:{index}"
+            )
+        content = row.get("content")
+        payload, credential_scan_text = _snapshot_payload(content)
+        _reject_embedded_credentials(credential_scan_text)
+        resolved_filename = _safe_filename(row.get("filename"))
+        if isinstance(content, (bytes, bytearray, memoryview)) and not resolved_filename:
+            raise ConnectorSnapshotError(
+                f"connector_snapshot_filename_required_for_binary:{index}"
+            )
+        if not resolved_filename:
+            resolved_filename = _default_filename(
+                requested_source_id, source_kind, content
+            )
+        explicit_ref = _text(row.get("external_ref"), 1000)
+        remote_id = _text(row.get("remote_resource_id"), 1000)
+        resource_kind = _safe_resource_kind(row.get("resource_kind"))
+        if explicit_ref.startswith("connector://") and not remote_id:
+            source_ref = explicit_ref
+            remote_id = requested_source_id
+        else:
+            remote_id = remote_id or explicit_ref or requested_source_id
+            source_ref = build_connector_source_ref(
+                connector, remote_id, resource_kind=resource_kind
+            )
+        if source_ref in source_refs:
+            raise ConnectorSnapshotError(
+                f"connector_snapshot_remote_identity_duplicate:{source_ref}"
+            )
+        source_refs.add(source_ref)
+        safe_canonical_url = _sanitized_url(row.get("canonical_url"))
+        metadata = _observation_metadata(
+            connector=connector,
+            requested_source_id=requested_source_id,
+            remote_id=remote_id,
+            resource_kind=resource_kind,
+            remote_revision=_text(row.get("remote_revision"), 240),
+            remote_updated_at=_text(row.get("remote_updated_at"), 80),
+            retrieved_at=_text(row.get("retrieved_at"), 80),
+            canonical_url=safe_canonical_url,
+            parent_remote_id=_text(row.get("parent_remote_id"), 1000),
+            sync_epoch_id=_text(sync_epoch_id, 240),
+            sync_cursor_fingerprint=cursor_fingerprint,
+            export_format=_text(row.get("export_format"), 80),
+            declared_mime=_text(row.get("declared_mime"), 160),
+            remote_materialization_fingerprint=_text(
+                row.get("remote_materialization_fingerprint"), 128
+            ),
+        )
+        envelopes.append(
+            {
+                **payload,
+                "filename": resolved_filename,
+                "source_type": source_kind,
+                "external_ref": source_ref,
+            }
+        )
+        prepared.append(
+            {
+                "requested_source_id": requested_source_id,
+                "remote_resource_id": remote_id,
+                "resource_kind": resource_kind,
+                "source_ref": source_ref,
+                "metadata": metadata,
+                "canonical_url": safe_canonical_url,
+                "remote_revision": _text(row.get("remote_revision"), 240),
+                "remote_updated_at": _text(row.get("remote_updated_at"), 80),
+                "retrieved_at": _text(row.get("retrieved_at"), 80),
+                "parent_remote_id": _text(row.get("parent_remote_id"), 1000),
+                "export_format": _text(row.get("export_format"), 80),
+                "declared_mime": _text(row.get("declared_mime"), 160),
+                "remote_materialization_fingerprint": _text(
+                    row.get("remote_materialization_fingerprint"), 128
+                ),
+            }
+        )
+
+    result = ingest_enterprise_knowledge_document_batch(
+        project_id,
+        envelopes,
+        root=root,
+        actor=effective_actor,
+    )
+    if result.get("errors"):
+        first = next(
+            (row for row in result.get("errors") or [] if isinstance(row, dict)),
+            {},
+        )
+        code = _text(first.get("code") or first.get("error"), 200) or "unknown"
+        raise ConnectorSnapshotError(
+            f"connector_snapshot_batch_ingestion_failed:{code}"
+        )
+    occurrences = {
+        _text(row.get("source_ref"), 2000): dict(row)
+        for row in [
+            *list(result.get("source_occurrences") or []),
+            *list(result.get("duplicate_source_occurrences") or []),
+        ]
+        if isinstance(row, dict) and _text(row.get("source_ref"), 2000)
+    }
+    missing = [row["source_ref"] for row in prepared if row["source_ref"] not in occurrences]
+    if missing:
+        raise ConnectorSnapshotError(
+            "connector_snapshot_batch_occurrence_missing:" + ",".join(missing[:5])
+        )
+    try:
+        observation_receipt = record_source_occurrence_observations_batch(
+            project_id,
+            [
+                {
+                    "source_ref": row["source_ref"],
+                    "metadata": row["metadata"],
+                }
+                for row in prepared
+            ],
+            root=root,
+            actor=effective_actor,
+        )
+    except SourceOccurrenceObservationError as exc:
+        raise ConnectorSnapshotError(
+            f"connector_snapshot_batch_observation_failed:{exc}"
+        ) from exc
+    refreshed = {
+        _text(row.get("source_ref"), 2000): dict(row)
+        for row in observation_receipt.get("source_occurrences") or []
+        if isinstance(row, dict)
+    }
+    items: list[dict[str, Any]] = []
+    for row in prepared:
+        occurrence = dict(occurrences[row["source_ref"]])
+        occurrence.update(refreshed.get(row["source_ref"]) or {})
+        canonical_source_id = _text(occurrence.get("canonical_source_id"), 200)
+        items.append(
+            {
+                "source_origin": "connector_snapshot",
+                "connector_id": connector,
+                "connector_instance_id": connector,
+                "requested_source_id": row["requested_source_id"],
+                "remote_resource_id": row["remote_resource_id"],
+                "resource_kind": row["resource_kind"],
+                "source_ref": row["source_ref"],
+                "external_ref": row["source_ref"],
+                "source_occurrence": occurrence,
+                "source_occurrence_id": _text(
+                    occurrence.get("source_occurrence_id"), 200
+                ),
+                "canonical_source_id": canonical_source_id,
+                "knowledge_source_id": canonical_source_id,
+                "content_hash": _text(occurrence.get("content_hash"), 128),
+                "remote_revision": row["remote_revision"],
+                "remote_updated_at": row["remote_updated_at"],
+                "retrieved_at": row["retrieved_at"],
+                "canonical_url": row["canonical_url"],
+                "parent_remote_id": row["parent_remote_id"],
+                "sync_epoch_id": _text(sync_epoch_id, 240),
+                "sync_cursor_fingerprint": cursor_fingerprint,
+                "export_format": row["export_format"],
+                "declared_mime": row["declared_mime"],
+                "remote_materialization_fingerprint": row[
+                    "remote_materialization_fingerprint"
+                ],
+            }
+        )
+    return {
+        "status": "INGESTED",
+        "item_count": len(items),
+        "items": items,
+        "source_occurrence_batch": result,
+        "source_occurrence_observation_batch": observation_receipt,
+        "actor_authority": actor_authority,
+        "canonical_ingestion_authority": "SOURCE_OCCURRENCE_REGISTRY",
+        "connector_parser_implemented": False,
+        "raw_sync_cursor_persisted": False,
     }
 
 
@@ -273,6 +491,7 @@ def ingest_connector_snapshot(
     sync_cursor: str = "",
     export_format: str = "",
     declared_mime: str = "",
+    remote_materialization_fingerprint: str = "",
     actor: dict[str, Any] | None = None,
     filename: str = "",
 ) -> dict[str, Any]:
@@ -369,6 +588,9 @@ def ingest_connector_snapshot(
                 sync_cursor_fingerprint=cursor_fingerprint,
                 export_format=export_format,
                 declared_mime=declared_mime,
+                remote_materialization_fingerprint=(
+                    remote_materialization_fingerprint
+                ),
             ),
             root=root,
             actor=effective_actor,
@@ -403,6 +625,9 @@ def ingest_connector_snapshot(
         "sync_cursor_fingerprint": cursor_fingerprint,
         "export_format": _text(export_format, 80),
         "declared_mime": _text(declared_mime, 160),
+        "remote_materialization_fingerprint": _text(
+            remote_materialization_fingerprint, 128
+        ),
         "external_ref": source_ref,
         "source_ref": source_ref,
         "source_occurrence": occurrence,
@@ -434,4 +659,5 @@ __all__ = [
     "ConnectorSnapshotError",
     "build_connector_source_ref",
     "ingest_connector_snapshot",
+    "ingest_connector_snapshots_batch",
 ]
