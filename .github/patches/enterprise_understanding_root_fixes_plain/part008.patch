@@ -1,0 +1,311 @@
++    never performs fuzzy name matching. Conflicting aliases are removed rather than
++    selected by document order.
++    """
++    candidates: dict[str, set[str]] = defaultdict(set)
++    ledger = as_dict(asset.get("business_fact_ledger"))
++    for fact in as_list(ledger.get("items")):
++        if (
++            not isinstance(fact, dict)
++            or text(fact.get("status")) != "ACCEPTED"
++            or text(fact.get("kind")) != "TERM_ALIAS"
++        ):
++            continue
++        canonical = text(fact.get("canonical_term"))
++        alias = text(fact.get("alias"))
++        if canonical and alias:
++            candidates[alias.casefold()].add(canonical)
++            candidates[canonical.casefold()].add(canonical)
++    compatibility = as_dict(asset.get("term_alias_identity_merge"))
++    for alias, canonical in as_dict(compatibility.get("alias_to_canonical")).items():
++        if text(alias) and text(canonical):
++            candidates[text(alias).casefold()].add(text(canonical))
++            candidates[text(canonical).casefold()].add(text(canonical))
++    return {
++        label: next(iter(values))
++        for label, values in candidates.items()
++        if len(values) == 1
++    }
++
++
++def _resolve_machine_object(
++    row: dict[str, Any],
++    known_objects: set[str],
++    asset: dict[str, Any] | None = None,
++) -> str:
+     candidates = unique_text(
+         [
+             row.get("object"),
+@@ -51,14 +94,124 @@ def _resolve_machine_object(row: dict[str, Any], known_objects: set[str]) -> str
+             row.get("name"),
+         ]
+     )
+-    exact = [candidate for candidate in candidates if candidate in known_objects]
+-    if len(exact) == 1:
+-        return exact[0]
++    exact_by_casefold = {name.casefold(): name for name in known_objects}
++    alias_map = _source_term_aliases(asset or {})
++    # A source-declared business alias is stronger than an exact technical
++    # label. OpenAPI/schema assets may introduce ``Ticket`` as a technical
++    # object while the enterprise glossary explicitly declares
++    # ``Ticket -> 工单``. Preferring the technical label splits one business
++    # lifecycle into parallel identities and makes fact-owned ``工单`` guards
++    # unable to reach the state catalog.
++    resolved = {
++        alias_map.get(candidate.casefold(), "")
++        or exact_by_casefold.get(candidate.casefold())
++        for candidate in candidates
++        if candidate
++    }
++    resolved = {value for value in resolved if value in known_objects}
++    if len(resolved) == 1:
++        return next(iter(resolved))
+     joined = " ".join(candidates)
+     mentions = [name for name in known_objects if name and name in joined]
+     return mentions[0] if len(mentions) == 1 else ""
+ 
+ 
++def source_declared_state_catalog(
++    asset: dict[str, Any],
++    known_objects: Iterable[str],
++) -> dict[str, list[dict[str, Any]]]:
++    """Build exact object-field-state coordinates from existing source assets.
++
++    A state alias is admitted only when it appears below an exact ``Object.field``
++    heading and its state code is already present in a source-declared state machine
++    for that uniquely resolved business object. This is a projection of existing
++    evidence, not a state synonym dictionary.
++    """
++    known = {text(value) for value in known_objects if text(value)}
++    machines: dict[str, list[dict[str, Any]]] = defaultdict(list)
++    for raw in as_list(asset.get("state_machines")):
++        if not isinstance(raw, dict):
++            continue
++        object_ref = _resolve_machine_object(raw, known, asset)
++        states = set(unique_text(as_list(raw.get("states"))))
++        if not object_ref or not states:
++            continue
++        transitions = []
++        for transition in [
++            *as_list(raw.get("transitions")),
++            *as_list(raw.get("allowed_transitions")),
++        ]:
++            row = as_dict(transition)
++            from_state = text(row.get("from_state") or row.get("from") or row.get("source"))
++            to_state = text(row.get("to_state") or row.get("to") or row.get("target"))
++            if from_state or to_state:
++                transitions.append({"from_state": from_state, "to_state": to_state})
++        machines[object_ref].append(
++            {
++                "states": states,
++                "transitions": transitions,
++                "source_id": text(raw.get("source_id")),
++                "state_machine_id": text(raw.get("state_machine_id")),
++            }
++        )
++
++    result: dict[str, list[dict[str, Any]]] = defaultdict(list)
++    trees = as_dict(asset.get("document_semantic_trees"))
++    for tree in as_list(trees.get("items")):
++        nodes = [row for row in as_list(as_dict(tree).get("nodes")) if isinstance(row, dict)]
++        for heading in nodes:
++            if text(heading.get("block_type")).upper() != "HEADING":
++                continue
++            title = text(heading.get("title") or heading.get("raw_heading"))
++            match = _STATE_FIELD_HEADING_RE.fullmatch(title)
++            if not match:
++                continue
++            object_ref = _resolve_machine_object(
++                {"object": match.group("object")}, known, asset
++            )
++            if not object_ref or object_ref not in machines:
++                continue
++            allowed_states = set().union(
++                *(machine["states"] for machine in machines[object_ref])
++            )
++            aliases: dict[str, str] = {state: state for state in allowed_states}
++            heading_id = text(heading.get("node_id"))
++            for node in nodes:
++                if text(node.get("parent_id")) != heading_id:
++                    continue
++                definition = _STATE_DEFINITION_RE.match(
++                    text(node.get("title") or node.get("text"))
++                )
++                if not definition:
++                    continue
++                state = text(definition.group("state"))
++                if state not in allowed_states:
++                    continue
++                aliases[state] = state
++                for alias in re.split(r"[，,；;、]", text(definition.group("description"))):
++                    alias = text(alias)
++                    if alias:
++                        aliases[alias] = state
++            result[object_ref].append(
++                {
++                    "field": title,
++                    "states": sorted(allowed_states),
++                    "aliases": aliases,
++                    "transitions": [
++                        transition
++                        for machine in machines[object_ref]
++                        for transition in machine["transitions"]
++                    ],
++                    "source_id": text(heading.get("source_id")),
++                    "source_locator": text(
++                        as_dict(heading.get("evidence")).get("source_locator")
++                        or heading.get("source_locator")
++                    ),
++                }
++            )
++    return dict(result)
++
++
+ def _transition_from_existing(
+     transition: Any,
+     *,
+@@ -238,7 +391,7 @@ def build_lifecycles(
+     for machine_index, machine in enumerate(as_list(asset.get("state_machines"))):
+         if not isinstance(machine, dict):
+             continue
+-        object_ref = _resolve_machine_object(machine, known)
++        object_ref = _resolve_machine_object(machine, known, asset)
+         source_id = text(machine.get("source_id"))
+         asset_ref = text(machine.get("state_machine_id")) or f"state_machines[{machine_index}]"
+         machine_evidence = [
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py
+index dd80c86..3195059 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py
+@@ -55,6 +55,13 @@ _MODALITY_RE = re.compile(
+     r"必须|应当|应该|需要|不得|严禁|禁止|不允许|不可|不能|"
+     r"只能|仅能|可以|允许|有权|无权|仅当|只有|除非"
+ )
++_DECLARED_ACTOR_PATTERNS = (
++    re.compile(r"(?:只有|仅)(?P<actor>[^|｜\n，,；;。]{1,32}?)(?:才)?(?:可以|允许|有权)"),
++    re.compile(
++        r"(?:^|[|｜\n，,；;。])\s*(?P<actor>[^|｜\n，,；;。]{1,32}?)"
++        r"(?:只能|仅能|不得|严禁|禁止|不允许|不可|不能|无权|必须|应当|可以|允许|有权)"
++    ),
++)
+ _RELATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+     (
+         "COMPOSED_OF",
+@@ -171,10 +178,53 @@ def _clean_entity(value: Any) -> str:
+     return _text(cleaned)
+ 
+ 
++def _declares_actor_coordinate(statement: str, entity_refs: Iterable[str]) -> bool:
++    entities = {_text(value) for value in entity_refs if _text(value)}
++    for pattern in _DECLARED_ACTOR_PATTERNS:
++        for match in pattern.finditer(statement):
++            candidate = _text(match.group("actor")).strip(" -|｜，,；;。")
++            candidate = re.sub(r"^(?:只有|仅|任何|任一|该)", "", candidate)
++            if candidate and not any(
++                entity and (candidate == entity or candidate.endswith(entity))
++                for entity in entities
++            ):
++                return True
++    return False
++
++
+ def _source_spans(fact: dict[str, Any]) -> list[dict[str, Any]]:
+     return [dict(row) for row in _list(fact.get("source_spans")) if isinstance(row, dict)]
+ 
+ 
++def _exact_interface_refs(fact: dict[str, Any]) -> list[str]:
++    """Return only source-declared interface identities already attached to a fact.
++
++    Interface identity is technical evidence, not part of the business semantic
++    signature: the same rule may be stated in a PRD and one or more interface
++    descriptions.  We therefore preserve every exact attachment through semantic
++    merging, but never infer an interface from paths, operation words, or filenames.
++    """
++    values = [
++        _text(fact.get("interface_id")),
++        *[_text(value) for value in _list(fact.get("interface_refs"))],
++        *[
++            _text(span.get("interface_id"))
++            for span in _source_spans(fact)
++            if _text(span.get("interface_id"))
++        ],
++    ]
++    return sorted({value for value in values if value})
++
++
++def _project_exact_interface_refs(fact: dict[str, Any]) -> None:
++    refs = _exact_interface_refs(fact)
++    fact["interface_refs"] = refs
++    # ``interface_id`` remains a compatibility projection only when the source
++    # evidence proves one exact interface.  Multiple refs are explicit ambiguity,
++    # not permission to choose the first endpoint.
++    fact["interface_id"] = refs[0] if len(refs) == 1 else ""
++
++
+ def _block_address(block: dict[str, Any], source_id: str, filename: str) -> dict[str, Any]:
+     evidence = _dict(block.get("evidence_address"))
+     locator = _text(
+@@ -338,8 +388,9 @@ def _semantic_signature_payload(fact: dict[str, Any]) -> dict[str, Any]:
+     subject = _dict(fact.get("subject"))
+     action = _dict(fact.get("action"))
+     scope = _dict(fact.get("scope"))
+-    return {
+-        "fact_type": _text(fact.get("fact_type") or fact.get("kind")),
++    fact_type = _text(fact.get("fact_type") or fact.get("kind"))
++    payload = {
++        "fact_type": fact_type,
+         "actor_refs": sorted(_norm(row) for row in _list(subject.get("actor_refs")) if _norm(row)),
+         "entity_refs": sorted(
+             _norm(row)
+@@ -404,6 +455,59 @@ def _semantic_signature_payload(fact: dict[str, Any]) -> dict[str, Any]:
+             if isinstance(row, dict)
+         ),
+     }
++    if fact_type == "TERM_ALIAS":
++        # Identity facts have no actor/action/entity slots. Without their explicit
++        # pair in the signature, every alias in a document collapses into the first
++        # one before the identity graph can see it.
++        payload["term_alias"] = {
++            "canonical_term": _norm(fact.get("canonical_term")),
++            "alias": _norm(fact.get("alias")),
++        }
++
++    core_semantics_declared = bool(
++        payload["predicate"]
++        and payload["entity_refs"]
++        and (
++            payload["actor_refs"]
++            or payload["condition"]
++            or payload["state_effects"]
++            or payload["data_effects"]
++            or payload["postconditions"]
++            or payload["quantity_constraints"]
++            or payload["time_window_constraints"]
++            or payload["formula_constraints"]
++            or payload["modality"] in {"MUST", "MUST_NOT", "MAY", "ONLY_IF"}
++        )
++    )
++    if fact_type != "TERM_ALIAS" and not core_semantics_declared:
++        # Empty typed slots are absence of evidence, not proof that two statements
++        # are equivalent. Keep under-specified source frames separate until the
++        # existing post-compile semantic authority resolves them. Fully typed facts
++        # still merge across documents and preserve all exact interface attachments.
++        frame_ids = sorted(
++            {
++                _text(row.get("statement_frame_id"))
++                for row in _list(fact.get("claims"))
++                if isinstance(row, dict) and _text(row.get("statement_frame_id"))
++            }
++        )
++        source_boundaries = sorted(
++            {
++                _text(row.get("quote_hash"))
++                or _text(row.get("document_block_id"))
++                or _text(row.get("locator") or row.get("source_locator"))
++                for row in _source_spans(fact)
++                if (
++                    _text(row.get("quote_hash"))
++                    or _text(row.get("document_block_id"))
++                    or _text(row.get("locator") or row.get("source_locator"))
++                )
++            }
++        )
