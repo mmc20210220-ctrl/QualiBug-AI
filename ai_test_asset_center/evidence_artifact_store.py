@@ -191,7 +191,17 @@ def persist_evidence_bundle(
             or int(registry.get("delivery_occurrence_count") or 0)
             != len(occurrence_ids)
         ):
-            raise EvidenceArtifactError("canonical_evidence_scope_mismatch")
+            _diag = {
+                "canonical_ids": canonical_ids[:5],
+                "finding_ids": finding_ids[:5],
+                "occurrence_ids": occurrence_ids[:5],
+                "persisted_occurrence_ids": persisted_occurrence_ids[:5],
+                "registry_canonical_count": registry.get("canonical_defect_count"),
+                "registry_occurrence_count": registry.get("delivery_occurrence_count"),
+                "occurrences_len": len(occurrences),
+                "canonical_findings_len": len(canonical_findings),
+            }
+            raise EvidenceArtifactError(f"canonical_evidence_scope_mismatch:{_diag}")
         identity_authority_status = "VERIFIED"
     fingerprint = _hash_json({
         "project": project,

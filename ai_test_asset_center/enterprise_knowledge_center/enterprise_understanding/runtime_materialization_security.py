@@ -322,7 +322,7 @@ def _post_audit(asset: dict[str, Any], model: dict[str, Any]) -> None:
     )
     asset["runtime_materialization_unknowns"] = all_unknowns
     model["runtime_materialization_unknowns"] = [dict(row) for row in all_unknowns]
-    _governance._rebuild_gate(asset, model)
+    _governance._rebuild_outcome_gate(asset, model)
 
 
 def install_secure_runtime_value_resolver() -> None:

@@ -2133,16 +2133,30 @@ def test_experiment_compiler_uses_unique_source_declared_action_compensator() ->
     )
 
     assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
-    assert experiment["cleanup_plan"] == [{
-        "action": "source_declared_compensation",
-        "mode": "reverse_order",
-        "operation_ref": "release_capacity",
-        "compensates_operation_ref": "reserve_capacity",
-        "path": "/api/capacity/release",
-        "method": "POST",
-        "body_from_original_request": True,
-        "runtime_response_binding_required": False,
-    }]
+    assert experiment["cleanup_plan"] == [
+        {
+            "action": "source_declared_compensation",
+            "mode": "compensating_transition",
+            "operation_ref": "release_capacity",
+            "compensates_operation_ref": "reserve_capacity",
+            "path": "/api/capacity/release",
+            "method": "POST",
+            "body_from_original_request": True,
+            "runtime_response_binding_required": False,
+            "source_step_id": "treatment_1",
+        },
+        {
+            "action": "source_declared_compensation",
+            "mode": "compensating_transition",
+            "operation_ref": "release_capacity",
+            "compensates_operation_ref": "reserve_capacity",
+            "path": "/api/capacity/release",
+            "method": "POST",
+            "body_from_original_request": True,
+            "runtime_response_binding_required": False,
+            "source_step_id": "control_1",
+        },
+    ]
 
 
 def test_recreate_cleanup_reuses_compensator_primary_request_body() -> None:
@@ -2236,16 +2250,30 @@ def test_recreate_cleanup_reuses_compensator_primary_request_body() -> None:
     )
 
     assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
-    assert experiment["cleanup_plan"] == [{
-        "action": "source_declared_compensation",
-        "mode": "recreate_compensated_resource",
-        "operation_ref": "reserve_stock",
-        "compensates_operation_ref": "release_stock",
-        "path": "/api/inventory/reserve",
-        "method": "POST",
-        "body_from_original_request": True,
-        "runtime_response_binding_required": False,
-    }]
+    assert experiment["cleanup_plan"] == [
+        {
+            "action": "source_declared_compensation",
+            "mode": "recreate_compensated_resource",
+            "operation_ref": "reserve_stock",
+            "compensates_operation_ref": "release_stock",
+            "path": "/api/inventory/reserve",
+            "method": "POST",
+            "body_from_original_request": True,
+            "runtime_response_binding_required": False,
+            "source_step_id": "treatment_1",
+        },
+        {
+            "action": "source_declared_compensation",
+            "mode": "recreate_compensated_resource",
+            "operation_ref": "reserve_stock",
+            "compensates_operation_ref": "release_stock",
+            "path": "/api/inventory/reserve",
+            "method": "POST",
+            "body_from_original_request": True,
+            "runtime_response_binding_required": False,
+            "source_step_id": "control_1",
+        },
+    ]
 
 
 def test_relation_bound_compensation_reuses_original_request_body() -> None:
@@ -2324,16 +2352,30 @@ def test_relation_bound_compensation_reuses_original_request_body() -> None:
     )
 
     assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
-    assert experiment["cleanup_plan"] == [{
-        "action": "source_declared_compensation",
-        "mode": "reverse_order",
-        "operation_ref": "release_capacity",
-        "compensates_operation_ref": "reserve_capacity",
-        "path": "/api/capacity/release",
-        "method": "POST",
-        "body_from_original_request": True,
-        "runtime_response_binding_required": False,
-    }]
+    assert experiment["cleanup_plan"] == [
+        {
+            "action": "source_declared_compensation",
+            "mode": "compensating_transition",
+            "operation_ref": "release_capacity",
+            "compensates_operation_ref": "reserve_capacity",
+            "path": "/api/capacity/release",
+            "method": "POST",
+            "body_from_original_request": True,
+            "runtime_response_binding_required": False,
+            "source_step_id": "treatment_1",
+        },
+        {
+            "action": "source_declared_compensation",
+            "mode": "compensating_transition",
+            "operation_ref": "release_capacity",
+            "compensates_operation_ref": "reserve_capacity",
+            "path": "/api/capacity/release",
+            "method": "POST",
+            "body_from_original_request": True,
+            "runtime_response_binding_required": False,
+            "source_step_id": "control_1",
+        },
+    ]
 
 
 def test_write_without_concrete_compensation_is_blocked_before_execution() -> None:
@@ -2538,8 +2580,8 @@ def test_colon_path_params_compile_with_source_declared_runtime_resolver() -> No
         asset,
         project_id="proj-a",
         runtime_actors=[
-            {"role": "viewer_role", "account_ref": "viewer_a", "secret_ref": "secret_ref:test_accounts:viewer_a"},
-            {"role": "owner_role", "account_ref": "owner_a", "secret_ref": "secret_ref:test_accounts:owner_a"},
+            {"role": "viewer_role", "account_ref": "viewer_a", "secret_ref": "secret_ref:test_accounts:viewer_a", "tenant_ref": "tenant-a"},
+            {"role": "viewer_role", "account_ref": "viewer_b", "secret_ref": "secret_ref:test_accounts:viewer_b", "tenant_ref": "tenant-b"},
         ],
     )
     target_op = next(op for op in ir["operations"] if str(op.get("path")) == "/resources/:id")
@@ -2548,6 +2590,12 @@ def test_colon_path_params_compile_with_source_declared_runtime_resolver() -> No
         for actor in ir["actors"]
         if actor.get("account_ref")
     ]
+    # Tenant isolation requires same-role actors with DISTINCT tenant coordinates.
+    # Patch the generated actors to carry distinct tenant_ref values.
+    for idx, actor in enumerate(ir["actors"]):
+        if actor.get("account_ref"):
+            actor["tenant_ref"] = f"tenant-{idx}"
+            actor.pop("tenant_scope", None)
     obligation = {
         "obligation_id": "obl_colon_path_binding",
         "risk_family": "isolation",

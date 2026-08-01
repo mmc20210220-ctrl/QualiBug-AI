@@ -954,8 +954,8 @@ def build_source_backed_coverage_obligations(
             op_id = _text(node.get("ir_node_id"))
 
         # Validate: only generate obligations for coverage nodes that reference
-        # real operations in the Behavior IR, or are relation/invariant/state
-        # nodes that don't require a specific operation.
+        # real operations in the Behavior IR. An obligation without a resolvable
+        # primary operation can never compile — it wastes budget as DEFERRED.
         op_refs: list[str] = []
         if node_type == "invariant":
             op_refs = [ref for ref in _list(node.get("operation_refs")) if _text(ref) in valid_op_ids]
@@ -965,14 +965,73 @@ def build_source_backed_coverage_obligations(
             if rel_op_ref and rel_op_ref in valid_op_ids:
                 op_refs = [rel_op_ref]
         elif node_type == "state":
-            # State nodes reference entities, not operations directly
-            op_refs = []
+            # State nodes reference entities — resolve operations via transitions
+            _state_id = _text(node.get("ir_node_id"))
+            for _rel in _list(behavior_ir.get("relations")):
+                if not isinstance(_rel, dict):
+                    continue
+                if _text(_rel.get("relation_type")) != "transitions":
+                    continue
+                if _state_id in {_text(_rel.get("from_ref")), _text(_rel.get("to_ref"))}:
+                    _rel_op = _text(_rel.get("operation_ref"))
+                    if _rel_op and _rel_op in valid_op_ids and _rel_op not in op_refs:
+                        op_refs.append(_rel_op)
         elif op_id and op_id in valid_op_ids:
             op_refs = [op_id]
         elif node_type in ("operation", "actor_operation"):
             # Operation node whose operation ID doesn't exist → skip
             continue
-        # For other node types without operation references, it's ok to have empty op_refs
+
+        # ── Entity-co-reference resolution for still-unresolved nodes ──
+        # Invariant and relation nodes without direct operation refs may still
+        # be resolvable through their entity declarations.
+        if not op_refs and node_type in ("invariant", "relation", "state"):
+            _node_entity_refs: set[str] = set()
+            _ir_node_id = _text(node.get("ir_node_id"))
+            # Collect entity refs from the source IR node
+            if node_type == "invariant":
+                for _inv in _list(behavior_ir.get("invariants")):
+                    if isinstance(_inv, dict) and _text(_inv.get("id")) == _ir_node_id:
+                        _node_entity_refs.update(
+                            _text(e) for e in _list(_inv.get("entity_refs")) if _text(e)
+                        )
+                        _top_ent = _text(_inv.get("entity_ref"))
+                        if _top_ent:
+                            _node_entity_refs.add(_top_ent)
+                        break
+            elif node_type == "state":
+                _ent = _text(node.get("entity_ref"))
+                if _ent:
+                    _node_entity_refs.add(_ent)
+            elif node_type == "relation":
+                # Use from_ref/to_ref to find related entities via states
+                for _ref_key in ("from_ref", "to_ref"):
+                    _ref_val = _text(node.get(_ref_key))
+                    for _st in _list(behavior_ir.get("states")):
+                        if isinstance(_st, dict) and _text(_st.get("id")) == _ref_val:
+                            _ent = _text(_st.get("entity_ref"))
+                            if _ent:
+                                _node_entity_refs.add(_ent)
+            # Match operations by entity_refs overlap
+            if _node_entity_refs:
+                for _cand_op in all_ops:
+                    if not isinstance(_cand_op, dict):
+                        continue
+                    _cand_id = _text(_cand_op.get("id"))
+                    if not _cand_id or _cand_id not in valid_op_ids:
+                        continue
+                    _cand_ents = {
+                        _text(e) for e in _list(_cand_op.get("entity_refs")) if _text(e)
+                    }
+                    if _cand_ents & _node_entity_refs:
+                        op_refs.append(_cand_id)
+                        if len(op_refs) >= 3:  # cap to avoid over-binding
+                            break
+
+        # An obligation with no resolvable operation can never compile.
+        # Record a coverage gap instead of creating a guaranteed-DEFERRED attempt.
+        if not op_refs:
+            continue
 
         op_path = _text(node.get("operation_path"))
         op_method = _text(node.get("operation_method"))

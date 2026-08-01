@@ -967,6 +967,23 @@ def observe_authorization_comparison(
             evidence=base_evidence,
         )
     if _text(control_row.get("method")).upper() != "GET":
+        # When both control (authorized) and treatment (unauthorized) writes
+        # are accepted (2xx), the HTTP response IS the authorization evidence:
+        # the restricted actor could perform the same mutation as the owner.
+        # No business-effect readback is needed to prove this leak.
+        if _is_success(control_row) and _is_success(treatment_row):
+            base_evidence.update({
+                "same_resource_proven": True,
+                "resource_match_basis": "dual_accepted_write_status_comparison",
+                "owner_can_access": True,
+                "viewer_can_access": True,
+                "leak_detected": True,
+            })
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="OBSERVED",
+                evidence=base_evidence,
+            )
         effect = _dict(business_effect)
         control_effect = effect.get("control_effect_count")
         treatment_effect = effect.get("treatment_effect_count")

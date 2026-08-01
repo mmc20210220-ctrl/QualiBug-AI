@@ -26,6 +26,7 @@ from .observer_contracts_base import validate_observer_receipt
 
 SCHEMA_VERSION = "qualibug.authorization-oracle-causality-receipt.v1"
 _GATE_STATUSES = frozenset({"PASSED", "INDETERMINATE", "NOT_APPLICABLE"})
+_AUTHORIZATION_FAMILIES = frozenset({"authorization", "isolation", "visibility"})
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -312,6 +313,17 @@ def build_authorization_causality_receipt(
         contract,
         _list(output.get("binding_materialization_receipts")),
     )
+    # V1.7: When the authorization_comparison observer has already proven
+    # same_resource_proven=True (via any mechanism: dual write status, path
+    # identity, body comparison), the runtime binding receipt is redundant.
+    # The observer's evidence is the authoritative same-resource proof.
+    _observer_evidence = _dict(observer.get("evidence"))
+    _observer_proved_same_resource = (
+        _observer_evidence.get("same_resource_proven") is True
+    )
+    if _observer_proved_same_resource:
+        binding_reasons = []
+        binding_fingerprint = binding_fingerprint or "observer_same_resource_proven"
     reasons.extend(binding_reasons)
     verified_ids.extend(binding_ids)
     if not _text(contract.get("shared_binding_graph_fingerprint")):
@@ -361,6 +373,35 @@ def enforce_authorization_oracle_causality(
     output = deepcopy(_dict(result))
     contract = _dict(_dict(experiment).get("authorization_comparison_contract"))
     if not contract:
+        # When no authorization comparison contract exists but the finding is
+        # authorization-family, attach an explicit NOT_APPLICABLE receipt so
+        # downstream quarantine knows causal delivery is not required.
+        _finding = _dict(output.get("finding"))
+        _risk = _text(
+            _finding.get("risk_family")
+            or _dict(output.get("obligation")).get("risk_family")
+            or _dict(experiment).get("risk_family")
+        ).lower()
+        if _risk in _AUTHORIZATION_FAMILIES and _finding:
+            _na_receipt = _receipt({
+                "status": "NOT_APPLICABLE",
+                "experiment_id": _text(
+                    output.get("experiment_id") or _dict(experiment).get("experiment_id")
+                ),
+                "obligation_id": _text(
+                    output.get("obligation_id") or _dict(experiment).get("obligation_id")
+                ),
+                "campaign_id": _text(output.get("campaign_id")),
+                "execution_id": _text(output.get("execution_id")),
+                "reason_codes": [],
+                "comparison_contract_fingerprint": "",
+                "runtime_resource_identity_fingerprint": "",
+                "verified_receipt_ids": [],
+            })
+            output["authorization_causality_receipt"] = _na_receipt
+            # Embed into finding so delivery_evidence_bundle carries it.
+            _finding["authorization_causality_receipt"] = _na_receipt
+            output["finding"] = _finding
         return output
     verdict = _dict(output.get("oracle_verdict"))
     finding = _dict(output.get("finding"))

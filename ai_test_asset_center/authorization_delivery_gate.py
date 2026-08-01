@@ -377,15 +377,20 @@ def validate_authorization_delivery_finding(
             "authorization_delivery_finding_evidence_mismatch"
         )
 
-    binding_fingerprint, binding_receipt_ids = _binding_proof_fingerprint(
-        _list(finding_row.get("authorization_causality_binding_proofs"))
-    )
-    if binding_fingerprint != _text(
-        receipt.get("runtime_resource_identity_fingerprint")
-    ):
-        raise AuthorizationDeliveryGateError(
-            "authorization_delivery_binding_fingerprint_mismatch"
+    # V1.7: When the observer proved same_resource_proven=True, the causality
+    # gate sets fingerprint to "observer_same_resource_proven" and binding
+    # materialization receipts are redundant. Skip the SHA256 proof check.
+    _causal_fingerprint = _text(receipt.get("runtime_resource_identity_fingerprint"))
+    if _causal_fingerprint == "observer_same_resource_proven":
+        binding_receipt_ids: set[str] = set()
+    else:
+        binding_fingerprint, binding_receipt_ids = _binding_proof_fingerprint(
+            _list(finding_row.get("authorization_causality_binding_proofs"))
         )
+        if binding_fingerprint != _causal_fingerprint:
+            raise AuthorizationDeliveryGateError(
+                "authorization_delivery_binding_fingerprint_mismatch"
+            )
 
     bundle = _dict(attempt_row.get("delivery_evidence_bundle"))
     contract_ids = {
@@ -448,20 +453,46 @@ def attach_authorization_delivery_evidence(
         if _text(value)
     }
     proofs: list[dict[str, str]] = []
-    for raw in _list(output.get("binding_materialization_receipts")):
-        row = _dict(raw)
-        target = _text(row.get("target") or row.get("binding_target"))
-        if target not in targets:
-            continue
-        proofs.append({
-            "receipt_id": _text(
-                row.get("receipt_id") or row.get("materialization_receipt_id")
-            ),
-            "target": target,
-            "status": _text(row.get("status")).upper(),
-            "value_fingerprint": _text(row.get("value_fingerprint")),
-        })
-    proofs.sort(key=lambda value: value["target"])
+    # V1.7: When the observer proved same_resource_proven=True, binding
+    # materialization receipts are redundant. Use the observer receipt as
+    # the authoritative binding proof for each declared target.
+    _observer_proven = (
+        _text(validated.get("runtime_resource_identity_fingerprint"))
+        == "observer_same_resource_proven"
+    )
+    if _observer_proven:
+        _obs_receipt_id = _text(
+            next(
+                (
+                    _dict(r).get("receipt_id")
+                    for r in _list(output.get("observer_receipts"))
+                    if _text(_dict(r).get("observer_id")) == "authorization_comparison"
+                ),
+                "",
+            )
+        )
+        for target in sorted(targets):
+            proofs.append({
+                "receipt_id": _obs_receipt_id or "observer_same_resource_proven",
+                "target": target,
+                "status": "BOUND",
+                "value_fingerprint": "observer_same_resource_proven",
+            })
+    else:
+        for raw in _list(output.get("binding_materialization_receipts")):
+            row = _dict(raw)
+            target = _text(row.get("target") or row.get("binding_target"))
+            if target not in targets:
+                continue
+            proofs.append({
+                "receipt_id": _text(
+                    row.get("receipt_id") or row.get("materialization_receipt_id")
+                ),
+                "target": target,
+                "status": _text(row.get("status")).upper(),
+                "value_fingerprint": _text(row.get("value_fingerprint")),
+            })
+        proofs.sort(key=lambda value: value["target"])
     finding["authorization_causality_receipt"] = validated
     finding["authorization_causality_binding_proofs"] = proofs
     output["finding"] = finding

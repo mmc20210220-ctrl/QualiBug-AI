@@ -448,10 +448,20 @@ def bind_experiment_pack_to_captured_materializations(
             "gate_status": _text(gate.get("status")) or "NOT_BUILT",
             "runtime_materialization_ready": gate.get("runtime_materialization_ready") is True,
         }
-        bridge_blocked = [
-            _blocked_experiment(row, "BLOCKED_RUNTIME_MATERIALIZATION_GATE", detail)
-            for row in compiled
+        # Only block experiments that actually require a materialization binding.
+        # Experiments whose operation has no matching materialization candidate
+        # do not depend on the gate and must not be blanket-blocked.
+        all_candidates = _ready_candidates(capture) or [
+            row for row in _list(capture.get("materializations")) if isinstance(row, dict)
         ]
+        for experiment in compiled:
+            candidate, _reason, _detail = _match_materialization(
+                experiment, behavior_ir=behavior_ir, candidates=all_candidates
+            )
+            if candidate is not None:
+                bridge_blocked.append(_blocked_experiment(experiment, "BLOCKED_RUNTIME_MATERIALIZATION_GATE", detail))
+            else:
+                bridged.append(experiment)
     else:
         for experiment in compiled:
             candidate, reason, detail = _match_materialization(

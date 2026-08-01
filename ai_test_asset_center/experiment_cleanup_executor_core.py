@@ -603,6 +603,7 @@ def _execute_adapter_cleanup_step(
     steps_out: list[dict[str, Any]],
     runtime_contract: dict[str, Any] | None = None,
     behavior_ir: dict[str, Any] | None = None,
+    creation_receipts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run one declared-adapter cleanup step and return its receipt.
 
@@ -704,7 +705,7 @@ def _execute_adapter_cleanup_step(
             sub_step,
             identity_value=identity,
             dsn=dsn,
-            creation_receipts=[],
+            creation_receipts=creation_receipts or [],
             root=root,
             project=project,
             runtime_contract=runtime_contract,
@@ -940,6 +941,28 @@ def execute_experiment_cleanup_compensation(
         cleanup_subjects = activation_requirements.get("cleanup") or []
         documented_routes = _documented_routes(ops)
         adapter_cleanup_receipts: list[dict[str, Any]] = []
+        # Build creation receipts from accepted governed writes so the DB
+        # adapter can prove row ownership. Each accepted 2xx write response
+        # body may contain the created resource identity.
+        _creation_receipts_for_cleanup: list[dict[str, Any]] = []
+        for _attempt in accepted_governed_writes:
+            _write_row = _dict(_attempt.get("write"))
+            _write_status = int(_write_row.get("status") or 0)
+            _write_body = _write_row.get("body")
+            if 200 <= _write_status < 300 and isinstance(_write_body, dict):
+                _cr_id = _text(
+                    _write_body.get("id")
+                    or _write_body.get("resource_id")
+                    or _write_body.get("entity_id")
+                    or _write_body.get("created_id")
+                )
+                if _cr_id:
+                    _creation_receipts_for_cleanup.append({
+                        "status": "created",
+                        "identity_value": _cr_id,
+                        "resource_id": _cr_id,
+                        "table": _text(_dict(cleanup_plan[0]).get("table")) if cleanup_plan else "",
+                    })
         for cleanup_index in reversed(range(len(cleanup_plan))):
             cleanup = cleanup_plan[cleanup_index]
             cleanup_subject_id = (
@@ -963,6 +986,7 @@ def execute_experiment_cleanup_compensation(
                     runtime_contract=runtime_contract,
                     behavior_ir={"entities": _list(_dict(exp.get("behavior_ir")).get("entities"))}
                     if exp.get("behavior_ir") else {"entities": []},
+                    creation_receipts=_creation_receipts_for_cleanup,
                 )
                 # contract_evidence_receipts has its own strict schema and the delivery
                 # gate validates every entry; a cleanup receipt is a different artifact

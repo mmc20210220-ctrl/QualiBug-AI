@@ -969,6 +969,12 @@ def finalize_experiment_execution(
         safety_contract=safety,
         steps_out=steps_out,
     )
+    # V1.7: Response-only families (authorization/validation/isolation/visibility)
+    # test that writes are REJECTED. No state change is expected, so cleanup
+    # equivalence is not applicable.
+    _finalizer_family = _text(exp.get("risk_family")).lower()
+    if _finalizer_family in {"authorization", "validation", "isolation", "visibility"}:
+        is_governed_write = False
     if is_governed_write:
         proof = _dict(exp.get("write_reversibility_proof"))
         if proof and _text(proof.get("proof_status")) == "PROVEN":
@@ -1110,9 +1116,20 @@ def finalize_experiment_execution(
             "execution_receipt": {"status": status, "reason_code": reason, "detail": detail},
         }
     # ── SPEC v1.1.1 §8.3: INDETERMINATE → block customer-deliverable findings ──
+    # V1.7: When contract evidence receipts already prove cleanup COMPLETED with
+    # restoration_verified=True, the equivalence gate's INDETERMINATE is a false
+    # negative (e.g. "cleanup_transport_failed:status=200" misreads success).
+    # The contract oracle's cleanup proof is the authoritative restoration evidence.
     elif (
         cleanup_gate == "BLOCKED"
         and verdict.get("customer_deliverable_candidate") is True
+        and not any(
+            isinstance(_cer, dict)
+            and _text(_cer.get("kind")) == "cleanup"
+            and _text(_cer.get("status")).upper() == "COMPLETED"
+            and _dict(_cer.get("evidence")).get("restoration_verified") is True
+            for _cer in contract_evidence_receipts
+        )
     ):
         status = "BLOCKED"
         reason = cleanup_gate_reason

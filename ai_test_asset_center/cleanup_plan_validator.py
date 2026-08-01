@@ -32,6 +32,7 @@ _SEMANTIC_COMPENSATION_MODES = frozenset(
     {
         "field_restore",
         "restore_snapshot",
+        "snapshot_restore",  # alias emitted by some cleanup plan builders
         "inverse_delta",
         "compensating_transition",
         "row_delete",

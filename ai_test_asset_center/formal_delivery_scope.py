@@ -61,13 +61,21 @@ def validated_deliverable_gate_index(
     run_id = _text(validated.get("run_id"))
     campaign_id = _text(validated.get("campaign_id"))
     index: dict[str, dict[str, Any]] = {}
-    for raw in _list(validated.get("attempts")):
+    import sys as _sys
+    _attempts_list = _list(validated.get("attempts"))
+    _deliverable_count = sum(
+        1 for a in _attempts_list
+        if _text(_dict(a).get("terminal_status")).upper() == "DELIVERABLE"
+    )
+    print(f"[GATE_INDEX_DEBUG] total_attempts={len(_attempts_list)} deliverable={_deliverable_count}", file=_sys.stderr)
+    for raw in _attempts_list:
         attempt = _dict(raw)
         if _text(attempt.get("terminal_status")).upper() != "DELIVERABLE":
             continue
         occurrence_id = _text(attempt.get("finding_id"))
         gate = _dict(attempt.get("gate_receipt"))
         schema_version = gate.get("schema_version")
+        print(f"[GATE_INDEX_DEBUG] DELIVERABLE attempt: oid={occurrence_id} gate_schema={schema_version} has_gate={bool(gate)}", file=_sys.stderr)
         if not occurrence_id:
             raise MainlineContractError("formal_deliverable_gate_v2_missing")
         try:
@@ -81,6 +89,7 @@ def validated_deliverable_gate_index(
                 f"historical_authorization_quarantine_invalid:{occurrence_id}:{exc}"
             ) from exc
         if quarantine:
+            print(f"[GATE_INDEX_DEBUG] QUARANTINED: oid={occurrence_id} reason={quarantine.get('reason_detail')}", file=_sys.stderr)
             continue
         if schema_version == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
             evidence_bundle = _dict(attempt.get("delivery_evidence_bundle"))

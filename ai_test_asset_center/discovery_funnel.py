@@ -14,6 +14,7 @@ from .discovery_quality_projection import (
     SCHEMA_VERSION as QUALITY_PROJECTION_SCHEMA,
 )
 from .operational_receipts import EXECUTION_OPERATIONAL_SUMMARY_SCHEMA
+from .formal_delivery_scope import validated_delivery_gate_finding_ids
 
 
 REQUIRED_STAGE_NAMES = (
@@ -414,12 +415,10 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     ledger = _attempt_ledger(result)
     formal = _formal_projection(result)
     attempts = [_dict(item) for item in _list(ledger.get("attempts"))]
-    attempt_deliverable_ids = sorted(
-        _text(item.get("finding_id"))
-        for item in attempts
-        if _text(item.get("terminal_status")).upper() == "DELIVERABLE"
-        and _text(item.get("finding_id"))
-    )
+    # Use the same validated+quarantine-filtered scope that the formal
+    # projection uses. Raw DELIVERABLE attempts may include quarantined
+    # historical authorization attempts that the projection excludes.
+    attempt_deliverable_ids = validated_delivery_gate_finding_ids(ledger)
     raw_contract = result.get("mainline_run") or _dict(result.get("v12")).get("mainline_run")
     customer_outputs_published = True
     if raw_contract is not None:

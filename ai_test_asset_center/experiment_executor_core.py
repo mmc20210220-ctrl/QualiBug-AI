@@ -209,7 +209,14 @@ def execute_one_experiment(
     safety = _dict(exp.get("safety_contract"))
     is_governed_write = safety.get("governed_write")
     compile_proof_fingerprint = ""
-    if is_governed_write:
+    # V1.7: Response-only families (authorization/validation/isolation/visibility)
+    # test that writes are REJECTED. No state change is expected, so cleanup
+    # reversibility proof is not applicable. Skip the proof check.
+    _exp_family = _text(exp.get("risk_family")).lower()
+    _cleanup_exempt = _exp_family in {
+        "authorization", "validation", "isolation", "visibility",
+    }
+    if is_governed_write and not _cleanup_exempt:
         compile_proof = _dict(exp.get("write_reversibility_proof"))
         if not compile_proof or _text(compile_proof.get("proof_status")) != "PROVEN":
             return _terminal(
@@ -316,6 +323,16 @@ def execute_one_experiment(
         "control_succeeded": False,
         "harness_error": False,
     }
+    # Expose compiled write_observers so the step executor can fall back to
+    # compiler-resolved observation paths when runtime re-derivation fails.
+    _compiled_wo = _list(exp.get("write_observers"))
+    if _compiled_wo:
+        observations["_compiled_write_observers"] = _compiled_wo
+    # Expose the full observer list so runtime can distinguish response-only
+    # experiments (authorization/validation) from effect-observation experiments.
+    _compiled_observers = _list(exp.get("observers"))
+    if _compiled_observers:
+        observations["_compiled_observers"] = _compiled_observers
     attach_lifecycle_ledger(observations, lifecycle_ledger)
     activation_requirements = contract_activation_requirements(exp)
     lifecycle_ledger.set_required_step_ids(
@@ -542,7 +559,8 @@ def execute_one_experiment(
     observations["fixture_row_lineage_receipts"] = _fixture_lineage_receipts
 
     # ── SPEC v1.1 §10 Phase B: Runtime binding validation ──
-    if is_governed_write:
+    # V1.7: Cleanup-exempt families skip runtime proof validation (no cleanup plan).
+    if is_governed_write and not _cleanup_exempt:
         runtime_validation = validate_cleanup_plan(
             exp,
             behavior_ir,

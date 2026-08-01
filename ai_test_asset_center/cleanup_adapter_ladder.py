@@ -560,8 +560,11 @@ def execute_declared_adapter_field_restore(
             receipt["detail"] = f"identity_matched_rows={updated}"
             return receipt
         if updated == 0:
-            receipt["status"] = "REFUSED"
+            # Row already absent or fields already at target values — the
+            # cleanup objective is satisfied.
+            receipt["status"] = "CLEANED"
             receipt["reason_code"] = "CLEANUP_ROW_ALREADY_ABSENT"
+            receipt["rows_updated"] = 0
             return receipt
         connection.commit()
         receipt["status"] = "CLEANED"
@@ -711,8 +714,13 @@ def execute_declared_adapter_cleanup(
             receipt["detail"] = f"identity_matched_rows={deleted}"
             return receipt
         if deleted == 0:
-            receipt["status"] = "REFUSED"
+            # Row already absent means the cleanup objective is satisfied —
+            # the environment is clean. This happens when two cleanup steps
+            # target the same row (control + treatment) or a prior run already
+            # removed it. Treat as success, not refusal.
+            receipt["status"] = "CLEANED"
             receipt["reason_code"] = "CLEANUP_ROW_ALREADY_ABSENT"
+            receipt["rows_deleted"] = 0
             return receipt
         connection.commit()
         receipt["status"] = "CLEANED"

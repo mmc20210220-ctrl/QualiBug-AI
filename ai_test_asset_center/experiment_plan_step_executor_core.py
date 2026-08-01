@@ -449,10 +449,68 @@ def execute_non_barrier_plans(
                 # _response_bound_observation_path after a 2xx response.
                 if not observation_path and _has_response_bound_create_observers(op, ops):
                     observation_path = normalize_path_placeholders(path_template)
+                # ── Fallback: use compiled write_observers from the experiment ──
+                # The compiler already resolved auto-observers (path-prefix matching
+                # + readback resolver). When the runtime re-derivation above fails
+                # (e.g. placeholder materialization gap), reuse the compiled result.
+                if not observation_path:
+                    for _wo in _list(observations.get("_compiled_write_observers")):
+                        _wo_path = normalize_path_placeholders(
+                            _text(_wo.get("path") or _wo.get("endpoint_template"))
+                        )
+                        if not _wo_path.startswith("/"):
+                            continue
+                        # Materialize placeholders from runtime bindings
+                        _materialized_obs = _wo_path
+                        for _bk, _bv in (runtime_bindings or {}).items():
+                            if _bv in (None, ""):
+                                continue
+                            _materialized_obs = _materialized_obs.replace(
+                                "{" + _bk + "}", str(_bv)
+                            )
+                        if (
+                            _materialized_obs.startswith("/")
+                            and not _unresolved_path_placeholders(_materialized_obs)
+                        ):
+                            observation_path = _materialized_obs
+                            break
                 # The observation path must be a source-declared read. Deriving
                 # one from the write path assumes a URL convention the source
                 # never stated, and reading back the write path itself makes the
                 # write its own evidence.
+                #
+                # However, response-only experiments (authorization, validation)
+                # assert on HTTP status codes and do NOT need effect observation.
+                # Their write is expected to be rejected; no state change occurs.
+                _EFFECT_OBSERVER_IDS_RT = {
+                    "entity_state", "before_state", "after_state",
+                    "final_state", "business_effect",
+                }
+                _compiled_observers_list = _list(observations.get("_compiled_observers"))
+                _exp_observer_ids = {
+                    _text(o.get("observer_id"))
+                    for o in _compiled_observers_list
+                    if isinstance(o, dict)
+                }
+                # Effect observers with resolver_operations or readback_contract_id
+                # have their own readback mechanism (e.g. database observers) and
+                # do not need an HTTP observation_path from the step executor.
+                _effect_observers_with_resolvers = any(
+                    isinstance(o, dict)
+                    and _text(o.get("observer_id")) in _EFFECT_OBSERVER_IDS_RT
+                    and (
+                        bool(_list(o.get("resolver_operations")))
+                        or bool(_text(o.get("readback_contract_id")))
+                    )
+                    for o in _compiled_observers_list
+                )
+                _needs_effect_observation = bool(
+                    _exp_observer_ids & _EFFECT_OBSERVER_IDS_RT
+                ) and not _effect_observers_with_resolvers
+                if not observation_path and not _needs_effect_observation:
+                    # Response-only experiment: send the write without before/after
+                    # observation. The HTTP response IS the evidence.
+                    observation_path = normalize_path_placeholders(path_template)
                 if not observation_path:
                     reason_code = "BLOCKED_MISSING_OBSERVER"
                     pre_transport_block_reasons.append(reason_code)
@@ -494,7 +552,17 @@ def execute_non_barrier_plans(
                     path=path,
                     body=request_body,
                     observation_path=observation_path,
-                    runtime_body_plan=runtime_body_plan or None,
+                    # Only pass runtime_body_plan when it is a real mutation plan.
+                    # The compile freezer adds readback_contract/async_policy metadata
+                    # to runtime_body_plan; the sandbox executor misinterprets any
+                    # non-None plan as a mutation directive and blocks on missing
+                    # schema_version. Separate the two concerns here.
+                    runtime_body_plan=(
+                        runtime_body_plan
+                        if _text(runtime_body_plan.get("schema_version"))
+                        == "qualibug.source-observed-mutation-plan.v1"
+                        else None
+                    ),
                 )
                 runtime_body_receipt = _dict(governed.get("runtime_body_receipt"))
                 runtime_body_blocked = (

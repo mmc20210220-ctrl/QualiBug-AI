@@ -234,17 +234,37 @@ def _first_text(*values: Any) -> str:
 
 
 def _scan_campaign_context_defaults(project: str, root: Path) -> dict[str, str]:
+    profile: dict[str, Any] = {}
     try:
         from .enterprise_pilot_runtime import load_connector_registry
 
         registry = load_connector_registry(project, root)
+        raw_profile = registry.get("test_profile") if isinstance(registry, dict) else {}
+        if isinstance(raw_profile, dict):
+            profile = raw_profile
     except Exception:
-        return {}
-    profile = registry.get("test_profile") if isinstance(registry, dict) else {}
-    if not isinstance(profile, dict):
+        pass
+    # Fall back to real_project_config.json when the connector registry does
+    # not carry the identity fields.  This is the project-level SSOT that
+    # stores target_id, environment_ref, environment_type, and base_url.
+    if not (_first_text(profile.get("scope_id"), profile.get("target_id"))
+            and _first_text(profile.get("environment_ref"), profile.get("target_environment"))):
+        try:
+            from .project_runtime_config import load_real_project_config
+
+            rpc = load_real_project_config(project, root)
+            if isinstance(rpc, dict):
+                for key in ("target_id", "scope_id", "environment_ref",
+                            "environment_type", "base_url", "approved_base_url"):
+                    if rpc.get(key) and not profile.get(key):
+                        profile[key] = rpc[key]
+        except Exception:
+            pass
+    if not profile:
         return {}
     scope_id = _first_text(
         profile.get("scope_id"),
+        profile.get("target_id"),
         profile.get("deployment_scope_id"),
         profile.get("project_scope_id"),
     )

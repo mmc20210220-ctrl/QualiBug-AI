@@ -279,7 +279,15 @@ def execute_precondition_plan(
             path=path,
             body=body,
             observation_path=observation_path,
-            runtime_body_plan=deepcopy(_dict(step.get("runtime_body_plan"))),
+            # Only pass runtime_body_plan when it is a real mutation plan.
+            # The compile freezer adds readback_contract/async_policy metadata
+            # which the sandbox executor misinterprets as a mutation directive.
+            runtime_body_plan=(
+                deepcopy(_dict(step.get("runtime_body_plan")))
+                if _text(_dict(step.get("runtime_body_plan")).get("schema_version"))
+                == "qualibug.source-observed-mutation-plan.v1"
+                else None
+            ),
         )
         write = _dict(governed.get("write"))
         status_code = int(write.get("status") or 0)

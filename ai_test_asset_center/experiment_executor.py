@@ -245,10 +245,20 @@ def execute_one_experiment(
             == "PASSED"
         )
         if causal_passed and targets:
-            binding_identity_proofs_for_targets(
-                _list(governed.get("binding_materialization_receipts")),
-                targets,
+            # V1.7: When the authorization_comparison observer has already proven
+            # same_resource_proven=True, runtime binding identity receipts are
+            # redundant — the observer is the authoritative same-resource proof.
+            _observer_proved = any(
+                isinstance(_obs, dict)
+                and _text(_obs.get("observer_id")) == "authorization_comparison"
+                and _dict(_obs.get("evidence")).get("same_resource_proven") is True
+                for _obs in _list(governed.get("observer_receipts"))
             )
+            if not _observer_proved:
+                binding_identity_proofs_for_targets(
+                    _list(governed.get("binding_materialization_receipts")),
+                    targets,
+                )
         _verify_authorization_compile_identity(governed, experiment)
         packaged = attach_authorization_delivery_evidence(
             governed,

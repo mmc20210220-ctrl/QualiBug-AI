@@ -663,10 +663,24 @@ def preflight_experiment_executable(
             and not _declared_effect_observer_available(op, ops)
             and not _exp_has_compiled_effect_resolvers
         ):
-            # A write response reports that the request was accepted, not that
-            # the business effect happened. Degrading to it would make the
-            # response its own proof.
-            return False, "BLOCKED_MISSING_OBSERVER", f"write_observer:{op_ref}"
+            # Response-only experiments (authorization, validation) assert on
+            # HTTP status codes. Their write is expected to be rejected; no state
+            # change occurs, so effect observation is unnecessary. Only block when
+            # the experiment actually has effect observers that need evidence.
+            _EFFECT_OBS_IDS = {
+                "entity_state", "before_state", "after_state",
+                "final_state", "business_effect",
+            }
+            _has_effect_observers = any(
+                isinstance(obs, dict)
+                and _text(obs.get("observer_id")) in _EFFECT_OBS_IDS
+                for obs in _list(exp.get("observers"))
+            )
+            if _has_effect_observers:
+                # A write response reports that the request was accepted, not that
+                # the business effect happened. Degrading to it would make the
+                # response its own proof.
+                return False, "BLOCKED_MISSING_OBSERVER", f"write_observer:{op_ref}"
         # Collection POST create with only response-bound identity GET:
         # the identity GET requires the write response ID, so it cannot serve
         # as a pre-write observer. Block unless an independent pre-write

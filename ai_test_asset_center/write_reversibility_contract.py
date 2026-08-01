@@ -290,7 +290,7 @@ def _classify_cleanup_authority_v11(
     cleanup_path = _text(first.get("path") or cleanup_op.get("path") or cleanup_op.get("raw_path"))
 
     # ── identity_delete (SPEC §7.1) ──
-    if cleanup_method == "DELETE" and mode in {"reverse_order", "identity_delete"}:
+    if cleanup_method == "DELETE" and mode in {"reverse_order", "identity_delete", "delete_created_resource"}:
         return _validate_identity_delete(
             primary_method=primary_method,
             primary_path=primary_path,
@@ -317,7 +317,7 @@ def _classify_cleanup_authority_v11(
         )
 
     # ── field_snapshot_restore (SPEC §7.3) ──
-    if mode == "snapshot_restore" or action == "restore_before_snapshot":
+    if mode in {"snapshot_restore", "restore_snapshot"} or action == "restore_before_snapshot":
         return _validate_field_snapshot_restore(
             primary_method=primary_method,
             primary_path=primary_path,

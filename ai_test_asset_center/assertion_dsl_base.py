@@ -1031,10 +1031,22 @@ def evaluate_assertion(
             "state_transition",
             "cross_entity_consistency",
         }
+        # V1.7: Response-status assertion kinds evaluate against the HTTP
+        # response directly. Observer INDETERMINATE (e.g. business_effect or
+        # entity_state cannot observe a rejected write) is irrelevant to the
+        # assertion outcome — the response IS the evidence.
+        _response_status_kinds = {
+            "http_status_class",
+            "validation_rejection",
+            "permitted_operation_invocation",
+            "authorization_status_comparison",
+        }
         if (
             _effective_for_trace not in _field_oracle_kinds
             and kind not in _field_oracle_kinds
             and kind != "forbidden_state_transition"
+            and _effective_for_trace not in _response_status_kinds
+            and kind not in _response_status_kinds
         ):
             return _assertion_receipt(
                 assertion_id=assertion_id,

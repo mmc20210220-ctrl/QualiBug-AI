@@ -103,15 +103,28 @@ def test_compile_create_delete_emits_reverse_order_delete_cleanup() -> None:
     )
 
     assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
-    assert experiment["cleanup_plan"] == [{
-        "action": "reverse_order_compensation",
-        "mode": "reverse_order",
-        "operation_ref": "op-delete",
-        "compensates_operation_ref": "op-create",
-        "path": "/resources/{id}",
-        "method": "DELETE",
-        "runtime_response_binding_required": True,
-    }]
+    assert experiment["cleanup_plan"] == [
+        {
+            "action": "reverse_order_compensation",
+            "mode": "delete_created_resource",
+            "operation_ref": "op-delete",
+            "compensates_operation_ref": "op-create",
+            "path": "/resources/{id}",
+            "method": "DELETE",
+            "runtime_response_binding_required": True,
+            "source_step_id": "treatment_1",
+        },
+        {
+            "action": "reverse_order_compensation",
+            "mode": "delete_created_resource",
+            "operation_ref": "op-delete",
+            "compensates_operation_ref": "op-create",
+            "path": "/resources/{id}",
+            "method": "DELETE",
+            "runtime_response_binding_required": True,
+            "source_step_id": "control_1",
+        },
+    ]
 
 
 def _run_create_delete_experiment(
@@ -251,15 +264,28 @@ def test_executor_runs_delete_cleanup_for_accepted_creates(
     result, resources, seen = _run_create_delete_experiment(
         monkeypatch,
         tmp_path,
-        cleanup_plan=[{
-            "action": "reverse_order_compensation",
-            "mode": "reverse_order",
-            "operation_ref": "op-delete",
-            "compensates_operation_ref": "op-create",
-            "path": "/resources/{id}",
-            "method": "DELETE",
-            "runtime_response_binding_required": True,
-        }],
+        cleanup_plan=[
+            {
+                "action": "reverse_order_compensation",
+                "mode": "delete_created_resource",
+                "operation_ref": "op-delete",
+                "compensates_operation_ref": "op-create",
+                "path": "/resources/{id}",
+                "method": "DELETE",
+                "runtime_response_binding_required": True,
+                "source_step_id": "treatment_1",
+            },
+            {
+                "action": "reverse_order_compensation",
+                "mode": "delete_created_resource",
+                "operation_ref": "op-delete",
+                "compensates_operation_ref": "op-create",
+                "path": "/resources/{id}",
+                "method": "DELETE",
+                "runtime_response_binding_required": True,
+                "source_step_id": "control_1",
+            },
+        ],
         execution_id="execution-create-delete-cleanup",
     )
 
@@ -283,16 +309,30 @@ def test_executor_source_declared_delete_cleanup_still_runs(
     result, resources, seen = _run_create_delete_experiment(
         monkeypatch,
         tmp_path,
-        cleanup_plan=[{
-            "action": "source_declared_compensation",
-            "mode": "reverse_order",
-            "operation_ref": "op-delete",
-            "compensates_operation_ref": "op-create",
-            "path": "/resources/{id}",
-            "method": "DELETE",
-            "body_from_original_request": False,
-            "runtime_response_binding_required": True,
-        }],
+        cleanup_plan=[
+            {
+                "action": "source_declared_compensation",
+                "mode": "delete_created_resource",
+                "operation_ref": "op-delete",
+                "compensates_operation_ref": "op-create",
+                "path": "/resources/{id}",
+                "method": "DELETE",
+                "body_from_original_request": False,
+                "runtime_response_binding_required": True,
+                "source_step_id": "treatment_1",
+            },
+            {
+                "action": "source_declared_compensation",
+                "mode": "delete_created_resource",
+                "operation_ref": "op-delete",
+                "compensates_operation_ref": "op-create",
+                "path": "/resources/{id}",
+                "method": "DELETE",
+                "body_from_original_request": False,
+                "runtime_response_binding_required": True,
+                "source_step_id": "control_1",
+            },
+        ],
         execution_id="execution-legacy-source-declared-delete",
     )
 
@@ -451,15 +491,28 @@ def test_cleanup_uses_each_write_actor_for_actor_scoped_collections(
                 }],
             },
         ],
-        "cleanup_plan": [{
-            "action": "reverse_order_compensation",
-            "mode": "reverse_order",
-            "operation_ref": "op-delete",
-            "compensates_operation_ref": "op-create",
-            "path": "/carts/{id}",
-            "method": "DELETE",
-            "runtime_response_binding_required": True,
-        }],
+        "cleanup_plan": [
+            {
+                "action": "reverse_order_compensation",
+                "mode": "delete_created_resource",
+                "operation_ref": "op-delete",
+                "compensates_operation_ref": "op-create",
+                "path": "/carts/{id}",
+                "method": "DELETE",
+                "runtime_response_binding_required": True,
+                "source_step_id": "treatment_1",
+            },
+            {
+                "action": "reverse_order_compensation",
+                "mode": "delete_created_resource",
+                "operation_ref": "op-delete",
+                "compensates_operation_ref": "op-create",
+                "path": "/carts/{id}",
+                "method": "DELETE",
+                "runtime_response_binding_required": True,
+                "source_step_id": "control_1",
+            },
+        ],
         "safety_contract": {"environment_type": "test", "governed_write": True},
         "source_refs": [{"source_id": "api", "kind": "api_operation"}],
         "compile_receipt": {"status": "COMPILED", "reason_code": ""},

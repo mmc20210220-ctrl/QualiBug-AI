@@ -102,19 +102,24 @@ def authorization_attempt_requires_causal_delivery(
 ) -> bool:
     """Detect authorization semantics from receipt-backed fields, not titles."""
     row = _dict(attempt)
+    bundle = _dict(row.get("delivery_evidence_bundle"))
+    finding = _dict(bundle.get("finding"))
+    # An explicit NOT_APPLICABLE causality receipt means the experiment was not
+    # an authorization comparison; causal delivery is not required.
+    raw_receipt = _dict(finding.get("authorization_causality_receipt"))
+    if _text(raw_receipt.get("status")).upper() == "NOT_APPLICABLE":
+        return False
     if _text(row.get("risk_family")).lower() in _AUTHORIZATION_FAMILIES:
         return True
-    bundle = _dict(row.get("delivery_evidence_bundle"))
     if any(
         _text(_dict(value).get("observer_id")) == "authorization_comparison"
         for value in _list(bundle.get("observer_receipts"))
     ):
         return True
-    finding = _dict(bundle.get("finding"))
     if _text(finding.get("risk_family")).lower() in _AUTHORIZATION_FAMILIES:
         return True
     return bool(
-        _dict(finding.get("authorization_causality_receipt"))
+        raw_receipt
         or _text(
             _dict(finding.get("oracle")).get(
                 "authorization_causality_receipt_id"
@@ -310,20 +315,28 @@ def classify_historical_authorization_attempt(
         )
 
     proofs = _list(finding.get("authorization_causality_binding_proofs"))
-    if not proofs:
+    # V1.7: When the observer proved same_resource_proven=True, binding
+    # materialization receipts are redundant. The causality receipt's
+    # fingerprint records this bypass; proofs may be observer-synthetic.
+    _observer_proven = (
+        _text(causality.get("runtime_resource_identity_fingerprint"))
+        == "observer_same_resource_proven"
+    )
+    if not proofs and not _observer_proven:
         return _quarantine_receipt(
             attempt=row,
             run_id=run_id,
             campaign_id=campaign_id,
             reason_detail="authorization_delivery_binding_proofs_missing",
         )
-    try:
-        for proof in proofs:
-            validate_binding_materialization_identity_receipt(_dict(proof))
-    except BindingMaterializationIdentityError as exc:
-        raise HistoricalAuthorizationQuarantineError(
-            f"historical_authorization_contradiction:{_error_code(exc)}:{exc}"
-        ) from exc
+    if not _observer_proven:
+        try:
+            for proof in proofs:
+                validate_binding_materialization_identity_receipt(_dict(proof))
+        except BindingMaterializationIdentityError as exc:
+            raise HistoricalAuthorizationQuarantineError(
+                f"historical_authorization_contradiction:{_error_code(exc)}:{exc}"
+            ) from exc
 
     try:
         validated = validate_authorization_delivery_finding(

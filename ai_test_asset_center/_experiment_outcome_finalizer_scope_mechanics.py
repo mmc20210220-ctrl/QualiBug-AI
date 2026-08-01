@@ -78,9 +78,15 @@ def _status_code(value: Any) -> int:
 
 
 def _merge_receipt_rows(*groups: Any) -> list[dict[str, Any]]:
-    """Merge existing receipts without inventing identity or evidence."""
+    """Merge existing receipts without inventing identity or evidence.
+
+    Deduplication uses both receipt_id and observer_id. When two receipts
+    share the same observer_id, the first one wins (generated receipts come
+    first and are authoritative over step-level observation receipts).
+    """
     merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen_ids: set[str] = set()
+    seen_observers: set[str] = set()
     for group in groups:
         rows = [group] if isinstance(group, dict) else _list(group)
         for raw in rows:
@@ -89,9 +95,17 @@ def _merge_receipt_rows(*groups: Any) -> list[dict[str, Any]]:
             row = dict(raw)
             receipt_id = _scope_receipt_id(row)
             key = receipt_id or f"anonymous:{len(merged)}"
-            if key in seen:
+            if key in seen_ids:
                 continue
-            seen.add(key)
+            # Deduplicate by observer_id: the contract oracle requires exactly
+            # one receipt per observer_id. Generated receipts (first group) are
+            # authoritative; step-level observation receipts are supplementary.
+            observer_id = _text(row.get("observer_id"))
+            if observer_id and observer_id in seen_observers:
+                continue
+            seen_ids.add(key)
+            if observer_id:
+                seen_observers.add(observer_id)
             merged.append(row)
     return merged
 

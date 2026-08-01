@@ -167,7 +167,7 @@ def test_cancel_recreates_via_unique_collection_create() -> None:
         "compile_receipt"
     ]
     assert experiment["cleanup_plan"][0]["operation_ref"] == "op-create-order"
-    assert experiment["cleanup_plan"][0]["mode"] == "compensator"
+    assert experiment["cleanup_plan"][0]["mode"] == "compensating_transition"
 
 
 def test_identity_bound_status_uses_snapshot_restore_with_effect_read() -> None:
@@ -214,7 +214,7 @@ def test_identity_bound_status_uses_snapshot_restore_with_effect_read() -> None:
     assert experiment["compile_receipt"]["status"] == "COMPILED", experiment[
         "compile_receipt"
     ]
-    assert experiment["cleanup_plan"][0]["mode"] == "snapshot_restore"
+    assert experiment["cleanup_plan"][0]["mode"] == "restore_snapshot"
 
 
 def test_identity_bound_ship_blocks_when_empty_body_not_restorable() -> None:

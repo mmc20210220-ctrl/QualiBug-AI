@@ -231,7 +231,12 @@ def plan_obligation_round(
         oid = _text(obl.get("obligation_id"))
         exp = _dict(experiments.get(oid))
         receipt = _dict(exp.get("compile_receipt"))
-        if _text(receipt.get("status")) != "COMPILED" and _text(obl.get("compile_status")) != "COMPILED":
+        compile_status = _text(receipt.get("status")).upper()
+        if not compile_status:
+            # Fallback: obligation carries its own compile_status (e.g. when
+            # the planner is invoked without a full experiment map).
+            compile_status = _text(obl.get("compile_status")).upper()
+        if compile_status != "COMPILED":
             continue
         path_prefix, operation_key, _resolved_path = _resolve_operation_path(
             obl,
