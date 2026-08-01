@@ -1,6 +1,10 @@
-name: One-time scheduled E2E root authority delivery
+name: One-time E2E root authority delivery
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/e2e-root-authority-delivery.trigger'
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
@@ -9,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: one-time-e2e-root-authority-scheduled-delivery
+  group: one-time-e2e-root-authority-delivery
   cancel-in-progress: false
 
 jobs:
