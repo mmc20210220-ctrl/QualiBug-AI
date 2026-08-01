@@ -124,26 +124,34 @@ def _unsupported_receipt(
     }
 
 
-def _unsupported_existing_observation(
+def _unsupported_coverage_observation(
     descriptor: Mapping[str, Any],
     capability: ResourceCapability,
     existing: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Keep an existing source occurrence active without pretending its bytes are current."""
+    """Represent a known gap without creating content or a synthetic source occurrence."""
     existing_metadata = dict(existing.get("source_metadata") or {})
     remote_id = _text(descriptor.get("remote_resource_id"), 1000)
     previous_kind = _text(existing_metadata.get("resource_kind"), 160)
     current_kind = _text(descriptor.get("resource_kind"), 160)
+    effective_kind = previous_kind or current_kind
+    freshness = "STALE_UNSUPPORTED" if existing else "UNAVAILABLE_UNSUPPORTED"
     return {
         "remote_resource_id": remote_id,
-        # Source refs include resource kind. Reuse the previous kind so the observation
-        # updates the existing occurrence rather than creating a synthetic placeholder.
-        "resource_kind": previous_kind or current_kind,
+        # Source refs include resource kind. Reuse the previous kind for an existing
+        # occurrence so RETIRE_MISSING and freshness observations bind to its real identity.
+        "resource_kind": effective_kind,
+        "state": "UNSUPPORTED",
+        "reason_code": capability.reason_code,
+        "remote_object_type": capability.remote_object_type,
+        "display_title": _text(descriptor.get("title"), 300),
+        "retry_trigger": capability.retry_trigger,
+        "capability_contract_version": capability.contract_version,
         "metadata": {
             "source_origin": "connector_snapshot",
             "requested_source_id": remote_id,
             "remote_resource_id": remote_id,
-            "resource_kind": previous_kind or current_kind,
+            "resource_kind": effective_kind,
             "current_remote_resource_kind": current_kind,
             "remote_revision": _text(descriptor.get("remote_revision"), 240),
             "remote_updated_at": _text(
@@ -155,7 +163,7 @@ def _unsupported_existing_observation(
             "remote_materialization_fingerprint": _unsupported_fingerprint(
                 descriptor, capability
             ),
-            "remote_coverage_state": "STALE_UNSUPPORTED",
+            "remote_coverage_state": freshness,
             "materialization_disposition": capability.disposition.value,
             "materialization_reason_code": capability.reason_code,
             "materialization_capability_contract": capability.contract_version,
@@ -222,7 +230,7 @@ def sync_feishu_connector(
     )
 
     supported_unchanged_observations: list[dict[str, Any]] = []
-    unsupported_existing_observations: list[dict[str, Any]] = []
+    coverage_observations: list[dict[str, Any]] = []
     unsupported_resources: list[dict[str, Any]] = []
     pending_materializations: list[tuple[dict[str, Any], str]] = []
 
@@ -234,12 +242,11 @@ def sync_feishu_connector(
             unsupported_resources.append(
                 _unsupported_receipt(descriptor, capability, existing)
             )
-            if existing:
-                unsupported_existing_observations.append(
-                    _unsupported_existing_observation(
-                        descriptor, capability, existing
-                    )
+            coverage_observations.append(
+                _unsupported_coverage_observation(
+                    descriptor, capability, existing
                 )
+            )
             continue
 
         fingerprint = _materialization_fingerprint(
@@ -292,10 +299,8 @@ def sync_feishu_connector(
             project_id,
             connector_instance_id=connector_instance_id,
             items=items,
-            unchanged_observations=[
-                *supported_unchanged_observations,
-                *unsupported_existing_observations,
-            ],
+            unchanged_observations=supported_unchanged_observations,
+            coverage_observations=coverage_observations,
             root=resolved_root,
             actor=actor,
             sync_mode="FULL",
@@ -318,6 +323,10 @@ def sync_feishu_connector(
         if unsupported_count
         else "COMPLETE"
     )
+    preserved_count = sum(
+        int(bool(row.get("historical_content_retained")))
+        for row in unsupported_resources
+    )
     return {
         **run,
         "adapter_schema": FEISHU_ADAPTER_SCHEMA,
@@ -332,9 +341,7 @@ def sync_feishu_connector(
         "materialized_resource_count": materialized_count,
         "unchanged_resource_count": unchanged_supported_count,
         "unsupported_resource_count": unsupported_count,
-        "preserved_unsupported_occurrence_count": len(
-            unsupported_existing_observations
-        ),
+        "preserved_unsupported_occurrence_count": preserved_count,
         "known_resource_count": known_count,
         "unknown_gap_count": unknown_gap_count,
         "covered_resource_count": covered_count,
