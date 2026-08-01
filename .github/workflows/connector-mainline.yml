@@ -73,7 +73,9 @@ jobs:
             tests/test_frontend_materials_mainline.py
 
   online-source-delivery:
-    if: github.event_name == 'push' && github.event.head_commit.message == 'chore(ingestion): deliver verified online source root fix'
+    if: >-
+      github.event_name == 'push' &&
+      github.event.head_commit.message == 'chore(ingestion): deliver verified online source root fix'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -182,11 +184,13 @@ jobs:
           set -euo pipefail
           git config user.name 'QualiBug Automation'
           git config user.email 'automation@qualibug.local'
-          git checkout HEAD^ -- .github/workflows/connector-mainline.yml
+          git cat-file blob bd44bc55393855bbe4e99ccac6027f79cb9a5857 \
+            > .github/workflows/connector-mainline.yml
           git rm \
             .github/workflows/deliver-online-source-root-fix.yml \
             .github/patches/online_source_ingestion_root_fix.patch.gz.b64 \
-            .github/online-source-delivery.trigger
+            .github/online-source-delivery.trigger \
+            ai_test_asset_center/connector_online_source_delivery_trigger.py
           git add \
             .github/workflows/connector-mainline.yml \
             ai_test_asset_center/connector_source_ingestion.py \
@@ -229,7 +233,10 @@ jobs:
           git push origin HEAD:main
 
   publish-online-source-delivery:
-    if: always() && github.event_name == 'push' && github.event.head_commit.message == 'chore(ingestion): deliver verified online source root fix'
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      github.event.head_commit.message == 'chore(ingestion): deliver verified online source root fix'
     needs: online-source-delivery
     runs-on: ubuntu-latest
     steps:
