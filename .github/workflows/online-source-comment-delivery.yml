@@ -1,0 +1,134 @@
+name: Online Source Comment Delivery
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  statuses: write
+
+concurrency:
+  group: online-source-comment-delivery-88
+  cancel-in-progress: true
+
+jobs:
+  deliver:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 88 &&
+      github.event.comment.body == '/deliver-online-source-v3' &&
+      github.event.comment.user.login == 'mmc20210220-ctrl'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout fixed same-repository branch
+        uses: actions/checkout@v4
+        with:
+          ref: online-source-ingestion-root-fix-v2
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Decode and apply immutable verified patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .github/patches/online_source_ingestion_root_fix.patch.gz.b64 \
+            | gzip -d > /tmp/online-source-root-fix.patch
+          echo '1b047903842952c8750440abbe2fb2c38af3e958bcbdd7063b373fb68ba6d079  /tmp/online-source-root-fix.patch' \
+            | sha256sum -c -
+          git apply --check /tmp/online-source-root-fix.patch
+          git apply /tmp/online-source-root-fix.patch
+          git diff --check
+
+      - name: Enforce exact product scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected-files.txt <<'EOF'
+          ai_test_asset_center/connector_source_ingestion.py
+          ai_test_asset_center/connector_sync_authority.py
+          ai_test_asset_center/enterprise_knowledge_center/_crud.py
+          ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py
+          ai_test_asset_center/feishu_connector_adapter.py
+          tests/test_feishu_connector_adapter.py
+          EOF
+          git diff --name-only | sort > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Install package and test runtime
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Compile online material authorities
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/enterprise_knowledge_center/_crud.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_observation.py \
+            ai_test_asset_center/connector_source_ingestion.py \
+            ai_test_asset_center/connector_sync_authority.py \
+            ai_test_asset_center/feishu_connector_adapter.py
+
+      - name: Run complete enterprise online-material regression
+        env:
+          QUALIBUG_JWT_SECRET: ci-online-source-secret
+          QUALIBUG_LOCAL_DEV_ACTOR: '1'
+          QUALIBUG_ALLOW_PUBLIC_BIND: '0'
+        run: |
+          python -m pytest -q \
+            tests/test_connector_auto_sync.py \
+            tests/test_connector_auto_sync_recovery_probe.py \
+            tests/test_connector_configuration_service.py \
+            tests/test_connector_connection_profiles.py \
+            tests/test_connector_fencing_public_projection.py \
+            tests/test_connector_profile_transaction_authority.py \
+            tests/test_connector_source_ingestion_compatibility.py \
+            tests/test_connector_source_occurrence_ingestion.py \
+            tests/test_connector_supervisor_lifecycle_authority.py \
+            tests/test_connector_sync_authority.py \
+            tests/test_connector_sync_fencing.py \
+            tests/test_connector_sync_locking.py \
+            tests/test_connector_sync_ownership.py \
+            tests/test_connector_workspace_maintenance.py \
+            tests/test_connector_workspace_maintenance_security.py \
+            tests/test_feishu_connector_adapter.py \
+            tests/test_frontend_materials_mainline.py \
+            tests/test_private_pilot_connector_handlers.py \
+            tests/test_source_occurrence_archive_lifecycle.py \
+            tests/test_source_occurrence_content_identity.py \
+            tests/test_source_occurrence_lifecycle.py \
+            tests/test_source_occurrence_projection.py
+
+      - name: Commit verified source to PR branch and remove scaffolding
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'QualiBug Automation'
+          git config user.email 'automation@qualibug.local'
+          git cat-file blob bd44bc55393855bbe4e99ccac6027f79cb9a5857 \
+            > .github/workflows/connector-mainline.yml
+          git rm \
+            .github/workflows/online-source-comment-delivery.yml \
+            .github/workflows/online-source-delivery-target.yml \
+            .github/workflows/deliver-online-source-root-fix.yml \
+            .github/patches/online_source_ingestion_root_fix.patch.gz.b64 \
+            .github/online-source-delivery.trigger \
+            ai_test_asset_center/connector_online_source_delivery_trigger.py
+          git add \
+            .github/workflows/connector-mainline.yml \
+            ai_test_asset_center/connector_source_ingestion.py \
+            ai_test_asset_center/connector_sync_authority.py \
+            ai_test_asset_center/enterprise_knowledge_center/_crud.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py \
+            ai_test_asset_center/feishu_connector_adapter.py \
+            tests/test_feishu_connector_adapter.py
+          git commit -m 'perf(ingestion): batch and skip unchanged online sources' \
+            -m 'Reuse the existing atomic ingestion, occurrence, observation, coordinator, checkpoint, and fencing authorities as one batch. Export only remotely changed Feishu resources and preserve full-snapshot deletion safety.'
+          git push origin HEAD:online-source-ingestion-root-fix-v2
