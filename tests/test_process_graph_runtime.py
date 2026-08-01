@@ -219,6 +219,96 @@ def test_consumer_receives_only_declared_producer_output():
     }
 
 
+def test_declared_edge_binding_overrides_ambient_same_name_without_cross_system_pollution():
+    graph = _graph()
+    runtime = _runtime(graph=graph)
+    record_graph_step_outcome(
+        runtime=runtime,
+        graph=graph,
+        step=_plan(graph)[0],
+        observation={
+            "status_code": 200,
+            "body": {"data": {"orderId": "ORD-9"}},
+        },
+    )
+
+    context = graph_step_context(
+        runtime=runtime,
+        graph=graph,
+        step=_plan(graph)[1],
+        initial_bindings={"orderId": "STALE-OTHER-SYSTEM"},
+    )
+
+    assert context["status"] == "READY"
+    assert context["bindings"]["orderId"] == "ORD-9"
+    consumption = runtime["binding_ledger"]["consumptions"][0]
+    assert consumption["initial_binding_shadowed"] is True
+    assert consumption["initial_value_fingerprint"]
+
+
+def test_two_explicit_producers_cannot_disagree_on_one_consumer_target():
+    graph = _graph()
+    graph["nodes"].insert(1, {
+        "node_id": "read_order_alias",
+        "step_id": "read_order_alias",
+        "operation_ref": "op_read_order",
+        "actor_ref": "actor_admin",
+        "system_ref": "erp",
+        "method": "GET",
+        "output_binding_specs": [
+            {
+                "canonical_field_id": "order_id",
+                "json_path": "$.data.orderId",
+            }
+        ],
+    })
+    graph["topological_order"] = [
+        "read_order",
+        "read_order_alias",
+        "read_payment",
+    ]
+    graph["edges"].append({
+        "source_node_id": "read_order_alias",
+        "target_node_id": "read_payment",
+        "relation_type": "DEPENDS_ON",
+    })
+    graph["nodes"][2]["input_binding_refs"].append({
+        "producer_node_id": "read_order_alias",
+        "producer_output_field": "order_id",
+        "target": "orderId",
+    })
+    runtime = prepare_graph_runtime(
+        graph=graph,
+        treatment_plan=_plan(graph),
+        ops=_ops(),
+        base_url="https://erp.test.example",
+        runtime_contract=_runtime_contract(),
+    )
+    assert runtime["status"] == "READY"
+    runtime["node_status"].update({
+        "read_order": "SUCCEEDED",
+        "read_order_alias": "SUCCEEDED",
+    })
+    runtime["binding_ledger"]["outputs_by_node"] = {
+        "read_order": {
+            "order_id": {"value": "ORD-9"},
+        },
+        "read_order_alias": {
+            "order_id": {"value": "ORD-10"},
+        },
+    }
+
+    context = graph_step_context(
+        runtime=runtime,
+        graph=graph,
+        step=_plan(graph)[2],
+        initial_bindings={},
+    )
+
+    assert context["status"] == "BLOCKED"
+    assert context["reason_code"] == "PROCESS_GRAPH_INPUT_BINDING_CONFLICT"
+
+
 def test_missing_declared_output_value_blocks_consumer():
     graph = _graph()
     runtime = _runtime(graph=graph)
