@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - .github/online-materialization-root-fix.trigger
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/online-materialization-root-fix.trigger
 
 permissions:
   contents: write
