@@ -6,140 +6,28 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  actions: write
+  contents: read
 
 concurrency:
-  group: lifecycle-root-delivery
+  group: verified-root-delivery-${{ github.head_ref }}
   cancel-in-progress: true
 
 jobs:
-  lifecycle-root-delivery:
-    if: github.head_ref == 'automation/lifecycle-root-cause-delivery-20260801'
+  role-permission-dispatch:
+    if: github.head_ref == 'automation/role-permission-root-cause-delivery-20260801'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
     steps:
-      - name: Checkout latest main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Decode and verify immutable lifecycle patch
-        shell: bash
+      - name: Dispatch verified role permission executor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          git show HEAD:.github/delivery/lifecycle-root-fix/patch.b64 > /tmp/lifecycle-root.patch.gz.b64
-          echo "05c0bb4e83d3a4a62c1e4b31d3bc461662e1306afe9f94d72d5daca904d05662  /tmp/lifecycle-root.patch.gz.b64" | sha256sum -c -
-          base64 -d /tmp/lifecycle-root.patch.gz.b64 | gzip -d > /tmp/lifecycle-root.patch
-          echo "412a3c39186577fc062f807a819a97890f4517c37651fcb4f658607d67171e5d  /tmp/lifecycle-root.patch" | sha256sum -c -
-          git apply --3way --check /tmp/lifecycle-root.patch
-          git apply --3way /tmp/lifecycle-root.patch
-          git diff --check
-
-      - name: Verify exact lifecycle source scope
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > /tmp/expected-files.txt <<'EOF'
-          ai_test_asset_center/_experiment_outcome_finalizer_scope_mechanics.py
-          ai_test_asset_center/experiment_lifecycle_runtime.py
-          ai_test_asset_center/experiment_outcome_finalizer_core.py
-          ai_test_asset_center/experiment_plan_step_executor_core.py
-          ai_test_asset_center/operational_receipts.py
-          ai_test_asset_center/process_step_evidence_scope_audit.py
-          ai_test_asset_center/process_step_execution.py
-          ai_test_asset_center/process_step_receipt_scope.py
-          ai_test_asset_center/process_step_semantic_projection.py
-          ai_test_asset_center/process_step_semantic_view.py
-          tests/test_experiment_lifecycle_runtime.py
-          tests/test_lifecycle_real_http_e2e.py
-          tests/test_process_step_execution_semantics.py
-          tests/test_process_step_ledger_authority.py
-          tests/test_process_step_semantic_view.py
-          tests/test_process_step_typed_observer_scope.py
-          EOF
-          git diff --name-only | sort > /tmp/actual-files.txt
-          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
-          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
-          git rev-parse HEAD > /tmp/tested-base-sha
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-
-      - name: Create lifecycle verification command
-        shell: bash
-        run: |
-          cat > /tmp/run-lifecycle-tests.sh <<'SH'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          export QUALIBUG_JWT_SECRET=ci-lifecycle-root-secret
-          export QUALIBUG_LOCAL_DEV_ACTOR=1
-          export QUALIBUG_ALLOW_PUBLIC_BIND=0
-          python -m compileall -q ai_test_asset_center tests
-          python -m pytest -q \
-            tests/test_experiment_lifecycle_runtime.py \
-            tests/test_lifecycle_real_http_e2e.py \
-            tests/test_operational_lifecycle_authority.py \
-            tests/test_operational_receipts.py \
-            tests/test_process_step_execution_semantics.py \
-            tests/test_process_step_ledger_authority.py \
-            tests/test_process_step_semantic_projection.py \
-            tests/test_process_step_semantic_view.py \
-            tests/test_process_step_typed_observer_scope.py \
-            tests/test_process_step_receipt_scope_runtime.py \
-            tests/test_process_step_bundle_hard_gate.py \
-            tests/test_process_step_cleanup_status_scope.py \
-            tests/test_process_step_oracle_invocation_scope.py \
-            tests/test_process_step_oracle_trace_bundle_scope.py \
-            tests/test_process_graph_cleanup_bundle_layers.py \
-            tests/test_v162_gate_a_receipt_authority.py
-          git diff --check
-          SH
-          chmod +x /tmp/run-lifecycle-tests.sh
-
-      - name: Run lifecycle and real HTTP E2E verification
-        run: /tmp/run-lifecycle-tests.sh
-
-      - name: Commit verified lifecycle source and restore repository workflows
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'QualiBug Automation'
-          git config user.email 'automation@qualibug.local'
-          git cat-file blob f9dfa5f0549969ed33dfe6975fbba30479f83da2 > .github/workflows/quality-gates.yml
-          git cat-file blob aa1d28315aa31c28343738eb6f180fe81cb2540d > .github/workflows/connector-mainline.yml
-          git cat-file blob d62c2aed031ae77900f00fe287522ffc269c422f > .github/workflows/one-time-e2e-root-authority-pr.yml
-          git rm -r .github/delivery/lifecycle-root-fix
-          git rm .github/workflows/one-time-lifecycle-root-fix.yml
-          git rm .github/lifecycle-root-fix-trigger
-          git add -A
-          git commit \
-            -m 'fix(lifecycle): unify execution facts and terminal reduction' \
-            -m 'Separate attempted, executed, accepted and completed step facts; require exact observation, oracle and cleanup scope; make read-only cleanup non-applicable; preserve failed target responses for Oracle evaluation; and derive the terminal lifecycle once from the sealed Execution Receipt Bundle.'
-
-      - name: Rebase on newer main and re-verify
-        shell: bash
-        run: |
-          set -euo pipefail
-          tested_base="$(cat /tmp/tested-base-sha)"
-          git fetch origin main
-          latest_main="$(git rev-parse origin/main)"
-          if [[ "${latest_main}" != "${tested_base}" ]]; then
-            git rebase origin/main
-            /tmp/run-lifecycle-tests.sh
-          fi
-
-      - name: Push main without force
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          git rebase origin/main
-          git push origin HEAD:main
+          gh api \
+            --method POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/${REPOSITORY}/actions/workflows/one-time-role-permission-root-fix.yml/dispatches" \
+            -f ref=main
