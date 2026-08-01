@@ -1,0 +1,401 @@
+diff --git a/tests/test_chinese_business_fact_conflicts.py b/tests/test_chinese_business_fact_conflicts.py
+index 150cc9b..53628b6 100644
+--- a/tests/test_chinese_business_fact_conflicts.py
++++ b/tests/test_chinese_business_fact_conflicts.py
+@@ -1,6 +1,8 @@
+ import ai_test_asset_center.enterprise_knowledge_center._chinese_business_conflicts as conflicts_module
+ from ai_test_asset_center.enterprise_knowledge_center._chinese_business_conflicts import (
+     reconcile_chinese_business_fact_conflicts,
+ )
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.explicit_fact_semantic_normalization import normalize_explicit_business_fact_semantics
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.structured_fact_compiler import _semantic_signature
+ 
+ 
+ def _fact(fact_id, statement, *, status="ACCEPTED", modality="MUST", polarity="POSITIVE"):
+@@ -210,6 +212,83 @@ def test_semantic_coverage_fail_closed_when_conflicting_rules_were_missing_from_
+     assert gate["entry_allowed"] is False
+ 
+ 
++def test_stale_conflict_clears_after_current_semantics_prove_different_actors() -> None:
++    left = _fact(
++        "fact:customer-close",
++        "只有客户可以关闭工单",
++        status="CONFLICTING",
++        modality="MAY",
++    )
++    right = _fact(
++        "fact:admin-close",
++        "只有管理员不允许关闭工单",
++        status="CONFLICTING",
++        modality="MUST_NOT",
++        polarity="NEGATIVE",
++    )
++    for fact in (left, right):
++        fact["subject"]["actor_refs"] = []
++        fact["conflict_refs"] = [
++            "conflict:business_modality_contradiction:temporary"
++        ]
++        fact["conflict_lifecycle"] = {
++            "status": "ACTIVE",
++            "previous_status": "ACCEPTED",
++        }
++    asset = {
++        "business_objects": [{"name": "工单"}],
++        "roles": [
++            {
++                "role": "CUSTOMER",
++                "canonical_name": "CUSTOMER",
++                "aliases": ["客户"],
++                "identity_authority": "SOURCE_DECLARED_ROLE_TABLE",
++            },
++            {
++                "role": "ADMIN",
++                "canonical_name": "ADMIN",
++                "aliases": ["管理员"],
++                "identity_authority": "SOURCE_DECLARED_ROLE_TABLE",
++            },
++        ],
++        "business_fact_ledger": {"items": [left, right]},
++        "business_rules": [
++            {"rule_id": "rule:customer", "fact_id": left["fact_id"]},
++            {"rule_id": "rule:admin", "fact_id": right["fact_id"]},
++        ],
++        "enterprise_comprehension_gate": {
++            "status": "BLOCKED_BUSINESS_COMPREHENSION_CONFLICTING_FACTS",
++            "entry_allowed": False,
++            "required_operator_action": "resolve_conflicts",
++        },
++        "unknown_semantics": [],
++    }
++
++    normalized = normalize_explicit_business_fact_semantics(asset)
++    normalized_facts = normalized["business_fact_ledger"]["items"]
++    assert normalized_facts[0]["subject"]["actor_refs"] == ["CUSTOMER"]
++    assert normalized_facts[1]["subject"]["actor_refs"] == ["ADMIN"]
++    assert _semantic_signature(normalized_facts[0]) != _semantic_signature(normalized_facts[1])
++
++    result = reconcile_chinese_business_fact_conflicts(normalized)
++
++    assert result["chinese_business_comprehension_conflicts"] == []
++    facts = result["business_fact_ledger"]["items"]
++    assert {row["status"] for row in facts} == {"ACCEPTED"}
++    assert all("conflict_refs" not in row for row in facts)
++    assert all(
++        row["conflict_lifecycle"]["status"] == "CLEARED_AFTER_RECOMPUTE"
++        for row in facts
++    )
++    assert result["business_rules"] == [
++        {"rule_id": "rule:customer", "fact_id": left["fact_id"]},
++        {"rule_id": "rule:admin", "fact_id": right["fact_id"]},
++    ]
++    assert result["enterprise_comprehension_gate"]["status"] == "PASS"
++    assert result["enterprise_comprehension_gate"]["entry_allowed"] is True
++
++
+ def test_conflict_module_contains_no_project_specific_literal() -> None:
+     source = conflicts_module.__file__
+     text = open(source, "r", encoding="utf-8").read()
+diff --git a/tests/test_enterprise_identity_resolution.py b/tests/test_enterprise_identity_resolution.py
+index 86506cb..8a23dd2 100644
+--- a/tests/test_enterprise_identity_resolution.py
++++ b/tests/test_enterprise_identity_resolution.py
+@@ -29,6 +29,21 @@ def _asset(*, with_alias=True, alias_conflict=False):
+                         "source_id": "prd",
+                         "locator": "PRD.md#term-order",
+                         "quote": "order=订单",
++                        "address_kind": "EXACT_SOURCE_LOCATOR",
++                    }
++                ],
++            }
++        )
++    if with_alias:
++        facts.append(
++            {
++                "fact_id": "fact:order-alias-continuity",
++                "kind": "TERM_ALIAS",
++                "status": "ACCEPTED",
++                "canonical_term": "订单",
++                "alias": "order",
++                "source_spans": [
++                    {
++                        "source_id": "prd",
++                        "locator": "PRD.md#term-order-continuity",
++                        "quote": "order=订单",
+                         "address_kind": "EXACT_SOURCE_LOCATOR",
+                     }
+                 ],
+@@ -277,3 +292,69 @@ def test_cross_source_identity_unresolved_without_term_alias():
+     assert unknown["blocks_formal_understanding"] is False
+     assert model["gate"]["status"] in {"READY", "PARTIAL"}
+ 
++
++def test_source_alias_connects_registry_rows_without_manufacturing_conflict():
++    asset = _asset()
++    asset["enterprise_identity_registry"] = {
++        "entities": [
++            {
++                "entity_id": "enterprise_entity:legacy-english",
++                "canonical_label": "order",
++                "aliases": [],
++                "labels": ["order"],
++                "status": "RESOLVED",
++            },
++            {
++                "entity_id": "enterprise_entity:legacy-chinese",
++                "canonical_label": "订单",
++                "aliases": [],
++                "labels": ["订单"],
++                "status": "RESOLVED",
++            },
++        ]
++    }
++
++    model = build_enterprise_understanding_model(asset)
++
++    resolved = [
++        row
++        for row in model["enterprise_entities"]
++        if set(row.get("labels") or []) >= {"order", "订单"}
++    ]
++    assert len(resolved) == 1
++    cluster = resolved[0]
++    assert cluster["status"] == "RESOLVED"
++    assert cluster["registry_reconciliation"] == "SOURCE_BACKED_CLUSTER_CONSOLIDATION"
++    assert len(cluster["superseded_registry_entity_ids"]) == 1
++    assert not any(
++        row.get("kind") == "IDENTITY_REGISTRY_CLUSTER_COLLISION"
++        for row in model["identity_conflicts"]
++    )
++
++
++def test_term_alias_identity_is_not_hijacked_by_same_named_technical_table():
++    asset = {
++        "business_objects": [
++            {
++                "object_id": "object:ticket",
++                "source_id": "rules",
++                "name": "工单",
++                "aliases": [],
++            }
++        ],
++        "data_tables": [
++            {
++                "table_id": "table:ticket",
++                "source_id": "openapi",
++                "name": "Ticket",
++                "table": "Ticket",
++                "fields": [],
++            }
++        ],
++        "business_fact_ledger": {
++            "items": [
++                {
++                    "fact_id": "fact:ticket-alias",
++                    "kind": "TERM_ALIAS",
++                    "status": "ACCEPTED",
++                    "canonical_term": "工单",
++                    "alias": "Ticket",
++                    "source_spans": [
++                        {
++                            "source_id": "rules",
++                            "locator": "BUSINESS_RULES.md#entity=Ticket",
++                            "quote": "实体=Ticket;说明=工单，核心业务实体",
++                            "address_kind": "EXACT_SOURCE_LOCATOR",
++                        }
++                    ],
++                }
++            ]
++        },
++    }
++
++    model = build_enterprise_understanding_model(asset)
++
++    resolved = next(row for row in model["enterprise_entities"] if "工单" in row["labels"])
++    assert set(resolved["labels"]) >= {"工单", "Ticket"}
++    assert any(row["relation"] == "SAME_AS" for row in model["identity_edges"])
++    assert not any(row["relation"] == "IMPLEMENTS_ENTITY" for row in model["identity_edges"])
+diff --git a/tests/test_enterprise_understanding_benchmark.py b/tests/test_enterprise_understanding_benchmark.py
+index 1c587f5..11b5a74 100644
+--- a/tests/test_enterprise_understanding_benchmark.py
++++ b/tests/test_enterprise_understanding_benchmark.py
+@@ -62,6 +62,8 @@ def test_ground_truth_validator_accepts_minimum_closed_schema_document(tmp_path)
+     assert loaded["validation_receipt"]["business_fact_slot_contract_schema"]
+     assert loaded["validation_receipt"]["business_fact_slot_annotation_count"] == 0
+     assert loaded["validation_receipt"]["explicit_fact_scope_complete"] is False
++    assert loaded["validation_receipt"]["explicit_fact_scope_membership_enforced"] is False
++    assert loaded["validation_receipt"]["all_annotated_fact_locators_inside_explicit_scope"] is True
+     assert loaded["validation_receipt"]["model_writeback_allowed"] is False
+     assert loaded["validation_receipt"]["minimum_project_diversity"] == 3
+     assert loaded["validation_receipt"]["permitted_use"] == "evaluation_only"
+@@ -282,6 +284,32 @@ def test_ground_truth_validator_accepts_optional_fact_slot_contract(tmp_path):
+     assert loaded["validation_receipt"]["confirmed_business_fact_slot_annotation_count"] == 1
+ 
+ 
++def test_ground_truth_validator_accepts_fact_locators_when_optional_scope_is_open(tmp_path):
++    payload = _base_ground_truth("demo")
++    payload["business_rules"][0].update(
++        {
++            "source_locators": ["RULES.md#BR-001"],
++            "object_refs": ["order"],
++            "actor_refs": ["buyer"],
++            "operation_ref": "createOrder",
++            "preconditions": [],
++            "state_effects": [],
++            "permission_decision": "ALLOW",
++            "annotation_status": "CONFIRMED",
++        }
++    )
++    # The project is incrementally annotated: exact fact locators are valid, but
++    # it has not claimed a complete or partial denominator scope yet.
++    payload["explicit_fact_scope_complete"] = False
++    payload["explicit_fact_scope_locators"] = []
++    path = tmp_path / "ground_truth.json"
++    path.write_text(json.dumps(payload), encoding="utf-8")
++
++    loaded = load_ground_truth(path)
++
++    receipt = loaded["validation_receipt"]
++    assert receipt["business_fact_slot_annotation_count"] == 1
++    assert receipt["explicit_fact_scope_membership_enforced"] is False
++    assert receipt["all_annotated_fact_locators_inside_explicit_scope"] is True
++
++
+ def test_ground_truth_validator_rejects_unknown_slot_filler_project_logic(tmp_path):
+     payload = _base_ground_truth("demo")
+     payload["business_behaviors"] = [
+@@ -321,6 +349,7 @@ def test_ground_truth_validator_rejects_fact_locator_outside_declared_scope(tmp_
+         load_ground_truth(path)
+ 
+ 
++
+ def test_runner_writes_baseline_and_miss_reports(tmp_path):
+     gt = _base_ground_truth("demo")
+     asset = _asset()
+diff --git a/tests/test_enterprise_understanding_source_backed_workflow.py b/tests/test_enterprise_understanding_source_backed_workflow.py
+index 361761a..5add325 100644
+--- a/tests/test_enterprise_understanding_source_backed_workflow.py
++++ b/tests/test_enterprise_understanding_source_backed_workflow.py
+@@ -16,6 +16,7 @@ from benchmark_evaluator.enterprise_understanding.build_product_snapshot import
+     PRODUCT_PHASE_RECEIPT_SCHEMA,
+     SOURCE_MANIFEST_SCHEMA,
+     ProductPhaseError,
++    _source_blob_identity,
+     build_isolated_product_snapshot,
+ )
+ from benchmark_evaluator.enterprise_understanding.ground_truth import (
+@@ -232,6 +233,8 @@ def _prepared_repo(tmp_path: Path):
+             "api.json",
+             "rules.md",
+         ],
++        "source_inventory": [],
++        "source_occurrence_inventory": [],
+         "business_objects": [],
+         "actors": [],
+         "operations": [],
+@@ -249,12 +252,46 @@ def _prepared_repo(tmp_path: Path):
+     return root, manifest, ground_truth, source_bytes
+ 
+ 
++def test_source_manifest_text_identity_tolerates_only_line_ending_transport_change(tmp_path):
++    root = tmp_path / "repo"
++    source = root / "projects" / "demo" / "input" / "rules.md"
++    source.parent.mkdir(parents=True, exist_ok=True)
++    source.write_bytes(b"rule one\r\nrule two\r\n")
++    expected = _git_blob_sha(b"rule one\nrule two\n")
++    manifest = root / "source_manifest.json"
++    _write_json(
++        manifest,
++        {
++            "schema": SOURCE_MANIFEST_SCHEMA,
++            "project_id": "demo",
++            "product_phase_may_load_ground_truth": False,
++            "sources": [
++                {
++                    "path": "projects/demo/input/rules.md",
++                    "source_ref": "source://demo/rules",
++                    "source_type": "business_rules",
++                    "blob_sha": expected,
++                }
++            ],
++            "excluded_from_product_phase": [],
++        },
++    )
++
++    captured: dict[str, object] = {}
++
++    def ingest(project_id, documents, *, root, actor):
++        captured["documents"] = documents
++        return _ingest_receipt(project_id, documents)
++
++    def build(project_id, workspace, options):
++        return _product_asset(project_id, ["source://demo/rules"])
++
++    def capture(**kwargs):
++        _write_json(Path(kwargs["output_path"]), _product_asset("demo", ["source://demo/rules"]))
++        return {"status": "CAPTURED"}
++
++    receipt = build_isolated_product_snapshot(
++        project_id="demo",
++        product_root=root,
++        workspace_root=tmp_path / "workspace",
++        manifest_path=manifest,
++        asset_output_path=tmp_path / "asset" / "final_asset.json",
++        receipt_output_path=tmp_path / "receipt" / "receipt.json",
++        authorities=(ingest, build),
++    )
++
++    source_receipt = receipt["source_receipts"][0]
++    assert source_receipt["blob_sha"] == expected
++    assert source_receipt["canonical_blob_sha"] == expected
++    assert source_receipt["raw_blob_sha"] != expected
++    assert source_receipt["line_ending_normalized_for_identity"] is True
++    assert source_receipt["source_content_identity_mode"] == "CANONICAL_UTF8_TEXT_GIT_BLOB"
++
++
+ def test_isolated_product_phase_receipt_proves_hidden_truth_absent(tmp_path):
+     root, manifest, _ground_truth, _source_bytes = _prepared_repo(tmp_path)
+     calls: list[str] = []
+@@ -527,12 +564,33 @@ def test_root_cause_source_matching_uses_formal_source_mapping_not_basename_guess
+             }
+         ],
+         "source_inventory": [
++            {
++                "canonical_source_id": "business-rules",
++                "external_ref": "source://demo/rules",
++                "content_asset_id": "content:rules",
++            },
+             {
+                 "canonical_source_id": "api-contract",
+                 "external_ref": "source://demo/api",
++                "content_asset_id": "content:api",
+             }
+         ],
++        "source_occurrence_inventory": [
++            {
++                "source_occurrence_id": "occurrence:rules",
++                "canonical_source_id": "business-rules",
++                "external_ref": "source://demo/rules",
++                "content_asset_id": "content:rules",
++            }
++        ],
+         "enterprise_understanding_model": {
+             "business_objects": [],
+             "actors": [],
+             "operations": [],
+             "lifecycles": [],
+-            "rules": [],
++            "rules": [
++                {
++                    "rule_id": "rule:create",
++                    "source_spans": [
++                        {
++                            "source_id": "business-rules",
++                            "source_locator": "business-rules#BR-001",
++                            "content_asset_id": "content:rules",
++                        }
++                    ],
++                }
++            ],
+             "behavior_families": [],
+             "unknown_semantics": [],
+             "implementation_bindings": [],
