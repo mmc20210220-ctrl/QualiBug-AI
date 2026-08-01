@@ -533,6 +533,30 @@ def _reactivate_existing_occurrence(
     )
 
 
+def _supersede_active_source_ref_peers(
+    registry: dict[str, Any],
+    *,
+    source_ref: str,
+    winning_occurrence_id: str,
+    reason: str,
+) -> set[str]:
+    orphan_candidates: set[str] = set()
+    for item in _registry_rows(registry, "source_occurrences"):
+        if (
+            item.get("status") != "active"
+            or _portable_ref(item.get("source_ref")) != source_ref
+            or _text(item.get("source_occurrence_id")) == winning_occurrence_id
+        ):
+            continue
+        item["status"] = "superseded"
+        item["superseded_at_utc"] = _now()
+        item["superseded_by_occurrence_id"] = winning_occurrence_id
+        item["superseded_reason"] = reason
+        orphan_candidates.add(_text(item.get("canonical_source_id")))
+        _unlink_occurrence(registry, item)
+    return orphan_candidates
+
+
 def _register_occurrence(
     registry: dict[str, Any],
     *,
@@ -568,6 +592,12 @@ def _register_occurrence(
         None,
     )
     if existing is not None:
+        orphan_candidates = _supersede_active_source_ref_peers(
+            registry,
+            source_ref=source_ref,
+            winning_occurrence_id=occurrence_id,
+            reason="source_content_reverted_to_prior_occurrence",
+        )
         if existing.get("status") != "active":
             _reactivate_existing_occurrence(
                 registry,
@@ -575,20 +605,17 @@ def _register_occurrence(
                 occurrence=existing,
                 actor=actor,
             )
-        return existing, False, set()
+        existing["content_reversion_reconciled"] = bool(orphan_candidates)
+        existing["single_active_source_ref_invariant"] = True
+        orphan_candidates.discard(source_id)
+        return existing, False, orphan_candidates
 
-    previous = [
-        item
-        for item in occurrences
-        if item.get("status") == "active" and _portable_ref(item.get("source_ref")) == source_ref
-    ]
-    orphan_candidates: set[str] = set()
-    for item in previous:
-        item["status"] = "superseded"
-        item["superseded_at_utc"] = _now()
-        item["superseded_by_occurrence_id"] = occurrence_id
-        orphan_candidates.add(_text(item.get("canonical_source_id")))
-        _unlink_occurrence(registry, item)
+    orphan_candidates = _supersede_active_source_ref_peers(
+        registry,
+        source_ref=source_ref,
+        winning_occurrence_id=occurrence_id,
+        reason="source_occurrence_superseded",
+    )
     version = max(
         [
             int(item.get("version") or 0)
@@ -619,6 +646,7 @@ def _register_occurrence(
         "parse_reused": result_row.get("reason") == "same_content_hash",
         "independent_evidence_identity": True,
         "absolute_workspace_path_is_identity": False,
+        "single_active_source_ref_invariant": True,
     }
     occurrences.append(occurrence)
     content_id = _upsert_content_asset(registry, canonical, occurrence_id)
@@ -683,6 +711,8 @@ def _register_result_rows(
                 "source_occurrence_core"
             ),
             "retired_occurrence_reactivation_preserves_identity": True,
+            "single_active_occurrence_per_source_ref": True,
+            "content_reversion_reuses_prior_occurrence_identity": True,
         }
     )
     registry.setdefault("audit_events", []).append(
@@ -700,6 +730,11 @@ def _register_result_rows(
                 row["source_occurrence_id"]
                 for row in duplicate_occurrences
                 if row.get("reactivated_at_utc")
+            ],
+            "content_reversion_occurrence_ids": [
+                row["source_occurrence_id"]
+                for row in duplicate_occurrences
+                if row.get("content_reversion_reconciled")
             ],
             "batch_registration": len(result_rows) > 1,
         }
