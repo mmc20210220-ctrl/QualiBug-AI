@@ -18,6 +18,7 @@ on:
       - "ai_test_asset_center/historical_authorization_artifact_migration.py"
       - "ai_test_asset_center/historical_authorization_inventory.py"
       - "ai_test_asset_center/historical_authorization_rerun_plan.py"
+      - "ai_test_asset_center/historical_authorization_rerun_consumer.py"
       - "ai_test_asset_center/private_pilot_historical_authorization_migration.py"
       - "ai_test_asset_center/experiment_compiler.py"
       - "ai_test_asset_center/experiment_executor.py"
@@ -97,6 +98,7 @@ jobs:
             ai_test_asset_center/historical_authorization_artifact_migration.py \
             ai_test_asset_center/historical_authorization_inventory.py \
             ai_test_asset_center/historical_authorization_rerun_plan.py \
+            ai_test_asset_center/historical_authorization_rerun_consumer.py \
             ai_test_asset_center/private_pilot_historical_authorization_migration.py \
             ai_test_asset_center/experiment_compiler.py \
             ai_test_asset_center/experiment_executor.py \
@@ -116,6 +118,7 @@ jobs:
             --root "$RUNNER_TEMP/qualibug-empty-root" \
             --stdout-only \
             --compact
+          qualibug-authorization-rerun-consume --help
 
       - name: Run document ingestion closure
         run: |
