@@ -28,8 +28,13 @@ def _configure_console_encoding() -> None:
         if callable(configure):
             try:
                 configure(errors="replace")
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.warning(
+                    "console_encoding_configuration_failed stream=%s error_type=%s",
+                    getattr(stream, "name", "unknown"),
+                    type(exc).__name__,
+                    exc_info=True,
+                )
 
 
 _configure_console_encoding()
@@ -258,8 +263,17 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                 if _resolved.get("found"):
                     runtime_contract = dict(runtime_contract)
                     runtime_contract["execution_approval"] = _resolved["approval"]
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.warning(
+                    "execution_approval_resolution_failed scope=%s environment=%s "
+                    "source_hash=%s target=%s error_type=%s",
+                    _rc_scope,
+                    _rc_env,
+                    _rc_source,
+                    _rc_target,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
 
     from .discovery_funnel import effective_execution_status
 
@@ -846,8 +860,22 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "summary": lifecycle.get("summary", {}),
             "active_issue_count": lifecycle.get("summary", {}).get("active_issue_count", 0),
         }
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.exception("issue_lifecycle_projection_failed")
+        failure_code = f"ISSUE_LIFECYCLE_PROJECTION_FAILED:{type(exc).__name__}"
+        result.setdefault("stage_failures", []).append(failure_code)
+        result["lifecycle_center"] = {
+            "status": "FAILED_SAFE",
+            "error_type": type(exc).__name__,
+            "stage": "issue_lifecycle_projection",
+            "retryability": "after_operator_action",
+        }
+        health = _as_dict(result.get("pipeline_health"))
+        if str(health.get("status") or "").upper() != "FAILED_SAFE":
+            health["status"] = "DEGRADED"
+        health.setdefault("stage_failures", []).append(failure_code)
+        health["empty_findings_means_no_bugs"] = False
+        result["pipeline_health"] = health
 
     # ── Closed-Loop Learning: extract patterns + generate probes for next scan ──
     try:

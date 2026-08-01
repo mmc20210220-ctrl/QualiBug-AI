@@ -1,14 +1,9 @@
 import { useMemo, useState } from 'react';
-import { asNum, asRecord, asText, type JsonRecord } from '../../lib/dashboard-utils';
+import { asNum, asRecord, asText } from '../../lib/dashboard-utils';
 
 type Props = {
   funnel: unknown;
 };
-
-function stageValue(stages: JsonRecord[], name: string, field: string): number {
-  const stage = stages.find((row) => asText(row.name) === name);
-  return asNum(stage?.[field]);
-}
 
 function listText(value: unknown, limit = 8): string[] {
   return Array.isArray(value)
@@ -18,8 +13,6 @@ function listText(value: unknown, limit = 8): string[] {
 
 export function DiscoveryFunnelPanel({ funnel }: Props) {
   const value = asRecord(funnel);
-  const stages = (Array.isArray(value.stages) ? value.stages : [])
-    .map(asRecord);
   const health = asRecord(value.pipeline_health);
   const conservation = asRecord(value.conservation || health.funnel_conservation);
   const details = (Array.isArray(value.top_blocking_reason_details)
@@ -33,13 +26,33 @@ export function DiscoveryFunnelPanel({ funnel }: Props) {
     ? (Array.isArray(selected.examples) ? selected.examples : []).map(asRecord)
     : [];
   const selectedExample = selectedExamples[0] || {};
+  const receiptCount = (field: string): number | string => (
+    typeof conservation[field] === 'number' && Number.isFinite(conservation[field])
+      ? conservation[field] as number
+      : 'NOT_MEASURED'
+  );
+  const selectedCount = receiptCount('selected_count');
+  const totalCount = receiptCount('generated_count');
+  const compiledCount = receiptCount('compile_success_count');
+  const executedCount = receiptCount('execution_count');
+  const executionBlockedCount = receiptCount('execution_blocked_count');
+  const compileBlockedCount = receiptCount('compile_blocked_count');
+  const compileDeferredCount = receiptCount('compile_deferred_count');
+  const oracleResolvedCount = receiptCount('oracle_resolved_count');
+  const oracleViolationCount = receiptCount('oracle_violation_count');
+  const deliverableCount = receiptCount('customer_deliverable_finding_count');
   const counts = useMemo(() => ([
-    ['Obligations', asNum(conservation.selected_count, asNum(value.candidate_count))],
-    ['Compiled', stageValue(stages, 'experiment_compile', 'success')],
-    ['Executed', asNum(conservation.execution_count, stageValue(stages, 'governed_execution', 'success'))],
-    ['Observed', stageValue(stages, 'observation', 'success')],
-    ['Delivered', asNum(value.validated_bug_count)],
-  ]), [conservation, stages, value]);
+    ['Total obligations', totalCount],
+    ['Compiled', compiledCount],
+    ['Compile blocked', compileBlockedCount],
+    ['Compile deferred', compileDeferredCount],
+    ['Selected', selectedCount],
+    ['Executed', executedCount],
+    ['Execution blocked', executionBlockedCount],
+    ['Oracle resolved', oracleResolvedCount],
+    ['Oracle violations', oracleViolationCount],
+    ['Deliverable findings', deliverableCount],
+  ]), [compileBlockedCount, compileDeferredCount, compiledCount, deliverableCount, executedCount, executionBlockedCount, oracleResolvedCount, oracleViolationCount, selectedCount, totalCount]);
   const healthStatus = asText(health.status) || 'UNKNOWN';
   const qualityStatus = asText(asRecord(value.quality).status) || 'NOT_MEASURED';
 

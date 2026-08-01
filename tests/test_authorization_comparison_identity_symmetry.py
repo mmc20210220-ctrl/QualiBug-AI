@@ -238,6 +238,31 @@ def test_ownership_comparison_blocks_unrelated_request_change() -> None:
     assert detail == "authorization_comparison_request_asymmetry:body.amount"
 
 
+def test_ownership_query_binding_does_not_block_on_omitted_empty_control_query() -> None:
+    ir = _behavior_ir(
+        _actor("actor:control", "瀹㈡埛", ownership="SELF"),
+        _actor("actor:treatment", "瀹㈡埛", ownership="OTHER"),
+    )
+    experiment = _experiment("isolation")
+    experiment["treatment_plan"][0]["query"] = {"user.id": "{user_id}"}
+
+    governed, reason, detail = attach_authorization_comparison_contract(
+        experiment,
+        _obligation(
+            "isolation",
+            ownership_param="user.id",
+            ownership_param_location="query",
+            identity_binding_target="user_id",
+        ),
+        ir,
+    )
+
+    assert (reason, detail) == ("", "")
+    contract = governed["authorization_comparison_contract"]
+    assert contract["allowed_request_mutation_paths"] == ["query.user.id"]
+    assert contract["observed_request_diff_paths"] == ["query.user.id"]
+
+
 def test_runtime_account_binding_validates_tenant_isolation_pair() -> None:
     control = _actor("actor:control", "仓库员", tenant="", organization="", account_ref="control")
     treatment = _actor("actor:treatment", "仓库员", tenant="", organization="", account_ref="treatment")

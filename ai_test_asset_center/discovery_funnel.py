@@ -36,6 +36,26 @@ REQUIRED_STAGE_NAMES = (
     "formal_projection",
 )
 
+_ORACLE_NON_VIOLATION_REASON_CODES = frozenset({
+    "ORACLE_NOT_VIOLATED",
+    "ORACLE_NO_VIOLATION",
+    "ASSERTION_NOT_VIOLATED",
+    "SURFACE_DISCOVERY_OBSERVATION_ONLY",
+})
+
+_ORACLE_INDETERMINATE_REASON_CODES = frozenset({
+    "ASSERTION_INDETERMINATE",
+    "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+    "BLOCKED_CANONICAL_OUTCOME_IDENTITY_INCOMPLETE",
+    "BLOCKED_AMBIGUOUS_OUTCOME_FINDING",
+    "CONTRACT_ORACLE_BLOCKED",
+    "CONTRACT_ORACLE_HARNESS_FAILED",
+    "HARNESS_BLOCKER_ATTRIBUTION_FAILED",
+    "HARNESS_COVERAGE_FUNNEL_FAILED",
+    "ORACLE_EXCEPTION",
+    "VALIDATION_GATE_EXCEPTION",
+})
+
 
 class DiscoveryFunnelError(ValueError):
     """Authoritative attempt or formal projection receipts are missing."""
@@ -60,45 +80,82 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _generated_obligation_count(result: dict[str, Any]) -> int | None:
+def _formal_obligation_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     nested = _dict(result.get("v12"))
-    generated_rows: list[dict[str, Any]] = []
     for owner in (result, nested):
         obligations = _dict(owner.get("test_obligations")).get("obligations")
         if isinstance(obligations, list):
-            generated_rows = [
+            return [
                 row for row in obligations if isinstance(row, dict)
             ]
-            break
-    if not generated_rows:
-        return None
+    return []
 
-    # Runtime interface discovery owns a separate, explicitly receipted
-    # obligation collection. Those surface rows enter the same attempt ledger
-    # but are intentionally not copied into the base test-obligation receipt.
-    # Count the union by immutable obligation identity so conservation does not
-    # mistake a governed runtime expansion for an unaccounted terminal attempt.
-    surface_execution = _dict(
-        _dict(nested.get("runtime_interface_discovery")).get("execution")
+
+def _formal_obligation_identity(result: dict[str, Any]) -> dict[str, Any]:
+    rows = _formal_obligation_rows(result)
+    ids = [_text(row.get("obligation_id")) for row in rows]
+    missing_count = sum(not value for value in ids)
+    counts = Counter(value for value in ids if value)
+    duplicate_ids = sorted(
+        value for value, count in counts.items() if count > 1
     )
-    surface_rows = [
-        row
-        for row in _list(surface_execution.get("selected_rows"))
-        if isinstance(row, dict)
-    ]
-    if not surface_rows:
-        return len(generated_rows)
-    generated_ids = {
-        _text(row.get("obligation_id")) for row in generated_rows
+    unique_ids = sorted(counts)
+    return {
+        "status": (
+            "INCOMPLETE"
+            if not rows or missing_count
+            else "FAILED_SAFE"
+            if duplicate_ids
+            else "PASS"
+        ),
+        "row_count": len(rows),
+        "unique_count": len(unique_ids),
+        "missing_id_count": missing_count,
+        "duplicate_id_count": sum(counts[value] - 1 for value in duplicate_ids),
+        "duplicate_ids": duplicate_ids,
+        "ids": unique_ids,
     }
-    surface_ids = {
-        _text(row.get("obligation_id")) for row in surface_rows
-    }
-    if all(generated_ids) and all(surface_ids):
-        return len(generated_ids | surface_ids)
-    # A malformed identity must remain visible and conservative. Do not infer
-    # overlap when either source receipt has an identity gap.
-    return len(generated_rows) + len(surface_rows)
+
+
+def _generated_obligation_count(result: dict[str, Any]) -> int | None:
+    identity = _formal_obligation_identity(result)
+    if not identity["row_count"]:
+        return None
+    # Runtime interface discovery is an explicitly separate, read-only
+    # planning/execution receipt. It is projected under
+    # ``business_discovery_separation`` and must not inflate the formal
+    # business-obligation funnel or create a terminal attempt implicitly.
+    return int(identity["unique_count"])
+
+
+def _status_count(rows: list[dict[str, Any]], *statuses: str) -> int:
+    accepted = {value.upper() for value in statuses}
+    return sum(
+        1 for row in rows if _text(row.get("status")).upper() in accepted
+    )
+
+
+def _oracle_bucket(
+    gate_stage: dict[str, Any],
+) -> str:
+    """Classify a gate receipt from explicit status/reason values only."""
+
+    status = _text(gate_stage.get("status")).upper()
+    reason = _text(gate_stage.get("reason_code")).upper()
+    if status == "DELIVERABLE":
+        return "violation"
+    if status == "REJECTED" and reason in _ORACLE_NON_VIOLATION_REASON_CODES:
+        return "pass"
+    if status in {"BLOCKED", "DEFERRED", "HARNESS_FAILED"}:
+        return "indeterminate"
+    if reason in _ORACLE_INDETERMINATE_REASON_CODES:
+        return "indeterminate"
+    if status == "REJECTED":
+        # A rejected gate with a non-normal reason is the explicit delivery-gate
+        # blocked branch. The reason registry still owns its detailed family;
+        # no free-form substring classification is used here.
+        return "violation"
+    return "indeterminate"
 
 
 def _conservation_check(
@@ -129,25 +186,55 @@ def _build_funnel_conservation(
     selected = _int(ledger.get("selected_count"))
     terminal = _int(ledger.get("terminal_count"))
     generated = _generated_obligation_count(result)
+    formal_identity = _formal_obligation_identity(result)
+    selected_ids = [_text(attempt.get("obligation_id")) for attempt in attempts]
+    selected_id_set = {value for value in selected_ids if value}
+    selected_identity_complete = (
+        len(selected_ids) == len(selected_id_set)
+        and len(selected_id_set) == selected
+        and all(selected_ids)
+    )
+    generated_id_set = set(formal_identity["ids"])
+    not_selected: int | None = None
+    selected_outside_generated: int | None = None
+    if formal_identity["status"] == "PASS" and selected_identity_complete:
+        selected_outside_generated = len(selected_id_set - generated_id_set)
+        if selected_outside_generated == 0:
+            not_selected = len(generated_id_set - selected_id_set)
     compile_rows = [_stage(attempt, "compile") for attempt in attempts]
     execution_rows = [_stage(attempt, "execution") for attempt in attempts]
     gate_rows = [_stage(attempt, "gate") for attempt in attempts]
-    compile_count = sum(bool(row) for row in compile_rows)
-    execution_count = sum(bool(row) for row in execution_rows)
+    compile_success_count = _status_count(compile_rows, "COMPILED")
+    compile_blocked_count = _status_count(compile_rows, "BLOCKED")
+    compile_deferred_count = _status_count(compile_rows, "DEFERRED")
+    compile_harness_failure_count = _status_count(
+        compile_rows, "HARNESS_FAILED"
+    )
+    compile_missing_count = sum(not row for row in compile_rows)
+    execution_count = _status_count(execution_rows, "EXECUTED", "DELIVERABLE")
+    execution_blocked_count = _status_count(
+        execution_rows, "BLOCKED", "DEFERRED"
+    )
+    execution_harness_failure_count = _status_count(
+        execution_rows, "HARNESS_FAILED"
+    )
+    execution_missing_after_compile_count = sum(
+        not execution
+        for compile, execution in zip(compile_rows, execution_rows)
+        if _text(compile.get("status")).upper() == "COMPILED"
+    )
     gate_count = sum(bool(row) for row in gate_rows)
-    pre_execution_count = sum(
-        1
-        for row in compile_rows
-        if _text(row.get("status")).upper()
-        in {"BLOCKED", "DEFERRED", "HARNESS_FAILED"}
+    pre_execution_count = (
+        compile_blocked_count
+        + compile_deferred_count
+        + compile_harness_failure_count
     )
     execution_unresolved_count = sum(
         1
         for execution, gate in zip(execution_rows, gate_rows)
-        if execution
+        if _text(execution.get("status")).upper()
+        in {"EXECUTED", "DELIVERABLE"}
         and not gate
-        and _text(execution.get("status")).upper()
-        in {"BLOCKED", "DEFERRED", "HARNESS_FAILED"}
     )
     gate_terminal_count = sum(
         1
@@ -155,6 +242,24 @@ def _build_funnel_conservation(
         if _text(row.get("status")).upper() in {
             "DELIVERABLE", "REJECTED", "BLOCKED", "DEFERRED", "HARNESS_FAILED",
         }
+    )
+    oracle_rows = [
+        gate
+        for execution, gate in zip(execution_rows, gate_rows)
+        if _text(execution.get("status")).upper()
+        in {"EXECUTED", "DELIVERABLE"}
+        and gate
+    ]
+    oracle_buckets = Counter(_oracle_bucket(row) for row in oracle_rows)
+    oracle_pass_count = int(oracle_buckets.get("pass", 0))
+    oracle_violation_count = int(oracle_buckets.get("violation", 0))
+    oracle_indeterminate_count = int(oracle_buckets.get("indeterminate", 0))
+    customer_deliverable_count = _status_count(oracle_rows, "DELIVERABLE")
+    delivery_gate_blocked_finding_count = sum(
+        1
+        for row in oracle_rows
+        if _oracle_bucket(row) == "violation"
+        and _text(row.get("status")).upper() != "DELIVERABLE"
     )
     deliverable_attempt_ids = {
         _text(attempt.get("finding_id"))
@@ -168,17 +273,54 @@ def _build_funnel_conservation(
         if _text(value)
     }
     checks: list[dict[str, Any]] = []
-    if generated is not None:
+    if formal_identity["row_count"]:
         checks.append({
-            "name": "obligation_generation_not_less_than_selected",
-            "status": "PASS" if generated >= selected else "INCOMPLETE",
-            "expected": True,
-            "observed": generated >= selected,
-            "detail": (
-                "generated obligations come from the test-obligation receipt"
-                if generated >= selected
-                else "selected runtime-expanded obligations are not all present in the base test-obligation receipt"
+            "name": "formal_obligation_identity_unique",
+            "status": (
+                "PASS"
+                if formal_identity["status"] == "PASS"
+                else formal_identity["status"]
             ),
+            "expected": "one unique obligation_id per formal obligation",
+            "observed": {
+                "row_count": formal_identity["row_count"],
+                "unique_count": formal_identity["unique_count"],
+                "missing_id_count": formal_identity["missing_id_count"],
+                "duplicate_id_count": formal_identity["duplicate_id_count"],
+            },
+            "detail": (
+                "formal test-obligation identity is unique"
+                if formal_identity["status"] == "PASS"
+                else "duplicate or missing formal obligation identity is visible; no row was merged in the report"
+            ),
+        })
+    else:
+        checks.append({
+            "name": "formal_obligation_identity_unique",
+            "status": "INCOMPLETE",
+            "expected": "one unique obligation_id per formal obligation",
+            "observed": "test_obligations.obligations missing",
+            "detail": "No formal obligation receipt was available.",
+        })
+    if generated is not None and not_selected is not None:
+        _conservation_check(
+            checks,
+            name="obligation_selection_conservation",
+            expected=generated,
+            observed=selected + not_selected,
+            detail="generated IDs are partitioned into selected and not-selected receipts",
+        )
+    else:
+        checks.append({
+            "name": "obligation_selection_conservation",
+            "status": "INCOMPLETE",
+            "expected": generated,
+            "observed": {
+                "selected": selected,
+                "not_selected": not_selected,
+                "selected_outside_generated": selected_outside_generated,
+            },
+            "detail": "Formal and selected obligation identities do not prove a complete partition.",
         })
     _conservation_check(
         checks,
@@ -188,21 +330,49 @@ def _build_funnel_conservation(
     )
     _conservation_check(
         checks,
-        name="compile_stage_conservation",
+        name="selected_compile_outcome_conservation",
         expected=selected,
-        observed=compile_count,
+        observed=(
+            compile_success_count
+            + compile_blocked_count
+            + compile_deferred_count
+            + compile_harness_failure_count
+        ),
+        detail="each selected attempt has exactly one compile outcome",
     )
     _conservation_check(
         checks,
-        name="compile_to_execution_conservation",
-        expected=selected,
-        observed=pre_execution_count + execution_count,
+        name="compiled_execution_outcome_conservation",
+        expected=compile_success_count,
+        observed=(
+            execution_count
+            + execution_blocked_count
+            + execution_harness_failure_count
+            + execution_missing_after_compile_count
+        ),
+        detail="each compiled attempt has an executed, blocked, harness-failed, or missing execution receipt",
     )
     _conservation_check(
         checks,
-        name="execution_to_oracle_conservation",
+        name="executed_oracle_outcome_conservation",
         expected=execution_count,
-        observed=gate_count + execution_unresolved_count,
+        observed=(
+            oracle_pass_count
+            + oracle_violation_count
+            + oracle_indeterminate_count
+            + execution_unresolved_count
+        ),
+        detail="each executed attempt has an explicit oracle pass, violation, indeterminate, or missing gate outcome",
+    )
+    _conservation_check(
+        checks,
+        name="oracle_violation_delivery_conservation",
+        expected=oracle_violation_count,
+        observed=(
+            customer_deliverable_count
+            + delivery_gate_blocked_finding_count
+        ),
+        detail="oracle violations are partitioned into deliverable and delivery-gate-blocked findings",
     )
     _conservation_check(
         checks,
@@ -318,7 +488,9 @@ def _build_funnel_conservation(
         "detail": "Classification uses the explicit code registry; detail text is not used.",
     })
 
-    failures = [row for row in checks if row.get("status") == "FAIL"]
+    failures = [
+        row for row in checks if row.get("status") in {"FAIL", "FAILED_SAFE"}
+    ]
     incomplete = [row for row in checks if row.get("status") == "INCOMPLETE"]
     missing_evidence: list[str] = []
     if generated is None:
@@ -333,13 +505,33 @@ def _build_funnel_conservation(
         "status": status,
         "complete": status == "PASS",
         "generated_count": generated,
+        "generated_row_count": formal_identity["row_count"],
+        "generated_duplicate_count": formal_identity["duplicate_id_count"],
+        "generated_duplicate_ids": formal_identity["duplicate_ids"],
+        "generated_missing_id_count": formal_identity["missing_id_count"],
+        "not_selected_count": not_selected,
+        "selected_outside_generated_count": selected_outside_generated,
         "selected_count": selected,
         "terminal_count": terminal,
-        "compile_count": compile_count,
+        "compile_count": compile_success_count,
+        "compile_success_count": compile_success_count,
+        "compile_blocked_count": compile_blocked_count,
+        "compile_deferred_count": compile_deferred_count,
+        "compile_harness_failure_count": compile_harness_failure_count,
+        "compile_missing_count": compile_missing_count,
         "pre_execution_blocked_count": pre_execution_count,
         "execution_count": execution_count,
+        "execution_blocked_count": execution_blocked_count,
+        "execution_harness_failure_count": execution_harness_failure_count,
+        "execution_missing_after_compile_count": execution_missing_after_compile_count,
         "execution_unresolved_count": execution_unresolved_count,
         "oracle_count": gate_count,
+        "oracle_resolved_count": oracle_pass_count + oracle_violation_count,
+        "oracle_pass_count": oracle_pass_count,
+        "oracle_violation_count": oracle_violation_count,
+        "oracle_indeterminate_count": oracle_indeterminate_count + execution_unresolved_count,
+        "customer_deliverable_finding_count": customer_deliverable_count,
+        "delivery_gate_blocked_finding_count": delivery_gate_blocked_finding_count,
         "delivery_count": len(deliverable_attempt_ids),
         "formal_delivery_occurrence_count": len(formal_occurrence_ids),
         "identity_status": identity_status,
@@ -1057,15 +1249,29 @@ def build_funnel_report(
         current_funnel = build_funnel(result)
     ledger = _attempt_ledger(result)
     attempts = [_dict(item) for item in _list(ledger.get("attempts"))]
-    conservation = _dict(current_funnel.get("conservation"))
-    if not conservation:
-        conservation = _dict(
-            _dict(current_funnel.get("pipeline_health")).get("funnel_conservation")
-        )
-    if not conservation:
-        conservation = build_funnel_conservation(result)
+    # Recompute from the immutable receipts even when a caller supplies a
+    # prebuilt funnel.  Stage projections are useful for presentation, but the
+    # report's counts must have one authority and must not inherit stale or
+    # inferred values from a compatibility projection.
+    formal = _formal_projection(result)
+    conservation = _build_funnel_conservation(
+        result,
+        ledger,
+        formal,
+    )
+    pipeline_health = build_pipeline_health(result)
     blockers, unregistered = _reason_details(attempts)
     nested = _dict(result.get("v12"))
+    discovery_separation = _dict(
+        result.get("business_discovery_separation")
+        or nested.get("business_discovery_separation")
+    )
+    formal_identity_receipt = _dict(
+        _dict(
+            result.get("test_obligations")
+            or nested.get("test_obligations")
+        ).get("obligation_identity_receipt")
+    )
     mainline = _dict(result.get("mainline_run") or nested.get("mainline_run"))
     external = _dict(
         result.get("external_evaluation") or nested.get("external_evaluation")
@@ -1077,7 +1283,13 @@ def build_funnel_report(
     quality_status = "MEASURED" if externally_measured else "NOT_MEASURED"
     report: dict[str, Any] = {
         "schema_version": "qualibug.discovery-funnel-report.v1",
-        "report_status": "FAILED_SAFE" if unregistered else "READY",
+        "report_status": (
+            "FAILED_SAFE"
+            if unregistered
+            or _text(conservation.get("status")).upper()
+            in {"FAILED_SAFE", "INCOMPLETE"}
+            else "READY"
+        ),
         "mainline_identity": {
             key: _text(mainline.get(key))
             for key in (
@@ -1085,6 +1297,7 @@ def build_funnel_report(
                 "campaign_id",
                 "target_id",
                 "environment_id",
+                "source_snapshot_hash",
                 "policy_version",
                 "evaluation_mode",
                 "contract_fingerprint",
@@ -1108,25 +1321,43 @@ def build_funnel_report(
         },
         "metrics": {
             "generated_count": conservation.get("generated_count"),
+            "not_selected_count": conservation.get("not_selected_count"),
             "selected_count": conservation.get("selected_count"),
             "terminal_count": conservation.get("terminal_count"),
-            "compiled_count": _int(
-                next(
-                    (
-                        _dict(stage).get("success")
-                        for stage in _list(current_funnel.get("stages"))
-                        if _text(_dict(stage).get("name")) == "experiment_compile"
-                    ),
-                    0,
-                )
+            "compiled_count": conservation.get("compile_success_count"),
+            "compile_blocked_count": conservation.get("compile_blocked_count"),
+            "compile_deferred_count": conservation.get("compile_deferred_count"),
+            "pre_execution_blocked_count": conservation.get(
+                "pre_execution_blocked_count"
             ),
             "executed_count": conservation.get("execution_count"),
+            "execution_blocked_count": conservation.get("execution_blocked_count"),
+            "execution_harness_failure_count": conservation.get(
+                "execution_harness_failure_count"
+            ),
             "oracle_count": conservation.get("oracle_count"),
-            "formal_delivery_count": current_funnel.get("validated_bug_count"),
-            "delivery_occurrence_count": current_funnel.get("delivery_occurrence_count"),
+            "oracle_resolved_count": conservation.get("oracle_resolved_count"),
+            "oracle_pass_count": conservation.get("oracle_pass_count"),
+            "oracle_violation_count": conservation.get("oracle_violation_count"),
+            "oracle_indeterminate_count": conservation.get(
+                "oracle_indeterminate_count"
+            ),
+            "delivery_gate_blocked_finding_count": conservation.get(
+                "delivery_gate_blocked_finding_count"
+            ),
+            "formal_delivery_count": formal.get(
+                "formal_customer_deliverable_count"
+            ),
+            "delivery_occurrence_count": formal.get(
+                "delivery_occurrence_count"
+            ),
         },
-        "pipeline_health": _dict(current_funnel.get("pipeline_health")),
+        "pipeline_health": pipeline_health,
         "conservation": conservation,
+        "formal_obligation_identity_receipt": formal_identity_receipt,
+        "discovery_task_summary": _dict(
+            discovery_separation.get("discovery_task_summary")
+        ),
         "reason_registry": {
             "schema_version": REASON_CODE_REGISTRY_SCHEMA,
             "status": "FAILED_SAFE" if unregistered else "PASS",
@@ -1165,11 +1396,18 @@ def render_funnel_report_markdown(report: dict[str, Any]) -> str:
         "| Stage | Count |",
         "| --- | ---: |",
         f"| Generated | {display_metric(metrics.get('generated_count'))} |",
+        f"| Not selected | {display_metric(metrics.get('not_selected_count'))} |",
         f"| Selected | {display_metric(metrics.get('selected_count'))} |",
         f"| Terminal | {display_metric(metrics.get('terminal_count'))} |",
         f"| Compiled | {display_metric(metrics.get('compiled_count'))} |",
+        f"| Compile blocked | {display_metric(metrics.get('compile_blocked_count'))} |",
+        f"| Pre-execution blocked | {display_metric(metrics.get('pre_execution_blocked_count'))} |",
         f"| Executed | {display_metric(metrics.get('executed_count'))} |",
-        f"| Oracle evaluated | {display_metric(metrics.get('oracle_count'))} |",
+        f"| Execution blocked | {display_metric(metrics.get('execution_blocked_count'))} |",
+        f"| Oracle resolved | {display_metric(metrics.get('oracle_resolved_count'))} |",
+        f"| Oracle violations | {display_metric(metrics.get('oracle_violation_count'))} |",
+        f"| Oracle indeterminate | {display_metric(metrics.get('oracle_indeterminate_count'))} |",
+        f"| Delivery-gate blocked findings | {display_metric(metrics.get('delivery_gate_blocked_finding_count'))} |",
         f"| Formal delivery | {display_metric(metrics.get('formal_delivery_count'))} |",
         f"| Delivery occurrences | {display_metric(metrics.get('delivery_occurrence_count'))} |",
         "",
@@ -1243,13 +1481,29 @@ def write_funnel_report_files(
 
 _COMPARISON_METRICS = (
     "generated_count",
+    "not_selected_count",
     "selected_count",
     "terminal_count",
     "compiled_count",
+    "compile_blocked_count",
+    "pre_execution_blocked_count",
     "executed_count",
+    "execution_blocked_count",
     "oracle_count",
+    "oracle_resolved_count",
+    "oracle_violation_count",
+    "oracle_indeterminate_count",
+    "delivery_gate_blocked_finding_count",
     "formal_delivery_count",
     "delivery_occurrence_count",
+)
+
+_COMPARISON_CONDITION_FIELDS = (
+    "target_id",
+    "environment_id",
+    "source_snapshot_hash",
+    "policy_version",
+    "evaluation_mode",
 )
 
 
@@ -1258,6 +1512,7 @@ def _comparison_snapshot(report: dict[str, Any]) -> dict[str, Any]:
     health = _dict(report.get("pipeline_health"))
     return {
         "report_status": _text(report.get("report_status")),
+        "mainline_identity": _dict(report.get("mainline_identity")),
         "quality": _dict(report.get("quality")),
         "metrics": {
             name: metrics.get(name)
@@ -1291,6 +1546,35 @@ def _comparison_snapshot(report: dict[str, Any]) -> dict[str, Any]:
             for row in _list(report.get("unresolved_top_10"))
             if _text(_dict(row).get("reason"))
         ],
+    }
+
+
+def _comparison_condition_check(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    baseline_identity = _dict(baseline.get("mainline_identity"))
+    candidate_identity = _dict(candidate.get("mainline_identity"))
+    missing_fields: list[str] = []
+    mismatches: list[dict[str, str]] = []
+    for field in _COMPARISON_CONDITION_FIELDS:
+        before = _text(baseline_identity.get(field))
+        after = _text(candidate_identity.get(field))
+        if not before or not after:
+            missing_fields.append(field)
+        elif before != after:
+            mismatches.append({"field": field, "baseline": before, "candidate": after})
+    if mismatches:
+        status = "MISMATCH"
+    elif missing_fields:
+        status = "NOT_MEASURED"
+    else:
+        status = "MATCH"
+    return {
+        "status": status,
+        "checked_fields": list(_COMPARISON_CONDITION_FIELDS),
+        "missing_fields": missing_fields,
+        "mismatches": mismatches,
     }
 
 
@@ -1352,6 +1636,17 @@ def build_funnel_comparison_report(
         }
         comparison_status = "RECEIPT_COMPARISON"
 
+    condition_check = (
+        _comparison_condition_check(baseline_snapshot, candidate_snapshot)
+        if candidate_result is not None
+        else {
+            "status": "NOT_MEASURED",
+            "checked_fields": list(_COMPARISON_CONDITION_FIELDS),
+            "missing_fields": list(_COMPARISON_CONDITION_FIELDS),
+            "mismatches": [],
+        }
+    )
+
     report = {
         "schema_version": "qualibug.discovery-funnel-comparison.v1",
         "status": comparison_status,
@@ -1359,6 +1654,7 @@ def build_funnel_comparison_report(
         "baseline": baseline_snapshot,
         "candidate": candidate_snapshot,
         "delta": delta,
+        "condition_check": condition_check,
         "quality_boundary": {
             "recall": "NOT_MEASURED",
             "precision": "NOT_MEASURED",
@@ -1382,6 +1678,7 @@ def render_funnel_comparison_report_markdown(report: dict[str, Any]) -> str:
     baseline = _dict(value.get("baseline"))
     candidate = _dict(value.get("candidate"))
     delta = _dict(value.get("delta"))
+    condition_check = _dict(value.get("condition_check"))
 
     def display_metric(raw: Any) -> str:
         return "NOT_MEASURED" if raw is None or raw == "" else str(raw)
@@ -1411,6 +1708,12 @@ def render_funnel_comparison_report_markdown(report: dict[str, Any]) -> str:
             f"{display_metric(delta_metrics.get(name))} |"
         )
     lines.extend([
+        "",
+        "## Run-condition check",
+        "",
+        f"- Status: `{_text(condition_check.get('status')) or 'NOT_MEASURED'}`",
+        f"- Missing fields: {', '.join(_text(item) for item in _list(condition_check.get('missing_fields'))) or 'none'}",
+        f"- Mismatches: {', '.join(_text(_dict(item).get('field')) for item in _list(condition_check.get('mismatches'))) or 'none'}",
         "",
         "## Unresolved top 10",
         "",

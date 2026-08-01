@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,7 @@ from .runtime_interface_discovery import (
     load_runtime_interface_discovery_budget,
     plan_runtime_interface_candidates,
 )
+from .test_obligation import dedupe_obligations, json_fingerprint
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -599,6 +601,79 @@ def build_discovery_plan(
             "conflict_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
+    # Obligation identity is the planning SSOT. Several enrichments above add
+    # rows after the compiler's own dedupe pass; leaving those rows in place
+    # creates multiple formal rows for one immutable obligation and makes every
+    # downstream count appear more complete than the ledger actually is.
+    raw_obligation_count = len(obligations)
+    id_fingerprints: dict[str, set[str]] = {}
+    missing_id_count = 0
+    for obligation in obligations:
+        if not isinstance(obligation, dict):
+            continue
+        obligation_id = _text(obligation.get("obligation_id"))
+        if not obligation_id:
+            missing_id_count += 1
+            continue
+        id_fingerprints.setdefault(obligation_id, set()).add(
+            json_fingerprint(obligation)
+        )
+    conflicting_duplicate_ids = sorted(
+        obligation_id
+        for obligation_id, fingerprints in id_fingerprints.items()
+        if len(fingerprints) > 1
+    )
+    if conflicting_duplicate_ids:
+        _planning_logger.error(
+            "Conflicting duplicate obligation identities detected: %s",
+            conflicting_duplicate_ids[:20],
+            extra={
+                "conflicting_duplicate_count": len(conflicting_duplicate_ids),
+                "raw_obligation_count": raw_obligation_count,
+            },
+        )
+        raise MainlineContractError(
+            "obligation_identity_conflict:"
+            + ",".join(conflicting_duplicate_ids[:20])
+        )
+    id_counts = Counter(
+        _text(obligation.get("obligation_id"))
+        for obligation in obligations
+        if isinstance(obligation, dict)
+        and _text(obligation.get("obligation_id"))
+    )
+    duplicate_ids = sorted(
+        obligation_id
+        for obligation_id, count in id_counts.items()
+        if count > 1
+    )
+    obligations = dedupe_obligations(obligations)
+    _obligation_identity_receipt = {
+        "schema_version": "qualibug.obligation-identity-receipt.v1",
+        "authority": "ai_test_asset_center.test_obligation.dedupe_obligations",
+        "status": (
+            "FAILED_SAFE"
+            if missing_id_count
+            else "DEDUPLICATED"
+            if duplicate_ids
+            else "PASS"
+        ),
+        "input_row_count": raw_obligation_count,
+        "unique_count": len(obligations),
+        "duplicate_count": raw_obligation_count - len(obligations),
+        "duplicate_ids": duplicate_ids[:50],
+        "missing_id_count": missing_id_count,
+        "conflicting_duplicate_ids": [],
+    }
+    if duplicate_ids:
+        _planning_logger.warning(
+            "Deduplicated repeated obligation identities before experiment compilation",
+            extra={
+                "duplicate_count": raw_obligation_count - len(obligations),
+                "duplicate_ids": duplicate_ids[:50],
+            },
+        )
+
     # ── Source-confidence gate ──
     # Obligations derived from low-confidence sources (e.g. OCR-parsed
     # documents with confidence < 0.5) are downweighted: they remain in the
@@ -941,7 +1016,14 @@ def build_discovery_plan(
     return DiscoveryPlanningBundle(
         mainline_run=contract,
         behavior_ir=behavior_ir,
-        obligations={**obligation_pack, "obligations": obligations, "behavior_ir_coverage_report": coverage_report, "state_audit_report": state_audit_report, "conflict_report": conflict_report},
+        obligations={
+            **obligation_pack,
+            "obligations": obligations,
+            "obligation_identity_receipt": _obligation_identity_receipt,
+            "behavior_ir_coverage_report": coverage_report,
+            "state_audit_report": state_audit_report,
+            "conflict_report": conflict_report,
+        },
         experiments={
             **experiment_pack,
             "all_experiments": all_experiments,

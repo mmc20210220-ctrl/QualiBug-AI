@@ -118,11 +118,22 @@ def _dimension(family: str, prop: dict[str, Any]) -> str:
 
 
 def _request_shape(step: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: deepcopy(step.get(key))
-        for key in ("path", "path_params", "query", "headers", "body")
-        if key in step
+    shape = {
+        "path": deepcopy(step.get("path")),
     }
+    # The protocol compiler omits empty request containers from the control
+    # step, while the ownership binder adds only the changed container to the
+    # treatment step. Treat an omitted empty container as the same structural
+    # value as ``{}`` so the diff reaches the declared leaf (for example
+    # ``query.user.id``) instead of reporting the entire container as an
+    # unrelated request mutation. Non-mapping values remain visible and fail
+    # closed through the existing asymmetry gate.
+    for key in ("path_params", "query", "headers", "body"):
+        if key not in step or step.get(key) is None:
+            shape[key] = {}
+        else:
+            shape[key] = deepcopy(step.get(key))
+    return shape
 
 
 def _diff_paths(left: Any, right: Any, prefix: str = "") -> list[str]:

@@ -8,6 +8,7 @@ compatibility.
 from __future__ import annotations
 
 import time
+from collections import Counter
 from typing import Any
 
 from .adaptive_behavior_ir_expansion import (
@@ -52,13 +53,12 @@ _VARIANT_RE = _re.compile(r"^(.+?)__v_[a-f0-9]+$")
 
 
 def _compiled_round0_obligation_ids(all_experiments: Any) -> set[str]:
-    """Round-0 obligation identities that actually compiled.
+    """Compatibility diagnostic for the historical compiled-only projection.
 
     Variant experiments (``obl_x__v_<digest>``) collapse to their base
-    identity. Compile-blocked obligations are excluded so the observation-
-    driven expansion round may re-compile them against the expanded IR: they
-    made zero target requests and no behavior slice was attempted, which the
-    ledger reopening rule allows.
+    identity. This helper is not used by the product expansion path: round 2
+    receives every immutable round-0 obligation identity, including compile-
+    blocked rows, so a retry cannot create a duplicate formal obligation.
     """
 
     compiled: set[str] = set()
@@ -73,6 +73,70 @@ def _compiled_round0_obligation_ids(all_experiments: Any) -> set[str]:
         match = _VARIANT_RE.match(obligation_id)
         compiled.add(match.group(1) if match else obligation_id)
     return compiled
+
+
+def _formal_obligation_rows_and_identity_receipt(
+    plan: DiscoveryPlanningBundle,
+    expansion: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Validate the final formal identity before any round-2 transport."""
+
+    base_rows = [
+        dict(row)
+        for row in _list(plan.obligations.get("obligations"))
+        if isinstance(row, dict)
+    ]
+    expansion_rows = [
+        dict(row)
+        for row in _list(expansion.get("delta_obligations"))
+        if isinstance(row, dict)
+    ]
+    formal_rows = [*base_rows, *expansion_rows]
+    base_ids = {
+        _text(row.get("obligation_id"))
+        for row in base_rows
+        if _text(row.get("obligation_id"))
+    }
+    expansion_ids = {
+        _text(row.get("obligation_id"))
+        for row in expansion_rows
+        if _text(row.get("obligation_id"))
+    }
+    all_id_values = [
+        _text(row.get("obligation_id")) for row in formal_rows
+    ]
+    missing_formal_ids = sum(not value for value in all_id_values)
+    duplicate_formal_ids = sorted(
+        obligation_id
+        for obligation_id, count in Counter(
+            value for value in all_id_values if value
+        ).items()
+        if count > 1
+    )
+    expansion_overlap_ids = sorted(base_ids & expansion_ids)
+    if missing_formal_ids or duplicate_formal_ids or expansion_overlap_ids:
+        raise ValueError(
+            "formal_obligation_identity_invalid:"
+            f"missing={missing_formal_ids};"
+            f"duplicates={','.join(duplicate_formal_ids[:20])};"
+            f"expansion_overlap={','.join(expansion_overlap_ids[:20])}"
+        )
+    planning_identity_receipt = _dict(
+        plan.obligations.get("obligation_identity_receipt")
+    )
+    return formal_rows, {
+        "schema_version": "qualibug.obligation-identity-receipt.v1",
+        "authority": "discovery_runtime_execution.formal_obligation_rows",
+        "status": "PASS",
+        "input_row_count": len(formal_rows),
+        "unique_count": len(formal_rows),
+        "duplicate_count": 0,
+        "duplicate_ids": [],
+        "missing_id_count": 0,
+        "expansion_added_count": len(expansion_rows),
+        "expansion_overlap_ids": [],
+        "planning_receipt": planning_identity_receipt,
+    }
 
 
 def _execution_ir_with_discovered_operations(
@@ -306,9 +370,15 @@ def run_experiment_candidate(
     if runtime_approved and surface_plan:
         expansion = expand_behavior_ir_from_runtime_observations(
             initial_behavior_ir=plan.behavior_ir,
-            existing_obligation_ids=_compiled_round0_obligation_ids(
-                plan.experiments.get("all_experiments")
-            ),
+            # Runtime expansion is planning round 2. Its obligation identity
+            # namespace must be disjoint from the immutable round-0 plan,
+            # including compile-blocked obligations; retrying one under the
+            # same identity would create two formal rows for one obligation.
+            existing_obligation_ids={
+                _text(row.get("obligation_id"))
+                for row in _list(plan.obligations.get("obligations"))
+                if isinstance(row, dict) and _text(row.get("obligation_id"))
+            },
             knowledge_asset=_dict(plan.experiments.get("_knowledge_asset")),
             documented_operations=[
                 dict(row)
@@ -338,6 +408,10 @@ def run_experiment_candidate(
             budget=int(plan.experiments.get("_planning_budget") or 0),
             planning_round=2,
         )
+
+    formal_obligation_rows, obligation_identity_receipt = (
+        _formal_obligation_rows_and_identity_receipt(plan, expansion)
+    )
 
     # Round-1 experiments were compiled against the immutable documented IR,
     # but the governed runtime interface discovery already proved additional
@@ -416,6 +490,7 @@ def run_experiment_candidate(
     }
 
     follow_on_batches: list[dict[str, Any]] = []
+    expansion_follow_on_batches: list[dict[str, Any]] = []
     if runtime_approved:
         # Round 1 runs at most the per-batch safety budget. Whatever it deferred
         # is still a scheduled obligation, so it joins the pending queue instead
@@ -469,12 +544,74 @@ def run_experiment_candidate(
         if isinstance(plan.experiments, dict):
             plan.experiments["obligation_plan"] = obligation_plan
 
+        # Runtime interface expansion owns a separate obligation plan.  Its
+        # first batch is intentionally capped by the same planning budget as
+        # round 1, so the remainder must enter the existing pending-round
+        # continuation authority as well.  Leaving this queue to the manual
+        # terminal projector makes every undispatched expansion obligation
+        # look like a budget failure even though it was never offered to the
+        # executor.
+        expansion_obligation_plan = _dict(expansion.get("obligation_plan"))
+        _round_two_deferred = [
+            dict(row)
+            for row in _list(round_two_batch.get("budget_deferred"))
+            if isinstance(row, dict) and _text(row.get("obligation_id"))
+        ]
+        if _round_two_deferred:
+            _already_pending = {
+                _text(row.get("obligation_id"))
+                for row in _list(expansion_obligation_plan.get("pending_next_round"))
+                if isinstance(row, dict)
+            }
+            expansion_obligation_plan = {
+                **expansion_obligation_plan,
+                "pending_next_round": [
+                    *_list(expansion_obligation_plan.get("pending_next_round")),
+                    *[
+                        row
+                        for row in _round_two_deferred
+                        if _text(row.get("obligation_id")) not in _already_pending
+                    ],
+                ],
+            }
+        expansion_follow_on_batches, expansion_obligation_plan = (
+            _consume_pending_obligation_rounds(
+                obligation_plan=expansion_obligation_plan,
+                obligations=[
+                    dict(row)
+                    for row in _list(expansion.get("delta_obligations"))
+                    if isinstance(row, dict)
+                ],
+                experiments_by_obligation=dict(
+                    _dict(expansion.get("by_obligation"))
+                ),
+                behavior_ir=_dict(expansion.get("behavior_ir")),
+                root=inputs.root,
+                project=inputs.project,
+                base_url=_text(runtime_contract.get("approved_base_url")),
+                runtime_contract=runtime_contract,
+                mainline_run=plan.mainline_run,
+                campaign_id=plan.mainline_run["campaign_id"],
+                automatic_round_limit=int(
+                    getattr(campaign_handle, "automatic_round_limit", 16) or 16
+                ),
+                execute_batch=execute_selected_experiments,
+                exclude_obligation_ids=round_two_executed_ids,
+            )
+        )
+        expansion["obligation_plan"] = expansion_obligation_plan
+
+    business_follow_on_batches = [
+        *follow_on_batches,
+        *expansion_follow_on_batches,
+    ]
+
     compile_results = {
         _text(key): dict(value)
         for key, value in _dict(batch.get("compile_results")).items()
         if _text(key) and isinstance(value, dict)
     }
-    for follow_on in follow_on_batches:
+    for follow_on in business_follow_on_batches:
         compile_results.update({
             _text(key): dict(value)
             for key, value in _dict(follow_on.get("compile_results")).items()
@@ -492,7 +629,7 @@ def run_experiment_candidate(
         for key, value in _dict(batch.get("execution_results")).items()
         if _text(key) and isinstance(value, dict)
     }
-    for follow_on in follow_on_batches:
+    for follow_on in business_follow_on_batches:
         execution_results.update({
             _text(key): dict(value)
             for key, value in _dict(follow_on.get("execution_results")).items()
@@ -510,7 +647,7 @@ def run_experiment_candidate(
         for key, value in _dict(batch.get("gate_results")).items()
         if _text(key) and isinstance(value, dict)
     }
-    for follow_on in follow_on_batches:
+    for follow_on in business_follow_on_batches:
         gate_results.update({
             _text(key): dict(value)
             for key, value in _dict(follow_on.get("gate_results")).items()
@@ -646,7 +783,7 @@ def run_experiment_candidate(
                 _list(batch.get("findings"))
                 + [
                     item
-                    for follow_on in follow_on_batches
+                    for follow_on in business_follow_on_batches
                     for item in _list(follow_on.get("findings"))
                 ]
                 + _list(round_two_batch.get("findings"))
@@ -725,7 +862,10 @@ def run_experiment_candidate(
     )
     executed_count = (
         int(batch.get("executed_count") or 0)
-        + sum(int(follow_on.get("executed_count") or 0) for follow_on in follow_on_batches)
+        + sum(
+            int(follow_on.get("executed_count") or 0)
+            for follow_on in business_follow_on_batches
+        )
         + int(round_two_batch.get("executed_count") or 0)
     )
     selected_count = len(selected_rows)
@@ -758,18 +898,8 @@ def run_experiment_candidate(
         "behavior_ir": dict(_dict(expansion.get("behavior_ir"))),
         "test_obligations": {
             **dict(plan.obligations),
-            "obligations": (
-                [
-                    dict(row)
-                    for row in _list(plan.obligations.get("obligations"))
-                    if isinstance(row, dict)
-                ]
-                + [
-                    dict(row)
-                    for row in _list(expansion.get("delta_obligations"))
-                    if isinstance(row, dict)
-                ]
-            ),
+            "obligations": formal_obligation_rows,
+            "obligation_identity_receipt": obligation_identity_receipt,
         },
         "experiment_compile": {
             key: value
@@ -807,6 +937,14 @@ def run_experiment_candidate(
             "status": _text(expansion.get("status")),
             "round_receipt": dict(_dict(expansion.get("round_receipt"))),
             "obligation_plan": dict(_dict(expansion.get("obligation_plan"))),
+            "follow_on_batch_count": len(expansion_follow_on_batches),
+            "follow_on_round_receipts": list(
+                _list(
+                    _dict(expansion.get("obligation_plan")).get(
+                        "follow_on_round_receipts"
+                    )
+                )
+            ),
             "agent_intent_plan": dict(
                 _dict(expansion.get("agent_intent_plan"))
             ),
@@ -816,6 +954,10 @@ def run_experiment_candidate(
             "scheduled_count": (
                 len(scheduled)
                 + len(round_two_scheduled)
+                + sum(
+                    int(item.get("selected_count") or 0)
+                    for item in business_follow_on_batches
+                )
                 + int(surface_execution.get("selected_count") or 0)
             ),
             "business_selected_count": len(selected_rows),
@@ -830,15 +972,15 @@ def run_experiment_candidate(
             ),
             "executed_count": executed_count,
             "blocked_count": _sum_batch_int(
-                [batch, *follow_on_batches, round_two_batch],
+                [batch, *business_follow_on_batches, round_two_batch],
                 "blocked_count",
             ),
             "harness_failure_count": _sum_batch_int(
-                [batch, *follow_on_batches, round_two_batch],
+                [batch, *business_follow_on_batches, round_two_batch],
                 "harness_failure_count",
             ),
             "cleanup_failures": _sum_batch_int(
-                [batch, *follow_on_batches, round_two_batch],
+                [batch, *business_follow_on_batches, round_two_batch],
                 "cleanup_failures",
             ),
             "every_experiment_has_receipt": bool(ledger.get("complete")),
@@ -848,7 +990,7 @@ def run_experiment_candidate(
             # COMPLETED alone cannot reconstruct Finalizer receipts.
             "results": _merge_experiment_execution_results(
                 batch,
-                *follow_on_batches,
+                *business_follow_on_batches,
                 round_two_batch,
                 surface_execution,
             ),

@@ -53,7 +53,12 @@ def _stage_identity_fields(
     return _stage_identity(obligation_id) if include_stage_identity else {}
 
 
-def _result(*, include_stage_identity: bool = True) -> dict:
+def _result(
+    *,
+    include_stage_identity: bool = True,
+    gate_status: str = "REJECTED",
+    gate_reason: str = "ORACLE_NOT_VIOLATED",
+) -> dict:
     ledger = build_obligation_attempt_ledger(
         mainline_run=_run(),
         selected=[
@@ -94,8 +99,8 @@ def _result(*, include_stage_identity: bool = True) -> dict:
         },
         gate_results={
             "obl-1": {
-                "status": "REJECTED",
-                "reason_code": "ORACLE_NOT_VIOLATED",
+                "status": gate_status,
+                "reason_code": gate_reason,
                 "gate_receipt_id": "gate-1",
                 **_stage_identity_fields("obl-1", include_stage_identity),
             }
@@ -139,6 +144,44 @@ def test_funnel_conservation_uses_stage_receipts() -> None:
     assert conservation["execution_count"] == 1
     assert conservation["execution_unresolved_count"] == 0
     assert all(check["status"] == "PASS" for check in conservation["checks"])
+
+
+def test_funnel_conservation_counts_only_receipted_oracle_violations() -> None:
+    result = _result()
+    assert build_funnel_conservation(result)["oracle_violation_count"] == 0
+
+    non_violation_result = _result(
+        gate_status="REJECTED",
+        gate_reason="ASSERTION_NOT_VIOLATED",
+    )
+    assert build_funnel_conservation(non_violation_result)["oracle_violation_count"] == 0
+
+    violation_result = _result(
+        gate_status="REJECTED",
+        gate_reason="BLOCKED_MISSING_OBSERVER",
+    )
+    assert build_funnel_conservation(violation_result)["oracle_violation_count"] == 1
+
+
+def test_funnel_fails_safe_on_duplicate_formal_obligation_rows() -> None:
+    result = _result()
+    result["test_obligations"]["obligations"].append({"obligation_id": "obl-1"})
+
+    conservation = build_funnel_conservation(result)
+
+    assert conservation["status"] == "FAILED_SAFE"
+    assert conservation["generated_row_count"] == 3
+    assert conservation["generated_count"] == 2
+    assert conservation["generated_duplicate_count"] == 1
+    assert conservation["generated_duplicate_ids"] == ["obl-1"]
+    assert any(
+        check["name"] == "formal_obligation_identity_unique"
+        and check["status"] == "FAILED_SAFE"
+        for check in conservation["checks"]
+    )
+    report = build_funnel_report(result)
+    assert report["report_status"] == "FAILED_SAFE"
+    assert report["metrics"]["generated_count"] == 2
 
 
 def test_funnel_exposes_missing_stage_identity_without_rederiving_it() -> None:

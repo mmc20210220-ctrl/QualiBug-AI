@@ -678,6 +678,79 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
         "ai_test_asset_center.discovery_runtime_execution.execute_selected_experiments",
         fake_execute,
     )
+    pending_round_calls: list[set[str]] = []
+    pending_round_id = "obl-runtime-round-2-pending"
+
+    def fake_consume_pending_rounds(**kwargs):
+        obligation_ids = {
+            str(row.get("obligation_id") or "")
+            for row in kwargs.get("obligations", [])
+            if isinstance(row, dict)
+        }
+        if pending_round_id not in obligation_ids:
+            return [], kwargs["obligation_plan"]
+        pending_round_calls.append(obligation_ids)
+        return [
+            {
+                "selected_count": 1,
+                "executed_count": 1,
+                "blocked_count": 0,
+                "harness_failure_count": 0,
+                "cleanup_failures": 0,
+                "findings": [],
+                "results": [],
+                "compile_results": {
+                    pending_round_id: {
+                        "status": "COMPILED",
+                        "experiment_id": "exp-runtime-round-2-pending",
+                        "cost_coverage_status": "MEASURED",
+                    }
+                },
+                "execution_results": {
+                    pending_round_id: {
+                        "status": "EXECUTED",
+                        "execution_id": "exec-runtime-round-2-pending",
+                        "observation_receipt_ids": ["obs-runtime-round-2-pending"],
+                        "oracle_receipt_id": "oracle-runtime-round-2-pending",
+                        "cost_coverage_status": "MEASURED",
+                        "operational_receipt": build_execution_operational_receipt(
+                            receipt_id="operational-runtime-round-2-pending",
+                            execution_status="EXECUTED",
+                            steps=[{
+                                "method": "GET",
+                                "path": "/resources",
+                                "status_code": 200,
+                            }],
+                            cleanup_failures=0,
+                        ),
+                    }
+                },
+                "gate_results": {
+                    pending_round_id: {
+                        "status": "REJECTED",
+                        "reason_code": "ORACLE_NOT_VIOLATED",
+                        "gate_receipt_id": "gate-runtime-round-2-pending",
+                        "cost_coverage_status": "MEASURED",
+                    }
+                },
+                "every_experiment_has_receipt": True,
+            }
+        ], {
+            **kwargs["obligation_plan"],
+            "pending_next_round": [],
+            "pending_count": 0,
+            "follow_on_round_receipts": [{
+                "planning_round": 3,
+                "selected_count": 1,
+                "pending_count": 0,
+                "executed_count": 1,
+            }],
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.discovery_runtime_execution._consume_pending_obligation_rounds",
+        fake_consume_pending_rounds,
+    )
 
     def fake_surface_execute(*_args, **_kwargs):
         calls.append("surface")
@@ -765,10 +838,16 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
             "planning_round": 2,
             "experiment_id": "exp-runtime-round-2",
         }
+        pending_obligation = {
+            **delta_obligation,
+            "obligation_id": pending_round_id,
+            "candidate_id": pending_round_id,
+            "experiment_id": "exp-runtime-round-2-pending",
+        }
         return {
             "status": "EXPANDED",
             "behavior_ir": kwargs["initial_behavior_ir"],
-            "delta_obligations": [delta_obligation],
+            "delta_obligations": [delta_obligation, pending_obligation],
             "experiment_pack": {},
             "all_experiments": [],
             "by_obligation": {
@@ -776,20 +855,28 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
                     "obligation_id": "obl-runtime-round-2",
                     "experiment_id": "exp-runtime-round-2",
                     "compile_receipt": {"status": "COMPILED"},
-                }
+                },
+                pending_round_id: {
+                    "obligation_id": pending_round_id,
+                    "experiment_id": "exp-runtime-round-2-pending",
+                    "compile_receipt": {"status": "COMPILED"},
+                },
             },
             "obligation_plan": {
                 "selected": [{"obligation_id": "obl-runtime-round-2"}],
-                "pending_next_round": [],
+                "pending_next_round": [{"obligation_id": pending_round_id}],
+                "budget": 1,
+                "selected_count": 1,
+                "pending_count": 1,
             },
             "agent_intent_plan": {
                 "intents": [{"obligation_id": "obl-runtime-round-2"}],
             },
-            "selected_rows": [delta_obligation],
+            "selected_rows": [delta_obligation, pending_obligation],
             "round_receipt": {
                 "schema_version": "qualibug.behavior-ir-expansion-round.v1",
                 "planning_round": 2,
-                "new_obligation_count": 1,
+                "new_obligation_count": 2,
                 "receipt_fingerprint": "a" * 64,
             },
         }
@@ -820,6 +907,10 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
     )
 
     assert calls == ["surface", "expand", "experiment", "experiment"]
+    assert pending_round_calls == [{
+        "obl-runtime-round-2",
+        pending_round_id,
+    }]
     # Core obligations (3) + coverage-driven obligations (variable).
     # Coverage obligations may be BLOCKED when the minimal test setup lacks
     # fixtures/observers; this is expected and does not affect the runtime
@@ -834,6 +925,13 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
     assert separation["business_obligation_summary"]["total"] == len(attempts)
     assert separation["discovery_task_summary"]["generated_discovery_tasks"] == 1
     assert result["experiment_execution"]["surface_discovery_selected_count"] == 1
+    assert result["behavior_ir_expansion"]["follow_on_batch_count"] == 1
+    assert result["behavior_ir_expansion"]["obligation_plan"]["pending_count"] == 0
+    assert any(
+        row["obligation_id"] == pending_round_id
+        and row["terminal_status"] == "REJECTED"
+        for row in attempts
+    )
     terminal_statuses = {row["terminal_status"] for row in attempts}
     assert terminal_statuses.issubset({"REJECTED", "BLOCKED"}), (
         f"Unexpected terminal statuses: {terminal_statuses}"
@@ -843,6 +941,12 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
     assert result["phases"]["execution"]["scenario_attempts"] >= 3
     assert result["phases"]["execution"]["accepted_write_count"] == 0
     assert result["discovery_funnel"]["pipeline_health"]["status"] in {"OK", "DEGRADED"}
+    identity_receipt = result["test_obligations"][
+        "obligation_identity_receipt"
+    ]
+    assert identity_receipt["status"] == "PASS"
+    assert identity_receipt["duplicate_count"] == 0
+    assert identity_receipt["expansion_overlap_ids"] == []
     assert result["behavior_ir_expansion"]["status"] == "EXPANDED"
     assert result["behavior_ir_expansion"]["round_receipt"]["planning_round"] == 2
     consistency = result["defect_identity_consistency"]

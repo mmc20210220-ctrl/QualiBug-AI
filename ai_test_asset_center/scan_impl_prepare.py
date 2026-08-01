@@ -6,6 +6,7 @@ pipeline invocation and post-run projection.
 from __future__ import annotations
 
 import time
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
@@ -28,6 +29,9 @@ from .scan_source_runtime import (
     _source_contract,
     _source_manifest,
 )
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def prepare_scan_before_pipeline(
@@ -54,7 +58,12 @@ def prepare_scan_before_pipeline(
         from .private_pilot_scan_context_contract import current_scan_campaign_context
 
         pending_context = current_scan_campaign_context()
-    except Exception:
+    except Exception as exc:
+        _LOGGER.warning(
+            "scan_campaign_context_resolution_failed error_type=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
         pending_context = None
     if isinstance(pending_context, dict) and pending_context:
         for key, value in pending_context.items():
@@ -103,10 +112,15 @@ def prepare_scan_before_pipeline(
                 file=_sys.stderr,
                 flush=True,
             )
-    except Exception:
+    except Exception as exc:
         # Never block a scan due to a session-health check failure itself;
         # the check is advisory.
-        pass
+        _LOGGER.warning(
+            "session_health_check_failed project=%s error_type=%s",
+            project,
+            type(exc).__name__,
+            exc_info=True,
+        )
 
     context_defaults = _scan_campaign_context_defaults(project, root)
     if context_defaults.get("scope_id") and not str(context.get("scope_id") or "").strip():
@@ -156,8 +170,13 @@ def prepare_scan_before_pipeline(
         from .api_doc_assets import enrich_api_spec_text
 
         api_doc_text = enrich_api_spec_text(root, project, api_doc_text)
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.warning(
+            "api_spec_enrichment_failed project=%s error_type=%s",
+            project,
+            type(exc).__name__,
+            exc_info=True,
+        )
     context["_source_verification_text"] = source_api_doc_text
 
     started = time.time()
@@ -249,7 +268,13 @@ def prepare_scan_before_pipeline(
         profile = registry.get("test_profile") if isinstance(registry, dict) else {}
         if isinstance(profile, dict):
             diagnostics_config = dict(profile)
-    except Exception:
+    except Exception as exc:
+        _LOGGER.warning(
+            "connector_registry_load_failed project=%s error_type=%s",
+            project,
+            type(exc).__name__,
+            exc_info=True,
+        )
         diagnostics_config = {}
     try:
         from .scan_diagnostics import run_preflight
