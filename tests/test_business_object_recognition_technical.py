@@ -46,7 +46,10 @@ def test_table_and_derived_guess_do_not_become_business_objects() -> None:
         for label in row["labels"]
     }
 
-    assert statuses["行业推断对象"] == "PENDING_DERIVED_ONLY"
+    assert "行业推断对象" not in statuses
     assert statuses["orders"] == "PENDING_TECHNICAL_ONLY"
+    assert recognition["gate"]["metrics"]["ignored_derived_input_count"] == 1
+    assert recognition["ignored_inputs"][0]["label"] == "行业推断对象"
+    assert recognition["derived_object_assets_used_as_authority"] is False
     assert recognition["technical_artifacts_are_business_objects"] is False
     assert build_enterprise_understanding_model(asset)["business_objects"] == []

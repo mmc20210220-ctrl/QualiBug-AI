@@ -25,6 +25,7 @@ def _recognition(candidates: list[dict]) -> dict:
     accepted_statuses = {
         "ACCEPTED",
         "ACCEPTED_BY_SOURCE_ALIAS",
+        "ACCEPTED_SURFACE_FORM_IDENTITY_PENDING",
         "ACCEPTED_WITH_ROLE_COLLISION_OVERRIDE",
     }
     return {

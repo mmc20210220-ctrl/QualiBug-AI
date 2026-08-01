@@ -132,40 +132,23 @@ def test_real_baseline_loads_ground_truth_only_after_product_capture(
             "product_asset_rewritten": False,
         }
 
-    def ground_truth_loader(_path):
-        calls.append("load_main_ground_truth")
-        return {"project_id": PROJECT_ID}
-
     def object_ground_truth_loader(_path):
         calls.append("load_object_ground_truth")
         return object_truth
 
-    def evaluator(
-        ground_truth,
-        product_asset,
-        *,
-        business_object_ground_truth,
-        output_dir,
-    ):
+    def evaluator(business_object_ground_truth, product_asset):
         calls.append("evaluate")
-        assert ground_truth == {"project_id": PROJECT_ID}
-        assert product_asset["asset_id"] == "asset:ticketsla"
         assert business_object_ground_truth is object_truth
-        assert output_dir.endswith("understanding")
+        assert product_asset["asset_id"] == "asset:ticketsla"
         return {
-            "status": "PASS",
-            "business_object_type_measurement": {
-                "status": "MEASURED",
-                "metrics": {
-                    "object_type_precision": 1.0,
-                    "object_type_recall": 1.0,
-                    "object_type_f1": 1.0,
-                },
-                "false_positive_objects": [],
-                "false_negative_objects": [],
+            "status": "MEASURED",
+            "metrics": {
+                "object_type_precision": 1.0,
+                "object_type_recall": 1.0,
+                "object_type_f1": 1.0,
             },
-            "next_business_object_repair_target": "",
-            "next_repair_target": "",
+            "false_positive_objects": [],
+            "false_negative_objects": [],
         }
 
     summary = run_ticketsla_object_baseline(
@@ -173,7 +156,6 @@ def test_real_baseline_loads_ground_truth_only_after_product_capture(
         ingestor=ingestor,
         builder=builder,
         capturer=capturer,
-        ground_truth_loader=ground_truth_loader,
         business_object_ground_truth_loader=object_ground_truth_loader,
         evaluator=evaluator,
     )
@@ -182,7 +164,6 @@ def test_real_baseline_loads_ground_truth_only_after_product_capture(
         "ingest",
         "build",
         "capture",
-        "load_main_ground_truth",
         "load_object_ground_truth",
         "evaluate",
     ]
@@ -232,10 +213,6 @@ def test_source_snapshot_drift_blocks_scoring_after_capture(tmp_path: Path) -> N
         target.write_text(json.dumps(asset), encoding="utf-8")
         return {"ground_truth_loaded": False}
 
-    def main_truth(_path):
-        calls.append("load_main_ground_truth")
-        return {"project_id": PROJECT_ID}
-
     def object_gt(_path):
         calls.append("load_object_ground_truth")
         return object_truth
@@ -249,7 +226,6 @@ def test_source_snapshot_drift_blocks_scoring_after_capture(tmp_path: Path) -> N
         ingestor=ingestor,
         builder=builder,
         capturer=capturer,
-        ground_truth_loader=main_truth,
         business_object_ground_truth_loader=object_gt,
         evaluator=evaluator,
     )
@@ -258,7 +234,6 @@ def test_source_snapshot_drift_blocks_scoring_after_capture(tmp_path: Path) -> N
         "ingest",
         "build",
         "capture",
-        "load_main_ground_truth",
         "load_object_ground_truth",
     ]
     assert summary["status"] == "BLOCKED"
@@ -295,7 +270,6 @@ def test_ingestion_failure_blocks_before_builder_and_ground_truth(tmp_path: Path
             ingestor=ingestor,
             builder=forbidden,
             capturer=forbidden,
-            ground_truth_loader=forbidden,
             business_object_ground_truth_loader=forbidden,
             evaluator=forbidden,
         )
