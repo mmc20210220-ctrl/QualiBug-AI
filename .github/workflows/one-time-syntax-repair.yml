@@ -1,0 +1,115 @@
+name: One-time syntax repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-syntax-repair.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-syntax-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Repair exact syntax corruption and self-remove
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+
+          def replace_exact(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one exact repair target, found {count}")
+              target.write_text(text.replace(old, new), encoding="utf-8")
+
+          bom_path = Path("artifacts/spec_v1_6_2_cleanup_reval/_run_reval_scan.py")
+          bom_text = bom_path.read_text(encoding="utf-8-sig")
+          bom_path.write_text(bom_text, encoding="utf-8")
+
+          replace_exact(
+              "ai_test_asset_center/cleanup_execution_receipt.py",
+              '''    receipt_id = f"cleanup_exec_{_sha256_short({
+                  'experiment_id': experiment_id,
+                  'proof_id': proof_id,
+                  'method': method,
+                  'materialized_path': materialized_path,
+                  'source_receipt_ids': source_ids,
+              })}"
+''',
+              '''    receipt_identity = {
+                  "experiment_id": experiment_id,
+                  "proof_id": proof_id,
+                  "method": method,
+                  "materialized_path": materialized_path,
+                  "source_receipt_ids": source_ids,
+              }
+              receipt_id = "cleanup_exec_" + _sha256_short(receipt_identity)
+''',
+          )
+
+          replace_exact(
+              "ai_test_asset_center/phase105_frontend_preview_acceptance.py",
+              '''        f"health status={health["status"]}, service_status={health_data.get('status')}。",
+''',
+              '''        f"health status={health['status']}, service_status={health_data.get('status')}。",
+''',
+          )
+
+          replace_exact(
+              "ai_test_asset_center/enterprise_knowledge_center/_linking_impl.py",
+              '''            edges.append({
+                  "edge_id": f"edge:{_short_hash({
+                      'rule': rule_id,
+                      'interface': interface_id,
+                      'derivation': 'exact_source_section',
+                  })}",
+''',
+              '''            edge_identity = {
+                  "rule": rule_id,
+                  "interface": interface_id,
+                  "derivation": "exact_source_section",
+              }
+              edges.append({
+                  "edge_id": "edge:" + _short_hash(edge_identity),
+''',
+          )
+
+          targets = [
+              bom_path,
+              Path("ai_test_asset_center/cleanup_execution_receipt.py"),
+              Path("ai_test_asset_center/phase105_frontend_preview_acceptance.py"),
+              Path("ai_test_asset_center/enterprise_knowledge_center/_linking_impl.py"),
+          ]
+          for target in targets:
+              ast.parse(target.read_text(encoding="utf-8"), filename=str(target))
+
+          Path(".github/workflows/one-time-syntax-repair.yml").unlink()
+          print("one-time syntax repair validated")
+          PY
+
+          git config user.name "qualibug-ci-repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add --all
+          if git diff --cached --quiet; then
+            echo "No repair changes were needed"
+            exit 0
+          fi
+          git commit -m "fix(ci): repair repository syntax corruption"
+          git pull --rebase origin main
+          git push origin HEAD:main
