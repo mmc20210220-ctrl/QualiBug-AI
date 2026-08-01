@@ -1,0 +1,299 @@
++            "knowledge_sources",
++        ):
++            for row in _rows(container.get(key)):
++                aliases = _explicit_source_aliases(row)
++                if aliases:
++                    groups.append(aliases)
++        structures = container.get("document_structure_assets")
++        if isinstance(structures, dict):
++            for row in _rows(structures.get("items")):
++                aliases = _explicit_source_aliases(row)
++                if aliases:
++                    groups.append(aliases)
++
++    # The same canonical id may occur in the canonical inventory and in one or
++    # more occurrence rows.  Merge only on an exact explicitly declared alias.
++    merged: list[set[str]] = []
++    for aliases in groups:
++        overlaps = [index for index, group in enumerate(merged) if group & aliases]
++        if not overlaps:
++            merged.append(set(aliases))
++            continue
++        combined = set(aliases)
++        for index in reversed(overlaps):
++            combined.update(merged.pop(index))
++        merged.append(combined)
++    return merged
++
++
++def _alias_index(groups: list[set[str]]) -> dict[str, set[str]]:
++    result: dict[str, set[str]] = {}
++    for group in groups:
++        frozen = set(group)
++        for alias in group:
++            result[alias] = frozen
++    return result
++
++
++def _expand_source_tokens(tokens: set[str], aliases: dict[str, set[str]]) -> set[str]:
++    """Expand evidence through exact source bindings, never fuzzy filenames."""
++    result = set(tokens)
++    for token in list(tokens):
++        group = aliases.get(token)
++        if group:
++            result.update(group)
++        # A locator may use an explicitly bound source alias as its prefix.
++        # Preserve its suffix while projecting to the other aliases in that
++        # same group, and also expose the source-level aliases for stage checks.
++        for separator in ("#", "::"):
++            if separator not in token:
++                continue
++            prefix, suffix = token.split(separator, 1)
++            group = aliases.get(prefix)
++            if not group:
++                continue
++            result.update(group)
++            result.update(f"{alias}{separator}{suffix}" for alias in group)
++            break
++    return result
++
++
++def _asset_source_tokens(asset: dict[str, Any]) -> set[str]:
++    groups = _source_alias_groups(asset)
++    return {alias for group in groups for alias in group}
++
++
+ def _fact_source_tokens(asset: dict[str, Any]) -> set[str]:
+     result: set[str] = set()
+     model = _model(asset)
+@@ -72,7 +181,15 @@ def _fact_source_tokens(asset: dict[str, Any]) -> set[str]:
+         ):
+             for row in _rows(container.get(key)):
+                 result.update(_evidence_tokens(row.get("evidence")))
+-                if _text(row.get("source_id")):
+-                    result.add(_text(row.get("source_id")))
+-    return result
++                result.update(_evidence_tokens(row.get("source_spans")))
++                for field in (
++                    "source_id",
++                    "canonical_source_id",
++                    "source_occurrence_id",
++                    "source_locator",
++                    "content_asset_id",
++                    "interpretation_asset_id",
++                ):
++                    value = _text(row.get(field))
++                    if value:
++                        result.add(value)
++    comprehension = asset.get("chinese_business_comprehension")
++    if isinstance(comprehension, dict):
++        for key in ("accepted_facts", "candidate_facts", "facts"):
++            for row in _rows(comprehension.get(key)):
++                result.update(_evidence_tokens(row.get("evidence")))
++                if _text(row.get("source_id")):
++                    result.add(_text(row.get("source_id")))
++    return _expand_source_tokens(result, _alias_index(_source_alias_groups(asset)))
+ 
+ 
+ def _index_ground_truth(ground_truth: dict[str, Any]) -> dict[str, dict[str, Any]]:
+diff --git a/benchmark_evaluator/enterprise_understanding/ticketsla_object_baseline.py b/benchmark_evaluator/enterprise_understanding/ticketsla_object_baseline.py
+index 05f41f1..c0bfe18 100644
+--- a/benchmark_evaluator/enterprise_understanding/ticketsla_object_baseline.py
++++ b/benchmark_evaluator/enterprise_understanding/ticketsla_object_baseline.py
+@@ -21,6 +21,7 @@ from pathlib import Path
+ from typing import Any, Callable
+ 
+ from .business_object_types import load_business_object_ground_truth
++from .build_product_snapshot import _source_blob_identity
+ from .capture_product_asset import capture_finalized_product_asset
+ from .ground_truth import load_ground_truth
+ from .runner import run_benchmark
+@@ -39,8 +40,9 @@ class TicketSLAObjectBaselineError(RuntimeError):
+     """The real TicketSLA baseline could not be built or measured safely."""
+ 
+ 
+-def _git_blob_sha(blob: bytes) -> str:
+-    return hashlib.sha1(f"blob {len(blob)}\0".encode("utf-8") + blob).hexdigest()
++def _git_blob_sha(blob: bytes) -> str:
++    """Compatibility helper retained for unit fixtures with exact bytes."""
++
++    return str(_source_blob_identity("fixture.txt", blob)["raw_blob_sha"])
+@@ -139,13 +141,22 @@ def verify_frozen_source_snapshot(
+         if not path.is_file():
+             raise TicketSLAObjectBaselineError(
+                 f"ticketsla_public_source_missing_after_capture:{relative}"
+             )
+-        actual = _git_blob_sha(path.read_bytes())
++        identity = _source_blob_identity(relative, path.read_bytes())
++        actual = str(identity["canonical_blob_sha"])
+         expected = declared[relative]
+         row = {
+             "path": relative,
+             "expected_blob_sha": expected,
+             "actual_blob_sha": actual,
++            "raw_blob_sha": identity["raw_blob_sha"],
++            "line_ending_normalized_for_identity": identity[
++                "line_ending_normalized"
++            ],
+             "status": "MATCH" if actual == expected else "DRIFTED",
+         }
+         rows.append(row)
+diff --git a/tests/test_behavior_implementation_binding.py b/tests/test_behavior_implementation_binding.py
+index 3450e0c..3a15532 100644
+--- a/tests/test_behavior_implementation_binding.py
++++ b/tests/test_behavior_implementation_binding.py
+@@ -7,6 +7,9 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.i
+     build_behavior_implementation_bindings,
+ )
+ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.probe_policy import build_gated_probes
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.builder_legacy_v1 import (
++    _build_operations,
++)
+ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.scenario_compiler import (
+     build_business_scenarios,
+ )
+@@ -55,7 +58,8 @@ def _asset(*, behavior_status="CONFIRMED", permission_decision="ALLOW", operatio
+                     "source_kind": "ACCEPTED_BUSINESS_FACT",
+                     "source_refs": ["rule:create"],
+                     "actor_refs": ["sales"],
+-                    "operation_ref": "创建订单",
++                    "operation_ref": operation_ref,
++                    "interface_refs": ["api:POST:/orders"] if operation_ref == "createOrder" else [],
+                     "object_refs": ["order"],
+                     "preconditions": [],
+                     "condition_combinator": "",
+@@ -282,8 +286,10 @@ def test_token_overlap_binding_is_candidate_only_and_blocks_scenario_planning()
+         scenario_result["gate"]["reason_code"] == "BEHAVIOR_IMPLEMENTATION_BINDING_BLOCKED"
+     )
+ 
+-
+ def test_semantic_gate_and_implementation_gate_remain_separate() -> None:
+     asset = _asset()
+     assert asset["enterprise_understanding_model"]["gate"]["status"] == "READY"
+     result = build_behavior_implementation_bindings(asset)
+     assert result["gate"]["status"] == "BLOCKED"
++
++
++def test_fact_attached_exact_interface_binds_without_duplicate_relationship() -> None:
++    asset = _asset(operation_ref="createOrder")
++    asset["relationships"] = []
++
++    result = build_behavior_implementation_bindings(asset)
++
++    action = next(row for row in result["bindings"] if row["binding_kind"] == "ACTION")
++    assert action["status"] == "BOUND"
++    assert action["interface_ref"] == "api:POST:/orders"
++    assert action["derivation"] == "source_fact_interface_attachment"
++    assert not any(
++        row.get("reason_code") == "BEHAVIOR_API_BINDING_UNRESOLVED"
++        for row in result["unknowns"]
++    )
++
++
++def test_multiple_source_attached_interfaces_are_ambiguous_not_first_match() -> None:
++    asset = _asset(operation_ref="createOrder")
++    asset["relationships"] = []
++    behavior = asset["business_behavior_ir"]["behaviors"][0]
++    behavior["interface_refs"] = ["api:POST:/orders", "api:GET:/orders/{id}"]
++
++    result = build_behavior_implementation_bindings(asset)
++
++    assert not any(row["binding_kind"] == "ACTION" and row["status"] == "BOUND" for row in result["bindings"])
++    unknown = next(
++        row for row in result["unknowns"] if row.get("reason_code") == "BEHAVIOR_API_BINDING_AMBIGUOUS"
++    )
++    assert unknown["candidate_interface_refs"] == ["api:GET:/orders/{id}", "api:POST:/orders"]
++    assert unknown["blocks_scenario_planning"] is True
++
++
++def test_exact_interface_operation_identity_propagates_into_operation_model() -> None:
++    asset = _asset(operation_ref="createOrder")
++    facts = [
++        {
++            "fact_id": "rule:create",
++            "status": "ACCEPTED",
++            "action": {"canonical": "创建", "raw": "创建订单"},
++            "subject": {"actor_refs": ["sales"], "entity_refs": ["order"]},
++            "object": {"entity_refs": ["order"]},
++            "interface_id": "api:POST:/orders",
++            "conditions": [],
++            "source_spans": [
++                {"source_id": "prd", "locator": "PRD.md#创建订单", "quote": "销售可以创建订单"}
++            ],
++        }
++    ]
++
++    operations, unknowns = _build_operations(facts, asset=asset)
++
++    assert not unknowns
++    assert len(operations) == 1
++    operation = operations[0]
++    assert operation["name"] == "createOrder"
++    assert operation["operation_ref"] == "createOrder"
++    assert operation["interface_refs"] == ["api:POST:/orders"]
++    assert "创建订单" in operation["raw_action_names"]
++    assert operation["identity_authority"] == "OPENAPI_OPERATION_ID"
+diff --git a/tests/test_chinese_business_comprehension.py b/tests/test_chinese_business_comprehension.py
+index 497ab58..9b39d38 100644
+--- a/tests/test_chinese_business_comprehension.py
++++ b/tests/test_chinese_business_comprehension.py
+@@ -2,7 +2,9 @@ from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehe
+     analyze_chinese_business_source,
+ )
+ from ai_test_asset_center.enterprise_knowledge_center.composition import (
+     _classify_business_rules,
+ )
++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.explicit_fact_semantic_normalization import (
++    normalize_explicit_business_fact_semantics,
++)
+ from ai_test_asset_center.semantic_governance_gate import apply_semantic_governance_gate
+ 
+ 
+@@ -428,6 +430,38 @@ def test_comprehension_prefers_explicit_unicode_synonym_over_character_overlap()
+     assert gaps == []
+ 
+ 
++def test_explicit_actor_grammar_captures_unlisted_source_role() -> None:
++    asset, _ = _asset()
++    statement = "只有调度专员可以分配工单"
++    _objects, facts, _glossary = analyze_chinese_business_source(
++        {"source_id": "doc-role", "filename": "RULES.md", "text": statement},
++        asset=asset,
++    )
++
++    normalized = normalize_explicit_business_fact_semantics(
++        {"roles": [], "business_fact_ledger": {"items": facts}}
++    )
++    rows = normalized["business_fact_ledger"]["items"]
++    assert len(rows) == 1
++    assert rows[0]["subject"]["actor_refs"] == ["调度专员"]
++    assert rows[0]["conditions"] == []
++
++
++def test_explicit_actor_grammar_splits_roles_and_preserves_qualifier_condition() -> None:
++    facts = [
++        {
++            "fact_id": "fact:actor",
++            "kind": "RULE",
++            "status": "ACCEPTED",
++            "raw_statement": "只有被分配的代理或主管可以关闭工单",
++            "subject": {"actor_refs": [], "entity_refs": ["工单"]},
++            "object": {"entity_refs": ["工单"]},
++            "action": {"canonical": "关闭", "raw": "关闭"},
++            "conditions": [],
++            "source_spans": [{"source_id": "rules", "locator": "line:1", "quote": "只有被分配的代理或主管可以关闭工单"}],
++        }
++    ]
++
++    normalized = normalize_explicit_business_fact_semantics(
++        {"roles": [], "business_objects": [{"name": "工单"}], "business_fact_ledger": {"items": facts}}
++    )
++    row = normalized["business_fact_ledger"]["items"][0]
++    assert row["subject"]["actor_refs"] == ["代理", "主管"]
++    assert "被分配" in row["conditions"]
++    assert row["condition_combinator"] == "SINGLE_CONDITION"
++
++
+ def test_comprehension_has_no_hardcoded_domain_rule_ids_or_exact_rule_sentences() -> None:
+     source = inspect.getsource(extractor)
+     forbidden = (
