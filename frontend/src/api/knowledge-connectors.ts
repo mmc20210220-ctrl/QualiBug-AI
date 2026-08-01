@@ -310,8 +310,25 @@ function toUnsupportedResource(value: unknown): KnowledgeConnectorUnsupportedRes
   };
 }
 
+function assertRemoteLifecycleSafety(row: JsonRecord): void {
+  const requiredFalse = [
+    'remote_deletion_inferred',
+    'permission_loss_inferred',
+    'customer_material_mutation_executed',
+    'remote_resource_identities_returned',
+    'source_refs_returned',
+  ];
+  if (requiredFalse.some((field) => row[field] !== false)) {
+    throw new Error('远端资料状态缺少完整的只读安全证明，已拒绝在页面展示。');
+  }
+  if (row.historical_source_bytes_retained !== true) {
+    throw new Error('远端资料状态未证明历史内容仍被保留，已拒绝在页面展示。');
+  }
+}
+
 function toRemoteLifecycle(value: unknown): KnowledgeConnectorRemoteLifecycle {
   const row = asRecord(value);
+  assertRemoteLifecycleSafety(row);
   const receipt = row.sync_receipt_persisted;
   return {
     status: asString(row.status) || 'NOT_AVAILABLE',
