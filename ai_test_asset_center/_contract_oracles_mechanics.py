@@ -498,7 +498,8 @@ def build_contract_oracle_activation_receipt(
             verified[kind].append(_text(receipt.get("receipt_id")))
 
     raw_observers = ev.get("observer_receipts", [])
-    observer_by_id: dict[str, dict[str, Any]] = {}
+    observer_by_id: dict[str, list[dict[str, Any]]] = {}
+    observer_scope_keys: set[tuple[str, str]] = set()
     if not isinstance(raw_observers, list):
         harness_failures.append("OBSERVER_RECEIPTS_NOT_LIST")
         raw_observers = []
@@ -519,28 +520,49 @@ def build_contract_oracle_activation_receipt(
                 f"OBSERVER_RECEIPT_LINEAGE_MISMATCH:{observer_id or index}"
             )
             continue
-        if observer_id in observer_by_id:
+        # Exact process-step scoping emits one http_response receipt per plan
+        # step (control_1, treatment_1), each carrying evidence.step_id. Those
+        # are not duplicates: every receipt proves a different plan step's
+        # observation. Only the same observer_id with the same step scope is a
+        # true duplicate.
+        _obs_scope = _text(_dict(observer.get("evidence")).get("step_id"))
+        _obs_key = (observer_id, _obs_scope)
+        if _obs_key in observer_scope_keys:
             harness_failures.append(f"OBSERVER_RECEIPT_DUPLICATE:{observer_id}")
             continue
-        observer_by_id[observer_id] = observer
+        observer_scope_keys.add(_obs_key)
+        observer_by_id.setdefault(observer_id, []).append(observer)
         observer_status = _text(observer.get("status")).upper()
         if observer_status in {"FAILED", "UNSUPPORTED"}:
             harness_failures.append(
                 f"OBSERVER_RECEIPT_{observer_status}:{observer_id}"
             )
     for observer_id in required["observer"]:
-        observer = observer_by_id.get(observer_id)
-        if observer is None:
+        observer_rows = observer_by_id.get(observer_id) or []
+        if not observer_rows:
             blockers.append(f"MISSING_OBSERVER_RECEIPT:{observer_id}")
             continue
-        if _text(observer.get("status")).upper() != "OBSERVED":
-            if _text(observer.get("status")).upper() == "INDETERMINATE":
-                # V1.6.1: allow Field Oracle evaluation to emit an INDETERMINATE
-                # Trace rather than suppressing the oracle call entirely.
-                if not _experiment_has_field_oracle_assertions(exp):
-                    blockers.append(f"OBSERVER_RECEIPT_INDETERMINATE:{observer_id}")
+        observed_rows = [
+            row
+            for row in observer_rows
+            if _text(row.get("status")).upper() == "OBSERVED"
+        ]
+        if not observed_rows:
+            # V1.6.1: allow Field Oracle evaluation to emit an INDETERMINATE
+            # Trace rather than suppressing the oracle call entirely.
+            if (
+                any(
+                    _text(row.get("status")).upper() == "INDETERMINATE"
+                    for row in observer_rows
+                )
+                and not _experiment_has_field_oracle_assertions(exp)
+            ):
+                blockers.append(f"OBSERVER_RECEIPT_INDETERMINATE:{observer_id}")
             continue
-        verified["observer"].append(_text(observer.get("receipt_id")))
+        # Record one verified receipt per required observer; step-scoped
+        # siblings stay in the evidence for assertion evaluation while the
+        # verified index remains 1:1 with the required observer set.
+        verified["observer"].append(_text(observed_rows[0].get("receipt_id")))
 
     # V1.7: When authorization_comparison is OBSERVED with leak_detected=True,
     # the authorization violation is already proven by status/effect comparison.
@@ -548,7 +570,8 @@ def build_contract_oracle_activation_receipt(
     # INDETERMINATE due to missing readback endpoints are redundant evidence —
     # they cannot invalidate the proven leak. Remove their blockers and count
     # them as verified (redundant) so receipt semantics remain consistent.
-    _auth_comp = observer_by_id.get("authorization_comparison")
+    _auth_comp_rows = observer_by_id.get("authorization_comparison") or []
+    _auth_comp = _auth_comp_rows[0] if _auth_comp_rows else None
     if _auth_comp and _text(_auth_comp.get("status")).upper() == "OBSERVED":
         _auth_evidence = _auth_comp.get("evidence") or {}
         if isinstance(_auth_evidence, dict) and _auth_evidence.get("leak_detected") is True:
@@ -559,7 +582,8 @@ def build_contract_oracle_activation_receipt(
             blockers = [b for b in blockers if b not in _redundant_indeterminate]
             # Add redundant observers to verified so len(verified)==len(required)
             for _red_oid in ("business_effect", "entity_state"):
-                _red_obs = observer_by_id.get(_red_oid)
+                _red_rows = observer_by_id.get(_red_oid) or []
+                _red_obs = _red_rows[0] if _red_rows else None
                 if (
                     _red_obs
                     and _text(_red_obs.get("status")).upper() == "INDETERMINATE"
@@ -580,7 +604,8 @@ def build_contract_oracle_activation_receipt(
         }
         blockers = [b for b in blockers if b not in _response_only_indeterminate]
         for _red_oid in ("business_effect", "entity_state"):
-            _red_obs = observer_by_id.get(_red_oid)
+            _red_rows = observer_by_id.get(_red_oid) or []
+            _red_obs = _red_rows[0] if _red_rows else None
             if (
                 _red_obs
                 and _text(_red_obs.get("status")).upper() == "INDETERMINATE"
