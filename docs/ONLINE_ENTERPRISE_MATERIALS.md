@@ -193,6 +193,61 @@ Content-Type: application/json
 
 ```
 
+## Generic webhook and event synchronization (OL-018)
+
+Webhook delivery is an optional manifest capability. It is configured once on a connector
+instance and does not require a provider-specific event parser. The adapter declares
+`webhook_supported`; the instance stores an encrypted `webhook_secret` in the existing
+Connection Profile Store and stores only the validated, non-secret `webhook_policy` in the
+existing Connector Instance metadata.
+
+```json
+{
+  "connector_instance_id": "gitlab-main",
+  "connector_type": "gitlab",
+  "resource_scope": "{\"repository_url\":\"https://gitlab.com/acme/orders\",\"branch\":\"main\"}",
+  "connection_profile": {
+    "auth_mode": "personal_access_token",
+    "token": "submitted only to the encrypted profile authority",
+    "webhook_secret": "submitted only to the encrypted profile authority"
+  },
+  "webhook_policy": {
+    "enabled": true,
+    "signature_header": "X-Webhook-Signature",
+    "event_id_header": "X-Webhook-Event-Id",
+    "timestamp_header": "X-Webhook-Timestamp",
+    "sequence_header": "X-Webhook-Sequence",
+    "signed_payload": "timestamp.body",
+    "algorithm": "hmac-sha256",
+    "encoding": "hex"
+  }
+}
+```
+
+The callback routes are:
+
+```http
+POST /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/webhook
+GET  /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/webhook
+```
+
+The callback verifies the configured HMAC, timestamp window, event identity, and optional
+monotonic sequence before reserving the event in the bounded fingerprint-only ledger. A
+duplicate event is acknowledged without another sync; an older sequence is recorded as
+out-of-order without a sync; a sequence gap requests calibration. Calibration is cleared
+only after the existing managed sync authority returns a complete snapshot. The event
+boundary always invokes `run_managed_connector_sync` with `deletion_policy=RETAIN`; it never
+directly mutates source material, advances a cursor in the webhook layer, or infers remote
+deletion.
+
+Raw event bodies, signatures, plaintext event IDs, source content, credentials, and raw
+cursors are not persisted or returned. The ledger retains bounded event fingerprints,
+ordering status, sync status, calibration state, and redacted failure details so operators
+can distinguish a duplicate, an out-of-order delivery, a lost-event calibration, and a
+failed managed sync. A connector with no source-backed event contract remains
+`webhook_supported=false`; it must not claim webhook readiness merely because the generic
+HTTP route exists.
+
 ## Generic connector acceptance (OL-012)
 
 All registered connector types use the same acceptance contract and the same managed sync

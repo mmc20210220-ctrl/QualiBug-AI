@@ -284,6 +284,11 @@ def _masked_profile(record: dict[str, Any]) -> dict[str, Any]:
         field.name: bool(is_encrypted(str(values.get(field.name) or "")))
         for field in fields
     }
+    required_fields_configured = all(
+        configured[field.name]
+        for field in fields
+        if field.required
+    )
     return {
         "schema": CONNECTOR_PROFILE_SCHEMA,
         "connector_instance_id": _text(record.get("connector_instance_id"), 160),
@@ -291,7 +296,7 @@ def _masked_profile(record: dict[str, Any]) -> dict[str, Any]:
         "connector_type": _text(record.get("connector_type"), 160),
         "auth_mode": auth_mode,
         "configured_fields": configured,
-        "credentials_configured": all(configured.values()),
+        "credentials_configured": required_fields_configured,
         "checkpoint_configured": bool(
             is_encrypted(str(record.get("checkpoint_ciphertext") or ""))
         ),
@@ -495,6 +500,12 @@ def _configure_connector_profile(
     clean_actor = _require_manage_actor(actor)
     if not isinstance(profile, dict):
         raise ConnectorProfileError("connector_profile_must_be_object")
+    if (
+        isinstance(instance_metadata, Mapping)
+        and "webhook_policy_json" in instance_metadata
+        and manifest.webhook_supported is not True
+    ):
+        raise ConnectorProfileError("webhook_not_supported_by_connector")
     auth_mode = _normalized_auth_mode(profile.get("auth_mode"), manifest)
     normalized_expiry = _normalized_expiry(credential_expires_at_utc)
     profile_ref = connector_profile_ref(connector)

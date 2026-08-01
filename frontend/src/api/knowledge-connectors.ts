@@ -42,6 +42,7 @@ export type ConnectorManifest = {
   read_only: boolean;
   credential_fields: ConnectorCredentialField[];
   capability_contract_version: string;
+  webhook_policy_schema?: Record<string, unknown>;
 };
 
 export type ConnectorTypeCatalog = {
@@ -81,6 +82,7 @@ export type KnowledgeConnectorHealth = {
     refresh_interval_seconds?: number;
     stale_after_seconds?: number;
   };
+  webhook?: KnowledgeConnectorWebhook;
   metrics: {
     last_attempt_at_utc?: string;
     discovered_resource_count: number;
@@ -108,6 +110,28 @@ export type KnowledgeConnectorHealth = {
   credentials_returned: false;
   raw_cursor_returned: false;
   customer_material_mutation_executed: false;
+};
+
+export type KnowledgeConnectorWebhook = {
+  schema?: string;
+  connector_instance_id?: string;
+  connector_type?: string;
+  connector_status?: string;
+  supported: boolean;
+  enabled: boolean;
+  status: string;
+  calibration_required?: boolean;
+  policy?: Record<string, unknown>;
+  state?: {
+    last_sequence?: number;
+    last_event_timestamp_utc?: string;
+    calibration_required?: boolean;
+    last_success_event?: Record<string, unknown> | null;
+    last_failure_event?: Record<string, unknown> | null;
+  };
+  events?: Array<Record<string, unknown>>;
+  governance?: Record<string, unknown>;
+  error_code?: string;
 };
 
 export type KnowledgeConnectorUnsupportedResource = {
@@ -224,6 +248,7 @@ export type KnowledgeConnectorRecord = {
   auto_sync?: KnowledgeConnectorAutoSync;
   coverage?: KnowledgeConnectorCoverage;
   health?: KnowledgeConnectorHealth;
+  webhook?: KnowledgeConnectorWebhook;
   acceptance?: KnowledgeConnectorAcceptance;
 };
 
@@ -270,6 +295,7 @@ export type ConfigureConnectorInput = {
   connection_profile: Record<string, string | undefined>;
   credential_expires_at_utc?: string;
   sync_policy?: Record<string, unknown>;
+  webhook_policy?: Record<string, unknown>;
 };
 
 export type ConnectorResource = {
@@ -632,6 +658,7 @@ function toConnectorHealth(value: unknown): KnowledgeConnectorHealth {
       refresh_interval_seconds: asNumber(freshness.refresh_interval_seconds),
       stale_after_seconds: asNumber(freshness.stale_after_seconds),
     },
+    webhook: row.webhook ? toWebhook(row.webhook) : undefined,
     metrics: {
       last_attempt_at_utc: asString(metrics.last_attempt_at_utc) || undefined,
       discovered_resource_count: asNumber(metrics.discovered_resource_count) || 0,
@@ -659,6 +686,35 @@ function toConnectorHealth(value: unknown): KnowledgeConnectorHealth {
     credentials_returned: false,
     raw_cursor_returned: false,
     customer_material_mutation_executed: false,
+  };
+}
+
+function toWebhook(value: unknown): KnowledgeConnectorWebhook {
+  const row = asRecord(value);
+  const state = row.state ? asRecord(row.state) : undefined;
+  return {
+    schema: asString(row.schema) || undefined,
+    connector_instance_id: asString(row.connector_instance_id) || undefined,
+    connector_type: asString(row.connector_type) || undefined,
+    connector_status: asString(row.connector_status) || undefined,
+    supported: asBoolean(row.supported),
+    enabled: asBoolean(row.enabled),
+    status: asString(row.status) || 'NOT_AVAILABLE',
+    calibration_required: asBoolean(row.calibration_required)
+      || asBoolean(state?.calibration_required),
+    policy: row.policy ? asRecord(row.policy) : undefined,
+    state: state
+      ? {
+        last_sequence: asNumber(state.last_sequence),
+        last_event_timestamp_utc: asString(state.last_event_timestamp_utc) || undefined,
+        calibration_required: asBoolean(state.calibration_required),
+        last_success_event: state.last_success_event ? asRecord(state.last_success_event) : null,
+        last_failure_event: state.last_failure_event ? asRecord(state.last_failure_event) : null,
+      }
+      : undefined,
+    events: asArray(row.events).map(asRecord),
+    governance: row.governance ? asRecord(row.governance) : undefined,
+    error_code: asString(row.error_code) || undefined,
   };
 }
 
@@ -738,6 +794,7 @@ function toConnector(value: unknown): KnowledgeConnectorRecord {
     auto_sync: row.auto_sync ? toAutoSync(row.auto_sync) : undefined,
     coverage: row.coverage ? toCoverage(row.coverage) : undefined,
     health: row.health ? toConnectorHealth(row.health) : undefined,
+    webhook: row.webhook ? toWebhook(row.webhook) : undefined,
     acceptance: row.acceptance ? toAcceptance(row.acceptance) : undefined,
   };
 }
@@ -824,6 +881,9 @@ function toManifest(value: unknown): ConnectorManifest {
       };
     }).filter((field) => Boolean(field.name)),
     capability_contract_version: asString(row.capability_contract_version),
+    webhook_policy_schema: row.webhook_policy_schema
+      ? asRecord(row.webhook_policy_schema)
+      : undefined,
   };
 }
 

@@ -20,6 +20,11 @@ from .connector_sync_authority import (
     register_connector_instance,
 )
 from .connector_sync_fencing import managed_connector_sync_fence
+from .connector_webhook_events import (
+    ConnectorWebhookError,
+    normalize_webhook_policy,
+    serialize_webhook_policy,
+)
 from .enterprise_knowledge_center._common import ROOT
 from .real_project_onboarding import _safe_project_id
 
@@ -48,6 +53,18 @@ def _sync_policy_metadata(value: Mapping[str, Any] | None) -> dict[str, Any] | N
     if unknown:
         raise ValueError(f"connector_sync_policy_field_not_supported:{unknown[0]}")
     return {str(key): item for key, item in value.items()}
+
+
+def _webhook_policy_metadata(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        normalized = normalize_webhook_policy(value)
+    except ConnectorWebhookError as exc:
+        raise ValueError(str(exc)) from exc
+    return {"webhook_policy_json": serialize_webhook_policy(normalized)}
 
 
 def _existing_connector(
@@ -85,12 +102,23 @@ def _configure_managed_connector(
     status: str = "ACTIVE",
     credential_expires_at_utc: Any = "",
     sync_policy: Mapping[str, Any] | None = None,
+    webhook_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create normally or replace an existing configuration under a newer fence."""
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
     existing = _existing_connector(project, connector, resolved_root)
+    instance_metadata: dict[str, Any] | None = None
+    sync_metadata = _sync_policy_metadata(sync_policy)
+    if sync_metadata is not None:
+        instance_metadata = dict(sync_metadata)
+    webhook_metadata = _webhook_policy_metadata(webhook_policy)
+    if webhook_metadata is not None:
+        instance_metadata = {
+            **dict(instance_metadata or {}),
+            **webhook_metadata,
+        }
     kwargs = {
         "connector_instance_id": connector,
         "resource_scope": resource_scope,
@@ -100,7 +128,7 @@ def _configure_managed_connector(
         "display_name": display_name,
         "status": status,
         "credential_expires_at_utc": credential_expires_at_utc,
-        "instance_metadata": _sync_policy_metadata(sync_policy),
+        "instance_metadata": instance_metadata,
     }
     if connector_type is not None:
         kwargs["connector_type"] = connector_type
@@ -153,6 +181,7 @@ def configure_managed_connector(
     status: str = "ACTIVE",
     credential_expires_at_utc: Any = "",
     sync_policy: Mapping[str, Any] | None = None,
+    webhook_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _configure_managed_connector(
         project_id,
@@ -167,6 +196,7 @@ def configure_managed_connector(
         status=status,
         credential_expires_at_utc=credential_expires_at_utc,
         sync_policy=sync_policy,
+        webhook_policy=webhook_policy,
     )
 
 
@@ -182,6 +212,7 @@ def configure_managed_feishu_connector(
     status: str = "ACTIVE",
     credential_expires_at_utc: Any = "",
     sync_policy: Mapping[str, Any] | None = None,
+    webhook_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the generic managed configuration service."""
     return _configure_managed_connector(
@@ -197,6 +228,7 @@ def configure_managed_feishu_connector(
         status=status,
         credential_expires_at_utc=credential_expires_at_utc,
         sync_policy=sync_policy,
+        webhook_policy=webhook_policy,
     )
 
 

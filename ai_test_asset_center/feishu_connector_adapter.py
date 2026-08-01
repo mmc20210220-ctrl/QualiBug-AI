@@ -1008,7 +1008,7 @@ def feishu_connector_manifest() -> ConnectorManifest:
         },
         supported_resource_types=tuple(sorted({*_EXPORT_FORMATS, *_DIRECT_FILE_TYPES})),
         sync_modes=("FULL", "INCREMENTAL"),
-        webhook_supported=False,
+        webhook_supported=True,
         local_runner_supported=False,
         local_runner_required=False,
         read_only=True,

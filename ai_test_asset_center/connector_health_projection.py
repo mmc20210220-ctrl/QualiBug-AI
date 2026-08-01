@@ -136,6 +136,7 @@ def project_connector_health(
     auto_sync: Mapping[str, Any] | None = None,
     coverage: Mapping[str, Any] | None = None,
     latest_sync: Mapping[str, Any] | None = None,
+    webhook: Mapping[str, Any] | None = None,
     now_utc: Any = None,
 ) -> dict[str, Any]:
     """Project bounded health state from already persisted connector evidence."""
@@ -144,6 +145,12 @@ def project_connector_health(
     auto = _mapping(auto_sync)
     coverage_row = _mapping(coverage)
     sync = _mapping(latest_sync)
+    webhook_row = _mapping(webhook)
+    webhook_state = _mapping(webhook_row.get("state"))
+    webhook_calibration_required = (
+        webhook_row.get("status") == "CALIBRATION_REQUIRED"
+        or webhook_state.get("calibration_required") is True
+    )
     checked_at = _utc(now_utc, "connector_health_check_time") if now_utc else datetime.now(timezone.utc)
 
     credential_status = _text(profile.get("credential_status"), 64).upper() or "UNKNOWN"
@@ -198,6 +205,8 @@ def project_connector_health(
         attention.append("DOWNSTREAM_REFRESH_INCOMPLETE")
     if _text(coverage_row.get("status"), 60) in {"UNKNOWN", "NOT_AVAILABLE"}:
         attention.append("COVERAGE_NOT_MEASURED")
+    if webhook_calibration_required:
+        attention.append("WEBHOOK_CALIBRATION_REQUIRED")
 
     if attention and attention[0] == "AUTHORIZATION_EXPIRED":
         status = "REAUTHORIZATION_REQUIRED"
@@ -217,6 +226,9 @@ def project_connector_health(
     elif instance.get("active_sync_epoch_id") or auto_state == "running":
         status = "SYNCING"
         recommended_action = "WAIT_FOR_SYNC"
+    elif webhook_calibration_required:
+        status = "CALIBRATION_REQUIRED"
+        recommended_action = "RUN_SYNC"
     elif freshness["status"] == "STALE":
         status = "STALE"
         recommended_action = "RUN_SYNC"
@@ -253,6 +265,24 @@ def project_connector_health(
         "reauthorization_required": reauthorization_required,
         "reauthorization_reason": _text(profile.get("reauthorization_reason"), 300),
         "freshness": freshness,
+        "webhook": {
+            "supported": webhook_row.get("supported") is True,
+            "enabled": webhook_row.get("enabled") is True,
+            "status": _text(webhook_row.get("status"), 60) or "NOT_AVAILABLE",
+            "calibration_required": webhook_calibration_required,
+            "last_success_completed_at_utc": _text(
+                _mapping(webhook_state.get("last_success_event")).get(
+                    "completed_at_utc"
+                ),
+                80,
+            ),
+            "last_failure_completed_at_utc": _text(
+                _mapping(webhook_state.get("last_failure_event")).get(
+                    "completed_at_utc"
+                ),
+                80,
+            ),
+        },
         "metrics": {
             "last_attempt_at_utc": _text(auto.get("last_attempt_at_utc"), 80),
             "discovered_resource_count": discovered,

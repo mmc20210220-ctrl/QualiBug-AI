@@ -68,6 +68,11 @@ from .connector_acl_authority import (
 )
 from .connector_semantic_refresh import project_connector_semantic_refresh_receipt
 from .connector_health_projection import project_connector_health
+from .connector_webhook_events import (
+    ConnectorWebhookError,
+    project_connector_webhook,
+    receive_connector_webhook,
+)
 from .local_runner_connector import (
     LocalRunnerError,
     accept_local_runner_result,
@@ -75,6 +80,7 @@ from .local_runner_connector import (
     list_local_runner_registrations,
     register_local_runner,
 )
+from .private_pilot_request_limits import MAX_REQUEST_BODY_BYTES, content_length
 from .real_project_onboarding import _safe_project_id
 
 _ROUTE_MARKER = "knowledge-connectors"
@@ -553,12 +559,33 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             raw,
             root,
         )
+        try:
+            row["webhook"] = project_connector_webhook(
+                project,
+                connector,
+                root=root,
+            )
+        except ConnectorWebhookError as exc:
+            row["webhook"] = {
+                "schema": "qualibug.connector-webhook-projection.v1",
+                "connector_instance_id": connector,
+                "status": "NOT_AVAILABLE",
+                "error_code": str(exc).split(":", 1)[0],
+                "governance": {
+                    "raw_event_body_persisted": False,
+                    "signature_persisted": False,
+                    "event_id_plaintext_persisted": False,
+                    "event_only_triggers_managed_sync": True,
+                    "source_content_mutated_by_webhook": False,
+                },
+            }
         row["health"] = project_connector_health(
             connector_instance=raw,
             connection_profile=row["connection_profile"],
             auto_sync=row["auto_sync"],
             coverage=row["coverage"],
             latest_sync=row["coverage"].get("latest_sync"),
+            webhook=row["webhook"],
         )
         acceptance_summary = (
             latest_connector_tenant_acceptance_summary(
@@ -910,6 +937,20 @@ def _sanitize_sync_response(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _error_status(exc: Exception) -> int:
     message = str(exc or "")
+    if isinstance(exc, ConnectorWebhookError):
+        if any(
+            token in message
+            for token in (
+                "signature",
+                "secret",
+                "replay",
+                "timestamp",
+            )
+        ):
+            return 401
+        if "transaction_busy" in message:
+            return 409
+        return 400
     if any(
         token in message
         for token in (
@@ -970,6 +1011,8 @@ class KnowledgeConnectorHandlersMixin:
             if isinstance(exc, FeishuTenantAcceptanceReportError)
             else "LOCAL_RUNNER_ERROR"
             if isinstance(exc, LocalRunnerError)
+            else "KNOWLEDGE_CONNECTOR_WEBHOOK_ERROR"
+            if isinstance(exc, ConnectorWebhookError)
             else "KNOWLEDGE_CONNECTOR_ERROR"
         )
         return self._json(
@@ -992,6 +1035,43 @@ class KnowledgeConnectorHandlersMixin:
                 _service().KNOWLEDGE_MANAGER_ROLES,
                 action,
             )
+        )
+
+    def _webhook_raw_body(self) -> bytes:
+        size = content_length(self.headers)
+        if size > MAX_REQUEST_BODY_BYTES:
+            raise ValueError(
+                f"webhook request body exceeds {MAX_REQUEST_BODY_BYTES} byte limit"
+            )
+        raw = self.rfile.read(size) if size else b""
+        if len(raw) != size:
+            raise ValueError("webhook request body ended before Content-Length bytes were read")
+        return raw
+
+    def _handle_connector_webhook(
+        self,
+        project: str,
+        connector: str,
+        root: Path,
+        body: bytes,
+    ) -> Any:
+        result = receive_connector_webhook(
+            project,
+            connector,
+            headers=self.headers,
+            body=body,
+            root=root,
+        )
+        sync_failed = result.get("status") == "SYNC_FAILED"
+        return self._json(
+            {
+                "ok": not sync_failed,
+                "data": result,
+                "source_content_returned": False,
+                "raw_cursor_returned": False,
+                "credential_values_returned": False,
+            },
+            202 if result.get("accepted") is True else 200,
         )
 
     def _handle_connector_type_get(self, tail: list[str]) -> Any:
@@ -1091,6 +1171,17 @@ class KnowledgeConnectorHandlersMixin:
                             connector_instance_id=connector,
                             root=root,
                             limit=20,
+                        ),
+                    }
+                )
+            if len(tail) == 2 and tail[1] == "webhook":
+                return self._json(
+                    {
+                        "ok": True,
+                        "data": project_connector_webhook(
+                            project,
+                            connector,
+                            root=root,
                         ),
                     }
                 )
@@ -1194,6 +1285,7 @@ class KnowledgeConnectorHandlersMixin:
             LocalRunnerError,
             FeishuTenantAcceptanceJobError,
             FeishuTenantAcceptanceReportError,
+            ConnectorWebhookError,
             KeyError,
         ) as exc:
             return self._knowledge_connector_error(exc)
@@ -1230,6 +1322,7 @@ class KnowledgeConnectorHandlersMixin:
                 "credential_expires_at_utc"
             ),
             "sync_policy": body.get("sync_policy"),
+            "webhook_policy": body.get("webhook_policy"),
         }
         if _text(body.get("connector_type"), 160):
             result = configure_managed_connector(
@@ -1317,6 +1410,7 @@ class KnowledgeConnectorHandlersMixin:
                 current_profile.get("credential_expires_at_utc", ""),
             ),
             "sync_policy": body.get("sync_policy"),
+            "webhook_policy": body.get("webhook_policy"),
         }
 
     def _handle_knowledge_connector_patch(
@@ -1335,6 +1429,7 @@ class KnowledgeConnectorHandlersMixin:
             "connection_profile",
             "credential_expires_at_utc",
             "sync_policy",
+            "webhook_policy",
         }
         unknown = sorted(set(body) - allowed)
         if unknown:
@@ -1784,6 +1879,20 @@ class KnowledgeConnectorHandlersMixin:
         route = _connector_route(parsed.path)
         if route is None:
             return super().do_POST()
+        if len(route[1]) == 2 and route[1][1] == "webhook":
+            self._init_request_context()
+            root = self._root()
+            try:
+                project = _safe_project_id(route[0])
+                body = self._webhook_raw_body()
+                return self._handle_connector_webhook(
+                    project,
+                    _text(route[1][0], 160),
+                    root,
+                    body,
+                )
+            except (ConnectorWebhookError, ValueError, TypeError) as exc:
+                return self._knowledge_connector_error(exc)
         self._init_request_context()
         root = self._root()
         actor = self._require_actor()

@@ -1930,7 +1930,7 @@ def git_connector_manifest(connector_type: str = "git") -> ConnectorManifest:
         },
         supported_resource_types=tuple(sorted({"file", "submodule", "lfs_pointer", "issue", "wiki_page", "release", "commit"})),
         sync_modes=("FULL", "INCREMENTAL"),
-        webhook_supported=False,
+        webhook_supported=True,
         local_runner_supported=True,
         local_runner_required=False,
         read_only=True,
