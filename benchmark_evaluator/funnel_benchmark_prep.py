@@ -1,8 +1,9 @@
-"""Funnel-benchmark preflight: reset target DB + refresh auth tokens.
+"""Funnel-benchmark preflight: assess cleanup, reset target DB, refresh tokens.
 
 All modes (baseline/optimized/llm/...) exercise governed write probes against
-the non-production benchmark target. Without a fresh DB and live tokens,
-permission/isolation probes degrade and cross-run state pollutes recall.
+the non-production benchmark target. Before any reset, the previous product run
+is assessed from formal runtime receipts so a database reset can never be
+misreported as proof that QualiBug's own cleanup executed.
 """
 from __future__ import annotations
 
@@ -246,6 +247,40 @@ def refresh_test_account_tokens(
     )
 
 
+def _persist_pre_reset_cleanup_assessment(
+    *,
+    root: Path,
+    project: str,
+) -> tuple[dict, str]:
+    """Seal the latest product cleanup facts before a reset can erase residue."""
+    import json
+
+    from ai_test_asset_center.benchmark_runtime_cleanup_assessment import (
+        assess_benchmark_runtime_cleanup,
+    )
+
+    assessment = assess_benchmark_runtime_cleanup(root=root, project=project)
+    receipt_id = str(assessment.get("receipt_id") or "runtime_cleanup_unsealed").strip()
+    receipt_dir = Path(root) / "_funnel_runs" / "runtime_cleanup_assessments"
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    receipt_path = receipt_dir / f"{project}_{receipt_id}.json"
+    encoded = json.dumps(
+        assessment,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    if receipt_path.exists():
+        existing = receipt_path.read_text(encoding="utf-8")
+        if existing != encoded:
+            raise RuntimeError(
+                f"runtime_cleanup_assessment_receipt_collision:{receipt_path}"
+            )
+    else:
+        receipt_path.write_text(encoded, encoding="utf-8")
+    return assessment, str(receipt_path)
+
+
 def prepare_funnel_benchmark_target(
     *,
     root: Path,
@@ -254,20 +289,28 @@ def prepare_funnel_benchmark_target(
     project: str = "benchmark_mall",
     target_base_url: str = "http://localhost:8080",
 ) -> dict:
-    """Reset DB first (seed accounts), then refresh tokens against the live API.
+    """Assess runtime cleanup, reset DB, then refresh tokens.
 
-    A skipped reset remains a loud operator override but can never produce a
-    ``completed`` cleanliness receipt. Only an observed successful DB reset may
-    certify that incomplete prior writes were superseded.
+    The pre-reset assessment is persisted before target state changes. A skipped
+    reset remains a loud operator override but can never produce a ``completed``
+    cleanliness receipt. Only an observed successful DB reset may certify that
+    incomplete prior writes were superseded.
     """
     import json
     import uuid
     from datetime import datetime, timezone
 
+    root = Path(root)
+    pre_reset_assessment, pre_reset_assessment_path = (
+        _persist_pre_reset_cleanup_assessment(
+            root=root,
+            project=project,
+        )
+    )
     db = reset_benchmark_target_db(env=env, runner=runner)
     tokens = refresh_test_account_tokens(env=env, runner=runner)
     reset_completed = str(db.get("status") or "").strip().lower() == "ok"
-    receipt_dir = Path(root) / "_funnel_runs"
+    receipt_dir = root / "_funnel_runs"
     receipt_dir.mkdir(parents=True, exist_ok=True)
     receipt_path = receipt_dir / f"{project}_target_reset_receipt.json"
     reset_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -280,9 +323,15 @@ def prepare_funnel_benchmark_target(
         "reset_at_utc": reset_at,
         "target_db_reset": db,
         "cleanliness_proof_eligible": reset_completed,
+        "pre_reset_runtime_cleanup_assessment_receipt_id": str(
+            pre_reset_assessment.get("receipt_id") or ""
+        ),
+        "pre_reset_runtime_cleanup_assessment_excluded_from_reset_proof": True,
     }
     receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
+        "pre_reset_runtime_cleanup_assessment": pre_reset_assessment,
+        "pre_reset_runtime_cleanup_assessment_path": pre_reset_assessment_path,
         "target_db_reset": db,
         "token_refresh": tokens,
         "reset_receipt_path": str(receipt_path),
