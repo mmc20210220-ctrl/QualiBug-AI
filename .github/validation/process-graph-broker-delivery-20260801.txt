@@ -1,2 +1,2 @@
 validation-only: process graph broker delivery semantics
-retry: validated current backend test inventory
+retry: graph node identity normalized before wait dispatch
