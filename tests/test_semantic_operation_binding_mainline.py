@@ -85,7 +85,14 @@ def _asset(interface_ref: str, *, status: str = "accepted") -> dict:
             "status": status,
             "confidence": 0.92,
             "derivation": "agent_semantic_mapping",
+            "evidence_gate": "behavior_ir_ids_and_runtime_oracle_required",
             "source_id": "agent_semantic_linker",
+            "evidence": {
+                "rule_source_id": "prd",
+                "interface_source_id": "api_spec",
+                "supporting_fact_refs": ["fact:order-submit"],
+                "runtime_verification_required": True,
+            },
         }],
     }
 
