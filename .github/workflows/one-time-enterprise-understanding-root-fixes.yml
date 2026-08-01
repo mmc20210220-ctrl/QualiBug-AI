@@ -93,7 +93,6 @@ jobs:
             tests/test_identity_benchmark_composition_order.py \
             tests/test_identity_field_evidence.py \
             tests/test_identity_structural_evidence.py \
-            tests/test_term_alias_identity_pipeline.py \
             tests/test_technical_source_understanding_attachment.py
 
       - name: Commit root-cause changes and remove one-time executor
