@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: one-time-chinese-explicit-fact-generalization
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   apply-test-and-push:
