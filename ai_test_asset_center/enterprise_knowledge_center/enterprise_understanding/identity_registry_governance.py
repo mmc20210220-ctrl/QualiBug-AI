@@ -38,6 +38,24 @@ def _reindex(result: dict[str, Any]) -> None:
     result["canonical_label_by_entity"] = canonical
 
 
+def _remove_dangling_cluster_edge_refs(result: dict[str, Any]) -> int:
+    """Keep cluster lineage aligned after governed mention/edge projections."""
+    valid_edge_ids = {
+        text(row.get("edge_id"))
+        for row in as_list(result.get("edges"))
+        if isinstance(row, dict) and text(row.get("edge_id"))
+    }
+    removed = 0
+    for cluster in as_list(result.get("clusters")):
+        if not isinstance(cluster, dict):
+            continue
+        original = unique_text(as_list(cluster.get("accepted_identity_edge_ids")))
+        retained = [edge_id for edge_id in original if edge_id in valid_edge_ids]
+        removed += len(original) - len(retained)
+        cluster["accepted_identity_edge_ids"] = retained
+    return removed
+
+
 def govern_identity_registry(
     prior_registry: dict[str, Any],
     result: dict[str, Any],
@@ -52,6 +70,7 @@ def govern_identity_registry(
     clusters = [
         row for row in as_list(result.get("clusters")) if isinstance(row, dict)
     ]
+    removed_dangling_edge_refs = _remove_dangling_cluster_edge_refs(result)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for cluster in clusters:
         grouped[text(cluster.get("entity_id"))].append(cluster)
@@ -146,6 +165,10 @@ def govern_identity_registry(
         text(row.get("entity_id")) for row in clusters if text(row.get("entity_id"))
     }
     prior_ids = set(prior)
+    operator_merge = dict(as_dict(as_dict(prior_registry).get("operator_authorized_merge")))
+    operator_retired_ids = unique_text(
+        as_list(operator_merge.get("retired_entity_ids"))
+    )
     registry = {
         "schema": IDENTITY_REGISTRY_SCHEMA,
         "entities": [
@@ -164,16 +187,22 @@ def govern_identity_registry(
         "identity_is_name_independent": True,
         "automatic_similarity_merge_allowed": False,
     }
+    if operator_merge:
+        registry["operator_authorized_merge"] = operator_merge
     receipt = {
         "schema": "qualibug.enterprise-identity-registry-recompute-receipt.v1",
         "prior_entity_count": len(prior_ids),
         "current_entity_count": len(current_ids),
         "reused_entity_ids": sorted(current_ids & prior_ids),
         "created_entity_ids": sorted(current_ids - prior_ids),
-        "retired_entity_ids": sorted(prior_ids - current_ids),
+        "retired_entity_ids": sorted((prior_ids - current_ids) | set(operator_retired_ids)),
         "split_conflict_prior_entity_ids": sorted(split_ids),
         "split_conflict_count": len(split_ids),
         "silent_split_identity_reuse_allowed": False,
+        "dangling_cluster_edge_ref_removed_count": removed_dangling_edge_refs,
+        "operator_authorized_merge": operator_merge,
+        "operator_authorized_retired_entity_ids": operator_retired_ids,
+        "automatic_entity_merge_used": False,
     }
     result["registry"] = registry
     result["registry_recompute_receipt"] = receipt
@@ -190,6 +219,8 @@ def govern_identity_registry(
     gate["metrics"] = {
         **as_dict(gate.get("metrics")),
         "registry_split_conflict_count": len(split_ids),
+        "registry_dangling_edge_ref_removed_count": removed_dangling_edge_refs,
+        "registry_operator_authorized_retired_entity_count": len(operator_retired_ids),
     }
     result["gate"] = gate
     if asset is not None:
