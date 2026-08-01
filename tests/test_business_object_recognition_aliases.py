@@ -94,7 +94,8 @@ def test_definition_expression_cannot_seed_object_type() -> None:
     recognition = recognize_business_objects(asset)
 
     assert recognition["accepted_labels"] == []
-    assert {row["status"] for row in recognition["candidates"]} == {"PENDING_ALIAS_ONLY"}
+    assert recognition["candidates"] == []
+    assert recognition["accepted_alias_edges"] == []
     model = build_enterprise_understanding_model(asset)
     assert model["business_objects"] == []
     assert model["identity_clusters"] == []

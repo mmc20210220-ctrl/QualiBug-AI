@@ -71,6 +71,10 @@ def _semantic_roles(row: dict[str, Any], expected_object: bool) -> set[str]:
     return roles
 
 
+def _ordered_roles(roles: set[str]) -> list[str]:
+    return ([OBJECT_TYPE] if OBJECT_TYPE in roles else []) + sorted(roles - {OBJECT_TYPE})
+
+
 def validate_business_object_ground_truth(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise BusinessObjectGroundTruthValidationError(
@@ -173,7 +177,7 @@ def validate_business_object_ground_truth(document: dict[str, Any]) -> dict[str,
         normalized = dict(row)
         normalized["annotation_status"] = "CONFIRMED"
         normalized["expected_business_object"] = expected_object
-        normalized["semantic_roles"] = sorted(roles)
+        normalized["semantic_roles"] = _ordered_roles(roles)
         normalized_rows.append(normalized)
 
     object_count = sum(1 for value in decisions.values() if value)

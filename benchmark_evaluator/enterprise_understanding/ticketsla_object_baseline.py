@@ -21,10 +21,11 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from .business_object_types import load_business_object_ground_truth
+from .business_object_types import (
+    evaluate_business_object_types,
+    load_business_object_ground_truth,
+)
 from .capture_product_asset import capture_finalized_product_asset
-from .ground_truth import load_ground_truth
-from .runner import run_benchmark
 
 PROJECT_ID = "ticketsla_d"
 BASELINE_SCHEMA = "qualibug.ticketsla-business-object-baseline.v1"
@@ -170,7 +171,6 @@ def run_ticketsla_object_baseline(
     ingestor: Callable[..., dict[str, Any]] | None = None,
     builder: Callable[[str, Path, dict[str, Any]], dict[str, Any]] | None = None,
     capturer: Callable[..., dict[str, Any]] | None = None,
-    ground_truth_loader: Callable[[str | Path], dict[str, Any]] | None = None,
     business_object_ground_truth_loader: Callable[[str | Path], dict[str, Any]] | None = None,
     evaluator: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -191,21 +191,18 @@ def run_ticketsla_object_baseline(
         ).resolve()
     )
     snapshot_path = baseline_dir / "final_asset.json"
-    evaluator_dir = baseline_dir / "understanding"
     summary_path = baseline_dir / "baseline_summary.json"
     fixture_dir = Path(__file__).resolve().parent / "fixtures" / PROJECT_ID
-    ground_truth_path = fixture_dir / "ground_truth.json"
     object_ground_truth_path = fixture_dir / "business_object_ground_truth.json"
 
     source_paths, source_type_hints = _source_files(resolved_root)
     ingest = ingestor or _default_ingestor
     build = builder or _default_builder
     capture = capturer or capture_finalized_product_asset
-    load_main_truth = ground_truth_loader or load_ground_truth
     load_object_truth = (
         business_object_ground_truth_loader or load_business_object_ground_truth
     )
-    score = evaluator or run_benchmark
+    score = evaluator or evaluate_business_object_types
 
     # Product phase. No Ground Truth has been loaded at this point.
     ingestion_receipt = ingest(
@@ -252,7 +249,6 @@ def run_ticketsla_object_baseline(
         )
 
     # Evaluator phase. Ground Truth is loaded only after product persistence and capture.
-    main_truth = load_main_truth(ground_truth_path)
     object_truth = load_object_truth(object_ground_truth_path)
     snapshot_verification = verify_frozen_source_snapshot(resolved_root, object_truth)
     snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
@@ -274,17 +270,11 @@ def run_ticketsla_object_baseline(
         _write_summary(summary_path, summary)
         return summary
 
-    benchmark = score(
-        main_truth,
-        snapshot,
-        business_object_ground_truth=object_truth,
-        output_dir=str(evaluator_dir),
-    )
-    measurement = (
-        benchmark.get("business_object_type_measurement")
-        if isinstance(benchmark.get("business_object_type_measurement"), dict)
-        else {}
-    )
+    measurement = score(object_truth, snapshot)
+    if not isinstance(measurement, dict):
+        raise TicketSLAObjectBaselineError(
+            "ticketsla_business_object_evaluator_returned_invalid_result"
+        )
     measurement_status = str(measurement.get("status") or "NOT_MEASURED")
     status = "PASS" if measurement_status == "MEASURED" else "BLOCKED"
     reason_code = str(measurement.get("reason_code") or "")
@@ -293,7 +283,6 @@ def run_ticketsla_object_baseline(
         "project_id": PROJECT_ID,
         "status": status,
         "reason_code": reason_code,
-        "benchmark_status": benchmark.get("status"),
         "business_object_measurement_status": measurement_status,
         "business_object_metrics": _json_clone(measurement.get("metrics") or {}),
         "false_positive_objects": _json_clone(
@@ -302,10 +291,6 @@ def run_ticketsla_object_baseline(
         "false_negative_objects": _json_clone(
             measurement.get("false_negative_objects") or []
         ),
-        "next_business_object_repair_target": benchmark.get(
-            "next_business_object_repair_target"
-        ),
-        "next_repair_target": benchmark.get("next_repair_target"),
         "source_snapshot_verification": snapshot_verification,
         "ingestion_receipt": _json_clone(ingestion_receipt),
         "capture_receipt": _json_clone(capture_receipt),
@@ -314,7 +299,6 @@ def run_ticketsla_object_baseline(
             "model_id"
         ),
         "product_asset_snapshot": str(snapshot_path),
-        "evaluator_output_dir": str(evaluator_dir),
         "ground_truth_loaded_after_product_capture": True,
         "ground_truth_entered_product_runtime": False,
         "ground_truth_passed_to_ingestion": False,

@@ -4,9 +4,161 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from ._object_role_evidence import comparison_key
-from .identity_types import fact_mentions
-from .schema import as_dict, as_list, stable_id, text, unique_text
+from ._object_role_evidence import comparison_key, object_slot_mentions
+from .schema import (
+    as_dict,
+    as_list,
+    dedupe_evidence,
+    stable_id,
+    text,
+    unique_text,
+)
+
+
+def _materialize_recognized_business_objects(
+    asset: dict[str, Any], recognition: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Project accepted type decisions into the existing identity input shape.
+
+    Recognition owns the type decision.  Identity resolution already consumes
+    ``business_objects`` plus declared aliases, so this adapter only materializes
+    that accepted decision; it does not infer another object or another alias.
+    """
+
+    accepted = set(as_list(recognition.get("accepted_comparison_keys")))
+    identity_eligible = set(
+        as_list(recognition.get("identity_resolution_eligible_comparison_keys"))
+    )
+    if "identity_resolution_eligible_comparison_keys" not in recognition:
+        identity_eligible = set(accepted)
+    candidates = {
+        text(row.get("comparison_key")): dict(row)
+        for row in as_list(recognition.get("candidates"))
+        if isinstance(row, dict)
+        and text(row.get("comparison_key")) in identity_eligible
+    }
+    graph: dict[str, set[str]] = {key: set() for key in identity_eligible}
+    alias_edges = [
+        dict(row)
+        for row in as_list(recognition.get("accepted_alias_edges"))
+        if isinstance(row, dict)
+    ]
+    for edge in alias_edges:
+        left, right = text(edge.get("left")), text(edge.get("right"))
+        if left in graph and right in graph:
+            graph[left].add(right)
+            graph[right].add(left)
+
+    components: list[set[str]] = []
+    remaining = set(graph)
+    while remaining:
+        root = min(remaining)
+        component: set[str] = set()
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            if current in component:
+                continue
+            component.add(current)
+            stack.extend(sorted(graph.get(current, set()) - component))
+        remaining -= component
+        components.append(component)
+
+    existing_by_key = {
+        comparison_key(row.get("object") or row.get("name")): dict(row)
+        for row in as_list(asset.get("business_objects"))
+        if isinstance(row, dict)
+        and comparison_key(row.get("object") or row.get("name")) in identity_eligible
+    }
+    rows: list[dict[str, Any]] = []
+    for component in sorted(components, key=lambda value: sorted(value)):
+        component_candidates = [
+            candidates[key] for key in sorted(component) if key in candidates
+        ]
+        labels = unique_text(
+            label
+            for candidate in component_candidates
+            for label in as_list(candidate.get("labels"))
+        )
+        base_candidates = [existing_by_key[key] for key in component if key in existing_by_key]
+        base = deepcopy(
+            sorted(
+                base_candidates,
+                key=lambda row: text(row.get("object_id") or row.get("object") or row.get("name")),
+            )[0]
+        ) if base_candidates else {}
+
+        canonical = text(base.get("object") or base.get("name"))
+        if not canonical:
+            declared_left_labels = [
+                text(edge.get("left_label"))
+                for edge in alias_edges
+                if text(edge.get("left")) in component
+                and text(edge.get("right")) in component
+                and text(edge.get("left_label"))
+            ]
+            canonical = (
+                sorted(declared_left_labels)[0]
+                if declared_left_labels
+                else (labels[0] if labels else "")
+            )
+        if not canonical:
+            continue
+
+        evidence = dedupe_evidence(
+            [
+                *as_list(base.get("evidence")),
+                *[
+                    row
+                    for candidate in component_candidates
+                    for row in as_list(candidate.get("evidence"))
+                    if isinstance(row, dict)
+                ],
+                *[
+                    row
+                    for edge in alias_edges
+                    if text(edge.get("left")) in component
+                    and text(edge.get("right")) in component
+                    for row in as_list(edge.get("evidence"))
+                    if isinstance(row, dict)
+                ],
+            ]
+        )
+        aliases = unique_text(
+            [
+                *as_list(base.get("aliases")),
+                *[label for label in labels if comparison_key(label) != comparison_key(canonical)],
+            ]
+        )
+        projected = {
+            **base,
+            "object": canonical,
+            "name": canonical,
+            "object_id": text(base.get("object_id"))
+            or stable_id(
+                "recognized_business_object_projection",
+                recognition.get("recognition_id"),
+                sorted(component),
+            ),
+            "aliases": aliases,
+            "evidence": evidence,
+            "source_id": text(base.get("source_id"))
+            or text(evidence[0].get("source_id") if evidence else "")
+            or "business_object_recognition",
+            "source_locator": text(base.get("source_locator"))
+            or text(evidence[0].get("source_locator") if evidence else "")
+            or text(base.get("object_id"))
+            or canonical,
+            "source_excerpt": text(base.get("source_excerpt"))
+            or text(evidence[0].get("quote") if evidence else ""),
+            "derivation": "business_object_recognition_projection",
+            "recognition_candidate_refs": [
+                candidate.get("candidate_id") for candidate in component_candidates
+            ],
+            "recognition_comparison_keys": sorted(component),
+        }
+        rows.append(projected)
+    return rows
 
 
 def project_asset_for_recognized_objects(
@@ -15,17 +167,20 @@ def project_asset_for_recognized_objects(
     """Filter object mentions while retaining technical assets for binding."""
     projected = deepcopy(asset)
     accepted = set(as_list(recognition.get("accepted_comparison_keys")))
+    identity_eligible = set(
+        as_list(recognition.get("identity_resolution_eligible_comparison_keys"))
+    )
+    if "identity_resolution_eligible_comparison_keys" not in recognition:
+        identity_eligible = set(accepted)
     accepted_alias_facts = set(as_list(recognition.get("accepted_alias_fact_ids")))
 
     def allowed(value: Any) -> bool:
-        return comparison_key(value) in accepted
+        return comparison_key(value) in identity_eligible
 
     projected["business_object_recognition"] = deepcopy(recognition)
-    projected["business_objects"] = [
-        deepcopy(row)
-        for row in as_list(projected.get("business_objects"))
-        if isinstance(row, dict) and allowed(row.get("object") or row.get("name"))
-    ]
+    projected["business_objects"] = _materialize_recognized_business_objects(
+        projected, recognition
+    )
 
     ledger = dict(as_dict(projected.get("business_fact_ledger")))
     facts: list[dict[str, Any]] = []
@@ -37,10 +192,12 @@ def project_asset_for_recognized_objects(
         if kind in {"RULE", "STATE_TRANSITION"}:
             for side in ("subject", "object"):
                 slot = dict(as_dict(fact.get(side)))
-                original = fact_mentions(fact, side)
+                original = object_slot_mentions(fact, side)
                 accepted_mentions = [value for value in original if allowed(value)]
                 rejected_mentions = [value for value in original if not allowed(value)]
-                slot["raw_entity_mentions"] = original
+                slot["raw_entity_mentions"] = unique_text(
+                    [*as_list(slot.get("entity_mentions")), *original]
+                )
                 slot["entity_mentions"] = unique_text(accepted_mentions)
                 slot["entity_refs"] = unique_text(accepted_mentions)
                 slot["business_object_rejected_mentions"] = unique_text(rejected_mentions)

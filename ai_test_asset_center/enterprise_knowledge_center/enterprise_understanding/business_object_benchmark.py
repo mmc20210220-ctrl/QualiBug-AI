@@ -74,7 +74,10 @@ def _semantic_roles(
         normalized.insert(0, OBJECT_TYPE)
     if not normalized:
         normalized = [OBJECT_TYPE if expected_object else "OTHER_NON_OBJECT"]
-    return unique_text(normalized)
+    role_set = set(normalized)
+    return ([OBJECT_TYPE] if OBJECT_TYPE in role_set else []) + sorted(
+        role_set - {OBJECT_TYPE}
+    )
 
 
 def _ground_truth_index(
@@ -158,8 +161,10 @@ def _ground_truth_index(
                 )
                 continue
             if prior:
-                prior["semantic_roles"] = unique_text(
-                    [*as_list(prior.get("semantic_roles")), *roles]
+                merged_roles = set(as_list(prior.get("semantic_roles"))) | set(roles)
+                prior["semantic_roles"] = (
+                    ([OBJECT_TYPE] if OBJECT_TYPE in merged_roles else [])
+                    + sorted(merged_roles - {OBJECT_TYPE})
                 )
                 prior["source_locators"] = unique_text(
                     [*as_list(prior.get("source_locators")), *source_locators]
