@@ -583,6 +583,9 @@ def _waits_from_relation(relation: dict[str, Any], predecessor: str, successor: 
                 "temporal_constraints": temporal,
                 "time_window_constraints": windows,
                 "orchestration_markers": markers,
+                "source_system_ref": text(relation.get("source_system_ref")),
+                "target_system_ref": text(relation.get("target_system_ref")),
+                "binding_refs": [dict(row) for row in as_list(relation.get("binding_refs")) if isinstance(row, dict)],
                 "source_backed": True,
             }
         )
@@ -720,6 +723,11 @@ def _project_multi_object_processes(
                     "source_process_ref": by_object[current].get("process_id"),
                     "target_process_ref": by_object[successor].get("process_id"),
                     "orchestration_markers": unique_text(as_list(relation.get("orchestration_markers"))),
+                    "source_system_ref": text(relation.get("source_system_ref")),
+                    "target_system_ref": text(relation.get("target_system_ref")),
+                    "binding_refs": [dict(row) for row in as_list(relation.get("binding_refs")) if isinstance(row, dict)],
+                    "source_refs": unique_text(as_list(relation.get("source_refs"))),
+                    "evidence": dedupe_evidence(as_list(relation.get("evidence"))),
                 }
             )
             waits.extend(_waits_from_relation(relation, current, successor))
@@ -875,6 +883,11 @@ def _project_multi_object_processes(
                         "source_process_ref": by_object[current].get("process_id"),
                         "target_process_ref": by_object[successor].get("process_id"),
                         "orchestration_markers": unique_text(as_list(relation.get("orchestration_markers"))),
+                    "source_system_ref": text(relation.get("source_system_ref")),
+                    "target_system_ref": text(relation.get("target_system_ref")),
+                    "binding_refs": [dict(row) for row in as_list(relation.get("binding_refs")) if isinstance(row, dict)],
+                    "source_refs": unique_text(as_list(relation.get("source_refs"))),
+                    "evidence": dedupe_evidence(as_list(relation.get("evidence"))),
                     }
                 )
                 waits.extend(_waits_from_relation(relation, current, successor))
