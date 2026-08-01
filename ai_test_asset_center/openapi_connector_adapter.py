@@ -44,6 +44,7 @@ from .enterprise_knowledge_center._common import MAX_SOURCE_BYTES, ROOT
 from .ssrf_guard import SsrfBlockedError, safe_urlopen, validate_url
 
 OPENAPI_CONNECTOR_TYPE = "openapi"
+OPENAPI_EXPORT_CONNECTOR_TYPES = ("apifox", "yapi")
 OPENAPI_ADAPTER_SCHEMA = "qualibug.openapi-connector-adapter.v1"
 OPENAPI_MATERIALIZATION_CONTRACT_VERSION = "openapi-materialization-v1"
 
@@ -92,6 +93,18 @@ _FORBIDDEN_HEADER_NAMES = {
 
 class OpenApiConnectorError(RuntimeError):
     """The online API-document snapshot is not trustworthy or not within policy."""
+
+
+def _normalize_openapi_connector_type(value: Any) -> str:
+    connector_type = _text(value, 160).lower() or OPENAPI_CONNECTOR_TYPE
+    if connector_type not in {
+        OPENAPI_CONNECTOR_TYPE,
+        *OPENAPI_EXPORT_CONNECTOR_TYPES,
+    }:
+        raise OpenApiConnectorError(
+            f"openapi_connector_type_not_supported:{connector_type}"
+        )
+    return connector_type
 
 
 @dataclass(frozen=True)
@@ -1352,10 +1365,14 @@ def _snapshot_cursor(descriptors: Sequence[Mapping[str, Any]]) -> str:
     return "openapi-snapshot-v1:" + digest
 
 
-def _adapter_capability(descriptor: Mapping[str, Any]) -> ResourceCapability:
+def _adapter_capability(
+    descriptor: Mapping[str, Any],
+    *,
+    connector_type: str = OPENAPI_CONNECTOR_TYPE,
+) -> ResourceCapability:
     return classify_materialization_capability(
         descriptor,
-        connector_type=OPENAPI_CONNECTOR_TYPE,
+        connector_type=_normalize_openapi_connector_type(connector_type),
         materializable_types=tuple(_SUPPORTED_OBJECT_TYPES),
         contract_version=OPENAPI_MATERIALIZATION_CONTRACT_VERSION,
     )
@@ -1365,7 +1382,10 @@ def _materialize_openapi_resource(
     context: ConnectorContext,
     descriptor: Mapping[str, Any],
 ) -> MaterializedSnapshot:
-    capability = _adapter_capability(descriptor)
+    connector_type = _normalize_openapi_connector_type(
+        context.get("connector_type")
+    )
+    capability = _adapter_capability(descriptor, connector_type=connector_type)
     if not capability.materializable:
         raise OpenApiConnectorError(f"openapi_resource_not_materializable:{capability.reason_code}")
     body = descriptor.get("_body")
@@ -1453,7 +1473,14 @@ def _observation_metadata(descriptor: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _connector_instance(project: str, connector: str, root: Path) -> dict[str, Any]:
+def _connector_instance(
+    project: str,
+    connector: str,
+    root: Path,
+    *,
+    connector_type: str = OPENAPI_CONNECTOR_TYPE,
+) -> dict[str, Any]:
+    expected_type = _normalize_openapi_connector_type(connector_type)
     rows = list_connector_instances(project, root=root, include_disabled=True).get("connector_instances") or []
     instance = next(
         (
@@ -1465,17 +1492,27 @@ def _connector_instance(project: str, connector: str, root: Path) -> dict[str, A
     )
     if instance is None:
         raise OpenApiConnectorError("openapi_connector_instance_not_registered")
-    if _text(instance.get("connector_type"), 160).lower() != OPENAPI_CONNECTOR_TYPE:
+    if _text(instance.get("connector_type"), 160).lower() != expected_type:
         raise OpenApiConnectorError("openapi_connector_instance_type_mismatch")
     if instance.get("status") != "ACTIVE":
         raise OpenApiConnectorError("openapi_connector_instance_not_active")
     return instance
 
 
-def openapi_connector_manifest() -> ConnectorManifest:
+def openapi_connector_manifest(
+    connector_type: str = OPENAPI_CONNECTOR_TYPE,
+    *,
+    display_name: str = "",
+) -> ConnectorManifest:
+    normalized_type = _normalize_openapi_connector_type(connector_type)
+    names = {
+        OPENAPI_CONNECTOR_TYPE: "Online OpenAPI and API documents",
+        "apifox": "Apifox OpenAPI export",
+        "yapi": "YApi OpenAPI export",
+    }
     return ConnectorManifest(
-        connector_type=OPENAPI_CONNECTOR_TYPE,
-        display_name="Online OpenAPI and API documents",
+        connector_type=normalized_type,
+        display_name=_text(display_name, 240) or names[normalized_type],
         category="api_contract",
         version="1",
         auth_modes=("anonymous", "bearer_token", "api_key", "cookie_session"),
@@ -1537,6 +1574,7 @@ def test_openapi_connector_connection(
     project_id: str,
     *,
     connector_instance_id: str,
+    connector_type: str = OPENAPI_CONNECTOR_TYPE,
     resolve_connection_profile: Callable[[str], Mapping[str, Any]] | None = None,
     root: Path | None = None,
     transport: OpenApiTransport | None = None,
@@ -1544,10 +1582,17 @@ def test_openapi_connector_connection(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     resolved_root = root or ROOT
-    instance = _connector_instance(project_id, connector_instance_id, resolved_root)
+    normalized_type = _normalize_openapi_connector_type(connector_type)
+    instance = _connector_instance(
+        project_id,
+        connector_instance_id,
+        resolved_root,
+        connector_type=normalized_type,
+    )
     context: dict[str, Any] = {
         "project_id": project_id,
         "connector_instance_id": connector_instance_id,
+        "connector_type": normalized_type,
         "connection_profile_ref": _text(instance.get("connection_profile_ref"), 500),
         "resolve_connection_profile": resolve_connection_profile,
         "resource_scope": _text(instance.get("resource_scope"), 20_000),
@@ -1571,7 +1616,7 @@ def test_openapi_connector_connection(
         "schema": OPENAPI_ADAPTER_SCHEMA,
         "status": "AVAILABLE",
         "connector_instance_id": connector_instance_id,
-        "connector_type": OPENAPI_CONNECTOR_TYPE,
+        "connector_type": normalized_type,
         "auth_mode": _profile_for_context(context)["auth_mode"],
         "document_url_count": len(scope["document_urls"]),
         "credentials_persisted": False,
@@ -1584,6 +1629,7 @@ def sync_openapi_connector(
     project_id: str,
     *,
     connector_instance_id: str,
+    connector_type: str = OPENAPI_CONNECTOR_TYPE,
     resolve_connection_profile: Callable[[str], Mapping[str, Any]] | None = None,
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
@@ -1597,13 +1643,20 @@ def sync_openapi_connector(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     resolved_root = root or ROOT
-    instance = _connector_instance(project_id, connector_instance_id, resolved_root)
+    normalized_type = _normalize_openapi_connector_type(connector_type)
+    instance = _connector_instance(
+        project_id,
+        connector_instance_id,
+        resolved_root,
+        connector_type=normalized_type,
+    )
     stored_hash = _text(instance.get("last_committed_cursor_fingerprint"), 128)
     if stored_hash and not previous_cursor:
         raise OpenApiConnectorError("openapi_previous_cursor_required")
     context: dict[str, Any] = {
         "project_id": project_id,
         "connector_instance_id": connector_instance_id,
+        "connector_type": normalized_type,
         "connection_profile_ref": _text(instance.get("connection_profile_ref"), 500),
         "resolve_connection_profile": resolve_connection_profile,
         "resource_scope": _text(instance.get("resource_scope"), 20_000),
@@ -1634,7 +1687,10 @@ def sync_openapi_connector(
         remote_id = _text(descriptor.get("remote_resource_id"), 4_000)
         existing = dict(observations.get(remote_id) or {})
         existing_metadata = dict(existing.get("source_metadata") or {})
-        capability = _adapter_capability(descriptor)
+        capability = _adapter_capability(
+            descriptor,
+            connector_type=normalized_type,
+        )
         if capability.observable_unsupported:
             coverage.append(_coverage(
                 remote_id,
@@ -1695,8 +1751,8 @@ def sync_openapi_connector(
     return {
         **run,
         "adapter_schema": OPENAPI_ADAPTER_SCHEMA,
-        "adapter": OPENAPI_CONNECTOR_TYPE,
-        "connector_type": OPENAPI_CONNECTOR_TYPE,
+        "adapter": normalized_type,
+        "connector_type": normalized_type,
         "auth_mode": _profile_for_context(context)["auth_mode"],
         "discovered_resource_count": len(descriptors),
         "materialized_resource_count": len(items),
@@ -1717,8 +1773,11 @@ def sync_openapi_connector(
 class OpenApiConnectorAdapter:
     """ConnectorAdapter facade over the online API-document authority."""
 
+    def __init__(self, connector_type: str = OPENAPI_CONNECTOR_TYPE) -> None:
+        self._connector_type = _normalize_openapi_connector_type(connector_type)
+
     def manifest(self) -> ConnectorManifest:
-        return openapi_connector_manifest()
+        return openapi_connector_manifest(self._connector_type)
 
     def test_connection(self, context: ConnectorContext) -> dict[str, Any]:
         project_id = _text(context.get("project_id"), 160)
@@ -1728,6 +1787,7 @@ class OpenApiConnectorAdapter:
         return test_openapi_connector_connection(
             project_id,
             connector_instance_id=connector_id,
+            connector_type=self._connector_type,
             resolve_connection_profile=context.get("resolve_connection_profile"),
             root=context.get("root"),
             transport=context.get("transport"),
@@ -1736,15 +1796,26 @@ class OpenApiConnectorAdapter:
         )
 
     def discover(self, context: ConnectorContext, cursor: SyncCursor = "") -> DiscoveryResult:
-        result = _discover_openapi_resources(context, cursor=cursor, retain_body=True)
+        working_context = dict(context)
+        working_context["connector_type"] = self._connector_type
+        result = _discover_openapi_resources(
+            working_context,
+            cursor=cursor,
+            retain_body=True,
+        )
         result["next_cursor"] = self.build_cursor(result)
         return result
 
     def classify_resource(self, descriptor: Mapping[str, Any]) -> ResourceCapability:
-        return _adapter_capability(descriptor)
+        return _adapter_capability(
+            descriptor,
+            connector_type=self._connector_type,
+        )
 
     def materialize(self, context: ConnectorContext, descriptor: Mapping[str, Any]) -> MaterializedSnapshot:
-        return _materialize_openapi_resource(context, descriptor)
+        working_context = dict(context)
+        working_context["connector_type"] = self._connector_type
+        return _materialize_openapi_resource(working_context, descriptor)
 
     def build_cursor(self, discovery_result: DiscoveryResult | Sequence[Mapping[str, Any]]) -> SyncCursor:
         descriptors = (
@@ -1757,13 +1828,16 @@ class OpenApiConnectorAdapter:
         return _snapshot_cursor([dict(item) for item in descriptors if isinstance(item, Mapping)])
 
     def managed_remote_checkpoint(self, context: ConnectorContext) -> SyncCursor:
-        result = _discover_openapi_resources(context, retain_body=False)
+        working_context = dict(context)
+        working_context["connector_type"] = self._connector_type
+        result = _discover_openapi_resources(working_context, retain_body=False)
         return self.build_cursor(result)
 
     def managed_sync(self, context: ConnectorContext) -> dict[str, Any]:
         return sync_openapi_connector(
             _text(context.get("project_id"), 160),
             connector_instance_id=_text(context.get("connector_instance_id"), 160),
+            connector_type=self._connector_type,
             resolve_connection_profile=context.get("resolve_connection_profile"),
             root=context.get("root"),
             actor=dict(context.get("actor") or {}),
@@ -1781,6 +1855,7 @@ class OpenApiConnectorAdapter:
 __all__ = [
     "OPENAPI_ADAPTER_SCHEMA",
     "OPENAPI_CONNECTOR_TYPE",
+    "OPENAPI_EXPORT_CONNECTOR_TYPES",
     "OPENAPI_MATERIALIZATION_CONTRACT_VERSION",
     "OpenApiConnectorAdapter",
     "OpenApiConnectorError",

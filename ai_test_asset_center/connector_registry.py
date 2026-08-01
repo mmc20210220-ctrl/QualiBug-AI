@@ -393,6 +393,8 @@ def build_default_connector_registry() -> ConnectorRegistry:
             GitRepositoryConnectorAdapter("github"),
             GitRepositoryConnectorAdapter("git"),
             OpenApiConnectorAdapter(),
+            OpenApiConnectorAdapter("apifox"),
+            OpenApiConnectorAdapter("yapi"),
             WebsiteConnectorAdapter(),
         )
     )

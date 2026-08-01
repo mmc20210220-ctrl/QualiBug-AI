@@ -128,7 +128,9 @@ def test_default_registry_exposes_manifest_driven_website_adapter_without_networ
         "gitee",
         "github",
         "gitlab",
+        "apifox",
         "openapi",
+        "yapi",
         "website",
     }
     assert registry.catalog()["governance"]["network_access_performed"] is False
@@ -148,6 +150,19 @@ def test_default_registry_exposes_manifest_driven_openapi_adapter_without_networ
         "cookie_session",
     }
     assert registry.catalog()["governance"]["network_access_performed"] is False
+
+
+def test_openapi_export_connectors_reuse_the_same_manifest_driven_adapter() -> None:
+    registry = build_default_connector_registry()
+
+    apifox = registry.get("apifox")
+    yapi = registry.get("yapi")
+
+    assert type(apifox) is type(yapi)
+    assert apifox.manifest().connector_type == "apifox"
+    assert yapi.manifest().connector_type == "yapi"
+    assert apifox.manifest().scope_schema == yapi.manifest().scope_schema
+    assert apifox.manifest().supported_resource_types == yapi.manifest().supported_resource_types
 
 
 def test_default_feishu_adapter_builds_cursor_from_discovery_descriptors() -> None:
