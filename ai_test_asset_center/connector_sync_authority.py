@@ -234,12 +234,16 @@ def _instance_by_id(registry: dict[str, Any], connector: str) -> dict[str, Any] 
     )
 
 
-def _sanitize_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+def _sanitize_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    max_fields: int | None = 40,
+) -> dict[str, Any]:
     if metadata is None:
         return {}
     if not isinstance(metadata, dict):
         raise ConnectorSyncError("connector_instance_metadata_must_be_object")
-    if len(metadata) > 40:
+    if max_fields is not None and len(metadata) > max_fields:
         raise ConnectorSyncError("connector_instance_metadata_field_limit_exceeded")
     result: dict[str, Any] = {}
     for raw_key, value in metadata.items():
@@ -533,6 +537,54 @@ def connector_snapshot_observation_index(
     return result
 
 
+# An active occurrence's metadata also contains ACL and lifecycle enrichments.  That merged
+# record can legitimately be wider than the bounded metadata accepted from a fresh connector
+# item.  An unchanged observation only needs the connector-owned freshness fields below; replaying
+# the entire historical map is neither a delta nor safe for the observation authority's field cap.
+_UNCHANGED_OBSERVATION_METADATA_FIELDS = (
+    "source_origin",
+    "connector_id",
+    "connector_instance_id",
+    "requested_source_id",
+    "remote_resource_id",
+    "resource_kind",
+    "remote_revision",
+    "remote_updated_at",
+    "retrieved_at",
+    "canonical_url",
+    "parent_remote_id",
+    "sync_epoch_id",
+    "sync_cursor_fingerprint",
+    "export_format",
+    "declared_mime",
+    "remote_materialization_fingerprint",
+    "display_title",
+    "remote_display_title",
+    "etag",
+    "last_modified",
+    "source_relationships_json",
+    "aliases_json",
+    "forms_present",
+    "robots_status",
+    "sitemap_last_modified",
+)
+
+
+def _unchanged_observation_metadata(metadata: Any) -> dict[str, Any]:
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, dict):
+        raise ConnectorSyncError("connector_sync_unchanged_metadata_invalid")
+    # Validate the complete input before projecting it.  Unknown fields are not silently trusted;
+    # only the bounded connector observation delta is forwarded to the occurrence authority.
+    safe = _sanitize_metadata(metadata, max_fields=None)
+    return {
+        key: safe[key]
+        for key in _UNCHANGED_OBSERVATION_METADATA_FIELDS
+        if key in safe
+    }
+
+
 _ACL_DIRECT_FIELDS = (
     "acl_version",
     "acl_fingerprint",
@@ -594,18 +646,19 @@ def _normalize_unchanged_observations(
             raise ConnectorSyncError(
                 f"connector_sync_duplicate_remote_identity:{source_ref}"
             )
-        metadata = raw.get("metadata")
-        if metadata is not None and not isinstance(metadata, dict):
+        try:
+            metadata = _unchanged_observation_metadata(raw.get("metadata"))
+        except ConnectorSyncError as exc:
             raise ConnectorSyncError(
                 f"connector_sync_unchanged_metadata_invalid:{index}"
-            )
+            ) from exc
         refs.add(source_ref)
         normalized.append(
             {
                 "remote_resource_id": remote_id,
                 "resource_kind": kind,
                 "source_ref": source_ref,
-                "metadata": dict(metadata or {}),
+                "metadata": metadata,
                 "availability": _text(
                     raw.get("availability") or raw.get("remote_availability"),
                     60,
