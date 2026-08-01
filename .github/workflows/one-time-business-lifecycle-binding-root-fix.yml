@@ -5,7 +5,8 @@ on:
     branches: [main]
     paths:
       - ".github/business-lifecycle-binding-root-fix-trigger"
-  pull_request:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
     branches: [main]
     paths:
       - ".github/business-lifecycle-binding-root-fix-trigger"
@@ -14,15 +15,15 @@ permissions:
   contents: write
 
 concurrency:
-  group: one-time-business-lifecycle-binding-root-fix-fast-20260801
-  cancel-in-progress: false
+  group: one-time-business-lifecycle-binding-root-fix-target-20260801
+  cancel-in-progress: true
 
 jobs:
   apply-test-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout latest main
+      - name: Checkout trusted latest main
         uses: actions/checkout@v4
         with:
           ref: main
