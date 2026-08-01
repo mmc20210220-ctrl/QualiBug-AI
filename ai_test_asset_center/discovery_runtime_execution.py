@@ -468,8 +468,17 @@ def run_experiment_candidate(
         for row in _list(surface_execution.get("selected_rows"))
         if isinstance(row, dict)
     ]
+    expansion_selected_ids = {
+        _text(row.get("obligation_id"))
+        for row in expansion_selected_rows
+        if _text(row.get("obligation_id"))
+    }
     selected_rows = (
-        initial_selected_rows
+        [
+            row
+            for row in initial_selected_rows
+            if _text(row.get("obligation_id")) not in expansion_selected_ids
+        ]
         + expansion_selected_rows
         + surface_selected_rows
     )
