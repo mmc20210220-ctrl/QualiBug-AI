@@ -49,7 +49,7 @@ jobs:
           sort -o /tmp/expected-files.txt /tmp/expected-files.txt
           diff -u /tmp/expected-files.txt /tmp/actual-files.txt
 
-      - name: Commit cleanup to main
+      - name: Commit cleanup and rebase safely onto concurrent main
         shell: bash
         run: |
           set -euo pipefail
@@ -61,4 +61,11 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "chore(repo): restore generated package metadata"
-          git push origin HEAD:main
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            git pull --rebase origin main
+          done
+          echo "unable to push cleanup after safe rebase retries" >&2
+          exit 1
