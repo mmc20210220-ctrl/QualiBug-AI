@@ -804,9 +804,44 @@ def build_binding_plan(
                     or body_field_collection_paths(name, api_prefix=_api_prefix(_text(op.get("path")))),
                     behavior_ir=_dict(behavior_ir),
                 ))
+            if name in path_placeholders:
+                # Path placeholders belong to the operation's own resource, so
+                # the operation's collection reads are the correct resolvers.
+                candidate_resolvers: list[dict[str, str]] = [
+                    *path_resolvers,
+                    *body_resolvers,
+                ]
+            else:
+                # Body placeholders belong to the FIELD's entity (an order
+                # body's addressId is an address, not an order). The operation's
+                # own collection reads must never be reused for them. When the
+                # field-derived collection has no declared read, fall back to
+                # the entity-hint matcher so a runtime-discovered route such as
+                # GET /api/users/addresses can resolve addressId.
+                if not body_resolvers:
+                    from .runtime_binding_resolver import (
+                        _find_list_endpoints_for_entity,
+                    )
+
+                    for candidate in _find_list_endpoints_for_entity(
+                        _dict(behavior_ir),
+                        name,
+                        collection_hints=set(body_placeholder_paths.get(name, [])),
+                    ):
+                        candidate_ref = _text(candidate.get("id"))
+                        candidate_path = normalize_path_placeholders(
+                            _text(candidate.get("path") or candidate.get("raw_path"))
+                        )
+                        if candidate_ref and candidate_path:
+                            body_resolvers.append({
+                                "operation_ref": candidate_ref,
+                                "method": "GET",
+                                "path": candidate_path,
+                            })
+                candidate_resolvers = body_resolvers
             resolvers: list[dict[str, str]] = []
             seen_resolvers: set[tuple[str, str, str]] = set()
-            for resolver in [*path_resolvers, *body_resolvers]:
+            for resolver in candidate_resolvers:
                 key = (
                     _text(resolver.get("operation_ref")),
                     _text(resolver.get("method")).upper(),

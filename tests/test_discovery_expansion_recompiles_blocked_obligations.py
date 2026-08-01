@@ -16,6 +16,7 @@ from ai_test_asset_center.discovery_runtime_execution import (
 from ai_test_asset_center.experiment_compiler import (
     compile_experiment_for_obligation,
 )
+from ai_test_asset_center.runtime_binding_graph import build_binding_plan
 
 
 def _obligation() -> dict:
@@ -189,3 +190,61 @@ def test_compiled_round0_ids_exclude_blocked_and_collapse_variants() -> None:
     compiled = _compiled_round0_obligation_ids(experiments)
     assert compiled == {"obl_a"}
     assert "obl_blocked" not in compiled
+
+
+def test_body_placeholder_resolver_uses_entity_route_not_operation_collection() -> None:
+    operation = {
+        "id": "op_orders",
+        "method": "POST",
+        "path": "/api/orders",
+        "request_example": {
+            "items": [{"sku": "SKU-1", "qty": 1}],
+            "couponCode": "NEW100",
+            "addressId": "<address_id>",
+        },
+        "request_schema": {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "items": [{"sku": "SKU-1", "qty": 1}],
+                        "couponCode": "NEW100",
+                        "addressId": "<address_id>",
+                    }
+                }
+            }
+        },
+    }
+    behavior_ir = {
+        "operations": [
+            operation,
+            {
+                "id": "op_addresses",
+                "method": "GET",
+                "path": "/api/users/addresses",
+            },
+            {"id": "op_get_orders", "method": "GET", "path": "/api/orders"},
+            {
+                "id": "op_get_order_detail",
+                "method": "GET",
+                "path": "/api/orders/:id",
+            },
+        ],
+        "actors": [],
+        "relations": [],
+    }
+    plan = build_binding_plan(
+        operation=operation,
+        obligation={},
+        behavior_ir=behavior_ir,
+    )
+    binding = next(row for row in plan if row.get("target") == "address_id")
+    assert binding["status"] == "runtime_resolvable"
+    assert binding["resolver_operations"]
+    assert (
+        binding["resolver_operations"][0]["path"]
+        == "/api/users/addresses"
+    )
+    assert all(
+        resolver["path"] != "/api/orders"
+        for resolver in binding["resolver_operations"]
+    )
