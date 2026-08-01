@@ -208,7 +208,6 @@ def refresh_test_account_tokens(
                 "exit_code": 0,
                 "attempts": attempt,
             }
-        # Transient post-reset unavailability: retry before failing the prep.
         transient = (
             "login rejected HTTP 0" in out
             or "timed out" in out.lower()
@@ -235,10 +234,11 @@ def prepare_funnel_benchmark_target(
     project: str = "benchmark_mall",
     target_base_url: str = "http://localhost:8080",
 ) -> dict:
-    """DB reset first (seed accounts), then token refresh against the live API.
+    """Reset DB first (seed accounts), then refresh tokens against the live API.
 
-    Also emits a benchmark_target_reset receipt so the cleanliness guard can
-    verify incomplete sandbox cleanups were superseded by a full DB reseed.
+    A skipped reset remains a loud operator override but can never produce a
+    ``completed`` cleanliness receipt. Only an observed successful DB reset may
+    certify that incomplete prior writes were superseded.
     """
     import json
     import uuid
@@ -246,19 +246,20 @@ def prepare_funnel_benchmark_target(
 
     db = reset_benchmark_target_db(env=env, runner=runner)
     tokens = refresh_test_account_tokens(env=env, runner=runner)
+    reset_completed = str(db.get("status") or "").strip().lower() == "ok"
     receipt_dir = Path(root) / "_funnel_runs"
     receipt_dir.mkdir(parents=True, exist_ok=True)
     receipt_path = receipt_dir / f"{project}_target_reset_receipt.json"
     reset_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # Receipt must be newer than any prior sandbox audit row.
     receipt = {
         "schema_version": "benchmark_target_reset.v1",
         "receipt_id": f"reset_{uuid.uuid4().hex[:16]}",
         "project": project,
         "target_base_url": str(target_base_url or "").rstrip("/"),
-        "status": "completed",
+        "status": "completed" if reset_completed else "skipped",
         "reset_at_utc": reset_at,
         "target_db_reset": db,
+        "cleanliness_proof_eligible": reset_completed,
     }
     receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
@@ -266,4 +267,5 @@ def prepare_funnel_benchmark_target(
         "token_refresh": tokens,
         "reset_receipt_path": str(receipt_path),
         "reset_receipt": receipt,
+        "cleanliness_proof_eligible": reset_completed,
     }
