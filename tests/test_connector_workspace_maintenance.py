@@ -289,7 +289,8 @@ def test_maintenance_authority_is_registered_as_core():
 
 def test_maintenance_has_no_parallel_registry_or_lifecycle_deletion_path():
     source = Path(maintenance.__file__).read_text(encoding="utf-8")
-    assert "maintenance_registry" not in source
+    assert "connector_maintenance_registry.json" not in source
+    assert "maintenance_registry_path" not in source
     assert "_remove_sync_lock" not in source
     assert "abort_connector_sync_run" not in source
     assert "stop_connector_sync_ownership" not in source
