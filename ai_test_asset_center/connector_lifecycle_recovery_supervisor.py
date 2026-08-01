@@ -1,8 +1,8 @@
 """Supervisor authority for pending connector lifecycle checkpoints.
 
 This module recovers the boundary between a committed material snapshot and its remote-lifecycle
-and cursor decisions.  It reuses the connector registry, sync run receipt, lifecycle transaction
-journal and content-free recovery intent.  It never guesses a missing remote snapshot, never
+and cursor decisions. It reuses the connector registry, sync run receipt, lifecycle transaction
+journal and content-free recovery intent. It never guesses a missing remote snapshot, never
 advances a cursor without a durable lifecycle COMMITTED decision, and persists only bounded
 operator status—not raw exceptions or customer content.
 """
@@ -17,18 +17,14 @@ from typing import Any
 
 from . import connector_sync_authority as _sync
 from .connector_checkpoint_commit_authority import (
-    ConnectorCheckpointCommitError,
     recover_committed_connector_checkpoint,
     reconcile_connector_remote_lifecycle_with_checkpoint,
 )
 from .connector_lifecycle_commit_authority import (
-    ConnectorLifecycleCommitError,
     recover_connector_lifecycle_transactions,
 )
 from .connector_lifecycle_recovery_intent import (
-    ConnectorLifecycleRecoveryIntentError,
     clear_connector_lifecycle_recovery_intent,
-    lifecycle_recovery_intent_age_seconds,
     load_connector_lifecycle_recovery_intent,
     update_connector_lifecycle_recovery_intent_state,
 )
@@ -97,11 +93,9 @@ def _pending_age(
     now: float,
 ) -> float:
     started = _parse_utc(instance.get("pending_checkpoint_since_utc"))
-    if started:
-        return max(0.0, now - started)
-    if intent:
-        return lifecycle_recovery_intent_age_seconds(intent)
-    return 0.0
+    if not started and intent:
+        started = _parse_utc(intent.get("created_at_utc"))
+    return max(0.0, now - started) if started else 0.0
 
 
 def inspect_pending_connector_lifecycle_checkpoint(
@@ -435,6 +429,8 @@ def recover_pending_connector_lifecycle_checkpoint(
             "recovery_action": "CLEARED_STALE_ORPHAN_INTENT",
         }
 
+    failure_recorded = False
+    failure_category = ""
     try:
         _recover_transaction_journals(
             project,
@@ -589,47 +585,51 @@ def recover_pending_connector_lifecycle_checkpoint(
                 "recovery_action": "ABANDONED_INCOMPLETE_SNAPSHOT",
             }
 
-        category = status or "UNKNOWN"
+        failure_category = status or "UNKNOWN"
         attention = bool(
             inspection.get("stale")
-            and category.startswith("BLOCKED_")
+            and failure_category.startswith("BLOCKED_")
         )
         _record_state(
             project,
             connector,
             resolved_root,
             clean_actor,
-            state=category,
+            state=failure_category,
             sync_epoch_id=epoch,
             pending_age_seconds=age,
             attention_required=attention,
-            error_category=category,
+            error_category=failure_category,
             increment_failure=True,
         )
+        failure_recorded = True
         raise ConnectorLifecycleRecoverySupervisorError(
-            "connector_lifecycle_recovery_blocked:" + category
+            "connector_lifecycle_recovery_blocked:" + failure_category
         )
-    except (
-        ConnectorCheckpointCommitError,
-        ConnectorLifecycleCommitError,
-        ConnectorLifecycleRecoveryIntentError,
-        ConnectorLifecycleRecoverySupervisorError,
-    ) as exc:
-        _record_state(
-            project,
-            connector,
-            resolved_root,
-            clean_actor,
-            state="RECOVERY_RETRYING",
-            sync_epoch_id=epoch,
-            pending_age_seconds=age,
-            attention_required=bool(age >= lifecycle_pending_stale_seconds()),
-            error_category=type(exc).__name__,
-            increment_failure=True,
+    except Exception as exc:
+        if not failure_recorded:
+            failure_category = type(exc).__name__
+            _record_state(
+                project,
+                connector,
+                resolved_root,
+                clean_actor,
+                state="RECOVERY_RETRYING",
+                sync_epoch_id=epoch,
+                pending_age_seconds=age,
+                attention_required=bool(
+                    age >= lifecycle_pending_stale_seconds()
+                ),
+                error_category=failure_category,
+                increment_failure=True,
+            )
+        prefix = (
+            "connector_lifecycle_recovery_blocked:"
+            if failure_recorded
+            else "connector_lifecycle_recovery_retryable:"
         )
         raise ConnectorLifecycleRecoverySupervisorError(
-            "connector_lifecycle_recovery_retryable:"
-            + type(exc).__name__
+            prefix + failure_category
         ) from exc
 
 
