@@ -163,16 +163,20 @@ def _reactivate_retired_occurrence(
     return True
 
 
-def _was_absent_or_retired(rows: list[dict[str, Any]]) -> bool:
+def _unconsumed_absence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
     for row in rows:
-        if row.get("status") == "retired_remote_scope":
-            return True
         metadata = dict(row.get("source_metadata") or {})
-        if _text(metadata.get("remote_lifecycle_state"), 100).startswith(
-            "ABSENT_FROM_CONFIGURED_SCOPE"
+        state = _text(metadata.get("remote_lifecycle_state"), 100)
+        if (
+            state.startswith("ABSENT_FROM_CONFIGURED_SCOPE")
+            and not _text(
+                metadata.get("remote_reappearance_consumed_at_sync_epoch_id"),
+                160,
+            )
         ):
-            return True
-    return False
+            result.append(row)
+    return result
 
 
 def _present_state(
@@ -330,7 +334,7 @@ def reconcile_connector_remote_lifecycle(
     present_existing_count = 0
     for remote_id, resource in present.items():
         candidates = by_remote.get(remote_id, [])
-        previously_absent = _was_absent_or_retired(candidates)
+        unconsumed_absence = _unconsumed_absence_rows(candidates)
         occurrence = next(
             (row for row in candidates if row.get("status") == "active"),
             None,
@@ -360,7 +364,7 @@ def reconcile_connector_remote_lifecycle(
         lifecycle_state, renamed, moved = _present_state(
             previous,
             resource,
-            reappeared=reactivated or previously_absent,
+            reappeared=reactivated or bool(unconsumed_absence),
         )
         renamed_count += int(renamed)
         moved_count += int(moved)
@@ -395,6 +399,20 @@ def reconcile_connector_remote_lifecycle(
         )
         occurrence["source_metadata"] = metadata
         occurrence["last_seen_at_utc"] = observed_at
+        if lifecycle_state == "REAPPEARED":
+            for historical in unconsumed_absence:
+                historical_metadata = dict(
+                    historical.get("source_metadata") or {}
+                )
+                historical_metadata.update(
+                    {
+                        "remote_reappearance_consumed_at_sync_epoch_id": _text(
+                            sync_epoch_id, 160
+                        ),
+                        "remote_reappearance_consumed_at_utc": observed_at,
+                    }
+                )
+                historical["source_metadata"] = historical_metadata
 
     absent_rows: list[dict[str, Any]] = []
     unconfirmed_rows: list[dict[str, Any]] = []
