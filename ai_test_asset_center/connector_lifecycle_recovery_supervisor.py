@@ -98,6 +98,34 @@ def _pending_age(
     return max(0.0, now - started) if started else 0.0
 
 
+def _load_run_or_empty(
+    project: str,
+    connector: str,
+    epoch: str,
+    root: Path,
+) -> dict[str, Any]:
+    if not epoch:
+        return {}
+    try:
+        return _sync.load_connector_sync_run(
+            project,
+            connector_instance_id=connector,
+            sync_epoch_id=epoch,
+            root=root,
+        )
+    except KeyError:
+        return {}
+
+
+def _run_has_committed_lifecycle_and_checkpoint(run: dict[str, Any]) -> bool:
+    lifecycle_commit = dict(run.get("remote_lifecycle_commit") or {})
+    return bool(
+        run.get("cursor_checkpoint_committed") is True
+        and lifecycle_commit.get("status") == "COMMITTED"
+        and _text(lifecycle_commit.get("transaction_id"), 160)
+    )
+
+
 def inspect_pending_connector_lifecycle_checkpoint(
     project_id: str,
     connector_instance_id: str,
@@ -120,27 +148,44 @@ def inspect_pending_connector_lifecycle_checkpoint(
     age = _pending_age(instance, intent, now=timestamp)
     stale = bool(age >= lifecycle_pending_stale_seconds())
     if not pending_epoch:
+        intent_run = _load_run_or_empty(
+            project,
+            connector,
+            intent_epoch,
+            resolved_root,
+        )
+        completed_cleanup = bool(
+            intent and _run_has_committed_lifecycle_and_checkpoint(intent_run)
+        )
+        status = (
+            "COMPLETED_INTENT_CLEANUP"
+            if completed_cleanup
+            else "ORPHAN_INTENT"
+            if intent
+            else "NOT_REQUIRED"
+        )
         return {
             "schema": CONNECTOR_LIFECYCLE_RECOVERY_SUPERVISOR_SCHEMA,
-            "status": "ORPHAN_INTENT" if intent else "NOT_REQUIRED",
+            "status": status,
             "project_id": project,
             "connector_instance_id": connector,
             "pending_sync_epoch_id": "",
             "intent_sync_epoch_id": intent_epoch,
+            "run_status": _text(intent_run.get("status"), 40),
             "pending_age_seconds": age,
             "stale": stale,
-            "attention_required": bool(intent and stale),
+            "attention_required": bool(
+                status == "ORPHAN_INTENT" and stale
+            ),
             "source_content_inspected": False,
+            "raw_cursor_inspected": False,
         }
-    try:
-        run = _sync.load_connector_sync_run(
-            project,
-            connector_instance_id=connector,
-            sync_epoch_id=pending_epoch,
-            root=resolved_root,
-        )
-    except KeyError:
-        run = {}
+    run = _load_run_or_empty(
+        project,
+        connector,
+        pending_epoch,
+        resolved_root,
+    )
     lifecycle_commit = dict(run.get("remote_lifecycle_commit") or {})
     pending_fingerprint = _text(
         run.get("pending_cursor_fingerprint")
@@ -393,25 +438,47 @@ def recover_pending_connector_lifecycle_checkpoint(
         now=timestamp,
     )
     status = inspection["status"]
-    epoch = _text(inspection.get("pending_sync_epoch_id"), 160)
+    epoch = _text(
+        inspection.get("pending_sync_epoch_id")
+        or inspection.get("intent_sync_epoch_id"),
+        160,
+    )
     age = float(inspection.get("pending_age_seconds") or 0.0)
 
     if status == "NOT_REQUIRED":
         return {**inspection, "recovery_action": "NOT_REQUIRED"}
-    if status == "ORPHAN_INTENT":
-        if inspection.get("stale") is not True:
-            return {**inspection, "recovery_action": "WAITING_FOR_SNAPSHOT_BIND"}
-        intent = load_connector_lifecycle_recovery_intent(
-            project,
-            connector,
-            root=resolved_root,
-        )
+    if status == "COMPLETED_INTENT_CLEANUP":
         clear_connector_lifecycle_recovery_intent(
             project,
             connector,
             root=resolved_root,
             actor=clean_actor,
-            expected_sync_epoch_id=_text(intent.get("sync_epoch_id"), 160),
+            expected_sync_epoch_id=epoch,
+        )
+        _record_state(
+            project,
+            connector,
+            resolved_root,
+            clean_actor,
+            state="CLEARED_COMMITTED_ORPHAN_INTENT",
+            sync_epoch_id=epoch,
+            pending_age_seconds=age,
+            attention_required=False,
+        )
+        return {
+            **inspection,
+            "status": "COMPLETE",
+            "recovery_action": "CLEARED_COMMITTED_ORPHAN_INTENT",
+        }
+    if status == "ORPHAN_INTENT":
+        if inspection.get("stale") is not True:
+            return {**inspection, "recovery_action": "WAITING_FOR_SNAPSHOT_BIND"}
+        clear_connector_lifecycle_recovery_intent(
+            project,
+            connector,
+            root=resolved_root,
+            actor=clean_actor,
+            expected_sync_epoch_id=epoch,
         )
         _record_state(
             project,
@@ -419,7 +486,7 @@ def recover_pending_connector_lifecycle_checkpoint(
             resolved_root,
             clean_actor,
             state="CLEARED_STALE_ORPHAN_INTENT",
-            sync_epoch_id=_text(intent.get("sync_epoch_id"), 160),
+            sync_epoch_id=epoch,
             pending_age_seconds=age,
             attention_required=False,
         )
