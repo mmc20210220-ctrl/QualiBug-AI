@@ -70,8 +70,8 @@ def test_requested_retirement_is_not_forwarded_to_ingestion_authority(
         captured_sync.update(kwargs)
         return {
             "status": "COMPLETE",
-            "sync_epoch_id": "sync-lifecycle",
-            "cursor_checkpoint_committed": True,
+            "sync_epoch_id": kwargs["sync_epoch_id"],
+            "cursor_checkpoint_committed": False,
         }
 
     def reconcile(*args, **kwargs):
@@ -89,6 +89,7 @@ def test_requested_retirement_is_not_forwarded_to_ingestion_authority(
             "reappeared_resource_count": 0,
             "remote_deletion_inferred": False,
             "permission_loss_inferred": False,
+            "cursor_checkpoint_committed": True,
             "customer_material_mutation_executed": False,
         }
 
@@ -108,12 +109,14 @@ def test_requested_retirement_is_not_forwarded_to_ingestion_authority(
     assert captured_sync["snapshot_complete"] is True
     assert captured_lifecycle["deletion_policy"] == "RETIRE_MISSING"
     assert captured_lifecycle["authoritative_snapshot_complete"] is True
+    assert captured_lifecycle["sync_epoch_id"] == captured_sync["sync_epoch_id"]
     assert captured_lifecycle["present_resources"][0]["remote_resource_id"] == (
         "wiki:space-a:node-a"
     )
     assert result["effective_deletion_policy"] == (
         "GUARDED_REMOTE_SCOPE_RETIREMENT"
     )
+    assert result["cursor_checkpoint_committed"] is True
     assert result["remote_deletion_inferred"] is False
     assert result["customer_material_mutation_executed"] is False
 
@@ -193,15 +196,15 @@ def test_incomplete_supported_sync_skips_lifecycle_reconciliation(
         "discover_feishu_wiki_resources",
         lambda *args, **kwargs: [_descriptor("mindnote")],
     )
-    monkeypatch.setattr(
-        sync,
-        "sync_connector_snapshot_batch",
-        lambda *args, **kwargs: {
+
+    def incomplete_snapshot(*args, **kwargs):
+        return {
             "status": "FAILED",
-            "sync_epoch_id": "sync-failed",
+            "sync_epoch_id": kwargs["sync_epoch_id"],
             "cursor_checkpoint_committed": False,
-        },
-    )
+        }
+
+    monkeypatch.setattr(sync, "sync_connector_snapshot_batch", incomplete_snapshot)
     lifecycle_calls = []
     monkeypatch.setattr(
         sync,
