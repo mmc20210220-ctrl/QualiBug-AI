@@ -155,6 +155,25 @@ def current_ledger_rows(
     ]
 
 
+def checkpoint_execution_applies(
+    checkpoint: dict[str, Any],
+    *,
+    experiment_id: str,
+    obligation_id: str,
+    campaign_id: str,
+    execution_id: str,
+) -> bool:
+    """Return whether a checkpoint belongs to the exact logical execution."""
+    return bool(checkpoint) and all(
+        (
+            _text(checkpoint.get("experiment_id")) == experiment_id,
+            _text(checkpoint.get("obligation_id")) == obligation_id,
+            _text(checkpoint.get("campaign_id")) == campaign_id,
+            _text(checkpoint.get("execution_id")) == execution_id,
+        )
+    )
+
+
 def checkpoint_applies(
     checkpoint: dict[str, Any],
     *,
@@ -164,15 +183,13 @@ def checkpoint_applies(
     campaign_id: str,
     execution_id: str,
 ) -> bool:
-    return bool(checkpoint) and all(
-        (
-            _text(checkpoint.get("experiment_id")) == experiment_id,
-            _text(checkpoint.get("obligation_id")) == obligation_id,
-            _text(checkpoint.get("campaign_id")) == campaign_id,
-            _text(checkpoint.get("execution_id")) == execution_id,
-            _text(checkpoint.get("execution_graph_id")) == graph_id(graph),
-        )
-    )
+    return checkpoint_execution_applies(
+        checkpoint,
+        experiment_id=experiment_id,
+        obligation_id=obligation_id,
+        campaign_id=campaign_id,
+        execution_id=execution_id,
+    ) and _text(checkpoint.get("execution_graph_id")) == graph_id(graph)
 
 
 def validate_fresh_runtime_scope(
@@ -272,6 +289,7 @@ __all__ = [
     "GRAPH_RESUME_AUTHORITY",
     "build_process_graph_resume_checkpoint",
     "checkpoint_applies",
+    "checkpoint_execution_applies",
     "current_graph_observations",
     "current_ledger_rows",
     "graph_id",
