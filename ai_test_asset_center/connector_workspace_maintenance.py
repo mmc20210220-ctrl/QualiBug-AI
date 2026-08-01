@@ -74,6 +74,14 @@ def _knowledge_workspace(root: Path, project: str) -> Path:
     return _project_workspace(root, project) / "enterprise_knowledge_center"
 
 
+def _maintenance_roots(root: Path, project: str) -> tuple[Path, ...]:
+    project_workspace = _project_workspace(root, project)
+    return (
+        project_workspace / "enterprise_knowledge_center",
+        project_workspace / "source_registry",
+    )
+
+
 def _is_atomic_temporary_file(path: Path, *, source_dir: Path) -> bool:
     """Recognize only names created by existing atomic-write helpers.
 
@@ -226,7 +234,6 @@ def maintain_connector_workspace(
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     clean_actor = _require_manage_actor(actor)
-    workspace = _knowledge_workspace(resolved_root, project)
     source_dir = _paths(project, resolved_root)["source_dir"].resolve()
     retention = _retention_seconds()
     scan_limit = _scan_limit()
@@ -264,8 +271,10 @@ def maintain_connector_workspace(
                     "run_receipts_deleted": False,
                 }
 
-            if workspace.is_dir():
-                for path in workspace.rglob("*"):
+            for maintenance_root in _maintenance_roots(resolved_root, project):
+                if not maintenance_root.is_dir():
+                    continue
+                for path in maintenance_root.rglob("*"):
                     if scanned_count >= scan_limit:
                         scan_truncated = True
                         break
@@ -287,6 +296,8 @@ def maintain_connector_workspace(
                         removed_bytes += size
                     except OSError:
                         cleanup_errors += 1
+                if scan_truncated:
+                    break
 
             detached = _detached_immutable_inventory(
                 resolved_root,
@@ -299,6 +310,7 @@ def maintain_connector_workspace(
                     {
                         "connector_temporary_residue_cleanup_enabled": True,
                         "temporary_cleanup_uses_atomic_name_contract": True,
+                        "runtime_source_registry_temporary_residue_in_scope": True,
                         "checkpoint_artifacts_deleted_by_maintenance": False,
                         "run_receipts_deleted_by_maintenance": False,
                         "detached_immutable_sources_deleted_by_maintenance": False,
