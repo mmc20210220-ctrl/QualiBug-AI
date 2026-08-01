@@ -1,14 +1,12 @@
 name: One-time E2E root authority delivery
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/delivery/e2e-root-fix/trigger
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
+  issues: read
 
 concurrency:
   group: one-time-e2e-root-authority-delivery
@@ -16,6 +14,7 @@ concurrency:
 
 jobs:
   apply-test-and-push:
+    if: github.event.issue.title == 'run-verified-e2e-root-authority-delivery-20260801'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
