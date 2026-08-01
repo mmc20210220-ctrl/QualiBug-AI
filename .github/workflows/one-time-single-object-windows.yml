@@ -40,3 +40,126 @@ jobs:
 
       - name: Apply verified single-object lifecycle source
         run: bash .github/delivery/single-object-complex-main/apply-verified-root-fix.sh
+
+  cross-object-system-deliver:
+    if: github.head_ref == 'delivery-cross-object-system-root-fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Decode and apply verified root fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/delivery/cross-object-system-root-fix/chunk-*.b64 \
+            | base64 --decode \
+            | gzip --decompress > /tmp/cross-object-system-root-fix.patch
+          echo '5023e63f90eef69cf61b9d06bf9b2f3566210de842804e1c3f23e84c4be2cc0b  /tmp/cross-object-system-root-fix.patch' \
+            | sha256sum -c -
+          git apply --check /tmp/cross-object-system-root-fix.patch
+          git apply /tmp/cross-object-system-root-fix.patch
+          git diff --check
+
+      - name: Verify exact source scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected-files.txt <<'EOF'
+          AGENTS.md
+          ai_test_asset_center/cross_entity_chain_planning.py
+          ai_test_asset_center/deep_experiment_planner.py
+          ai_test_asset_center/multi_step_protocol_core.py
+          tests/test_cross_object_system_mainline.py
+          EOF
+          git diff --name-only | sort > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Install product and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Compile changed authorities
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/cross_entity_chain_planning.py \
+            ai_test_asset_center/deep_experiment_planner.py \
+            ai_test_asset_center/multi_step_protocol_core.py \
+            tests/test_cross_object_system_mainline.py
+
+      - name: Run cross-object cross-system verification
+        env:
+          QUALIBUG_JWT_SECRET: ci-cross-system-secret
+          QUALIBUG_LOCAL_DEV_ACTOR: '1'
+          QUALIBUG_ALLOW_PUBLIC_BIND: '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/verify-cross-system.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export PYTHONPATH=.
+          python -m pytest -q \
+            tests/test_cross_object_system_mainline.py \
+            tests/test_deep_experiment_protocol_adapter.py \
+            tests/test_enterprise_understanding_process_graph_ir.py \
+            tests/test_process_graph_runtime.py \
+            tests/test_experiment_plan_executor.py \
+            tests/test_process_graph_async_transition_oracle.py \
+            tests/test_process_graph_broker_adapter.py \
+            tests/test_process_graph_event_transition.py \
+            tests/test_process_graph_event_transition_scope.py \
+            tests/test_v150_multi_step_protocol.py \
+            -k 'not test_multi_step_process_compiles_source_backed_chain'
+          git diff --check
+          SH
+          chmod +x /tmp/verify-cross-system.sh
+          /tmp/verify-cross-system.sh
+
+      - name: Commit verified source and remove delivery assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'QualiBug Automation'
+          git config user.email 'automation@qualibug.local'
+          git cat-file blob c73adac495ad9115310f407d2725ff0ad74450d7 \
+            > .github/workflows/one-time-single-object-windows.yml
+          git rm -r \
+            .github/delivery/cross-object-system-root-fix \
+            .github/workflows/one-time-cross-object-system-root-fix.yml
+          git add \
+            .github/workflows/one-time-single-object-windows.yml \
+            AGENTS.md \
+            ai_test_asset_center/cross_entity_chain_planning.py \
+            ai_test_asset_center/deep_experiment_planner.py \
+            ai_test_asset_center/multi_step_protocol_core.py \
+            tests/test_cross_object_system_mainline.py
+          git commit -m 'fix(process): unify cross-object system graph authority' \
+            -m 'Compile source-backed cross-object and cross-system flows through the existing public multi-step protocol and Process Graph runtime. Fail closed on unresolved relations, operations, actors, targets, and graph scope; preserve exact bindings, waits, compensation, and system targets; reuse one indexed planning context; and add executable end-to-end regressions.'
+
+      - name: Rebase, reverify, and push main
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main
+            /tmp/verify-cross-system.sh
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+          done
+          echo 'main advanced repeatedly; refusing to force push' >&2
+          exit 1
