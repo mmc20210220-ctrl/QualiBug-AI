@@ -259,6 +259,31 @@ def validate_customer_delivery_gate_bundle(
         reproduction_receipt=reproduction_receipt,
     )
     if validated != rebuilt:
+        # ``reason_detail`` is diagnostic enrichment, not a new adjudication
+        # input.  Receipts emitted before the enrichment was introduced remain
+        # immutable and must continue to validate against the same evidence
+        # bundle.  Accept only the exact old sealed payload; any other drift
+        # remains a hard bundle mismatch.
+        if (
+            "reason_detail" not in validated
+            and "reason_detail" in rebuilt
+            and validated
+            == _core._seal(
+                {
+                    key: value
+                    for key, value in rebuilt.items()
+                    if key not in {
+                        "reason_detail",
+                        "gate_receipt_id",
+                        "output_fingerprint",
+                    }
+                },
+                prefix="gate_",
+                id_field="gate_receipt_id",
+                fingerprint_field="output_fingerprint",
+            )
+        ):
+            return validated
         raise _core.DeliveryGateV2Error("delivery_gate_bundle_mismatch")
     return validated
 

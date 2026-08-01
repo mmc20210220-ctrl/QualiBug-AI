@@ -2,13 +2,79 @@ from __future__ import annotations
 
 import pytest
 
+import ai_test_asset_center.customer_delivery_gate_v2 as delivery_gate_v2
+from ai_test_asset_center import _customer_delivery_gate_v2_mechanics as gate_mechanics
 from ai_test_asset_center.customer_delivery_gate_v2 import (
+    DeliveryGateV2Error,
     _cleanup_gate_decision,
     _oracle_harness_reason_detail,
     _reproduction_decision,
     _validate_active_chain,
+    validate_customer_delivery_gate_receipt_v2,
 )
 from ai_test_asset_center.assertion_dsl_base import _assertion_receipt
+
+
+def _synthetic_harness_gate(*, reason_detail: str = "") -> dict:
+    identity = {
+        "run_id": "run-1",
+        "campaign_id": "campaign-1",
+        "target_id": "target-1",
+        "environment_id": "environment-1",
+        "mainline_contract_fingerprint": "contract-1",
+        "candidate_id": "candidate-1",
+        "slice_id": "slice-1",
+        "obligation_id": "obligation-1",
+        "experiment_id": "experiment-1",
+        "execution_id": "execution-1",
+        "evidence_id": "evidence-1",
+        "finding_id": "",
+    }
+    receipt_refs = {
+        "execution": {"receipt_id": "execution-1", "fingerprint": "e" * 64},
+        "actors": [],
+        "fixtures": [],
+        "controls": [],
+        "treatments": [],
+        "observers": [],
+        "assertions": [],
+        "oracle": {"receipt_id": "oracle-1", "fingerprint": "o" * 64},
+        "reproduction": {"receipt_id": "reproduction-1", "fingerprint": "r" * 64},
+        "cleanup": [],
+        "lineage": {"receipt_id": "lineage-1", "fingerprint": "l" * 64},
+    }
+    payload = {
+        "schema_version": "qualibug.customer-delivery-gate-receipt.v2",
+        "status": "HARNESS_FAILED",
+        "reason_code": "CONTRACT_ORACLE_HARNESS_FAILED",
+        "reason_codes": ["CONTRACT_ORACLE_HARNESS_FAILED"],
+        "identity": identity,
+        "finding_payload_fingerprint": "",
+        "receipt_refs": receipt_refs,
+        "adjudication": {
+            "execution": "EXECUTED",
+            "activation": "HARNESS_FAILED",
+            "assertion": "PASS",
+            "oracle": "HARNESS_FAILED",
+            "reproduction": "NOT_REPRODUCED",
+            "cleanup": "FAILED",
+            "lineage": "CONSISTENT",
+        },
+        "cost_coverage_status": "UNKNOWN",
+        "input_fingerprint": gate_mechanics._fingerprint({
+            "identity": identity,
+            "finding_payload_fingerprint": "",
+            "receipt_refs": receipt_refs,
+        }),
+    }
+    if reason_detail:
+        payload["reason_detail"] = reason_detail
+    return gate_mechanics._seal(
+        payload,
+        prefix="gate_",
+        id_field="gate_receipt_id",
+        fingerprint_field="output_fingerprint",
+    )
 
 
 def _execution(
@@ -80,6 +146,54 @@ def test_oracle_harness_detail_preserves_activation_failure_reasons() -> None:
     )
 
     assert detail == "ORACLE_REASON,CLEANUP_RECEIPT_FAILED:cleanup:cleanup-1"
+
+
+def test_harness_reason_detail_is_optional_and_old_bundle_stays_valid(
+    monkeypatch,
+) -> None:
+    enriched = _synthetic_harness_gate(
+        reason_detail="CLEANUP_RECEIPT_FAILED:cleanup:cleanup-1"
+    )
+    assert validate_customer_delivery_gate_receipt_v2(enriched) == enriched
+
+    legacy = _synthetic_harness_gate()
+    assert validate_customer_delivery_gate_receipt_v2(legacy) == legacy
+
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "build_customer_delivery_gate_receipt_v2",
+        lambda **_: enriched,
+    )
+    assert delivery_gate_v2.validate_customer_delivery_gate_bundle(
+        legacy,
+        finding=None,
+        execution_receipt={},
+        contract_evidence_receipts=[],
+        observer_receipts=[],
+        oracle_receipt={},
+        reproduction_receipt={},
+    ) == legacy
+
+
+def test_harness_reason_detail_cannot_appear_on_another_gate_status() -> None:
+    gate = _synthetic_harness_gate(reason_detail="diagnostic")
+    payload = {
+        key: value
+        for key, value in gate.items()
+        if key not in {"gate_receipt_id", "output_fingerprint"}
+    }
+    payload["status"] = "BLOCKED"
+    blocked = gate_mechanics._seal(
+        payload,
+        prefix="gate_",
+        id_field="gate_receipt_id",
+        fingerprint_field="output_fingerprint",
+    )
+    with pytest.raises(
+        DeliveryGateV2Error,
+        match="delivery_gate_reason_detail_status_invalid",
+    ):
+        validate_customer_delivery_gate_receipt_v2(blocked)
 
 
 def test_cleanup_receipt_must_cover_every_accepted_write() -> None:

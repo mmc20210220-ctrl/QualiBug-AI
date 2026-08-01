@@ -20,6 +20,7 @@ from .blocker_attribution import (
     REASON_CODE_REGISTRY_SCHEMA,
     profile_reason_code,
 )
+from .customer_delivery_gate_v2 import _oracle_harness_reason_detail
 
 
 REQUIRED_STAGE_NAMES = (
@@ -1211,7 +1212,7 @@ def _reason_details(
                     if _text(value)
                 ][:8],
                 "source_refs": _safe_source_refs(attempt),
-                "reason_detail": _text(attempt.get("reason_detail"))[:500],
+                "reason_detail": _attempt_reason_detail(attempt)[:500],
             })
             if len(examples) >= 3:
                 break
@@ -1229,6 +1230,25 @@ def _reason_details(
         })
     blocking = [row for row in rows if row.get("is_blocking")]
     return blocking[:limit], sorted(set(unregistered))
+
+
+def _attempt_reason_detail(attempt: dict[str, Any]) -> str:
+    """Project captured Oracle failure detail when an older Gate omitted it.
+
+    Gate ``reason_detail`` was added after some immutable attempt ledgers were
+    emitted.  The evidence bundle still contains the validated Oracle and
+    activation reason codes, so the report may expose those exact values as a
+    diagnostic fallback.  No business meaning is inferred from the detail.
+    """
+
+    explicit = _text(attempt.get("reason_detail"))
+    if explicit:
+        return explicit
+    if _text(attempt.get("reason_code")).upper() != "CONTRACT_ORACLE_HARNESS_FAILED":
+        return ""
+    bundle = _dict(attempt.get("delivery_evidence_bundle"))
+    oracle = _dict(bundle.get("oracle_receipt"))
+    return _oracle_harness_reason_detail(oracle)
 
 
 def build_funnel_report(
@@ -2029,10 +2049,23 @@ def reconcile_product_pipeline_health(
     preflight_present = any(
         key in diagnostics for key in ("ready", "all_checks_passed", "errors", "checks")
     )
+    checks = diagnostics.get("checks")
+    if not isinstance(checks, list):
+        checks = []
+    failed_error_check = any(
+        isinstance(check, dict)
+        and check.get("passed") is False
+        and _text(check.get("severity")).lower() == "error"
+        for check in checks
+    )
+    # ``all_checks_passed`` also includes advisory info/warning checks (for
+    # example an optional database connection).  It is a completeness signal,
+    # not a blocking health gate.  ``ready``/error counts and explicit error
+    # checks are the preflight authority for execution health.
     preflight_failed = preflight_present and (
         diagnostics.get("ready") is False
-        or diagnostics.get("all_checks_passed") is False
         or _int(diagnostics.get("errors")) > 0
+        or failed_error_check
     )
     if normalized == "partial":
         health.update({
@@ -2061,5 +2094,14 @@ def reconcile_product_pipeline_health(
         "all_checks_passed": diagnostics.get("all_checks_passed"),
         "errors": _int(diagnostics.get("errors")),
         "warnings": _int(diagnostics.get("warnings")),
+        "blocking_failed": preflight_failed,
+        "warning_only": bool(
+            preflight_present
+            and not preflight_failed
+            and (
+                _int(diagnostics.get("warnings")) > 0
+                or diagnostics.get("all_checks_passed") is False
+            )
+        ),
     }
     return health
