@@ -1,8 +1,6 @@
 name: Apply process event idempotency authority
 
 on:
-  issues:
-    types: [opened]
   push:
     branches: [main]
     paths:
@@ -10,7 +8,6 @@ on:
 
 permissions:
   contents: write
-  issues: read
 
 concurrency:
   group: process-event-idempotency-authority-main
@@ -18,12 +15,6 @@ concurrency:
 
 jobs:
   apply:
-    if: >-
-      (github.event_name == 'issues'
-       && github.event.issue.title == 'APPLY_PROCESS_EVENT_IDEMPOTENCY_AUTHORITY_20260801'
-       && github.event.issue.user.login == github.repository_owner)
-      ||
-      github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -40,10 +31,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat tools/.one_shot/process_event_idempotency_authority/part-* \
-            > /tmp/apply_process_event_idempotency_authority.py
-          python -m py_compile /tmp/apply_process_event_idempotency_authority.py
-          python /tmp/apply_process_event_idempotency_authority.py
+          python -m py_compile \
+            tools/.one_shot/process_event_idempotency_authority/apply_compact.py
+          python tools/.one_shot/process_event_idempotency_authority/apply_compact.py
           python -m py_compile \
             ai_test_asset_center/process_graph_wait_contract.py \
             ai_test_asset_center/process_graph_event_transition.py \
