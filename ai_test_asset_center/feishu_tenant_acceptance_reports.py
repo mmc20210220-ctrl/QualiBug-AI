@@ -1,9 +1,9 @@
 """Safe public projection for Feishu tenant acceptance reports.
 
 Acceptance reports are operator evidence, not customer-content storage. This module owns report
-lookup, path confinement, bounded listing, and an explicit public allowlist. Raw report JSON is
-never returned directly, so future internal fields cannot accidentally expose credentials, source
-content, raw cursors, or filesystem paths through the HTTP surface.
+lookup, path confinement, bounded listing, and explicit public allowlists for both fields and
+values. Raw report JSON and arbitrary diagnostic text are never returned directly, so future
+checks cannot accidentally expose credentials, source content, cursors, or filesystem paths.
 """
 from __future__ import annotations
 
@@ -21,6 +21,23 @@ FEISHU_ACCEPTANCE_REPORT_INVENTORY_SCHEMA = (
 )
 _REPORT_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[a-f0-9]{12}$")
 _CONNECTOR_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
+_THRESHOLD_RE = re.compile(r"^(?:<=|>=) [0-9]+(?:\.[0-9]+)?$")
+_ERROR_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}(?:Error|Exception)$")
+_SAFE_OBSERVATION_LITERALS = {
+    "AVAILABLE",
+    "READ_ONLY",
+    "COMPLETE",
+    "NO_EXCEPTION",
+    "RECOVERABLE_TWO_STAGE",
+    "REMOTE_SNAPSHOT_CHANGED",
+    "REPEATABLE_OR_EXPLAINED",
+    ">= covered_resource_count",
+}
+_SAFE_OBSERVATION_KEYS = {
+    "materialized_resource_count",
+    "export_avoided_count",
+    "covered_resource_count",
+}
 
 
 class FeishuTenantAcceptanceReportError(RuntimeError):
@@ -97,38 +114,30 @@ def _boolean_or_none(value: Any) -> bool | None:
 
 
 def _safe_observation(value: Any, depth: int = 0) -> Any:
-    if depth > 3:
+    if depth > 2:
         return None
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value[:500]
-    if isinstance(value, list):
-        return [_safe_observation(item, depth + 1) for item in value[:50]]
+        text = _text(value, 160)
+        if (
+            text in _SAFE_OBSERVATION_LITERALS
+            or _THRESHOLD_RE.fullmatch(text)
+            or _ERROR_TYPE_RE.fullmatch(text)
+        ):
+            return text
+        return "REDACTED_UNSTRUCTURED_VALUE"
     if isinstance(value, Mapping):
-        result: dict[str, Any] = {}
-        for raw_key, raw_value in list(value.items())[:50]:
-            key = _text(raw_key, 120)
-            lowered = key.lower()
-            if any(
-                token in lowered
-                for token in (
-                    "secret",
-                    "token",
-                    "credential",
-                    "content",
-                    "raw_cursor",
-                    "authorization",
-                    "cookie",
-                    "password",
-                )
-            ):
-                continue
-            result[key] = _safe_observation(raw_value, depth + 1)
-        return result
-    return _text(type(value).__name__, 80)
+        return {
+            key: _safe_observation(value.get(key), depth + 1)
+            for key in sorted(_SAFE_OBSERVATION_KEYS)
+            if key in value
+        }
+    if isinstance(value, list):
+        return [_safe_observation(item, depth + 1) for item in value[:20]]
+    return None
 
 
 def _public_run(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -192,7 +201,8 @@ def _public_check(value: Mapping[str, Any]) -> dict[str, Any]:
         "severity": _text(value.get("severity"), 40),
         "observed": _safe_observation(value.get("observed")),
         "expected": _safe_observation(value.get("expected")),
-        "detail": _text(value.get("detail"), 500),
+        "detail": "",
+        "arbitrary_diagnostic_text_returned": False,
     }
 
 
@@ -367,6 +377,7 @@ def project_feishu_tenant_acceptance_report(
         "raw_cursor_returned": False,
         "credential_values_returned": False,
         "filesystem_path_returned": False,
+        "arbitrary_diagnostic_text_returned": False,
     }
 
 
@@ -438,6 +449,8 @@ def list_feishu_tenant_acceptance_reports(
                     "source_content_returned": False,
                     "raw_cursor_returned": False,
                     "credential_values_returned": False,
+                    "filesystem_path_returned": False,
+                    "arbitrary_diagnostic_text_returned": False,
                 }
             )
     return {
@@ -460,6 +473,7 @@ def list_feishu_tenant_acceptance_reports(
             "raw_cursor_returned": False,
             "credential_values_returned": False,
             "filesystem_paths_returned": False,
+            "arbitrary_diagnostic_text_returned": False,
         },
     }
 
