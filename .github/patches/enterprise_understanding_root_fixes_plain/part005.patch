@@ -1,0 +1,352 @@
++                        "source_kind": "SOURCE_DECLARED_STATE_GUARD",
++                        "status": "CONFIRMED_SOURCE_TEXT",
++                    }
++                )
++    if len(slots) <= 1:
++        return slots, "SINGLE_CONDITION" if slots else ""
++    return slots, "AND" if negative else "OR"
++
++
++def _state_effects_from_slots(
++    slots: Iterable[dict[str, Any]],
++    entities: Iterable[str],
++    state_catalog: dict[str, list[dict[str, Any]]],
++) -> list[dict[str, Any]]:
++    effects: list[dict[str, Any]] = []
++    for slot in slots:
++        if _text(slot.get("operator_candidate")) != "EQUALS":
++            continue
++        from_state = _text(_dict(slot.get("value_candidate")).get("normalized_value"))
++        field = _text(slot.get("field_candidate"))
++        targets: set[str] = set()
++        for entity in _ordered_unique(entities):
++            for field_contract in state_catalog.get(entity, []):
++                if _text(field_contract.get("field")) != field:
++                    continue
++                for transition in _list(field_contract.get("transitions")):
++                    row = _dict(transition)
++                    if _text(row.get("from_state")) == from_state and _text(row.get("to_state")):
++                        targets.add(_text(row.get("to_state")))
++        if len(targets) == 1:
++            effects.append(
++                {
++                    "from_state": from_state,
++                    "to_state": next(iter(targets)),
++                    "raw": f"{field}:{from_state}",
++                    "source_backed": True,
++                    "derivation": "source_state_guard_plus_unique_declared_transition",
++                }
++            )
++    return effects
++
++
++def _explicit_authorization_semantics(
++    raw_statement: str,
++    grammar_statement: str,
++    *,
++    actors: Iterable[str],
++    entities: Iterable[str],
++    action: dict[str, Any],
++) -> dict[str, Any] | None:
++    if _source_rule_type(raw_statement) != "AUTHORIZATION":
++        return None
++    if not _ordered_unique(actors) or not _ordered_unique(entities) or not _text(action.get("canonical")):
++        return None
++    if _NEGATIVE_RE.search(grammar_statement):
++        decision = "DENY"
++    elif _ONLY_ACTOR_PERMISSION_RE.search(grammar_statement) or _MAY_RE.search(grammar_statement):
++        decision = "ALLOW"
++    else:
++        return None
++    cells = _source_rule_cells(raw_statement)
++    return {
++        "decision": decision,
++        "semantic_kind": "AUTHORIZATION",
++        "source_backed": True,
++        "authority": "SOURCE_DECLARED_RULE_TYPE",
++        "rule_id": cells[0] if cells else "",
++        "rule_type": "AUTHORIZATION",
++    }
++
+ def _explicit_refs(statement: str, vocabulary: Iterable[str]) -> list[str]:
+     """Return longest non-overlapping coordinates literally present in source."""
+     candidates: list[tuple[int, int, str]] = []
+@@ -223,14 +398,183 @@ def _source_backed_vocabulary(
+     return _ordered_unique([*existing_values, *head_values])
+ 
+ 
+-def _only_actor_role(statement: str) -> str:
+-    match = _ONLY_ACTOR_PERMISSION_RE.search(statement)
+-    if not match:
+-        return ""
+-    actor = _text(match.group("actor")).strip(" ，,")
+-    if not actor or not any(actor.endswith(head) for head in _ROLE_HEADS):
+-        return ""
+-    return actor
++def _asset_role_vocabulary(asset: dict[str, Any]) -> list[str]:
++    values: list[Any] = [*_ROLE_HEADS, "系统"]
++    for row in _list(asset.get("roles")):
++        if not isinstance(row, dict):
++            continue
++        values.extend(
++            [
++                row.get("role"),
++                row.get("name"),
++                *_list(row.get("aliases")),
++            ]
++        )
++        evidence = row.get("evidence")
++        if (
++            isinstance(evidence, str)
++            and 0 < len(_text(evidence)) <= 24
++            and not re.search(r"[|｜\n，,；;。：:{}\[\]]", _text(evidence))
++            and not _MODAL_PIVOT_RE.search(_text(evidence))
++        ):
++            values.append(evidence)
++    for row in _list(asset.get("permission_matrix")):
++        if isinstance(row, dict):
++            values.append(row.get("role"))
++    model = _dict(asset.get("enterprise_understanding_model"))
++    for row in _list(model.get("actors")):
++        if isinstance(row, dict):
++            values.extend([row.get("name"), *_list(row.get("aliases"))])
++    return _ordered_unique(values)
++
++
++def _asset_role_identity_map(asset: dict[str, Any]) -> dict[str, str]:
++    """Map exact source-declared role labels to one canonical role identity.
++
++    Structured role tables outrank lexical role guesses.  A label is normalized
++    only when it maps to exactly one canonical role; conflicts remain visible.
++    """
++    rows = [row for row in _list(asset.get("roles")) if isinstance(row, dict)]
++    explicit = [
++        row
++        for row in rows
++        if _text(row.get("identity_authority")) == "SOURCE_DECLARED_ROLE_TABLE"
++    ]
++    authoritative = explicit or rows
++    claims: dict[str, set[str]] = defaultdict(set)
++    for row in authoritative:
++        canonical = _text(
++            row.get("canonical_name") or row.get("role") or row.get("name")
++        )
++        if not canonical:
++            continue
++        for label in [canonical, *_list(row.get("aliases"))]:
++            key = re.sub(r"\s+", "", _text(label)).casefold()
++            if key:
++                claims[key].add(canonical)
++    return {
++        key: next(iter(values))
++        for key, values in claims.items()
++        if len(values) == 1
++    }
++
++
++def _canonical_actor_refs(
++    values: Iterable[Any], role_identity_map: dict[str, str]
++) -> list[str]:
++    result: list[str] = []
++    for value in values:
++        raw = _text(value)
++        if not raw:
++            continue
++        key = re.sub(r"\s+", "", raw).casefold()
++        canonical = role_identity_map.get(key, raw)
++        if canonical not in result:
++            result.append(canonical)
++    return result
++
++
++def _asset_entity_vocabulary(asset: dict[str, Any]) -> list[str]:
++    values: list[Any] = [*_ENTITY_HEADS]
++    for row in _list(asset.get("business_objects")):
++        if not isinstance(row, dict):
++            continue
++        values.extend(
++            [
++                row.get("name"),
++                row.get("canonical_name"),
++                *_list(row.get("aliases")),
++            ]
++        )
++    model = _dict(asset.get("enterprise_understanding_model"))
++    for row in _list(model.get("business_objects")):
++        if isinstance(row, dict):
++            values.extend([row.get("name"), *_list(row.get("aliases"))])
++    return _ordered_unique(values)
++
++
++def _actor_candidate(
++    value: Any,
++    *,
++    role_vocabulary: Iterable[str],
++    entity_vocabulary: Iterable[str],
++    strong_actor_grammar: bool,
++) -> tuple[str, str]:
++    raw = _text(value).strip(" -|｜，,；;。")
++    raw = re.sub(r"^(?:只有|仅|任何|任一|该)", "", raw).strip()
++    if not raw:
++        return "", ""
++    qualifier = ""
++    actor = raw
++    if "的" in raw:
++        prefix, tail = raw.rsplit("的", 1)
++        if tail and (
++            tail in set(role_vocabulary)
++            or _ACTOR_QUALIFIER_PREFIX_RE.search(prefix)
++        ):
++            qualifier = _clean_condition(prefix)
++            actor = _text(tail)
++    if actor.endswith("本人") and len(actor) > 2:
++        qualifier = qualifier or "本人"
++        actor = actor[: -len("本人")]
++    entities = {_text(item) for item in entity_vocabulary if _text(item)}
++    if not actor or any(entity and entity in actor for entity in entities):
++        return "", ""
++    if (
++        "状态" in actor
++        or re.search(r"\b[A-Z][A-Z0-9_]{1,31}\b", actor)
++        or re.search(r"(?:时|后|前|内|期间|情况下)$", actor)
++        or re.match(r"^(?:已|未|待|尚未|正在)", actor)
++        or actor.endswith(("内容", "信息", "字段", "金额", "时间", "数量", "值", "状态", "规则", "记录"))
++    ):
++        return "", ""
++    if _MODAL_PIVOT_RE.search(actor) or _action_matches(actor):
++        return "", ""
++    roles = {_text(item) for item in role_vocabulary if _text(item)}
++    source_role = actor in roles or any(actor.endswith(head) for head in _ROLE_HEADS)
++    if not source_role and not strong_actor_grammar:
++        return "", ""
++    if len(actor) > 24:
++        return "", ""
++    return actor, qualifier
++
++
++def _actor_coordinates(
++    statement: str,
++    *,
++    role_vocabulary: Iterable[str],
++    entity_vocabulary: Iterable[str],
++) -> tuple[list[str], list[str]]:
++    """Extract source-declared actor coordinates without a domain role list.
++
++    Exclusive/leading modal grammar is strong evidence that the phrase denotes an
++    actor. Entity/state phrases are rejected; coordinated roles are split; and an
++    explicit qualifier such as ``被分配的代理`` remains a condition while ``代理``
++    becomes the actor identity.
++    """
++    phrases: list[tuple[str, bool]] = []
++    phrases.extend((match.group("actor"), True) for match in _ONLY_ACTOR_PERMISSION_RE.finditer(statement))
++    phrases.extend((match.group("actor"), True) for match in _LEADING_ACTOR_MODAL_RE.finditer(statement))
++    for marker in re.finditer(r"由", statement):
++        action = _first_action_after(statement, marker.end())
++        if action and int(action.get("start", -1)) > marker.end():
++            phrases.append((statement[marker.end() : int(action["start"])], True))
++
++    actors: list[str] = []
++    qualifiers: list[str] = []
++    for phrase, strong in phrases:
++        for part in _ACTOR_COORDINATE_SPLIT_RE.split(_text(phrase)):
++            actor, qualifier = _actor_candidate(
++                part,
++                role_vocabulary=role_vocabulary,
++                entity_vocabulary=entity_vocabulary,
++                strong_actor_grammar=strong,
++            )
++            if actor:
++                actors.append(actor)
++            if qualifier:
++                qualifiers.append(qualifier)
++    return _ordered_unique(actors), _ordered_unique(qualifiers)
+ 
+ 
+ def _action_matches(statement: str) -> list[dict[str, Any]]:
+@@ -384,6 +728,7 @@ def _condition_coordinates(
+     *,
+     action: dict[str, Any],
+     entities: list[str],
++    actor_qualifiers: Iterable[str] = (),
+ ) -> tuple[list[str], str]:
+     match = _ONLY_IF_FRAME_RE.search(statement)
+     if match:
+@@ -406,11 +751,18 @@ def _condition_coordinates(
+         entities,
+     )
+     existing = [_clean_condition(row) for row in _list(fact.get("conditions"))]
+-    rows = _ordered_unique([*(row for row in existing if row), *qualified])
+-    if qualified:
++    actor_conditions = [
++        _clean_condition(row) for row in actor_qualifiers if _clean_condition(row)
++    ]
++    rows = _ordered_unique(
++        [*(row for row in existing if row), *actor_conditions, *qualified]
++    )
++    if qualified or actor_conditions:
+         if len(rows) <= 1:
+             return rows, "SINGLE_CONDITION"
+-        return rows, qualified_combinator or "UNRESOLVED"
++        if qualified and qualified_combinator in {"AND", "OR"}:
++            return rows, qualified_combinator
++        return rows, "AND"
+     return rows, _text(fact.get("condition_combinator"))
+ 
+ 
+@@ -605,11 +957,16 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
+     normalized_ids: list[str] = []
+     skipped_formal_typed = 0
+     field_counts: dict[str, int] = {}
++    asset_role_vocabulary = _asset_role_vocabulary(asset)
++    role_identity_map = _asset_role_identity_map(asset)
++    asset_entity_vocabulary = _asset_entity_vocabulary(asset)
++    state_catalog = source_declared_state_catalog(asset, asset_entity_vocabulary)
+ 
+     for fact in facts:
+         statement = _text(fact.get("raw_statement"))
++        grammar_statement = _source_grammar_text(_source_rule_statement(statement))
+         current_type = _text(fact.get("fact_type")).upper()
+-        if not statement or _text(fact.get("kind")) == "TERM_ALIAS":
++        if not grammar_statement or _text(fact.get("kind")) == "TERM_ALIAS":
+             continue
+         if current_type in _FORMAL_TYPED_COORDINATES:
+             skipped_formal_typed += 1
+@@ -621,18 +978,33 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
+             _text(row) for row in _list(subject.get("actor_refs")) if _text(row)
+         ]
+         actor_vocabulary = _source_backed_vocabulary(
+-            statement,
+-            existing_actors,
++            grammar_statement,
++            [*existing_actors, *asset_role_vocabulary],
+             _ROLE_HEADS,
+         )
++        entity_vocabulary = _source_backed_vocabulary(
++            grammar_statement,
++            [
++                *_list(subject.get("entity_refs")),
++                *asset_entity_vocabulary,
++            ],
++            _ENTITY_HEADS,
++        )
+         exception_scopes = set(_text(row) for row in _list(fact.get("exception_scope")))
+-        only_actor = _only_actor_role(statement)
++        grammar_actors, actor_qualifiers = _actor_coordinates(
++            grammar_statement,
++            role_vocabulary=actor_vocabulary,
++            entity_vocabulary=entity_vocabulary,
++        )
+         explicit_actors = [
+             row
+             for row in _explicit_refs(statement, actor_vocabulary)
+             if row not in exception_scopes
+         ]
+-        actors = [only_actor] if only_actor else (explicit_actors or existing_actors)
++        actors = _canonical_actor_refs(
++            grammar_actors or explicit_actors or existing_actors,
++            role_identity_map,
++        )
+         if actors != _list(subject.get("actor_refs")):
+             subject["actor_refs"] = actors
+             changed.append("actor_refs")
+@@ -652,7 +1024,7 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
