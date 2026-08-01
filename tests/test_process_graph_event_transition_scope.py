@@ -46,6 +46,12 @@ def _graph() -> dict:
                 "system_ref": "jobs",
                 "method": "POST",
                 "path": "/jobs",
+                "output_binding_specs": [
+                    {
+                        "canonical_field_id": "job_id",
+                        "json_path": "$.job_id",
+                    }
+                ],
             },
             {
                 "node_id": "consume",
@@ -54,6 +60,13 @@ def _graph() -> dict:
                 "system_ref": "results",
                 "method": "GET",
                 "path": "/results/{job_id}",
+                "input_binding_refs": [
+                    {
+                        "producer_node_id": "submit",
+                        "producer_output_field": "job_id",
+                        "target": "job_id",
+                    }
+                ],
             },
         ],
         "edges": [
@@ -62,6 +75,14 @@ def _graph() -> dict:
                 "source_node_id": "submit",
                 "target_node_id": "consume",
                 "relation_type": "TRIGGERS",
+                "binding_refs": [
+                    {
+                        "producer_node_id": "submit",
+                        "consumer_node_id": "consume",
+                        "producer_output_field": "job_id",
+                        "consumer_target": "job_id",
+                    }
+                ],
             }
         ],
         "topological_order": ["submit", "consume"],
@@ -192,3 +213,45 @@ def test_declared_retry_limit_violation_is_measured_for_oracle() -> None:
     assert receipt["semantic_status"] == "VIOLATION"
     assert receipt["reason_code"] == EVENT_RETRY_LIMIT_EXCEEDED
     assert receipt["retry_limit_violation_count"] == 1
+
+
+def test_event_correlation_requires_exact_source_to_target_handoff() -> None:
+    graph = _graph()
+    graph["edges"][0]["binding_refs"] = []
+
+    result = compile_process_graph_wait_contracts(graph, behavior_ir=IR)
+
+    assert result["status"] == STATUS_BLOCKED
+    assert result["reason_code"] == EVENT_TRANSITION_INVALID
+    assert "event_correlation_handoff_unresolved:job_id" in result["detail"]
+
+
+def test_event_correlation_requires_declared_producer_output() -> None:
+    graph = _graph()
+    graph["nodes"][0]["output_binding_specs"] = []
+
+    result = compile_process_graph_wait_contracts(graph, behavior_ir=IR)
+
+    assert result["status"] == STATUS_BLOCKED
+    assert result["reason_code"] == EVENT_TRANSITION_INVALID
+    assert "event_correlation_producer_output_unresolved:submit.job_id" in result["detail"]
+
+
+def test_event_correlation_binding_contract_is_frozen_to_edge_scope() -> None:
+    result = compile_process_graph_wait_contracts(_graph(), behavior_ir=IR)
+    assert result["status"] == STATUS_COMPILED
+    event = result["graph"]["wait_contracts_by_target"]["consume"][
+        "event_transition_contract"
+    ]
+    proof = event["correlation_binding_contract"]
+
+    assert event["declared_correlation_binding"] == "job_id"
+    assert event["correlation_binding"] == "job_id"
+    assert proof["edge_id"] == "edge_callback"
+    assert proof["producer_node_id"] == "submit"
+    assert proof["consumer_node_id"] == "consume"
+    assert proof["producer_output_field"] == "job_id"
+    assert proof["consumer_target"] == "job_id"
+    assert proof["source_system_ref"] == "jobs"
+    assert proof["target_system_ref"] == "results"
+    assert proof["contract_fingerprint"]

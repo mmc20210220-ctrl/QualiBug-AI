@@ -51,6 +51,12 @@ def _graph() -> dict:
                 "system_ref": "orders",
                 "method": "POST",
                 "path": "/orders",
+                "output_binding_specs": [
+                    {
+                        "canonical_field_id": "order_id",
+                        "json_path": "$.order_id",
+                    }
+                ],
             },
             {
                 "node_id": "consume",
@@ -59,6 +65,13 @@ def _graph() -> dict:
                 "system_ref": "notifications",
                 "method": "GET",
                 "path": "/notifications/{order_id}",
+                "input_binding_refs": [
+                    {
+                        "producer_node_id": "submit",
+                        "producer_output_field": "order_id",
+                        "target": "order_id",
+                    }
+                ],
             },
         ],
         "edges": [
@@ -67,6 +80,14 @@ def _graph() -> dict:
                 "source_node_id": "submit",
                 "target_node_id": "consume",
                 "relation_type": "MESSAGE",
+                "binding_refs": [
+                    {
+                        "producer_node_id": "submit",
+                        "consumer_node_id": "consume",
+                        "producer_output_field": "order_id",
+                        "consumer_target": "order_id",
+                    }
+                ],
             }
         ],
         "topological_order": ["submit", "consume"],

@@ -123,6 +123,183 @@ def _edge_scope(
     return edge, ""
 
 
+
+_EVENT_CORRELATION_BINDING_SCHEMA = (
+    "qualibug.process-graph-event-correlation-binding.v1"
+)
+
+
+def _binding_source_field(row: dict[str, Any]) -> str:
+    return _text(
+        row.get("producer_output_field")
+        or row.get("source_field")
+        or row.get("canonical_field_id")
+        or row.get("output_field")
+        or row.get("field")
+    )
+
+
+def _binding_target(row: dict[str, Any]) -> str:
+    return _text(
+        row.get("target")
+        or row.get("consumer_target")
+        or row.get("target_location")
+        or _binding_source_field(row)
+    )
+
+
+def _node_output_fields(node: dict[str, Any]) -> set[str]:
+    return {
+        _binding_source_field(_dict(row))
+        for row in _list(node.get("output_binding_specs"))
+        if isinstance(row, dict) and _binding_source_field(_dict(row))
+    }
+
+
+def _node_input_binding_rows(node: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        _dict(row)
+        for row in _list(node.get("input_binding_refs"))
+        if isinstance(row, dict)
+    ]
+
+
+def _correlation_binding_proof(
+    *,
+    graph: dict[str, Any],
+    edge: dict[str, Any],
+    event_contract: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Bind event correlation to one exact executable data handoff.
+
+    Runtime bindings are graph-scoped and may contain same-named values from
+    fixtures or other branches.  A cross-system event may therefore use a
+    binding only when the source node produces it and the selected edge hands
+    that exact field to the target node.  No name/path inference is allowed.
+    """
+    source_node_id = _text(event_contract.get("source_node_id"))
+    target_node_id = _text(event_contract.get("target_node_id"))
+    declared = _text(event_contract.get("correlation_binding"))
+    nodes = _nodes(graph)
+    source_node = _dict(nodes.get(source_node_id))
+    target_node = _dict(nodes.get(target_node_id))
+    if not source_node or not target_node:
+        return {}, "event_correlation_node_scope_unresolved"
+
+    candidates: list[tuple[dict[str, Any], str, str]] = []
+    for raw in _list(edge.get("binding_refs")):
+        if not isinstance(raw, dict):
+            continue
+        row = _dict(raw)
+        producer = _text(
+            row.get("producer_node_id")
+            or row.get("source_node_id")
+            or source_node_id
+        )
+        consumer = _text(
+            row.get("consumer_node_id")
+            or row.get("target_node_id")
+            or target_node_id
+        )
+        source_field = _binding_source_field(row)
+        target = _binding_target(row)
+        if (
+            producer == source_node_id
+            and consumer == target_node_id
+            and source_field
+            and target
+            and declared in {source_field, target}
+        ):
+            candidates.append((row, source_field, target))
+    if not candidates:
+        return {}, f"event_correlation_handoff_unresolved:{declared}"
+    if len(candidates) != 1:
+        return {}, (
+            "event_correlation_handoff_ambiguous:"
+            f"{declared}:count={len(candidates)}"
+        )
+    _binding, source_field, consumer_target = candidates[0]
+
+    if source_field not in _node_output_fields(source_node):
+        return {}, (
+            "event_correlation_producer_output_unresolved:"
+            f"{source_node_id}.{source_field}"
+        )
+
+    matching_inputs = [
+        row
+        for row in _node_input_binding_rows(target_node)
+        if _text(
+            row.get("producer_node_id")
+            or row.get("source_node_id")
+            or row.get("producer_step_id")
+        )
+        == source_node_id
+        and _binding_source_field(row) == source_field
+        and _binding_target(row) == consumer_target
+    ]
+    if len(matching_inputs) != 1:
+        return {}, (
+            "event_correlation_consumer_input_unresolved:"
+            f"{target_node_id}:{source_field}->{consumer_target}:"
+            f"count={len(matching_inputs)}"
+        )
+
+    payload = {
+        "schema_version": _EVENT_CORRELATION_BINDING_SCHEMA,
+        "edge_id": _text(edge.get("edge_id")),
+        "producer_node_id": source_node_id,
+        "consumer_node_id": target_node_id,
+        "producer_output_field": source_field,
+        "consumer_target": consumer_target,
+        "source_system_ref": _text(
+            edge.get("source_system_ref") or source_node.get("system_ref")
+        ),
+        "target_system_ref": _text(
+            edge.get("target_system_ref") or target_node.get("system_ref")
+        ),
+    }
+    payload["contract_fingerprint"] = _core._fingerprint(payload)
+    return payload, ""
+
+
+def _correlation_binding_proof_valid(
+    *,
+    graph: dict[str, Any],
+    edge: dict[str, Any],
+    event_contract: dict[str, Any],
+) -> bool:
+    proof = deepcopy(_dict(event_contract.get("correlation_binding_contract")))
+    attached = _text(proof.pop("contract_fingerprint", ""))
+    if (
+        not attached
+        or attached != _core._fingerprint(proof)
+        or _text(proof.get("schema_version"))
+        != _EVENT_CORRELATION_BINDING_SCHEMA
+        or _text(event_contract.get("correlation_binding"))
+        != _text(proof.get("consumer_target"))
+    ):
+        return False
+    expected, error = _correlation_binding_proof(
+        graph=graph,
+        edge=edge,
+        event_contract={
+            **event_contract,
+            "correlation_binding": _text(
+                event_contract.get("declared_correlation_binding")
+                or event_contract.get("correlation_binding")
+            ),
+        },
+    )
+    return bool(
+        not error
+        and _text(expected.get("contract_fingerprint")) == attached
+        and expected == _dict(
+            event_contract.get("correlation_binding_contract")
+        )
+    )
+
+
 def _fingerprint_valid(row: dict[str, Any]) -> bool:
     value = deepcopy(_dict(row))
     attached = _text(value.pop("contract_fingerprint", ""))
@@ -190,6 +367,12 @@ def _validate_event_wait_runtime(
         != _text(edge.get("relation_type")).upper()
     ):
         return "event_edge_contract_drift"
+    if not _correlation_binding_proof_valid(
+        graph=graph,
+        edge=edge,
+        event_contract=event,
+    ):
+        return "event_correlation_binding_contract_drift"
     return ""
 
 
@@ -443,6 +626,24 @@ def compile_process_graph_wait_contracts(
         if event_error:
             event_issues.append(f"{wait_id}:{event_error}")
             continue
+        declared_correlation_binding = _text(
+            event_contract.get("correlation_binding")
+        )
+        correlation_proof, correlation_error = _correlation_binding_proof(
+            graph=compiled_graph,
+            edge=edge,
+            event_contract=event_contract,
+        )
+        if correlation_error:
+            event_issues.append(f"{wait_id}:{correlation_error}")
+            continue
+        event_contract["declared_correlation_binding"] = (
+            declared_correlation_binding
+        )
+        event_contract["correlation_binding"] = _text(
+            correlation_proof.get("consumer_target")
+        )
+        event_contract["correlation_binding_contract"] = correlation_proof
 
         original_adapter_event = _dict(adapter_event_specs.get(wait_id))
         if original_adapter_event:
