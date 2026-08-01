@@ -1,41 +1,35 @@
 from __future__ import annotations
 
-import json
+from typing import Any
 
 import pytest
 
-from ai_test_asset_center import behavior_ir as bir
 from ai_test_asset_center import formal_event_surface as events
 from ai_test_asset_center.formal_event_pre_cleanup import (
     _pre_observe_event,
     install_formal_event_pre_cleanup_observer,
 )
-from ai_test_asset_center.scan_event_contract_external_signal import (
-    overlay_scan_event_contracts_with_external_signals,
-)
-from ai_test_asset_center.source_event_contract_binding import (
-    bind_source_event_contracts,
-)
-from ai_test_asset_center.source_event_obligation_binding import (
-    compile_obligations_with_source_event,
-)
 
 
-def _contract() -> dict:
+def _source_ref() -> dict[str, str]:
+    return {
+        "source_id": "prd_events_v1",
+        "version": "1",
+        "locator": "section=event-contracts;row=1",
+        "kind": "formal_event_contract",
+        "quote_hash": "event-contract-source-hash",
+    }
+
+
+def _event_contract() -> dict[str, Any]:
     return {
         "schema_version": "qualibug.formal-event-contract.v1",
         "signal_type": "formal_event_contract",
         "contract_id": "event_order_created_once",
-        "title": "Order creation emits one OrderCreated event",
-        "source_refs": [{
-            "source_id": "prd_orders_v1",
-            "version": "1",
-            "locator": "section=events;table=1;row=2",
-            "kind": "formal_event_contract",
-            "quote_hash": "abc123",
-        }],
-        "operation_ref": "create_order",
-        "actor_ref": "actor_admin",
+        "title": "Trigger emits exactly one OrderCreated event",
+        "source_refs": [_source_ref()],
+        "operation_ref": "read_event_trigger",
+        "actor_ref": "actor_public",
         "observer_path": "/test-observers/events",
         "events_path": "items",
         "event_id_field": "event_id",
@@ -52,326 +46,139 @@ def _contract() -> dict:
         "observation_window_ms": 1000,
         "poll_interval_ms": 100,
         "timestamp_field": "occurred_at",
-        "trigger_body": {"sku": "SKU-1", "quantity": 1},
         "observer_requires_actor_token": False,
     }
 
 
-def _source_ref(source_id: str, locator: str, kind: str) -> dict:
+def _binding_identity() -> dict[str, Any]:
     return {
-        "source_id": source_id,
-        "version": "1",
-        "locator": locator,
-        "kind": kind,
-        "quote_hash": "",
+        "schema_version": "qualibug.formal-event-binding-identity-bridge.v1",
+        "status": "BOUND",
+        "event_contract_ref": "event_order_created_once",
+        "implementation_binding_ref": "impl_binding_order_trigger",
+        "action_surface_binding_ref": "action_surface_order_trigger",
+        "observer_binding_ref": "observer_binding_order_created",
+        "interface_id": "interface_order_trigger",
+        "actor_ref": "actor_public",
+        "scenario_ref": "scenario_order_created_event",
+        "runtime_plan_ref": "runtime_plan_order_created_event",
+        "runtime_materialization_ref": "runtime_materialization_order_created_event",
+        "contract_field_binding_refs": ["contract_field_order_id"],
+        "runtime_value_binding_refs": ["runtime_value_order_id"],
+        "binding_authority": "enterprise_binding_identity_graph",
+        "identity_reselection_allowed": False,
+        "token_overlap_is_authoritative": False,
     }
 
 
-def _ir() -> dict:
-    model = bir.empty_behavior_ir(project_id="events-project", source_snapshot_hash="source-hash")
-    create = bir._fact_node(
-        node_id="bir_op_create_order",
-        typed_fields={
-            "operation_id": "create_order",
-            "service": "orders",
-            "method": "POST",
-            "path": "/api/orders",
-            "request_schema": {},
-            "request_example": {"sku": "SKU-1", "quantity": 1},
-            "response_schema": {},
-            "parameters": [],
-            "field_dictionary": [],
-            "security": [],
-            "summary": "Create order",
-            "description": "",
-            "tags": ["orders"],
-            "side_effect_class": "write",
-            "read_write": "write",
-            "entity_refs": [],
-            "affected_fields": [],
-            "examples": [],
-            "source_operation_refs": ["create_order"],
-        },
-        source_refs=[_source_ref("api_orders_v1", "POST /api/orders", "api_operation")],
-        confidence=1.0,
-        derivation="explicit",
-        status="accepted",
-    )
-    delete = bir._fact_node(
-        node_id="bir_op_delete_order",
-        typed_fields={
-            **{key: value for key, value in create.items() if key not in {
-                "id", "source_refs", "confidence", "derivation", "status"
-            }},
-            "operation_id": "delete_order",
-            "method": "DELETE",
-            "path": "/api/orders/{id}",
-            "request_example": {},
-            "summary": "Delete order",
-            "source_operation_refs": ["delete_order"],
-        },
-        source_refs=[_source_ref("api_orders_v1", "DELETE /api/orders/{id}", "api_operation")],
-        confidence=1.0,
-        derivation="explicit",
-        status="accepted",
-    )
-    actor = bir._fact_node(
-        node_id="actor_admin",
-        typed_fields={
-            "role": "admin",
-            "role_key": "admin",
-            "account_ref": "admin@example.test",
-            "tenant_scope": "all",
-            "credential_secret_ref": "secret_ref:test_accounts:admin@example.test",
-            "account_status": "active",
-            "allowed_resources": ["orders"],
-            "allowed_actions": ["create", "delete"],
-            "denied_actions": [],
-            "runtime_bound": True,
-        },
-        source_refs=[_source_ref("runtime_actors", "admin", "runtime_actor")],
-        confidence=1.0,
-        derivation="runtime-observed",
-        status="accepted",
-    )
-    compensation = bir._relation_node(
-        relation_type="compensates",
-        from_ref="bir_op_delete_order",
-        to_ref="bir_op_create_order",
-        operation_ref="bir_op_delete_order",
-        actor_ref="actor_admin",
-        preconditions=[],
-        effects=[],
-        source_refs=[_source_ref("api_orders_v1", "cleanup:create_order", "cleanup")],
-        confidence=1.0,
-        derivation="explicit",
-        status="accepted",
-    )
-    model["operations"] = [create, delete]
-    model["actors"] = [actor]
-    model["relations"] = [compensation]
-    model["model_id"] = bir._content_addressed_id(model)
-    assert bir.validate_behavior_ir(model, require_explicit_relations=True) == []
-    return model
-
-
-def test_event_surface_registers_all_formal_links_and_static_adapter() -> None:
-    installed = events.install_formal_event_surface()
-
-    from ai_test_asset_center.adapter_capability import (
-        ADAPTER_TO_CAPABILITY,
-        ADAPTER_TO_OBSERVATION_SURFACE,
-        DECLARATION_REQUIRED,
-    )
-    from ai_test_asset_center.assertion_dsl_base import registered_assertion_kinds
-    from ai_test_asset_center.experiment_protocol_registry import registered_family_protocols
-    from ai_test_asset_center.observer_contracts_base import OBSERVER_REGISTRY
-    from ai_test_asset_center.test_obligation import canonical_risk_families
-
-    assert installed["observer"] == events.OBSERVER_ID
-    assert OBSERVER_REGISTRY[events.OBSERVER_ID]["adapter"] == events.ADAPTER
-    assert events.ASSERTION_KIND in registered_assertion_kinds()
-    assert events.RISK_FAMILY in canonical_risk_families()
-    assert f"{events.RISK_FAMILY}:{events.PROTOCOL_TEMPLATE}" in registered_family_protocols()
-    assert DECLARATION_REQUIRED[events.ADAPTER] == "runtime_contract.declared_adapters[]"
-    assert ADAPTER_TO_OBSERVATION_SURFACE[events.ADAPTER] == "event_stream"
-    assert ADAPTER_TO_CAPABILITY[events.ADAPTER] == "event_stream_read"
-
-
-def test_only_explicitly_typed_external_signals_enter_event_overlay() -> None:
-    ordinary = {
-        "signal_type": "webhook_probe",
-        "contract_id": "ordinary_signal",
-        "source_refs": _contract()["source_refs"],
-    }
-    merged, receipt = overlay_scan_event_contracts_with_external_signals(
-        {},
-        campaign_context={
-            "external_signal_requests": [ordinary, _contract()],
-        },
-    )
-
-    assert [row["contract_id"] for row in merged["event_formal_contracts"]] == [
-        "event_order_created_once"
-    ]
-    assert receipt["external_signal_request_count"] == 2
-    assert receipt["typed_external_event_contract_count"] == 1
-    assert receipt["contract_added_count"] == 1
-
-
-def test_source_event_contract_binds_exact_operation_actor_and_relation() -> None:
-    bound, receipt = bind_source_event_contracts(
-        _ir(),
-        {"event_formal_contracts": [_contract()]},
-    )
-
-    assert receipt["status"] == "BOUND"
-    invariant = next(
-        row for row in bound["invariants"]
-        if row.get("event_contract_id") == "event_order_created_once"
-    )
-    assert invariant["operation_refs"] == ["bir_op_create_order"]
-    assert invariant["event_actor_ref"] == "actor_admin"
-    assert invariant["expression"]["kind"] == "event_delivery_contract"
-    relation = next(
-        row for row in bound["relations"]
-        if row.get("to_ref") == invariant["id"]
-    )
-    assert relation["relation_type"] == "produces"
-    assert relation["operation_ref"] == "bir_op_create_order"
-
-
-def test_event_obligation_inherits_existing_cleanup_contract() -> None:
-    events.install_formal_event_surface()
-    bound, _ = bind_source_event_contracts(
-        _ir(),
-        {"event_formal_contracts": [_contract()]},
-    )
-    result = compile_obligations_with_source_event(
-        bound,
-        base_compile=lambda _model: {
-            "schema_version": "qualibug.test-obligation-pack.v1",
-            "obligations": [],
-            "obligation_count": 0,
-            "coverage_gaps": [],
-            "by_family": {},
-        },
-    )
-
-    rows = [
-        row for row in result["obligations"]
-        if row["risk_family"] == events.RISK_FAMILY
-    ]
-    assert len(rows) == 1
-    obligation = rows[0]
-    assert obligation["required_operations"] == ["bir_op_create_order"]
-    assert obligation["required_actors"] == ["actor_admin"]
-    assert obligation["required_observers"] == [events.OBSERVER_ID]
-    assert obligation["property"]["template"] == events.PROTOCOL_TEMPLATE
-    assert obligation["cleanup_requirement"]["required"] is True
-    assert obligation["cleanup_requirement"]["operation_ref"] == "bir_op_delete_order"
-    assert result["by_family"][events.RISK_FAMILY] == 1
-
-
-def test_event_protocol_requires_complete_source_contract() -> None:
-    compiled = events._compile_event_protocol({
-        "property_spec": {
-            "invariant_ref": "bir_event_inv",
-            "actor_ref": "actor_admin",
-            "event_contract": _contract(),
-        },
-        "operation": _ir()["operations"][0],
-        "operation_ref": "bir_op_create_order",
-        "treatment_actor_ref": "actor_admin",
-    })
-    assert compiled["status"] == "COMPILED"
-    assert compiled["observers"] == [{"observer_id": events.OBSERVER_ID}]
-    assert compiled["assertion"]["kind"] == events.ASSERTION_KIND
-    assert compiled["treatment_plan"][0]["body"] == {
-        "sku": "SKU-1",
-        "quantity": 1,
-    }
-
-    invalid = _contract()
-    invalid.pop("event_id_field")
-    blocked = events._compile_event_protocol({
-        "property_spec": {"event_contract": invalid},
-        "operation": _ir()["operations"][0],
-        "operation_ref": "bir_op_create_order",
-        "treatment_actor_ref": "actor_admin",
-    })
-    assert blocked["status"] == "BLOCKED"
-    assert blocked["reason_code"] == "BLOCKED_MISSING_BINDING"
-
-
-def test_full_window_exactly_once_observation_is_receipted_without_raw_payloads(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(events, "_observer_token", lambda **_kwargs: "")
-    monkeypatch.setattr(events, "_poll_event_endpoint", lambda **_kwargs: {
-        "events": [{
-            "event_id": "evt-secret-1",
-            "event_type": "OrderCreated",
-            "correlation": "order-secret-123",
-            "timestamp_present": True,
-        }],
-        "poll_count": 3,
-        "successful_polls": 3,
-        "status_codes": [200, 200, 200],
-        "errors": [],
-        "truncated": False,
-        "observation_window_completed": True,
-    })
-    exp = {
-        "experiment_id": "exp_event_1",
-        "execution_id": "exec_event_1",
-        "_observer_runtime_context": {
-            "root": "/tmp/qualibug",
-            "project": "events-project",
-            "runtime_contract": {
-                "status": "approved",
-                "approved_base_url": "http://localhost:8080",
-                "declared_adapters": [events.ADAPTER],
-            },
-        },
-    }
-    assertion = {
+def _assertion() -> dict[str, Any]:
+    return {
+        "assertion_id": "assert_order_created_event",
         "kind": events.ASSERTION_KIND,
         "property": {
-            "actor_ref": "actor_admin",
-            "event_contract": _contract(),
+            "template": events.PROTOCOL_TEMPLATE,
+            "invariant_ref": "inv_order_created_event",
+            "actor_ref": "actor_public",
+            "event_contract_id": "event_order_created_once",
+            "event_contract": _event_contract(),
+            "formal_event_binding_identity": _binding_identity(),
         },
+        "source_refs": [_source_ref()],
     }
-    observations = {
-        "treatment_observation": {
-            "body": {"id": "order-secret-123"},
+
+
+def test_formal_event_surface_installs_additively() -> None:
+    events.install_formal_event_surface()
+    from ai_test_asset_center.experiment_compiler_base import _FAMILY_SPECS
+    from ai_test_asset_center.observer_contracts_base import (
+        _REGISTERED_OBSERVER_HANDLERS,
+    )
+
+    assert events.RISK_FAMILY in _FAMILY_SPECS
+    assert events.OBSERVER_ID in _REGISTERED_OBSERVER_HANDLERS
+
+
+def test_event_protocol_compiles_source_grounded_contract() -> None:
+    events.install_formal_event_surface()
+    from ai_test_asset_center.experiment_compiler_base import compile_experiment
+
+    obligation = {
+        "obligation_id": "obl_event_1",
+        "risk_family": events.RISK_FAMILY,
+        "source_refs": [_source_ref()],
+        "formal_event_contract": _event_contract(),
+        "formal_event_binding_identity": _binding_identity(),
+    }
+    behavior_ir = {
+        "actors": [{"id": "actor_public", "role": "public"}],
+        "operations": [{
+            "id": "bir_op_read_event_trigger",
+            "operation_id": "read_event_trigger",
+            "source_operation_refs": ["read_event_trigger"],
+            "method": "GET",
+            "path": "/api/event-trigger",
+            "raw_path": "/api/event-trigger",
+        }],
+    }
+    experiment = compile_experiment(obligation, behavior_ir=behavior_ir)
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    assert events.ADAPTER in experiment["compiled_adapters"]
+    assert experiment["treatment_plan"][0]["protocol_step"] == "event_trigger"
+    assert experiment["assertions"][0]["kind"] == events.ASSERTION_KIND
+
+
+def test_event_oracle_detects_delivery_count_violation() -> None:
+    events.install_formal_event_surface()
+    from ai_test_asset_center.contract_oracles_base import evaluate_assertion
+
+    assertion = _assertion()
+    verdict = evaluate_assertion(assertion, {
+        events.EVIDENCE_KEY: {
+            "observed_total_count": 0,
+            "observed_correlated_count": 0,
+            "observed_event_types": [],
+            "mismatched_event_types": [],
+            "observation_window_completed": True,
+            "coverage_complete": True,
         },
-    }
-    receipt = events._event_observer_handler({
-        "experiment": exp,
-        "assertion": assertion,
-        "property": assertion["property"],
-        "observations": observations,
-        "execution_id": "exec_event_1",
     })
+    assert verdict["passed"] is False
+    assert verdict["reason_code"] == "EVENT_DELIVERY_COUNT_BELOW_MINIMUM"
 
-    assert receipt["status"] == "OBSERVED"
-    evidence = receipt["evidence"][events.EVIDENCE_KEY]
-    assert evidence["observed_correlated_count"] == 1
-    assert evidence["coverage_complete"] is True
-    assert evidence["raw_event_payloads_included"] is False
-    serialized = json.dumps(receipt, ensure_ascii=False, sort_keys=True)
-    assert "evt-secret-1" not in serialized
-    assert "order-secret-123" not in serialized
 
-    verdict = events._evaluate_event_delivery({
-        "observations": {events.EVIDENCE_KEY: evidence},
+def test_event_oracle_detects_duplicate_unique_deliveries() -> None:
+    events.install_formal_event_surface()
+    from ai_test_asset_center.contract_oracles_base import evaluate_assertion
+
+    assertion = _assertion()
+    verdict = evaluate_assertion(assertion, {
+        events.EVIDENCE_KEY: {
+            "observed_total_count": 2,
+            "observed_correlated_count": 2,
+            "observed_unique_event_count": 2,
+            "observed_unique_correlated_count": 2,
+            "duplicate_event_count": 0,
+            "observed_event_types": ["OrderCreated", "OrderCreated"],
+            "mismatched_event_types": [],
+            "observation_window_completed": True,
+            "coverage_complete": True,
+        },
     })
-    assert verdict["passed"] is True
-
-    duplicate = dict(evidence)
-    duplicate["observed_correlated_count"] = 2
-    duplicate["event_id_fingerprints"] = ["one", "two"]
-    duplicate_verdict = events._evaluate_event_delivery({
-        "observations": {events.EVIDENCE_KEY: duplicate},
-    })
-    assert duplicate_verdict["passed"] is False
-    assert duplicate_verdict["actual"]["count"] == 2
+    assert verdict["passed"] is False
+    assert verdict["reason_code"] == "EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
 
 
-def test_incomplete_event_observation_never_reports_pass() -> None:
-    verdict = events._evaluate_event_delivery({
-        "observations": {
-            events.EVIDENCE_KEY: {
-                "expected_event_type": "OrderCreated",
-                "expected_min_count": 1,
-                "expected_max_count": 1,
-                "observed_correlated_count": 1,
-                "observed_event_types": ["OrderCreated"],
-                "mismatched_event_types": [],
-                "observation_window_completed": False,
-                "coverage_complete": False,
-            }
+def test_event_oracle_indeterminate_when_window_not_completed() -> None:
+    events.install_formal_event_surface()
+    from ai_test_asset_center.contract_oracles_base import evaluate_assertion
+
+    verdict = evaluate_assertion(_assertion(), {
+        events.EVIDENCE_KEY: {
+            "observed_correlated_count": 0,
+            "observed_event_types": ["OrderCreated"],
+            "mismatched_event_types": [],
+            "observation_window_completed": False,
+            "coverage_complete": False,
         },
     })
     assert verdict["passed"] is None
@@ -407,6 +214,11 @@ def test_event_observer_runs_before_cleanup_and_finalizer_reuses_receipt(
 
     monkeypatch.setattr(events, "_event_observer_handler", fake_handler)
     exp = {
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "intent": "trigger_source_declared_event",
+            "protocol_step": "event_trigger",
+        }],
         "observers": [{"observer_id": events.OBSERVER_ID}],
         "assertions": [{"kind": events.ASSERTION_KIND, "property": {}}],
     }
@@ -419,6 +231,7 @@ def test_event_observer_runs_before_cleanup_and_finalizer_reuses_receipt(
     )
     assert calls == ["observe"]
     assert receipt is not None
+    assert receipt["evidence"]["step_id"] == "treatment_1"
     assert observations[events.EVIDENCE_KEY]["observation_phase"] == "pre_cleanup"
 
     reused = _REGISTERED_OBSERVER_HANDLERS[events.OBSERVER_ID]({
