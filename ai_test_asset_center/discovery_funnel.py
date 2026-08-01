@@ -262,12 +262,11 @@ def _build_funnel_conservation(
         if _oracle_bucket(row) == "violation"
         and _text(row.get("status")).upper() != "DELIVERABLE"
     )
-    deliverable_attempt_ids = {
-        _text(attempt.get("finding_id"))
-        for attempt in attempts
-        if _text(attempt.get("terminal_status")).upper() == "DELIVERABLE"
-        and _text(attempt.get("finding_id"))
-    }
+    # Historical authorization quarantine is a derived formal-scope decision.
+    # The immutable ledger may still contain DELIVERABLE terminal rows, but
+    # those rows are not customer-deliverable until the same validated scope
+    # used by the formal projection accepts their occurrence identities.
+    deliverable_attempt_ids = set(validated_delivery_gate_finding_ids(ledger))
     formal_occurrence_ids = {
         _text(value)
         for value in _list(formal.get("delivery_occurrence_finding_ids"))
