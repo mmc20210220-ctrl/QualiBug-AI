@@ -47,19 +47,25 @@ def test_authenticated_role_comes_from_signed_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    account = _tenant(tmp_path, monkeypatch, "tenant-a", "tenant-a-user")
     monkeypatch.setenv("QUALIBUG_JWT_SECRET", "test-secret-with-enough-entropy")
     jwt_auth._cached_secret = None
-    token = jwt_auth.create_token("tenant-a", role="viewer")
+    token = jwt_auth.create_token(
+        account["tenant_id"],
+        role=account["role"],
+        username=account["username"],
+        session_version=account["session_version"],
+    )
     headers = {
         "Authorization": f"Bearer {token}",
         "X-QualiBug-Actor": "attacker",
-        "X-QualiBug-Role": "platform_admin",
+        "X-QualiBug-Role": "viewer",
         "X-QualiBug-Project-Scopes": "*",
     }
     assert _tenant_from_headers(headers, root=tmp_path) == "tenant-a"
     assert _actor(headers, root=tmp_path) == {
-        "name": "tenant-a",
-        "role": "viewer",
+        "name": "tenant-a-user",
+        "role": "admin",
     }
 
 
