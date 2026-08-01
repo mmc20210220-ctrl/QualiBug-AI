@@ -178,6 +178,214 @@ def _bindings(asset: dict | None = None) -> tuple[list[dict], list[dict]]:
     return behaviors, bindings
 
 
+def _fan_in_asset() -> dict:
+    return {
+        "interfaces": [
+            {
+                "interface_id": "erp:get-order",
+                "source_id": "erp-openapi",
+                "method": "GET",
+                "path": "/orders/current",
+                "operation_id": "读取订单",
+                "summary": "读取订单",
+                "system_ref": "erp",
+                "output_binding_specs": [
+                    {
+                        "canonical_field_id": "order_id",
+                        "json_path": "$.data.orderId",
+                    }
+                ],
+            },
+            {
+                "interface_id": "inventory:get-stock",
+                "source_id": "inventory-openapi",
+                "method": "GET",
+                "path": "/stock/current",
+                "operation_id": "读取库存检查",
+                "summary": "读取库存检查",
+                "system_ref": "inventory",
+                "output_binding_specs": [
+                    {
+                        "canonical_field_id": "stock_check_id",
+                        "json_path": "$.data.stockCheckId",
+                    }
+                ],
+            },
+            {
+                "interface_id": "procurement:get-readiness",
+                "source_id": "procurement-openapi",
+                "method": "GET",
+                "path": "/purchase/readiness",
+                "operation_id": "读取采购就绪状态",
+                "summary": "读取采购就绪状态",
+                "system_ref": "procurement",
+                "input_binding_refs": [
+                    {
+                        "producer_output_field": "order_id",
+                        "target": "orderId",
+                    },
+                    {
+                        "producer_output_field": "stock_check_id",
+                        "target": "stockCheckId",
+                    },
+                ],
+            },
+        ],
+        "relationships": [
+            {
+                "from": "fact:read-order",
+                "to": "erp:get-order",
+                "relation": "behavior_to_interface",
+                "status": "accepted",
+                "derivation": "exact_source_section",
+            },
+            {
+                "from": "fact:read-stock",
+                "to": "inventory:get-stock",
+                "relation": "behavior_to_interface",
+                "status": "accepted",
+                "derivation": "exact_source_section",
+            },
+            {
+                "from": "fact:read-purchase",
+                "to": "procurement:get-readiness",
+                "relation": "behavior_to_interface",
+                "status": "accepted",
+                "derivation": "exact_source_section",
+            },
+        ],
+        "rule_library": [],
+        "data_tables": [],
+        "field_dictionary": [],
+        "ui_design_specs": [],
+    }
+
+
+def _fan_in_model() -> dict:
+    children = [
+        ("process:order", "订单", "读取订单"),
+        ("process:stock", "库存检查", "读取库存检查"),
+        ("process:purchase", "采购订单", "读取采购就绪状态"),
+    ]
+    processes = [
+        {
+            "process_id": process_id,
+            "name": f"{object_ref}子流程",
+            "process_type": "LIFECYCLE_UNIQUE_CHAIN",
+            "inputs": [object_ref],
+            "participants": ["operator"],
+            "steps": [
+                {
+                    "transition_id": f"transition:{process_id}",
+                    "operation_ref": operation,
+                }
+            ],
+            "evidence": [{"source_id": "prd", "quote": object_ref}],
+            "status": "UNDERSTOOD",
+        }
+        for process_id, object_ref, operation in children
+    ]
+    processes.append(
+        {
+            "process_id": "process:purchase-fan-in",
+            "name": "订单与库存检查汇合采购",
+            "process_type": "MULTI_OBJECT_ORCHESTRATION",
+            "process_features": [
+                "MULTI_OBJECT",
+                "ORCHESTRATION",
+                "EXPLICIT_JOIN",
+                "CROSS_SYSTEM",
+            ],
+            "trigger": {"object_refs": ["订单", "库存检查"]},
+            "entry_mode": "SOURCE_DECLARED_MULTI_START_JOIN",
+            "inputs": ["订单", "库存检查"],
+            "steps": [
+                {"object_ref": "订单", "process_ref": "process:order"},
+                {"object_ref": "库存检查", "process_ref": "process:stock"},
+                {"object_ref": "采购订单", "process_ref": "process:purchase"},
+            ],
+            "object_links": [
+                {
+                    "relation_id": "relation:order-purchase",
+                    "source_object_ref": "订单",
+                    "target_object_ref": "采购订单",
+                    "source_process_ref": "process:order",
+                    "target_process_ref": "process:purchase",
+                    "source_system_ref": "erp",
+                    "target_system_ref": "procurement",
+                    "relation_type": "GENERATES",
+                    "orchestration_markers": ["EXPLICIT_JOIN", "CROSS_SYSTEM"],
+                    "binding_refs": [
+                        {
+                            "canonical_field_id": "order_id",
+                            "producer_response_path": "$.data.orderId",
+                            "consumer_target": "orderId",
+                        }
+                    ],
+                    "source_refs": ["prd#join-order"],
+                    "evidence": [{"source_id": "prd", "quote": "订单完成后参与采购汇合"}],
+                },
+                {
+                    "relation_id": "relation:stock-purchase",
+                    "source_object_ref": "库存检查",
+                    "target_object_ref": "采购订单",
+                    "source_process_ref": "process:stock",
+                    "target_process_ref": "process:purchase",
+                    "source_system_ref": "inventory",
+                    "target_system_ref": "procurement",
+                    "relation_type": "GENERATES",
+                    "orchestration_markers": ["EXPLICIT_JOIN", "CROSS_SYSTEM"],
+                    "binding_refs": [
+                        {
+                            "canonical_field_id": "stock_check_id",
+                            "producer_response_path": "$.data.stockCheckId",
+                            "consumer_target": "stockCheckId",
+                        }
+                    ],
+                    "source_refs": ["prd#join-stock"],
+                    "evidence": [{"source_id": "prd", "quote": "库存检查完成后参与采购汇合"}],
+                },
+            ],
+            "joins": [
+                {
+                    "join_id": "join:purchase",
+                    "join_kind": "SOURCE_EXPLICIT_JOIN",
+                    "target_object_ref": "采购订单",
+                    "incoming_object_refs": ["订单", "库存检查"],
+                    "source_refs": ["prd#join-order", "prd#join-stock"],
+                    "evidence": [{"source_id": "prd", "quote": "订单和库存检查均完成后"}],
+                }
+            ],
+            "waits": [],
+            "evidence": [{"source_id": "prd", "quote": "订单和库存检查均完成后进入采购"}],
+            "status": "UNDERSTOOD",
+        }
+    )
+    return {"operations": [], "processes": processes}
+
+
+def _fan_in_bindings() -> tuple[list[dict], list[dict]]:
+    behaviors = [
+        _behavior("behavior:order", "读取订单", "订单", "fact:read-order"),
+        _behavior("behavior:stock", "读取库存检查", "库存检查", "fact:read-stock"),
+        _behavior(
+            "behavior:purchase",
+            "读取采购就绪状态",
+            "采购订单",
+            "fact:read-purchase",
+        ),
+    ]
+    bindings, unknowns, conflicts, _gate = build_behavior_implementation_bindings(
+        _fan_in_asset(), behaviors
+    )
+    assert all(
+        row.get("reason_code") == "IMPLEMENTATION_EFFECT_OBSERVER_UNRESOLVED"
+        for row in unknowns
+    )
+    assert conflicts == []
+    return behaviors, bindings
+
+
 def test_source_declared_system_and_handoff_contracts_reach_process_graph() -> None:
     behaviors, bindings = _bindings()
 
@@ -598,3 +806,397 @@ def test_compiled_cross_system_graph_enters_existing_multi_step_protocol() -> No
     assert target["input_binding_refs"][0]["producer_output_field"] == "order_id"
     assert target["input_binding_refs"][0]["target"] == "orderId"
     assert result["per_step_evidence"] is True
+
+
+def test_source_declared_cross_system_fan_in_compiles_one_exact_join() -> None:
+    from ai_test_asset_center.multi_step_protocol import (
+        compile_multi_step_process_protocol,
+    )
+
+    behaviors, bindings = _fan_in_bindings()
+    graphs, unknowns, gate = build_business_process_graphs(
+        _fan_in_model(), behaviors, bindings
+    )
+
+    assert unknowns == []
+    assert gate["status"] == "PASS"
+    graph = next(
+        row for row in graphs if row["process_id"] == "process:purchase-fan-in"
+    )
+    assert graph["status"] == "COMPILED"
+    assert len(graph["start_node_refs"]) == 2
+    assert len(graph["join_groups"]) == 1
+    join = graph["join_groups"][0]
+    assert join["join_kind"] == "SOURCE_EXPLICIT_JOIN"
+    assert join["status"] == "BOUND"
+    actual_predecessors = {
+        edge["source_node_id"]
+        for edge in graph["edges"]
+        if edge["target_node_id"] == join["join_node_id"]
+    }
+    assert set(join["predecessor_node_ids"]) == actual_predecessors
+    assert len(actual_predecessors) == 2
+
+    result = compile_multi_step_process_protocol(
+        {
+            "risk_family": "process",
+            "operation_ref": graph["nodes"][0]["operation_ref"],
+            "treatment_actor_ref": "operator",
+            "property_spec": {
+                "process_graph": graph,
+                "source_refs": ["prd#purchase-fan-in"],
+            },
+            "behavior_ir": {
+                "operations": [
+                    {
+                        "id": node["operation_ref"],
+                        "method": node["method"],
+                        "path": node["path"],
+                        "system_ref": node["system_ref"],
+                    }
+                    for node in graph["nodes"]
+                ],
+                "actors": [{"id": "operator", "role": "public"}],
+            },
+        }
+    )
+    assert result["status"] == "COMPILED", result
+    assert result["expected_order"] == []
+    assert len(result["execution_graph"]["join_groups"]) == 1
+
+
+def test_cross_system_fan_in_runtime_waits_for_every_declared_predecessor() -> None:
+    behaviors, bindings = _fan_in_bindings()
+    graphs, unknowns, _gate = build_business_process_graphs(
+        _fan_in_model(), behaviors, bindings
+    )
+    assert unknowns == []
+    graph = next(
+        row for row in graphs if row["process_id"] == "process:purchase-fan-in"
+    )
+    plan = [
+        {
+            "step_id": node["node_id"],
+            "operation_ref": node["operation_ref"],
+            "actor_ref": node["actor_ref"],
+            "system_ref": node["system_ref"],
+            "input_binding_refs": deepcopy(node.get("input_binding_refs") or []),
+            "output_binding_specs": deepcopy(node.get("output_binding_specs") or []),
+            "_execution_graph": graph,
+        }
+        for node in graph["nodes"]
+    ]
+    ops = {
+        node["operation_ref"]: {
+            "id": node["operation_ref"],
+            "method": node["method"],
+            "path": node["path"],
+        }
+        for node in graph["nodes"]
+    }
+    runtime = prepare_graph_runtime(
+        graph=graph,
+        treatment_plan=plan,
+        ops=ops,
+        base_url="https://erp.example.test",
+        runtime_contract={
+            "status": "approved",
+            "requested_base_url": "https://erp.example.test",
+            "approved_base_url": "https://erp.example.test",
+            "environment_type": "test",
+            "environment_ref": "erp-test",
+            "execution_mode": "safe_read_only",
+            "system_ref": "erp",
+            "approved_targets": {
+                "inventory": {
+                    "status": "approved",
+                    "requested_base_url": "https://inventory.example.test",
+                    "approved_base_url": "https://inventory.example.test",
+                    "environment_type": "test",
+                    "environment_ref": "inventory-test",
+                    "execution_mode": "safe_read_only",
+                    "actor_token_keys": {"operator": "inventory:operator"},
+                },
+                "procurement": {
+                    "status": "approved",
+                    "requested_base_url": "https://procurement.example.test",
+                    "approved_base_url": "https://procurement.example.test",
+                    "environment_type": "test",
+                    "environment_ref": "procurement-test",
+                    "execution_mode": "safe_read_only",
+                    "actor_token_keys": {"operator": "procurement:operator"},
+                },
+            },
+        },
+    )
+    assert runtime["status"] == "READY", runtime
+    by_system = {row["system_ref"]: row for row in plan}
+    order_step = by_system["erp"]
+    stock_step = by_system["inventory"]
+    purchase_step = by_system["procurement"]
+    assert runtime["wave_by_node"][order_step["step_id"]] == 0
+    assert runtime["wave_by_node"][stock_step["step_id"]] == 0
+    assert runtime["wave_by_node"][purchase_step["step_id"]] == 1
+
+    assert record_graph_step_outcome(
+        runtime=runtime,
+        graph=graph,
+        step=order_step,
+        observation={"status_code": 200, "body": {"data": {"orderId": "ORD-42"}}},
+    )["status"] == "SUCCEEDED"
+    blocked = graph_step_context(
+        runtime=runtime,
+        graph=graph,
+        step=purchase_step,
+        initial_bindings={},
+    )
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["reason_code"] == "PROCESS_GRAPH_PREDECESSOR_NOT_SUCCEEDED"
+    assert stock_step["step_id"] in blocked["detail"]
+
+    assert record_graph_step_outcome(
+        runtime=runtime,
+        graph=graph,
+        step=stock_step,
+        observation={
+            "status_code": 200,
+            "body": {"data": {"stockCheckId": "STOCK-9"}},
+        },
+    )["status"] == "SUCCEEDED"
+    ready = graph_step_context(
+        runtime=runtime,
+        graph=graph,
+        step=purchase_step,
+        initial_bindings={},
+    )
+    assert ready["status"] == "READY"
+    assert ready["base_url"] == "https://procurement.example.test"
+    assert ready["bindings"] == {
+        "orderId": "ORD-42",
+        "stockCheckId": "STOCK-9",
+    }
+
+
+def test_runtime_blocks_join_metadata_that_disagrees_with_executable_edges() -> None:
+    behaviors, bindings = _fan_in_bindings()
+    graphs, unknowns, _gate = build_business_process_graphs(
+        _fan_in_model(), behaviors, bindings
+    )
+    assert unknowns == []
+    graph = deepcopy(
+        next(row for row in graphs if row["process_id"] == "process:purchase-fan-in")
+    )
+    graph["join_groups"][0]["predecessor_node_ids"] = graph["join_groups"][0][
+        "predecessor_node_ids"
+    ][:1]
+    plan = [
+        {
+            "step_id": node["node_id"],
+            "operation_ref": node["operation_ref"],
+            "actor_ref": node["actor_ref"],
+            "system_ref": node["system_ref"],
+            "_execution_graph": graph,
+        }
+        for node in graph["nodes"]
+    ]
+    result = prepare_graph_runtime(
+        graph=graph,
+        treatment_plan=plan,
+        ops={
+            node["operation_ref"]: {
+                "id": node["operation_ref"],
+                "method": node["method"],
+                "path": node["path"],
+            }
+            for node in graph["nodes"]
+        },
+        base_url="https://erp.example.test",
+        runtime_contract={
+            "status": "approved",
+            "requested_base_url": "https://erp.example.test",
+            "approved_base_url": "https://erp.example.test",
+            "environment_type": "test",
+            "environment_ref": "erp-test",
+            "execution_mode": "safe_read_only",
+            "system_ref": "erp",
+        },
+    )
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "PROCESS_GRAPH_RUNTIME_INVALID"
+    assert "join_1_predecessor_identity_invalid" in result["detail"]
+
+
+def test_cross_system_fan_in_executes_through_existing_plan_executor(monkeypatch) -> None:
+    from pathlib import Path
+
+    import ai_test_asset_center.experiment_plan_executor as plan_executor
+    from ai_test_asset_center.multi_step_protocol import (
+        compile_multi_step_process_protocol,
+    )
+    from ai_test_asset_center.process_step_execution import ProcessStepLedger
+
+    behaviors, bindings = _fan_in_bindings()
+    graphs, unknowns, _gate = build_business_process_graphs(
+        _fan_in_model(), behaviors, bindings
+    )
+    assert unknowns == []
+    graph = next(
+        row for row in graphs if row["process_id"] == "process:purchase-fan-in"
+    )
+    protocol = compile_multi_step_process_protocol(
+        {
+            "risk_family": "process",
+            "operation_ref": graph["nodes"][0]["operation_ref"],
+            "treatment_actor_ref": "operator",
+            "property_spec": {"process_graph": graph},
+            "behavior_ir": {
+                "operations": [
+                    {
+                        "id": node["operation_ref"],
+                        "method": node["method"],
+                        "path": node["path"],
+                        "system_ref": node["system_ref"],
+                    }
+                    for node in graph["nodes"]
+                ],
+                "actors": [{"id": "operator", "role": "operator"}],
+            },
+        }
+    )
+    assert protocol["status"] == "COMPILED", protocol
+    calls: list[dict] = []
+
+    def fake_sequential(**kwargs):
+        step = kwargs["treatment_plan"][0]
+        system_ref = step["system_ref"]
+        calls.append(
+            {
+                "step_id": step["step_id"],
+                "system_ref": system_ref,
+                "base_url": kwargs["base_url"],
+                "bindings": dict(kwargs["runtime_bindings"]),
+            }
+        )
+        body = {
+            "erp": {"data": {"orderId": "ORD-42"}},
+            "inventory": {"data": {"stockCheckId": "STOCK-9"}},
+            "procurement": {"ready": True},
+        }[system_ref]
+        ledger = ProcessStepLedger(
+            experiment_id=kwargs["eid"],
+            campaign_id=kwargs["resolved_campaign_id"],
+            run_id=kwargs["resolved_execution_id"],
+            obligation_id=kwargs["oid"],
+            required_step_ids=[step["step_id"]],
+        )
+        ledger.record_step_execution(
+            step_id=step["step_id"],
+            phase="treatment",
+            operation_ref=step["operation_ref"],
+            actor_ref=step["actor_ref"],
+            runtime_identity=dict(kwargs["runtime_bindings"]),
+            status_code=200,
+            final_status="EXECUTED",
+            target_reached=True,
+        )
+        return {
+            "steps": [
+                {
+                    "step_id": step["step_id"],
+                    "phase": "treatment",
+                    "operation_ref": step["operation_ref"],
+                    "status_code": 200,
+                    "body": body,
+                }
+            ],
+            "contract_evidence_receipts": [],
+            "request_bodies_for_cleanup": {},
+            "pre_transport_block_reasons": [],
+            "cleanup_failures": 0,
+            "process_step_ledger": ledger,
+        }
+
+    monkeypatch.setattr(plan_executor, "_delegate_sequential", fake_sequential)
+    observations: dict = {}
+    result = plan_executor.execute_non_barrier_plans(
+        control_plan=[],
+        treatment_plan=protocol["treatment_plan"],
+        consumed_barrier_steps=set(),
+        actors={
+            "operator": {
+                "id": "operator",
+                "role": "operator",
+                "credential_secret_ref": "erp:operator",
+            }
+        },
+        ops={
+            node["operation_ref"]: {
+                "id": node["operation_ref"],
+                "method": node["method"],
+                "path": node["path"],
+            }
+            for node in graph["nodes"]
+        },
+        tokens={
+            "erp:operator": "erp-token",
+            "inventory:operator": "inventory-token",
+            "procurement:operator": "procurement-token",
+        },
+        runtime_bindings={"tenantId": "TENANT-A"},
+        activation_requirements={
+            "control": [],
+            "treatment": [
+                row["step_id"] for row in protocol["treatment_plan"]
+            ],
+        },
+        observations=observations,
+        eid="exp-fan-in",
+        oid="obl-fan-in",
+        resolved_campaign_id="cmp-fan-in",
+        resolved_execution_id="run-fan-in",
+        campaign_id="cmp-fan-in",
+        root=Path("."),
+        project="project",
+        base_url="https://erp.example.test",
+        runtime_contract={
+            "status": "approved",
+            "requested_base_url": "https://erp.example.test",
+            "approved_base_url": "https://erp.example.test",
+            "environment_type": "test",
+            "environment_ref": "erp-test",
+            "execution_mode": "safe_read_only",
+            "system_ref": "erp",
+            "approved_targets": {
+                "inventory": {
+                    "status": "approved",
+                    "requested_base_url": "https://inventory.example.test",
+                    "approved_base_url": "https://inventory.example.test",
+                    "environment_type": "test",
+                    "environment_ref": "inventory-test",
+                    "execution_mode": "safe_read_only",
+                    "actor_token_keys": {"operator": "inventory:operator"},
+                },
+                "procurement": {
+                    "status": "approved",
+                    "requested_base_url": "https://procurement.example.test",
+                    "approved_base_url": "https://procurement.example.test",
+                    "environment_type": "test",
+                    "environment_ref": "procurement-test",
+                    "execution_mode": "safe_read_only",
+                    "actor_token_keys": {"operator": "procurement:operator"},
+                },
+            },
+        },
+    )
+
+    assert [row["system_ref"] for row in calls[-1:]] == ["procurement"]
+    assert {row["system_ref"] for row in calls[:2]} == {"erp", "inventory"}
+    assert calls[-1]["bindings"] == {
+        "tenantId": "TENANT-A",
+        "orderId": "ORD-42",
+        "stockCheckId": "STOCK-9",
+    }
+    assert set(result["process_graph_runtime"]["node_status"].values()) == {
+        "SUCCEEDED"
+    }
+    assert len(observations["graph_step_observations"]) == 3

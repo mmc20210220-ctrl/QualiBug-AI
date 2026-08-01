@@ -558,6 +558,51 @@ def _relation_has_parallel_marker(relation: dict[str, Any]) -> bool:
     return bool(_PARALLEL_OBJECT_MARKER_RE.search(_relation_corpus(relation)))
 
 
+def _source_declared_multi_start_join(
+    *,
+    starts: list[str],
+    join_objects: list[str],
+    outgoing: dict[str, list[tuple[str, dict[str, Any]]]],
+) -> bool:
+    """Prove that every source root participates in an explicit downstream join.
+
+    Multiple roots are not ambiguous when the source explicitly declares their
+    convergence.  The existing dependency-wave runtime already supports several
+    start nodes, so the understanding layer must not invent a synthetic root or
+    reject a proven fan-in.  Unrelated roots remain fail-closed.
+    """
+    if len(starts) <= 1 or not join_objects:
+        return False
+    join_targets = set(join_objects)
+    common_reachable_joins: set[str] | None = None
+    for start in starts:
+        queue = [start]
+        visited: set[str] = set()
+        reachable_joins: set[str] = set()
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+            visited.add(current)
+            if current in join_targets:
+                reachable_joins.add(current)
+            queue.extend(
+                successor
+                for successor, _relation in outgoing.get(current, [])
+                if successor not in visited
+            )
+        if not reachable_joins:
+            return False
+        common_reachable_joins = (
+            reachable_joins
+            if common_reachable_joins is None
+            else common_reachable_joins & reachable_joins
+        )
+        if not common_reachable_joins:
+            return False
+    return bool(common_reachable_joins)
+
+
 def _waits_from_relation(relation: dict[str, Any], predecessor: str, successor: str) -> list[dict[str, Any]]:
     markers = unique_text(as_list(relation.get("orchestration_markers")))
     temporal = unique_text(as_list(relation.get("temporal_constraints")))
@@ -676,7 +721,12 @@ def _project_multi_object_processes(
         ]
 
     starts = sorted(obj for obj in linked_objects if not incoming.get(obj))
-    if len(starts) != 1 and not join_objects:
+    multi_start_join = _source_declared_multi_start_join(
+        starts=starts,
+        join_objects=join_objects,
+        outgoing=outgoing,
+    )
+    if len(starts) != 1 and not multi_start_join:
         return [], [
             new_unknown(
                 "MULTI_OBJECT_PROCESS_START_UNDERDETERMINED",
@@ -834,6 +884,20 @@ def _project_multi_object_processes(
                         for marker in as_list(relation.get("orchestration_markers"))
                     ]
                 ),
+                "source_refs": unique_text(
+                    [
+                        source_ref
+                        for _, relation in rows
+                        for source_ref in as_list(relation.get("source_refs"))
+                    ]
+                ),
+                "evidence": dedupe_evidence(
+                    [
+                        evidence_row
+                        for _, relation in rows
+                        for evidence_row in as_list(relation.get("evidence"))
+                    ]
+                ),
             }
         )
     parallel_groups: list[dict[str, Any]] = []
@@ -924,10 +988,11 @@ def _project_multi_object_processes(
     terminals = sorted(obj for obj in linked_objects if not outgoing.get(obj))
     status = (
         "PARTIAL"
-        if any(text(by_object[obj].get("status")) == "PARTIAL" for obj in ordered_objects) or len(starts) != 1
+        if any(text(by_object[obj].get("status")) == "PARTIAL" for obj in ordered_objects)
+        or (len(starts) != 1 and not multi_start_join)
         else "UNDERSTOOD"
     )
-    if len(starts) != 1:
+    if len(starts) != 1 and not multi_start_join:
         unknowns.append(
             new_unknown(
                 "MULTI_OBJECT_PROCESS_START_UNDERDETERMINED",
@@ -952,6 +1017,13 @@ def _project_multi_object_processes(
         "process_type": "MULTI_OBJECT_ORCHESTRATION",
         "process_features": unique_text(features),
         "trigger": {"object_ref": starts[0]} if len(starts) == 1 else {"object_refs": starts},
+        "entry_mode": (
+            "SOURCE_DECLARED_MULTI_START_JOIN"
+            if multi_start_join
+            else "SOURCE_DECLARED_SINGLE_START"
+            if len(starts) == 1
+            else "UNRESOLVED"
+        ),
         "inputs": starts if starts else sorted(linked_objects),
         "outputs": [{"object_ref": obj} for obj in terminals],
         "participants": unique_text(
