@@ -133,7 +133,7 @@ export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
       )}
 
       {unknown ? (
-        <p>最近一次同步收据暂不可用，系统会自动恢复；已有资料不会被覆盖或移除。</p>
+        <p>最近一次同步收据暂不可用，系统会自动恢复；已有资料不会被覆盖或删除。</p>
       ) : partial ? (
         <>
           <p>
