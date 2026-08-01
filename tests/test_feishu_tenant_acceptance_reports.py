@@ -102,11 +102,19 @@ def _write_report(
                     "content": "MUST-NOT-RETURN",
                 },
                 "expected": False,
-                "detail": "Customer material remains unchanged.",
-            }
+                "detail": "CUSTOMER-DIAGNOSTIC-MUST-NOT-RETURN",
+            },
+            {
+                "check_id": "UNSTRUCTURED_VALUE",
+                "status": "FAIL",
+                "severity": "BLOCKER",
+                "observed": "CUSTOMER-CONTRACT-CONTENT-MUST-NOT-RETURN",
+                "expected": ">= 20",
+                "detail": "CUSTOMER-ERROR-DETAIL-MUST-NOT-RETURN",
+            },
         ],
         "summary": {
-            "check_count": 1,
+            "check_count": 2,
             "blocker_failure_count": 0,
             "executed_run_count": 2,
             "required_run_count": 2,
@@ -149,11 +157,20 @@ def test_report_projection_is_allowlisted_and_redacted(tmp_path: Path) -> None:
     assert report["acceptance_ready"] is True
     assert report["runs"][0]["next_cursor_fingerprint"] == "a" * 64
     assert report["runs"][0]["customer_material_mutation_executed"] is False
+    assert report["checks"][0]["observed"] == {}
+    assert report["checks"][0]["detail"] == ""
+    assert report["checks"][1]["observed"] == "REDACTED_UNSTRUCTURED_VALUE"
+    assert report["checks"][1]["expected"] == ">= 20"
+    assert report["checks"][1]["detail"] == ""
+    assert report["arbitrary_diagnostic_text_returned"] is False
     assert report["source_content_returned"] is False
     assert report["raw_cursor_returned"] is False
     assert report["credential_values_returned"] is False
     assert "RAW-CURSOR-MUST-NOT-RETURN" not in encoded
     assert "CUSTOMER-CONTENT-MUST-NOT-RETURN" not in encoded
+    assert "CUSTOMER-DIAGNOSTIC-MUST-NOT-RETURN" not in encoded
+    assert "CUSTOMER-CONTRACT-CONTENT-MUST-NOT-RETURN" not in encoded
+    assert "CUSTOMER-ERROR-DETAIL-MUST-NOT-RETURN" not in encoded
     assert "MUST-NOT-RETURN" not in encoded
     assert "/private/server" not in encoded
     assert "next_cursor\"" not in encoded
@@ -199,8 +216,10 @@ def test_report_inventory_is_newest_first_and_bounded(tmp_path: Path) -> None:
         "20260801T100200Z_bbbbbbbbbbbb"
     )
     assert inventory["reports"][0]["acceptance_ready"] is True
+    assert inventory["governance"]["arbitrary_diagnostic_text_returned"] is False
     encoded = json.dumps(inventory, ensure_ascii=False)
     assert "CUSTOMER-CONTENT-MUST-NOT-RETURN" not in encoded
+    assert "CUSTOMER-ERROR-DETAIL-MUST-NOT-RETURN" not in encoded
     assert "/private/server" not in encoded
 
 
