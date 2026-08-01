@@ -33,6 +33,7 @@ export function DiscoveryFunnelPanel({ funnel, report }: Props) {
     ? (Array.isArray(selected.examples) ? selected.examples : []).map(asRecord)
     : [];
   const selectedExample = selectedExamples[0] || {};
+  const selectedAttribution = selected ? asRecord(selected.loss_attribution) : {};
   const receiptCount = (field: string, reportField: string): number | string => {
     if (typeof conservation[field] === 'number' && Number.isFinite(conservation[field])) {
       return conservation[field] as number;
@@ -70,6 +71,24 @@ export function DiscoveryFunnelPanel({ funnel, report }: Props) {
   const identityStatus = asText(conservation.identity_status) || 'NOT_MEASURED';
   const reasonRegistry = asRecord(value.reason_registry || reportValue.reason_registry);
   const reasonRegistryStatus = asText(reasonRegistry.status) || 'NOT_MEASURED';
+  const sourceFlow = asRecord(reportValue.source_flow || value.source_flow);
+  const sourceMaterials = asRecord(sourceFlow.source_materials);
+  const businessFacts = asRecord(sourceFlow.business_facts);
+  const enterpriseBehaviorIr = asRecord(sourceFlow.enterprise_behavior_ir);
+  const formalObligations = asRecord(sourceFlow.formal_obligations);
+  const sourceFlowStatus = asText(sourceFlow.status) || 'NOT_MEASURED';
+  const conversionRates = asRecord(reportValue.conversion_rates || value.conversion_rates);
+  const conversionRows = (Array.isArray(conversionRates.rates) ? conversionRates.rates : [])
+    .map(asRecord)
+    .slice(0, 6);
+  const displayCount = (raw: unknown): string => (
+    typeof raw === 'number' && Number.isFinite(raw) ? String(raw) : 'NOT_MEASURED'
+  );
+  const displayRate = (row: ReturnType<typeof asRecord>): string => (
+    typeof row.rate === 'number' && Number.isFinite(row.rate)
+      ? `${(row.rate * 100).toFixed(2)}%`
+      : asText(row.status) || 'NOT_MEASURED'
+  );
 
   return (
     <section className="customer-secondary-card" aria-label="Discovery funnel">
@@ -95,6 +114,32 @@ export function DiscoveryFunnelPanel({ funnel, report }: Props) {
         {counts.map(([label, count]) => (
           <span key={label}><em>{label}</em><b>{count}</b></span>
         ))}
+      </div>
+      <div style={{ marginTop: 18 }}>
+        <strong>Source-to-obligation evidence</strong>
+        <div className="customer-secondary-meta">
+          <span><em>Flow status</em><b>{sourceFlowStatus}</b></span>
+          <span><em>Source materials</em><b>{displayCount(sourceMaterials.canonical_source_count)}</b></span>
+          <span><em>Business facts</em><b>{displayCount(businessFacts.observed_row_count)}</b></span>
+          <span><em>Enterprise Behavior IR</em><b>{displayCount(enterpriseBehaviorIr.behavior_node_count)}</b></span>
+          <span><em>Formal obligations</em><b>{displayCount(formalObligations.formal_obligation_count)}</b></span>
+        </div>
+        <div className="focus-list" style={{ marginTop: 10 }}>
+          {conversionRows.length === 0 ? (
+            <p>No conversion-rate receipt was recorded.</p>
+          ) : conversionRows.map((row, index) => (
+            <div className="focus-card" key={`${asText(row.name)}-${index}`}>
+              <div className="focus-card-head">
+                <strong>{asText(row.name) || 'UNNAMED_CONVERSION'}</strong>
+                <span>{displayRate(row)}</span>
+              </div>
+              <div className="focus-card-meta">
+                <span>Status <b>{asText(row.status) || 'NOT_MEASURED'}</b></span>
+                <span>Numerator / denominator <b>{displayCount(row.numerator_count)} / {displayCount(row.denominator_count)}</b></span>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
       <div style={{ marginTop: 18 }}>
         <strong>Top blocking reasons</strong>
@@ -137,6 +182,8 @@ export function DiscoveryFunnelPanel({ funnel, report }: Props) {
           <p><strong>Related operation/API:</strong> {listText(selectedExample.operation_refs).join(', ') || 'Not recorded'}</p>
           <p><strong>Actor scope:</strong> {listText(selectedExample.actor_refs).join(', ') || 'Not recorded'}</p>
           <p><strong>Source evidence:</strong> {Array.isArray(selectedExample.source_refs) && selectedExample.source_refs.length > 0 ? 'Available in the source receipt' : 'Not recorded'}</p>
+          <p><strong>Loss owner:</strong> {asText(selectedAttribution.primary_owner) || 'UNKNOWN'}</p>
+          <p><strong>Source sufficiency:</strong> {asText(selectedAttribution.source_evidence_sufficiency) || 'NOT_MEASURED'}</p>
           <p><strong>Receipt detail:</strong> {asText(selectedExample.reason_detail) || 'Not recorded'}</p>
         </div>
       )}

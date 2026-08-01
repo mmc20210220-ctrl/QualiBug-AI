@@ -31,6 +31,9 @@ from .runtime_binding_materializer import (
     runtime_setup_value_from_response as _runtime_setup_value_from_response,
 )
 from .runtime_binding_graph import declared_effect_observers
+from .runtime_onboarding_preflight import (
+    run_environment_preflight as _run_environment_preflight,
+)
 from .sandbox_write_executor import _http_request
 
 
@@ -1238,156 +1241,15 @@ def run_environment_preflight(
     runtime_contract: dict[str, Any] | None = None,
     max_route_checks: int = 20,
 ) -> dict[str, Any]:
-    """Pre-scan environment validation.
-
-    Checks:
-    1. base_url reachable
-    2. Gateway routes for planned paths (deduplicated, capped)
-    3. Auth configuration present
-    4. Actor tokens loadable
-
-    Returns a preflight_receipt dict with per-check results and a set of
-    obligation IDs that should be marked ENVIRONMENT_BLOCKED.
-    """
-    checks: list[dict[str, Any]] = []
-    blocked_obligation_ids: set[str] = set()
-    all_passed = True
-
-    # ── Check 1: base_url reachable ──
-    base_url_ok = False
-    if not base_url:
-        checks.append({"check": "base_url_reachable", "status": "FAILED", "detail": "no base_url provided"})
-        all_passed = False
-    else:
-        try:
-            resp = _http_request("GET", base_url.rstrip("/") + "/", timeout=8.0)
-            status = int(resp.get("status") or 0)
-            # Any HTTP response means the server is reachable
-            if status > 0:
-                base_url_ok = True
-                checks.append({"check": "base_url_reachable", "status": "PASSED", "http_status": status})
-            else:
-                checks.append({"check": "base_url_reachable", "status": "FAILED", "detail": "no HTTP response"})
-                all_passed = False
-        except Exception as exc:
-            checks.append({"check": "base_url_reachable", "status": "FAILED", "detail": str(exc)[:200]})
-            all_passed = False
-
-    # ── Check 2: Gateway route sampling ──
-    planned_paths: set[str] = set()
-    for item in _list(obligation_plan.get("selected")):
-        if not isinstance(item, dict):
-            continue
-        op_key = _text(item.get("operation_key"))
-        # operation_key format: "METHOD /path" or "op:ref"
-        if " " in op_key:
-            path_part = op_key.split(" ", 1)[1]
-            if path_part.startswith("/"):
-                planned_paths.add(path_part)
-    route_results: list[dict[str, Any]] = []
-    routes_ok = 0
-    routes_failed = 0
-    if base_url_ok and planned_paths:
-        sample_paths = sorted(planned_paths)[:max_route_checks]
-        for path in sample_paths:
-            try:
-                resp = _http_request("HEAD", base_url.rstrip("/") + path, timeout=6.0)
-                status = int(resp.get("status") or 0)
-                if status == 404:
-                    routes_failed += 1
-                    route_results.append({"path": path, "status": status, "route": "NOT_FOUND"})
-                else:
-                    routes_ok += 1
-                    route_results.append({"path": path, "status": status, "route": "OK"})
-            except Exception as exc:
-                routes_failed += 1
-                error_type = type(exc).__name__
-                route_results.append(
-                    {
-                        "path": path,
-                        "status": 0,
-                        "route": "ERROR",
-                        "error_type": error_type,
-                        "detail": str(exc)[:200],
-                    }
-                )
-                _LOGGER.warning(
-                    "environment_preflight_route_failed path=%s error=%s",
-                    path,
-                    error_type,
-                )
-    route_ratio = routes_ok / max(1, routes_ok + routes_failed)
-    checks.append({
-        "check": "gateway_routes",
-        "status": "PASSED" if route_ratio >= 0.5 else "DEGRADED" if routes_ok > 0 else "FAILED",
-        "routes_ok": routes_ok,
-        "routes_failed": routes_failed,
-        "sample_size": len(route_results),
-    })
-    if routes_ok == 0 and routes_failed > 0:
-        all_passed = False
-
-    # ── Check 3: Auth configuration ──
-    auth_config_present = False
-    auth_source = ""
-    # Check test_accounts.json
-    accounts_path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
-    if accounts_path.exists():
-        auth_config_present = True
-        auth_source = "test_accounts.json"
-    # Check project input directory for TEST_ACCOUNTS.md
-    input_dir = Path(root) / "projects" / str(project) / "input"
-    if not auth_config_present and input_dir.exists():
-        for fname in ("TEST_ACCOUNTS.md", "test_accounts.md", "accounts.md"):
-            if (input_dir / fname).exists():
-                auth_config_present = True
-                auth_source = fname
-                break
-    # Check runtime_contract for explicit auth
-    rc = _dict(runtime_contract)
-    if not auth_config_present and _text(rc.get("auth_token") or rc.get("bearer_token")):
-        auth_config_present = True
-        auth_source = "runtime_contract"
-    checks.append({
-        "check": "auth_configuration",
-        "status": "PASSED" if auth_config_present else "WARNING",
-        "source": auth_source,
-    })
-
-    # ── Check 4: Actor tokens loadable ──
-    # base_url is in scope here and must be passed: without it the MD-login
-    # fallback cannot run, so this check reports "no tokens" for a project whose
-    # accounts are perfectly usable.
-    actor_tokens = load_actor_tokens(root, project, base_url=base_url)
-    tokens_ok = len(actor_tokens) > 0
-    checks.append({
-        "check": "actor_tokens",
-        "status": "PASSED" if tokens_ok else "WARNING",
-        "token_count": len(actor_tokens),
-        "roles": sorted(set(
-            k for k in actor_tokens if not k.startswith("secret_ref:")
-        ))[:20],
-    })
-
-    # ── Determine blocked obligations ──
-    # If base_url is not reachable, ALL planned obligations are blocked
-    if not base_url_ok:
-        for item in _list(obligation_plan.get("selected")):
-            if isinstance(item, dict):
-                oid = _text(item.get("obligation_id"))
-                if oid:
-                    blocked_obligation_ids.add(oid)
-
-    return {
-        "schema_version": "qualibug.environment-preflight.v1",
-        "all_passed": all_passed,
-        "checks": checks,
-        "base_url": base_url,
-        "base_url_reachable": base_url_ok,
-        "route_sample_results": route_results,
-        "auth_config_present": auth_config_present,
-        "auth_source": auth_source,
-        "actor_token_count": len(actor_tokens),
-        "environment_blocked_obligation_ids": sorted(blocked_obligation_ids),
-        "environment_blocked_count": len(blocked_obligation_ids),
-    }
+    """Compatibility facade for the canonical onboarding preflight helper."""
+    return _run_environment_preflight(
+        root=root,
+        project=project,
+        base_url=base_url,
+        obligation_plan=obligation_plan,
+        behavior_ir=behavior_ir,
+        runtime_contract=runtime_contract,
+        max_route_checks=max_route_checks,
+        http_request=_http_request,
+        actor_token_loader=load_actor_tokens,
+    )

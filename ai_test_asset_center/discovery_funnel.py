@@ -1174,6 +1174,76 @@ _REASON_MATERIALS: dict[str, list[str]] = {
     "UNREGISTERED": ["operator review of the emitting module and its reason-code contract"],
 }
 
+_CUSTOMER_INPUT_LOSS_FAMILIES = frozenset({
+    "SOURCE_GAP",
+})
+_QUALIBUG_CAPABILITY_LOSS_FAMILIES = frozenset({
+    "BINDING_GRAPH_GAP",
+    "BEHAVIOR_MODEL_GAP",
+    "COMPILER_GAP",
+    "FIXTURE_CAPABILITY_GAP",
+    "OBSERVER_CAPABILITY_GAP",
+    "ADAPTER_CAPABILITY_GAP",
+    "ORACLE_INPUT_GAP",
+    "EXECUTION_BUDGET",
+    "PLANNING_DEFERRED",
+})
+_RUNTIME_ENVIRONMENT_LOSS_FAMILIES = frozenset({
+    "ENVIRONMENT_GAP",
+    "POLICY_SAFETY_BLOCK",
+    "TARGET_SYSTEM_RESPONSE",
+})
+
+
+def _loss_attribution(
+    attempts: list[dict[str, Any]],
+    *,
+    family: str,
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    """Project owner buckets from the registered family and captured refs.
+
+    Source-ref presence is intentionally reported as evidence presence only;
+    it is not promoted to a sufficiency claim without an explicit receipt.
+    """
+
+    source_present_count = sum(bool(_list(item.get("source_refs"))) for item in attempts)
+    source_missing_count = len(attempts) - source_present_count
+    explicit_sufficiency = {
+        _text(item.get("source_evidence_sufficiency")).upper()
+        for item in attempts
+        if _text(item.get("source_evidence_sufficiency")).upper()
+        in {"SUFFICIENT", "INSUFFICIENT"}
+    }
+    if len(explicit_sufficiency) == 1:
+        source_sufficiency = next(iter(explicit_sufficiency))
+    elif explicit_sufficiency:
+        source_sufficiency = "MIXED"
+    else:
+        source_sufficiency = "NOT_MEASURED"
+
+    if family in _CUSTOMER_INPUT_LOSS_FAMILIES or (
+        family == "CLEANUP_CAPABILITY_GAP"
+        and _text(profile.get("recoverability")).upper() == "SOURCE_DEPENDENT"
+    ):
+        primary_owner = "CUSTOMER_INPUT_GAP"
+    elif family in _QUALIBUG_CAPABILITY_LOSS_FAMILIES or family == "CLEANUP_CAPABILITY_GAP":
+        primary_owner = "QUALIBUG_CAPABILITY_GAP"
+    elif family in _RUNTIME_ENVIRONMENT_LOSS_FAMILIES:
+        primary_owner = "RUNTIME_ENVIRONMENT_GAP"
+    else:
+        primary_owner = "UNKNOWN"
+    return {
+        "primary_owner": primary_owner,
+        "classification_basis": "registered_reason_family_and_attempt_source_refs",
+        "customer_input_gap": primary_owner == "CUSTOMER_INPUT_GAP",
+        "qualibug_capability_gap": primary_owner == "QUALIBUG_CAPABILITY_GAP",
+        "runtime_environment_gap": primary_owner == "RUNTIME_ENVIRONMENT_GAP",
+        "source_evidence_present_blocked_count": source_present_count,
+        "source_evidence_missing_blocked_count": source_missing_count,
+        "source_evidence_sufficiency": source_sufficiency,
+    }
+
 
 def _reason_details(
     attempts: list[dict[str, Any]],
@@ -1216,6 +1286,11 @@ def _reason_details(
             if len(examples) >= 3:
                 break
         family = _text(profile.get("reason_family")) or "UNREGISTERED"
+        reason_attempts = [
+            attempt
+            for attempt in attempts
+            if _text(attempt.get("reason_code")) == reason
+        ]
         rows.append({
             "reason": reason,
             "count": count,
@@ -1225,6 +1300,11 @@ def _reason_details(
             "is_blocking": bool(profile.get("is_blocking")),
             "must_remain_blocked": bool(profile.get("must_remain_blocked")),
             "customer_materials_needed": list(_REASON_MATERIALS.get(family, [])),
+            "loss_attribution": _loss_attribution(
+                reason_attempts,
+                family=family,
+                profile=profile,
+            ),
             "examples": examples,
         })
     blocking = [row for row in rows if row.get("is_blocking")]
@@ -1243,11 +1323,163 @@ def _attempt_reason_detail(attempt: dict[str, Any]) -> str:
     explicit = _text(attempt.get("reason_detail"))
     if explicit:
         return explicit
+    terminal_reason = _text(attempt.get("reason_code"))
+    for stage in _list(attempt.get("stages")):
+        stage_value = _dict(stage)
+        if (
+            _text(stage_value.get("reason_code")) == terminal_reason
+            and _text(stage_value.get("reason_detail"))
+        ):
+            return _text(stage_value.get("reason_detail"))
     if _text(attempt.get("reason_code")).upper() != "CONTRACT_ORACLE_HARNESS_FAILED":
         return ""
     bundle = _dict(attempt.get("delivery_evidence_bundle"))
     oracle = _dict(bundle.get("oracle_receipt"))
     return _oracle_harness_reason_detail(oracle)
+
+
+def _source_flow_projection(result: dict[str, Any]) -> dict[str, Any]:
+    """Return the source-to-obligation receipt, or expose its absence."""
+
+    nested = _dict(result.get("v12"))
+    receipt = result.get("knowledge_source_flow_receipt")
+    if not isinstance(receipt, dict):
+        receipt = nested.get("knowledge_source_flow_receipt")
+    if isinstance(receipt, dict) and receipt:
+        return dict(receipt)
+    return {
+        "schema_version": "qualibug.discovery-source-flow-receipt.v1",
+        "authority": (
+            "enterprise_business_knowledge_asset -> enterprise_understanding_model "
+            "-> Behavior IR -> formal obligations"
+        ),
+        "status": "NOT_MEASURED",
+        "reason": "knowledge_source_flow_receipt_missing",
+        "missing_evidence": ["knowledge_source_flow_receipt"],
+        "issues": [],
+    }
+
+
+def _conversion_rate(
+    *,
+    numerator: Any,
+    denominator: Any,
+    name: str,
+    definition: str,
+) -> dict[str, Any]:
+    """Calculate a receipt-backed stage rate without inventing zeroes."""
+
+    if not isinstance(numerator, int) or isinstance(numerator, bool):
+        return {
+            "name": name,
+            "status": "NOT_MEASURED",
+            "numerator_count": None,
+            "denominator_count": None,
+            "rate": None,
+            "definition": definition,
+            "reason": "count_missing",
+        }
+    if not isinstance(denominator, int) or isinstance(denominator, bool):
+        return {
+            "name": name,
+            "status": "NOT_MEASURED",
+            "numerator_count": numerator,
+            "denominator_count": None,
+            "rate": None,
+            "definition": definition,
+            "reason": "denominator_missing",
+        }
+    if numerator < 0 or denominator < 0 or numerator > denominator:
+        return {
+            "name": name,
+            "status": "FAILED_SAFE",
+            "numerator_count": numerator,
+            "denominator_count": denominator,
+            "rate": None,
+            "definition": definition,
+            "reason": "count_out_of_range",
+        }
+    if denominator == 0:
+        return {
+            "name": name,
+            "status": "NOT_MEASURED",
+            "numerator_count": numerator,
+            "denominator_count": denominator,
+            "rate": None,
+            "definition": definition,
+            "reason": "zero_denominator",
+        }
+    return {
+        "name": name,
+        "status": "MEASURED",
+        "numerator_count": numerator,
+        "denominator_count": denominator,
+        "rate": round(numerator / denominator, 6),
+        "definition": definition,
+    }
+
+
+def _build_conversion_rates(
+    conservation: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the stage-rate projection from conservation-owned counts."""
+
+    generated = conservation.get("generated_count")
+    selected = conservation.get("selected_count")
+    compiled = conservation.get("compile_success_count")
+    executed = conservation.get("execution_count")
+    oracle = conservation.get("oracle_count")
+    violations = conservation.get("oracle_violation_count")
+    deliverable = conservation.get("customer_deliverable_finding_count")
+    rates = [
+        _conversion_rate(
+            numerator=selected,
+            denominator=generated,
+            name="generated_to_selected",
+            definition="selected obligations / generated formal obligations",
+        ),
+        _conversion_rate(
+            numerator=compiled,
+            denominator=selected,
+            name="selected_to_compiled",
+            definition="compiled obligations / selected obligations",
+        ),
+        _conversion_rate(
+            numerator=executed,
+            denominator=selected,
+            name="selected_to_executed",
+            definition="executed obligations / selected obligations",
+        ),
+        _conversion_rate(
+            numerator=executed,
+            denominator=compiled,
+            name="compiled_to_executed",
+            definition="executed obligations / compiled obligations",
+        ),
+        _conversion_rate(
+            numerator=oracle,
+            denominator=executed,
+            name="executed_to_oracle",
+            definition="oracle-receipted executions / executed obligations",
+        ),
+        _conversion_rate(
+            numerator=deliverable,
+            denominator=violations,
+            name="oracle_violation_to_customer_deliverable",
+            definition="customer-deliverable gate outcomes / oracle violations",
+        ),
+    ]
+    status = "PASS"
+    if any(_text(row.get("status")).upper() == "FAILED_SAFE" for row in rates):
+        status = "FAILED_SAFE"
+    elif any(_text(row.get("status")).upper() == "NOT_MEASURED" for row in rates):
+        status = "NOT_MEASURED"
+    return {
+        "schema_version": "qualibug.discovery-funnel-conversion-rates.v1",
+        "authority": "qualibug.obligation-attempt-ledger.v1",
+        "status": status,
+        "rates": rates,
+    }
 
 
 def build_funnel_report(
@@ -1280,6 +1512,9 @@ def build_funnel_report(
     )
     pipeline_health = build_pipeline_health(result)
     blockers, unregistered = _reason_details(attempts)
+    source_flow = _source_flow_projection(result)
+    conversion_rates = _build_conversion_rates(conservation)
+    source_flow_status = _text(source_flow.get("status")).upper()
     nested = _dict(result.get("v12"))
     discovery_separation = _dict(
         result.get("business_discovery_separation")
@@ -1306,8 +1541,14 @@ def build_funnel_report(
         "report_status": (
             "FAILED_SAFE"
             if unregistered
-            or _text(conservation.get("status")).upper()
-            in {"FAILED_SAFE", "INCOMPLETE"}
+            or _text(conservation.get("status")).upper() == "FAILED_SAFE"
+            or source_flow_status == "FAILED_SAFE"
+            or _text(conversion_rates.get("status")).upper() == "FAILED_SAFE"
+            else "BLOCKED"
+            if source_flow_status == "BLOCKED"
+            else "INCOMPLETE"
+            if _text(conservation.get("status")).upper() == "INCOMPLETE"
+            or source_flow_status in {"INCOMPLETE", "NOT_MEASURED"}
             else "READY"
         ),
         "mainline_identity": {
@@ -1375,6 +1616,8 @@ def build_funnel_report(
         },
         "pipeline_health": pipeline_health,
         "conservation": conservation,
+        "conversion_rates": conversion_rates,
+        "source_flow": source_flow,
         "formal_obligation_identity_receipt": formal_identity_receipt,
         "discovery_task_summary": _dict(
             discovery_separation.get("discovery_task_summary")
@@ -1401,6 +1644,8 @@ def render_funnel_report_markdown(report: dict[str, Any]) -> str:
     metrics = _dict(value.get("metrics"))
     quality = _dict(value.get("quality"))
     conservation = _dict(value.get("conservation"))
+    conversion_rates = _dict(value.get("conversion_rates"))
+    source_flow = _dict(value.get("source_flow"))
 
     def display_metric(raw: Any) -> str:
         return "NOT_MEASURED" if raw is None or raw == "" else str(raw)
@@ -1432,6 +1677,36 @@ def render_funnel_report_markdown(report: dict[str, Any]) -> str:
         f"| Formal delivery | {display_metric(metrics.get('formal_delivery_count'))} |",
         f"| Delivery occurrences | {display_metric(metrics.get('delivery_occurrence_count'))} |",
         "",
+        "## Stage conversion rates",
+        "",
+        "| Conversion | Rate | Status |",
+        "| --- | ---: | --- |",
+    ]
+    for rate in _list(conversion_rates.get("rates")):
+        row = _dict(rate)
+        raw_rate = row.get("rate")
+        display_rate = (
+            "NOT_MEASURED"
+            if raw_rate is None
+            else f"{float(raw_rate) * 100:.2f}%"
+        )
+        lines.append(
+            f"| {_text(row.get('name'))} | {display_rate} | "
+            f"{_text(row.get('status')) or 'UNKNOWN'} |"
+        )
+    runtime_node_counts = _dict(_dict(source_flow.get("runtime_behavior_ir")).get("node_counts"))
+    lines.extend([
+        "",
+        "## Source flow",
+        "",
+        f"- Status: `{_text(source_flow.get('status')) or 'NOT_MEASURED'}`",
+        f"- Source materials: `{display_metric(_dict(source_flow.get('source_materials')).get('canonical_source_count'))}`",
+        f"- Business facts: `{display_metric(_dict(source_flow.get('business_facts')).get('observed_row_count'))}`",
+        f"- Enterprise Behavior IR nodes: `{display_metric(_dict(source_flow.get('enterprise_behavior_ir')).get('behavior_node_count'))}`",
+        f"- Runtime Behavior IR operations: `{display_metric(runtime_node_counts.get('operations'))}`",
+        f"- Formal obligations: `{display_metric(_dict(source_flow.get('formal_obligations')).get('formal_obligation_count'))}`",
+        f"- Missing evidence: `{', '.join(_text(v) for v in _list(source_flow.get('missing_evidence')) if _text(v)) or 'none'}`",
+        "",
         "## Conservation",
         "",
         f"- Status: `{_text(conservation.get('status')) or 'UNKNOWN'}`",
@@ -1442,17 +1717,21 @@ def render_funnel_report_markdown(report: dict[str, Any]) -> str:
         "",
         "## Top blocking reasons",
         "",
-    ]
+    ])
     blockers = [_dict(row) for row in _list(value.get("top_blocking_reasons"))]
     if not blockers:
         lines.append("No blocking reason receipt was recorded.")
     for row in blockers:
+        attribution = _dict(row.get("loss_attribution"))
         lines.extend([
             f"### `{_text(row.get('reason'))}` ({_int(row.get('count'))})",
             "",
             f"- Family: `{_text(row.get('reason_family'))}`",
             f"- Registry: `{_text(row.get('registry_status'))}`",
             f"- Recoverability: `{_text(row.get('recoverability'))}`",
+            f"- Primary loss owner: `{_text(attribution.get('primary_owner')) or 'UNKNOWN'}`",
+            f"- Source evidence present on blocked attempts: `{display_metric(attribution.get('source_evidence_present_blocked_count'))}`",
+            f"- Source evidence sufficiency: `{_text(attribution.get('source_evidence_sufficiency')) or 'NOT_MEASURED'}`",
             f"- Customer materials needed: {', '.join(_text(v) for v in _list(row.get('customer_materials_needed')) if _text(v)) or 'none recorded'}",
             "",
         ])

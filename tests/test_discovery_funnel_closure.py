@@ -13,6 +13,9 @@ from ai_test_asset_center.discovery_mainline_contract import (
     build_mainline_run_contract,
     validate_mainline_run_contract,
 )
+from ai_test_asset_center.discovery_runtime_execution import (
+    _build_knowledge_source_flow_receipt,
+)
 from ai_test_asset_center.obligation_attempt_ledger import (
     bind_stage_receipt_identity,
     build_obligation_attempt_ledger,
@@ -321,10 +324,93 @@ def test_report_exposes_top_blockers_without_claiming_external_quality() -> None
     assert report["quality"]["status"] == "NOT_MEASURED"
     assert report["quality"]["recall"] == "NOT_MEASURED"
     assert report["top_blocking_reasons"][0]["reason"] == "BLOCKED_MISSING_OBSERVER"
+    attribution = report["top_blocking_reasons"][0]["loss_attribution"]
+    assert attribution["primary_owner"] == "QUALIBUG_CAPABILITY_GAP"
+    assert attribution["source_evidence_present_blocked_count"] == 1
+    assert attribution["source_evidence_sufficiency"] == "NOT_MEASURED"
     markdown = render_funnel_report_markdown(report)
     assert "BLOCKED_MISSING_OBSERVER" in markdown
     assert "NOT_MEASURED" in markdown
     assert "stack_trace" not in markdown.lower()
+
+
+def test_report_exposes_source_flow_and_receipt_backed_conversion_rates() -> None:
+    result = _result()
+    result["knowledge_source_flow_receipt"] = {
+        "schema_version": "qualibug.discovery-source-flow-receipt.v1",
+        "status": "PASS",
+        "source_materials": {"canonical_source_count": 2},
+        "business_facts": {"observed_row_count": 7},
+        "enterprise_behavior_ir": {"behavior_node_count": 4},
+        "runtime_behavior_ir": {"node_counts": {"operations": 3}},
+        "formal_obligations": {"formal_obligation_count": 2},
+        "missing_evidence": [],
+        "issues": [],
+    }
+
+    report = build_funnel_report(result)
+
+    assert report["source_flow"]["status"] == "PASS"
+    assert report["source_flow"]["business_facts"]["observed_row_count"] == 7
+    assert report["conversion_rates"]["status"] == "NOT_MEASURED"
+    selected_rate = next(
+        row
+        for row in report["conversion_rates"]["rates"]
+        if row["name"] == "selected_to_compiled"
+    )
+    assert selected_rate["rate"] == 0.5
+    assert "Stage conversion rates" in render_funnel_report_markdown(report)
+
+
+def test_source_flow_receipt_counts_only_explicit_asset_records() -> None:
+    from types import SimpleNamespace
+
+    asset = {
+        "asset_id": "asset-1",
+        "summary": {"canonical_source_count": 1},
+        "canonical_source_inventory": [{"source_id": "source-1"}],
+        "business_fact_ledger": {
+            "schema": "qualibug.business-fact-ledger.v2",
+            "items": [{"fact_id": "fact-1"}, {"fact_id": "fact-2"}],
+        },
+        "structure_first_business_fact_compilation_receipt": {
+            "status": "PASS",
+            "final_fact_count": 2,
+            "exact_evidence_fact_count": 2,
+            "accepted_fact_count": 2,
+            "pending_fact_count": 0,
+        },
+        "enterprise_understanding_model": {
+            "model_id": "understanding-1",
+            "gate": {"status": "PASS"},
+            "source_summary": {
+                "canonical_source_count": 1,
+                "business_behavior_count": 1,
+                "accepted_behavior_fact_count": 2,
+            },
+            "business_behavior_ir": {
+                "schema": "qualibug.enterprise-business-behavior-ir.v1",
+                "behavior_gate": {"status": "PASS"},
+                "behaviors": [{"source_refs": ["fact-1", "fact-2"]}],
+            },
+        },
+    }
+    plan = SimpleNamespace(
+        experiments={"_knowledge_asset": asset},
+        mainline_run={"source_snapshot_hash": "snapshot-1"},
+    )
+
+    receipt = _build_knowledge_source_flow_receipt(
+        plan=plan,
+        behavior_ir={"model_id": "bir-1", "operations": []},
+        formal_obligation_rows=[{"obligation_id": "obligation-1"}],
+    )
+
+    assert receipt["status"] == "PASS"
+    assert receipt["source_materials"]["canonical_source_count"] == 1
+    assert receipt["business_facts"]["observed_row_count"] == 2
+    assert receipt["enterprise_behavior_ir"]["source_bound_fact_ref_count"] == 2
+    assert receipt["formal_obligations"]["formal_obligation_count"] == 1
 
 
 def test_report_projects_captured_oracle_detail_for_legacy_gate_receipts() -> None:
@@ -347,6 +433,25 @@ def test_report_projects_captured_oracle_detail_for_legacy_gate_receipts() -> No
     assert not unregistered
     assert blockers[0]["examples"][0]["reason_detail"] == (
         "CLEANUP_RECEIPT_FAILED:cleanup:cleanup-1"
+    )
+
+
+def test_report_projects_stage_reason_detail_without_inference() -> None:
+    blockers, unregistered = _reason_details([
+        {
+            "obligation_id": "obl-binding",
+            "reason_code": "BLOCKED_MISSING_BINDING",
+            "stages": [{
+                "stage": "execution",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "reason_detail": "resolver_status_200_fixture_setup_not_generated",
+            }],
+        },
+    ])
+
+    assert not unregistered
+    assert blockers[0]["examples"][0]["reason_detail"] == (
+        "resolver_status_200_fixture_setup_not_generated"
     )
 
 
