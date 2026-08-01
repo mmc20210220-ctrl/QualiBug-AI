@@ -1,9 +1,10 @@
 """Fail-closed terminal authority for process-graph async waits.
 
 A compensation receipt terminates only the exact graph branch, execution and
-rollback contract that produced it.  This module validates those existing
-cleanup receipts and binds the terminal epoch to the compile-frozen wait/event
-contract before any observer or business transport can run.
+rollback contract that produced it. This module validates live cleanup receipts
+or recovers their exact ledger-scoped persisted chain after a process restart,
+then binds the terminal epoch to the compile-frozen wait/event contract before
+any observer or business transport can run.
 """
 from __future__ import annotations
 
@@ -14,6 +15,10 @@ from . import process_graph_wait_contract as _wait_authority
 from .contract_oracles import validate_contract_evidence_receipt
 from .process_graph_cleanup_executor_core import GRAPH_CLEANUP_SCHEMA
 from .process_graph_wait_contract import STATUS_BLOCKED as WAIT_BLOCKED
+from .process_graph_wait_termination_recovery import (
+    PERSISTED_TERMINATION_AUTHORITY,
+    recover_persisted_cleanup_receipts,
+)
 
 WAIT_TERMINATION_EPOCH_ACTIVE = (
     "PROCESS_GRAPH_WAIT_TERMINATION_EPOCH_ACTIVE"
@@ -24,6 +29,7 @@ WAIT_TERMINATION_RECEIPT_INVALID = (
 TERMINATION_EPOCH_SCHEMA = (
     "qualibug.process-graph-wait-termination-epoch.v1"
 )
+_LIVE_TERMINATION_AUTHORITY = "process_graph_cleanup_receipts"
 _TERMINAL_CLEANUP_STATUSES = frozenset(
     {"BLOCKED", "COMPLETED", "FAILED", "NOT_REQUIRED"}
 )
@@ -69,6 +75,37 @@ def _graph_scope(
     return graph_id, rollback_id, observed_graph_id
 
 
+def _cleanup_receipt_source(
+    *,
+    step: dict[str, Any],
+    observations: dict[str, Any],
+    experiment_id: str,
+    obligation_id: str,
+    campaign_id: str,
+    execution_id: str,
+) -> tuple[list[dict[str, Any]], str, dict[str, Any], str]:
+    live = [
+        dict(row)
+        for row in _list(observations.get("process_graph_cleanup_receipts"))
+        if isinstance(row, dict)
+    ]
+    if live:
+        return live, _LIVE_TERMINATION_AUTHORITY, {}, ""
+
+    recovered, metadata, error = recover_persisted_cleanup_receipts(
+        observations=observations,
+        source_step_id=_source_node_id(step),
+        experiment_id=experiment_id,
+        obligation_id=obligation_id,
+        campaign_id=campaign_id,
+        execution_id=execution_id,
+    )
+    authority = _text(metadata.get("authority"))
+    if recovered and not authority:
+        authority = PERSISTED_TERMINATION_AUTHORITY
+    return recovered, authority, metadata, error
+
+
 def _matching_cleanup_receipts(
     *,
     step: dict[str, Any],
@@ -77,7 +114,7 @@ def _matching_cleanup_receipts(
     obligation_id: str,
     campaign_id: str,
     execution_id: str,
-) -> tuple[list[dict[str, Any]], str]:
+) -> tuple[list[dict[str, Any]], str, dict[str, Any], str]:
     source_node_id = _source_node_id(step)
     if not all(
         (
@@ -88,22 +125,32 @@ def _matching_cleanup_receipts(
             execution_id,
         )
     ):
-        return [], ""
+        return [], "", {}, ""
 
     graph_id, rollback_id, observed_graph_id = _graph_scope(
         step=step,
         observations=observations,
     )
     if graph_id and observed_graph_id and graph_id != observed_graph_id:
-        return [], ""
+        return [], "", {}, ""
     observed_rollback_id = _text(
         observations.get("process_graph_rollback_contract_id")
     )
 
+    raw_receipts, authority, recovery, source_error = _cleanup_receipt_source(
+        step=step,
+        observations=observations,
+        experiment_id=experiment_id,
+        obligation_id=obligation_id,
+        campaign_id=campaign_id,
+        execution_id=execution_id,
+    )
+    if source_error:
+        return [], authority, recovery, source_error
+
     matches: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for raw in _list(observations.get("process_graph_cleanup_receipts")):
-        receipt = _dict(raw)
+    for receipt in raw_receipts:
         evidence = _dict(receipt.get("evidence"))
         if not (
             _text(receipt.get("kind")).lower() == "cleanup"
@@ -117,7 +164,12 @@ def _matching_cleanup_receipts(
         try:
             validated = validate_contract_evidence_receipt(receipt)
         except ValueError as exc:
-            return [], f"cleanup_receipt_invalid:{exc}"
+            return (
+                [],
+                authority,
+                recovery,
+                f"cleanup_receipt_invalid:{exc}",
+            )
         status = _text(validated.get("status")).upper()
         validated_evidence = _dict(validated.get("evidence"))
         if (
@@ -125,7 +177,12 @@ def _matching_cleanup_receipts(
             or _text(validated_evidence.get("schema_version"))
             != GRAPH_CLEANUP_SCHEMA
         ):
-            return [], "cleanup_receipt_terminal_scope_invalid"
+            return (
+                [],
+                authority,
+                recovery,
+                "cleanup_receipt_terminal_scope_invalid",
+            )
         receipt_id = _text(validated.get("receipt_id"))
         if receipt_id and receipt_id not in seen:
             seen.add(receipt_id)
@@ -134,10 +191,20 @@ def _matching_cleanup_receipts(
     matches.sort(key=lambda row: _text(row.get("receipt_id")))
     if matches and rollback_id:
         if not observed_rollback_id:
-            return [], "cleanup_termination_rollback_contract_missing"
+            return (
+                [],
+                authority,
+                recovery,
+                "cleanup_termination_rollback_contract_missing",
+            )
         if rollback_id != observed_rollback_id:
-            return [], "cleanup_termination_rollback_contract_mismatch"
-    return matches, ""
+            return (
+                [],
+                authority,
+                recovery,
+                "cleanup_termination_rollback_contract_mismatch",
+            )
+    return matches, authority, recovery, ""
 
 
 def _termination_epoch(
@@ -146,6 +213,8 @@ def _termination_epoch(
     observations: dict[str, Any],
     execution_id: str,
     cleanup_receipts: list[dict[str, Any]],
+    authority: str,
+    recovery: dict[str, Any],
 ) -> dict[str, Any]:
     wait = _wait_contract(step)
     event = _dict(wait.get("event_transition_contract"))
@@ -163,6 +232,13 @@ def _termination_epoch(
         "wait_contract_fingerprint": _text(wait.get("contract_fingerprint")),
         "event_contract_fingerprint": _text(event.get("contract_fingerprint")),
         "rollback_contract_fingerprint": rollback_id,
+        "cleanup_receipt_authority": authority,
+        "recovery_schema_version": _text(recovery.get("schema_version")),
+        "recovery_ledger_id": _text(recovery.get("ledger_id")),
+        "recovery_ledger_hash": _text(recovery.get("ledger_hash")),
+        "recovery_source_step_fact_hash": _text(
+            recovery.get("source_step_fact_hash")
+        ),
         "cleanup_receipt_ids": [
             _text(row.get("receipt_id")) for row in cleanup_receipts
         ],
@@ -184,6 +260,8 @@ def _blocked_receipt(
     observations: dict[str, Any],
     execution_id: str,
     cleanup_receipts: list[dict[str, Any]],
+    authority: str,
+    recovery: dict[str, Any],
     reason_code: str,
     detail: str,
 ) -> dict[str, Any]:
@@ -194,6 +272,8 @@ def _blocked_receipt(
         observations=observations,
         execution_id=execution_id,
         cleanup_receipts=cleanup_receipts,
+        authority=authority,
+        recovery=recovery,
     )
     if event:
         receipt = _event_authority._blocked_receipt(
@@ -219,7 +299,7 @@ def _blocked_receipt(
         {
             "request_reached_transport": False,
             "observer_request_reached_transport": False,
-            "termination_epoch_authority": "process_graph_cleanup_receipts",
+            "termination_epoch_authority": authority,
             "termination_epoch_contract_fingerprint": _text(
                 epoch.get("contract_fingerprint")
             ),
@@ -229,6 +309,18 @@ def _blocked_receipt(
             ),
             "termination_cleanup_outcomes": list(
                 epoch.get("cleanup_outcomes") or []
+            ),
+            "termination_recovery_schema_version": _text(
+                recovery.get("schema_version")
+            ),
+            "termination_recovery_ledger_id": _text(
+                recovery.get("ledger_id")
+            ),
+            "termination_recovery_ledger_hash": _text(
+                recovery.get("ledger_hash")
+            ),
+            "termination_recovery_source_step_fact_hash": _text(
+                recovery.get("source_step_fact_hash")
             ),
         }
     )
@@ -247,7 +339,7 @@ def resolve_wait_termination_receipt(
     execution_id: str,
 ) -> dict[str, Any]:
     """Return a terminal wait receipt or an empty dict when the branch is live."""
-    receipts, error = _matching_cleanup_receipts(
+    receipts, authority, recovery, error = _matching_cleanup_receipts(
         step=step,
         observations=observations,
         experiment_id=_text(experiment_id),
@@ -261,6 +353,8 @@ def resolve_wait_termination_receipt(
             observations=observations,
             execution_id=_text(execution_id),
             cleanup_receipts=[],
+            authority=authority or _LIVE_TERMINATION_AUTHORITY,
+            recovery=recovery,
             reason_code=WAIT_TERMINATION_RECEIPT_INVALID,
             detail=error,
         )
@@ -270,6 +364,8 @@ def resolve_wait_termination_receipt(
             observations=observations,
             execution_id=_text(execution_id),
             cleanup_receipts=receipts,
+            authority=authority or _LIVE_TERMINATION_AUTHORITY,
+            recovery=recovery,
             reason_code=WAIT_TERMINATION_EPOCH_ACTIVE,
             detail="late_event_reactivation_forbidden",
         )
