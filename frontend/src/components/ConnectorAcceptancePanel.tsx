@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getConnectorAcceptanceJob,
   getConnectorAcceptanceReport,
@@ -64,6 +64,8 @@ export function ConnectorAcceptancePanel({
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
+  const pollInFlightRef = useRef(false);
+  const notifiedJobRef = useRef('');
 
   const loadReport = useCallback(async (reportId: string) => {
     const loaded = await getConnectorAcceptanceReport(projectId, connectorId, reportId);
@@ -109,7 +111,15 @@ export function ConnectorAcceptancePanel({
     if (!job?.job_id || !isActiveJob(job)) return undefined;
     let cancelled = false;
 
+    const notifyOnce = (jobId: string, message: string, tone: 'success' | 'warning') => {
+      if (notifiedJobRef.current === jobId) return;
+      notifiedJobRef.current = jobId;
+      toast.show(message, tone);
+    };
+
     const poll = async () => {
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
       try {
         const next = await getConnectorAcceptanceJob(projectId, connectorId, job.job_id);
         if (cancelled) return;
@@ -118,18 +128,27 @@ export function ConnectorAcceptancePanel({
         if (next.status === 'COMPLETE' && next.report_id) {
           const completed = await loadReport(next.report_id);
           if (cancelled) return;
+          setError('');
           if (completed.acceptance_ready) {
-            toast.show('飞书真实租户 Pilot 验收已通过。', 'success');
+            notifyOnce(next.job_id, '飞书真实租户 Pilot 验收已通过。', 'success');
           } else {
-            toast.show(`验收完成，发现 ${completed.summary.blocker_failure_count} 个阻断项。`, 'warning');
+            notifyOnce(
+              next.job_id,
+              `验收完成，发现 ${completed.summary.blocker_failure_count} 个阻断项。`,
+              'warning',
+            );
           }
         } else if (next.status === 'FAILED' || next.status === 'INTERRUPTED') {
           setError('验收任务未完整结束，已有资料不受影响，可重新运行。');
-          toast.show('验收任务未完整结束，已有资料不受影响。', 'warning');
+          notifyOnce(next.job_id, '验收任务未完整结束，已有资料不受影响。', 'warning');
+        } else {
+          setError('');
         }
       } catch (pollError: unknown) {
         if (cancelled) return;
         setError(pollError instanceof Error ? pollError.message : '验收任务状态读取失败。');
+      } finally {
+        pollInFlightRef.current = false;
       }
     };
 
@@ -151,6 +170,7 @@ export function ConnectorAcceptancePanel({
     setError('');
     try {
       const started = await startConnectorAcceptance(projectId, connectorId, 'pilot');
+      notifiedJobRef.current = '';
       setJob(started);
       setRunning(isActiveJob(started));
       toast.show('Pilot 验收任务已启动，可刷新页面后继续查看进度。', 'success');
