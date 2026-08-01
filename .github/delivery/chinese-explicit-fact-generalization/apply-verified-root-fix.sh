@@ -8,10 +8,7 @@ BASE_COMPILER_BLOB="15a2157e71f0dd9c81eee16eb378f32db7e59475"
 BASE_EXTRACTOR_BLOB="fa9bbd906aa5b94abf9ffdd29979fb1d27d1a16c"
 PAYLOAD=".github/patches/chinese_explicit_fact_generalization_payload.tar.gz.b64"
 WORKDIR="${RUNNER_TEMP:-/tmp}/chinese-explicit-fact-generalization"
-
-# This commit contains the delivery script while quality-gates.yml is still the
-# original registered PR dispatcher. It is the immutable cleanup authority.
-QUALITY_GATE_RESTORE_COMMIT="__QUALITY_GATE_RESTORE_COMMIT__"
+QUALITY_GATE_RESTORE_COMMIT="41113338432e09bfbb278fbed459eaa49077425b"
 REGISTERED_WORKFLOW_TRIGGER_COMMIT="71ea412b7e66e61e6edf4c2cb2f10d7a6e84e7b4"
 
 rm -rf "$WORKDIR"
@@ -25,8 +22,7 @@ echo "8520879e0f2b2bf6ba6918725d6ded8f25b40ff675565aab7d0c8e0ebf1cd451  $WORKDIR
 tar -xzf "$WORKDIR/payload.tar.gz" -C "$WORKDIR/payload"
 
 python "$WORKDIR/payload/apply.py"
-cp "$WORKDIR/payload/test_chinese_explicit_fact_language_mutations.py" \
-  tests/test_chinese_explicit_fact_language_mutations.py
+cp "$WORKDIR/payload/test_chinese_explicit_fact_language_mutations.py" tests/test_chinese_explicit_fact_language_mutations.py
 
 git diff --check
 cat > "$WORKDIR/expected-files.txt" <<'EOF'
@@ -38,10 +34,7 @@ git status --short | awk '{print $2}' | grep -v '^.github/' | sort > "$WORKDIR/a
 sort -o "$WORKDIR/expected-files.txt" "$WORKDIR/expected-files.txt"
 diff -u "$WORKDIR/expected-files.txt" "$WORKDIR/actual-files.txt"
 
-python -m compileall -q \
-  ai_test_asset_center/enterprise_knowledge_center \
-  benchmark_evaluator/enterprise_understanding
-
+python -m compileall -q ai_test_asset_center/enterprise_knowledge_center benchmark_evaluator/enterprise_understanding
 python -m pytest -q tests/test_chinese_explicit_fact_language_mutations.py
 python -m pytest -q \
   tests/test_chinese_business_comprehension.py \
@@ -66,12 +59,10 @@ rm -rf "$BASELINE_WORKSPACE" "$BASELINE_OUTPUT"
 python -m benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline \
   --workspace-root "$BASELINE_WORKSPACE" \
   --output "$BASELINE_OUTPUT"
-
 python - "$BASELINE_OUTPUT/chinese_explicit_fact_baseline_summary.json" <<'PY'
 import json
 import sys
 from pathlib import Path
-
 summary = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 metrics = summary["metrics"]
 assert summary["status"] == "PASS", summary
@@ -87,7 +78,6 @@ assert metrics["accepted_fact_precision"] == 1.0, metrics
 assert metrics["false_accepted_fact_count"] == 0, metrics
 PY
 
-# Restore permanent CI authorities and remove all one-time transport/probe files.
 git show "$QUALITY_GATE_RESTORE_COMMIT:.github/workflows/quality-gates.yml" > .github/workflows/quality-gates.yml
 git show "$REGISTERED_WORKFLOW_TRIGGER_COMMIT^:.github/workflows/chinese-explicit-fact-baseline.yml" > .github/workflows/chinese-explicit-fact-baseline.yml
 git checkout -- qualibug_ai.egg-info 2>/dev/null || true
@@ -126,9 +116,6 @@ for attempt in 1 2 3 4 5; do
       --workspace-root "$WORKDIR/reverify-workspace" \
       --output "$WORKDIR/reverify-output"
   fi
-  if git push origin HEAD:main; then
-    exit 0
-  fi
+  if git push origin HEAD:main; then exit 0; fi
 done
-
 exit 1
