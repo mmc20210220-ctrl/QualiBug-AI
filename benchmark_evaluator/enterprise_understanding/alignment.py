@@ -125,8 +125,53 @@ def _best_name(gt: dict[str, Any], candidates: list[dict[str, Any]], collection:
 
 def _operation_names(row: dict[str, Any]) -> set[str]:
     return _names(
-        row, "name", "canonical_name", "raw_action_names", "operation_ref", "operation", "action"
+        row,
+        "name",
+        "canonical_name",
+        "raw_action_names",
+        "operation_ref",
+        "operation",
+        "action",
+        "authoritative_operation_refs",
     )
+
+
+def _behavior_candidates(model: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project exact implementation operation identity into evaluator candidates.
+
+    The product keeps business-language operations on the
+    Behavior IR and technical OpenAPI operationIds (for example ``listTickets``)
+    on governed implementation bindings. Both are existing product authorities.
+    Evaluator alignment joins them by ``behavior_ref`` instead of comparing the
+    Ground Truth operationId directly with the Chinese action.
+
+    Only source-governed, authoritative, BOUND API rows are admitted. Fuzzy,
+    partial, ambiguous, or merely diagnostic endpoint candidates remain excluded.
+    The projection is evaluator-local and never mutates the product snapshot.
+    """
+    operation_refs_by_behavior: dict[str, set[str]] = {}
+    for binding in _rows(model.get("behavior_implementation_bindings")):
+        behavior_ref = _text(binding.get("behavior_ref"))
+        if not behavior_ref:
+            continue
+        for api_binding in _rows(binding.get("api_operation_bindings")):
+            if api_binding.get("authoritative") is not True:
+                continue
+            if _text(api_binding.get("status")).upper() != "BOUND":
+                continue
+            operation_ref = _text(api_binding.get("operation_id"))
+            if operation_ref:
+                operation_refs_by_behavior.setdefault(behavior_ref, set()).add(operation_ref)
+
+    result: list[dict[str, Any]] = []
+    for behavior in _rows(model.get("business_behaviors")):
+        item = dict(behavior)
+        behavior_ref = _text(item.get("behavior_id"))
+        operation_refs = sorted(operation_refs_by_behavior.get(behavior_ref, set()))
+        if operation_refs:
+            item["authoritative_operation_refs"] = operation_refs
+        result.append(item)
+    return result
 
 
 def _object_names(row: dict[str, Any], index: dict[str, set[str]]) -> set[str]:
@@ -155,288 +200,7 @@ def _align_operation(gt: dict[str, Any], candidates: list[dict[str, Any]], objec
         return _alignment(gt, "operations", "EXACT_MATCH", exact[0])
     if len(exact) > 1:
         return _alignment(
-            gt, "operations", "CONFLICTED",
-            details={"candidate_ids": [_candidate_id(row) for row in exact]},
-        )
-    if action_matches:
-        return _alignment(
-            gt, "operations", "WRONG_BINDING",
-            action_matches[0] if len(action_matches) == 1 else None,
-            {
-                "expected_object_refs": sorted(expected_objects),
-                "candidate_object_refs": sorted({
-                    value for row in action_matches for value in _object_names(row, object_index)
-                }),
-            },
-        )
-    return _alignment(gt, "operations", "MISSING")
-
-
-def _relation_endpoint(row: dict[str, Any], side: str, index: dict[str, set[str]]) -> set[str]:
-    fields = (
-        ("from_object", "from_object_ref", "from", "source_object_ref", "subject_ref")
-        if side == "from"
-        else ("to_object", "to_object_ref", "to", "target_object_ref", "object_ref")
-    )
-    result: set[str] = set()
-    for field in fields:
-        result.update(_resolve(row.get(field), index))
-    return result
-
-
-def _align_relation(gt: dict[str, Any], candidates: list[dict[str, Any]], index: dict[str, set[str]]) -> dict[str, Any]:
-    expected_from = {_norm(gt.get("from_object"))}
-    expected_to = {_norm(gt.get("to_object"))}
-    expected_type = _norm(gt.get("relation_type"))
-    endpoint_matches = [
-        row for row in candidates
-        if expected_from & _relation_endpoint(row, "from", index)
-        and expected_to & _relation_endpoint(row, "to", index)
-    ]
-    exact = [
-        row for row in endpoint_matches
-        if _norm(row.get("relation_type") or row.get("relation") or row.get("predicate") or row.get("type"))
-        == expected_type
-    ]
-    if len(exact) == 1:
-        return _alignment(gt, "object_relations", "EXACT_MATCH", exact[0])
-    if endpoint_matches:
-        return _alignment(
-            gt, "object_relations", "PARTIAL_MATCH",
-            endpoint_matches[0] if len(endpoint_matches) == 1 else None,
-            {"expected_relation_type": expected_type},
-        )
-    return _alignment(gt, "object_relations", "MISSING")
-
-
-def _state(row: dict[str, Any], side: str) -> str:
-    fields = (
-        ("from_state", "before_state", "source_state")
-        if side == "from"
-        else ("to_state", "after_state", "target_state")
-    )
-    for field in fields:
-        if _norm(row.get(field)):
-            return _norm(row.get(field))
-    return ""
-
-
-def _transition_rows(model: dict[str, Any]) -> list[dict[str, Any]]:
-    result = _rows(model.get("state_transitions"))
-    for lifecycle in _rows(model.get("lifecycles")):
-        for transition in _rows(lifecycle.get("transitions")):
-            item = dict(transition)
-            item.setdefault("object_ref", lifecycle.get("object_ref") or lifecycle.get("object_id"))
-            item.setdefault("lifecycle_id", lifecycle.get("lifecycle_id"))
-            result.append(item)
-    return result
-
-
-def _align_transition(gt: dict[str, Any], candidates: list[dict[str, Any]], index: dict[str, set[str]]) -> dict[str, Any]:
-    expected_object = {_norm(gt.get("object_ref"))}
-    expected_from = _norm(gt.get("from_state"))
-    expected_to = _norm(gt.get("to_state"))
-    exact = [
-        row for row in candidates
-        if expected_object & _resolve(row.get("object_ref"), index)
-        and _state(row, "from") == expected_from and _state(row, "to") == expected_to
-    ]
-    if len(exact) == 1:
-        return _alignment(gt, "state_transitions", "EXACT_MATCH", exact[0])
-    partial = [
-        row for row in candidates
-        if expected_object & _resolve(row.get("object_ref"), index)
-        and (_state(row, "from") == expected_from or _state(row, "to") == expected_to)
-    ]
-    if partial:
-        return _alignment(
-            gt, "state_transitions", "PARTIAL_MATCH",
-            partial[0] if len(partial) == 1 else None,
-        )
-    return _alignment(gt, "state_transitions", "MISSING")
-
-
-def _condition_signature(value: Any) -> set[str]:
-    result: set[str] = set()
-    for row in _rows(value):
-        candidate = row.get("value") if "value" in row else row.get("value_candidate")
-        if isinstance(candidate, dict):
-            candidate = candidate.get("normalized_value", candidate.get("raw"))
-        result.add(json.dumps([
-            _norm(row.get("field") or row.get("field_candidate")),
-            _norm(row.get("operator") or row.get("operator_candidate")),
-            _norm(candidate),
-        ], ensure_ascii=False))
-    return result
-
-
-def _state_effect_signature(value: Any) -> set[str]:
-    return {
-        json.dumps([_state(row, "from"), _state(row, "to")], ensure_ascii=False)
-        for row in _rows(value)
-    }
-
-
-def _align_behavior(
-    gt: dict[str, Any],
-    candidates: list[dict[str, Any]],
-    object_index: dict[str, set[str]],
-    actor_index: dict[str, set[str]],
-    collection: str,
-) -> dict[str, Any]:
-    expected_action = {_norm(gt.get("operation"))}
-    expected_objects = {_norm(value) for value in _values(gt.get("object_refs"))}
-    expected_actors = {_norm(value) for value in _values(gt.get("actor_refs"))}
-    action_matches = [row for row in candidates if expected_action & _operation_names(row)]
-    object_matches = [row for row in action_matches if expected_objects & _object_names(row, object_index)]
-    if not action_matches:
-        return _alignment(gt, collection, "MISSING")
-    if not object_matches:
-        return _alignment(
-            gt, collection, "WRONG_BINDING",
-            action_matches[0] if len(action_matches) == 1 else None,
-            {"slot": "object_refs"},
-        )
-    expected_permission = _norm(gt.get("permission_decision"))
-    expected_conditions = _condition_signature(gt.get("preconditions"))
-    expected_effects = _state_effect_signature(gt.get("state_effects"))
-    exact: list[dict[str, Any]] = []
-    partial: list[tuple[dict[str, Any], list[str]]] = []
-    for row in object_matches:
-        missing: list[str] = []
-        if expected_actors and not expected_actors & _actor_names(row, actor_index):
-            missing.append("actor_refs")
-        if expected_permission and _norm(row.get("permission_decision")) != expected_permission:
-            missing.append("permission_decision")
-        if expected_conditions and not expected_conditions.issubset(
-            _condition_signature(row.get("preconditions") or row.get("conditions"))
-        ):
-            missing.append("preconditions")
-        if expected_effects and not expected_effects.issubset(
-            _state_effect_signature(row.get("state_effects"))
-        ):
-            missing.append("state_effects")
-        if missing:
-            partial.append((row, missing))
-        else:
-            exact.append(row)
-    if len(exact) == 1:
-        candidate = exact[0]
-        confirmed = _text(candidate.get("status")).upper() in {"", "CONFIRMED", "ACCEPTED"}
-        return _alignment(
-            gt, collection, "EXACT_MATCH" if confirmed else "PARTIAL_MATCH", candidate,
-            {"candidate_not_confirmed": not confirmed},
-        )
-    if len(exact) > 1:
-        return _alignment(
-            gt, collection, "CONFLICTED",
-            details={"candidate_ids": [_candidate_id(row) for row in exact]},
-        )
-    candidate, missing = partial[0]
-    return _alignment(
-        gt, collection, "PARTIAL_MATCH", candidate if len(partial) == 1 else None,
-        {"missing_or_wrong_slots": missing},
-    )
-
-
-def _align_expected_unknown(gt: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    expected = _names(gt, "reason_code", "kind", "canonical_name", "aliases")
-    matches = [
-        row for row in candidates
-        if expected & _names(row, "reason_code", "kind", "question", "message")
-    ]
-    if matches:
-        return _alignment(
-            gt, "expected_unknowns", "UNKNOWN_CORRECTLY_EXPOSED",
-            matches[0] if len(matches) == 1 else None,
-        )
-    return _alignment(gt, "expected_unknowns", "MISSING")
-
-
-def align_enterprise_understanding(ground_truth: dict[str, Any], asset: dict[str, Any]) -> dict[str, Any]:
-    model = _model(asset)
-    objects = _rows(model.get("business_objects"))
-    actors = _rows(model.get("actors"))
-    operations = _rows(model.get("operations"))
-    relations = _rows(model.get("object_relations"))
-    transitions = _transition_rows(model)
-    rules = _rows(model.get("rules"))
-    behaviors = _rows(model.get("business_behaviors"))
-    conflicts = _rows(model.get("conflicts"))
-    unknowns = _rows(model.get("unknowns"))
-    object_index = _entity_index(objects, ("object_id", "entity_id"))
-    actor_index = _entity_index(actors, ("actor_id", "role_id"))
-    alignments: list[dict[str, Any]] = []
-    for row in _rows(ground_truth.get("business_objects")):
-        alignments.append(_best_name(row, objects, "business_objects"))
-    for row in _rows(ground_truth.get("actors")):
-        alignments.append(_best_name(row, actors, "actors"))
-    for row in _rows(ground_truth.get("operations")):
-        alignments.append(_align_operation(row, operations, object_index))
-    for row in _rows(ground_truth.get("object_relations")):
-        alignments.append(_align_relation(row, relations, object_index))
-    for row in _rows(ground_truth.get("state_transitions")):
-        alignments.append(_align_transition(row, transitions, object_index))
-    for row in _rows(ground_truth.get("business_rules")):
-        alignments.append(_align_behavior(row, rules, object_index, actor_index, "business_rules"))
-    for row in _rows(ground_truth.get("business_behaviors")):
-        alignments.append(_align_behavior(row, behaviors, object_index, actor_index, "business_behaviors"))
-    for row in _rows(ground_truth.get("conflicts")):
-        alignments.append(_best_name(row, conflicts, "conflicts"))
-    for row in _rows(ground_truth.get("expected_unknowns")):
-        alignments.append(_align_expected_unknown(row, unknowns))
-
-    matched_candidate_ids = {
-        _text(row.get("candidate_id"))
-        for row in alignments
-        if _text(row.get("candidate_id")) and row.get("alignment_status") in COVERED_STATUSES
-    }
-    formal_collections = {
-        "business_objects": objects,
-        "actors": actors,
-        "operations": operations,
-        "object_relations": relations,
-        "business_rules": rules,
-        "business_behaviors": behaviors,
-    }
-    unmatched_confirmed: list[dict[str, Any]] = []
-    for collection, candidates in formal_collections.items():
-        for row in candidates:
-            identity = _candidate_id(row)
-            if identity and identity not in matched_candidate_ids and _text(row.get("status")).upper() in {
-                "CONFIRMED", "ACCEPTED", "PASS"
-            }:
-                unmatched_confirmed.append({
-                    "candidate_id": identity,
-                    "candidate_collection": collection,
-                    "candidate_status": _text(row.get("status")),
-                    "candidate_evidence": _evidence(row),
-                })
-
-    expected_unknown_candidate_ids = {
-        _text(row.get("candidate_id"))
-        for row in alignments
-        if row.get("collection") == "expected_unknowns" and _text(row.get("candidate_id"))
-    }
-    unexpected_unknowns = [
-        {
-            "candidate_id": _candidate_id(row),
-            "candidate_collection": "unknowns",
-            "candidate_status": _text(row.get("status")),
-            "candidate_evidence": _evidence(row),
-            "alignment_status": "UNKNOWN_SHOULD_HAVE_BEEN_RESOLVED",
-            "reason_code": row.get("reason_code") or row.get("kind"),
-        }
-        for row in unknowns
-        if _candidate_id(row) and _candidate_id(row) not in expected_unknown_candidate_ids
-    ]
-    return {
-        "schema": ALIGNMENT_SCHEMA,
-        "project_id": ground_truth.get("project_id"),
-        "ground_truth_validation_status": (
-            ground_truth.get("validation_receipt", {}).get("status")
-            if isinstance(ground_truth.get("validation_receipt"), dict) else "UNKNOWN"
-        ),
+            g²È="24¤™½ÈÙ…±Õ”¥¸}Ù…±Õ•Ì¡Ð¹•Ð ‰½‰©•Ñ}É•™Ìˆ¤¥ô(€€€•áÁ•Ñ•‘}…Ñ½ÉÌ€ôí}¹½É´¡Ù…±Õ”¤™½ÈÙ…±Õ”¥¸}Ù…±Õ•Ì¡Ð¹•Ð ‰…Ñ½É}É•™Ìˆ¤¥ô(€€€…Ñ¥½¹}µ…Ñ¡•Ì€ômÉ½Ü™½ÈÉ½Ü¥¸…¹‘¥‘…Ñ•Ì¥˜•áÁ•Ñ•‘}…Ñ¥½¸€˜}½Á•É…Ñ¥½¹}¹…µ•Ì¡É½Ü¥t(€€€½‰©•Ñ}µ…Ñ¡•Ì€ômÉ½Ü™½ÈÉ½Ü¥¸…Ñ¥½¹}µ…Ñ¡•Ì¥˜•áÁ•Ñ•‘}½‰©•ÑÌ€˜}½‰©•Ñ}¹…µ•Ì¡É½Ü°½‰©•Ñ}¥¹‘•à¥t(€€€¥˜¹½Ð…Ñ¥½¹}µ…Ñ¡•Ìè(€€€€€€€É•ÑÕÉ¸}…±¥¹µ•¹Ð¡Ð°½±±•Ñ¥½¸°€‰5%MM%9ˆ¤(€€€¥˜¹½Ð½‰©•Ñ}µ…Ñ¡•Ìè(€€€€€€€É•ÑÕÉ¸}…±¥¹µ•¹Ð (€€€€€€€€€€€Ð°½±±•Ñ¥½¸°€‰]I=9}	%9%9ˆ°(€€€€€€€€€€€…Ñ¥½¹}µ…Ñ¡•ÍlÁt¥˜±•¸¡…Ñ¥½¹}µ…Ñ¡•Ì¤€ôô€Ä•±Í”9½¹”°(€€€€€€€€€€€ì‰Í±½Ðˆè€‰½‰©•Ñ}É•™Ì‰ô°(€€€€€€€€¤(€€€•áÁ•Ñ•‘}Á•Éµ¥ÍÍ¥½¸€ô}¹½É´¡Ð¹•Ð ‰Á•Éµ¥ÍÍ¥½¹}‘•¥Í¥½¸ˆ¤¤(€€€•áÁ•Ñ•‘}½¹‘¥Ñ¥½¹Ì€ô}½¹‘¥Ñ¥½¹}Í¥¹…ÑÕÉ”¡Ð¹•Ð ‰ÁÉ•½¹‘¥Ñ¥½¹Ìˆ¤¤(€€€•áÁ•Ñ•‘}•™™•ÑÌ€ô}ÍÑ…Ñ•}•™™•Ñ}Í¥¹…ÑÕÉ”¡Ð¹•Ð ‰ÍÑ…Ñ•}•™™•ÑÌˆ¤¤(€€€•á…Ðè±¥ÍÑm‘¥ÑmÍÑÈ°¹åut€ômt(€€€Á…ÉÑ¥…°è±¥ÍÑmÑÕÁ±•m‘¥ÑmÍÑÈ°¹åt°±¥ÍÑmÍÑÉuut€ômt(€€€™½ÈÉ½Ü¥¸½‰©•Ñ}µ…Ñ¡•Ìè(€€€€€€€µ¥ÍÍ¥¹œè±¥ÍÑmÍÑÉt€ômt(€€€€€€€¥˜•áÁ•Ñ•‘}…Ñ½ÉÌ…¹¹½Ð•áÁ•Ñ•‘}…Ñ½ÉÌ€˜}…Ñ½É}¹…µ•Ì¡É½Ü°…Ñ½É}¥¹‘•à¤è(€€€€€€€€€€€µ¥ÍÍ¥¹œ¹…ÁÁ•¹ ‰…Ñ½É}É•™Ìˆ¤(€€€€€€€¥˜•áÁ•Ñ•‘}Á•Éµ¥ÍÍ¥½¸…¹}¹½É´¡É½Ü¹•Ð ‰Á•Éµ¥ÍÍ¥½¹}‘•¥Í¥½¸ˆ¤¤€„ô•áÁ•Ñ•‘}Á•Éµ¥ÍÍ¥½¸è(€€€€€€€€€€€µ¥ÍÍ¥¹œ¹…ÁÁ•¹ ‰Á•Éµ¥ÍÍ¥½¹}‘•¥Í¥½¸ˆ¤(€€€€€€€¥˜•áÁ•Ñ•‘}½¹‘¥Ñ¥½¹Ì…¹¹½Ð•áÁ•Ñ•‘}½¹‘¥Ñ¥½¹Ì¹¥ÍÍÕ‰Í•Ð (€€€€€€€€€€€}½¹‘¥Ñ¥½¹}Í¥¹…ÑÕÉ”¡É½Ü¹•Ð ‰ÁÉ•½¹‘¥Ñ¥½¹Ìˆ¤½ÈÉ½Ü¹•Ð ‰½¹‘¥Ñ¥½¹Ìˆ¤¤(€€€€€€€€¤è(€€€€€€€€€€€µ¥ÍÍ¥¹œ¹…ÁÁ•¹ ‰ÁÉ•½¹‘¥Ñ¥½¹Ìˆ¤(€€€€€€€¥˜•áÁ•Ñ•‘}•™™•ÑÌ…¹¹½Ð•áÁ•Ñ•‘}•™™•ÑÌ¹¥ÍÍÕ‰Í•Ð (€€€€€€€€€€€}ÍÑ…Ñ•}•™™•Ñ}Í¥¹…ÑÕÉ”¡É½Ü¹•Ð ‰ÍÑ…Ñ•}•™™•ÑÌˆ¤¤(€€€€€€€€¤è(€€€€€€€€€€€µ¥ÍÍ¥¹œ¹…ÁÁ•¹ ‰ÍÑ…Ñ•}•™™•ÑÌˆ¤(€€€€€€€¥˜µ¥ÍÍ¥¹œè(€€€€€€€€€€€Á…ÉÑ¥…°¹…ÁÁ•¹ ¡É½Ü°µ¥ÍÍ¥¹œ¤¤(€€€€€€€•±Í”è(€€€€€€€€€€€•á…Ð¹…ÁÁ•¹¡É½Ü¤(€€€¥˜±•¸¡•á…Ð¤€ôô€Äè(€€€€€€€…¹‘¥‘…Ñ”€ô•á…ÑlÁt(€€€€€€€½¹™¥Éµ•€ô}Ñ•áÐ¡…¹‘¥‘…Ñ”¹•Ð ‰ÍÑ…ÑÕÌˆ¤¤¹ÕÁÁ•È ¤¥¸ìˆˆ°€‰=9%I5ˆ°€‰AQ‰ô(€€€€€€€É•ÑÕÉ¸}…±¥¹µ•¹Ð (€€€€€€€€€€€Ð°½±±•Ñ¥½¸°€‰aQ}5Q ˆ¥˜½¹™¥Éµ••±Í”€‰AIQ%1}5Q ˆ°…¹‘¥‘…Ñ”°(€€€€€€€€€€€ì‰…¹‘¥‘…Ñ•}¹½Ñ}½¹™¥Éµ•ˆè¹½Ð½¹™¥Éµ•‘ô°(€€€€€€€€¤(€€€¥˜±•¸¡•á…Ð¤€ø€Äè(€€€€€€€É•ÑÕÉ¸}…±¥¹µ•¹Ð (€€€€€€€€€€€Ð°½±±•Ñ¥½¸°€‰=91%Qˆ°(€€€€€€€€€€€‘•Ñ…¥±Ìõì‰…¹‘¥‘…Ñ•}¥‘Ìˆèm}…¹‘¥‘…Ñ•}¥¡É½Ü¤™½ÈÉ½Ü¥¸•á…Ñuô°(€€€€€€€€¤(€€€…¹‘¥‘…Ñ”°µ¥ÍÍ¥¹œ€ôÁ…ÉÑ¥…±lÁt(€€€É•ÑÕÉ¸}…±¥¹µ•¹Ð (€€€€€€€Ð°½±±•Ñ¥½¸°€‰AIQ%1}5Q ˆ°…¹‘¥‘…Ñ”¥˜±•¸¡Á…ÉÑ¥…°¤€ôô€Ä•±Í”9½¹”°(€€€€€€€ì‰µ¥ÍÍ¥¹}½É}ÝÉ½¹}Í±½ÑÌˆèµ¥ÍÍ¥¹ô°(€€€€¤(()‘•˜}…±¥¹}•áÁ•Ñ•‘}Õ¹­¹½Ý¸¡Ðè‘¥ÑmÍÑÈ°¹åt°…¹‘¥‘…Ñ•Ìè±¥ÍÑm‘¥ÑmÍÑÈ°¹åut¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€•áÁ•Ñ•€ô}¹…µ•Ì¡Ð°€‰É•…Í½¹}½‘”ˆ°€‰­¥¹ˆ°€‰…¹½¹¥…±}¹…µ”ˆ°€‰…±¥…Í•Ìˆ¤(€€€µ…Ñ¡•Ì€ôl(€€€€€€€É½Ü™½ÈÉ½Ü¥¸…¹‘¥‘…Ñ•Ì(€€€€€€€¥˜•áÁ•Ñ•€˜}¹…µ•Ì¡É½Ü°€‰É•…Í½¹}½‘”ˆ°€‰­¥¹ˆ°€‰ÅÕ•ÍÑ¥½¸ˆ°€‰µ•ÍÍ…”ˆ¤(€€€t(€€€¥˜µ…Ñ¡•Ìè(€€€€€€€É•ÑÕÉ¸}…±¥¹µ•¹Ð (€€€€€€€€€€€Ð°€‰•áÁ•Ñ•‘}Õ¹­¹½Ý¹Ìˆ°€‰U9-9=]9}=IIQ1e}aA=Mˆ°(€€€€€€€€€€€µ…Ñ¡•ÍlÁt¥˜±•¸¡µ…Ñ¡•Ì¤€ôô€Ä•±Í”9½¹”°(€€€€€€€€¤(€€€É•ÑÕÉ¸}…±¥¹µ•¹Ð¡Ð°€‰•áÁ•Ñ•‘}Õ¹­¹½Ý¹Ìˆ°€‰5%MM%9ˆ¤(()‘•˜…±¥¹}•¹Ñ•ÉÁÉ¥Í•}Õ¹‘•ÉÍÑ…¹‘¥¹œ¡É½Õ¹‘}ÑÉÕÑ è‘¥ÑmÍÑÈ°¹åt°…ÍÍ•Ðè‘¥ÑmÍÑÈ°¹åt¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€µ½‘•°€ô}µ½‘•°¡…ÍÍ•Ð¤(€€€½‰©•ÑÌ€ô}É½ÝÌ¡µ½‘•°¹•Ð ‰‰ÕÍ¥¹•ÍÍ}½‰©•ÑÌˆ¤¤(€€€…Ñ½ÉÌ€ô}É½ÝÌ¡µ½‘•°¹•Ð ‰…Ñ½ÉÌˆ¤¤(€€€½Á•É…Ñ¥½¹Ì€ô}É½ÝÌ¡µ½‘•°¹•Ð ‰½Á•É…Ñ¥½¹Ìˆ¤¤(€€€É•±…Ñ¥½¹Ì€ô}É½ÝÌ¡µ½‘•°¹•Ð ‰½‰©•Ñ}É•±…Ñ¥½¹Ìˆ¤¤(€€€ÑÉ…¹Í¥Ñ¥½¹Ì€ô}ÑÉ…¹Í¥Ñ¥½¹}É½ÝÌ¡µ½‘•°¤(€€€ÉÕ±•Ì€ô}É½ÝÌ¡µ½‘•°¹•Ð ‰ÉÕ±•Ìˆ¤¤(€€€‰•¡…Ù¥½ÉÌ€ô}‰•¡…Ù¥½É}…¹‘¥‘…Ñ•Ì¡µ½‘•°¤(€€€½¹™±¥ÑÌ€ô}É½ÝÌ¡µ½‘•°¹•Ð ‰½¹™±¥ÑÌˆ¤¤(€€€Õ¹­¹½Ý¹Ì€ô}É½ÝÌ¡µ½‘•°¹•Ð ‰Õ¹­¹½Ý¹Ìˆ¤¤(€€€½‰©•Ñ}¥¹‘•à€ô}•¹Ñ¥Ñå}¥¹‘•à¡½‰©•ÑÌ°€ ‰½‰©•Ñ}¥ˆ°€‰•¹Ñ¥Ñå}¥ˆ¤¤(€€€…Ñ½É}¥¹‘•à€ô}•¹Ñ¥Ñå}¥¹‘•à¡…Ñ½ÉÌ°€ ‰…Ñ½É}¥ˆ°€‰É½±•}¥ˆ¤¤(€€€…±¥¹µ•¹ÑÌè±¥ÍÑm‘¥ÑmÍÑÈ°¹åut€ômt(€€€™½ÈÉ½Ü¥¸}É½ÝÌ¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰‰ÕÍ¥¹•ÍÍ}½‰©•ÑÌˆ¤¤è(€€€€€€€…±¥¹µ•¹ÑÌ¹…ÁÁ•¹¡}‰•ÍÑ}¹…µ”¡É½Ü°½‰©•ÑÌ°€‰‰ÕÍ¥¹•ÍÍ}½‰©•ÑÌˆ¤¤(€€€™½ÈÉ½Ü¥¸}É½ÝÌ¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰…Ñ½ÉÌˆ¤¤è(€€€€€€€…±¥¹µ•¹ÑÌ¹…ÁÁ•¹¡}‰•ÍÑ}¹…µ”¡É½Ü°…Ñ½ÉÌ°€‰…Ñ½ÉÌˆ¤¤(€€€™½ÈÉ½Ü¥¸}É½ÝÌ¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰½Á•É…Ñ¥½¹Ìˆ¤¤è(€€€€€€€…±¥¹µ•¹ÑÌ¹…ÁÁ•¹¡}…±¥¹}½Á•É…Ñ¥½¸¡É½Ü°½Á•É…Ñ¥½¹Ì°½‰©•Ñ}¥¹‘•à¤¤(€€€™½ÈÉ½Ü¥¸}É½ÝÌ¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰½‰©•Ñ}É•±…Ñ¥½¹Ìˆ¤¤è(€€€€€€€…±¥¹µ•¹ÑÌ¹…ÁÁ•¹¡}…±¥¹}É•±…Ñ¥½¸¡É½Ü°É•±…Ñ¥½¹Ì°½‰©•Ñ}¥¹‘•à¤¤(€€€™½ÈÉ½Ü¥¸}É½ÝÌ¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰ÍÑ…Ñ•}ÑÉ…¹Í¥Ñ¥½¹Ìˆ¤¤è(€€€€€€€…±¥¹µ•¹ÑÌ¹…ÁÁ•¹¡}…±¥¹}ÑÉ…¹Í¥Ñ¥½¸¡É½Ü°ÑÉ…¹Í¥Ñ¥½¹Ì°½‰©•Ñ}¥¹‘•à¤¤(€€€™½ÈÉ½Ü¥¸}É½ÝÌ¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰‰ÕÍ¥¹•ÍÍ}ÉÕ±•Ìˆ¤¤è(€€€€€€€…±¥¹µ•¹ÑÌ¹…ÁÁ•¹¡}…±¥¹}‰•¡…Ù¥½È¡É½Ü°ÉÕ±•Ì°½‰©•Ñ}¥¹‘•à°…Ñ½É}¥¹‘•à°€‰‰ÕÍ¥¹•ÍÍ}ÉÕ±•Ìˆ¤¤(€€€™½ÈÉ½Ü¥¸}É½ÝÌ¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰‰ÕÍ¥¹•ÍÍ}‰•¡…Ù¥½ÉÌˆ¤¤è(€€€€€€€…±¥¹µ•¹ÑÌ¹…ÁÁ•¹¡}…±¥¹}‰•¡…Ù¥½È¡É½Ü°‰•¡…Ù¥½ÉÌ°½‰©•Ñ}¥¹‘•à°…Ñ½É}¥¹‘•à°€‰‰ÕÍ¥¹•ÍÍ}‰•¡…Ù¥½ÉÌˆ¤¤(€€€™½ÈÉ½Ü¥¸}É½ÝÌ¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰½¹™±¥ÑÌˆ¤¤è(€€€€€€€…±¥¹µ•¹ÑÌ¹…ÁÁ•¹¡}‰•ÍÑ}¹…µ”¡É½Ü°½¹™±¥ÑÌ°€‰½¹™±¥ÑÌˆ¤¤(€€€™½ÈÉ½Ü¥¸}É½ÝÌ¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰•áÁ•Ñ•‘}Õ¹­¹½Ý¹Ìˆ¤¤è(€€€€€€€…±¥¹µ•¹ÑÌ¹…ÁÁ•¹¡}…±¥¹}•áÁ•Ñ•‘}Õ¹­¹½Ý¸¡É½Ü°Õ¹­¹½Ý¹Ì¤¤((€€€µ…Ñ¡•‘}…¹‘¥‘…Ñ•}¥‘Ì€ôì(€€€€€€€}Ñ•áÐ¡É½Ü¹•Ð ‰…¹‘¥‘…Ñ•}¥ˆ¤¤(€€€€€€€™½ÈÉ½Ü¥¸…±¥¹µ•¹ÑÌ(€€€€€€€¥˜}Ñ•áÐ¡É½Ü¹•Ð ‰…¹‘¥‘…Ñ•}¥ˆ¤¤…¹É½Ü¹•Ð ‰…±¥¹µ•¹Ñ}ÍÑ…ÑÕÌˆ¤¥¸=YI}MQQUML(€€€ô(€€€™½Éµ…±}½±±•Ñ¥½¹Ì€ôì(€€€€€€€€‰‰ÕÍ¥¹•ÍÍ}½‰©•ÑÌˆè½‰©•ÑÌ°(€€€€€€€€‰…Ñ½ÉÌˆè…Ñ½ÉÌ°(€€€€€€€€‰½Á•É…Ñ¥½¹Ìˆè½Á•É…Ñ¥½¹Ì°(€€€€€€€€‰½‰©•Ñ}É•±…Ñ¥½¹ÌˆèÉ•±…Ñ¥½¹Ì°(€€€€€€€€‰‰ÕÍ¥¹•ÍÍ}ÉÕ±•ÌˆèÉÕ±•Ì°(€€€€€€€€‰‰ÕÍ¥¹•ÍÍ}‰•¡…Ù¥½ÉÌˆè‰•¡…Ù¥½ÉÌ°(€€€ô(€€€Õ¹µ…Ñ¡•‘}½¹™¥Éµ•è±¥ÍÑm‘¥ÑmÍÑÈ°¹åut€ômt(€€€™½È½±±•Ñ¥½¸°…¹‘¥‘…Ñ•Ì¥¸™½Éµ…±}½±±•Ñ¥½¹Ì¹¥Ñ•µÌ ¤è(€€€€€€€™½ÈÉ½Ü¥¸…¹‘¥‘…Ñ•Ìè(€€€€€€€€€€€¥‘•¹Ñ¥Ñä€ô}…¹‘¥‘…Ñ•}¥¡É½Ü¤(€€€€€€€€€€€¥˜¥‘•¹Ñ¥Ñä…¹¥‘•¹Ñ¥Ñä¹½Ð¥¸µ…Ñ¡•‘}…¹‘¥‘…Ñ•}¥‘Ì…¹}Ñ•áÐ¡É½Ü¹•Ð ‰ÍÑ…ÑÕÌˆ¤¤¹ÕÁÁ•È ¤¥¸ì(€€€€€€€€€€€€€€€€‰=9%I5ˆ°€‰AQˆ°€‰AMLˆ(€€€€€€€€€€€ôè(€€€€€€€€€€€€€€€Õ¹µ…Ñ¡•‘}½¹™¥Éµ•¹…ÁÁ•¹¡ì(€€€€€€€€€€€€€€€€€€€€‰…¹‘¥‘…Ñ•}¥ˆè¥‘•¹Ñ¥Ñä°(€€€€€€€€€€€€€€€€€€€€‰…¹‘¥‘…Ñ•}½±±•Ñ¥½¸ˆè½±±•Ñ¥½¸°(€€€€€€€€€€€€€€€€€€€€‰…¹‘¥‘…Ñ•}ÍÑ…ÑÕÌˆè}Ñ•áÐ¡É½Ü¹•Ð ‰ÍÑ…ÑÕÌˆ¤¤°(€€€€€€€€€€€€€€€€€€€€‰…¹‘¥‘…Ñ•}•Ù¥‘•¹”ˆè}•Ù¥‘•¹”¡É½Ü¤°(€€€€€€€€€€€€€€€ô¤((€€€•áÁ•Ñ•‘}Õ¹­¹½Ý¹}…¹‘¥‘…Ñ•}¥‘Ì€ôì(€€€€€€€}Ñ•áÐ¡É½Ü¹•Ð ‰…¹‘¥‘…Ñ•}¥ˆ¤¤(€€€€€€€™½ÈÉ½Ü¥¸…±¥¹µ•¹ÑÌ(€€€€€€€¥˜É½Ü¹•Ð ‰½±±•Ñ¥½¸ˆ¤€ôô€‰•áÁ•Ñ•‘}Õ¹­¹½Ý¹Ìˆ…¹}Ñ•áÐ¡É½Ü¹•Ð ‰…¹‘¥‘…Ñ•}¥ˆ¤(€€€ô(€€€Õ¹•áÁ•Ñ•‘}Õ¹­¹½Ý¹Ì€ôl(€€€€€€€ì(€€€€€€€€€€€€‰…¹‘¥‘…Ñ•}¥ˆè}…¹‘¥‘…Ñ•}¥¡É½Ü¤°(€€€€€€€€€€€€‰…¹‘¥‘…Ñ•}½±±•Ñ¥½¸ˆè€‰Õ¹­¹½Ý¹Ìˆ°(€€€€€€€€€€€€‰…¹‘¥‘…Ñ•}ÍÑ…ÑÕÌˆè}Ñ•áÐ¡É½Ü¹•Ð ‰ÍÑ…ÑÕÌˆ¤¤°(€€€€€€€€€€€€‰…¹‘¥‘…Ñ•}•Ù¥‘•¹”ˆè}•Ù¥‘•¹”¡É½Ü¤°(€€€€€€€€€€€€‰…±¥¹µ•¹Ñ}ÍÑ…ÑÕÌˆè€‰U9-9=]9}M!=U1}!Y}	9}IM=1Yˆ°(€€€€€€€€€€€€‰É•…Í½¹}½‘”ˆèÉ½Ü¹•Ð ‰É•…Í½¹}½‘”ˆ¤½ÈÉ½Ü¹•Ð ‰­¥¹ˆ¤°(€€€€€€€ô(€€€€€€€™½ÈÉ½Ü¥¸Õ¹­¹½Ý¹Ì(€€€€€€€¥˜}…¹‘¥‘…Ñ•}¥¡É½Ü¤…¹}…¹‘¥‘…Ñ•}¥¡É½Ü¤¹½Ð¥¸•áÁ•Ñ•‘}Õ¹­¹½Ý¹}…¹‘¥‘…Ñ•}¥‘Ì(€€€t(€€€É•ÑÕÉ¸ì(€€€€€€€€‰Í¡•µ„ˆè1%959Q}M!5°(€€€€€€€€‰ÁÉ½©•Ñ}¥ˆèÉ½Õ¹‘}ÑÉÕÑ ¹•Ð ‰ÁÉ½©•Ñ}¥ˆ¤°(€€€€€€€€‰É½Õ¹‘}ÑÉÕÑ¡}Ù…±¥‘…Ñ¥½¹}ÍÑ…ÑÕÌˆè€ (€€€€€€€€€€€É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰Ù…±¥‘…Ñ¥½¹}É••¥ÁÐˆ°íô¤¹•Ð ‰ÍÑ…ÑÕÌˆ¤(€€€€€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡É½Õ¹‘}ÑÉÕÑ ¹•Ð ‰Ù…±¥‘…Ñ¥½¹}É••¥ÁÐˆ¤°‘¥Ð¤•±Í”€‰U9-9=]8ˆ(        ),
         "alignments": alignments,
         "unmatched_confirmed_candidates": unmatched_confirmed,
         "unexpected_unknowns": unexpected_unknowns,
