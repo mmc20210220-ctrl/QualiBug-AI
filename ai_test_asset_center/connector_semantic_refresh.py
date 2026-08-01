@@ -1,11 +1,12 @@
 """Deterministic sync-diff and downstream semantic refresh contract.
 
 This authority deliberately separates what a connector sync proved from what
-the semantic pipeline has actually executed.  It records source/artifact
-impact, suppresses unchanged-source reanalysis, and exposes an explicit
-pending handoff when an incremental semantic executor is not installed.  It
-never claims that facts, entities, scenarios, or regression scope changed just
-because a sync completed.
+the semantic pipeline has actually executed. It records source/artifact
+impact, suppresses unchanged-source reanalysis, and delegates completed syncs
+to the existing knowledge-composition incremental executor. A receipt never
+claims that facts, entities, scenarios, or regression scope changed just
+because a sync completed; those counts are populated only from the executed
+source-bound projection.
 """
 from __future__ import annotations
 
@@ -386,6 +387,175 @@ def build_connector_semantic_refresh_receipt(
     }
 
 
+def execute_connector_semantic_refresh(
+    project_id: str,
+    receipt: Mapping[str, Any],
+    *,
+    root: Any = None,
+    options: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run the existing knowledge composition incrementally for one sync receipt.
+
+    The composition import is intentionally lazy: connector diff construction remains usable
+    during package import, while the connector sync coordinator invokes this explicit executor
+    only after source-occurrence and ACL persistence have committed.
+    """
+    result = dict(receipt)
+    try:
+        from .enterprise_knowledge_center.composition import (
+            refresh_enterprise_business_knowledge_asset_incremental,
+        )
+
+        execution = refresh_enterprise_business_knowledge_asset_incremental(
+            project_id,
+            dict(receipt),
+            root=root,
+            options=dict(options or {}),
+        )
+    except Exception as exc:
+        source_diff = dict(result.get("source_occurrence_diff") or {})
+        blocked = "BLOCKED_INCREMENTAL_EXECUTOR_ERROR"
+        result.update(
+            {
+                "status": blocked,
+                "incremental_executor_installed": True,
+                "completion_reason": "INCREMENTAL_SEMANTIC_EXECUTOR_FAILED",
+                "executor_error": {
+                    "code": "INCREMENTAL_SEMANTIC_EXECUTOR_FAILED",
+                    "type": type(exc).__name__,
+                    "detail": str(exc)[:500],
+                },
+                "unchanged_materials_reanalyzed": False,
+                "full_project_recompute_requested": False,
+                "downstream": [
+                    {
+                        "stage": row.get("stage"),
+                        "status": blocked,
+                        "executed": False,
+                        "source_refs_bound": int(
+                            row.get("source_refs_bound") or 0
+                        ),
+                        "authority": row.get("authority")
+                        or "enterprise_knowledge_composition",
+                    }
+                    for row in result.get("downstream") or []
+                    if isinstance(row, Mapping)
+                ],
+                "source_occurrence_diff": {
+                    **source_diff,
+                    "status": "COMPLETE",
+                },
+                "source_content_returned": False,
+            }
+        )
+        return result
+
+    mode = str(execution.get("mode") or "INCREMENTAL")
+    stage_counts = dict(execution.get("stage_counts") or {})
+    changed_source_count = int(
+        dict(result.get("source_occurrence_diff") or {}).get(
+            "changed_source_count"
+        )
+        or 0
+    )
+    if mode == "NO_CHANGE":
+        result.update(
+            {
+                "status": "NO_CHANGE",
+                "incremental_executor_installed": True,
+                "completion_reason": "NO_SOURCE_CHANGE",
+                "unchanged_materials_reanalyzed": False,
+                "full_project_recompute_requested": False,
+                "source_content_returned": False,
+            }
+        )
+        return result
+
+    executed_status = (
+        "EXECUTED_INITIAL_ASSET_BUILD"
+        if mode == "INITIAL_ASSET_BUILD"
+        else "EXECUTED_INCREMENTAL"
+    )
+    stage_names = (
+        "fact_reextraction",
+        "entity_remerge",
+        "conflict_recomputation",
+        "behavior_model_impact_analysis",
+        "scenario_regeneration_or_invalidation",
+        "regression_scope_update",
+    )
+    result.update(
+        {
+            "status": "EXECUTED",
+            "incremental_executor_installed": True,
+            "completion_reason": (
+                "INITIAL_ASSET_BUILD_EXECUTED"
+                if mode == "INITIAL_ASSET_BUILD"
+                else "INCREMENTAL_SEMANTIC_EXECUTOR_EXECUTED"
+            ),
+            "llm_reanalysis_scheduled_count": int(
+                execution.get("llm_reanalysis_count") or 0
+            ),
+            "unchanged_materials_reanalyzed": execution.get(
+                "unchanged_materials_reanalyzed"
+            )
+            is True,
+            "full_project_recompute_requested": execution.get(
+                "full_project_recompute_requested"
+            )
+            is True,
+            "incremental_execution_mode": mode,
+            "incremental_parsed_source_count": int(
+                execution.get("parsed_source_count") or 0
+            ),
+            "affected_content_blocks": int(
+                execution.get("affected_content_blocks") or 0
+            ),
+            "artifact_diff": {
+                **dict(result.get("artifact_diff") or {}),
+                "status": "COMPLETE",
+                "content_block_count": int(
+                    execution.get("affected_content_blocks") or 0
+                ),
+            },
+            "semantic_impact_relation_count": int(
+                execution.get("semantic_impact_relation_count") or 0
+            ),
+            "pending_validation_count": int(
+                execution.get("pending_validation_count") or 0
+            ),
+            "affected_facts": int(
+                stage_counts.get("fact_reextraction") or 0
+            ),
+            "affected_entities": int(
+                stage_counts.get("entity_remerge") or 0
+            ),
+            "affected_behaviors": int(
+                stage_counts.get("behavior_model_impact_analysis") or 0
+            ),
+            "affected_scenarios": int(
+                stage_counts.get("scenario_regeneration_or_invalidation") or 0
+            ),
+            "affected_regression_items": int(
+                stage_counts.get("regression_scope_update") or 0
+            ),
+            "downstream": [
+                {
+                    "stage": stage,
+                    "status": executed_status,
+                    "executed": True,
+                    "source_refs_bound": changed_source_count,
+                    "authority": "enterprise_knowledge_composition",
+                    "affected_count": int(stage_counts.get(stage) or 0),
+                }
+                for stage in stage_names
+            ],
+            "source_content_returned": False,
+        }
+    )
+    return result
+
+
 def project_connector_semantic_refresh_receipt(
     receipt: Mapping[str, Any], *, include_events: bool = True
 ) -> dict[str, Any]:
@@ -417,11 +587,26 @@ def project_connector_semantic_refresh_receipt(
         "changed_source_count": int(source_diff.get("changed_source_count") or 0),
         "unchanged_source_count": int(source_diff.get("unchanged_source_count") or 0),
         "affected_content_blocks": int(receipt.get("affected_content_blocks") or 0),
+        "semantic_impact_relation_count": int(
+            receipt.get("semantic_impact_relation_count") or 0
+        ),
         "affected_facts": int(receipt.get("affected_facts") or 0),
         "affected_entities": int(receipt.get("affected_entities") or 0),
         "affected_behaviors": int(receipt.get("affected_behaviors") or 0),
         "affected_scenarios": int(receipt.get("affected_scenarios") or 0),
         "affected_regression_items": int(receipt.get("affected_regression_items") or 0),
+        "incremental_execution_mode": _text(
+            receipt.get("incremental_execution_mode"), 80
+        ),
+        "incremental_parsed_source_count": int(
+            receipt.get("incremental_parsed_source_count") or 0
+        ),
+        "pending_validation_count": int(
+            receipt.get("pending_validation_count") or 0
+        ),
+        "llm_reanalysis_scheduled_count": int(
+            receipt.get("llm_reanalysis_scheduled_count") or 0
+        ),
         "downstream": [
             {
                 "stage": _text(row.get("stage"), 120),
@@ -435,6 +620,11 @@ def project_connector_semantic_refresh_receipt(
         "unchanged_materials_reanalyzed": receipt.get("unchanged_materials_reanalyzed") is True,
         "full_project_recompute_requested": receipt.get("full_project_recompute_requested") is True,
         "incremental_executor_installed": receipt.get("incremental_executor_installed") is True,
+        "executor_error_code": _text(
+            (receipt.get("executor_error") or {}).get("code"), 160
+        )
+        if isinstance(receipt.get("executor_error"), Mapping)
+        else "",
         "completion_reason": _text(receipt.get("completion_reason"), 160),
         "source_content_returned": False,
         "remote_resource_identities_returned": False,
@@ -446,5 +636,6 @@ __all__ = [
     "ConnectorSemanticRefreshError",
     "SOURCE_EVENT_TYPES",
     "build_connector_semantic_refresh_receipt",
+    "execute_connector_semantic_refresh",
     "project_connector_semantic_refresh_receipt",
 ]

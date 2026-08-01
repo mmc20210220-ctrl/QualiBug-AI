@@ -228,7 +228,20 @@ Connector Sync Complete
   -> scenario / regression impact
 ```
 
-Unchanged materials do not trigger repeated semantic analysis. Until the incremental semantic executor is installed, changed materials remain visibly `PENDING_VALIDATION` with downstream `PENDING_INCREMENTAL_EXECUTOR`; the system never claims that facts, entities, behavior models, or scenarios were refreshed. Ordinary frontend projections expose only event types, source-label fingerprints, impact counts, and stage status—not raw remote identities or content.
+The incremental semantic executor is now installed on the existing knowledge composition root. An initial
+connector sync performs the explicit baseline build; later `SOURCE_REVISION_CHANGED`, `SOURCE_CREATED`,
+`SOURCE_REAPPEARED`, and `SOURCE_CAPABILITY_NOW_SUPPORTED` events parse and semantically analyze only the
+changed Source Occurrences. The existing deterministic technical, fact, conflict, behavior, scenario, and
+Probe authorities then reconcile the final asset. Unchanged materials are not re-read or sent through LLM
+analysis. Shared API artifact records are source-scoped, so a changed declaration cannot discard an unchanged
+declaration from another Source Occurrence.
+
+`SOURCE_BECAME_UNAVAILABLE`, `SOURCE_PERMISSION_CHANGED`, and `SOURCE_RETIRED` keep the related facts,
+behaviors, scenarios, and regression probes visible but mark them `PENDING_SOURCE_VALIDATION`/invalidated;
+they are never silently deleted or executed. Each completed handoff persists an inspectable
+`qualibug.connector-semantic-impact.v1` relation ledger and stage counts. Ordinary frontend projections expose
+only event types, source-label fingerprints, impact counts, relation counts, and stage status—not raw remote
+identities or content.
 
 中止操作不推进 cursor，不删除现有资料快照，只清理遗留运行状态和对应租约。
 

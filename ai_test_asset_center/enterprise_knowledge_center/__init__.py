@@ -116,6 +116,7 @@ from .composition import (  # noqa: E402,F401
     configure_source_parser_extensions,
     generate_enterprise_business_knowledge_probes,
     load_enterprise_business_knowledge_asset,
+    refresh_enterprise_business_knowledge_asset_incremental,
 )
 
 # Public ingestion authority. It records content, interpretation and occurrence identities,
