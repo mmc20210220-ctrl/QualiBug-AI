@@ -468,6 +468,71 @@ def deactivate_unreferenced_canonical_sources(
     }
 
 
+def _reactivate_existing_occurrence(
+    registry: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    occurrence: dict[str, Any],
+    actor: dict[str, Any],
+) -> None:
+    previous_status = _text(occurrence.get("status")) or "unknown"
+    occurrence_id = _text(occurrence.get("source_occurrence_id"))
+    source_ref = _text(occurrence.get("source_ref"))
+    content_id = _upsert_content_asset(registry, canonical, occurrence_id)
+    _upsert_interpretation_asset(
+        registry,
+        canonical=canonical,
+        content_asset_id=content_id,
+        interpretation_asset_id=_text(occurrence.get("interpretation_asset_id")),
+        source_type=_text(occurrence.get("source_type")),
+        fmt=_text(occurrence.get("format_identity")),
+        occurrence_id=occurrence_id,
+        source_ref=source_ref,
+    )
+    _add_unique(canonical, "source_occurrence_ids", occurrence_id)
+    _add_unique(canonical, "source_refs", source_ref)
+    history = [
+        dict(row)
+        for row in occurrence.get("lifecycle_history") or []
+        if isinstance(row, dict)
+    ]
+    history.append(
+        {
+            "status": previous_status,
+            "ended_at_utc": _now(),
+            "reason": _text(
+                occurrence.get("retired_reason")
+                or occurrence.get("deleted_reason")
+                or occurrence.get("superseded_reason")
+            ),
+        }
+    )
+    occurrence["lifecycle_history"] = history[-50:]
+    occurrence["status"] = "active"
+    occurrence["reactivated_at_utc"] = _now()
+    occurrence["reactivated_by"] = dict(actor)
+    occurrence["reactivated_from_status"] = previous_status
+    for key in (
+        "retired_at_utc",
+        "retired_by",
+        "retired_reason",
+        "retirement_evidence",
+        "deleted_at_utc",
+        "deleted_by",
+        "deleted_reason",
+        "superseded_at_utc",
+        "superseded_by_occurrence_id",
+        "superseded_reason",
+    ):
+        occurrence.pop(key, None)
+    canonical["content_asset_id"] = content_id
+    canonical["active_source_occurrence_count"] = sum(
+        item.get("status") == "active"
+        and _text(item.get("canonical_source_id")) == _text(canonical.get("source_id"))
+        for item in _registry_rows(registry, "source_occurrences")
+    )
+
+
 def _register_occurrence(
     registry: dict[str, Any],
     *,
@@ -503,6 +568,13 @@ def _register_occurrence(
         None,
     )
     if existing is not None:
+        if existing.get("status") != "active":
+            _reactivate_existing_occurrence(
+                registry,
+                canonical=canonical,
+                occurrence=existing,
+                actor=actor,
+            )
         return existing, False, set()
 
     previous = [
@@ -610,6 +682,7 @@ def _register_result_rows(
             "source_occurrence_batch_registration_authority": (
                 "source_occurrence_core"
             ),
+            "retired_occurrence_reactivation_preserves_identity": True,
         }
     )
     registry.setdefault("audit_events", []).append(
@@ -622,6 +695,11 @@ def _register_result_rows(
             ],
             "duplicate_source_occurrence_ids": [
                 row["source_occurrence_id"] for row in duplicate_occurrences
+            ],
+            "reactivated_source_occurrence_ids": [
+                row["source_occurrence_id"]
+                for row in duplicate_occurrences
+                if row.get("reactivated_at_utc")
             ],
             "batch_registration": len(result_rows) > 1,
         }
