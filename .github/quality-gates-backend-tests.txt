@@ -76,3 +76,4 @@ tests/test_identity_benchmark_workflow.py
 tests/test_private_pilot_identity_benchmark_handlers.py
 tests/test_identity_benchmark_composition_order.py
 tests/test_identity_benchmark_http_busy_contract.py
+tests/test_outcome_identity_runtime_receipt_chain.py
