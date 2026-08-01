@@ -183,6 +183,20 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
                     )
                     if _text(value)
                 ],
+                "termination_recovery_schema_version": _text(
+                    receipt.get("termination_recovery_schema_version")
+                ),
+                "termination_recovery_ledger_id": _text(
+                    receipt.get("termination_recovery_ledger_id")
+                ),
+                "termination_recovery_ledger_hash": _text(
+                    receipt.get("termination_recovery_ledger_hash")
+                ),
+                "termination_recovery_source_step_fact_hash": _text(
+                    receipt.get(
+                        "termination_recovery_source_step_fact_hash"
+                    )
+                ),
                 "observed_correlated_row_count": int(
                     receipt.get("observed_correlated_row_count") or 0
                 ),
