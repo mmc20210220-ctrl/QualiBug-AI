@@ -45,6 +45,7 @@ jobs:
             ai_test_asset_center/db_persistence.py \
             ai_test_asset_center/enterprise_knowledge_center/_crud.py \
             ai_test_asset_center/experiment_compiler_obligation.py \
+            ai_test_asset_center/experiment_cleanup_executor.py \
             ai_test_asset_center/experiment_lifecycle_runtime.py \
             ai_test_asset_center/experiment_outcome_finalizer.py \
             ai_test_asset_center/operational_receipts.py \
@@ -66,6 +67,7 @@ jobs:
             tests/test_process_step_semantic_view.py \
             tests/test_compiled_http_observer_bundle_scope.py \
             tests/test_process_graph_event_finalizer_scope.py \
+            tests/test_adapter_cleanup_runtime_identity.py \
             tests/test_formal_event_mainline.py \
             tests/test_formal_event_runtime_execution.py \
             tests/test_formal_event_post_runtime_execution.py
