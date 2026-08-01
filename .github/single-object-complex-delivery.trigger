@@ -1,1 +1,1 @@
-single-object complex lifecycle delivery
+single-object complex lifecycle delivery native trigger 2026-08-01
