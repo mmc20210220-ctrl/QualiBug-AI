@@ -1,8 +1,8 @@
 """Context-isolated Feishu lifecycle recovery composition.
 
-The Feishu core remains transport and capability focused.  These dispatchers bind one invocation
+The Feishu core remains transport and capability focused. These dispatchers bind one invocation
 to a durable lifecycle recovery intent and one pre-generated sync epoch without mutating shared
-module globals per request.  ContextVar isolation allows different connector instances to run
+module globals per request. ContextVar isolation allows different connector instances to run
 concurrently while tests may still inject explicit delegates through the public facade.
 """
 from __future__ import annotations
@@ -20,7 +20,6 @@ from .connector_checkpoint_commit_authority import (
 )
 from .connector_lifecycle_recovery_intent import (
     clear_connector_lifecycle_recovery_intent,
-    load_connector_lifecycle_recovery_intent,
     stage_connector_lifecycle_recovery_intent,
     update_connector_lifecycle_recovery_intent_state,
 )
@@ -216,6 +215,14 @@ def sync_feishu_snapshot_with_recovery_intent(
     delegated = dict(kwargs)
     delegated["sync_epoch_id"] = epoch
     run = context["snapshot_delegate"](project_id, **delegated)
+    if not isinstance(run, dict):
+        raise FeishuLifecycleRecoveryRuntimeError(
+            "feishu_lifecycle_recovery_snapshot_result_invalid"
+        )
+    if _text(run.get("sync_epoch_id"), 160) != epoch:
+        raise FeishuLifecycleRecoveryRuntimeError(
+            "feishu_lifecycle_recovery_snapshot_epoch_mismatch"
+        )
     if run.get("status") == "COMPLETE":
         update_connector_lifecycle_recovery_intent_state(
             context["project_id"],
@@ -275,6 +282,10 @@ def reconcile_feishu_lifecycle_with_recovery_intent(
         except Exception:
             pass
         raise
+    if not isinstance(lifecycle, dict):
+        raise FeishuLifecycleRecoveryRuntimeError(
+            "feishu_lifecycle_recovery_result_invalid"
+        )
     if lifecycle.get("cursor_checkpoint_committed") is True:
         clear_connector_lifecycle_recovery_intent(
             context["project_id"],
