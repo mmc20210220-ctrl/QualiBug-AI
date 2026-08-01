@@ -158,6 +158,15 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
                     receipt.get("observation_window_completed") is True
                 ),
                 "attempt_count": int(receipt.get("attempt_count") or 0),
+                "event_scope_mode": _text(
+                    receipt.get("event_scope_mode")
+                ),
+                "observed_correlated_row_count": int(
+                    receipt.get("observed_correlated_row_count") or 0
+                ),
+                "observed_matching_row_count": int(
+                    receipt.get("observed_matching_row_count") or 0
+                ),
                 "observed_unique_event_count": int(
                     receipt.get("observed_unique_event_count") or 0
                 ),
@@ -175,6 +184,12 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "idempotency_mismatch_count": int(
                     receipt.get("idempotency_mismatch_count") or 0
+                ),
+                "out_of_scope_idempotency_event_count": int(
+                    receipt.get("out_of_scope_idempotency_event_count") or 0
+                ),
+                "missing_idempotency_event_count": int(
+                    receipt.get("missing_idempotency_event_count") or 0
                 ),
                 "retry_limit_violation_count": int(
                     receipt.get("retry_limit_violation_count") or 0
