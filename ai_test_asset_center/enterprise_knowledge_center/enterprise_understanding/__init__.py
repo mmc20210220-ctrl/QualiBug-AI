@@ -14,6 +14,15 @@ from .behavior_ir_governance import build_governed_business_behavior_ir
 from .behavior_ir_logic_gate import build_business_behavior_ir_v1
 from .builder import build_enterprise_understanding_model
 from .gate import assess_understanding_model
+from .identity_structural_review import (
+    ACTION_CONFIRM_ALIAS,
+    ACTION_REJECT_CANDIDATE,
+    DECISION_KIND as IDENTITY_STRUCTURAL_REVIEW_DECISION_KIND,
+    REVIEW_QUEUE_SCHEMA as IDENTITY_STRUCTURAL_REVIEW_QUEUE_SCHEMA,
+    REVIEW_RECEIPT_SCHEMA as IDENTITY_STRUCTURAL_REVIEW_RECEIPT_SCHEMA,
+    get_identity_structural_review_queue,
+    record_identity_structural_review_decision,
+)
 from .implementation_binding import (
     IMPLEMENTATION_BINDING_GATE_SCHEMA,
     IMPLEMENTATION_BINDING_SCHEMA,
@@ -110,6 +119,13 @@ __all__ = [
     "RUNTIME_MATERIALIZATION_SCHEMA",
     "RUNTIME_MATERIALIZATION_GATE_SCHEMA",
     "OPENAPI_RUNTIME_CONTRACT_SCHEMA",
+    "IDENTITY_STRUCTURAL_REVIEW_DECISION_KIND",
+    "IDENTITY_STRUCTURAL_REVIEW_QUEUE_SCHEMA",
+    "IDENTITY_STRUCTURAL_REVIEW_RECEIPT_SCHEMA",
+    "ACTION_CONFIRM_ALIAS",
+    "ACTION_REJECT_CANDIDATE",
+    "get_identity_structural_review_queue",
+    "record_identity_structural_review_decision",
     "build_decision_matrix_row_ledger",
     "build_business_behavior_ir",
     "build_governed_business_behavior_ir",
