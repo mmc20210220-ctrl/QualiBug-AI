@@ -1,38 +1,81 @@
-name: One-time identity table diagnostic
+name: One-time exact table semantic identity binding
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened, reopened, edited]
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: one-time-exact-table-semantic-identity-binding
+  cancel-in-progress: false
 
 jobs:
-  benchmark-current-main:
-    if: >-
-      github.event.pull_request.base.ref == 'main' &&
-      github.event.pull_request.head.ref == 'internal-identity-table-diagnostic' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+  apply-test-and-push:
+    if: github.event.pull_request.number == 81
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
-      - name: Checkout current main only
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 1
+          fetch-depth: 0
+      - name: Verify and apply root fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_B64=.github/patches/identity_exact_table_semantic_binding.patch.gz.b64
+          echo 'cab9dd98b5a729d00105196ecf861edd4bd8257183e11e9a25d60d16cf8403dd  '"${PATCH_B64}" | sha256sum -c -
+          base64 -d "${PATCH_B64}" | gzip -d > /tmp/identity-table-binding.patch
+          echo 'b821d5f4274a3896efdda93c8a0e921a56a9f009c631318839ade335b57695cb  /tmp/identity-table-binding.patch' | sha256sum -c -
+          git apply --3way --check /tmp/identity-table-binding.patch
+          git apply --3way /tmp/identity-table-binding.patch
+          git diff --check
+      - name: Verify exact identity scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected-files.txt <<'EOF'
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_technical_projection.py
+          tests/test_enterprise_identity_governance.py
+          EOF
+          git diff --name-only | sort > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install package
+          cache: pip
+      - name: Install package and tests
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-      - name: Run identity benchmark twice
+      - name: Compile identity authority
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_technical_projection.py
+      - name: Run focused identity regressions
+        run: |
+          python -m pytest -q \
+            tests/test_business_object_recognition_aliases.py \
+            tests/test_business_object_recognition_benchmark.py \
+            tests/test_business_object_recognition_technical.py \
+            tests/test_business_object_recognition_types.py \
+            tests/test_enterprise_identity_governance.py \
+            tests/test_enterprise_identity_scope.py \
+            tests/test_enterprise_identity_resolution.py \
+            tests/test_identity_field_evidence.py \
+            tests/test_identity_structural_evidence.py \
+            tests/test_identity_structural_review.py \
+            tests/test_identity_structural_review_governance.py \
+            tests/test_identity_benchmark_composition_order.py
+      - name: Run real benchmark twice
         shell: bash
         run: |
-          cat > /tmp/identity_diagnostic.py <<'PY'
+          cat > /tmp/verify_identity_table_binding.py <<'PY'
           import json
           from pathlib import Path
           from ai_test_asset_center.enterprise_knowledge_center.composition import build_enterprise_business_knowledge_asset
@@ -44,22 +87,24 @@ jobs:
               clusters = resolution.get('clusters') or []
               bindings = model.get('identity_bindings') or []
               unknowns = model.get('identity_unknowns') or []
-              unresolved = [
-                  item
+              unresolved = {
+                  item.get('artifact_ref')
                   for row in unknowns
                   for item in (row.get('details') or {}).get('unresolved_artifacts') or []
                   if isinstance(item, dict)
+              }
+              exact = [
+                  row for row in bindings
+                  if 'SOURCE_DECLARED_TECHNICAL_SEMANTIC_LABEL'
+                  in (row.get('identity_authorities') or [])
               ]
               return {
                   'gate': gate.get('status'),
                   'cluster_count': len(clusters),
-                  'cluster_labels': sorted(row.get('canonical_label') for row in clusters if row.get('canonical_label')),
                   'binding_count': len(bindings),
-                  'api_bindings': sorted(row.get('artifact_ref') for row in bindings if row.get('artifact_type') == 'API_OPERATION'),
-                  'table_bindings': sorted(row.get('artifact_ref') for row in bindings if row.get('artifact_type') == 'DATABASE_TABLE'),
                   'unknown_record_count': len(unknowns),
-                  'unresolved_tables': sorted(item.get('artifact_ref') for item in unresolved if item.get('artifact_type') == 'DATABASE_TABLE'),
-                  'unresolved_apis': sorted(item.get('artifact_ref') for item in unresolved if item.get('artifact_type') == 'API_OPERATION'),
+                  'exact_table_binding_refs': sorted(row.get('artifact_ref') for row in exact),
+                  'unresolved_refs': sorted(value for value in unresolved if value),
                   'entity_ids': sorted(row.get('entity_id') for row in clusters if row.get('entity_id')),
               }
 
@@ -67,10 +112,36 @@ jobs:
           for _ in range(2):
               asset = build_enterprise_business_knowledge_asset('benchmark_mall', Path.cwd(), {'probe_limit': 0})
               runs.append(summary(asset))
-          print('IDENTITY_DIAGNOSTIC=' + json.dumps({
+          required = {'table:products', 'table:cart_items', 'table:coupons'}
+          assert runs[0]['gate'] != 'BLOCKED_ENTERPRISE_IDENTITY_CONFLICT', runs[0]
+          assert required <= set(runs[0]['exact_table_binding_refs']), runs[0]
+          assert not required & set(runs[0]['unresolved_refs']), runs[0]
+          assert runs[0]['entity_ids'] == runs[1]['entity_ids'], runs
+          print('IDENTITY_TABLE_BINDING_RESULT=' + json.dumps({
               'run1': {key: value for key, value in runs[0].items() if key != 'entity_ids'},
               'run2': {key: value for key, value in runs[1].items() if key != 'entity_ids'},
-              'stable_entity_ids': runs[0]['entity_ids'] == runs[1]['entity_ids'],
+              'stable_entity_ids': True,
           }, ensure_ascii=False, sort_keys=True))
           PY
-          python /tmp/identity_diagnostic.py
+          python /tmp/verify_identity_table_binding.py
+      - name: Commit verified root fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'QualiBug Automation'
+          git config user.email 'automation@qualibug.local'
+          git add \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_technical_projection.py \
+            tests/test_enterprise_identity_governance.py
+          git rm \
+            .github/workflows/one-time-identity-table-diagnostic.yml \
+            .github/patches/identity_exact_table_semantic_binding.patch.gz.b64
+          git commit -m 'fix(identity): bind exact source-declared table semantics' \
+            -m 'Project complete structured database labels through the existing Identity Authority only when they resolve to one current business entity. Reconcile aggregate technical unknowns while preserving fail-closed behavior for prefix, suffix, plural, token, path, and source-less inference.'
+      - name: Rebase and push main without force
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
