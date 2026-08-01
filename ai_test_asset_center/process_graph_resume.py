@@ -17,6 +17,7 @@ from .process_graph_resume_checkpoint import (
     GRAPH_RESUME_SCHEMA,
     build_process_graph_resume_checkpoint,
     checkpoint_applies,
+    checkpoint_execution_applies,
     current_graph_observations,
     current_ledger_rows,
     graph_id,
@@ -105,6 +106,13 @@ def recover_process_graph_runtime(
         execution_id=run_id,
     )
     checkpoint = _dict(observations.get("process_graph_resume_checkpoint"))
+    same_execution = checkpoint_execution_applies(
+        checkpoint,
+        experiment_id=eid,
+        obligation_id=oid,
+        campaign_id=cid,
+        execution_id=run_id,
+    )
     applies = checkpoint_applies(
         checkpoint,
         graph=graph,
@@ -113,6 +121,8 @@ def recover_process_graph_runtime(
         campaign_id=cid,
         execution_id=run_id,
     )
+    if same_execution and not applies:
+        return _blocked("resume_checkpoint_execution_graph_id_mismatch")
     if not current_rows and not applies:
         return _fresh()
     if not applies:
