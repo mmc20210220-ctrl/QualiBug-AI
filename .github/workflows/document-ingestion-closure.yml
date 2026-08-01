@@ -17,6 +17,7 @@ on:
       - "ai_test_asset_center/historical_authorization_quarantine.py"
       - "ai_test_asset_center/historical_authorization_artifact_migration.py"
       - "ai_test_asset_center/historical_authorization_inventory.py"
+      - "ai_test_asset_center/historical_authorization_rerun_plan.py"
       - "ai_test_asset_center/private_pilot_historical_authorization_migration.py"
       - "ai_test_asset_center/experiment_compiler.py"
       - "ai_test_asset_center/experiment_executor.py"
@@ -95,6 +96,7 @@ jobs:
             ai_test_asset_center/historical_authorization_quarantine.py \
             ai_test_asset_center/historical_authorization_artifact_migration.py \
             ai_test_asset_center/historical_authorization_inventory.py \
+            ai_test_asset_center/historical_authorization_rerun_plan.py \
             ai_test_asset_center/private_pilot_historical_authorization_migration.py \
             ai_test_asset_center/experiment_compiler.py \
             ai_test_asset_center/experiment_executor.py \
@@ -103,10 +105,14 @@ jobs:
             ai_test_asset_center/formal_delivery_authority.py \
             ai_test_asset_center/private_pilot_service.py
 
-      - name: Smoke installed authorization inventory CLI
+      - name: Smoke installed authorization remediation CLIs
         run: |
           mkdir -p "$RUNNER_TEMP/qualibug-empty-root"
           qualibug-authorization-inventory \
+            --root "$RUNNER_TEMP/qualibug-empty-root" \
+            --stdout-only \
+            --compact
+          qualibug-authorization-rerun-plan \
             --root "$RUNNER_TEMP/qualibug-empty-root" \
             --stdout-only \
             --compact
