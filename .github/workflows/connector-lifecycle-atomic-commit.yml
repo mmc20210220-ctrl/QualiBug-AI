@@ -1,0 +1,70 @@
+name: Connector lifecycle atomic commit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ai_test_asset_center/connector_lifecycle_commit_authority.py"
+      - "ai_test_asset_center/connector_remote_lifecycle.py"
+      - "ai_test_asset_center/connector_sync_authority.py"
+      - "ai_test_asset_center/feishu_connector_capability_sync.py"
+      - "ai_test_asset_center/feishu_connector_capability_sync_core.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
+      - "tests/test_connector_lifecycle_commit_authority.py"
+      - "tests/test_connector_remote_lifecycle.py"
+      - "tests/test_connector_remote_lifecycle_transaction.py"
+      - "tests/test_feishu_remote_lifecycle_integration.py"
+      - ".github/workflows/connector-lifecycle-atomic-commit.yml"
+  pull_request:
+    paths:
+      - "ai_test_asset_center/connector_lifecycle_commit_authority.py"
+      - "ai_test_asset_center/connector_remote_lifecycle.py"
+      - "ai_test_asset_center/connector_sync_authority.py"
+      - "ai_test_asset_center/feishu_connector_capability_sync.py"
+      - "ai_test_asset_center/feishu_connector_capability_sync_core.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
+      - "tests/test_connector_lifecycle_commit_authority.py"
+      - "tests/test_connector_remote_lifecycle.py"
+      - "tests/test_connector_remote_lifecycle_transaction.py"
+      - "tests/test_feishu_remote_lifecycle_integration.py"
+      - ".github/workflows/connector-lifecycle-atomic-commit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  atomic-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile atomic lifecycle authorities
+        run: |
+          python -m py_compile ai_test_asset_center/connector_lifecycle_commit_authority.py
+          python -m py_compile ai_test_asset_center/connector_remote_lifecycle.py
+          python -m py_compile ai_test_asset_center/feishu_connector_capability_sync.py
+          python -m py_compile ai_test_asset_center/feishu_connector_capability_sync_core.py
+
+      - name: Run atomic lifecycle regressions
+        run: |
+          python -m pytest -q \
+            tests/test_connector_lifecycle_commit_authority.py \
+            tests/test_connector_remote_lifecycle.py \
+            tests/test_connector_remote_lifecycle_transaction.py \
+            tests/test_feishu_remote_lifecycle_integration.py
