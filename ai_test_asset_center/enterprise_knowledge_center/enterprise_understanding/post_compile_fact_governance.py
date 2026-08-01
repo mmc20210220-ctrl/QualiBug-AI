@@ -45,7 +45,11 @@ def _normalize_typed_fact_values(asset: dict[str, Any]) -> dict[str, Any]:
     projected = 0
     formal_slot_projected = 0
     ambiguous_ids: list[str] = []
+    skipped_nonaccepted = 0
     for fact in facts:
+        if _text(fact.get("status")) != "ACCEPTED":
+            skipped_nonaccepted += 1
+            continue
         fact_type = _text(fact.get("fact_type")).upper()
         if fact_type != "CARDINALITY_CONSTRAINT":
             continue
@@ -122,6 +126,7 @@ def _normalize_typed_fact_values(asset: dict[str, Any]) -> dict[str, Any]:
         "status": "BLOCKED" if ambiguous_ids else "PASS",
         "compatibility_value_projected_fact_count": projected,
         "formal_quantity_constraint_projected_fact_count": formal_slot_projected,
+        "skipped_nonaccepted_fact_count": skipped_nonaccepted,
         "ambiguous_fact_ids": ambiguous_ids,
         "automatic_winner_used": False,
         "parallel_value_authority_created": False,
@@ -247,6 +252,7 @@ def govern_compiled_business_facts(
             "typed_object_relations_use_existing_object_graph": True,
             "typed_atomic_value_projection_is_single_boundary": True,
             "typed_atomic_value_projection_never_selects_multiple_claims": True,
+            "typed_atomic_value_projection_consumes_accepted_facts_only": True,
             "cardinality_value_and_quantity_constraint_share_one_authority": True,
             "identity_policy_runs_after_structure_fact_compilation": True,
             "conflict_authority_reapplied_after_structure_fact_compilation": True,
