@@ -10,6 +10,7 @@ from ai_test_asset_center.connector_connection_profiles import ConnectorProfileE
 from ai_test_asset_center.private_pilot_connector_handlers import (
     KnowledgeConnectorHandlersMixin,
     _connector_route,
+    _connector_type_route,
     _sanitize_sync_response,
 )
 
@@ -31,6 +32,36 @@ def test_connector_route_is_project_scoped_and_non_connector_routes_fall_through
         "/api/v1/projects/enterprise-project/knowledge-connectors/feishu-prod/sync"
     ) == (PROJECT, ["feishu-prod", "sync"])
     assert _connector_route("/api/knowledge/asset") is None
+
+
+def test_connector_type_route_is_global_and_manifest_lookup_is_metadata_only():
+    assert _connector_type_route("/api/v1/connector-types") == []
+    assert _connector_type_route("/api/v1/connector-types/feishu") == ["feishu"]
+    assert _connector_type_route("/api/v1/projects/enterprise-project/knowledge-connectors") is None
+
+    catalog = DummyHandler()._handle_connector_type_get([])
+    assert catalog["status"] == 200
+    assert catalog["body"]["ok"] is True
+    assert catalog["body"]["data"]["schema"] == "qualibug.connector-type-catalog.v1"
+    assert [row["connector_type"] for row in catalog["body"]["data"]["connector_types"]] == [
+        "feishu"
+    ]
+    assert catalog["body"]["data"]["governance"]["network_access_performed"] is False
+
+    detail = DummyHandler()._handle_connector_type_get(["feishu"])
+    assert detail["status"] == 200
+    assert detail["body"]["data"]["connector_type"]["connector_type"] == "feishu"
+
+
+def test_unknown_connector_type_is_fail_visible():
+    result = DummyHandler()._handle_connector_type_get(["does-not-exist"])
+
+    assert result["status"] == 404
+    assert result["body"] == {
+        "ok": False,
+        "error": "CONNECTOR_MANIFEST_ERROR",
+        "message": "connector_adapter_not_registered:does-not-exist",
+    }
 
 
 def test_sync_response_never_returns_checkpoint_or_source_content():

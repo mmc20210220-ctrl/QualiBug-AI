@@ -16,6 +16,10 @@ from .connector_auto_sync import (
     run_managed_feishu_sync,
     test_managed_feishu_connection,
 )
+from .connector_registry import (
+    ConnectorRegistryError,
+    build_default_connector_registry,
+)
 from .connector_configuration_service import configure_managed_feishu_connector
 from .connector_connection_profiles import (
     ConnectorProfileError,
@@ -76,6 +80,13 @@ def _connector_route(path: str) -> tuple[str, list[str]] | None:
     ):
         return None
     return parts[3], parts[5:]
+
+
+def _connector_type_route(path: str) -> list[str] | None:
+    parts = [unquote(part) for part in path.split("/") if part]
+    if parts[:3] != ["api", "v1", "connector-types"] or len(parts) > 4:
+        return None
+    return parts[3:]
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -562,6 +573,33 @@ class KnowledgeConnectorHandlersMixin:
             )
         )
 
+    def _handle_connector_type_get(self, tail: list[str]) -> Any:
+        try:
+            registry = build_default_connector_registry()
+            if not tail:
+                return self._json({"ok": True, "data": registry.catalog()})
+            manifest = registry.manifest(_text(tail[0], 160))
+            catalog = registry.catalog()
+            return self._json(
+                {
+                    "ok": True,
+                    "data": {
+                        "schema": catalog["schema"],
+                        "connector_type": manifest.as_dict(),
+                        "governance": dict(catalog["governance"]),
+                    },
+                }
+            )
+        except ConnectorRegistryError as exc:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "CONNECTOR_MANIFEST_ERROR",
+                    "message": _text(exc, 600),
+                },
+                404,
+            )
+
     def _handle_knowledge_connector_get(
         self,
         project: str,
@@ -798,6 +836,14 @@ class KnowledgeConnectorHandlersMixin:
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        connector_type_route = _connector_type_route(parsed.path)
+        if connector_type_route is not None:
+            self._init_request_context()
+            root = self._root()
+            actor = self._require_actor()
+            if actor is None or self._require_tenant(root) is None:
+                return None
+            return self._handle_connector_type_get(connector_type_route)
         route = _connector_route(parsed.path)
         if route is None:
             return super().do_GET()
@@ -878,6 +924,7 @@ __all__ = [
     "KnowledgeConnectorHandlersMixin",
     "_connector_inventory",
     "_connector_route",
+    "_connector_type_route",
     "_coverage_projection",
     "_public_connector_instance",
     "_remote_lifecycle_projection",

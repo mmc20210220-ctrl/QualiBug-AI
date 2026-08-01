@@ -26,6 +26,15 @@ from .connector_sync_authority import (
     list_connector_instances,
     sync_connector_snapshot_batch,
 )
+from .connector_registry import (
+    ConnectorContext,
+    ConnectorCredentialField,
+    ConnectorManifest,
+    DiscoveryResult,
+    MaterializedSnapshot,
+    SyncCursor,
+)
+from .connector_materialization_capability import ResourceCapability
 from .enterprise_knowledge_center._common import MAX_SOURCE_BYTES, ROOT
 from .enterprise_knowledge_center._utils import _redact_text
 from .ssrf_guard import SsrfBlockedError, safe_urlopen
@@ -980,6 +989,144 @@ def test_feishu_connector_connection(
     }
 
 
+def feishu_connector_manifest() -> ConnectorManifest:
+    """Return the public Feishu capability declaration without resolving credentials."""
+    return ConnectorManifest(
+        connector_type=FEISHU_CONNECTOR_TYPE,
+        display_name="飞书",
+        category="knowledge_base",
+        version="1",
+        auth_modes=("internal_app", "tenant_access_token", "user_access_token"),
+        scope_schema={
+            "type": "string",
+            "presets": (
+                "wiki-all-accessible",
+                "wiki-space",
+                "wiki-spaces",
+                "wiki-node",
+            ),
+        },
+        supported_resource_types=tuple(sorted({*_EXPORT_FORMATS, *_DIRECT_FILE_TYPES})),
+        sync_modes=("FULL", "INCREMENTAL"),
+        webhook_supported=False,
+        local_runner_supported=False,
+        local_runner_required=False,
+        read_only=True,
+        credential_fields=(
+            ConnectorCredentialField(
+                name="app_id",
+                field_type="text",
+                required=True,
+                secret=False,
+                description="企业应用标识",
+            ),
+            ConnectorCredentialField(
+                name="app_secret",
+                field_type="secret",
+                required=True,
+                secret=True,
+                description="企业应用密钥",
+            ),
+            ConnectorCredentialField(
+                name="tenant_access_token",
+                field_type="token",
+                required=True,
+                secret=True,
+                description="租户访问令牌",
+            ),
+            ConnectorCredentialField(
+                name="user_access_token",
+                field_type="token",
+                required=True,
+                secret=True,
+                description="用户访问令牌",
+            ),
+        ),
+        capability_contract_version=_MATERIALIZATION_CONTRACT_VERSION,
+    )
+
+
+def _context_value(context: ConnectorContext, name: str) -> Any:
+    value = context.get(name)
+    if value is None or value == "":
+        raise FeishuConnectorError(f"connector_context_{name}_missing")
+    return value
+
+
+class FeishuConnectorAdapter:
+    """Generic ConnectorAdapter facade over the existing Feishu implementation."""
+
+    def manifest(self) -> ConnectorManifest:
+        return feishu_connector_manifest()
+
+    def test_connection(self, context: ConnectorContext) -> dict[str, Any]:
+        return test_feishu_connector_connection(
+            _context_value(context, "project_id"),
+            connector_instance_id=_context_value(context, "connector_instance_id"),
+            resolve_connection_profile=_context_value(
+                context, "resolve_connection_profile"
+            ),
+            root=context.get("root"),
+            transport=context.get("transport"),
+            timeout=float(context.get("timeout", 15.0)),
+            sleeper=context.get("sleeper", time.sleep),
+        )
+
+    def discover(self, context: ConnectorContext, cursor: SyncCursor = "") -> DiscoveryResult:
+        descriptors = discover_feishu_wiki_resources(
+            _context_value(context, "access_token"),
+            _context_value(context, "resource_scope"),
+            transport=context.get("transport"),
+            timeout=float(context.get("timeout", 15.0)),
+            max_nodes=int(context.get("max_nodes", _DEFAULT_MAX_NODES)),
+            sleeper=context.get("sleeper", time.sleep),
+        )
+        return {
+            "schema": FEISHU_ADAPTER_SCHEMA,
+            "descriptors": descriptors,
+            "complete": True,
+            "next_cursor": self.build_cursor(descriptors),
+            "coverage": {"discovered_count": len(descriptors)},
+            "previous_cursor_supplied": bool(cursor),
+        }
+
+    def classify_resource(self, descriptor: Mapping[str, Any]) -> ResourceCapability:
+        from .feishu_connector_capability_sync_core import classify_feishu_resource
+
+        return classify_feishu_resource(descriptor)
+
+    def materialize(
+        self,
+        context: ConnectorContext,
+        descriptor: Mapping[str, Any],
+    ) -> MaterializedSnapshot:
+        return materialize_feishu_resource(
+            descriptor,
+            _context_value(context, "access_token"),
+            transport=context.get("transport"),
+            timeout=float(context.get("timeout", 15.0)),
+            max_export_polls=int(
+                context.get("max_export_polls", _DEFAULT_MAX_EXPORT_POLLS)
+            ),
+            export_poll_interval=float(context.get("export_poll_interval", 0.5)),
+            allow_raw_text_fallback=bool(context.get("allow_raw_text_fallback", False)),
+            sleeper=context.get("sleeper", time.sleep),
+        )
+
+    def build_cursor(
+        self,
+        discovery_result: DiscoveryResult | list[Mapping[str, Any]],
+    ) -> SyncCursor:
+        descriptors = (
+            discovery_result.get("descriptors")
+            if isinstance(discovery_result, Mapping)
+            else discovery_result
+        )
+        if not isinstance(descriptors, list):
+            raise FeishuConnectorError("connector_discovery_descriptors_missing")
+        return _snapshot_cursor([dict(item) for item in descriptors])
+
+
 def sync_feishu_connector(
     project_id: str,
     *,
@@ -1119,9 +1266,11 @@ def sync_feishu_connector(
 __all__ = [
     "FEISHU_ADAPTER_SCHEMA",
     "FEISHU_CONNECTOR_TYPE",
+    "FeishuConnectorAdapter",
     "FeishuConnectorError",
     "FeishuHttpResponse",
     "discover_feishu_wiki_resources",
+    "feishu_connector_manifest",
     "materialize_feishu_resource",
     "sync_feishu_connector",
     "test_feishu_connector_connection",
