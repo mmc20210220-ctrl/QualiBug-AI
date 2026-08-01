@@ -225,6 +225,43 @@ def _validate_multi_write_cleanup_coverage(
             "multi_write": True,
         }
 
+    # A single experiment-level snapshot restore is sufficient when every
+    # mutating step targets the same source operation. The runtime restore
+    # authority already iterates all accepted writes for that operation;
+    # duplicating the plan would send the same restore request repeatedly.
+    global_snapshot = [
+        step
+        for step in cleanup_plan
+        if not _cleanup_source_step_id(step)
+        and _text(step.get("action")) == "restore_before_snapshot"
+        and _cleanup_mode(step) in {"snapshot_restore", "restore_snapshot"}
+    ]
+    if len(global_snapshot) == 1 and len(global_snapshot) == len(cleanup_plan):
+        cleanup_operation_ref = _cleanup_operation_ref(global_snapshot[0])
+        cleanup_method = _text(
+            global_snapshot[0].get("method")
+            or _dict(ops.get(cleanup_operation_ref)).get("method")
+        ).upper()
+        cleanup_path = _text(
+            global_snapshot[0].get("path")
+            or _dict(ops.get(cleanup_operation_ref)).get("path")
+        )
+        if all(
+            write["operation_ref"] == cleanup_operation_ref
+            and write["method"] == cleanup_method
+            and write["path"] == cleanup_path
+            for write in writes
+        ):
+            return {
+                "valid": True,
+                "reason_code": "",
+                "detail": "",
+                "write_step_ids": write_step_ids,
+                "cleanup_source_step_ids": [],
+                "multi_write": True,
+                "global_snapshot_restore": True,
+            }
+
     writes_by_id = {row["step_id"]: row for row in writes}
     scoped_cleanup = [
         step

@@ -8,6 +8,7 @@ from ai_test_asset_center.discovery_trace_ledger import (
     DiscoveryTraceError,
     build_discovery_trace_ledger_v2,
     migrate_trace_ledger_v1_to_v3,
+    persist_trace_ledger,
     validate_trace_ledger,
 )
 from ai_test_asset_center.discovery_weakness_miner import mine_discovery_weaknesses
@@ -120,6 +121,19 @@ def test_trace_v2_has_one_row_per_obligation_attempt_without_raw_payloads() -> N
     assert ledger["redaction_contract"]["ground_truth_persisted"] is False
     serialized = json.dumps(ledger, ensure_ascii=False)
     assert "must-not-persist" not in serialized
+
+
+def test_trace_persistence_bounds_long_windows_target_paths(tmp_path) -> None:
+    target_id = "scope-" + ("x" * 180)
+    ledger = _trace(_attempt_result(), target_id=target_id)
+
+    path = persist_trace_ledger(ledger, tmp_path / ("output-" + ("x" * 70)))
+
+    assert path.exists()
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["target_id"] == target_id
+    if __import__("os").name == "nt":
+        assert len(str(path)) <= 240
 
 
 def test_runtime_rejects_v1_without_explicit_migration() -> None:

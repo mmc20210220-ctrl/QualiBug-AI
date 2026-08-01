@@ -62,11 +62,43 @@ def _int(value: Any, default: int = 0) -> int:
 
 def _generated_obligation_count(result: dict[str, Any]) -> int | None:
     nested = _dict(result.get("v12"))
+    generated_rows: list[dict[str, Any]] = []
     for owner in (result, nested):
         obligations = _dict(owner.get("test_obligations")).get("obligations")
         if isinstance(obligations, list):
-            return len([row for row in obligations if isinstance(row, dict)])
-    return None
+            generated_rows = [
+                row for row in obligations if isinstance(row, dict)
+            ]
+            break
+    if not generated_rows:
+        return None
+
+    # Runtime interface discovery owns a separate, explicitly receipted
+    # obligation collection. Those surface rows enter the same attempt ledger
+    # but are intentionally not copied into the base test-obligation receipt.
+    # Count the union by immutable obligation identity so conservation does not
+    # mistake a governed runtime expansion for an unaccounted terminal attempt.
+    surface_execution = _dict(
+        _dict(nested.get("runtime_interface_discovery")).get("execution")
+    )
+    surface_rows = [
+        row
+        for row in _list(surface_execution.get("selected_rows"))
+        if isinstance(row, dict)
+    ]
+    if not surface_rows:
+        return len(generated_rows)
+    generated_ids = {
+        _text(row.get("obligation_id")) for row in generated_rows
+    }
+    surface_ids = {
+        _text(row.get("obligation_id")) for row in surface_rows
+    }
+    if all(generated_ids) and all(surface_ids):
+        return len(generated_ids | surface_ids)
+    # A malformed identity must remain visible and conservative. Do not infer
+    # overlap when either source receipt has an identity gap.
+    return len(generated_rows) + len(surface_rows)
 
 
 def _conservation_check(

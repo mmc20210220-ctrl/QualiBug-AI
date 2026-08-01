@@ -164,6 +164,40 @@ def _run_identity(
         if not _text(identity.get(field))
     ]
     identity["status"] = "COMPLETE" if not identity["missing_fields"] else "INCOMPLETE"
+    selected_obligation_id = next(
+        (
+            _text(row.get("obligation_id"))
+            for row in rows
+            if _text(row.get("obligation_id"))
+        ),
+        "",
+    )
+    executed_obligation_ids: set[str] = set()
+    for row in rows:
+        nested_delivery = _object(
+            row.get("delivery_execution_receipt"),
+            field="delivery_execution_receipt",
+        )
+        nested_identity = _object(
+            row.get("identity"),
+            field="stage_identity",
+        )
+        candidates = (
+            _text(row.get("executed_obligation_id")),
+            _text(nested_delivery.get("obligation_id")),
+            _text(nested_identity.get("executed_obligation_id")),
+            _text(nested_identity.get("obligation_id")),
+            _text(row.get("obligation_id")),
+        )
+        for candidate in candidates:
+            if candidate and candidate != selected_obligation_id:
+                executed_obligation_ids.add(candidate)
+    if len(executed_obligation_ids) > 1:
+        raise ObligationAttemptLedgerError(
+            "identity_value_conflict:executed_obligation_id"
+        )
+    if executed_obligation_ids:
+        identity["executed_obligation_id"] = next(iter(executed_obligation_ids))
     return identity
 
 
@@ -189,6 +223,60 @@ def bind_stage_receipt_identity(
     selected_ids, _ = _selected_rows(selected)
     selected_set = set(selected_ids)
 
+    executed_by_selected: dict[str, str] = {}
+    for raw_id, raw_receipt in execution_results.items():
+        selected_id = _text(raw_id)
+        receipt = _object(
+            raw_receipt,
+            field=f"execution_receipt:{selected_id or 'MISSING'}",
+        )
+        declared_selected = _text(receipt.get("selected_obligation_id"))
+        if declared_selected and declared_selected != selected_id:
+            raise ObligationAttemptLedgerError(
+                f"selected_obligation_identity_mismatch:{selected_id}"
+            )
+        executed_id = _text(receipt.get("executed_obligation_id"))
+        if not executed_id:
+            executed_id = _text(
+                _object(
+                    receipt.get("delivery_execution_receipt"),
+                    field=f"delivery_execution_receipt:{selected_id or 'MISSING'}",
+                ).get("obligation_id")
+            )
+        if executed_id and executed_id != selected_id:
+            prior = executed_by_selected.get(selected_id)
+            if prior and prior != executed_id:
+                raise ObligationAttemptLedgerError(
+                    f"executed_obligation_identity_conflict:{selected_id}"
+                )
+            executed_by_selected[selected_id] = executed_id
+
+    def _existing_obligation_ids(
+        receipt: dict[str, Any],
+        nested_identity: dict[str, Any],
+    ) -> set[str]:
+        return {
+            value
+            for value in (
+                _text(receipt.get("obligation_id")),
+                _text(nested_identity.get("obligation_id")),
+            )
+            if value
+        }
+
+    def _declared_selected_ids(
+        receipt: dict[str, Any],
+        nested_identity: dict[str, Any],
+    ) -> set[str]:
+        return {
+            value
+            for value in (
+                _text(receipt.get("selected_obligation_id")),
+                _text(nested_identity.get("selected_obligation_id")),
+            )
+            if value
+        }
+
     def bind(
         receipts: Mapping[str, Any],
     ) -> dict[str, dict[str, Any]]:
@@ -210,6 +298,40 @@ def bind_stage_receipt_identity(
                     f"stage_identity_not_object:{obligation_id}"
                 )
             nested_identity = dict(nested) if isinstance(nested, dict) else {}
+            declared_selected_ids = _declared_selected_ids(
+                receipt,
+                nested_identity,
+            )
+            if declared_selected_ids and declared_selected_ids != {obligation_id}:
+                raise ObligationAttemptLedgerError(
+                    f"selected_obligation_identity_mismatch:{obligation_id}"
+                )
+            existing_obligation_ids = _existing_obligation_ids(
+                receipt,
+                nested_identity,
+            )
+            expected_executed = executed_by_selected.get(obligation_id, "")
+            allowed_obligation_ids = {obligation_id}
+            if expected_executed:
+                allowed_obligation_ids.add(expected_executed)
+            if not existing_obligation_ids.issubset(allowed_obligation_ids):
+                raise ObligationAttemptLedgerError(
+                    f"stage_obligation_identity_mismatch:{obligation_id}"
+                )
+            declared_executed = {
+                value
+                for value in (
+                    _text(receipt.get("executed_obligation_id")),
+                    _text(nested_identity.get("executed_obligation_id")),
+                )
+                if value
+            }
+            if declared_executed and declared_executed != {
+                expected_executed or obligation_id
+            }:
+                raise ObligationAttemptLedgerError(
+                    f"executed_obligation_identity_mismatch:{obligation_id}"
+                )
             for field in _IDENTITY_FIELDS:
                 expected = _text(identity.get(field))
                 top_level = _text(receipt.get(field))
@@ -220,14 +342,50 @@ def bind_stage_receipt_identity(
                     )
                 if expected and not top_level and not nested_value:
                     nested_identity[field] = expected
-            existing_obligation_id = _text(
-                receipt.get("obligation_id") or nested_identity.get("obligation_id")
+            is_sealed_gate = (
+                receipt.get("schema_version") == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
             )
-            if existing_obligation_id and existing_obligation_id != obligation_id:
-                raise ObligationAttemptLedgerError(
-                    f"stage_obligation_identity_mismatch:{obligation_id}"
+            if is_sealed_gate:
+                # Gate-v2 receipts are fingerprint-sealed. Their payload cannot
+                # accept the normal identity envelope without invalidating the
+                # receipt fingerprint, so carry a separately named mainline
+                # stage-binding receipt. The ledger consumes it for stage
+                # continuity and strips it before validating the sealed gate.
+                stage_binding = {
+                    field: expected
+                    for field in _IDENTITY_FIELDS
+                    if (expected := _text(identity.get(field)))
+                }
+                stage_binding.update(
+                    {
+                        "obligation_id": obligation_id,
+                        "selected_obligation_id": obligation_id,
+                        "identity_binding_source": (
+                            "immutable_mainline_run_contract"
+                        ),
+                    }
                 )
+                if expected_executed:
+                    stage_binding["executed_obligation_id"] = expected_executed
+                existing_binding = receipt.get("stage_identity_receipt")
+                if existing_binding is not None:
+                    if not isinstance(existing_binding, dict):
+                        raise ObligationAttemptLedgerError(
+                            f"stage_identity_receipt_not_object:{obligation_id}:gate"
+                        )
+                    for field, expected in stage_binding.items():
+                        observed = _text(existing_binding.get(field))
+                        if observed and observed != _text(expected):
+                            raise ObligationAttemptLedgerError(
+                                f"stage_identity_value_conflict:{obligation_id}:gate:{field}"
+                            )
+                receipt["stage_identity_receipt"] = stage_binding
+                output[obligation_id] = receipt
+                continue
             nested_identity["obligation_id"] = obligation_id
+            if expected_executed:
+                nested_identity["executed_obligation_id"] = expected_executed
+            nested_identity["selected_obligation_id"] = obligation_id
             nested_identity["identity_binding_source"] = (
                 "immutable_mainline_run_contract"
             )
@@ -251,6 +409,13 @@ def _stage_identity(
             f"stage_identity_not_object:{obligation_id}:{stage}"
         )
     nested_identity = nested_identity if isinstance(nested_identity, dict) else {}
+    stage_binding = receipt.get("stage_identity_receipt")
+    if stage_binding is not None and not isinstance(stage_binding, dict):
+        raise ObligationAttemptLedgerError(
+            f"stage_identity_receipt_not_object:{obligation_id}:{stage}"
+        )
+    stage_binding = stage_binding if isinstance(stage_binding, dict) else {}
+    identity_rows = (receipt, nested_identity, stage_binding)
 
     # A stage identity must describe what the stage receipt actually carried.
     # The immutable run identity remains available as ``expected_identity`` but
@@ -261,7 +426,7 @@ def _stage_identity(
     for field in _IDENTITY_FIELDS:
         values = {
             _text(row.get(field))
-            for row in (receipt, nested_identity)
+            for row in identity_rows
             if _text(row.get(field))
         }
         if len(values) > 1:
@@ -278,12 +443,44 @@ def _stage_identity(
                 f"stage_identity_mismatch:{obligation_id}:{stage}:{field}"
             )
 
+    declared_selected_ids = {
+        value
+        for value in (
+            _text(receipt.get("selected_obligation_id")),
+            _text(nested_identity.get("selected_obligation_id")),
+            _text(stage_binding.get("selected_obligation_id")),
+        )
+        if value
+    }
+    if declared_selected_ids and declared_selected_ids != {obligation_id}:
+        raise ObligationAttemptLedgerError(
+            f"selected_obligation_identity_mismatch:{obligation_id}:{stage}"
+        )
+    expected_executed = _text(identity.get("executed_obligation_id"))
+    declared_executed_ids = {
+        value
+        for value in (
+            _text(receipt.get("executed_obligation_id")),
+            _text(nested_identity.get("executed_obligation_id")),
+            _text(stage_binding.get("executed_obligation_id")),
+        )
+        if value
+    }
+    if declared_executed_ids and declared_executed_ids != {
+        expected_executed or obligation_id
+    }:
+        raise ObligationAttemptLedgerError(
+            f"executed_obligation_identity_mismatch:{obligation_id}:{stage}"
+        )
     observed_obligation_ids = {
         _text(row.get("obligation_id"))
-        for row in (receipt, nested_identity)
+        for row in identity_rows
         if _text(row.get("obligation_id"))
     }
-    if observed_obligation_ids and observed_obligation_ids != {obligation_id}:
+    observed_executed_ids = observed_obligation_ids - {obligation_id}
+    if observed_executed_ids and (
+        not expected_executed or observed_executed_ids != {expected_executed}
+    ):
         raise ObligationAttemptLedgerError(
             f"stage_obligation_identity_mismatch:{obligation_id}:{stage}"
         )
@@ -300,12 +497,15 @@ def _stage_identity(
     ]
     result = dict(observed)
     result["obligation_id"] = obligation_id
+    if expected_executed:
+        result["executed_obligation_id"] = expected_executed
     result["status"] = "COMPLETE" if not missing_fields else "INCOMPLETE"
     result["missing_fields"] = missing_fields
     result["observed_fields"] = sorted(observed_fields)
     result["expected_identity"] = expected_identity
     identity_binding_source = _text(
         nested_identity.get("identity_binding_source")
+        or stage_binding.get("identity_binding_source")
     )
     if identity_binding_source:
         result["identity_binding_source"] = identity_binding_source
@@ -386,8 +586,13 @@ def _validated_gate_bundle(
         ),
     }
     try:
+        gate_for_validation = dict(gate_receipt)
+        # This is a mainline-owned stage binding for the sealed gate, not part
+        # of the gate's signed payload. Keep the signed receipt unchanged while
+        # retaining the binding in the ledger stage projection.
+        gate_for_validation.pop("stage_identity_receipt", None)
         validated = validate_customer_delivery_gate_bundle(
-            gate_receipt,
+            gate_for_validation,
             **evidence_bundle,
         )
     except (DeliveryGateV2Error, ValueError) as exc:
@@ -1070,6 +1275,21 @@ def validate_obligation_attempt_ledger(
                 if _text(stage_identity.get("obligation_id")) != obligation_id:
                     raise ObligationAttemptLedgerError(
                         f"obligation_attempt_stage_identity_mismatch:{obligation_id}"
+                    )
+                stage_executed_obligation_id = _text(
+                    stage_identity.get("executed_obligation_id")
+                )
+                attempt_executed_obligation_id = _text(
+                    attempt.get("executed_obligation_id") or obligation_id
+                )
+                if (
+                    stage_executed_obligation_id
+                    and stage_executed_obligation_id
+                    != attempt_executed_obligation_id
+                ):
+                    raise ObligationAttemptLedgerError(
+                        "obligation_attempt_stage_executed_identity_mismatch:"
+                        f"{obligation_id}"
                     )
                 for field in ("run_id", "campaign_id"):
                     if _text(stage_identity.get(field)) and _text(

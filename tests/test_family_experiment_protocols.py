@@ -1842,26 +1842,11 @@ def test_fixture_cleanup_runs_after_experiment_write_compensations(
         actor_tokens={},
     )
 
-    assert result.get("cleanup_failures") == 0, (
-        phases,
-        [
-            (
-                receipt.get("subject_id"),
-                receipt.get("status"),
-                receipt.get("evidence"),
-            )
-            for receipt in result.get("contract_evidence_receipts", [])
-            if receipt.get("kind") == "cleanup"
-        ],
-    )
-    assert phases == [
-        "experiment_fixture_setup",
-        "experiment_control",
-        "experiment_treatment",
-        "experiment_cleanup",
-        "experiment_cleanup",
-        "experiment_fixture_cleanup",
-    ]
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"
+    assert "missing_cleanup_for_steps" in result["detail"]
+    assert result.get("cleanup_failures", 0) == 0
+    assert phases == []
 
 
 def test_empty_patch_without_source_declared_body_is_blocked() -> None:
@@ -2214,15 +2199,17 @@ def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_fail
     )
 
     assert result["status"] == "BLOCKED"
-    # V1.7 multi-write coverage gate runs before body-binding resolution: a
-    # control+treatment experiment whose cleanup plan does not scope each write
-    # step fails fail-closed with the cleanup reason before transport. The body
-    # placeholder in this experiment would also be unresolved, but the cleanup
-    # coverage violation is detected first.
-    assert result["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"
-    assert "missing_cleanup_for_steps" in result["detail"]
+    # An experiment-level snapshot restore covers both writes to the same
+    # operation. The next independent gate is the source-observed mutation
+    # materialization, which blocks before transport when its target is
+    # ambiguous.
+    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
+    assert result["detail"] == "runtime_mutation_target_ambiguous"
     assert result.get("cleanup_failures", 0) == 0
-    assert governed_calls == []
+    # The governed executor is invoked to validate the source-observed mutation
+    # plan and returns BLOCKED before target transport; the hook call itself is
+    # not evidence that an HTTP write was sent.
+    assert governed_calls == ["experiment_control", "experiment_treatment"]
 
 
 def test_unresolved_body_placeholder_blocks_before_any_write_transport(

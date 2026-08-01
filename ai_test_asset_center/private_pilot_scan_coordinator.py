@@ -6,6 +6,8 @@ report/counter/state artifacts concurrently.
 """
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
 import json
 import os
 import shutil
@@ -58,6 +60,26 @@ def _read_owner(lease_dir: Path) -> dict[str, Any]:
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        process_query_limited_information = 0x1000
+        synchronize = 0x00100000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(
+            process_query_limited_information | synchronize,
+            False,
+            pid,
+        )
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -76,8 +98,12 @@ def _stale(lease_dir: Path, *, stale_after_seconds: int) -> bool:
         started = float(owner.get("started_unix") or 0)
     except (TypeError, ValueError):
         return False
-    age = max(0.0, time.time() - started) if started else 0.0
-    return bool(started and age > stale_after_seconds and not _pid_alive(pid))
+    # A dead owner cannot recover the lease. Waiting hours before reclaiming it
+    # leaves every subsequent real scan permanently blocked after a worker or
+    # service restart. The PID liveness check is the authoritative local fact;
+    # ``stale_after_seconds`` remains part of the API for callers that still
+    # supply it, but must not delay recovery of an owner that is already gone.
+    return bool(started and not _pid_alive(pid))
 
 
 def _remove_stale_lease(lease_dir: Path) -> None:
@@ -128,13 +154,12 @@ def project_scan_lease(
     lease_dir = _lease_dir(resolved_root, safe_project)
     lease_dir.parent.mkdir(parents=True, exist_ok=True)
     acquired = False
-    with local:
-        while True:
+    while True:
+        with local:
             try:
                 lease_dir.mkdir()
                 _write_json_object_atomic(_owner_path(lease_dir), owner)
                 acquired = True
-                break
             except FileExistsError:
                 if _stale(
                     lease_dir,
@@ -142,13 +167,19 @@ def project_scan_lease(
                 ):
                     _remove_stale_lease(lease_dir)
                     continue
-                if time.monotonic() >= deadline:
-                    raise ScanLeaseBusy(_read_owner(lease_dir))
-                time.sleep(0.25)
-        try:
-            yield owner
-        finally:
-            if acquired:
+                owner_snapshot = _read_owner(lease_dir)
+            else:
+                owner_snapshot = None
+        if acquired:
+            break
+        if time.monotonic() >= deadline:
+            raise ScanLeaseBusy(owner_snapshot)
+        time.sleep(0.25)
+    try:
+        yield owner
+    finally:
+        if acquired:
+            with local:
                 current = _read_owner(lease_dir)
                 if current.get("token") == token:
                     shutil.rmtree(lease_dir, ignore_errors=True)

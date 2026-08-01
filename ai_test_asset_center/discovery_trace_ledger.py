@@ -617,9 +617,19 @@ def persist_trace_ledger(ledger: dict[str, Any], output_root: Path | str) -> Pat
             "trace ledger still contained redactable material before persistence"
         )
     safe = re.compile(r"[^A-Za-z0-9_.-]+")
-    target = safe.sub("_", _required(value.get("target_id"), "target_id"))
+    target_identity = _required(value.get("target_id"), "target_id")
+    target = safe.sub("_", target_identity)
     run_id = safe.sub("_", _required(value.get("run_id"), "run_id"))
     path = Path(output_root) / target / f"{run_id}.trace-ledger.json"
+    if os.name == "nt" and len(str(path)) > 240:
+        # Windows legacy file APIs reject paths near MAX_PATH with a misleading
+        # FileNotFoundError even when the parent directory exists.  Keep the
+        # full target identity in the redacted ledger, but use a deterministic
+        # bounded directory component for the filesystem projection.
+        target = "target_" + hashlib.sha256(
+            target_identity.encode("utf-8")
+        ).hexdigest()[:32]
+        path = Path(output_root) / target / f"{run_id}.trace-ledger.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(redacted, ensure_ascii=False, indent=2)
     if path.exists():

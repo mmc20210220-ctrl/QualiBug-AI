@@ -3,12 +3,14 @@ from __future__ import annotations
 import io
 import json
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from ai_test_asset_center import db_persistence, jwt_auth
+from ai_test_asset_center import private_pilot_scan_coordinator
 from ai_test_asset_center.enterprise_knowledge_center.transaction_lock import (
     KnowledgeTransactionBusy,
     knowledge_transaction,
@@ -131,6 +133,37 @@ def test_project_scan_lease_is_exclusive_across_threads(tmp_path: Path) -> None:
     release.set()
     thread.join(5)
     assert not thread.is_alive()
+
+
+def test_dead_scan_owner_is_reclaimed_without_stale_wait(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease_dir = private_pilot_scan_coordinator._lease_dir(tmp_path, "project-a")
+    lease_dir.mkdir(parents=True)
+    (lease_dir / "owner.json").write_text(
+        json.dumps(
+            {
+                "schema": "qualibug.project-scan-lease.v1",
+                "token": "dead-owner",
+                "pid": 12345,
+                "project_id": "project-a",
+                "started_unix": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(private_pilot_scan_coordinator, "_pid_alive", lambda pid: False)
+
+    with private_pilot_scan_coordinator.project_scan_lease(
+        tmp_path,
+        "project-a",
+        mode="reclaim",
+        tenant_id="tenant-a",
+        stale_after_seconds=6 * 60 * 60,
+    ) as owner:
+        assert owner["token"] != "dead-owner"
+        assert owner["pid"] != 12345
 
 
 def test_knowledge_transaction_is_exclusive(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ Configuration sources (priority order):
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -31,6 +32,9 @@ from typing import Any
 
 from .ssrf_guard import safe_urlopen, SsrfBlockedError
 from .credential_crypto import decrypt as _decrypt_cred
+
+
+_LOGGER = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -493,7 +497,11 @@ class EnterpriseCredentialManager:
         # instead of trying weak defaults like "{role}123" which could lock out
         # accounts or succeed against poorly-configured targets.
         if not cred.username or not cred.password:
-            print(f"  [WARN] {service}/{role}: no credentials configured, skipping login", flush=True)
+            _LOGGER.warning(
+                "credential_login_skipped_no_credentials service=%s role=%s",
+                service,
+                role,
+            )
             return None
         username = cred.username
         password = cred.password
@@ -525,6 +533,7 @@ class EnterpriseCredentialManager:
                 unique.append(c)
 
         identity_fields = _identity_field_candidates(username, cred.username_field)
+        attempt_failures: list[str] = []
 
         for login_path in unique:
             url = cred.base_url.rstrip("/") + "/" + login_path
@@ -550,13 +559,30 @@ class EnterpriseCredentialManager:
                     # Every candidate path shares this host, so retrying them all
                     # would emit the same refusal N times and end in a "login failed"
                     # summary that reads as "wrong password". Stop and name the cause.
-                    print(f"  [BLOCK] {service}/{role}: {url} refused by SSRF guard "
-                          f"({exc}); target grant: "
-                          f"{self._target_grant.get('reason_code') or 'none'}",
-                          flush=True)
+                    _LOGGER.warning(
+                        "credential_login_blocked_ssrf service=%s role=%s url=%s "
+                        "reason=%s target_grant=%s",
+                        service,
+                        role,
+                        url,
+                        exc,
+                        self._target_grant.get("reason_code") or "none",
+                    )
                     return None
-                except Exception:
-                    continue  # Try next identity shape, then the next path
+                except Exception as exc:
+                    error_type = type(exc).__name__
+                    attempt_failures.append(error_type)
+                    _LOGGER.warning(
+                        "credential_login_attempt_failed service=%s role=%s "
+                        "path=/%s identity_field=%s error_type=%s",
+                        service,
+                        role,
+                        login_path,
+                        identity_field,
+                        error_type,
+                        exc_info=True,
+                    )
+                    continue
 
                 # Extract token from common response patterns
                 token = (
@@ -589,17 +615,28 @@ class EnterpriseCredentialManager:
                     if refresh:
                         cred.refresh_token = refresh
                     self.store.set(cred)
-                    print(f"  [OK] {role} token for {service} via "
-                          f"/{login_path} [{identity_field}] (len={len(token)}, "
-                          f"exp={time.strftime('%H:%M', time.localtime(cred.expires_at))}"
-                          f"{', refreshable' if refresh else ''})", flush=True)
+                    _LOGGER.info(
+                        "credential_login_succeeded service=%s role=%s path=/%s "
+                        "identity_field=%s token_length=%s expires_at=%s refreshable=%s",
+                        service,
+                        role,
+                        login_path,
+                        identity_field,
+                        len(token),
+                        time.strftime("%H:%M", time.localtime(cred.expires_at)),
+                        bool(refresh),
+                    )
                     return cred
 
-        print(f"  [WARN] {service}/{role}: login failed on all paths "
-              f"({len(unique)} paths x {len(identity_fields)} identity fields tried: "
-              f"{', '.join(identity_fields)})"
-              f"{' (可能存在验证码)' if len(unique) <= 3 else ''}",
-              flush=True)
+        _LOGGER.warning(
+            "credential_login_failed service=%s role=%s paths_tried=%s "
+            "identity_fields=%s failure_types=%s",
+            service,
+            role,
+            len(unique),
+            ",".join(identity_fields),
+            ",".join(attempt_failures) or "no_token_response",
+        )
         return None
 
     # ── Token lifecycle: expiry extraction + auto-refresh ──
@@ -681,12 +718,19 @@ class EnterpriseCredentialManager:
                 if new_token:
                     cred.token = new_token
                     cred.expires_at = self._extract_expiry(new_token, data)
-                    print(f"  [OK] Token refreshed for {cred.service}/{cred.role} "
+                    _LOGGER.info(f"  [OK] Token refreshed for {cred.service}/{cred.role} "
                           f"(exp={time.strftime('%H:%M', time.localtime(cred.expires_at))})",
-                          flush=True)
+                          )
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.warning(
+                    "credential_refresh_failed service=%s role=%s "
+                    "error_type=%s",
+                    cred.service,
+                    cred.role,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
         return False
 
     # ── OpenAPI-aware login path extraction ──

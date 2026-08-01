@@ -107,8 +107,12 @@ export function ConnectorAcceptancePanel({
     void load();
   }, [load]);
 
+  const activeJobId = job?.job_id;
+  const activeJobStatus = job?.status;
+  const activeJob = activeJobStatus === 'PENDING' || activeJobStatus === 'RUNNING';
+
   useEffect(() => {
-    if (!job?.job_id || !isActiveJob(job)) return undefined;
+    if (!activeJobId || !activeJob) return undefined;
     let cancelled = false;
 
     const notifyOnce = (jobId: string, message: string, tone: 'success' | 'warning') => {
@@ -121,7 +125,7 @@ export function ConnectorAcceptancePanel({
       if (pollInFlightRef.current) return;
       pollInFlightRef.current = true;
       try {
-        const next = await getConnectorAcceptanceJob(projectId, connectorId, job.job_id);
+        const next = await getConnectorAcceptanceJob(projectId, connectorId, activeJobId);
         if (cancelled) return;
         setJob(next);
         setRunning(isActiveJob(next));
@@ -158,7 +162,7 @@ export function ConnectorAcceptancePanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [job?.job_id, job?.status, projectId, connectorId, loadReport, toast]);
+  }, [activeJobId, activeJob, projectId, connectorId, loadReport, toast]);
 
   const blockers = useMemo(
     () => (report?.checks || []).filter((check) => check.severity === 'BLOCKER' && check.status === 'FAIL'),

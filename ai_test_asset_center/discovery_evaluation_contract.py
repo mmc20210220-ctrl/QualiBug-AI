@@ -19,10 +19,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from benchmark_evaluator.benchmark_compute import (
-    compute_benchmark,
-    compute_stage_loss_matrix,
-)
 from .canonical_defect_registry import (
     CanonicalDefectRegistryError,
     build_defect_identity_consistency,
@@ -106,6 +102,28 @@ NON_PRODUCTION_ENVIRONMENTS = {
 VALID_SPLITS = {"held_in", "held_out"}
 VALID_EXPECTATIONS = {"seeded_defects", "clean"}
 VALID_EVALUATION_MODES = {"operational", "replay", "shadow"}
+
+
+def _load_external_benchmark_compute() -> tuple[Any, Any]:
+    """Load evaluator-only scoring code only for an authenticated evaluation.
+
+    Product scans must remain runnable without the evaluator package.  The
+    evaluator dependency is intentionally resolved at the private scoring
+    boundary, after the caller has supplied a completed evaluation contract;
+    a missing evaluator is an explicit evaluation failure, never a product
+    runtime fallback or an implicit quality claim.
+    """
+
+    try:
+        from benchmark_evaluator.benchmark_compute import (
+            compute_benchmark,
+            compute_stage_loss_matrix,
+        )
+    except ModuleNotFoundError as exc:
+        raise EvaluationContractError(
+            "external_evaluator_dependency_missing:benchmark_evaluator"
+        ) from exc
+    return compute_benchmark, compute_stage_loss_matrix
 
 
 class EvaluationContractError(ValueError):
@@ -909,6 +927,7 @@ def evaluate_completed_scan(
 
     metrics: dict[str, Any] = {}
     if measurement_status == "MEASURED" and target.expectation == "seeded_defects":
+        compute_benchmark, compute_stage_loss_matrix = _load_external_benchmark_compute()
         ground_truth_path = _resolve_ref(target.ground_truth_ref, manifest.manifest_path)
         metrics = compute_benchmark(
             target.project_id,

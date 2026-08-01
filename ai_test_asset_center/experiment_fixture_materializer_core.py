@@ -112,6 +112,7 @@ def _auto_fixture_create_for_binding_target(
     operations: dict[str, dict[str, Any]],
     binding_plan: dict[str, Any],
     actors: dict[str, dict[str, Any]] | None = None,
+    behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Find a POST create operation at the same collection as the binding target path.
 
@@ -158,28 +159,15 @@ def _auto_fixture_create_for_binding_target(
         if op_path in candidate_paths or op_collection in candidate_paths:
             # Prefer identity-bound DELETE; otherwise accept a source-shaped
             # compensation action on the same collection (e.g. …/{id}/cancel).
-            cleanup_ops: list[dict[str, str]] = []
-            for clean_id, clean_op in operations.items():
-                if not isinstance(clean_op, dict):
-                    continue
-                clean_method = _text(clean_op.get("method")).upper()
-                if clean_method != "DELETE":
-                    continue
-                clean_path = normalize_path_placeholders(
-                    _text(clean_op.get("path") or clean_op.get("raw_path"))
-                )
-                if (
-                    not path_has_placeholders(clean_path)
-                    or not clean_path.startswith(op_collection.rstrip("/") + "/")
-                ):
-                    continue
-                row = {
-                    "operation_ref": clean_id,
-                    "method": clean_method,
-                    "path": clean_path,
-                }
-                cleanup_ops.append(row)
-            selected_cleanup = cleanup_ops
+            from .runtime_binding_graph import _declared_cleanup_operations
+
+            source_ir = _dict(behavior_ir)
+            if not source_ir:
+                source_ir = {"operations": list(operations.values())}
+            selected_cleanup = _declared_cleanup_operations(
+                op_collection,
+                behavior_ir=source_ir,
+            )
             if not selected_cleanup:
                 continue
             owner = _text(binding.get("fixture_owner_actor_ref"))
@@ -239,6 +227,7 @@ def materialize_experiment_fixtures(
     base_url: str,
     runtime_contract: dict[str, Any],
     campaign_id: str,
+    behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Materialize fixture DAG + actor/fixture activation evidence.
 
@@ -433,7 +422,12 @@ def materialize_experiment_fixtures(
                 and not binding.get("fixture_setup")
             ):
                 auto_create = _auto_fixture_create_for_binding_target(
-                    target, binding, ops, binding_plan, actors=actors
+                    target,
+                    binding,
+                    ops,
+                    binding_plan,
+                    actors=actors,
+                    behavior_ir=behavior_ir,
                 )
                 if auto_create:
                     binding = {**binding, **auto_create}
@@ -558,7 +552,12 @@ def materialize_experiment_fixtures(
                 # Uses the documented request_example from Behavior IR as body_template
                 # — industry-neutral, no hardcoding, works across all systems.
                 auto_create = _auto_fixture_create_for_binding_target(
-                    target, binding, ops, binding_plan, actors=actors
+                    target,
+                    binding,
+                    ops,
+                    binding_plan,
+                    actors=actors,
+                    behavior_ir=behavior_ir,
                 )
                 if auto_create:
                     binding = {**binding, **auto_create}

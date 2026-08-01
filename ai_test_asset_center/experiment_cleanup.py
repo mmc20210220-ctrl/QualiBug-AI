@@ -355,8 +355,15 @@ def _cleanup_compensates_created_resource(
     if _text(original_row.get("method")).upper() != "POST":
         return False
     cleanup_path = _text(cleanup_row.get("path"))
-    created_identities = _primary_resource_identity_candidates(
-        _dict(original_row.get("write")).get("body")
+    # The identity-bound compensation route itself carries the created resource
+    # id (e.g. /api/orders/{id}/cancel after a governed order create), so the
+    # materialized path is the authoritative identity source. Request-body
+    # identity-like fields (e.g. addressId) are foreign keys, not the created
+    # resource identity, and must never be required on the compensation path.
+    created_identities = _concrete_path_identity_candidates(cleanup_path) or (
+        _primary_resource_identity_candidates(
+            _dict(original_row.get("write")).get("body")
+        )
     )
     if not created_identities or not any(
         identity and identity in cleanup_path for identity in created_identities

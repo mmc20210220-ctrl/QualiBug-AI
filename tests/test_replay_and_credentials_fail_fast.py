@@ -21,9 +21,17 @@ class _JsonCaptureHandler:
     def _build_command_center(self, project: str, root: Path) -> dict:
         return {"data": {"risks": [{"risk_id": "finding-1"}]}}
 
+    def _request_tenant(self) -> str:
+        return "tenant-demo"
+
 
 class _ReplayEngineResult:
-    result: dict = {"ok": True, "success": False, "evidence": {"status": 404}}
+    result: dict = {
+        "ok": True,
+        "success": False,
+        "verdict": "not_reproduced",
+        "evidence": {"status": 404},
+    }
 
     def __init__(self, root: Path, project: str) -> None:
         self.root = root
@@ -41,7 +49,9 @@ def test_replay_status_persistence_failure_is_not_reported_as_success(
     monkeypatch.setattr(
         service.db_persist,
         "update_finding_status",
-        lambda *args: (_ for _ in ()).throw(RuntimeError("finding database locked")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("finding database locked")
+        ),
     )
     handler = _JsonCaptureHandler()
 
@@ -70,11 +80,20 @@ def test_replay_persists_status_before_claiming_success(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    _ReplayEngineResult.result = {"ok": True, "success": True}
+    _ReplayEngineResult.result = {
+        "ok": True,
+        "success": True,
+        "verdict": "reproduced",
+    }
     persisted: list[tuple[str, str]] = []
     monkeypatch.setattr("ai_test_asset_center.replay_engine.ReplayEngine", _ReplayEngineResult)
 
-    def persist_status(root: Path, finding_id: str, status: str) -> bool:
+    def persist_status(
+        root: Path,
+        finding_id: str,
+        status: str,
+        **kwargs: object,
+    ) -> bool:
         persisted.append((finding_id, status))
         return True
 
@@ -103,9 +122,17 @@ def test_replay_rejects_a_false_status_update_receipt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    _ReplayEngineResult.result = {"ok": True, "success": False}
+    _ReplayEngineResult.result = {
+        "ok": True,
+        "success": False,
+        "verdict": "not_reproduced",
+    }
     monkeypatch.setattr("ai_test_asset_center.replay_engine.ReplayEngine", _ReplayEngineResult)
-    monkeypatch.setattr(service.db_persist, "update_finding_status", lambda *args: False)
+    monkeypatch.setattr(
+        service.db_persist,
+        "update_finding_status",
+        lambda *args, **kwargs: False,
+    )
     handler = _JsonCaptureHandler()
 
     service.PrivatePilotHandler._handle_replay(

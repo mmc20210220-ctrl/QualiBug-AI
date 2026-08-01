@@ -1,5 +1,6 @@
 import pytest
 import json
+from pathlib import Path
 
 
 def _documented_operations() -> list[dict[str, object]]:
@@ -32,6 +33,9 @@ def test_runtime_interface_candidates_are_source_derived_read_only_and_bounded()
     assert all(row["source_refs"] for row in plan["candidates"])
     assert "/api/orders" not in {row["path"] for row in plan["candidates"]}
     assert "/api/orders/export" in {row["path"] for row in plan["candidates"]}
+    assert "/api/reports/export" in {
+        row["path"] for row in plan["candidates"]
+    }
     assert "/api/reports/orders/export" in {
         row["path"] for row in plan["candidates"]
     }
@@ -137,6 +141,8 @@ def test_runtime_interface_observation_rejects_write_probe_candidates() -> None:
 
 
 def test_runtime_interface_default_actions_come_from_policy_asset() -> None:
+    import ai_test_asset_center.runtime_interface_discovery as discovery_module
+
     from ai_test_asset_center.runtime_interface_discovery import (
         load_runtime_interface_discovery_actions,
         load_runtime_interface_discovery_budget,
@@ -147,7 +153,11 @@ def test_runtime_interface_default_actions_come_from_policy_asset() -> None:
     budget = load_runtime_interface_discovery_budget()
     assert "export" in actions
     assert "all" in actions
-    assert budget == 180
+    policy = json.loads(
+        (Path(discovery_module.__file__).parent / "policies" / "semantic_lexicon.json")
+        .read_text(encoding="utf-8")
+    )
+    assert budget == policy["runtime_interface_discovery_max_candidates"]
     plan = plan_runtime_interface_candidates(
         _documented_operations(),
         action_markers=None,
@@ -178,6 +188,29 @@ def test_confirmation_tokens_are_unique_active_declared_accounts_only(
     assert load_runtime_interface_confirmation_tokens(tmp_path, "sample") == [
         "token-a",
         "token-b",
+    ]
+
+
+def test_confirmation_tokens_reuse_configured_credential_authority(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from ai_test_asset_center.runtime_interface_discovery import (
+        load_runtime_interface_confirmation_tokens,
+    )
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._configured_credential_tokens",
+        lambda root, project, *, base_url="": {
+            "buyer@example.com": "token-buyer",
+            "buyer": "token-buyer",
+            "admin@example.com": "token-admin",
+        },
+    )
+
+    assert load_runtime_interface_confirmation_tokens(tmp_path, "sample") == [
+        "token-buyer",
+        "token-admin",
     ]
 
 

@@ -73,6 +73,61 @@ def _compiled_round0_obligation_ids(all_experiments: Any) -> set[str]:
         match = _VARIANT_RE.match(obligation_id)
         compiled.add(match.group(1) if match else obligation_id)
     return compiled
+
+
+def _execution_ir_with_discovered_operations(
+    behavior_ir: dict[str, Any],
+    discovered_operations: Any,
+) -> dict[str, Any]:
+    """Append governed runtime-discovered operations to an execution IR view.
+
+    Round-1 experiments were compiled against the immutable documented IR, but
+    governed runtime interface discovery may prove additional routes before
+    round 1 executes (e.g. GET /api/users/addresses for an order fixture's
+    addressId dependency). The discovered operations are appended without
+    rebuilding the IR so compiled operation identities stay valid; the same
+    observations are covered by the behavior-ir-expansion-round receipt.
+    """
+    ir = dict(_dict(behavior_ir))
+    rows = [
+        dict(row)
+        for row in _list(discovered_operations)
+        if isinstance(row, dict)
+    ]
+    if not rows:
+        return ir
+    existing_ops = [
+        dict(row)
+        for row in _list(ir.get("operations"))
+        if isinstance(row, dict)
+    ]
+    existing_keys = {
+        (
+            _text(row.get("method")).upper(),
+            _text(row.get("path") or row.get("raw_path")),
+        )
+        for row in existing_ops
+    }
+    added = 0
+    for row in rows:
+        normalized = dict(row)
+        if not _text(normalized.get("id")):
+            # Runtime-discovered operations carry operation_id, while runtime
+            # operation indexes are keyed by id. Normalize so the execution IR
+            # view exposes the discovered route to resolver lookups.
+            normalized["id"] = _text(normalized.get("operation_id"))
+        row = normalized
+        key = (
+            _text(row.get("method")).upper(),
+            _text(row.get("path") or row.get("raw_path")),
+        )
+        if key and key not in existing_keys:
+            existing_ops.append(dict(row))
+            existing_keys.add(key)
+            added += 1
+    if added:
+        ir = {**ir, "operations": existing_ops}
+    return ir
 from .experiment_executor import execute_selected_experiments
 from .formal_delivery_authority import build_formal_delivery_authority_receipt
 from .formal_delivery_scope import formal_customer_deliverable_findings
@@ -80,6 +135,7 @@ from .obligation_attempt_ledger import (
     bind_stage_receipt_identity,
     build_obligation_attempt_ledger,
 )
+from .operational_receipts import aggregate_execution_operational_receipts
 from .runtime_interface_discovery import (
     execute_runtime_interface_discovery,
     load_runtime_interface_confirmation_tokens,
@@ -283,13 +339,43 @@ def run_experiment_candidate(
             planning_round=2,
         )
 
+    # Round-1 experiments were compiled against the immutable documented IR,
+    # but the governed runtime interface discovery already proved additional
+    # routes before round 1 executes (e.g. GET /api/users/addresses). Disposable
+    # order fixtures need that route to fill the documented addressId
+    # dependency. Append the proven discovered operations to the execution-time
+    # IR view without rebuilding it, so compiled operation identities stay valid
+    # and the round-1 runtime can resolve fixture dependencies on routes that
+    # the expansion receipt already records.
+    _initial_operation_keys = {
+        (
+            _text(row.get("method")).upper(),
+            _text(row.get("path") or row.get("raw_path")),
+        )
+        for row in _list(plan.behavior_ir.get("operations"))
+        if isinstance(row, dict)
+    }
+    _expanded_operations = [
+        dict(row)
+        for row in _list(_dict(expansion.get("behavior_ir")).get("operations"))
+        if isinstance(row, dict)
+        and (
+            _text(row.get("method")).upper(),
+            _text(row.get("path") or row.get("raw_path")),
+        ) not in _initial_operation_keys
+    ]
+    _execution_ir = _execution_ir_with_discovered_operations(
+        plan.behavior_ir,
+        _expanded_operations,
+    )
+
     if runtime_approved and scheduled:
         batch = execute_selected_experiments(
             scheduled,
             experiments_by_obligation=dict(
                 _dict(plan.experiments.get("by_obligation"))
             ),
-            behavior_ir=plan.behavior_ir,
+            behavior_ir=_execution_ir,
             root=inputs.root,
             project=inputs.project,
             base_url=_text(runtime_contract.get("approved_base_url")),
@@ -366,7 +452,7 @@ def run_experiment_candidate(
             experiments_by_obligation=dict(
                 _dict(plan.experiments.get("by_obligation"))
             ),
-            behavior_ir=plan.behavior_ir,
+            behavior_ir=_execution_ir,
             root=inputs.root,
             project=inputs.project,
             base_url=_text(runtime_contract.get("approved_base_url")),
@@ -401,13 +487,6 @@ def run_experiment_candidate(
         ).items()
         if _text(key) and isinstance(value, dict)
     })
-    compile_results.update({
-        _text(key): dict(value)
-        for key, value in _dict(
-            surface_execution.get("compile_results")
-        ).items()
-        if _text(key) and isinstance(value, dict)
-    })
     execution_results = {
         _text(key): dict(value)
         for key, value in _dict(batch.get("execution_results")).items()
@@ -426,13 +505,6 @@ def run_experiment_candidate(
         ).items()
         if _text(key) and isinstance(value, dict)
     })
-    execution_results.update({
-        _text(key): dict(value)
-        for key, value in _dict(
-            surface_execution.get("execution_results")
-        ).items()
-        if _text(key) and isinstance(value, dict)
-    })
     gate_results = {
         _text(key): dict(value)
         for key, value in _dict(batch.get("gate_results")).items()
@@ -447,13 +519,6 @@ def run_experiment_candidate(
     gate_results.update({
         _text(key): dict(value)
         for key, value in _dict(round_two_batch.get("gate_results")).items()
-        if _text(key) and isinstance(value, dict)
-    })
-    gate_results.update({
-        _text(key): dict(value)
-        for key, value in _dict(
-            surface_execution.get("gate_results")
-        ).items()
         if _text(key) and isinstance(value, dict)
     })
     gate_results = _project_gate_results_for_authority(
@@ -483,7 +548,6 @@ def run_experiment_candidate(
             if _text(row.get("obligation_id")) not in expansion_selected_ids
         ]
         + expansion_selected_rows
-        + surface_selected_rows
     )
     _manual_terminal_receipts(
         selected_rows=initial_selected_rows,
@@ -523,7 +587,48 @@ def run_experiment_candidate(
         execution_results=execution_results,
         gate_results=gate_results,
     )
-    operational_summary = _operational_summary_from_attempt_ledger(ledger)
+    business_operational_summary = _operational_summary_from_attempt_ledger(ledger)
+    surface_execution_rows = [
+        dict(row)
+        for row in _dict(surface_execution.get("execution_results")).values()
+        if isinstance(row, dict)
+    ]
+    surface_operational_receipts = [
+        dict(row["operational_receipt"])
+        for row in surface_execution_rows
+        if isinstance(row.get("operational_receipt"), dict)
+    ]
+    surface_operational_summary = aggregate_execution_operational_receipts(
+        surface_operational_receipts
+    )
+    surface_missing_receipts = [
+        _text(row.get("obligation_id") or row.get("candidate_id"))
+        for row in surface_execution_rows
+        if not isinstance(row.get("operational_receipt"), dict)
+    ]
+    surface_operational_summary.update({
+        "complete": not surface_missing_receipts
+        and len(surface_operational_receipts) == len(surface_execution_rows),
+        "missing_obligation_ids": surface_missing_receipts,
+    })
+    all_operational_receipts = [
+        dict(row["operational_receipt"])
+        for row in _dict(ledger).get("attempts", [])
+        if isinstance(row, dict) and isinstance(row.get("operational_receipt"), dict)
+    ] + surface_operational_receipts
+    operational_summary = aggregate_execution_operational_receipts(
+        all_operational_receipts
+    )
+    operational_summary.update({
+        "complete": bool(business_operational_summary.get("complete"))
+        and bool(surface_operational_summary.get("complete")),
+        "missing_obligation_ids": [
+            *_list(business_operational_summary.get("missing_obligation_ids")),
+            *_list(surface_operational_summary.get("missing_obligation_ids")),
+        ],
+        "business": business_operational_summary,
+        "surface_discovery": surface_operational_summary,
+    })
     planning_history_receipt = build_planning_history_receipt(
         policy_identity=_dict(
             plan.experiments.get("_planning_policy_identity")
@@ -622,7 +727,6 @@ def run_experiment_candidate(
         int(batch.get("executed_count") or 0)
         + sum(int(follow_on.get("executed_count") or 0) for follow_on in follow_on_batches)
         + int(round_two_batch.get("executed_count") or 0)
-        + int(surface_execution.get("executed_count") or 0)
     )
     selected_count = len(selected_rows)
     if _text(runtime_contract.get("status")) == "plan_only":
@@ -714,17 +818,27 @@ def run_experiment_candidate(
                 + len(round_two_scheduled)
                 + int(surface_execution.get("selected_count") or 0)
             ),
+            "business_selected_count": len(selected_rows),
+            "surface_discovery_selected_count": int(
+                surface_execution.get("selected_count") or 0
+            ),
+            "surface_discovery_executed_count": int(
+                surface_execution.get("executed_count") or 0
+            ),
+            "surface_discovery_harness_failure_count": int(
+                surface_execution.get("harness_failure_count") or 0
+            ),
             "executed_count": executed_count,
             "blocked_count": _sum_batch_int(
-                [batch, *follow_on_batches, round_two_batch, surface_execution],
+                [batch, *follow_on_batches, round_two_batch],
                 "blocked_count",
             ),
             "harness_failure_count": _sum_batch_int(
-                [batch, *follow_on_batches, round_two_batch, surface_execution],
+                [batch, *follow_on_batches, round_two_batch],
                 "harness_failure_count",
             ),
             "cleanup_failures": _sum_batch_int(
-                [batch, *follow_on_batches, round_two_batch, surface_execution],
+                [batch, *follow_on_batches, round_two_batch],
                 "cleanup_failures",
             ),
             "every_experiment_has_receipt": bool(ledger.get("complete")),
@@ -879,6 +993,22 @@ def run_experiment_candidate(
         ledger,
         canonical_findings if plan.mainline_run["customer_outputs_published"] else [],
     )
+    # Discovery observations are intentionally outside the business obligation
+    # ledger. Keep their counts and proven operations visible in a separate
+    # receipt-backed projection so they cannot be mistaken for business
+    # execution or cause assertion/oracle stages to expect business receipts.
+    _separation["discovery_task_summary"].update({
+        "generated_discovery_tasks": int(surface_execution.get("selected_count") or 0),
+        "executed_discovery_tasks": int(surface_execution.get("executed_count") or 0),
+        "successful_discovery_tasks": sum(
+            1
+            for row in _list(surface_execution.get("observation_receipts"))
+            if _text(_dict(row).get("status")).upper() == "DISCOVERED"
+        ),
+        "discovery_harness_failure_count": int(
+            surface_execution.get("harness_failure_count") or 0
+        ),
+    })
     # Fill discovered_operations from surface execution
     _disc_ops = _list(surface_execution.get("discovered_operations"))
     _separation["discovery_task_summary"]["discovered_operations"] = len(_disc_ops)

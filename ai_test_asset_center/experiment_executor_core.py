@@ -209,14 +209,7 @@ def execute_one_experiment(
     safety = _dict(exp.get("safety_contract"))
     is_governed_write = safety.get("governed_write")
     compile_proof_fingerprint = ""
-    # V1.7: Response-only families (authorization/validation/isolation/visibility)
-    # test that writes are REJECTED. No state change is expected, so cleanup
-    # reversibility proof is not applicable. Skip the proof check.
-    _exp_family = _text(exp.get("risk_family")).lower()
-    _cleanup_exempt = _exp_family in {
-        "authorization", "validation", "isolation", "visibility",
-    }
-    if is_governed_write and not _cleanup_exempt:
+    if is_governed_write:
         compile_proof = _dict(exp.get("write_reversibility_proof"))
         if not compile_proof or _text(compile_proof.get("proof_status")) != "PROVEN":
             return _terminal(
@@ -374,6 +367,41 @@ def execute_one_experiment(
     resolver_actor = actors.get(resolver_actor_ref) or {}
     resolver_token = _resolve_token(resolver_actor, tokens)
 
+    # Validate the immutable cleanup topology before fixture materialization.
+    # Fixture setup is a governed write too; allowing it to run before a
+    # changed experiment proves every business write is compensable can leave
+    # residue even though the later runtime proof gate correctly blocks.
+    preflight_cleanup = validate_cleanup_plan(
+        exp,
+        behavior_ir,
+        phase="compile",
+    )
+    if not preflight_cleanup["valid"]:
+        return _terminal(
+            {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "status": "BLOCKED",
+                "reason_code": preflight_cleanup["reason_code"],
+                "detail": preflight_cleanup["detail"],
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": preflight_cleanup["reason_code"],
+                    "detail": preflight_cleanup["detail"],
+                },
+                "runtime_proof_validation": {
+                    "status": "INVALID",
+                    "reason_code": preflight_cleanup["reason_code"],
+                    "detail": preflight_cleanup["detail"],
+                },
+            },
+            phase="cleanup_contract_preflight",
+            reason_code=preflight_cleanup["reason_code"],
+        )
+
     fixture_state = materialize_experiment_fixtures(
         exp=exp,
         eid=eid,
@@ -383,6 +411,7 @@ def execute_one_experiment(
         started=started,
         actors=actors,
         ops=ops,
+        behavior_ir=behavior_ir,
         tokens=tokens,
         binding_plan=binding_plan,
         resolver_actor_ref=resolver_actor_ref,
@@ -559,8 +588,7 @@ def execute_one_experiment(
     observations["fixture_row_lineage_receipts"] = _fixture_lineage_receipts
 
     # ── SPEC v1.1 §10 Phase B: Runtime binding validation ──
-    # V1.7: Cleanup-exempt families skip runtime proof validation (no cleanup plan).
-    if is_governed_write and not _cleanup_exempt:
+    if is_governed_write:
         runtime_validation = validate_cleanup_plan(
             exp,
             behavior_ir,

@@ -174,47 +174,61 @@ def load_runtime_interface_confirmation_tokens(
     """
 
     path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
-    if not path.exists():
-        return []
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"runtime_interface_actor_catalog_invalid:{type(exc).__name__}"
-        ) from exc
-    if isinstance(payload, list):
-        rows = payload
-    elif isinstance(payload, dict):
-        declared = payload.get("accounts") or payload.get("actors") or payload.get("users")
-        if declared is None:
-            rows = [
-                value
-                for key, value in payload.items()
-                if key not in {"schema", "schema_version", "meta"}
-            ]
-        elif isinstance(declared, list):
-            rows = declared
-        else:
-            raise ValueError("runtime_interface_actor_catalog_rows_invalid")
-    else:
-        raise ValueError("runtime_interface_actor_catalog_root_invalid")
-
     tokens: list[str] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            raise ValueError("runtime_interface_actor_catalog_row_invalid")
-        status = _text(
-            row.get("status")
-            or row.get("account_status")
-            or row.get("authenticated_status")
-            or row.get("state")
-            or "active"
-        ).upper()
-        if status in {"DISABLED", "LOCKED", "SUSPENDED", "INACTIVE"}:
-            continue
-        token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
-        if token and token not in tokens:
-            tokens.append(token)
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"runtime_interface_actor_catalog_invalid:{type(exc).__name__}"
+            ) from exc
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            declared = payload.get("accounts") or payload.get("actors") or payload.get("users")
+            if declared is None:
+                rows = [
+                    value
+                    for key, value in payload.items()
+                    if key not in {"schema", "schema_version", "meta"}
+                ]
+            elif isinstance(declared, list):
+                rows = declared
+            else:
+                raise ValueError("runtime_interface_actor_catalog_rows_invalid")
+        else:
+            raise ValueError("runtime_interface_actor_catalog_root_invalid")
+
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("runtime_interface_actor_catalog_row_invalid")
+            status = _text(
+                row.get("status")
+                or row.get("account_status")
+                or row.get("authenticated_status")
+                or row.get("state")
+                or "active"
+            ).upper()
+            if status in {"DISABLED", "LOCKED", "SUSPENDED", "INACTIVE"}:
+                continue
+            token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
+            if token and token not in tokens:
+                tokens.append(token)
+
+    if not tokens:
+        # The enterprise settings route stores credentials in the existing
+        # credential manager, not in the legacy test_accounts.json alias. Reuse
+        # that authority so a source-bound project can confirm a read-only
+        # interface probe with its declared actors. The helper returns token
+        # material only for transport; this discovery module never persists it
+        # in an observation receipt.
+        from .experiment_runtime_support import _configured_credential_tokens
+
+        configured = _configured_credential_tokens(root, project)
+        for token in configured.values():
+            token = _text(token)
+            if token and token not in tokens:
+                tokens.append(token)
     return tokens
 
 
@@ -376,7 +390,21 @@ def plan_runtime_interface_candidates(
                 [resource],
             )
 
-    # Tier 2: general resource vocabulary x action, reaching undocumented
+    # Tier 2: observed namespace/resource/action lattice. A namespace and its
+    # child resource are both source evidence, so this outranks the broad
+    # deployment vocabulary below and cannot be starved by a large policy.
+    for action in actions:
+        for namespace in namespaces:
+            for resource in resources:
+                if resource == namespace:
+                    continue
+                add(
+                    f"{prefix_path}/{namespace}/{resource}/{action}",
+                    "observed_namespace_resource_action_lattice",
+                    [namespace, resource],
+                )
+
+    # Tier 3: general resource vocabulary x action, reaching undocumented
     # service namespaces mounted under the declared transport prefix.  Iterated
     # resource-major and capped to a budget share so every general resource is
     # probed with the most diagnostic actions first (breadth before depth),
@@ -395,7 +423,7 @@ def plan_runtime_interface_candidates(
                 extra_refs=[general_ref],
             )
 
-    # Tier 3: nested resource/subresource/action lattice (reaches deeper
+    # Tier 4: nested resource/subresource/action lattice (reaches deeper
     # undocumented paths such as a resource's child collections).  Distributed
     # evenly across (subresource, action) pairs so no single pair monopolises the
     # budget.  Placed before the admin shape because nested child paths are a
@@ -426,7 +454,7 @@ def plan_runtime_interface_candidates(
                 ):
                     emitted += 1
 
-    # Tier 4: admin shape lattice (observed admin convention or general admin
+    # Tier 5: admin shape lattice (observed admin convention or general admin
     # vocabulary) across documented and general resources.
     if admin_shape_observed or "admin" in subresources or "admin" in general_resources:
         admin_pool = sorted(set(resources) | set(general_resources))
@@ -437,18 +465,6 @@ def plan_runtime_interface_candidates(
                     "observed_admin_shape_action_lattice",
                     [resource] if resource in refs_by_token else [],
                     extra_refs=() if resource in refs_by_token else [general_ref],
-                )
-
-    # Tier 5: observed namespace/resource/action lattice (lowest priority).
-    for action in actions:
-        for namespace in namespaces:
-            for resource in resources:
-                if resource == namespace:
-                    continue
-                add(
-                    f"{prefix_path}/{namespace}/{resource}/{action}",
-                    "observed_namespace_resource_action_lattice",
-                    [namespace, resource],
                 )
 
     selected = planned[: int(max_candidates)]

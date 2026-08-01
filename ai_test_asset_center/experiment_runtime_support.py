@@ -535,10 +535,12 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
         if tokens:
             return tokens
         if expired_roles:
-            print(
-                f"  [STALE] {project}: {len(expired_roles)} declared token(s) expired "
-                f"({', '.join(sorted(set(expired_roles))[:6])}); re-logging in from TEST_ACCOUNTS.md",
-                flush=True,
+            _LOGGER.warning(
+                "declared_actor_tokens_expired project=%s count=%s roles=%s "
+                "action=reload_test_accounts",
+                project,
+                len(expired_roles),
+                ",".join(sorted(set(expired_roles))[:6]),
             )
 
     # ── P0-4: Fallback to TEST_ACCOUNTS.md with login ──

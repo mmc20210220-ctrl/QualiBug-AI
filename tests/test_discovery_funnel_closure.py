@@ -181,6 +181,46 @@ def test_mainline_binds_immutable_identity_before_sealing_stage_receipts() -> No
     assert stage_identity["observation_source"] == "mainline_contract_binding"
 
 
+def test_mainline_binds_sealed_gate_stage_identity_outside_gate_payload() -> None:
+    from ai_test_asset_center._obligation_attempt_ledger_single_occurrence_mechanics import (
+        _run_identity,
+        _stage_identity,
+    )
+    from ai_test_asset_center.customer_delivery_gate_v2 import (
+        CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
+    )
+
+    gate = {
+        "schema_version": CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
+        "status": "REJECTED",
+        "reason_code": "ORACLE_NOT_VIOLATED",
+    }
+    _, execution_results, gate_results = bind_stage_receipt_identity(
+        mainline_run=_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={},
+        execution_results={
+            "obl-1": {
+                "status": "EXECUTED",
+                "executed_obligation_id": "obl-1",
+            }
+        },
+        gate_results={"obl-1": gate},
+    )
+
+    bound_gate = gate_results["obl-1"]
+    assert "identity" not in bound_gate
+    assert bound_gate["stage_identity_receipt"]["policy_version"] == "POLICY-CLOSURE"
+    stage_identity = _stage_identity(
+        stage="gate",
+        obligation_id="obl-1",
+        receipt=bound_gate,
+        identity=_run_identity(_run(), execution_results["obl-1"], bound_gate),
+    )
+    assert stage_identity["status"] == "COMPLETE"
+    assert stage_identity["observation_source"] == "mainline_contract_binding"
+
+
 def test_runner_exception_is_terminal_harness_failure_without_request_claim() -> None:
     from types import SimpleNamespace
 

@@ -145,76 +145,27 @@ def _find_collection_create_fixture(
     primary_op: dict[str, Any],
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    """Find a POST create operation on the same collection for fixture setup.
+    """Build a source-declared disposable fixture for a response-only probe.
 
-    For response-only families, when no GET resolver exists, the runtime can
-    create the resource first (via the collection POST) and use the response
-    ID to aim the unauthorized request. Cleanup is NOT required because the
-    unauthorized write is expected to be rejected (no state change).
+    A fixture create is itself a governed write. Reuse the binding graph's
+    existing setup authority so the request example, dependency reads, actor
+    permission, and identity-bound cleanup all remain source-backed.
     """
     primary_path = normalize_path_placeholders(
         _text(primary_op.get("path") or primary_op.get("raw_path"))
     )
     if not primary_path.startswith("/"):
         return {}
-    coll = normalize_path_placeholders(collection_path(primary_path))
-    if not coll.startswith("/") or "{" in coll:
+    targets = infer_path_params(primary_path)
+    if not targets:
         return {}
-    _ir_ops = _list(_dict(behavior_ir).get("operations"))
-    # DEBUG: dump IR ops once to understand what's available
-    if not hasattr(_find_collection_create_fixture, "_dumped"):
-        _find_collection_create_fixture._dumped = True  # type: ignore
-        try:
-            import json as _json
-            _dump = [
-                {"method": _text(c.get("method")), "path": _text(c.get("path") or c.get("raw_path")), "id": _text(c.get("id"))}
-                for c in _ir_ops if isinstance(c, dict)
-            ]
-            with open("_ir_ops_dump.json", "w", encoding="utf-8") as _f:
-                _json.dump(_dump, _f, indent=2, ensure_ascii=False)
-            logger.warning("[V1.8-rescue] Dumped %d IR ops to _ir_ops_dump.json", len(_dump))
-        except Exception:
-            pass
-    # Find POST on exact collection path (no placeholders)
-    create_op = next(
-        (
-            c for c in _ir_ops
-            if isinstance(c, dict)
-            and _text(c.get("method")).upper() == "POST"
-            and _text(c.get("id"))
-            and normalize_path_placeholders(
-                _text(c.get("path") or c.get("raw_path"))
-            ).rstrip("/") == coll.rstrip("/")
-            and "{" not in normalize_path_placeholders(
-                _text(c.get("path") or c.get("raw_path"))
-            )
-        ),
-        None,
+    from .runtime_binding_graph import _declared_fixture_setup
+
+    return _declared_fixture_setup(
+        primary_op,
+        target=targets[0],
+        behavior_ir=behavior_ir,
     )
-    if not isinstance(create_op, dict):
-        logger.warning(
-            "[V1.8-rescue] No POST create for coll=%s (primary=%s, IR ops=%d)",
-            coll[:60], primary_path[:60], len(_ir_ops),
-        )
-        return {}
-    # Build minimal fixture setup (no cleanup required for response-only)
-    fixture: dict[str, Any] = {
-        "operation_ref": _text(create_op.get("id")),
-        "method": "POST",
-        "path": coll,
-        "actor_refs": [],
-        "body_template": {},
-        "body_bindings": [],
-        "cleanup_operations": [],
-        "cleanup_waived": "response_only_family_no_state_change",
-    }
-    # Try to extract request example from the create operation
-    examples = _list(create_op.get("examples"))
-    if examples and isinstance(examples[0], dict):
-        fixture["body_template"] = examples[0]
-    elif create_op.get("request_body_example"):
-        fixture["body_template"] = create_op["request_body_example"]
-    return fixture
 
 
 def _rescue_binding_for_response_only_family(
@@ -561,6 +512,11 @@ def compile_experiment_for_obligation(
 
     prop = _dict(obl.get("property"))
     family = _text(obl.get("risk_family"))
+    permit_only = _text(prop.get("template")) == "permitted_operation_invocation"
+    response_only_family = (
+        family in {"authorization", "validation", "isolation", "visibility"}
+        and not permit_only
+    )
     required_ops = [
         _text(x) for x in _list(obl.get("required_operations")) if _text(x)
     ]
@@ -773,6 +729,16 @@ def compile_experiment_for_obligation(
         _text(primary_op.get("read_write")) == "write"
         or _op_method_upper in {"POST", "PUT", "PATCH", "DELETE"}
     )
+    if (
+        is_write
+        and _op_method_upper in {"PUT", "PATCH"}
+        and not _source_request_example(primary_op)
+    ):
+        return blocked_experiment(
+            oid,
+            "BLOCKED_MISSING_BINDING",
+            f"source_declared_request_body_missing:{primary_op_id}",
+        )
     write_observers = (
         declared_effect_observers(primary_op, behavior_ir=ir)
         if is_write
@@ -882,7 +848,7 @@ def compile_experiment_for_obligation(
         # The write is expected to be REJECTED (403). The path placeholder only
         # needs a concrete resource ID to aim at — rescue blocked bindings by
         # finding any source-declared GET on the same entity collection.
-        if family in {"authorization", "isolation", "visibility", "validation"}:
+        if response_only_family:
             _rescued = _rescue_binding_for_response_only_family(
                 binding_plan, primary_op, ir,
             )
@@ -902,7 +868,7 @@ def compile_experiment_for_obligation(
             )
     if (
         not is_write
-        and family in {"authorization", "isolation", "visibility"}
+        and response_only_family
         and (
             prop.get("require_same_resource") is True
             or (
@@ -990,7 +956,7 @@ def compile_experiment_for_obligation(
     unresolved = unresolved_placeholders(primary_op, binding_plan)
     if unresolved:
         # V1.8: Same rescue for response-only families at the unresolved check.
-        if family in {"authorization", "isolation", "visibility", "validation"}:
+        if response_only_family:
             _rescue_unresolved = _rescue_unresolved_for_response_only_family(
                 binding_plan, primary_op, ir, unresolved,
             )
@@ -1027,7 +993,7 @@ def compile_experiment_for_obligation(
                 # prove violations via response status (403/400/422) or comparison
                 # observer. A missing effect-read endpoint does not invalidate the
                 # test — the response/comparison is the primary evidence authority.
-                if family in {"authorization", "isolation", "visibility", "validation"}:
+                if response_only_family:
                     pass  # compile without write_observers
                 elif _is_action_verb_path(primary_path_for_observers):
                     # POST endpoints whose terminal segment is an action verb
@@ -1092,17 +1058,9 @@ def compile_experiment_for_obligation(
         # posts. Matrix/coverage strings like "not_required" on entity writes
         # previously compiled accepted creates with no compensator.
         #
-        # V1.7 EXCEPTION: Authorization/validation/isolation/visibility families
-        # test that a write is REJECTED (403/400/422). No state change is expected,
-        # so cleanup is not required. Forcing cleanup here blocks the experiment
-        # entirely, preventing detection of the very bugs it tests for.
-        _CLEANUP_EXEMPT_FAMILIES = {
-            "authorization", "validation", "isolation", "visibility",
-        }
         if (
             cleanup_req.get("required") is False
             and not _is_ephemeral_session_path(primary_path_for_cleanup)
-            and family not in _CLEANUP_EXEMPT_FAMILIES
         ):
             cleanup_req = {**cleanup_req, "required": True}
         primary_method = _text(primary_op.get("method")).upper()
@@ -1446,19 +1404,11 @@ def compile_experiment_for_obligation(
                         "compensates_operation_ref": primary_op_id,
                     }]
                 else:
-                    # V1.7: Response-only families (authorization/validation/
-                    # isolation/visibility) test that writes are REJECTED. No
-                    # state change is expected, so missing cleanup is acceptable.
-                    # Blocking here prevents detection of authorization bugs.
-                    if family in _CLEANUP_EXEMPT_FAMILIES:
-                        cleanup_plan = []
-                        cleanup_explicitly_not_required = True
-                    else:
-                        return blocked_experiment(
-                            oid,
-                            "BLOCKED_NON_REVERSIBLE_WRITE",
-                            f"cleanup_unresolved:{cleanup_op}",
-                        )
+                    return blocked_experiment(
+                        oid,
+                        "BLOCKED_NON_REVERSIBLE_WRITE",
+                        f"cleanup_unresolved:{cleanup_op}",
+                    )
             # Only build cleanup plan if cleanup_op is valid
             if cleanup_op and cleanup_op in ops and cleanup_op != primary_op_id:
                 cleanup_mode = _text(cleanup_req.get("mode") or "reverse_order")
@@ -1640,7 +1590,6 @@ def compile_experiment_for_obligation(
                 f"{type(_fc_exc).__name__}:{str(_fc_exc)[:160]}",
             )
     observer_requirements = list(required_observers)
-    permit_only = _text(prop.get("template")) == "permitted_operation_invocation"
     if (
         is_write
         and family in {"authorization", "isolation", "visibility"}
@@ -1741,14 +1690,11 @@ def compile_experiment_for_obligation(
     # EXCEPTION: authorization/validation/isolation/visibility families assert
     # on HTTP response status (403/400/401). Their write is expected to be
     # rejected; no state change occurs, so effect observation is unnecessary.
-    _RESPONSE_ONLY_FAMILIES = {
-        "authorization", "validation", "isolation", "visibility",
-    }
     if (
         is_write
         and write_observers
         and not effect_observer_ids
-        and family not in _RESPONSE_ONLY_FAMILIES
+        and not response_only_family
     ):
         observers.append({
             "observer_id": "entity_state",
@@ -2259,15 +2205,29 @@ def compile_experiment_for_obligation(
                 if _s_method in {"POST", "PUT", "PATCH", "DELETE"}:
                     _write_step_rows.append((_text(_s.get("step_id")), _s_op))
         if len(_write_step_rows) > 1:
-            _expanded_cleanup: list[dict[str, Any]] = []
-            for _step_id, _step_op_ref in reversed(_write_step_rows):
-                for _tmpl in cleanup_plan:
-                    _comp_ref = _text(
-                        _tmpl.get("compensates_operation_ref")
-                        or _tmpl.get("operation_ref")
-                    )
-                    if _comp_ref == _step_op_ref:
-                        _expanded_cleanup.append({**_tmpl, "source_step_id": _step_id})
+            # A snapshot restore is an experiment-level authority: the
+            # cleanup executor restores every accepted write for the same
+            # operation from the captured before-state. Expanding it once per
+            # step would execute the same restore repeatedly.
+            _snapshot_cleanup = [
+                _tmpl
+                for _tmpl in cleanup_plan
+                if _text(_tmpl.get("action")) == "restore_before_snapshot"
+                and _text(_tmpl.get("mode")) in {"snapshot_restore", "restore_snapshot"}
+            ]
+            if len(_snapshot_cleanup) == 1 and len(_snapshot_cleanup) == len(cleanup_plan):
+                _expanded_cleanup = list(cleanup_plan)
+            else:
+                _expanded_cleanup = []
+            if not _expanded_cleanup:
+                for _step_id, _step_op_ref in reversed(_write_step_rows):
+                    for _tmpl in cleanup_plan:
+                        _comp_ref = _text(
+                            _tmpl.get("compensates_operation_ref")
+                            or _tmpl.get("operation_ref")
+                        )
+                        if _comp_ref == _step_op_ref:
+                            _expanded_cleanup.append({**_tmpl, "source_step_id": _step_id})
             if _expanded_cleanup:
                 experiment["cleanup_plan"] = _expanded_cleanup
 
@@ -2368,11 +2328,10 @@ def compile_experiment_for_obligation(
     }
 
     # ── SPEC v1.1 §8: Compile-time Cleanup Validation ──
-    # All governed writes must pass semantic cleanup validation before COMPILED.
-    # V1.7 EXCEPTION: Response-only families (authorization/validation/isolation/
-    # visibility) test that writes are REJECTED. No state change is expected, so
-    # cleanup validation is not applicable.
-    if is_write and family not in _CLEANUP_EXEMPT_FAMILIES:
+    # Every governed write, including response-only probes, must pass semantic
+    # cleanup validation before COMPILED. A rejected response is an observed
+    # outcome, not proof that fixture/setup writes were harmless.
+    if is_write:
         validation = validate_cleanup_plan(
             experiment,
             ir,

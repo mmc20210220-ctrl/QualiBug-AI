@@ -826,6 +826,14 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
     # interface discovery authority under test.
     attempts = result["obligation_attempt_ledger"]["attempts"]
     assert len(attempts) >= 3, f"Expected at least 3 attempts, got {len(attempts)}"
+    assert not any(
+        row.get("risk_family") == "interface_discovery"
+        for row in attempts
+    )
+    separation = result["business_discovery_separation"]
+    assert separation["business_obligation_summary"]["total"] == len(attempts)
+    assert separation["discovery_task_summary"]["generated_discovery_tasks"] == 1
+    assert result["experiment_execution"]["surface_discovery_selected_count"] == 1
     terminal_statuses = {row["terminal_status"] for row in attempts}
     assert terminal_statuses.issubset({"REJECTED", "BLOCKED"}), (
         f"Unexpected terminal statuses: {terminal_statuses}"

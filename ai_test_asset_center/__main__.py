@@ -8,6 +8,7 @@ finding must also have a persisted, integrity-verifiable evidence bundle.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,9 @@ from typing import Any, Optional
 from .scan_diagnostics import increment_scan_counter
 from .enterprise_test_data_plan import build_campaign_test_data_plan
 from .test_data_receipt_bootstrap import bootstrap_test_data_receipts_for_campaign
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _configure_console_encoding() -> None:
@@ -54,11 +58,10 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         write_json_redacted(path, payload)
     except ArtifactSecretLeakError as exc:
         # Fail closed: do not leave a secret-bearing artifact on disk.
-        import sys as _sys
-
-        print(
-            f"[scan] FAILED_SAFE artifact secret scan blocked write to {path}: {exc}",
-            file=_sys.stderr,
+        _LOGGER.error(
+            "artifact_persistence_blocked_secret_scan path=%s error=%s",
+            path,
+            exc,
         )
         raise
 
@@ -341,7 +344,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                 }
 
     except Exception as exc:
-        print(f"[scan] Evidence persistence failed: {exc}", file=sys.stderr)
+        _LOGGER.exception("scan evidence persistence failed")
         failure = {
             "success": False,
             "scan_id": scan_id,
@@ -530,7 +533,10 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "reason": "benchmark_compute_failed",
             "error": str(benchmark_error)[:400],
         }
-        print(f"  [WARN] Benchmark compute failed (non-fatal): {benchmark_error}", flush=True)
+        _LOGGER.warning(
+            "benchmark_compute_failed status=FAILED_SAFE error=%s",
+            benchmark_error,
+        )
     ui_findings = v12.get("ui_findings") if isinstance(v12.get("ui_findings"), list) else []
     ui_candidate_findings = _ui_candidate_gate(ui_findings)
     ui_candidate_findings = _verify_ui_candidate_findings(ui_candidate_findings, root=root, runtime_contract=runtime_contract)
@@ -769,14 +775,11 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                 ),
             )
         )
-        import sys as _evolution_sys
-        print(
-            (
-                "[scan] Discovery evolution blocked: no obligations selected"
-                if _no_selected_obligations
-                else f"[scan] Discovery evolution observability failed: {evolution_error}"
-            ),
-            file=_evolution_sys.stderr,
+        _LOGGER.error(
+            "discovery_evolution_failed status=%s error_type=%s error=%s",
+            "BLOCKED" if _no_selected_obligations else "FAILED_SAFE",
+            type(evolution_error).__name__,
+            evolution_error,
         )
     result["discovery_funnel_report"] = build_funnel_report(
         result,
@@ -871,7 +874,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                 })
                 result["closed_loop"]["probe_pool_path"] = str(probe_pool_path)
     except Exception as e:
-        print(f"[scan] Closed-loop learning failed: {e}", file=sys.stderr)
+        _LOGGER.exception("closed_loop_learning_failed")
         failure_code = f"CLOSED_LOOP_LEARNING_FAILED:{type(e).__name__}:{str(e)[:200]}"
         result.setdefault("stage_failures", []).append(failure_code)
         result["closed_loop"] = {
