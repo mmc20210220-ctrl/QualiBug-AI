@@ -6,12 +6,14 @@ on:
     paths:
       - "ai_test_asset_center/feishu_tenant_acceptance.py"
       - "ai_test_asset_center/feishu_tenant_acceptance_reports.py"
+      - "ai_test_asset_center/feishu_tenant_acceptance_jobs.py"
       - "ai_test_asset_center/private_pilot_connector_handlers.py"
       - "ai_test_asset_center/connector_auto_sync.py"
       - "ai_test_asset_center/feishu_connector_capability_sync.py"
       - "ai_test_asset_center/connector_sync_authority.py"
       - "tests/test_feishu_tenant_acceptance.py"
       - "tests/test_feishu_tenant_acceptance_reports.py"
+      - "tests/test_feishu_tenant_acceptance_jobs.py"
       - "tests/test_private_pilot_connector_acceptance_handlers.py"
       - "pyproject.toml"
       - ".github/workflows/feishu-tenant-acceptance-contract.yml"
@@ -19,12 +21,14 @@ on:
     paths:
       - "ai_test_asset_center/feishu_tenant_acceptance.py"
       - "ai_test_asset_center/feishu_tenant_acceptance_reports.py"
+      - "ai_test_asset_center/feishu_tenant_acceptance_jobs.py"
       - "ai_test_asset_center/private_pilot_connector_handlers.py"
       - "ai_test_asset_center/connector_auto_sync.py"
       - "ai_test_asset_center/feishu_connector_capability_sync.py"
       - "ai_test_asset_center/connector_sync_authority.py"
       - "tests/test_feishu_tenant_acceptance.py"
       - "tests/test_feishu_tenant_acceptance_reports.py"
+      - "tests/test_feishu_tenant_acceptance_jobs.py"
       - "tests/test_private_pilot_connector_acceptance_handlers.py"
       - "pyproject.toml"
       - ".github/workflows/feishu-tenant-acceptance-contract.yml"
@@ -56,6 +60,7 @@ jobs:
         run: |
           python -m py_compile ai_test_asset_center/feishu_tenant_acceptance.py
           python -m py_compile ai_test_asset_center/feishu_tenant_acceptance_reports.py
+          python -m py_compile ai_test_asset_center/feishu_tenant_acceptance_jobs.py
           python -m py_compile ai_test_asset_center/private_pilot_connector_handlers.py
 
       - name: Verify CLI registration
@@ -77,4 +82,5 @@ jobs:
           python -m pytest -q \
             tests/test_feishu_tenant_acceptance.py \
             tests/test_feishu_tenant_acceptance_reports.py \
+            tests/test_feishu_tenant_acceptance_jobs.py \
             tests/test_private_pilot_connector_acceptance_handlers.py
