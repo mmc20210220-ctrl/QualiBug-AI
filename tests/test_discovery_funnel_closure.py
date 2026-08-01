@@ -343,6 +343,72 @@ def test_comparison_does_not_invent_a_missing_candidate() -> None:
     assert report["quality_boundary"]["recall"] == "NOT_MEASURED"
 
 
+def _result_with_run_conditions(**overrides: object) -> dict:
+    result = _result()
+    result["mainline_run"] = build_mainline_run_contract(
+        mainline_authority="experiment_candidate",
+        run_id="RUN-CLOSURE",
+        campaign_id="CMP-CLOSURE",
+        target_id="TARGET-CLOSURE",
+        environment_id="ENV-CLOSURE",
+        policy_version="POLICY-CLOSURE",
+        evaluation_mode="replay",
+        source_snapshot_hash="sha256:source-closure",
+    )
+    result["run_conditions"] = {
+        "execution_mode": "approved_sandbox_write",
+        "budget_configured": 20,
+        "budget_effective": 20,
+        "model_provider": "provider-closure",
+        "model_id": "model-closure",
+        **overrides,
+    }
+    return result
+
+
+def test_comparison_requires_budget_model_and_execution_conditions() -> None:
+    report = build_funnel_comparison_report(_result(), _result())
+
+    assert report["condition_check"]["status"] == "NOT_MEASURED"
+    assert {
+        "execution_mode",
+        "budget_configured",
+        "budget_effective",
+        "model_provider",
+        "model_id",
+    }.issubset(set(report["condition_check"]["missing_fields"]))
+
+
+def test_comparison_matches_only_identical_explicit_run_conditions() -> None:
+    baseline = _result_with_run_conditions()
+    candidate = _result_with_run_conditions()
+
+    report = build_funnel_comparison_report(baseline, candidate)
+
+    assert report["condition_check"]["status"] == "MATCH"
+    assert report["condition_check"]["missing_fields"] == []
+
+
+def test_comparison_exposes_budget_model_and_mode_mismatches() -> None:
+    baseline = _result_with_run_conditions()
+    candidate = _result_with_run_conditions(
+        execution_mode="safe_read_only",
+        budget_effective=21,
+        model_id="model-other",
+    )
+
+    report = build_funnel_comparison_report(baseline, candidate)
+
+    assert report["condition_check"]["status"] == "MISMATCH"
+    assert {
+        "execution_mode",
+        "budget_effective",
+        "model_id",
+    }.issubset({
+        row["field"] for row in report["condition_check"]["mismatches"]
+    })
+
+
 def test_source_snapshot_hash_stays_in_the_immutable_mainline_identity() -> None:
     contract = build_mainline_run_contract(
         mainline_authority="experiment_candidate",

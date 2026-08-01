@@ -1273,6 +1273,7 @@ def build_funnel_report(
         ).get("obligation_identity_receipt")
     )
     mainline = _dict(result.get("mainline_run") or nested.get("mainline_run"))
+    run_conditions = _run_condition_receipt(result, mainline)
     external = _dict(
         result.get("external_evaluation") or nested.get("external_evaluation")
     )
@@ -1304,6 +1305,7 @@ def build_funnel_report(
             )
             if _text(mainline.get(key))
         },
+        "run_conditions": run_conditions,
         "ledger_identity": {
             key: value
             for key, value in _dict(ledger.get("identity")).items()
@@ -1504,7 +1506,128 @@ _COMPARISON_CONDITION_FIELDS = (
     "source_snapshot_hash",
     "policy_version",
     "evaluation_mode",
+    "execution_mode",
+    "budget_configured",
+    "budget_effective",
+    "model_provider",
+    "model_id",
 )
+
+
+def _run_condition_receipt(
+    result: dict[str, Any],
+    mainline: dict[str, Any],
+) -> dict[str, Any]:
+    """Project explicit conditions needed for a valid replay comparison.
+
+    Target/source/evaluation identity comes from the immutable mainline
+    contract. Execution mode and planning budget come from their named runtime
+    receipts. Model identity must be supplied by an explicit run-condition
+    receipt; a Behavior IR content id is not a provider/model execution
+    identity and is therefore never substituted here.
+    """
+
+    nested = _dict(result.get("v12"))
+    values: dict[str, Any] = {}
+    conflicts: list[dict[str, Any]] = []
+    invalid_fields: list[str] = []
+
+    def add_value(field: str, value: Any, source: str) -> None:
+        if field in {
+            "budget_configured",
+            "budget_effective",
+        }:
+            if value is None:
+                return
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                invalid_fields.append(field)
+                return
+            normalized: Any = value
+        else:
+            normalized = _text(value)
+            if not normalized:
+                return
+        if field in values and values[field] != normalized:
+            conflicts.append({
+                "field": field,
+                "existing": values[field],
+                "incoming": normalized,
+                "source": source,
+            })
+            return
+        values[field] = normalized
+
+    for field in _COMPARISON_CONDITION_FIELDS[:5]:
+        add_value(field, mainline.get(field), "mainline_run")
+
+    explicit_sources = [
+        ("run_conditions", result.get("run_conditions")),
+        ("v12.run_conditions", nested.get("run_conditions")),
+    ]
+    for source, raw in explicit_sources:
+        conditions = _dict(raw)
+        for field in _COMPARISON_CONDITION_FIELDS:
+            add_value(field, conditions.get(field), source)
+        budget = _dict(conditions.get("budget"))
+        add_value(
+            "budget_configured",
+            budget.get("configured_budget"),
+            f"{source}.budget",
+        )
+        add_value(
+            "budget_effective",
+            budget.get("effective_budget"),
+            f"{source}.budget",
+        )
+        model = _dict(conditions.get("model"))
+        add_value("model_provider", model.get("provider"), f"{source}.model")
+        add_value("model_id", model.get("id"), f"{source}.model")
+
+    for source, raw in (
+        ("runtime_contract", result.get("runtime_contract")),
+        ("v12.runtime_contract", nested.get("runtime_contract")),
+    ):
+        runtime_contract = _dict(raw)
+        add_value(
+            "execution_mode",
+            runtime_contract.get("execution_mode"),
+            source,
+        )
+
+    for source, raw in (
+        ("planning_budget_receipt", result.get("planning_budget_receipt")),
+        ("v12.planning_budget_receipt", nested.get("planning_budget_receipt")),
+    ):
+        budget_receipt = _dict(raw)
+        add_value(
+            "budget_configured",
+            budget_receipt.get("configured_budget"),
+            source,
+        )
+        add_value(
+            "budget_effective",
+            budget_receipt.get("effective_budget"),
+            source,
+        )
+
+    missing_fields = [
+        field for field in _COMPARISON_CONDITION_FIELDS if field not in values
+    ]
+    status = (
+        "FAILED_SAFE"
+        if conflicts or invalid_fields
+        else "INCOMPLETE"
+        if missing_fields
+        else "PASS"
+    )
+    return {
+        "schema_version": "qualibug.discovery-run-conditions.v1",
+        "status": status,
+        "values": values,
+        "missing_fields": missing_fields,
+        "invalid_fields": sorted(set(invalid_fields)),
+        "conflicts": conflicts,
+    }
 
 
 def _comparison_snapshot(report: dict[str, Any]) -> dict[str, Any]:
@@ -1513,6 +1636,7 @@ def _comparison_snapshot(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "report_status": _text(report.get("report_status")),
         "mainline_identity": _dict(report.get("mainline_identity")),
+        "run_conditions": _dict(report.get("run_conditions")),
         "quality": _dict(report.get("quality")),
         "metrics": {
             name: metrics.get(name)
@@ -1553,21 +1677,33 @@ def _comparison_condition_check(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
-    baseline_identity = _dict(baseline.get("mainline_identity"))
-    candidate_identity = _dict(candidate.get("mainline_identity"))
+    baseline_receipt = _dict(baseline.get("run_conditions"))
+    candidate_receipt = _dict(candidate.get("run_conditions"))
+    baseline_values = _dict(baseline_receipt.get("values"))
+    candidate_values = _dict(candidate_receipt.get("values"))
     missing_fields: list[str] = []
-    mismatches: list[dict[str, str]] = []
+    mismatches: list[dict[str, Any]] = []
     for field in _COMPARISON_CONDITION_FIELDS:
-        before = _text(baseline_identity.get(field))
-        after = _text(candidate_identity.get(field))
-        if not before or not after:
+        before = baseline_values.get(field)
+        after = candidate_values.get(field)
+        if before is None or before == "" or after is None or after == "":
             missing_fields.append(field)
         elif before != after:
             mismatches.append({"field": field, "baseline": before, "candidate": after})
-    if mismatches:
-        status = "MISMATCH"
+    invalid_fields = sorted(set(
+        _list(baseline_receipt.get("invalid_fields"))
+        + _list(candidate_receipt.get("invalid_fields"))
+    ))
+    conflicts = [
+        *_list(baseline_receipt.get("conflicts")),
+        *_list(candidate_receipt.get("conflicts")),
+    ]
+    if invalid_fields or conflicts:
+        status = "FAILED_SAFE"
     elif missing_fields:
         status = "NOT_MEASURED"
+    elif mismatches:
+        status = "MISMATCH"
     else:
         status = "MATCH"
     return {
@@ -1575,6 +1711,8 @@ def _comparison_condition_check(
         "checked_fields": list(_COMPARISON_CONDITION_FIELDS),
         "missing_fields": missing_fields,
         "mismatches": mismatches,
+        "invalid_fields": invalid_fields,
+        "conflicts": conflicts,
     }
 
 
@@ -1602,6 +1740,14 @@ def build_funnel_comparison_report(
             },
             "metrics": None,
             "pipeline_health": None,
+            "run_conditions": {
+                "schema_version": "qualibug.discovery-run-conditions.v1",
+                "status": "NOT_MEASURED",
+                "values": {},
+                "missing_fields": list(_COMPARISON_CONDITION_FIELDS),
+                "invalid_fields": [],
+                "conflicts": [],
+            },
             "reason_registry": None,
             "top_blocking_reasons": [],
             "unresolved_top_10": [],
@@ -1644,6 +1790,8 @@ def build_funnel_comparison_report(
             "checked_fields": list(_COMPARISON_CONDITION_FIELDS),
             "missing_fields": list(_COMPARISON_CONDITION_FIELDS),
             "mismatches": [],
+            "invalid_fields": [],
+            "conflicts": [],
         }
     )
 
@@ -1714,6 +1862,8 @@ def render_funnel_comparison_report_markdown(report: dict[str, Any]) -> str:
         f"- Status: `{_text(condition_check.get('status')) or 'NOT_MEASURED'}`",
         f"- Missing fields: {', '.join(_text(item) for item in _list(condition_check.get('missing_fields'))) or 'none'}",
         f"- Mismatches: {', '.join(_text(_dict(item).get('field')) for item in _list(condition_check.get('mismatches'))) or 'none'}",
+        f"- Invalid fields: {', '.join(_text(item) for item in _list(condition_check.get('invalid_fields'))) or 'none'}",
+        f"- Conflicting receipts: {len(_list(condition_check.get('conflicts')))}",
         "",
         "## Unresolved top 10",
         "",
