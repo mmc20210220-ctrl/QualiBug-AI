@@ -1,9 +1,9 @@
 """Bind exact source-declared database semantics to existing business identities.
 
-This module is a projection inside the single enterprise Identity Authority.  It
-never creates or merges business entities: a complete structured database label
-must already resolve to exactly one current entity, and the technical table is
-then attached as a typed binding with source evidence.
+This module is a projection inside the single enterprise Identity Authority. It never
+creates or merges business entities: a complete structured database label must already
+resolve to exactly one current entity, and the technical table is then attached as a typed
+binding with source evidence.
 """
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ from .identity_types import (
     IDENTITY_EDGE_SCHEMA,
     asset_evidence,
     identity_scope,
+)
+from .identity_unknown_reconciliation import (
+    reconcile_resolved_technical_identity_unknowns,
 )
 from .schema import as_dict, as_list, dedupe_evidence, stable_id, text, unique_text
 
@@ -33,14 +36,7 @@ def _exact_table_semantic_declarations(
     lookup: dict[str, str],
     known_entity_ids: set[str],
 ) -> dict[str, dict[str, Any]]:
-    """Resolve exact structured table semantics without lexical inference.
-
-    A database dictionary row such as ``products | 商品`` is an explicit
-    technical-to-business declaration.  Only the complete structured value is
-    considered, and it must already resolve to one current business identity.
-    Prefix stripping, plural normalization, path matching and token overlap are
-    intentionally excluded.
-    """
+    """Resolve exact structured table semantics without lexical inference."""
     declarations: dict[str, dict[str, Any]] = {}
     source_id = text(raw.get("source_id"))
     if not source_id or source_id == "asset":
@@ -96,42 +92,10 @@ def _exact_table_semantic_declarations(
 def _reconcile_aggregate_technical_unknowns(
     unknowns: list[dict[str, Any]], bound_artifacts: set[str]
 ) -> list[dict[str, Any]]:
-    """Remove newly resolved artifacts from the pre-projection aggregate gap."""
-    reconciled: list[dict[str, Any]] = []
-    for raw in unknowns:
-        if not isinstance(raw, dict):
-            continue
-        row = dict(raw)
-        details = dict(as_dict(row.get("details")))
-        unresolved = [
-            dict(value)
-            for value in as_list(details.get("unresolved_artifacts"))
-            if isinstance(value, dict)
-            and text(value.get("artifact_ref")) not in bound_artifacts
-        ]
-        if "unresolved_artifacts" not in details:
-            reconciled.append(row)
-            continue
-        if not unresolved:
-            continue
-        details["unresolved_artifacts"] = unresolved
-        row["details"] = details
-        row["question"] = (
-            f"存在{len(unresolved)}个技术资产尚未通过源声明绑定到业务身份；"
-            "系统不会按名称相似自动合并。"
-        )
-        remaining_refs = {text(value.get("artifact_ref")) for value in unresolved}
-        row["evidence"] = dedupe_evidence(
-            evidence
-            for evidence in as_list(row.get("evidence"))
-            if isinstance(evidence, dict)
-            and (
-                not text(evidence.get("asset_ref"))
-                or text(evidence.get("asset_ref")) in remaining_refs
-            )
-        )
-        reconciled.append(row)
-    return reconciled
+    """Compatibility wrapper around the single Unknown reconciliation authority."""
+    return reconcile_resolved_technical_identity_unknowns(
+        unknowns, bound_artifacts
+    )
 
 
 def project_exact_table_semantic_bindings(
@@ -242,7 +206,9 @@ def project_exact_table_semantic_bindings(
                 }
             )
         bound_artifacts.add(artifact_ref)
-    return _reconcile_aggregate_technical_unknowns(unknowns, bound_artifacts)
+    return reconcile_resolved_technical_identity_unknowns(
+        unknowns, bound_artifacts
+    )
 
 
 __all__ = ["project_exact_table_semantic_bindings"]
