@@ -26,6 +26,9 @@ for (const field of [
   'unsupported_count',
   'coverage_ratio',
   'unsupported_resources',
+  'KnowledgeConnectorHealth',
+  'toConnectorHealth',
+  'health_attention_connector_count',
 ]) {
   requireText(api, field, 'knowledge connector API projection');
 }
@@ -33,6 +36,18 @@ for (const field of [
 requireText(page, '<ConnectorCoverage coverage={connector.coverage} />', 'materials page');
 requireText(page, '已读取 ${connector.coverage.covered_count}/${connector.coverage.discovered_count}', 'connector status');
 requireText(page, '资料类型暂不支持', 'sync completion message');
+requireText(page, 'materials-health-summary', 'connector health projection');
+requireText(page, 'connectorHealthLabel(', 'connector health projection');
+for (const marker of [
+  'scopeProperties(',
+  'serializeScope(',
+  'missingRequiredScopeFields(',
+  'property.enum',
+  "type === 'array'",
+  'JSON.stringify(properties)',
+]) {
+  requireText(page, marker, 'manifest-driven scope editor');
+}
 
 requireText(panel, 'role="progressbar"', 'coverage panel accessibility');
 requireText(panel, '已发现 {coverage.discovered_count} 份资料', 'coverage explanation');

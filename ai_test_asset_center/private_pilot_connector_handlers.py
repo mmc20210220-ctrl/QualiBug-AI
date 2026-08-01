@@ -66,6 +66,7 @@ from .connector_acl_authority import (
     record_connector_project_share,
 )
 from .connector_semantic_refresh import project_connector_semantic_refresh_receipt
+from .connector_health_projection import project_connector_health
 from .local_runner_connector import (
     LocalRunnerError,
     accept_local_runner_result,
@@ -386,6 +387,17 @@ def _latest_sync_projection(run: dict[str, Any]) -> dict[str, Any]:
             run.get("semantic_changed_source_count")
             or semantic_diff.get("changed_source_count")
         ),
+        "materialized_success_count": _safe_int(
+            run.get("materialized_success_count")
+            if "materialized_success_count" in run
+            else run.get("materialized_item_count")
+        ),
+        "unchanged_success_count": _safe_int(
+            run.get("unchanged_success_count")
+            if "unchanged_success_count" in run
+            else run.get("unchanged_item_count")
+        ),
+        "failure_count": _safe_int(run.get("failure_count")),
         "source_content_returned": False,
         "remote_resource_identities_returned": False,
         "source_refs_returned": False,
@@ -514,6 +526,13 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             raw,
             root,
         )
+        row["health"] = project_connector_health(
+            connector_instance=raw,
+            connection_profile=row["connection_profile"],
+            auto_sync=row["auto_sync"],
+            coverage=row["coverage"],
+            latest_sync=row["coverage"].get("latest_sync"),
+        )
         acceptance_summary = (
             latest_connector_tenant_acceptance_summary(
                 project,
@@ -559,6 +578,10 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
                 _safe_int(row.get("coverage", {}).get("unsupported_count"))
                 for row in rows
             ),
+            "health_attention_connector_count": sum(
+                bool(row.get("health", {}).get("attention_reasons"))
+                for row in rows
+            ),
             "remote_absent_resource_count": sum(
                 _safe_int(
                     row.get("coverage", {})
@@ -601,6 +624,10 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             "automatic_refresh_uses_existing_sync_authority": True,
             "coverage_projection_uses_persisted_sync_receipt": True,
             "coverage_projection_returns_source_content": False,
+            "health_projection_uses_persisted_sync_receipt": True,
+            "health_projection_returns_source_content": False,
+            "health_projection_returns_credentials": False,
+            "health_projection_returns_raw_cursor": False,
             "remote_lifecycle_projection_uses_persisted_sync_receipt": True,
             "remote_lifecycle_projection_returns_remote_identities": False,
             "remote_lifecycle_projection_returns_source_refs": False,

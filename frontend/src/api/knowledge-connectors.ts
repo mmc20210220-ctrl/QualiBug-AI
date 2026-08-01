@@ -66,6 +66,50 @@ export type KnowledgeConnectorAutoSync = {
   raw_error_returned?: boolean;
 };
 
+export type KnowledgeConnectorHealth = {
+  schema?: string;
+  status: string;
+  recommended_action: string;
+  attention_reasons: string[];
+  credential_status?: string;
+  reauthorization_required: boolean;
+  reauthorization_reason?: string;
+  freshness: {
+    status: string;
+    last_successful_sync_at_utc?: string;
+    age_seconds?: number;
+    refresh_interval_seconds?: number;
+    stale_after_seconds?: number;
+  };
+  metrics: {
+    last_attempt_at_utc?: string;
+    discovered_resource_count: number;
+    covered_resource_count: number;
+    unsupported_resource_count: number;
+    coverage_ratio?: number;
+    failure_count: number;
+    retry_count: number;
+    materialized_resource_count: number;
+    unchanged_resource_count: number;
+    unchanged_reuse_ratio?: number;
+    semantic_refresh_status: string;
+    semantic_event_count: number;
+    semantic_changed_source_count: number;
+    acl_propagation_status: string;
+  };
+  evidence: {
+    source: string;
+    measured: boolean;
+    coverage_receipt_present: boolean;
+    latest_sync_receipt_present: boolean;
+    checked_at_utc: string;
+  };
+  source_content_returned: false;
+  credentials_returned: false;
+  raw_cursor_returned: false;
+  customer_material_mutation_executed: false;
+};
+
 export type KnowledgeConnectorUnsupportedResource = {
   remote_resource_id?: string;
   resource_index?: number;
@@ -179,6 +223,7 @@ export type KnowledgeConnectorRecord = {
   connection_profile?: KnowledgeConnectorProfile;
   auto_sync?: KnowledgeConnectorAutoSync;
   coverage?: KnowledgeConnectorCoverage;
+  health?: KnowledgeConnectorHealth;
   acceptance?: KnowledgeConnectorAcceptance;
 };
 
@@ -194,6 +239,7 @@ export type KnowledgeConnectorInventory = {
     automatic_refresh_enabled?: boolean;
     partial_coverage_connector_count?: number;
     unsupported_resource_count?: number;
+    health_attention_connector_count?: number;
     remote_absent_resource_count?: number;
     remote_unconfirmed_missing_resource_count?: number;
     remote_retired_resource_count?: number;
@@ -556,6 +602,66 @@ function toCoverage(value: unknown): KnowledgeConnectorCoverage {
   };
 }
 
+function toConnectorHealth(value: unknown): KnowledgeConnectorHealth {
+  const row = asRecord(value);
+  assertFalseFields(
+    row,
+    [
+      'source_content_returned',
+      'credentials_returned',
+      'raw_cursor_returned',
+      'customer_material_mutation_executed',
+    ],
+    '连接器健康状态',
+  );
+  const freshness = asRecord(row.freshness);
+  const metrics = asRecord(row.metrics);
+  const evidence = asRecord(row.evidence);
+  return {
+    schema: asString(row.schema) || undefined,
+    status: asString(row.status) || 'NOT_MEASURED',
+    recommended_action: asString(row.recommended_action) || 'REVIEW_CONNECTOR',
+    attention_reasons: asArray(row.attention_reasons).map(asString).filter(Boolean),
+    credential_status: asString(row.credential_status) || undefined,
+    reauthorization_required: asBoolean(row.reauthorization_required),
+    reauthorization_reason: asString(row.reauthorization_reason) || undefined,
+    freshness: {
+      status: asString(freshness.status) || 'UNKNOWN',
+      last_successful_sync_at_utc: asString(freshness.last_successful_sync_at_utc) || undefined,
+      age_seconds: asNumber(freshness.age_seconds),
+      refresh_interval_seconds: asNumber(freshness.refresh_interval_seconds),
+      stale_after_seconds: asNumber(freshness.stale_after_seconds),
+    },
+    metrics: {
+      last_attempt_at_utc: asString(metrics.last_attempt_at_utc) || undefined,
+      discovered_resource_count: asNumber(metrics.discovered_resource_count) || 0,
+      covered_resource_count: asNumber(metrics.covered_resource_count) || 0,
+      unsupported_resource_count: asNumber(metrics.unsupported_resource_count) || 0,
+      coverage_ratio: asNumber(metrics.coverage_ratio),
+      failure_count: asNumber(metrics.failure_count) || 0,
+      retry_count: asNumber(metrics.retry_count) || 0,
+      materialized_resource_count: asNumber(metrics.materialized_resource_count) || 0,
+      unchanged_resource_count: asNumber(metrics.unchanged_resource_count) || 0,
+      unchanged_reuse_ratio: asNumber(metrics.unchanged_reuse_ratio),
+      semantic_refresh_status: asString(metrics.semantic_refresh_status) || 'NOT_RECORDED',
+      semantic_event_count: asNumber(metrics.semantic_event_count) || 0,
+      semantic_changed_source_count: asNumber(metrics.semantic_changed_source_count) || 0,
+      acl_propagation_status: asString(metrics.acl_propagation_status) || 'NOT_RECORDED',
+    },
+    evidence: {
+      source: asString(evidence.source) || 'connector_sync_receipt',
+      measured: asBoolean(evidence.measured),
+      coverage_receipt_present: asBoolean(evidence.coverage_receipt_present),
+      latest_sync_receipt_present: asBoolean(evidence.latest_sync_receipt_present),
+      checked_at_utc: asString(evidence.checked_at_utc),
+    },
+    source_content_returned: false,
+    credentials_returned: false,
+    raw_cursor_returned: false,
+    customer_material_mutation_executed: false,
+  };
+}
+
 function toSemanticRefresh(value: unknown): KnowledgeConnectorSemanticRefresh {
   const row = asRecord(value);
   const events = asArray(row.events).map((event) => {
@@ -631,6 +737,7 @@ function toConnector(value: unknown): KnowledgeConnectorRecord {
     connection_profile: row.connection_profile ? toProfile(row.connection_profile) : undefined,
     auto_sync: row.auto_sync ? toAutoSync(row.auto_sync) : undefined,
     coverage: row.coverage ? toCoverage(row.coverage) : undefined,
+    health: row.health ? toConnectorHealth(row.health) : undefined,
     acceptance: row.acceptance ? toAcceptance(row.acceptance) : undefined,
   };
 }
@@ -736,6 +843,7 @@ export async function listKnowledgeConnectors(projectId: string): Promise<Knowle
       automatic_refresh_enabled: asBoolean(summary.automatic_refresh_enabled),
       partial_coverage_connector_count: asNumber(summary.partial_coverage_connector_count),
       unsupported_resource_count: asNumber(summary.unsupported_resource_count),
+      health_attention_connector_count: asNumber(summary.health_attention_connector_count),
       remote_absent_resource_count: asNumber(summary.remote_absent_resource_count),
       remote_unconfirmed_missing_resource_count: asNumber(summary.remote_unconfirmed_missing_resource_count),
       remote_retired_resource_count: asNumber(summary.remote_retired_resource_count),

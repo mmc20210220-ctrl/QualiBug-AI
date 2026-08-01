@@ -43,6 +43,8 @@ Adapter 不解析业务语义，不创建独立知识库，不写回远端资料
 3. 离线资料补充上传
 4. 在线和上传资料的统一 Source Occurrence 清单
 
+连接器范围编辑器由 Manifest 的 `scope_schema` 驱动。对象范围会把字段、默认值、枚举、数组、布尔值和数值约束直接转换为表单；普通用户不需要手工拼接 JSON。保存前会校验 Manifest 声明的必填字段，同时保留旧的 URL/字符串简写兼容性。未知范围字段不会被前端自行补全，仍由连接器配置服务拒绝或接受并返回明确结果。
+
 ## 私有服务 API
 
 所有接口均要求登录、租户校验和项目范围校验。配置、测试、同步与中止要求知识资料管理角色：
@@ -61,6 +63,10 @@ GET /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/runs/{sync
 ```
 
 返回值只包含连接状态、加密配置状态、同步状态和来源身份，不返回密钥、访问令牌、原始 cursor 或资料正文。
+
+连接器清单中的 `health` 是 `qualibug.connector-health-projection.v1` 投影，来自既有连接器实例、Profile、自动同步状态、覆盖投影和最新同步收据，不发起额外网络请求，也不创建第二套同步状态。它统一展示授权、同步新鲜度、覆盖比例、失败/重试、资料复用、ACL 传播和语义刷新状态；常见状态包括 `HEALTHY`、`SYNCING`、`STALE`、`NOT_SYNCED`、`REAUTHORIZATION_REQUIRED`、`PERMISSION_INSUFFICIENT`、`AUTHORIZATION_EXPIRING` 和 `DOWNSTREAM_DEGRADED`。没有成功同步收据时，新鲜度保持 `UNKNOWN`、健康状态保持 `NOT_SYNCED`，不能被解释为资料完整或连接成功。
+
+健康投影只返回聚合计数、状态、时间和指纹边界；`source_content_returned`、`credentials_returned`、`raw_cursor_returned` 和 `customer_material_mutation_executed` 必须为 `false`。前端收到不满足这些安全证明的投影会拒绝展示。
 
 ### 配置飞书资料源
 

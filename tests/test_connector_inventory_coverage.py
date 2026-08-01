@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ai_test_asset_center import private_pilot_connector_handlers as handlers
@@ -75,3 +76,81 @@ def test_coverage_projection_without_completed_sync_is_explicit() -> None:
         "source_content_returned": False,
         "customer_material_mutation_executed": False,
     }
+
+
+def test_connector_inventory_exposes_receipt_backed_health_without_secrets(
+    monkeypatch,
+) -> None:
+    checked_at = datetime.now(timezone.utc).replace(microsecond=0)
+    checked_at_text = checked_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    raw = {
+        "connector_instance_id": "website-docs",
+        "connector_type": "website",
+        "status": "ACTIVE",
+        "last_successful_sync_at_utc": checked_at_text,
+    }
+    coverage = {
+        "status": "COMPLETE",
+        "discovered_count": 3,
+        "covered_count": 3,
+        "unsupported_count": 0,
+        "coverage_ratio": 1.0,
+        "latest_sync": {
+            "status": "COMPLETE",
+            "materialized_success_count": 2,
+            "unchanged_success_count": 1,
+            "failure_count": 0,
+            "semantic_refresh_status": "NO_CHANGE",
+            "acl_propagation_status": "COMPLETE",
+        },
+    }
+    monkeypatch.setattr(
+        handlers,
+        "list_connector_instances",
+        lambda *args, **kwargs: {"connector_instances": [raw], "summary": {}},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_profile_index",
+        lambda *args, **kwargs: {
+            "website-docs": {
+                "connector_instance_id": "website-docs",
+                "credential_status": "ACTIVE",
+                "reauthorization_required": False,
+                "credentials_configured": True,
+                "plaintext_returned": False,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "connector_auto_sync_status",
+        lambda *args, **kwargs: {
+            "enabled": True,
+            "state": "healthy",
+            "last_success_at_utc": checked_at_text,
+            "refresh_interval_seconds": 3600,
+            "failure_count": 0,
+        },
+    )
+    monkeypatch.setattr(handlers, "_coverage_projection", lambda *args, **kwargs: coverage)
+    monkeypatch.setattr(
+        handlers,
+        "latest_connector_tenant_acceptance_summary",
+        lambda *args, **kwargs: {"status": "NOT_RUN"},
+    )
+
+    inventory = handlers._connector_inventory("enterprise-project", Path("/unused"))
+
+    row = inventory["connectors"][0]
+    health = row["health"]
+    assert health["status"] == "HEALTHY"
+    assert health["evidence"]["source"] == "connector_sync_receipt"
+    assert health["metrics"]["unchanged_reuse_ratio"] == 1 / 3
+    assert health["source_content_returned"] is False
+    assert health["credentials_returned"] is False
+    assert health["raw_cursor_returned"] is False
+    assert health["customer_material_mutation_executed"] is False
+    assert inventory["summary"]["health_attention_connector_count"] == 0
+    assert inventory["governance"]["health_projection_uses_persisted_sync_receipt"] is True
+    assert inventory["governance"]["health_projection_returns_credentials"] is False
