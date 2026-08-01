@@ -154,3 +154,71 @@ def test_connector_inventory_exposes_receipt_backed_health_without_secrets(
     assert inventory["summary"]["health_attention_connector_count"] == 0
     assert inventory["governance"]["health_projection_uses_persisted_sync_receipt"] is True
     assert inventory["governance"]["health_projection_returns_credentials"] is False
+
+
+def test_connector_inventory_uses_canonical_expiry_projection_for_health(
+    monkeypatch,
+) -> None:
+    raw = {
+        "connector_instance_id": "website-docs",
+        "connector_type": "website",
+        "status": "ACTIVE",
+    }
+    monkeypatch.setattr(
+        handlers,
+        "list_connector_instances",
+        lambda *args, **kwargs: {"connector_instances": [raw], "summary": {}},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_profile_index",
+        lambda *args, **kwargs: {
+            "website-docs": {
+                "connector_instance_id": "website-docs",
+                "profile_ref": "vault-ref://connectors/website-docs",
+                "credential_status": "ACTIVE",
+                "reauthorization_required": False,
+                "credentials_configured": True,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "connector_credential_expiry_status",
+        lambda *args, **kwargs: {
+            "status": "EXPIRING",
+            "credential_expires_at_utc": "2026-08-02T12:00:00Z",
+            "reauthorization_required": False,
+            "reauthorization_reason": "",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "connector_auto_sync_status",
+        lambda *args, **kwargs: {
+            "enabled": True,
+            "state": "scheduled",
+            "refresh_interval_seconds": 3600,
+            "failure_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_coverage_projection",
+        lambda *args, **kwargs: {
+            "status": "NOT_AVAILABLE",
+            "discovered_count": 0,
+            "covered_count": 0,
+            "unsupported_count": 0,
+            "coverage_ratio": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "latest_connector_tenant_acceptance_summary",
+        lambda *args, **kwargs: {"status": "NOT_RUN"},
+    )
+
+    inventory = handlers._connector_inventory("enterprise-project", Path("/unused"))
+
+    assert inventory["connectors"][0]["health"]["status"] == "AUTHORIZATION_EXPIRING"
