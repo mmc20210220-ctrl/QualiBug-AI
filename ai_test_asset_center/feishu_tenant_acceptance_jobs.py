@@ -3,8 +3,8 @@
 A Pilot or enterprise acceptance can take several minutes and must not depend on one HTTP
 connection staying open. This authority creates one atomically locked job per connector, runs the
 existing acceptance authority in a daemon worker, persists bounded status, and recovers jobs whose
-owner process disappeared. Customer content, credentials, raw cursors, and filesystem paths are
-never stored in the public job projection.
+owner process or worker thread disappeared. Customer content, credentials, raw cursors, and
+filesystem paths are never stored in the public job projection.
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from .real_project_onboarding import _safe_project_id
 FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA = "qualibug.feishu-tenant-acceptance-job.v1"
 _CONNECTOR_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 _JOB_ID_RE = re.compile(r"^ftaj_[a-f0-9]{24}$")
+_REPORT_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[a-f0-9]{12}$")
 _TERMINAL_STATES = {"COMPLETE", "FAILED", "INTERRUPTED"}
 _STARTUP_GRACE_SECONDS = 30.0
 _LOCAL_LOCK = threading.RLock()
@@ -112,6 +113,16 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _native_thread_alive(pid: int, native_thread_id: int) -> bool:
+    if pid <= 0 or native_thread_id <= 0:
+        return False
+    task_path = Path(f"/proc/{pid}/task/{native_thread_id}")
+    try:
+        return task_path.is_dir()
+    except OSError:
+        return False
+
+
 def _timestamp(value: Any) -> float:
     try:
         return float(value)
@@ -119,29 +130,40 @@ def _timestamp(value: Any) -> float:
         return 0.0
 
 
+def _recent_startup(payload: Mapping[str, Any], pid: int) -> bool:
+    recent = max(
+        _timestamp(payload.get("updated_unix")),
+        _timestamp(payload.get("requested_unix")),
+        _timestamp(payload.get("created_unix")),
+    )
+    return (
+        _pid_alive(pid)
+        and recent > 0
+        and time.time() - recent <= _STARTUP_GRACE_SECONDS
+    )
+
+
 def _owner_alive(payload: Mapping[str, Any]) -> bool:
     job = _text(payload.get("job_id"), 80)
     pid = int(payload.get("owner_pid") or 0)
-    if _text(payload.get("process_token"), 80) == _PROCESS_TOKEN:
+    native_thread_id = int(payload.get("owner_native_thread_id") or 0)
+    same_process = _text(payload.get("process_token"), 80) == _PROCESS_TOKEN
+    if same_process:
         thread = _THREADS.get(job)
         if thread is not None:
             return thread.is_alive()
-        recent = max(
-            _timestamp(payload.get("updated_unix")),
-            _timestamp(payload.get("requested_unix")),
-            _timestamp(payload.get("created_unix")),
-        )
-        return (
-            pid == os.getpid()
-            and _pid_alive(pid)
-            and recent > 0
-            and time.time() - recent <= _STARTUP_GRACE_SECONDS
-        )
+        if pid == os.getpid() and _native_thread_alive(pid, native_thread_id):
+            return True
+        return pid == os.getpid() and _recent_startup(payload, pid)
     if not _pid_alive(pid):
         return False
     expected_marker = _text(payload.get("owner_process_marker"), 120)
     current_marker = _process_marker(pid)
-    return not expected_marker or not current_marker or expected_marker == current_marker
+    if expected_marker and current_marker and expected_marker != current_marker:
+        return False
+    if native_thread_id > 0:
+        return _native_thread_alive(pid, native_thread_id)
+    return _recent_startup(payload, pid)
 
 
 def _ensure_connector_registered(project: str, connector: str, root: Path) -> None:
@@ -179,6 +201,23 @@ def _persist(root: Path, project: str, connector: str, payload: dict[str, Any]) 
         _history_path(root, project, connector, _job_id(payload.get("job_id"))),
         payload,
     )
+
+
+def _persist_recovered(
+    root: Path,
+    project: str,
+    connector: str,
+    payload: dict[str, Any],
+) -> None:
+    job = _job_id(payload.get("job_id"))
+    _write_json_object_atomic(
+        _history_path(root, project, connector, job),
+        payload,
+    )
+    current_path = _current_path(root, project, connector)
+    current = _read_json_object(current_path)
+    if _text(current.get("job_id"), 80) == job:
+        _write_json_object_atomic(current_path, payload)
 
 
 def _public_job(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -264,7 +303,7 @@ def _recover_interrupted(
             "updated_unix": now_unix,
         }
     )
-    _persist(root, project, connector, recovered)
+    _persist_recovered(root, project, connector, recovered)
     _release_lock(_lock_path(root, project, connector), _text(payload.get("job_id"), 80))
     return recovered
 
@@ -340,6 +379,29 @@ def _default_thread_starter(target: Callable[[], None], name: str) -> threading.
     return thread
 
 
+def _validated_completion(report: Mapping[str, Any]) -> tuple[str, str, bool]:
+    report_id = Path(_text(report.get("report_path"), 1000)).stem
+    verdict = _text(report.get("verdict"), 40)
+    acceptance_ready = report.get("acceptance_ready")
+    if not _REPORT_ID_RE.fullmatch(report_id):
+        raise FeishuTenantAcceptanceJobError(
+            "acceptance_job_report_identity_invalid"
+        )
+    if verdict not in {"PASS", "FAIL"}:
+        raise FeishuTenantAcceptanceJobError(
+            "acceptance_job_verdict_invalid"
+        )
+    if not isinstance(acceptance_ready, bool):
+        raise FeishuTenantAcceptanceJobError(
+            "acceptance_job_readiness_invalid"
+        )
+    if (verdict == "PASS") is not acceptance_ready:
+        raise FeishuTenantAcceptanceJobError(
+            "acceptance_job_verdict_readiness_mismatch"
+        )
+    return report_id, verdict, acceptance_ready
+
+
 def start_feishu_tenant_acceptance_job(
     project_id: str,
     connector_instance_id: str,
@@ -385,6 +447,7 @@ def start_feishu_tenant_acceptance_job(
         "error_type": "",
         "owner_pid": os.getpid(),
         "owner_process_marker": _process_marker(os.getpid()),
+        "owner_native_thread_id": 0,
         "process_token": _PROCESS_TOKEN,
         "actor": clean_actor,
         "options": {
@@ -431,6 +494,7 @@ def start_feishu_tenant_acceptance_job(
             "job_id": job,
             "owner_pid": os.getpid(),
             "owner_process_marker": _process_marker(os.getpid()),
+            "owner_native_thread_id": 0,
             "process_token": _PROCESS_TOKEN,
             "created_at_utc": now,
             "created_unix": now_unix,
@@ -457,10 +521,12 @@ def start_feishu_tenant_acceptance_job(
                 "started_at_utc": _utc(started_unix),
                 "updated_at_utc": _utc(started_unix),
                 "updated_unix": started_unix,
+                "owner_native_thread_id": threading.get_native_id(),
             }
         )
         with _LOCAL_LOCK:
             _persist(resolved_root, project, connector, running)
+        completed = dict(running)
         try:
             report = dict(
                 runner(
@@ -472,9 +538,8 @@ def start_feishu_tenant_acceptance_job(
                     **dict(running.get("options") or {}),
                 )
             )
-            report_id = Path(_text(report.get("report_path"), 1000)).stem
+            report_id, verdict, acceptance_ready = _validated_completion(report)
             completed_unix = time.time()
-            completed = dict(running)
             completed.update(
                 {
                     "status": "COMPLETE",
@@ -482,14 +547,13 @@ def start_feishu_tenant_acceptance_job(
                     "updated_at_utc": _utc(completed_unix),
                     "updated_unix": completed_unix,
                     "report_id": report_id,
-                    "verdict": _text(report.get("verdict"), 40),
-                    "acceptance_ready": report.get("acceptance_ready") is True,
+                    "verdict": verdict,
+                    "acceptance_ready": acceptance_ready,
                     "error_type": "",
                 }
             )
-        except Exception as exc:
+        except BaseException as exc:
             completed_unix = time.time()
-            completed = dict(running)
             completed.update(
                 {
                     "status": "FAILED",
