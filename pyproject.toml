@@ -79,6 +79,7 @@ qualibug-acceptance-smoke = "ai_test_asset_center.private_pilot_acceptance_smoke
 qualibug-discover-chain = "ai_test_asset_center.real_project_discovery_with_chain:main"
 qualibug-pilot-chain = "ai_test_asset_center.enterprise_pilot_runtime_with_chain:_cli"
 qualibug-identity-benchmark = "ai_test_asset_center.identity_benchmark_cli:main"
+qualibug-authorization-inventory = "ai_test_asset_center.historical_authorization_inventory:main"
 
 [tool.setuptools.packages.find]
 include = ["aitestops*", "ai_test_asset_center*"]
