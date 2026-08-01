@@ -1,14 +1,10 @@
-name: One-time lifecycle root-cause PR delivery
+name: One-time lifecycle root-cause delivery
 
 on:
-  pull_request_target:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: write
-  pull-requests: write
-  statuses: write
 
 concurrency:
   group: one-time-lifecycle-root-cause-delivery
@@ -16,30 +12,16 @@ concurrency:
 
 jobs:
   apply-test-and-push:
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'automation/lifecycle-root-cause-delivery-20260801'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Publish delivery start
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `Lifecycle root-cause delivery started against latest main. Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            });
-
       - name: Checkout latest main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Decode and verify lifecycle root change
+      - name: Decode and verify immutable lifecycle patch
         shell: bash
         run: |
           set -euo pipefail
@@ -128,7 +110,7 @@ jobs:
           set -euo pipefail
           git config user.name 'QualiBug Automation'
           git config user.email 'automation@qualibug.local'
-          git cat-file blob aa1d28315aa31c28343738eb6f180fe81cb2540d > .github/workflows/connector-mainline.yml
+          git cat-file blob 4b570a2e5c515fe975ce5717ffeeeb82c61d3803 > .github/workflows/quality-gates.yml
           git rm -r .github/delivery/lifecycle-root-fix
           git rm .github/workflows/one-time-lifecycle-root-fix.yml
           git rm .github/lifecycle-root-fix-trigger
@@ -137,7 +119,7 @@ jobs:
             -m 'fix(lifecycle): unify execution facts and terminal reduction' \
             -m 'Separate attempted, executed, accepted and completed step facts; require exact observation, oracle and cleanup scope; make read-only cleanup non-applicable; preserve failed target responses for Oracle evaluation; and derive the terminal lifecycle once from the sealed Execution Receipt Bundle.'
 
-      - name: Rebase, reverify, and push main
+      - name: Rebase on newer main and re-verify
         shell: bash
         run: |
           set -euo pipefail
@@ -148,27 +130,11 @@ jobs:
             git rebase origin/main
             /tmp/run-lifecycle-tests.sh
           fi
+
+      - name: Push main without force
+        shell: bash
+        run: |
+          set -euo pipefail
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
-
-      - name: Publish success and remove trigger branch
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          final_sha="$(git rev-parse HEAD)"
-          gh pr comment "${{ github.event.pull_request.number }}" --repo "${GITHUB_REPOSITORY}" --body "Lifecycle root-cause delivery passed compileall, 181 focused tests, real HTTP 200/500 E2E, and pushed main at ${final_sha}."
-          gh pr close "${{ github.event.pull_request.number }}" --repo "${GITHUB_REPOSITORY}" --delete-branch
-
-      - name: Publish failure
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `Lifecycle root-cause delivery failed safely; main was not force-pushed. Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            });
