@@ -116,13 +116,32 @@ def _resume_wait_capable_result(
         behavior_ir=_core._dict(envelope.get("behavior_ir")),
     )
     if _core._text(wait_result.get("status")) != WAIT_STATUS_COMPILED:
-        return _core._blocked(
-            _core._text(wait_result.get("reason_code"))
-            or _core.MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE,
+        semantic_reason = _core._text(wait_result.get("reason_code"))
+        semantic_reasons = [
+            _core._text(value)
+            for value in _core._list(
+                wait_result.get("semantic_reason_codes")
+            )
+            if _core._text(value)
+        ]
+        if semantic_reason and semantic_reason not in semantic_reasons:
+            semantic_reasons.insert(0, semantic_reason)
+        blocked = _core._blocked(
+            _core.MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE,
             _core._text(wait_result.get("detail"))
             or "observer_backed_wait_contract_not_compiled",
             graph,
         )
+        blocked["semantic_reason_code"] = semantic_reason
+        blocked["semantic_reason_codes"] = semantic_reasons
+        blocked["wait_contract_compile_receipt"] = {
+            "status": _core._text(wait_result.get("status")),
+            "reason_code": semantic_reason,
+            "semantic_reason_codes": semantic_reasons,
+            "detail": _core._text(wait_result.get("detail")),
+            "issues": deepcopy(_core._list(wait_result.get("issues"))),
+        }
+        return blocked
 
     compiled_graph = _core._dict(wait_result.get("graph"))
     treatment_plan = _core._treatment_plan(compiled_graph)
