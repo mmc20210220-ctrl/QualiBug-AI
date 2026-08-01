@@ -1,0 +1,110 @@
+name: One-time business behavior binding root fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/business-behavior-binding-root-fix-trigger"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-business-behavior-binding-root-fix
+  cancel-in-progress: false
+
+jobs:
+  apply-test-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Verify and decode business binding patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_B64=.github/patches/business_behavior_binding_root_fix.patch.gz.b64
+          echo "23fec152dee0f04ea609faae2538321dd8bc71252ccf03162c37fc3f9d656240  ${PATCH_B64}" | sha256sum -c -
+          base64 -d "${PATCH_B64}" | gzip -d > /tmp/business-binding.patch
+          echo "78ba16f9f71217172703ca908e4a5fe72cc30bba9f7381e3ce6f85d999fdc8cf  /tmp/business-binding.patch" | sha256sum -c -
+
+      - name: Apply patch with three-way conflict detection
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --3way --check /tmp/business-binding.patch
+          git apply --3way /tmp/business-binding.patch
+          git diff --check
+
+      - name: Verify exact source scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected-files.txt <<'EOF'
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/event_contract_implementation_authority.py
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/event_observer_implementation_projection.py
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py
+          tests/test_behavior_binding_root_regressions.py
+          EOF
+          git status --short | awk '{print $2}' | sort > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile changed authorities
+        shell: bash
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/event_contract_implementation_authority.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/event_observer_implementation_projection.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py \
+            tests/test_behavior_binding_root_regressions.py
+
+      - name: Run focused business binding regressions
+        shell: bash
+        run: |
+          python -m pytest -q \
+            tests/test_behavior_binding_root_regressions.py \
+            tests/test_behavior_implementation_binding_relationships.py \
+            tests/test_behavior_implementation_binding_object_identity.py \
+            tests/test_invariant_operation_binder.py \
+            tests/test_scenario_planning_partial_binding_admission.py \
+            tests/test_event_observer_implementation_mainline.py \
+            tests/test_event_observer_scenario_projection.py \
+            tests/test_event_contract_implementation_authority.py
+
+      - name: Commit source changes and remove one-time executor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "QualiBug Automation"
+          git config user.email "automation@qualibug.local"
+          git rm .github/workflows/one-time-business-behavior-binding-root-fix.yml
+          git rm .github/business-behavior-binding-root-fix-trigger
+          git rm .github/patches/business_behavior_binding_root_fix.patch.gz.b64
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(binding): bind exact action-object source identities' \
+            -m 'Preserve upstream implementation gates when optional Event authorities have no input, and bind a business action to an API only when the action and governed object co-occur in one unique source-declared interface phrase. Ambiguous and split-label matches remain unresolved. Adds focused root-cause regressions.'
+
+      - name: Rebase and push main without force
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
