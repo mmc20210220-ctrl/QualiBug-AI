@@ -45,6 +45,7 @@ CONNECTOR_SYNC_RUN_SCHEMA = "qualibug.connector-sync-run.v1"
 _SYNC_MODES = {"FULL", "INCREMENTAL"}
 _DELETION_POLICIES = {"RETAIN", "RETIRE_MISSING"}
 _INSTANCE_STATUSES = {"ACTIVE", "PAUSED", "DISABLED"}
+_COVERAGE_STATES = {"UNSUPPORTED"}
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 _METADATA_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,119}$")
 _SECRET_KEY_RE = re.compile(
@@ -138,6 +139,7 @@ def _registry_default(project: str) -> dict[str, Any]:
             "source_content_persisted_in_sync_registry": False,
             "source_occurrence_is_material_identity_authority": True,
             "missing_source_retirement_requires_complete_full_snapshot": True,
+            "coverage_observations_create_source_occurrences": False,
         },
     }
 
@@ -484,6 +486,72 @@ def _normalize_unchanged_observations(
     return normalized
 
 
+def _normalize_coverage_observations(
+    connector: str,
+    observations: list[dict[str, Any]] | None,
+    *,
+    blocked_refs: set[str],
+) -> list[dict[str, Any]]:
+    if observations is None:
+        return []
+    if not isinstance(observations, list):
+        raise ConnectorSyncError(
+            "connector_sync_coverage_observations_must_be_list"
+        )
+    normalized: list[dict[str, Any]] = []
+    refs: set[str] = set()
+    for index, raw in enumerate(observations):
+        if not isinstance(raw, dict):
+            raise ConnectorSyncError(
+                f"connector_sync_coverage_observation_invalid:{index}"
+            )
+        remote_id = _text(raw.get("remote_resource_id"), 1000)
+        kind = _text(raw.get("resource_kind"), 80) or "document"
+        state = _text(raw.get("state"), 40).upper()
+        reason_code = _text(raw.get("reason_code"), 160)
+        if not remote_id:
+            raise ConnectorSyncError(
+                f"connector_sync_coverage_remote_resource_id_required:{index}"
+            )
+        if state not in _COVERAGE_STATES:
+            raise ConnectorSyncError(
+                f"connector_sync_coverage_state_invalid:{index}"
+            )
+        if not reason_code or not _IDENTIFIER_RE.fullmatch(reason_code):
+            raise ConnectorSyncError(
+                f"connector_sync_coverage_reason_code_invalid:{index}"
+            )
+        source_ref = build_connector_source_ref(
+            connector, remote_id, resource_kind=kind
+        )
+        if source_ref in refs or source_ref in blocked_refs:
+            raise ConnectorSyncError(
+                f"connector_sync_duplicate_remote_identity:{source_ref}"
+            )
+        metadata = _sanitize_metadata(dict(raw.get("metadata") or {}))
+        refs.add(source_ref)
+        normalized.append(
+            {
+                "remote_resource_id": remote_id,
+                "resource_kind": kind,
+                "source_ref": source_ref,
+                "state": state,
+                "reason_code": reason_code,
+                "remote_object_type": _text(raw.get("remote_object_type"), 80),
+                "display_title": _redact_text(raw.get("display_title"), 300),
+                "retry_trigger": _text(raw.get("retry_trigger"), 160),
+                "capability_contract_version": _text(
+                    raw.get("capability_contract_version"), 160
+                ),
+                "metadata": metadata,
+                "content_materialized": False,
+                "source_occurrence_created": False,
+                "customer_source_modified": False,
+            }
+        )
+    return normalized
+
+
 def _normalize_items(connector: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(items, list):
         raise ConnectorSyncError("connector_sync_items_must_be_list")
@@ -537,6 +605,8 @@ def _run_summary(registry: dict[str, Any], run: dict[str, Any], receipt_path: st
             "success_count": run.get("success_count", 0),
             "materialized_success_count": run.get("materialized_success_count", 0),
             "unchanged_success_count": run.get("unchanged_success_count", 0),
+            "coverage_observation_count": run.get("coverage_observation_count", 0),
+            "knowledge_coverage_status": run.get("knowledge_coverage_status", ""),
             "failure_count": run.get("failure_count", 0),
             "retired_count": run.get("retired_count", 0),
             "cursor_checkpoint_committed": bool(run.get("cursor_checkpoint_committed")),
@@ -604,6 +674,7 @@ def _finish_run(
             "sync_epoch_id": run["sync_epoch_id"],
             "status": run.get("status"),
             "success_count": run.get("success_count", 0),
+            "coverage_observation_count": run.get("coverage_observation_count", 0),
             "failure_count": run.get("failure_count", 0),
             "retired_count": run.get("retired_count", 0),
             "cursor_checkpoint_committed": committed,
@@ -674,6 +745,7 @@ def sync_connector_snapshot_batch(
     connector_instance_id: str,
     items: list[dict[str, Any]],
     unchanged_observations: list[dict[str, Any]] | None = None,
+    coverage_observations: list[dict[str, Any]] | None = None,
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
     sync_mode: str = "INCREMENTAL",
@@ -708,6 +780,12 @@ def sync_connector_snapshot_batch(
         unchanged_observations,
         changed_refs=changed_refs,
     )
+    unchanged_refs = {row["source_ref"] for row in unchanged}
+    coverage = _normalize_coverage_observations(
+        connector,
+        coverage_observations,
+        blocked_refs=changed_refs | unchanged_refs,
+    )
     epoch = _identifier(sync_epoch_id, "sync_epoch_id") if sync_epoch_id else _new_epoch(
         project, connector
     )
@@ -735,14 +813,18 @@ def sync_connector_snapshot_batch(
             "status": "RUNNING",
             "started_at_utc": _now(),
             "started_by": clean_actor,
-            "item_count": len(normalized) + len(unchanged),
+            "item_count": len(normalized) + len(unchanged) + len(coverage),
             "materialized_item_count": len(normalized),
             "unchanged_item_count": len(unchanged),
+            "coverage_observation_count": len(coverage),
+            "coverage_observations": coverage,
             "previous_cursor_fingerprint": previous_hash,
             "next_cursor_fingerprint": next_hash,
             "cursor_checkpoint_committed": False,
             "raw_cursor_values_persisted": False,
             "source_content_persisted_in_run_receipt": False,
+            "coverage_observations_create_source_occurrences": False,
+            "customer_material_mutation_executed": False,
         }
         _start_run(project, connector, instance, registry, run, resolved_root)
 
@@ -750,6 +832,7 @@ def sync_connector_snapshot_batch(
         errors: list[dict[str, Any]] = []
         seen_refs: set[str] = set()
         unchanged_recorded_count = 0
+        coverage_existing_recorded_count = 0
         retired: list[dict[str, Any]] = []
         reconciliation: dict[str, Any] = {
             "status": "NOT_REQUESTED",
@@ -904,6 +987,45 @@ def sync_connector_snapshot_batch(
                         }
                     )
 
+            if coverage:
+                seen_refs.update(row["source_ref"] for row in coverage)
+                existing_coverage = [
+                    row for row in coverage if row["source_ref"] in before_refs
+                ]
+                if existing_coverage:
+                    try:
+                        coverage_receipt = record_source_occurrence_observations_batch(
+                            project,
+                            [
+                                {
+                                    "source_ref": row["source_ref"],
+                                    "metadata": row["metadata"],
+                                }
+                                for row in existing_coverage
+                            ],
+                            root=resolved_root,
+                            actor=clean_actor,
+                        )
+                        coverage_existing_recorded_count = int(
+                            coverage_receipt.get("recorded_count") or 0
+                        )
+                        if coverage_existing_recorded_count != len(existing_coverage):
+                            raise ConnectorSyncError(
+                                "connector_coverage_observation_count_mismatch"
+                            )
+                    except Exception as exc:
+                        errors.append(
+                            {
+                                "code": "CONNECTOR_COVERAGE_OBSERVATION_FAILED",
+                                "detail": (
+                                    str(exc)[:500]
+                                    if isinstance(exc, ConnectorSyncError)
+                                    else type(exc).__name__
+                                ),
+                                "previous_snapshot_retained": True,
+                            }
+                        )
+
             if not errors and policy == "RETIRE_MISSING":
                 reconciliation = _retirement_plan(
                     before_refs, seen_refs, max_retire_count, float(max_retire_ratio)
@@ -939,6 +1061,13 @@ def sync_connector_snapshot_batch(
                 if reconciliation.get("status") == "BLOCKED"
                 else "COMPLETE"
             )
+            knowledge_coverage_status = (
+                "INCOMPLETE"
+                if status != "COMPLETE"
+                else "PARTIAL_UNSUPPORTED"
+                if coverage
+                else "COMPLETE"
+            )
             run.update(
                 {
                     "status": status,
@@ -946,6 +1075,12 @@ def sync_connector_snapshot_batch(
                     "success_count": len(successes) + unchanged_recorded_count,
                     "materialized_success_count": len(successes),
                     "unchanged_success_count": unchanged_recorded_count,
+                    "coverage_observation_count": len(coverage),
+                    "coverage_existing_occurrence_recorded_count": (
+                        coverage_existing_recorded_count
+                    ),
+                    "knowledge_coverage_status": knowledge_coverage_status,
+                    "knowledge_coverage_complete": status == "COMPLETE" and not coverage,
                     "failure_count": len(errors),
                     "successful_items": successes,
                     "errors": errors,
@@ -960,6 +1095,8 @@ def sync_connector_snapshot_batch(
                     "previous_snapshots_retained_on_item_failure": True,
                     "raw_cursor_values_persisted": False,
                     "source_content_persisted_in_run_receipt": False,
+                    "coverage_observations_create_source_occurrences": False,
+                    "customer_material_mutation_executed": False,
                 }
             )
             receipt_path = _finish_run(
@@ -974,6 +1111,12 @@ def sync_connector_snapshot_batch(
                     "success_count": len(successes) + unchanged_recorded_count,
                     "materialized_success_count": len(successes),
                     "unchanged_success_count": unchanged_recorded_count,
+                    "coverage_observation_count": len(coverage),
+                    "coverage_existing_occurrence_recorded_count": (
+                        coverage_existing_recorded_count
+                    ),
+                    "knowledge_coverage_status": "INCOMPLETE",
+                    "knowledge_coverage_complete": False,
                     "failure_count": len(errors) + 1,
                     "successful_items": successes,
                     "errors": [
@@ -990,6 +1133,8 @@ def sync_connector_snapshot_batch(
                     "previous_snapshots_retained_on_item_failure": True,
                     "raw_cursor_values_persisted": False,
                     "source_content_persisted_in_run_receipt": False,
+                    "coverage_observations_create_source_occurrences": False,
+                    "customer_material_mutation_executed": False,
                 }
             )
             try:
