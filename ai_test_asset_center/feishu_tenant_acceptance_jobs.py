@@ -27,6 +27,7 @@ FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA = "qualibug.feishu-tenant-acceptance-job.v1"
 _CONNECTOR_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 _JOB_ID_RE = re.compile(r"^ftaj_[a-f0-9]{24}$")
 _TERMINAL_STATES = {"COMPLETE", "FAILED", "INTERRUPTED"}
+_STARTUP_GRACE_SECONDS = 30.0
 _LOCAL_LOCK = threading.RLock()
 _THREADS: dict[str, threading.Thread] = {}
 _PROCESS_TOKEN = uuid.uuid4().hex
@@ -111,12 +112,31 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _timestamp(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _owner_alive(payload: Mapping[str, Any]) -> bool:
     job = _text(payload.get("job_id"), 80)
+    pid = int(payload.get("owner_pid") or 0)
     if _text(payload.get("process_token"), 80) == _PROCESS_TOKEN:
         thread = _THREADS.get(job)
-        return bool(thread and thread.is_alive())
-    pid = int(payload.get("owner_pid") or 0)
+        if thread is not None:
+            return thread.is_alive()
+        recent = max(
+            _timestamp(payload.get("updated_unix")),
+            _timestamp(payload.get("requested_unix")),
+            _timestamp(payload.get("created_unix")),
+        )
+        return (
+            pid == os.getpid()
+            and _pid_alive(pid)
+            and recent > 0
+            and time.time() - recent <= _STARTUP_GRACE_SECONDS
+        )
     if not _pid_alive(pid):
         return False
     expected_marker = _text(payload.get("owner_process_marker"), 120)
@@ -193,19 +213,22 @@ def _public_job(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def _write_lock(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(dict(payload), ensure_ascii=False).encode("utf-8")
     descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
-        os.write(descriptor, serialized)
-        os.fsync(descriptor)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = -1
+            json.dump(dict(payload), stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
     finally:
-        os.close(descriptor)
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _read_lock(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return {}
     return dict(payload) if isinstance(payload, dict) else {}
 
@@ -229,14 +252,16 @@ def _recover_interrupted(
         return payload
     if _owner_alive(payload):
         return payload
+    now_unix = time.time()
     recovered = dict(payload)
     recovered.update(
         {
             "status": "INTERRUPTED",
-            "completed_at_utc": _utc(),
+            "completed_at_utc": _utc(now_unix),
             "error_type": "ACCEPTANCE_OWNER_DISAPPEARED",
             "acceptance_ready": False,
-            "updated_at_utc": _utc(),
+            "updated_at_utc": _utc(now_unix),
+            "updated_unix": now_unix,
         }
     )
     _persist(root, project, connector, recovered)
@@ -339,7 +364,8 @@ def start_feishu_tenant_acceptance_job(
     }
     clean_options = dict(options or {})
     job = "ftaj_" + uuid.uuid4().hex[:24]
-    now = _utc()
+    now_unix = time.time()
+    now = _utc(now_unix)
     payload = {
         "schema": FEISHU_TENANT_ACCEPTANCE_JOB_SCHEMA,
         "job_id": job,
@@ -348,9 +374,11 @@ def start_feishu_tenant_acceptance_job(
         "profile": profile_name,
         "status": "PENDING",
         "requested_at_utc": now,
+        "requested_unix": now_unix,
         "started_at_utc": "",
         "completed_at_utc": "",
         "updated_at_utc": now,
+        "updated_unix": now_unix,
         "report_id": "",
         "verdict": "",
         "acceptance_ready": False,
@@ -399,31 +427,21 @@ def start_feishu_tenant_acceptance_job(
                 raise FeishuTenantAcceptanceJobError(
                     "acceptance_job_already_running"
                 )
+        lock_payload = {
+            "job_id": job,
+            "owner_pid": os.getpid(),
+            "owner_process_marker": _process_marker(os.getpid()),
+            "process_token": _PROCESS_TOKEN,
+            "created_at_utc": now,
+            "created_unix": now_unix,
+        }
         try:
-            _write_lock(
-                lock,
-                {
-                    "job_id": job,
-                    "owner_pid": os.getpid(),
-                    "owner_process_marker": _process_marker(os.getpid()),
-                    "process_token": _PROCESS_TOKEN,
-                    "created_at_utc": now,
-                },
-            )
+            _write_lock(lock, lock_payload)
         except FileExistsError:
             stale_lock = _read_lock(lock)
             if stale_lock and not _owner_alive(stale_lock):
                 lock.unlink(missing_ok=True)
-                _write_lock(
-                    lock,
-                    {
-                        "job_id": job,
-                        "owner_pid": os.getpid(),
-                        "owner_process_marker": _process_marker(os.getpid()),
-                        "process_token": _PROCESS_TOKEN,
-                        "created_at_utc": now,
-                    },
-                )
+                _write_lock(lock, lock_payload)
             else:
                 raise FeishuTenantAcceptanceJobError(
                     "acceptance_job_already_running"
@@ -431,12 +449,14 @@ def start_feishu_tenant_acceptance_job(
         _persist(resolved_root, project, connector, payload)
 
     def execute() -> None:
+        started_unix = time.time()
         running = dict(payload)
         running.update(
             {
                 "status": "RUNNING",
-                "started_at_utc": _utc(),
-                "updated_at_utc": _utc(),
+                "started_at_utc": _utc(started_unix),
+                "updated_at_utc": _utc(started_unix),
+                "updated_unix": started_unix,
             }
         )
         with _LOCAL_LOCK:
@@ -453,12 +473,14 @@ def start_feishu_tenant_acceptance_job(
                 )
             )
             report_id = Path(_text(report.get("report_path"), 1000)).stem
+            completed_unix = time.time()
             completed = dict(running)
             completed.update(
                 {
                     "status": "COMPLETE",
-                    "completed_at_utc": _utc(),
-                    "updated_at_utc": _utc(),
+                    "completed_at_utc": _utc(completed_unix),
+                    "updated_at_utc": _utc(completed_unix),
+                    "updated_unix": completed_unix,
                     "report_id": report_id,
                     "verdict": _text(report.get("verdict"), 40),
                     "acceptance_ready": report.get("acceptance_ready") is True,
@@ -466,12 +488,14 @@ def start_feishu_tenant_acceptance_job(
                 }
             )
         except Exception as exc:
+            completed_unix = time.time()
             completed = dict(running)
             completed.update(
                 {
                     "status": "FAILED",
-                    "completed_at_utc": _utc(),
-                    "updated_at_utc": _utc(),
+                    "completed_at_utc": _utc(completed_unix),
+                    "updated_at_utc": _utc(completed_unix),
+                    "updated_unix": completed_unix,
                     "report_id": "",
                     "verdict": "FAIL",
                     "acceptance_ready": False,
@@ -489,16 +513,18 @@ def start_feishu_tenant_acceptance_job(
             execute,
             f"qualibug-feishu-acceptance-{connector}",
         )
-        if isinstance(thread, threading.Thread):
+        if isinstance(thread, threading.Thread) and thread.is_alive():
             with _LOCAL_LOCK:
                 _THREADS[job] = thread
     except Exception as exc:
+        failed_unix = time.time()
         failed = dict(payload)
         failed.update(
             {
                 "status": "FAILED",
-                "completed_at_utc": _utc(),
-                "updated_at_utc": _utc(),
+                "completed_at_utc": _utc(failed_unix),
+                "updated_at_utc": _utc(failed_unix),
+                "updated_unix": failed_unix,
                 "verdict": "FAIL",
                 "acceptance_ready": False,
                 "error_type": _text(type(exc).__name__, 120),
