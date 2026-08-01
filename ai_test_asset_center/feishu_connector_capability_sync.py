@@ -34,6 +34,7 @@ _FACADE_OWNED_NAMES = {
     "_DEFAULT_REMOTE_LIFECYCLE_AUTHORITY",
     "_FACADE_OWNED_NAMES",
     "_temporary_core_overrides",
+    "_project_committed_checkpoint",
     "sync_feishu_connector",
     "contextmanager",
     "wraps",
@@ -68,10 +69,31 @@ def _temporary_core_overrides() -> Iterator[None]:
             setattr(_core, name, value)
 
 
+def _project_committed_checkpoint(result: dict[str, Any]) -> dict[str, Any]:
+    lifecycle = dict(result.get("remote_lifecycle") or {})
+    if lifecycle.get("cursor_checkpoint_committed") is not True:
+        return result
+    projected = dict(result)
+    projected.update(
+        {
+            "cursor_checkpoint_committed": True,
+            "cursor_checkpoint_pending_lifecycle_commit": False,
+            "pending_cursor_fingerprint": "",
+            "previous_cursor_checkpoint_preserved": False,
+            "checkpoint_committed_after_lifecycle_decision": True,
+            "checkpoint_response_projection": (
+                "COMMITTED_WITH_CURSOR_FINGERPRINT_REDACTED"
+            ),
+        }
+    )
+    return projected
+
+
 @wraps(_core.sync_feishu_connector)
 def sync_feishu_connector(*args: Any, **kwargs: Any) -> dict[str, Any]:
     with _temporary_core_overrides():
-        return _core.sync_feishu_connector(*args, **kwargs)
+        result = _core.sync_feishu_connector(*args, **kwargs)
+    return _project_committed_checkpoint(result)
 
 
 __all__ = sorted(
