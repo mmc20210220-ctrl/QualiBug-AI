@@ -2,11 +2,13 @@
 
 The existing sequential transport/governance implementation remains the only
 step kernel. This module adds source-backed dependency scheduling, exact
-approved-target dispatch, and namespaced cross-node bindings before invoking
-that kernel one node at a time. Ordinary plans delegate unchanged.
+approved-target dispatch, namespaced cross-node bindings, and durable graph
+resume checkpoints before invoking that kernel one node at a time. Ordinary
+plans delegate unchanged.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,11 @@ from .process_graph_executor_support import (
     runtime_projection,
     scoped_actor_context,
     step_observation,
+)
+from .process_graph_resume import (
+    GRAPH_RESUME_STATE_INVALID,
+    build_process_graph_resume_checkpoint,
+    recover_process_graph_runtime,
 )
 from .process_graph_runtime import (
     GRAPH_PREDECESSOR_NOT_SUCCEEDED,
@@ -125,6 +132,40 @@ def _apply_graph_outcome_to_master(
     unresolved = _list(outcome.get("output_binding_unresolved"))
     if unresolved:
         row["detail"] = ",".join(_text(value) for value in unresolved if _text(value))
+
+
+def _publish_graph_progress(
+    *,
+    graph: dict[str, Any],
+    runtime: dict[str, Any],
+    master: Any,
+    bags: dict[str, Any],
+    observations: dict[str, Any],
+    graph_observations: list[dict[str, Any]],
+    eid: str,
+    oid: str,
+    resolved_campaign_id: str,
+    resolved_execution_id: str,
+) -> dict[str, Any]:
+    """Publish one hash-bound checkpoint after every terminal node outcome."""
+    observations["graph_step_observations"] = deepcopy(graph_observations)
+    observations["process_graph_runtime"] = runtime_projection(runtime)
+    observations["process_graph_binding_ledger"] = public_binding_ledger(runtime)
+    observations["process_graph_request_bodies_for_cleanup"] = deepcopy(
+        _dict(bags.get("request_bodies_for_cleanup"))
+    )
+    attach_ledger_refs_to_observations(observations, master)
+    checkpoint = build_process_graph_resume_checkpoint(
+        graph=graph,
+        runtime=runtime,
+        observations=observations,
+        experiment_id=eid,
+        obligation_id=oid,
+        campaign_id=resolved_campaign_id,
+        execution_id=resolved_execution_id,
+    )
+    observations["process_graph_resume_checkpoint"] = checkpoint
+    return checkpoint
 
 
 def _execute_graph_node(
@@ -283,6 +324,10 @@ def _execute_graph_node(
         return {}
     return {
         **observation,
+        "experiment_id": eid,
+        "obligation_id": oid,
+        "campaign_id": resolved_campaign_id,
+        "execution_id": resolved_execution_id,
         "execution_graph_id": runtime.get("execution_graph_id"),
         "process_id": runtime.get("process_id"),
         "system_ref": _text(step.get("system_ref")),
@@ -317,7 +362,7 @@ def execute_non_barrier_plans(
     runtime_contract: dict[str, Any],
     cleanup_failures: int = 0,
 ) -> dict[str, Any]:
-    """Execute a normal plan unchanged or a synchronous source-backed graph."""
+    """Execute a normal plan unchanged or resume one source-backed graph."""
     call_args = {
         "control_plan": control_plan,
         "treatment_plan": treatment_plan,
@@ -407,8 +452,86 @@ def execute_non_barrier_plans(
         for step in treatment_plan
         if isinstance(step, dict) and _text(step.get("step_id"))
     }
-    graph_observations: list[dict[str, Any]] = []
+    resume = recover_process_graph_runtime(
+        graph=graph,
+        treatment_plan=treatment_plan,
+        runtime=runtime,
+        observations=observations,
+        experiment_id=eid,
+        obligation_id=oid,
+        campaign_id=resolved_campaign_id,
+        execution_id=resolved_execution_id,
+    )
+    if _text(resume.get("status")) == "BLOCKED":
+        runtime.update(
+            {
+                "status": "BLOCKED",
+                "reason_code": _text(resume.get("reason_code"))
+                or GRAPH_RESUME_STATE_INVALID,
+                "detail": _text(resume.get("detail"))
+                or "process_graph_resume_state_invalid",
+            }
+        )
+        return _blocked_graph_result(
+            runtime=runtime,
+            treatment_plan=treatment_plan,
+            master=master,
+            bags=bags,
+            observations=observations,
+            eid=eid,
+            oid=oid,
+            resolved_campaign_id=resolved_campaign_id,
+            resolved_execution_id=resolved_execution_id,
+        )
+
+    recovered_node_ids = {
+        _text(value)
+        for value in _list(resume.get("recovered_node_ids"))
+        if _text(value)
+    }
+    graph_observations = [
+        dict(row)
+        for row in _list(resume.get("recovered_graph_observations"))
+        if isinstance(row, dict)
+    ]
+    if recovered_node_ids:
+        contexts = {
+            node_id: {
+                **_dict(_dict(runtime.get("target_contexts")).get(node_id)),
+                "wave_index": int(
+                    _dict(runtime.get("wave_by_node")).get(node_id) or 0
+                ),
+                "object_refs": _list(
+                    _dict(plan_by_id.get(node_id)).get("object_refs")
+                ),
+            }
+            for node_id in recovered_node_ids
+        }
+        copy_subledger_rows(
+            master,
+            resume.get("subledger"),
+            graph_context_by_step=contexts,
+        )
+        bags["steps"].extend(deepcopy(graph_observations))
+        bags["request_bodies_for_cleanup"].update(
+            deepcopy(_dict(resume.get("request_bodies_for_cleanup")))
+        )
+        _publish_graph_progress(
+            graph=graph,
+            runtime=runtime,
+            master=master,
+            bags=bags,
+            observations=observations,
+            graph_observations=graph_observations,
+            eid=eid,
+            oid=oid,
+            resolved_campaign_id=resolved_campaign_id,
+            resolved_execution_id=resolved_execution_id,
+        )
+
     for node_id in order:
+        if node_id in recovered_node_ids:
+            continue
         projected = _execute_graph_node(
             node_id=node_id,
             step=_dict(plan_by_id.get(node_id)),
@@ -431,11 +554,31 @@ def execute_non_barrier_plans(
         )
         if projected:
             graph_observations.append(projected)
+        _publish_graph_progress(
+            graph=graph,
+            runtime=runtime,
+            master=master,
+            bags=bags,
+            observations=observations,
+            graph_observations=graph_observations,
+            eid=eid,
+            oid=oid,
+            resolved_campaign_id=resolved_campaign_id,
+            resolved_execution_id=resolved_execution_id,
+        )
 
-    observations["graph_step_observations"] = graph_observations
-    observations["process_graph_runtime"] = runtime_projection(runtime)
-    observations["process_graph_binding_ledger"] = public_binding_ledger(runtime)
-    attach_ledger_refs_to_observations(observations, master)
+    checkpoint = _publish_graph_progress(
+        graph=graph,
+        runtime=runtime,
+        master=master,
+        bags=bags,
+        observations=observations,
+        graph_observations=graph_observations,
+        eid=eid,
+        oid=oid,
+        resolved_campaign_id=resolved_campaign_id,
+        resolved_execution_id=resolved_execution_id,
+    )
     return {
         **bags,
         "process_step_ledger": master,
@@ -449,6 +592,10 @@ def execute_non_barrier_plans(
         "process_graph_binding_ledger": observations[
             "process_graph_binding_ledger"
         ],
+        "process_graph_resume_checkpoint": checkpoint,
+        "process_graph_resume_recovery": deepcopy(
+            _dict(observations.get("process_graph_resume_recovery"))
+        ),
     }
 
 
