@@ -1,0 +1,298 @@
+             _text(row) for row in _list(subject.get("entity_refs")) if _text(row)
+         ]
+         governed_entities = _governed_entities(
+-            statement,
++            grammar_statement,
+             action_coordinate,
+             existing_entities,
+         )
+@@ -668,7 +1040,7 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
+             changed.append("object_refs")
+         fact["object"] = object_part
+ 
+-        modality, polarity = _modality(statement)
++        modality, polarity = _modality(grammar_statement)
+         if modality != _text(fact.get("modality")):
+             fact["modality"] = modality
+             changed.append("modality")
+@@ -677,10 +1049,11 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
+             changed.append("polarity")
+ 
+         conditions, combinator = _condition_coordinates(
+-            statement,
++            grammar_statement,
+             fact,
+             action=action_coordinate,
+             entities=entities,
++            actor_qualifiers=actor_qualifiers,
+         )
+         before_frame = (
+             list(_list(fact.get("conditions"))),
+@@ -696,12 +1069,52 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
+         if before_frame != after_frame:
+             changed.append("condition_frame")
+ 
+-        state_effect = _normalized_state_effect(statement)
++        state_slots, state_combinator = _state_slots_for_fact(
++            grammar_statement,
++            fact,
++            entities,
++            state_catalog,
++        )
++        if state_slots:
++            retained_slots = [
++                dict(row)
++                for row in _list(fact.get("condition_slots"))
++                if isinstance(row, dict)
++                and _text(row.get("source_kind")) != "SOURCE_DECLARED_STATE_GUARD"
++            ]
++            fact["condition_slots"] = [*retained_slots, *state_slots]
++            state_conditions = [
++                f"{row['field_candidate']} {row['operator_candidate']} "
++                f"{_text(_dict(row.get('value_candidate')).get('normalized_value'))}"
++                for row in state_slots
++            ]
++            fact["conditions"] = _ordered_unique([*_list(fact.get("conditions")), *state_conditions])
++            fact["condition_combinator"] = state_combinator
++            _normalize_condition_frame(fact, _list(fact.get("conditions")), state_combinator)
++            changed.append("condition_slots")
++
++        state_effect = _normalized_state_effect(grammar_statement)
+         if state_effect is not None and _list(fact.get("state_effects")) != [state_effect]:
+             fact["state_effects"] = [state_effect]
+             changed.append("state_effects")
++        elif state_slots and not _list(fact.get("state_effects")):
++            derived_effects = _state_effects_from_slots(state_slots, entities, state_catalog)
++            if derived_effects:
++                fact["state_effects"] = derived_effects
++                changed.append("state_effects")
+ 
+-        time_window = _normalized_time_window(statement)
++        authorization = _explicit_authorization_semantics(
++            statement,
++            grammar_statement,
++            actors=actors,
++            entities=entities,
++            action=action,
++        )
++        if authorization is not None and authorization != _dict(fact.get("authorization_semantics")):
++            fact["authorization_semantics"] = authorization
++            changed.append("authorization_semantics")
++
++        time_window = _normalized_time_window(grammar_statement)
+         if (
+             time_window is not None
+             and _list(fact.get("time_window_constraints")) != [time_window]
+@@ -710,7 +1123,7 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
+             changed.append("time_window_constraints")
+ 
+         postconditions = _normalized_postconditions(
+-            statement,
++            grammar_statement,
+             _list(fact.get("postconditions")),
+         )
+         if postconditions != _list(fact.get("postconditions")):
+@@ -767,6 +1180,9 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
+         "normalized_field_counts": dict(sorted(field_counts.items())),
+         "existing_ledger_reused": True,
+         "existing_source_backed_identity_vocabulary_reused": True,
++        "asset_role_identity_vocabulary_reused": True,
++        "source_grammar_can_declare_unseen_role_identity": True,
++        "qualified_actor_condition_preserved": True,
+         "grammar_fragment_identity_reuse_allowed": False,
+         "governed_operation_binding": True,
+         "qualified_object_conditions_compiled": True,
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_clusters.py b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_clusters.py
+index 5ff11da..4378e5b 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_clusters.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_clusters.py
+@@ -125,28 +125,43 @@ def build_identity_clusters(
+             )
+         ]
+         canonical = _canonical(labels, votes.get(root, []))
+-        if len(matched) > 1:
+-            entity_id, status = stable_id("enterprise_entity_conflicted", labels), "CONFLICTED"
+-            conflicts.append(
+-                {
+-                    "kind": "IDENTITY_REGISTRY_CLUSTER_COLLISION",
+-                    "status": "UNRESOLVED",
+-                    "labels": labels,
+-                    "candidate_entity_ids": unique_text(row.get("entity_id") for row in matched),
+-                    "automatic_resolution_allowed": False,
+-                    "evidence": dedupe_evidence(
+-                        evidence for row in members for evidence in as_list(row.get("evidence"))
+-                    ),
+-                }
+-            )
+-        else:
+-            entity_id = text(as_dict(matched[0] if matched else {}).get("entity_id")) or stable_id(
+-                "enterprise_entity",
+-                members[0].get("source_id"),
+-                members[0].get("source_locator"),
+-                canonical,
+-            )
+-            status = "RESOLVED"
++        # The registry is derived continuity state, never identity fact authority.
++        # When newly accepted source edges connect labels that older runs stored as
++        # separate entities, consolidate those stale registry rows instead of
++        # manufacturing a business conflict from historical implementation state.
++        ranked_matches = sorted(
++            matched,
++            key=lambda row: (
++                -len(
++                    set(labels)
++                    & set(
++                        unique_text(
++                            [
++                                row.get("canonical_label"),
++                                *as_list(row.get("aliases")),
++                                *as_list(row.get("labels")),
++                            ]
++                        )
++                    )
++                ),
++                text(row.get("status")) != "RESOLVED",
++                text(row.get("canonical_label")) not in labels,
++                text(row.get("entity_id")),
++            ),
++        )
++        selected_registry = as_dict(ranked_matches[0] if ranked_matches else {})
++        entity_id = text(selected_registry.get("entity_id")) or stable_id(
++            "enterprise_entity",
++            members[0].get("source_id"),
++            members[0].get("source_locator"),
++            canonical,
++        )
++        status = "RESOLVED"
++        superseded_registry_entity_ids = unique_text(
++            row.get("entity_id")
++            for row in ranked_matches[1:]
++            if text(row.get("entity_id")) != entity_id
++        )
+         cluster = {
+             "schema": IDENTITY_CLUSTER_SCHEMA,
+             "entity_id": entity_id,
+@@ -157,6 +172,12 @@ def build_identity_clusters(
+             "aliases": [label for label in labels if label != canonical],
+             "labels": labels,
+             "status": status,
++            "superseded_registry_entity_ids": superseded_registry_entity_ids,
++            "registry_reconciliation": (
++                "SOURCE_BACKED_CLUSTER_CONSOLIDATION"
++                if superseded_registry_entity_ids
++                else "REUSED_OR_CREATED"
++            ),
+             "evidence": dedupe_evidence(
+                 evidence for row in members for evidence in as_list(row.get("evidence"))
+             ),
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_edges.py b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_edges.py
+index 0fbcbc3..2a4a006 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_edges.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_edges.py
+@@ -80,6 +80,8 @@ def _identity_edge(
+ 
+ def _exact_occurrence_edges(
+     mentions: list[dict[str, Any]],
++    *,
++    authoritative_labels: set[str],
+ ) -> list[dict[str, Any]]:
+     """Close one source occurrence before comparing it with other sources.
+ 
+@@ -129,6 +131,8 @@ def _exact_occurrence_edges(
+                 )
+ 
+         scope_declared = any(key[1:])
++        source_authoritative = key[0] in authoritative_labels
++        accepted_across_occurrences = scope_declared or source_authoritative
+         ordered_representatives = sorted(
+             representatives, key=lambda row: text(row.get("mention_id"))
+         )
+@@ -138,15 +142,19 @@ def _exact_occurrence_edges(
+                     left,
+                     right,
+                     scope=scope,
+-                    accepted=scope_declared,
++                    accepted=accepted_across_occurrences,
+                     authority=(
+                         "EXPLICIT_SCOPE"
+                         if scope_declared
++                        else "SOURCE_DECLARED_LABEL_AUTHORITY"
++                        if source_authoritative
+                         else "CANDIDATE_ONLY_SCOPE_MISSING"
+                     ),
+                     reason_code=(
+                         "EXACT_LABEL_SCOPE_PROVEN"
+                         if scope_declared
++                        else "EXACT_LABEL_SOURCE_AUTHORITY_PROVEN"
++                        if source_authoritative
+                         else "EXACT_LABEL_SCOPE_MISSING"
+                     ),
+                 )
+@@ -185,18 +193,13 @@ def build_identity_edges(
+         right = _pick(mentions, alias, source_id, "alias")
+         if not left or not right or not canonical or not alias or canonical == alias:
+             continue
++        # TERM_ALIAS is business identity evidence only. A technical artifact
++        # sharing either label must not hijack this edge into IMPLEMENTS_ENTITY;
++        # implementation bindings are compiled separately below and require an
++        # explicit business_object/business_entity/object_ref/entity_ref mapping.
+         relation = "SAME_AS"
+         evidence_class = identity_evidence_class(fact)
+-        technical = technical_by_label.get(canonical, []) + technical_by_label.get(alias, [])
+-        if technical:
+-            technical_mention = sorted(
+-                technical, key=lambda row: text(row.get("mention_id"))
+-            )[0]
+-            business_mention = (
+-                right if text(technical_mention.get("raw_label")) == canonical else left
+-            )
+-            left, right, relation = business_mention, technical_mention, "IMPLEMENTS_ENTITY"
+-        accepted = relation != "SAME_AS" or evidence_class in HARD_IDENTITY_CLASSES
++        accepted = evidence_class in HARD_IDENTITY_CLASSES
+         edges.append(
+             {
+                 "schema": IDENTITY_EDGE_SCHEMA,
+@@ -220,7 +223,30 @@ def build_identity_edges(
+             }
+         )
+ 
+-    edges.extend(_exact_occurrence_edges(mentions))
++    hard_identity_labels = {
++        text(value)
++        for fact in facts
++        if isinstance(fact, dict)
++        and text(fact.get("kind")) == "TERM_ALIAS"
++        and text(fact.get("status")) == "ACCEPTED"
++        and identity_evidence_class(fact) in HARD_IDENTITY_CLASSES
++        for value in (fact.get("canonical_term"), fact.get("alias"))
++        if text(value)
++    }
++    authoritative_labels = {
++        text(mention.get("raw_label"))
++        for mention in mentions
++        if text(mention.get("source_kind"))
++        in {"BUSINESS_OBJECT_ASSET", "BUSINESS_OBJECT_ALIAS"}
++        and text(mention.get("raw_label"))
++    }
++    authoritative_labels.update(hard_identity_labels)
++    edges.extend(
++        _exact_occurrence_edges(
++            mentions,
++            authoritative_labels=authoritative_labels,
++        )
++    )
+ 
+     for index, raw in enumerate(as_list(asset.get("data_tables"))):
+         if not isinstance(raw, dict):
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py
+index 5af37ed..c16ac6a 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py
+@@ -102,9 +102,93 @@ def _source_rule_ids(asset: dict[str, Any], behavior: dict[str, Any]) -> set[str
+     return result
+ 
+ 
+-def _authoritative_interface_ids(asset: dict[str, Any], behavior: dict[str, Any]) -> set[str]:
++def _declared_interface_ids(asset: dict[str, Any], behavior: dict[str, Any]) -> set[str]:
++    """Exact interface identities carried by the behavior's source facts.
++
