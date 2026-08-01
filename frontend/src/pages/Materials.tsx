@@ -6,8 +6,10 @@ import {
   listKnowledgeConnectors,
   refreshKnowledgeConnector,
   type ConfigureFeishuConnectorInput,
+  type KnowledgeConnectorActionResult,
   type KnowledgeConnectorRecord,
 } from '../api/knowledge-connectors';
+import { ConnectorCoverage } from '../components/ConnectorCoverage';
 import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
 import './Materials.css';
@@ -61,16 +63,34 @@ function formatTime(value?: string): string {
   return parsed.toLocaleString('zh-CN', { hour12: false });
 }
 
+function syncCompletionMessage(prefix: string, result: KnowledgeConnectorActionResult): string {
+  const materialized = result.materialized_resource_count ?? 0;
+  const unchanged = result.unchanged_resource_count ?? 0;
+  const covered = result.covered_resource_count ?? materialized + unchanged;
+  const unsupported = result.unsupported_resource_count ?? 0;
+  const discovered = result.discovered_resource_count ?? covered + unsupported;
+  if (unsupported > 0) {
+    return `${prefix}。发现 ${discovered} 份，已读取 ${covered} 份，${unsupported} 份资料类型暂不支持。`;
+  }
+  return `${prefix}，已读取 ${covered} 份在线资料。`;
+}
+
 function connectorTone(connector: KnowledgeConnectorRecord): string {
   if (connector.active_sync_epoch_id || connector.auto_sync?.state === 'running') return 'warning';
   if (connector.auto_sync?.maintenance_required_by_user) return 'danger';
   if (connector.auto_sync?.state === 'retrying') return 'warning';
+  if (connector.coverage?.status === 'PARTIAL_UNSUPPORTED') return 'warning';
   if (connector.last_successful_sync_epoch_id) return 'success';
   return 'neutral';
 }
 
 function connectorLabel(connector: KnowledgeConnectorRecord): string {
   if (connector.active_sync_epoch_id || connector.auto_sync?.state === 'running') return '正在自动更新';
+  if (connector.auto_sync?.maintenance_required_by_user) return connector.auto_sync.message || '需要重新授权';
+  if (connector.auto_sync?.state === 'retrying') return connector.auto_sync.message || '系统正在自动恢复';
+  if (connector.coverage?.status === 'PARTIAL_UNSUPPORTED') {
+    return `已读取 ${connector.coverage.covered_count}/${connector.coverage.discovered_count}`;
+  }
   if (connector.auto_sync?.message) return connector.auto_sync.message;
   if (connector.last_successful_sync_epoch_id) return '自动更新正常';
   return '等待首次更新';
@@ -241,11 +261,10 @@ export function Materials() {
         status: 'ACTIVE',
         connection_profile: profilePayload(),
       });
-      const count = result.sync.materialized_resource_count ?? result.sync.success_count ?? 0;
       setFormOpen(false);
       resetForm();
       await refresh();
-      toast.show(`飞书资料已连接，并读取 ${count} 份资料。后续由系统自动更新。`, 'success');
+      toast.show(syncCompletionMessage('飞书资料已连接', result.sync), 'success');
     } catch (error: unknown) {
       await refresh();
       toast.show(error instanceof Error ? error.message : '飞书资料连接未完成，请重试。', 'danger');
@@ -260,9 +279,8 @@ export function Materials() {
     setOperation((current) => ({ ...current, [id]: '正在检查飞书最新资料…' }));
     try {
       const result = await refreshKnowledgeConnector(project, id);
-      const count = result.materialized_resource_count ?? result.success_count ?? 0;
       await refresh();
-      toast.show(`检查完成，共处理 ${count} 份在线资料。`, 'success');
+      toast.show(syncCompletionMessage('检查完成', result), 'success');
     } catch (error: unknown) {
       await refresh();
       toast.show(error instanceof Error ? error.message : '检查未完成，系统仍会自动重试。', 'danger');
@@ -383,6 +401,8 @@ export function Materials() {
                       <strong>{needsHelp ? '需要重新授权' : '系统自动恢复'}</strong>
                     </div>
                   </div>
+
+                  <ConnectorCoverage coverage={connector.coverage} />
 
                   {(operation[connector.connector_instance_id] || running || connector.auto_sync?.state === 'retrying') && (
                     <div className="materials-operation-note">
