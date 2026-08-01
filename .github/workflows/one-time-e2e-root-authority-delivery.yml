@@ -3,7 +3,7 @@ name: One-time E2E root authority delivery
 on:
   push:
     branches:
-      - automation/e2e-root-authority-delivery-20260801
+      - main
     paths:
       - .github/delivery/e2e-root-fix/trigger
 
@@ -136,12 +136,14 @@ jobs:
       - name: Run full root and E2E verification
         run: /tmp/run-root-delivery-tests.sh
 
-      - name: Commit verified source changes
+      - name: Commit verified source changes and remove executor
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'QualiBug Automation'
           git config user.email 'automation@qualibug.local'
+          git rm -r .github/delivery/e2e-root-fix
+          git rm .github/workflows/one-time-e2e-root-authority-delivery.yml
           git add -A
           git commit \
             -m 'fix(execution): unify observer cleanup and graph evidence authority' \
