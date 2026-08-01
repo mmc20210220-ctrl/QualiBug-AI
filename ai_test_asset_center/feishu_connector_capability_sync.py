@@ -6,8 +6,9 @@ discovery, capability classification, export, ingestion, or coverage logic.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from functools import wraps
-from typing import Any
+from typing import Any, Iterator
 
 from . import feishu_connector_capability_sync_core as _core
 from .connector_lifecycle_commit_authority import (
@@ -26,31 +27,44 @@ _FACADE_OWNED_NAMES = {
     "_core",
     "_DEFAULT_REMOTE_LIFECYCLE_AUTHORITY",
     "_FACADE_OWNED_NAMES",
-    "_propagate_overrides",
+    "_temporary_core_overrides",
     "sync_feishu_connector",
+    "contextmanager",
     "wraps",
     "Any",
+    "Iterator",
 }
 
 
-def _propagate_overrides() -> None:
-    """Forward explicit dependency overrides to the single implementation module."""
-    for name, value in list(globals().items()):
-        if name in _FACADE_OWNED_NAMES or name.startswith("__"):
-            continue
-        if name in vars(_core):
+@contextmanager
+def _temporary_core_overrides() -> Iterator[None]:
+    """Forward facade/test overrides for one call and then restore the core exactly."""
+    saved: dict[str, Any] = {}
+    try:
+        for name, value in list(globals().items()):
+            if name in _FACADE_OWNED_NAMES or name.startswith("__"):
+                continue
+            if name in vars(_core):
+                saved.setdefault(name, getattr(_core, name))
+                setattr(_core, name, value)
+        saved.setdefault(
+            "reconcile_connector_remote_lifecycle",
+            getattr(_core, "reconcile_connector_remote_lifecycle"),
+        )
+        _core.reconcile_connector_remote_lifecycle = globals().get(
+            "reconcile_connector_remote_lifecycle",
+            _DEFAULT_REMOTE_LIFECYCLE_AUTHORITY,
+        )
+        yield
+    finally:
+        for name, value in saved.items():
             setattr(_core, name, value)
-    # Production defaults to the atomic authority; tests may explicitly replace this facade field.
-    _core.reconcile_connector_remote_lifecycle = globals().get(
-        "reconcile_connector_remote_lifecycle",
-        _DEFAULT_REMOTE_LIFECYCLE_AUTHORITY,
-    )
 
 
 @wraps(_core.sync_feishu_connector)
 def sync_feishu_connector(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    _propagate_overrides()
-    return _core.sync_feishu_connector(*args, **kwargs)
+    with _temporary_core_overrides():
+        return _core.sync_feishu_connector(*args, **kwargs)
 
 
 __all__ = sorted(
