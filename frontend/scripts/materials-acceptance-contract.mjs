@@ -42,6 +42,7 @@ for (const safetyField of [
   'raw_cursor_returned: false',
   'credential_values_returned: false',
   'filesystem_path_returned: false',
+  'arbitrary_diagnostic_text_returned: false',
 ]) {
   requireText(api, safetyField, 'connector acceptance API safety projection');
 }
