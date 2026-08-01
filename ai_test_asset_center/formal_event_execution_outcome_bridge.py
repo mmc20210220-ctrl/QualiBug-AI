@@ -15,8 +15,7 @@ or restoration fact is invented here.
 from __future__ import annotations
 
 import contextvars
-import functools
-from typing import Any
+from typing import Any, Callable
 
 from .formal_event_surface import ASSERTION_KIND, RISK_FAMILY
 from .process_step_receipt_scope import (
@@ -24,10 +23,6 @@ from .process_step_receipt_scope import (
     replace_with_exact_step_receipt_projections,
 )
 
-_INSTALL_MARKER = "_qualibug_formal_event_execution_outcome_installed"
-_ORIGINAL_MARKER = "_qualibug_original_finalizer_before_event_outcome"
-_ORIGINAL_ORACLE_MARKER = "_qualibug_original_oracle_before_event_scope"
-_ORIGINAL_EQUIVALENCE_MARKER = "_qualibug_original_equivalence_before_event_scope"
 _EVENT_FINALIZER_SCOPE: contextvars.ContextVar[
     tuple[dict[str, Any], str] | None
 ] = contextvars.ContextVar("qualibug_formal_event_finalizer_scope", default=None)
@@ -180,133 +175,122 @@ def _append_oracle_scope(
         )
 
 
-def install_formal_event_execution_outcome_bridge() -> None:
-    """Compose Event-specific projections with exact-scope Finalizer hooks."""
-    from . import experiment_executor as executor
-    from . import experiment_outcome_finalizer as finalizer
-
-    if getattr(executor, _INSTALL_MARKER, False):
-        return
-
-    # The exact-scope facade calls these module-level underlying authorities on
-    # every run. Wrapping its public re-export is ineffective because
-    # ``_install_core_hooks`` restores the core functions before finalization.
-    original_oracle = getattr(
-        finalizer,
-        _ORIGINAL_ORACLE_MARKER,
-        finalizer.evaluate_contract_oracle,
-    )
-    setattr(finalizer, _ORIGINAL_ORACLE_MARKER, original_oracle)
-
-    @functools.wraps(original_oracle)
-    def evaluate_oracle_with_event_scope(
-        *,
-        experiment: dict[str, Any],
-        evidence: dict[str, Any],
-    ) -> dict[str, Any]:
-        verdict = dict(
-            original_oracle(experiment=experiment, evidence=evidence)
+def _evaluate_oracle_with_event_scope(
+    next_call: Callable[..., dict[str, Any]],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    verdict = dict(next_call(*args, **kwargs))
+    experiment = _dict(kwargs.get("experiment"))
+    if not experiment and args and isinstance(args[0], dict):
+        experiment = args[0]
+    evidence = kwargs.get("evidence")
+    step_id = _event_trigger_step_id(experiment)
+    if _is_formal_event(experiment) and step_id and isinstance(evidence, dict):
+        # PROPERTY_HELD and VIOLATION both mean the protocol was completely
+        # evaluated. Assertion truth remains in Oracle status; target_reached
+        # expresses execution completion independently.
+        scoped_verdict = dict(verdict)
+        if _text(verdict.get("status")).upper() in {
+            "PROPERTY_HELD",
+            "VIOLATION",
+        }:
+            scoped_verdict["target_reached"] = True
+        _append_oracle_scope(
+            evidence,
+            verdict=scoped_verdict,
+            step_id=step_id,
         )
-        step_id = _event_trigger_step_id(experiment)
-        if _is_formal_event(experiment) and step_id:
-            # PROPERTY_HELD and VIOLATION both mean the protocol was completely
-            # evaluated. Assertion truth remains in Oracle status; target_reached
-            # expresses execution completion independently.
-            scoped_verdict = dict(verdict)
-            if _text(verdict.get("status")).upper() in {
-                "PROPERTY_HELD",
-                "VIOLATION",
-            }:
-                scoped_verdict["target_reached"] = True
-            _append_oracle_scope(
-                evidence,
-                verdict=scoped_verdict,
-                step_id=step_id,
-            )
-        return verdict
+    return verdict
 
-    finalizer.evaluate_contract_oracle = evaluate_oracle_with_event_scope
 
-    original_equivalence = getattr(
-        finalizer,
-        _ORIGINAL_EQUIVALENCE_MARKER,
-        finalizer.evaluate_cleanup_equivalence,
+def _evaluate_equivalence_with_event_scope(
+    next_call: Callable[..., dict[str, Any]],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    receipt = dict(next_call(*args, **kwargs))
+    scope = _EVENT_FINALIZER_SCOPE.get()
+    if scope is not None:
+        observations, step_id = scope
+        _replace_with_scoped_projections(
+            observations,
+            target_key="cleanup_verification_receipts",
+            receipts=[receipt],
+            step_id=step_id,
+            projection_kind="event_cleanup_verification",
+        )
+    return receipt
+
+
+def _finalize_with_event_outcome(
+    next_call: Callable[[tuple[Any, ...], dict[str, Any]], dict[str, Any]],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    experiment = _dict(kwargs.get("exp") or kwargs.get("experiment"))
+    observations = _dict(kwargs.get("observations"))
+    step_id = _event_trigger_step_id(experiment)
+    is_event = _is_formal_event(experiment) and bool(step_id)
+    token = _EVENT_FINALIZER_SCOPE.set(
+        (observations, step_id) if is_event else None
     )
-    setattr(finalizer, _ORIGINAL_EQUIVALENCE_MARKER, original_equivalence)
-
-    @functools.wraps(original_equivalence)
-    def evaluate_equivalence_with_event_scope(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        receipt = dict(original_equivalence(*args, **kwargs))
-        scope = _EVENT_FINALIZER_SCOPE.get()
-        if scope is not None:
-            observations, step_id = scope
-            _replace_with_scoped_projections(
+    try:
+        if is_event:
+            _scope_existing_cleanup_execution(
                 observations,
-                target_key="cleanup_verification_receipts",
-                receipts=[receipt],
                 step_id=step_id,
-                projection_kind="event_cleanup_verification",
             )
-        return receipt
+        result = dict(next_call(args, kwargs))
+    finally:
+        _EVENT_FINALIZER_SCOPE.reset(token)
 
-    finalizer.evaluate_cleanup_equivalence = (
-        evaluate_equivalence_with_event_scope
-    )
-
-    original = getattr(
-        executor,
-        _ORIGINAL_MARKER,
-        executor.finalize_experiment_execution,
-    )
-    setattr(executor, _ORIGINAL_MARKER, original)
-
-    @functools.wraps(original)
-    def finalize_with_event_outcome(**kwargs: Any) -> dict[str, Any]:
-        experiment = _dict(kwargs.get("exp"))
-        observations = _dict(kwargs.get("observations"))
-        step_id = _event_trigger_step_id(experiment)
-        token = _EVENT_FINALIZER_SCOPE.set(
-            (observations, step_id)
-            if _is_formal_event(experiment) and step_id
-            else None
-        )
-        try:
-            if _is_formal_event(experiment) and step_id:
-                _scope_existing_cleanup_execution(
-                    observations,
-                    step_id=step_id,
-                )
-            result = dict(original(**kwargs))
-        finally:
-            _EVENT_FINALIZER_SCOPE.reset(token)
-
-        verdict = _dict(result.get("oracle_verdict"))
-        if not (
-            _is_formal_event(experiment)
-            and _text(verdict.get("status")) == "INDETERMINATE"
-            and _http_executed(result)
-        ):
-            return result
-        reason = _indeterminate_reason(result)
-        result.update({
+    verdict = _dict(result.get("oracle_verdict"))
+    if not (
+        is_event
+        and _text(verdict.get("status")) == "INDETERMINATE"
+        and _http_executed(result)
+    ):
+        return result
+    reason = _indeterminate_reason(result)
+    result.update(
+        {
             "status": "EXECUTED",
             "reason_code": reason,
             "detail": reason,
             "finding": None,
             "finding_created": False,
             "finding_filter_reason": "oracle_indeterminate",
-        })
-        execution_receipt = dict(_dict(result.get("execution_receipt")))
-        execution_receipt.update({
+        }
+    )
+    execution_receipt = dict(_dict(result.get("execution_receipt")))
+    execution_receipt.update(
+        {
             "status": "EXECUTED",
             "reason_code": reason,
             "detail": reason,
-        })
-        result["execution_receipt"] = execution_receipt
-        return result
+        }
+    )
+    result["execution_receipt"] = execution_receipt
+    return result
 
-    executor.finalize_experiment_execution = finalize_with_event_outcome
-    setattr(executor, _INSTALL_MARKER, True)
+
+def install_formal_event_execution_outcome_bridge() -> None:
+    """Register Event projections on the canonical Finalizer composition points."""
+    from . import experiment_outcome_finalizer as finalizer
+
+    finalizer.register_contract_oracle_hook(
+        "formal_event_oracle_scope",
+        _evaluate_oracle_with_event_scope,
+    )
+    finalizer.register_cleanup_equivalence_hook(
+        "formal_event_cleanup_scope",
+        _evaluate_equivalence_with_event_scope,
+    )
+    finalizer.register_finalizer_hook(
+        "formal_event_execution_outcome",
+        _finalize_with_event_outcome,
+    )
 
 
 __all__ = ["install_formal_event_execution_outcome_bridge"]

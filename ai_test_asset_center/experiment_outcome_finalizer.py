@@ -7,7 +7,7 @@ finding occurrences while preserving the aggregate Oracle receipt for audit.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable
 
 from . import observer_contracts as _outcome_observers  # noqa: F401
 from . import assertion_dsl as _outcome_assertions  # noqa: F401
@@ -21,6 +21,147 @@ _original_finalize_experiment_execution = _scope.finalize_experiment_execution
 observe_experiment_requirements = _scope._original_observe_experiment_requirements
 evaluate_contract_oracle = _outcome_oracles.evaluate_contract_oracle
 evaluate_cleanup_equivalence = _scope._original_evaluate_cleanup_equivalence
+
+FinalizerContinuation = Callable[
+    [tuple[Any, ...], dict[str, Any]], dict[str, Any]
+]
+FinalizerHook = Callable[
+    [FinalizerContinuation, tuple[Any, ...], dict[str, Any]], dict[str, Any]
+]
+EvaluatorContinuation = Callable[..., dict[str, Any]]
+EvaluatorHook = Callable[
+    [EvaluatorContinuation, tuple[Any, ...], dict[str, Any]], dict[str, Any]
+]
+
+_FINALIZER_HOOKS: dict[str, FinalizerHook] = {}
+_CONTRACT_ORACLE_HOOKS: dict[str, EvaluatorHook] = {}
+_CLEANUP_EQUIVALENCE_HOOKS: dict[str, EvaluatorHook] = {}
+
+
+def _register_hook(
+    registry: dict[str, Callable[..., Any]],
+    name: str,
+    hook: Callable[..., Any] | None,
+    *,
+    registry_name: str,
+) -> None:
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError(f"{registry_name} name must not be empty")
+    if hook is None:
+        registry.pop(normalized_name, None)
+        return
+    if not callable(hook):
+        raise TypeError(f"{registry_name} hook must be callable")
+    existing = registry.get(normalized_name)
+    if existing is not None and existing is not hook:
+        raise RuntimeError(
+            f"{registry_name} hook already registered: {normalized_name}"
+        )
+    registry[normalized_name] = hook
+
+
+def register_finalizer_hook(name: str, hook: FinalizerHook | None) -> None:
+    """Register one explicit around-finalization hook on the canonical Finalizer.
+
+    A hook receives ``(next_call, args, kwargs)`` and must return the result of
+    that call, optionally enriched with evidence that it actually observed.
+    Hook registration is the only supported bridge-composition mechanism; no
+    bridge may replace the public Finalizer or Executor symbol.
+    """
+    _register_hook(
+        _FINALIZER_HOOKS,
+        name,
+        hook,
+        registry_name="finalizer",
+    )
+
+
+def register_contract_oracle_hook(name: str, hook: EvaluatorHook | None) -> None:
+    """Register an explicit Contract Oracle composition hook."""
+    _register_hook(
+        _CONTRACT_ORACLE_HOOKS,
+        name,
+        hook,
+        registry_name="contract_oracle",
+    )
+
+
+def register_cleanup_equivalence_hook(
+    name: str, hook: EvaluatorHook | None
+) -> None:
+    """Register an explicit cleanup-equivalence composition hook."""
+    _register_hook(
+        _CLEANUP_EQUIVALENCE_HOOKS,
+        name,
+        hook,
+        registry_name="cleanup_equivalence",
+    )
+
+
+def finalizer_hook_names() -> tuple[str, ...]:
+    return tuple(sorted(_FINALIZER_HOOKS))
+
+
+def contract_oracle_hook_names() -> tuple[str, ...]:
+    return tuple(sorted(_CONTRACT_ORACLE_HOOKS))
+
+
+def cleanup_equivalence_hook_names() -> tuple[str, ...]:
+    return tuple(sorted(_CLEANUP_EQUIVALENCE_HOOKS))
+
+
+def _compose_evaluator_hooks(
+    base: EvaluatorContinuation,
+    registry: dict[str, EvaluatorHook],
+) -> EvaluatorContinuation:
+    continuation = base
+    for name in reversed(sorted(registry)):
+        hook = registry[name]
+        next_call = continuation
+
+        def invoke(
+            *args: Any,
+            _hook: EvaluatorHook = hook,
+            _next_call: EvaluatorContinuation = next_call,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            result = _hook(_next_call, tuple(args), dict(kwargs))
+            if not isinstance(result, dict):
+                raise TypeError(
+                    f"evaluator hook returned non-dict result: {type(result)!r}"
+                )
+            return result
+
+        continuation = invoke
+    return continuation
+
+
+def _run_finalizer_hooks(
+    base: FinalizerContinuation,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    continuation = base
+    for name in reversed(sorted(_FINALIZER_HOOKS)):
+        hook = _FINALIZER_HOOKS[name]
+        next_call = continuation
+
+        def invoke(
+            call_args: tuple[Any, ...],
+            call_kwargs: dict[str, Any],
+            _hook: FinalizerHook = hook,
+            _next_call: FinalizerContinuation = next_call,
+        ) -> dict[str, Any]:
+            result = _hook(_next_call, call_args, call_kwargs)
+            if not isinstance(result, dict):
+                raise TypeError(
+                    f"finalizer hook returned non-dict result: {type(result)!r}"
+                )
+            return result
+
+        continuation = invoke
+    return continuation(args, kwargs)
 
 
 def __getattr__(name: str) -> Any:
@@ -269,15 +410,30 @@ def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
     _scope._original_observe_experiment_requirements = (
         observe_experiment_requirements
     )
-    _scope._original_evaluate_contract_oracle = evaluate_contract_oracle
+    _scope._original_evaluate_contract_oracle = _compose_evaluator_hooks(
+        evaluate_contract_oracle,
+        _CONTRACT_ORACLE_HOOKS,
+    )
     _scope._original_evaluate_cleanup_equivalence = (
-        evaluate_cleanup_equivalence
+        _compose_evaluator_hooks(
+            evaluate_cleanup_equivalence,
+            _CLEANUP_EQUIVALENCE_HOOKS,
+        )
     )
     call_kwargs = dict(kwargs)
     if isinstance(call_kwargs.get("exp"), dict):
         call_kwargs["exp"] = _normalize_experiment_outcome_identity(call_kwargs["exp"])
-    result = _original_finalize_experiment_execution(*args, **call_kwargs)
-    return _fanout_finding_outcomes(_dict(result))
+
+    def base_finalize(
+        call_args: tuple[Any, ...], call_kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
+        result = _original_finalize_experiment_execution(
+            *call_args,
+            **call_kwargs,
+        )
+        return _fanout_finding_outcomes(_dict(result))
+
+    return _run_finalizer_hooks(base_finalize, tuple(args), call_kwargs)
 
 
 __all__ = sorted(

@@ -1,10 +1,8 @@
 """Attach operation-causality proof to causal database delta candidates."""
 from __future__ import annotations
 
-import functools
-import sys
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable
 
 from .database_relation_delta_causality_projection import ASSERTION_KIND
 from .database_relation_delta_finding_bridge import (
@@ -12,7 +10,6 @@ from .database_relation_delta_finding_bridge import (
 )
 
 FINDING_EVIDENCE_SCHEMA = "qualibug.database-relation-causal-delta-finding-evidence.v1"
-_INSTALL_MARKER = "__qualibug_database_relation_causal_delta_finding_bridge_v1__"
 _FORBIDDEN_KEYS = frozenset(
     {
         "raw_sql",
@@ -312,39 +309,36 @@ def enrich_database_relation_causal_delta_finding(
     return output
 
 
-def install_database_relation_causal_delta_finding_bridge() -> None:
-    try:
-        from . import experiment_outcome_finalizer as finalizer
-    except Exception:
-        return
-    original = getattr(finalizer, "finalize_experiment_execution", None)
-    if not callable(original) or getattr(original, _INSTALL_MARKER, False):
-        return
-
-    @functools.wraps(original)
-    def wrapped(*args: Any, **kwargs: Any) -> Any:
-        result = original(*args, **kwargs)
-        experiment = kwargs.get("exp") or kwargs.get("experiment")
-        if not isinstance(experiment, dict):
-            experiment = next(
-                (
-                    arg
-                    for arg in args
-                    if isinstance(arg, dict) and arg.get("experiment_id")
-                ),
-                {},
-            )
-        return enrich_database_relation_causal_delta_finding(
-            result,
-            experiment=_dict(experiment),
+def _database_relation_causal_delta_finalizer_hook(
+    next_call: Callable[[tuple[Any, ...], dict[str, Any]], dict[str, Any]],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    result = next_call(args, kwargs)
+    experiment = kwargs.get("exp") or kwargs.get("experiment")
+    if not isinstance(experiment, dict):
+        experiment = next(
+            (
+                arg
+                for arg in args
+                if isinstance(arg, dict) and arg.get("experiment_id")
+            ),
+            {},
         )
+    return enrich_database_relation_causal_delta_finding(
+        result,
+        experiment=_dict(experiment),
+    )
 
-    setattr(wrapped, _INSTALL_MARKER, True)
-    setattr(wrapped, "__qualibug_original__", original)
-    finalizer.finalize_experiment_execution = wrapped
-    executor = sys.modules.get(f"{__package__}.experiment_executor")
-    if executor is not None:
-        executor.finalize_experiment_execution = wrapped
+
+def install_database_relation_causal_delta_finding_bridge() -> None:
+    """Register causal relation-delta evidence on the canonical Finalizer."""
+    from . import experiment_outcome_finalizer as finalizer
+
+    finalizer.register_finalizer_hook(
+        "database_relation_causal_delta_finding",
+        _database_relation_causal_delta_finalizer_hook,
+    )
 
 
 __all__ = [

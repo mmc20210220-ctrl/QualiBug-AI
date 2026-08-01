@@ -279,11 +279,15 @@ def test_existing_runtime_preflight_and_finalizer_are_extended_not_replaced() ->
         "__qualibug_runtime_materialization_preflight_v1__",
         False,
     ) is True
-    assert getattr(
-        experiment_outcome_finalizer.finalize_experiment_execution,
-        "__qualibug_runtime_materialization_finalizer_v1__",
-        False,
-    ) is True
+    from ai_test_asset_center import experiment_executor
+
+    assert (
+        experiment_executor.finalize_experiment_execution
+        is experiment_outcome_finalizer.finalize_experiment_execution
+    )
+    assert "runtime_materialization_lineage" in (
+        experiment_outcome_finalizer.finalizer_hook_names()
+    )
 
 
 def test_execution_and_finding_receipts_keep_one_materialization_lineage() -> None:

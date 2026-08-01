@@ -28,7 +28,6 @@ _CAPTURED_ASSET: ContextVar[dict[str, Any] | None] = ContextVar(
 )
 _CAPTURE_INSTALL_MARKER = "__qualibug_runtime_materialization_capture_v1__"
 _PREFLIGHT_INSTALL_MARKER = "__qualibug_runtime_materialization_preflight_v1__"
-_FINALIZER_INSTALL_MARKER = "__qualibug_runtime_materialization_finalizer_v1__"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -650,29 +649,35 @@ def attach_materialization_lineage_to_result(
     return output
 
 
+def _materialization_finalizer_hook(
+    next_call: Callable[[tuple[Any, ...], dict[str, Any]], dict[str, Any]],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    result = next_call(args, kwargs)
+    experiment = kwargs.get("exp") or kwargs.get("experiment")
+    if not isinstance(experiment, dict):
+        experiment = next(
+            (
+                arg
+                for arg in args
+                if isinstance(arg, dict) and arg.get("experiment_id")
+            ),
+            {},
+        )
+    return attach_materialization_lineage_to_result(
+        result,
+        experiment=_dict(experiment),
+    )
+
+
 def _install_finalizer_receipt() -> None:
-    try:
-        from . import experiment_outcome_finalizer as finalizer
-    except Exception:
-        return
-    original = getattr(finalizer, "finalize_experiment_execution", None)
-    if not callable(original) or getattr(original, _FINALIZER_INSTALL_MARKER, False):
-        return
+    from . import experiment_outcome_finalizer as finalizer
 
-    @functools.wraps(original)
-    def wrapped(*args: Any, **kwargs: Any) -> Any:
-        result = original(*args, **kwargs)
-        experiment = kwargs.get("exp") or kwargs.get("experiment")
-        if not isinstance(experiment, dict):
-            experiment = next((arg for arg in args if isinstance(arg, dict) and arg.get("experiment_id")), {})
-        return attach_materialization_lineage_to_result(result, experiment=_dict(experiment))
-
-    setattr(wrapped, _FINALIZER_INSTALL_MARKER, True)
-    setattr(wrapped, "__qualibug_original__", original)
-    finalizer.finalize_experiment_execution = wrapped
-    executor = sys.modules.get(f"{__package__}.experiment_executor")
-    if executor is not None:
-        executor.finalize_experiment_execution = wrapped
+    finalizer.register_finalizer_hook(
+        "runtime_materialization_lineage",
+        _materialization_finalizer_hook,
+    )
 
 
 def install_runtime_materialization_execution_bridge() -> None:
