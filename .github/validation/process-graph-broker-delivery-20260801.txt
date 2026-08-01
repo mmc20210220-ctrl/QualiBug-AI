@@ -1,1 +1,2 @@
 validation-only: process graph broker delivery semantics
+retry: quality gate manifest repaired
