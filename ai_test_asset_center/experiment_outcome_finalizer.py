@@ -1,7 +1,7 @@
 """Canonical outcome-aware experiment finalization authority.
 
-Exact process-step scoping remains in the private compatibility module. One execution may
-prove several independent outcome violations; this facade fans them out into deterministic
+Exact process-step scoping remains in the existing compatibility facade. One execution may
+prove several independent outcome violations; this module fans them out into deterministic
 finding occurrences while preserving the aggregate Oracle receipt for audit.
 """
 from __future__ import annotations
@@ -16,6 +16,8 @@ from . import _experiment_outcome_finalizer_scope_mechanics as _scope
 from ._experiment_outcome_finalizer_scope_mechanics import *  # noqa: F401,F403
 
 _original_finalize_experiment_execution = _scope.finalize_experiment_execution
+# Public injection point retained for existing tests and runtime adapters.
+evaluate_contract_oracle = _outcome_oracles.evaluate_contract_oracle
 
 
 def __getattr__(name: str) -> Any:
@@ -48,9 +50,8 @@ def _finding_for_assertion(
     title = _text(finding.get("title"))
     suffix = title.split(":", 1)[1].strip() if ":" in title else title
     reason = _text(assertion.get("error") or assertion.get("reason_code"))
-    description = (
-        reason
-        or f"mandatory outcome {outcome_ref} violated typed assertion {kind}"
+    description = reason or (
+        f"mandatory outcome {outcome_ref} violated typed assertion {kind}"
     )
     finding.update(
         {
@@ -211,7 +212,6 @@ def _fanout_finding_outcomes(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_experiment_outcome_identity(exp: dict[str, Any]) -> dict[str, Any]:
-    """Activate canonical mode from explicit assertion/observer outcome references."""
     governed = dict(_dict(exp))
     assertions = [
         dict(row) for row in _list(governed.get("assertions")) if isinstance(row, dict)
@@ -261,7 +261,9 @@ def _normalize_experiment_outcome_identity(exp: dict[str, Any]) -> dict[str, Any
 
 
 def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    _scope._core.evaluate_contract_oracle = _outcome_oracles.evaluate_contract_oracle
+    # Preserve the existing public injection point instead of bypassing test/runtime
+    # adapters with a hard-coded module function.
+    _scope._original_evaluate_contract_oracle = evaluate_contract_oracle
     call_kwargs = dict(kwargs)
     if isinstance(call_kwargs.get("exp"), dict):
         call_kwargs["exp"] = _normalize_experiment_outcome_identity(call_kwargs["exp"])
