@@ -105,6 +105,85 @@ def _public_connector_instance(value: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _coverage_projection(
+    project: str,
+    connector: str,
+    instance: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    epoch = _text(instance.get("last_successful_sync_epoch_id"), 160)
+    if not epoch:
+        return {
+            "status": "NOT_AVAILABLE",
+            "complete": False,
+            "discovered_count": 0,
+            "covered_count": 0,
+            "unsupported_count": 0,
+            "coverage_ratio": 0.0,
+            "unsupported_resources": [],
+            "source_content_returned": False,
+            "customer_material_mutation_executed": False,
+        }
+    try:
+        run = load_connector_sync_run(
+            project,
+            connector_instance_id=connector,
+            sync_epoch_id=epoch,
+            root=root,
+        )
+    except (KeyError, ConnectorSyncError):
+        return {
+            "status": "UNKNOWN",
+            "complete": False,
+            "discovered_count": 0,
+            "covered_count": 0,
+            "unsupported_count": 0,
+            "coverage_ratio": 0.0,
+            "unsupported_resources": [],
+            "source_content_returned": False,
+            "customer_material_mutation_executed": False,
+        }
+
+    materialized_count = int(run.get("materialized_item_count") or 0)
+    unchanged_count = int(run.get("unchanged_item_count") or 0)
+    unsupported_count = int(run.get("coverage_observation_count") or 0)
+    covered_count = materialized_count + unchanged_count
+    discovered_count = covered_count + unsupported_count
+    ratio = covered_count / discovered_count if discovered_count else 1.0
+    unsupported_resources = [
+        {
+            "remote_resource_id": _text(row.get("remote_resource_id"), 1000),
+            "resource_kind": _text(row.get("resource_kind"), 160),
+            "remote_object_type": _text(row.get("remote_object_type"), 80),
+            "display_title": _text(row.get("display_title"), 300),
+            "reason_code": _text(row.get("reason_code"), 160),
+            "retry_trigger": _text(row.get("retry_trigger"), 160),
+            "content_materialized": False,
+            "source_occurrence_created": False,
+            "customer_source_modified": False,
+        }
+        for row in (run.get("coverage_observations") or [])[:100]
+        if isinstance(row, dict)
+    ]
+    status = _text(run.get("knowledge_coverage_status"), 80) or (
+        "PARTIAL_UNSUPPORTED" if unsupported_count else "COMPLETE"
+    )
+    return {
+        "status": status,
+        "complete": status == "COMPLETE",
+        "discovered_count": discovered_count,
+        "covered_count": covered_count,
+        "unsupported_count": unsupported_count,
+        "coverage_ratio": ratio,
+        "unsupported_resources": unsupported_resources,
+        "unsupported_resources_truncated": unsupported_count > len(unsupported_resources),
+        "last_sync_epoch_id": epoch,
+        "last_completed_at_utc": _text(run.get("completed_at_utc"), 80),
+        "source_content_returned": False,
+        "customer_material_mutation_executed": False,
+    }
+
+
 def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
     instances = list_connector_instances(
         project,
@@ -132,6 +211,12 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             project,
             connector,
         )
+        row["coverage"] = _coverage_projection(
+            project,
+            connector,
+            raw,
+            root,
+        )
         rows.append(row)
     return {
         "schema": "qualibug.knowledge-connector-inventory.v1",
@@ -151,6 +236,14 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             "automatic_refresh_enabled": any(
                 bool(row.get("auto_sync", {}).get("enabled")) for row in rows
             ),
+            "partial_coverage_connector_count": sum(
+                row.get("coverage", {}).get("status") == "PARTIAL_UNSUPPORTED"
+                for row in rows
+            ),
+            "unsupported_resource_count": sum(
+                int(row.get("coverage", {}).get("unsupported_count") or 0)
+                for row in rows
+            ),
         },
         "governance": {
             **dict(instances.get("governance") or {}),
@@ -159,6 +252,9 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             "fencing_tokens_returned_to_frontend": False,
             "checkpoint_fingerprints_returned_to_frontend": False,
             "automatic_refresh_uses_existing_sync_authority": True,
+            "coverage_projection_uses_persisted_sync_receipt": True,
+            "coverage_projection_returns_source_content": False,
+            "customer_material_mutation_executed": False,
             "second_connector_registry_created": False,
             "second_fencing_registry_created": False,
         },
@@ -477,6 +573,7 @@ __all__ = [
     "KnowledgeConnectorHandlersMixin",
     "_connector_inventory",
     "_connector_route",
+    "_coverage_projection",
     "_public_connector_instance",
     "_sanitize_sync_response",
 ]
