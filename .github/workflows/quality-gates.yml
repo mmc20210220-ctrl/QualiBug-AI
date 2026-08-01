@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   role-permission-dispatch:
-    if: github.head_ref == 'automation/role-permission-root-cause-delivery-20260801'
+    if: github.head_ref == 'automation/role-permission-root-cause-delivery-20260801-v2'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
