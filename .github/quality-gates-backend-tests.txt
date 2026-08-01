@@ -109,3 +109,4 @@ tests/test_relationship_authority_facade.py
 tests/test_implementation_binding_relationship_authority.py
 tests/test_semantic_operation_binding_mainline.py
 tests/test_semantic_operation_relationship_authority.py
+tests/test_agent_semantic_existing_relationship_authority.py
