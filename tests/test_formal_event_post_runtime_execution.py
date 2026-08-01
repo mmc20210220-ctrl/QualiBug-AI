@@ -407,7 +407,19 @@ def test_compiled_post_event_runs_before_cleanup_and_restores_environment(
 
     bundle = result["execution_receipt_bundle"]
     assert bundle["fixture_id"] == "NOT_APPLICABLE"
-    assert bundle["fixture_provenance_receipt_ids"] == []
+    assert len(bundle["fixture_provenance_receipt_ids"]) == 1
+    fixture_id = bundle["fixture_provenance_receipt_ids"][0]
+    fixture_envelope = next(
+        row for row in bundle["receipts"] if row["receipt_id"] == fixture_id
+    )
+    assert fixture_envelope["receipt_type"] == (
+        "qualibug.fixture-materialization-receipt.v1"
+    )
+    fixture_payload = fixture_envelope["payload"]
+    assert fixture_payload["kind"] == "flow_data_materialization"
+    assert fixture_payload["required_target_count"] == 0
+    assert fixture_payload["materialized_target_count"] == 0
+    assert fixture_payload["missing_targets"] == []
     assert bundle["complete"] is True
     assert bundle["validation_errors"] == []
     process_audit = bundle["process_step_audit"]

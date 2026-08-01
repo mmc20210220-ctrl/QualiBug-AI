@@ -15,12 +15,14 @@ or restoration fact is invented here.
 from __future__ import annotations
 
 import contextvars
-import copy
 import functools
-import hashlib
 from typing import Any
 
 from .formal_event_surface import ASSERTION_KIND, RISK_FAMILY
+from .process_step_receipt_scope import (
+    build_exact_step_receipt_projection,
+    replace_with_exact_step_receipt_projections,
+)
 
 _INSTALL_MARKER = "_qualibug_formal_event_execution_outcome_installed"
 _ORIGINAL_MARKER = "_qualibug_original_finalizer_before_event_outcome"
@@ -99,61 +101,17 @@ def _receipt_id(receipt: dict[str, Any]) -> str:
     )
 
 
-def _projection_receipt_id(
-    receipt: dict[str, Any],
-    *,
-    step_id: str,
-    projection_kind: str,
-) -> tuple[str, str]:
-    """Return (id, origin) from a source id or a sealed source fingerprint."""
-    source_id = _receipt_id(receipt)
-    if source_id:
-        return source_id, "source_receipt_id"
-    fingerprint = _text(_dict(receipt).get("fingerprint"))
-    if not fingerprint or not _text(step_id) or not _text(projection_kind):
-        return "", ""
-    material = "|".join(
-        [
-            _text(projection_kind),
-            _text(step_id),
-            _text(_dict(receipt).get("schema_version")),
-            fingerprint,
-        ]
-    )
-    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
-    return f"event_scope_{digest}", "source_fingerprint"
-
-
 def _scoped_projection(
     receipt: dict[str, Any],
     *,
     step_id: str,
     projection_kind: str,
 ) -> dict[str, Any]:
-    """Repeat exact step scope around one immutable source receipt."""
-    row = copy.deepcopy(_dict(receipt))
-    rid, id_origin = _projection_receipt_id(
-        row,
+    return build_exact_step_receipt_projection(
+        receipt,
         step_id=step_id,
         projection_kind=projection_kind,
     )
-    if not rid or not _text(step_id):
-        return {}
-    return {
-        "receipt_id": rid,
-        "step_id": _text(step_id),
-        "scope_projection_kind": _text(projection_kind),
-        "scope_receipt_id_origin": id_origin,
-        "source_receipt_id": _receipt_id(row),
-        "source_fingerprint": _text(row.get("fingerprint")),
-        "source_receipt": row,
-        "source_schema_version": _text(row.get("schema_version")),
-        "source_status": _text(
-            row.get("status")
-            or row.get("equivalence_status")
-            or row.get("final_status")
-        ),
-    }
 
 
 def _replace_with_scoped_projections(
@@ -164,21 +122,13 @@ def _replace_with_scoped_projections(
     step_id: str,
     projection_kind: str,
 ) -> None:
-    projections: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for receipt in receipts:
-        projection = _scoped_projection(
-            receipt,
-            step_id=step_id,
-            projection_kind=projection_kind,
-        )
-        rid = _receipt_id(projection)
-        if not rid or rid in seen:
-            continue
-        seen.add(rid)
-        projections.append(projection)
-    if projections:
-        observations[target_key] = projections
+    replace_with_exact_step_receipt_projections(
+        observations,
+        target_key=target_key,
+        receipts=receipts,
+        step_id=step_id,
+        projection_kind=projection_kind,
+    )
 
 
 def _scope_existing_cleanup_execution(
@@ -244,7 +194,7 @@ def install_formal_event_execution_outcome_bridge() -> None:
     original_oracle = getattr(
         finalizer,
         _ORIGINAL_ORACLE_MARKER,
-        finalizer._original_evaluate_contract_oracle,
+        finalizer.evaluate_contract_oracle,
     )
     setattr(finalizer, _ORIGINAL_ORACLE_MARKER, original_oracle)
 
@@ -259,21 +209,28 @@ def install_formal_event_execution_outcome_bridge() -> None:
         )
         step_id = _event_trigger_step_id(experiment)
         if _is_formal_event(experiment) and step_id:
+            # PROPERTY_HELD and VIOLATION both mean the protocol was completely
+            # evaluated. Assertion truth remains in Oracle status; target_reached
+            # expresses execution completion independently.
+            scoped_verdict = dict(verdict)
+            if _text(verdict.get("status")).upper() in {
+                "PROPERTY_HELD",
+                "VIOLATION",
+            }:
+                scoped_verdict["target_reached"] = True
             _append_oracle_scope(
                 evidence,
-                verdict=verdict,
+                verdict=scoped_verdict,
                 step_id=step_id,
             )
         return verdict
 
-    finalizer._original_evaluate_contract_oracle = (
-        evaluate_oracle_with_event_scope
-    )
+    finalizer.evaluate_contract_oracle = evaluate_oracle_with_event_scope
 
     original_equivalence = getattr(
         finalizer,
         _ORIGINAL_EQUIVALENCE_MARKER,
-        finalizer._original_evaluate_cleanup_equivalence,
+        finalizer.evaluate_cleanup_equivalence,
     )
     setattr(finalizer, _ORIGINAL_EQUIVALENCE_MARKER, original_equivalence)
 
@@ -292,7 +249,7 @@ def install_formal_event_execution_outcome_bridge() -> None:
             )
         return receipt
 
-    finalizer._original_evaluate_cleanup_equivalence = (
+    finalizer.evaluate_cleanup_equivalence = (
         evaluate_equivalence_with_event_scope
     )
 

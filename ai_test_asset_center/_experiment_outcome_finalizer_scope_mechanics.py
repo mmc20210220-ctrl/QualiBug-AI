@@ -22,6 +22,7 @@ from typing import Any
 from . import experiment_outcome_finalizer_core as _core
 from .observer_contracts_base import build_observer_receipt
 from .process_step_receipt_scope import (
+    build_exact_step_receipt_projection,
     extract_receipt_step_scope,
     receipt_id as _scope_receipt_id,
     synchronize_scoped_receipts_from_observations,
@@ -78,15 +79,15 @@ def _status_code(value: Any) -> int:
 
 
 def _merge_receipt_rows(*groups: Any) -> list[dict[str, Any]]:
-    """Merge existing receipts without inventing identity or evidence.
+    """Merge immutable receipts without collapsing distinct step scopes.
 
-    Deduplication uses both receipt_id and observer_id. When two receipts
-    share the same observer_id, the first one wins (generated receipts come
-    first and are authoritative over step-level observation receipts).
+    One Observer contract may emit one exact receipt per process step. Receipt
+    identity remains primary; Observer duplicates are collapsed only when they
+    declare the same exact step (or are both unscoped). When exact receipts
+    exist, an unscoped aggregate for that Observer is diagnostic only.
     """
-    merged: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
-    seen_observers: set[str] = set()
     for group in groups:
         rows = [group] if isinstance(group, dict) else _list(group)
         for raw in rows:
@@ -94,19 +95,35 @@ def _merge_receipt_rows(*groups: Any) -> list[dict[str, Any]]:
                 continue
             row = dict(raw)
             receipt_id = _scope_receipt_id(row)
-            key = receipt_id or f"anonymous:{len(merged)}"
+            key = receipt_id or f"anonymous:{len(candidates)}"
             if key in seen_ids:
                 continue
-            # Deduplicate by observer_id: the contract oracle requires exactly
-            # one receipt per observer_id. Generated receipts (first group) are
-            # authoritative; step-level observation receipts are supplementary.
-            observer_id = _text(row.get("observer_id"))
-            if observer_id and observer_id in seen_observers:
-                continue
             seen_ids.add(key)
-            if observer_id:
-                seen_observers.add(observer_id)
+            candidates.append(row)
+
+    exact_observers = {
+        _text(row.get("observer_id"))
+        for row in candidates
+        if _text(row.get("observer_id"))
+        and extract_receipt_step_scope(row).get("status") == "EXACT"
+    }
+    merged: list[dict[str, Any]] = []
+    seen_observer_scopes: set[tuple[str, str]] = set()
+    for row in candidates:
+        observer_id = _text(row.get("observer_id"))
+        if not observer_id:
             merged.append(row)
+            continue
+        scope = extract_receipt_step_scope(row)
+        exact = scope.get("status") == "EXACT"
+        step_id = _text(scope.get("step_id")) if exact else ""
+        if not exact and observer_id in exact_observers:
+            continue
+        observer_scope = (observer_id, step_id or "__unscoped__")
+        if observer_scope in seen_observer_scopes:
+            continue
+        seen_observer_scopes.add(observer_scope)
+        merged.append(row)
     return merged
 
 
@@ -353,11 +370,50 @@ def _evaluate_contract_oracle_exact(
     return verdict
 
 
+def _single_write_cleanup_step_id(
+    proof: dict[str, Any],
+    semantic_view: ProcessStepSemanticView,
+) -> str:
+    """Resolve the unique cleanup owner from proof and the live ledger."""
+    ledger = semantic_view.source_ledger
+    primary_operation_ref = _text(
+        _dict(_dict(proof).get("primary_write")).get("operation_ref")
+    )
+    rows = [row for row in ledger.all_rows() if isinstance(row, dict)]
+    if primary_operation_ref:
+        matches = [
+            _text(row.get("step_id"))
+            for row in rows
+            if _text(row.get("operation_ref")) == primary_operation_ref
+            and _text(row.get("step_id"))
+        ]
+        unique = list(dict.fromkeys(matches))
+        if len(unique) == 1:
+            return unique[0]
+    successful = [
+        _text(value)
+        for value in (
+            ledger.successful_write_step_ids()
+            if hasattr(ledger, "successful_write_step_ids")
+            else []
+        )
+        if _text(value)
+    ]
+    if len(successful) == 1:
+        return successful[0]
+    required = [
+        _text(value)
+        for value in list(getattr(ledger, "required_step_ids", []) or [])
+        if _text(value)
+    ]
+    return required[0] if len(required) == 1 else ""
+
+
 def _evaluate_cleanup_equivalence_exact(
     *args: Any,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Bind graph step verification before the core seals its receipt bundle."""
+    """Publish cleanup verification once, then bind through scope authority."""
     receipt = _original_evaluate_cleanup_equivalence(*args, **kwargs)
     context = _active_finalizer_scope.get()
     if context is None:
@@ -367,83 +423,62 @@ def _evaluate_cleanup_equivalence_exact(
     step_receipts = _dict(
         _dict(receipt).get("step_equivalence_receipts_by_id")
     )
-    if not step_receipts:
-        return receipt
+    aggregate_id = ""
+    if step_receipts:
+        exact_rows = [
+            dict(row)
+            for _, row in sorted(step_receipts.items())
+            if isinstance(row, dict)
+        ]
+        formal_rows = [dict(receipt), *exact_rows]
+        aggregate_id = _scope_receipt_id(receipt)
+    else:
+        proof = _dict(kwargs.get("proof"))
+        if not proof and args and isinstance(args[0], dict):
+            proof = _dict(args[0])
+        step_id = _single_write_cleanup_step_id(proof, semantic_view)
+        projection = build_exact_step_receipt_projection(
+            _dict(receipt),
+            step_id=step_id,
+            projection_kind="cleanup_equivalence",
+        )
+        exact_rows = [projection] if projection else []
+        formal_rows = list(exact_rows)
 
-    rows = [
-        dict(row)
-        for _, row in sorted(step_receipts.items())
-        if isinstance(row, dict)
-    ]
-    merged = _merge_receipt_rows(
-        observations.get("cleanup_verification_receipts"),
-        rows,
-    )
     _publish_receipt_rows(
         observations,
         "cleanup_verification_receipts",
-        merged,
+        _merge_receipt_rows(formal_rows),
     )
-
-    source_ledger = semantic_view.source_ledger
-    known_step_ids = list(source_ledger.recorded_step_ids())
-    bound: list[dict[str, str]] = []
-    unbound: list[dict[str, Any]] = []
-    seen_receipt_ids: set[str] = set()
-    for row in rows:
-        scope = extract_receipt_step_scope(
-            row,
-            known_step_ids=known_step_ids,
-        )
-        receipt_id = _scope_receipt_id(row)
-        step_id = _text(scope.get("step_id"))
-        if (
-            not receipt_id
-            or receipt_id in seen_receipt_ids
-            or scope.get("status") != "EXACT"
-        ):
-            unbound.append(
-                {
-                    **scope,
-                    "receipt_id": receipt_id,
-                    "evidence_kind": "cleanup_verification",
-                    "status": (
-                        "RECEIPT_REUSED"
-                        if receipt_id in seen_receipt_ids
-                        else _text(scope.get("status"))
-                        or "RECEIPT_ID_MISSING"
-                    ),
-                }
-            )
-            continue
-        seen_receipt_ids.add(receipt_id)
-        if not semantic_view.append_scoped_receipt_ref(
-            step_id=step_id,
-            field="cleanup_receipt_ids",
-            receipt_id=receipt_id,
-            receipt_step_id=step_id,
-        ):
-            unbound.append(
-                {
-                    **scope,
-                    "evidence_kind": "cleanup_verification",
-                    "status": "LEDGER_SCOPE_BINDING_REJECTED",
-                }
-            )
-            continue
-        bound.append(
-            {
-                "receipt_id": receipt_id,
-                "step_id": step_id,
-                "evidence_kind": "cleanup_verification",
-            }
-        )
-
+    audit = synchronize_scoped_receipts_from_observations(
+        semantic_view.source_ledger,
+        observations,
+    )
+    verification_ids = {
+        _scope_receipt_id(row) for row in exact_rows if _scope_receipt_id(row)
+    }
+    cleanup_audit = _dict(audit.get("cleanup"))
+    bound = [
+        dict(row)
+        for row in _list(cleanup_audit.get("bound"))
+        if isinstance(row, dict)
+        and _text(row.get("receipt_id")) in verification_ids
+    ]
+    unbound = [
+        dict(row)
+        for row in _list(cleanup_audit.get("unbound"))
+        if isinstance(row, dict)
+        and _text(row.get("receipt_id")) in verification_ids
+    ]
+    bound_ids = {_text(row.get("receipt_id")) for row in bound}
     observations["process_step_cleanup_verification_binding"] = {
         "bound": bound,
         "unbound": unbound,
-        "complete": bool(rows) and not unbound and len(bound) == len(rows),
+        "complete": bool(verification_ids)
+        and not unbound
+        and bound_ids == verification_ids,
         "broadcast_fallback_forbidden": True,
+        "aggregate_receipt_id": aggregate_id,
     }
     _invalidate_derived_step_snapshot(observations)
     semantic_view.compute_hash()

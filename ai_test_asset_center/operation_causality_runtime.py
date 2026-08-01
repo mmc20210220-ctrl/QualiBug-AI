@@ -317,7 +317,7 @@ def _exp_with_actual_causal_values(
 def install_operation_causality_runtime() -> None:
     """Install phase and transport wrappers on the existing executor mainline."""
     from . import database_observer_experiment_runtime as phase_runtime
-    from . import experiment_plan_executor as plan_runtime
+    from . import experiment_plan_lifecycle_adapter as lifecycle_plan_runtime
 
     phase_original = getattr(phase_runtime, "execute_database_observer_phase", None)
     if callable(phase_original) and not getattr(
@@ -359,7 +359,7 @@ def install_operation_causality_runtime() -> None:
         if executor is not None:
             executor.execute_database_observer_phase = phase_wrapped
 
-    plan_original = getattr(plan_runtime, "execute_non_barrier_plans", None)
+    plan_original = lifecycle_plan_runtime.current_raw_plan_delegate()
     if callable(plan_original) and not getattr(plan_original, _PLAN_INSTALL_MARKER, False):
         @functools.wraps(plan_original)
         def plan_wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -389,10 +389,9 @@ def install_operation_causality_runtime() -> None:
 
         setattr(plan_wrapped, _PLAN_INSTALL_MARKER, True)
         setattr(plan_wrapped, "__qualibug_original__", plan_original)
-        plan_runtime.execute_non_barrier_plans = plan_wrapped
-        executor = sys.modules.get(f"{__package__}.experiment_executor")
-        if executor is not None:
-            executor.execute_non_barrier_plans = plan_wrapped
+        # Causality decorates raw transport only. The lifecycle adapter remains
+        # every public execution authority and preserves the entry ledger.
+        lifecycle_plan_runtime.install_raw_plan_delegate(plan_wrapped)
 
 
 def attach_operation_causality_experiment(

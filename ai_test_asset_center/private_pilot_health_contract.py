@@ -230,30 +230,38 @@ def build_private_pilot_health_payload(
     sb_ready = bool(system_behavior.get("ready"))
     sb_status = "healthy" if sb_ready else "degraded"
 
-    # Overall health is derived from every subsystem, not just API liveness.
-    # Serving this response proves the HTTP process is up; it proves nothing
-    # about LLM connectivity, System Behavior Space readiness, or whether the
-    # private-deployment root even exists. A hardcoded ``True`` here hid every
-    # one of those failures behind a "healthy" banner.
+    # Liveness and business readiness are different deployment facts. The
+    # process can be alive before an operator configures an LLM or imports
+    # enterprise sources; reporting that state as HTTP 503 makes orchestrators
+    # restart a healthy process and prevents configuration through the product.
     offline_reasons: list[str] = []
+    readiness_blockers: list[str] = []
     degraded_reasons: list[str] = []
     if not root_ok:
         offline_reasons.append("private_root_missing")
     if not llm_available or llm_status in {"offline", "failed", "error"}:
-        offline_reasons.append(f"llm_{llm_status}")
+        readiness_blockers.append("llm_offline")
     if not sb_ready:
-        degraded_reasons.append("system_behavior_not_ready")
+        readiness_blockers.append("system_behavior_not_ready")
 
-    if offline_reasons:
+    live = not offline_reasons
+    ready = live and not readiness_blockers
+    if not live:
         overall_status = "offline"
-    elif degraded_reasons:
+    elif not ready:
         overall_status = "degraded"
+        degraded_reasons.extend(readiness_blockers)
     else:
         overall_status = "healthy"
-    overall_ok = overall_status == "healthy"
     return {
-        "ok": overall_ok,
+        # Compatibility: ``ok`` answers whether the service can serve requests.
+        # Readiness is exposed independently and must be used for real scans.
+        "ok": live,
         "status": overall_status,
+        "live": live,
+        "ready": ready,
+        "readiness_status": "ready" if ready else "blocked",
+        "readiness_blockers": readiness_blockers,
         "offline_reasons": offline_reasons,
         "degraded_reasons": degraded_reasons,
         "service": "qualibug_private_pilot",

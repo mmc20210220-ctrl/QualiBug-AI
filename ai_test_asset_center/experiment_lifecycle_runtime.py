@@ -79,7 +79,50 @@ def _fixture_requirement(experiment: dict[str, Any]) -> tuple[bool, str]:
         return True, explicit_id
     if fixture_contract:
         return True, ""
-    if _list(exp.get("required_fixtures")) or _list(exp.get("setup_plan")):
+
+    flow_requirement = _dict(exp.get("flow_data_requirement"))
+    if _text(flow_requirement.get("status")).upper() == "FROZEN":
+        materialized_targets = {
+            _text(value)
+            for value in [
+                *_list(flow_requirement.get("binding_targets")),
+                *_list(
+                    flow_requirement.get(
+                        "materialized_before_measurement_targets"
+                    )
+                ),
+                *[
+                    target
+                    for raw in _list(flow_requirement.get("step_requirements"))
+                    for target in _list(
+                        _dict(raw).get("materialized_before_step")
+                    )
+                ],
+            ]
+            if _text(value)
+        }
+        if not materialized_targets:
+            return False, _NOT_APPLICABLE
+        return True, ""
+
+    if _list(exp.get("required_fixtures")):
+        return True, ""
+    setup_rows = [
+        _dict(row)
+        for row in _list(exp.get("setup_plan"))
+        if isinstance(row, dict)
+    ]
+    fixture_setup_rows = [
+        row
+        for row in setup_rows
+        if _text(row.get("fixture_id"))
+        or _text(row.get("entity_ref"))
+        or _text(row.get("table"))
+        or _text(row.get("adapter_ref"))
+        or _text(row.get("action")).lower()
+        not in {"", "resolve_bindings", "query_entity_binding", "none"}
+    ]
+    if fixture_setup_rows:
         return True, ""
     fixture_dag = _dict(exp.get("fixture_dag"))
     if fixture_dag and (
@@ -120,7 +163,10 @@ def new_experiment_lifecycle_ledger(
         campaign_id=campaign_id,
         run_id=run_id,
         obligation_id=obligation_id,
-        protocol_id=_text(exp.get("protocol_id") or protocol.get("protocol_id")),
+        protocol_id=(
+            _text(exp.get("protocol_id") or protocol.get("protocol_id"))
+            or _NOT_APPLICABLE
+        ),
         required_step_ids=_required_step_ids(exp),
     )
     ledger.fixture_required = fixture_required

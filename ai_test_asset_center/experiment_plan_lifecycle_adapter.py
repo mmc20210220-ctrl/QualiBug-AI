@@ -6,7 +6,8 @@ so fixture, barrier, business, and cleanup stages share one public authority.
 """
 from __future__ import annotations
 
-from typing import Any
+import sys
+from typing import Any, Callable
 
 from .experiment_plan_executor import (
     execute_non_barrier_plans as _execute_non_barrier_plans,
@@ -113,6 +114,37 @@ def _copy_timeline(
         )
         existing.add(key)
 
+
+
+def current_raw_plan_delegate() -> Callable[..., dict[str, Any]]:
+    """Return the transport delegate wrapped by the lifecycle authority."""
+    return _execute_non_barrier_plans
+
+
+def install_raw_plan_delegate(
+    delegate: Callable[..., dict[str, Any]],
+) -> Callable[..., dict[str, Any]]:
+    """Install one raw transport wrapper without replacing public authority.
+
+    Runtime plugins may specialize transport, but every public executor alias
+    must continue through :func:`execute_non_barrier_plans` so the entry ledger
+    remains authoritative.
+    """
+    global _execute_non_barrier_plans
+    _execute_non_barrier_plans = delegate
+
+    from . import experiment_plan_executor as raw_plan_module
+
+    raw_plan_module.execute_non_barrier_plans = execute_non_barrier_plans
+    for module_name in (
+        f"{__package__}.experiment_executor_core",
+        f"{__package__}.experiment_executor_governance",
+        f"{__package__}.experiment_executor",
+    ):
+        module = sys.modules.get(module_name)
+        if module is not None:
+            setattr(module, "execute_non_barrier_plans", execute_non_barrier_plans)
+    return delegate
 
 def execute_non_barrier_plans(**kwargs: Any) -> dict[str, Any]:
     observations = _dict(kwargs.get("observations"))

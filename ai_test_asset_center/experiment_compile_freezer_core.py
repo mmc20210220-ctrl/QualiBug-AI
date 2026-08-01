@@ -172,6 +172,7 @@ def _applicable_observers(
     step: dict[str, Any],
     observers: list[dict[str, Any]],
     primary_operation_ref: str,
+    explicitly_claimed_observer_ids: set[str],
 ) -> list[dict[str, Any]]:
     operation_ref = _text(step.get("operation_ref"))
     required_ids, inline = _step_observer_requirements(step)
@@ -189,6 +190,7 @@ def _applicable_observers(
             not explicit_scope
             and operation_ref
             and operation_ref == primary_operation_ref
+            and observer_id not in explicitly_claimed_observer_ids
             and (
                 observer_id in _EFFECT_OBSERVERS
                 or bool(observer.get("readback_contract_id"))
@@ -309,12 +311,14 @@ def _freeze_plan_step(
     step: dict[str, Any],
     observers: list[dict[str, Any]],
     primary_operation_ref: str,
+    explicitly_claimed_observer_ids: set[str],
 ) -> tuple[dict[str, Any] | None, str, str, dict[str, Any]]:
     frozen = deepcopy(step)
     applicable = _applicable_observers(
         step=frozen,
         observers=observers,
         primary_operation_ref=primary_operation_ref,
+        explicitly_claimed_observer_ids=explicitly_claimed_observer_ids,
     )
     policies = _unique_dicts(
         [
@@ -389,6 +393,13 @@ def freeze_compiled_experiment(
     ]
     primary_operation_ref = _primary_operation_ref(source)
     operations = _operation_index(behavior_ir)
+    explicitly_claimed_observer_ids: set[str] = set()
+    for phase in ("precondition", "control", "treatment"):
+        for raw_step in _list(source.get(f"{phase}_plan")):
+            if not isinstance(raw_step, dict):
+                continue
+            claimed_ids, _ = _step_observer_requirements(raw_step)
+            explicitly_claimed_observer_ids.update(claimed_ids)
     frozen_plans: dict[str, list[dict[str, Any]]] = {}
     step_bindings: list[dict[str, Any]] = []
     required_step_ids: list[str] = []
@@ -422,6 +433,7 @@ def freeze_compiled_experiment(
                 step=step,
                 observers=observers,
                 primary_operation_ref=primary_operation_ref,
+                explicitly_claimed_observer_ids=explicitly_claimed_observer_ids,
             )
             if frozen is None:
                 return _block(source, reason, detail)
