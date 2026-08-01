@@ -46,6 +46,9 @@ from ..identity_structural_review import (
     identity_structural_review_rebuild_in_progress,
     scrub_operator_structural_review_mentions,
 )
+from ..identity_source_governed_table_binding import (
+    augment_source_governed_table_bindings,
+)
 from ..identity_structural_review_governance import (
     attach_identity_structural_review_admission,
     govern_identity_structural_review_decision_admission,
@@ -98,6 +101,7 @@ def _publish_identity_audit_receipts(
         "enterprise_identity_registry_recompute_receipt",
         "enterprise_identity_authority_projection_receipt",
         "enterprise_identity_field_evidence",
+        "enterprise_identity_source_governed_table_binding",
         "enterprise_identity_structural_evidence",
         "enterprise_identity_structural_review_queue",
         "enterprise_identity_structural_review_admission",
@@ -127,6 +131,13 @@ def _attach_identity_audit_receipts(
         or asset.get("enterprise_identity_field_evidence")
     )
     model["identity_field_evidence"] = field_evidence
+    source_governed_table_binding = as_dict(
+        resolution.get("source_governed_table_binding")
+        or asset.get("enterprise_identity_source_governed_table_binding")
+    )
+    model["identity_source_governed_table_binding"] = (
+        source_governed_table_binding
+    )
     structural_evidence = as_dict(
         resolution.get("identity_structural_evidence")
         or asset.get("enterprise_identity_structural_evidence")
@@ -193,6 +204,12 @@ def _attach_identity_audit_receipts(
             "enterprise_identity_field_binding_count": int(
                 field_evidence.get("field_binding_count") or 0
             ),
+            "enterprise_identity_source_governed_table_binding_count": int(
+                source_governed_table_binding.get("admitted_binding_count") or 0
+            ),
+            "enterprise_identity_source_governed_table_conflict_count": int(
+                source_governed_table_binding.get("conflict_count") or 0
+            ),
             "enterprise_identity_cross_technical_key_binding_count": int(
                 field_evidence.get("cross_technical_binding_count") or 0
             ),
@@ -258,6 +275,9 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     )
     resolution = govern_identity_registry(prior_registry, resolution, asset=recognized_asset)
     resolution = augment_technical_identity_projection(recognized_asset, resolution)
+    resolution = augment_source_governed_table_bindings(
+        recognized_asset, resolution
+    )
     resolution = augment_identity_field_evidence(recognized_asset, resolution)
     resolution = project_identity_authority_receipt(recognized_asset, resolution)
     resolution = project_identity_annotation_manifest(recognized_asset, resolution)
