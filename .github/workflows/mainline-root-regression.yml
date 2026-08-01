@@ -51,6 +51,8 @@ jobs:
             ai_test_asset_center/experiment_cleanup_executor.py \
             ai_test_asset_center/experiment_lifecycle_runtime.py \
             ai_test_asset_center/experiment_outcome_finalizer.py \
+            ai_test_asset_center/cleanup_equivalence_core.py \
+            ai_test_asset_center/cleanup_equivalence.py \
             ai_test_asset_center/operational_receipts.py \
             ai_test_asset_center/process_step_evidence_scope_audit.py \
             ai_test_asset_center/process_step_receipt_scope.py \
@@ -71,6 +73,7 @@ jobs:
             tests/test_compiled_http_observer_bundle_scope.py \
             tests/test_process_graph_event_finalizer_scope.py \
             tests/test_adapter_cleanup_runtime_identity.py \
+            tests/test_cleanup_equivalence_collection_projection.py \
             tests/test_funnel_benchmark_prep.py \
             tests/test_benchmark_reset_receipt_truth.py \
             tests/test_benchmark_runtime_cleanup_assessment.py \
