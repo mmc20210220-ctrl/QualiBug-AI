@@ -198,6 +198,9 @@ def govern_compiled_business_facts(
     asset = _normalize_typed_fact_values(asset)
     asset = project_typed_object_relations(asset)
     asset = apply_identity_evidence_policy(asset)
+    from ._object_source_conflicts import project_business_object_source_conflicts
+
+    asset = project_business_object_source_conflicts(asset)
     asset = reconcile_chinese_business_fact_conflicts(
         asset,
         project_id=project_id,
