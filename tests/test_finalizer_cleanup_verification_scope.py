@@ -64,7 +64,7 @@ def _call_hook(monkeypatch, aggregate: dict) -> tuple[dict, ProcessStepLedger]:
     ledger = _ledger()
     view = ProcessStepSemanticView(ledger, observations=observations)
     monkeypatch.setattr(
-        finalizer,
+        finalizer._scope,
         "_original_evaluate_cleanup_equivalence",
         lambda *args, **kwargs: aggregate,
     )
@@ -89,15 +89,16 @@ def test_finalizer_binds_each_cleanup_verification_to_exact_source_step(
         {
             "receipt_id": "equivalence_a",
             "step_id": "write_a",
-            "evidence_kind": "cleanup_verification",
+            "evidence_kind": "cleanup",
         },
         {
             "receipt_id": "equivalence_b",
             "step_id": "write_b",
-            "evidence_kind": "cleanup_verification",
+            "evidence_kind": "cleanup",
         },
     ]
     assert observations["cleanup_verification_receipts"] == [
+        _aggregate(),
         _aggregate()["step_equivalence_receipts_by_id"]["write_a"],
         _aggregate()["step_equivalence_receipts_by_id"]["write_b"],
     ]
@@ -121,18 +122,17 @@ def test_finalizer_rejects_cleanup_verification_receipt_reuse(
 
     binding = observations["process_step_cleanup_verification_binding"]
     assert binding["complete"] is False
-    assert binding["bound"] == [
-        {
-            "receipt_id": "equivalence_shared",
-            "step_id": "write_a",
-            "evidence_kind": "cleanup_verification",
-        }
+    assert binding["bound"] == []
+    assert binding["unbound"][0]["status"] == (
+        "RECEIPT_REUSED_ACROSS_STEPS"
+    )
+    assert binding["unbound"][0]["declared_step_ids"] == [
+        "write_a",
+        "write_b",
     ]
-    assert binding["unbound"][0]["status"] == "RECEIPT_REUSED"
-    assert binding["unbound"][0]["step_id"] == "write_b"
     assert ledger.get_step_row("write_a")[
         "scoped_cleanup_receipt_ids"
-    ] == ["equivalence_shared"]
+    ] == []
     assert ledger.get_step_row("write_b")[
         "scoped_cleanup_receipt_ids"
     ] == []

@@ -1872,8 +1872,10 @@ def execute_experiment_cleanup_compensation(
             cleanup_receipts=_db_receipts,
             dependency_graph=_dict(_db_contract.get("dependency_graph")),
         )
+        # This is a diagnostic summary, not a formal step verification. The
+        # cleanup-equivalence authority publishes canonical aggregate and exact
+        # step receipts later; dual publication causes alias multiplication.
         observations["cleanup_verification"] = _verification
-        observations["cleanup_verification_receipts"] = [_verification]
         _ver_rid = _text(_verification.get("receipt_id") or _verification.get("verification_id"))
         if _ver_rid:
             observations.setdefault("cleanup_verification_receipt_ids", [])

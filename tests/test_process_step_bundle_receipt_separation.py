@@ -48,7 +48,7 @@ def _verification(step_id: str) -> dict:
     }
 
 
-def test_graph_step_verifications_leave_bundle_list_before_aggregate_fallback() -> None:
+def test_graph_step_verifications_remain_formal_and_bind_exact_steps() -> None:
     ledger = _ledger()
     execution_set = {
         "schema_version": (
@@ -88,9 +88,16 @@ def test_graph_step_verifications_leave_bundle_list_before_aggregate_fallback() 
         "graph-cleanup-execution-set"
     ]
     assert audit["aggregate_cleanup_verification_receipt_ids"] == []
-    # Empty makes experiment_outcome_finalizer_core use its local aggregate
-    # cleanup-equivalence return as the Bundle verification receipt.
-    assert observations["cleanup_verification_receipts"] == []
+    # The formal Bundle layer keeps exact verification receipts until the
+    # aggregate equivalence receipt is published; Ledger binding uses the same
+    # immutable rows rather than a second materialization.
+    assert [
+        row["receipt_id"]
+        for row in observations["cleanup_verification_receipts"]
+    ] == [
+        "cleanup-verification-write-a",
+        "cleanup-verification-write-b",
+    ]
     assert [
         row["receipt_id"]
         for row in observations[

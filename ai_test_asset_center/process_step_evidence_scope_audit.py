@@ -420,7 +420,7 @@ def _audit_compiled_observer_subjects(
         set(expected_http_step_ids) - set(known_step_ids)
     )
 
-    declaration_valid = bool(
+    base_declaration_valid = bool(
         declared
         and len(compile_ids) == 1
         and _text(binding_receipt.get("schema_version"))
@@ -429,12 +429,22 @@ def _audit_compiled_observer_subjects(
         and _safe_int(binding_receipt.get("binding_count")) == len(bindings)
         and stored_hash
         and stored_hash == recomputed_hash
-        and len(http_bindings) == 1
-        and _text(http_bindings[0].get("scope_mode")) == "per_plan_step"
-        and expected_http_step_ids
-        and not unknown_declared_step_ids
     )
-    required = bool(typed_http_receipt_ids or declared)
+    http_authority_declared = bool(http_bindings)
+    declaration_valid = bool(
+        base_declaration_valid
+        and (
+            not http_authority_declared
+            or (
+                len(http_bindings) == 1
+                and _text(http_bindings[0].get("scope_mode"))
+                == "per_plan_step"
+                and expected_http_step_ids
+                and not unknown_declared_step_ids
+            )
+        )
+    )
+    required = bool(typed_http_receipt_ids or http_authority_declared)
     complete = bool(
         (not required)
         or (
@@ -459,6 +469,7 @@ def _audit_compiled_observer_subjects(
         "missing_http_step_ids": missing_http_step_ids,
         "unexpected_http_step_ids": unexpected_http_step_ids,
         "unknown_declared_step_ids": unknown_declared_step_ids,
+        "http_authority_declared": http_authority_declared,
         "compile_subject_authority_enforced": required,
     }
 

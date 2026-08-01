@@ -9,6 +9,7 @@ from the immutable Contract Oracle receipt. No total receipt is broadcast.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from typing import Any
@@ -53,6 +54,103 @@ def _receipt_schema(receipt: dict[str, Any]) -> str:
 
 def _is_graph_aggregate(receipt: dict[str, Any]) -> bool:
     return _receipt_schema(receipt) in _GRAPH_AGGREGATE_SCHEMAS
+
+
+def build_exact_step_receipt_projection(
+    receipt: dict[str, Any],
+    *,
+    step_id: str,
+    projection_kind: str,
+) -> dict[str, Any]:
+    """Project one immutable source receipt onto one explicit process step.
+
+    A source schema is never mutated. Already exact receipts are reused; an
+    unscoped source is wrapped once with a deterministic identity. Sources with
+    neither a receipt id nor a sealed fingerprint are diagnostic and cannot be
+    promoted to formal evidence.
+    """
+    row = copy.deepcopy(_core._dict(receipt))
+    target_step_id = _core._text(step_id)
+    kind = _core._text(projection_kind)
+    if not row or not target_step_id or not kind:
+        return {}
+    scope = _core.extract_receipt_step_scope(row)
+    if scope.get("status") == "EXACT":
+        return row if _core._text(scope.get("step_id")) == target_step_id else {}
+
+    source_id = _core.receipt_id(row)
+    source_fingerprint = _core._text(row.get("fingerprint"))
+    if source_id:
+        receipt_id = source_id
+        id_origin = "source_receipt_id"
+    elif source_fingerprint:
+        receipt_id = "psp_" + _stable_hash(
+            {
+                "projection_kind": kind,
+                "step_id": target_step_id,
+                "source_schema_version": _receipt_schema(row),
+                "source_fingerprint": source_fingerprint,
+            }
+        )[:24]
+        id_origin = "source_fingerprint"
+    else:
+        return {}
+    projected = {
+        "receipt_id": receipt_id,
+        "step_id": target_step_id,
+        "scope_projection_kind": kind,
+        "scope_receipt_id_origin": id_origin,
+        "source_receipt_id": source_id,
+        "source_fingerprint": source_fingerprint,
+        "source_receipt": row,
+        "source_schema_version": _receipt_schema(row),
+        "source_status": _core._text(
+            row.get("status")
+            or row.get("equivalence_status")
+            or row.get("final_status")
+        ),
+    }
+    for verdict_key in (
+        "target_reached",
+        "target_state_reached",
+        "postcondition_satisfied",
+        "state_transition_satisfied",
+        "assertion_passed",
+        "passed",
+        "satisfied",
+    ):
+        if isinstance(row.get(verdict_key), bool):
+            projected[verdict_key] = row[verdict_key]
+            break
+    return projected
+
+
+def replace_with_exact_step_receipt_projections(
+    observations: dict[str, Any],
+    *,
+    target_key: str,
+    receipts: list[dict[str, Any]],
+    step_id: str,
+    projection_kind: str,
+) -> list[dict[str, Any]]:
+    """Replace one formal list with deterministic exact-step projections."""
+    projected = _core._deduplicate_receipts(
+        [
+            value
+            for raw in receipts
+            if isinstance(raw, dict)
+            for value in [
+                build_exact_step_receipt_projection(
+                    raw,
+                    step_id=step_id,
+                    projection_kind=projection_kind,
+                )
+            ]
+            if value
+        ]
+    )
+    _core._publish_rows(observations, target_key, projected)
+    return projected
 
 
 def _raw_rows(
@@ -227,14 +325,18 @@ def _partition_cleanup_receipts(
         source,
         ("cleanup_execution_receipts", "cleanup_execution_receipt"),
     )
+    # Only the formal list participates in Bundle/step scope. Diagnostic
+    # aliases are source facts consumed by the Finalizer projection hook;
+    # repeatedly importing them causes alias-driven receipt multiplication.
     verification_rows = _raw_rows(
         source,
-        (
-            "cleanup_verification_receipts",
-            "cleanup_verification",
-            "cleanup_equivalence_receipt",
-        ),
+        ("cleanup_verification_receipts",),
     )
+    singular_equivalence = _core._dict(
+        source.get("cleanup_equivalence_receipt")
+    )
+    if singular_equivalence and _is_graph_aggregate(singular_equivalence):
+        verification_rows.append(singular_equivalence)
     execution_aggregates = _core._deduplicate_receipts(
         [row for row in execution_rows if _is_graph_aggregate(row)]
     )
@@ -536,6 +638,8 @@ __all__ = sorted(
             if not name.startswith("__")
         ],
         "PROCESS_STEP_ORACLE_INVOCATION_SCHEMA",
+        "build_exact_step_receipt_projection",
+        "replace_with_exact_step_receipt_projections",
         "synchronize_scoped_receipts_from_observations",
     }
 )

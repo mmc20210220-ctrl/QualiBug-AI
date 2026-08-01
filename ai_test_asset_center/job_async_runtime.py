@@ -763,11 +763,12 @@ def install_job_async_execution_adapter() -> Callable[..., dict[str, Any]]:
     pure ASYNC_JOB plan uses ``execute_async_job_plan`` and still returns the same
     result contract consumed by ``experiment_executor`` and the existing Finalizer.
     """
-    from . import experiment_executor as executor_module
     from . import experiment_plan_executor as plan_module
+    from . import experiment_plan_lifecycle_adapter as lifecycle_plan_runtime
 
-    current = plan_module.execute_non_barrier_plans
+    current = lifecycle_plan_runtime.current_raw_plan_delegate()
     if getattr(current, "_qualibug_job_async_adapter", False):
+        lifecycle_plan_runtime.install_raw_plan_delegate(current)
         return current
     original = current
 
@@ -782,10 +783,9 @@ def install_job_async_execution_adapter() -> Callable[..., dict[str, Any]]:
 
     wrapped._qualibug_job_async_adapter = True  # type: ignore[attr-defined]
     wrapped._qualibug_original_executor = original  # type: ignore[attr-defined]
-    plan_module.execute_non_barrier_plans = wrapped
-    # experiment_executor imported the symbol directly; update that existing call
-    # site as well so no second runtime entrypoint is introduced.
-    executor_module.execute_non_barrier_plans = wrapped
+    # ASYNC_JOB specializes raw transport. The lifecycle adapter remains the
+    # public authority and merges the returned ledger into the entry ledger.
+    lifecycle_plan_runtime.install_raw_plan_delegate(wrapped)
     return wrapped
 
 

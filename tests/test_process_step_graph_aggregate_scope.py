@@ -120,8 +120,24 @@ def test_graph_aggregates_stay_bundle_scoped_while_nested_receipts_bind() -> Non
         "graph-cleanup-equivalence-set",
     ]
     assert observations["cleanup_execution_receipt"] is execution_set
-    assert observations["cleanup_execution_receipts"] == [execution_set]
+    assert [
+        row["receipt_id"] for row in observations["cleanup_execution_receipts"]
+    ] == [
+        "graph-cleanup-execution-set",
+        "graph-cleanup-write-a",
+        "graph-cleanup-write-b",
+        "cleanup-execution-write-a",
+        "cleanup-execution-write-b",
+    ]
     assert observations["cleanup_equivalence_receipt"] is equivalence_set
+    assert [
+        row["receipt_id"]
+        for row in observations["cleanup_verification_receipts"]
+    ] == [
+        "graph-cleanup-equivalence-set",
+        "cleanup-verification-write-a",
+        "cleanup-verification-write-b",
+    ]
 
     assert audit["step_cleanup_execution_receipt_ids"] == [
         "graph-cleanup-write-a",

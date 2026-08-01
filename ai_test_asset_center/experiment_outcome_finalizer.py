@@ -16,8 +16,11 @@ from . import _experiment_outcome_finalizer_scope_mechanics as _scope
 from ._experiment_outcome_finalizer_scope_mechanics import *  # noqa: F401,F403
 
 _original_finalize_experiment_execution = _scope.finalize_experiment_execution
-# Public injection point retained for existing tests and runtime adapters.
+# Supported composition points. Scope mechanics remains the sole implementation
+# and these callables are synchronized for the duration of finalization.
+observe_experiment_requirements = _scope._original_observe_experiment_requirements
 evaluate_contract_oracle = _outcome_oracles.evaluate_contract_oracle
+evaluate_cleanup_equivalence = _scope._original_evaluate_cleanup_equivalence
 
 
 def __getattr__(name: str) -> Any:
@@ -261,9 +264,15 @@ def _normalize_experiment_outcome_identity(exp: dict[str, Any]) -> dict[str, Any
 
 
 def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    # Preserve the existing public injection point instead of bypassing test/runtime
-    # adapters with a hard-coded module function.
+    # Synchronize supported public composition points without introducing a
+    # second Finalizer implementation.
+    _scope._original_observe_experiment_requirements = (
+        observe_experiment_requirements
+    )
     _scope._original_evaluate_contract_oracle = evaluate_contract_oracle
+    _scope._original_evaluate_cleanup_equivalence = (
+        evaluate_cleanup_equivalence
+    )
     call_kwargs = dict(kwargs)
     if isinstance(call_kwargs.get("exp"), dict):
         call_kwargs["exp"] = _normalize_experiment_outcome_identity(call_kwargs["exp"])

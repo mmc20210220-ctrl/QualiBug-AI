@@ -731,12 +731,13 @@ def execute_non_barrier_plans(
             # ── V1.5.0 §21: Record step in ProcessStepLedger ──
             _gov = _dict(obs.get("governance_receipt"))
             _transport_rid = _text(_gov.get("receipt_id") or request_body_fingerprint)
-            # Response body fingerprint is real transport observation evidence.
-            # Only attach when the step actually reached the target (status > 0).
+            # Response body fingerprint proves transport only. Independent
+            # business observation must be supplied by a typed Observer receipt;
+            # otherwise a response can self-prove semantic completion.
             _response_rid = (
                 _sha256(obs.get("body")) if int(observed_status or 0) > 0 else ""
             )
-            _step_obs_rids = [_response_rid] if _response_rid else []
+            _step_obs_rids: list[str] = []
             _before = _dict(_gov.get("before"))
             _after = _dict(_gov.get("after"))
             process_ledger.record_step_execution(

@@ -237,14 +237,20 @@ def compile_process_graph_wait_contracts(
             )
 
     if issues:
+        # An invalid declaration naturally leaves an async edge uncovered. Keep
+        # that derived symptom, but never let it hide the source-contract error.
+        has_duplicate = any("duplicate_target_wait" in value for value in issues)
+        has_contract_error = any(
+            not value.startswith("async_edge_uncovered") for value in issues
+        )
         return {
             "status": STATUS_BLOCKED,
             "reason_code": (
-                WAIT_ASYNC_EDGE_UNCOVERED
-                if any(value.startswith("async_edge_uncovered") for value in issues)
-                else WAIT_CONTRACT_AMBIGUOUS
-                if any("duplicate_target_wait" in value for value in issues)
+                WAIT_CONTRACT_AMBIGUOUS
+                if has_duplicate
                 else WAIT_CONTRACT_INVALID
+                if has_contract_error
+                else WAIT_ASYNC_EDGE_UNCOVERED
             ),
             "detail": ";".join(issues[:16]),
             "issues": issues,
