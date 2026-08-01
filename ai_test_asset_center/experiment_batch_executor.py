@@ -8,6 +8,7 @@ finding receipt chain.
 from __future__ import annotations
 
 from copy import deepcopy
+import logging
 from typing import Any
 
 from . import _experiment_batch_executor_single_finding_mechanics as _core
@@ -21,6 +22,10 @@ from .customer_delivery_gate_v2 import (
     build_delivery_execution_receipt,
     build_reproduction_receipt,
 )
+from .small_scale_validation_gate import VALIDATION_GATE_SCHEMA
+
+
+logger = logging.getLogger(__name__)
 
 _original_execute_selected_experiments = _core.execute_selected_experiments
 
@@ -425,8 +430,35 @@ def _apply_fanout(
             run_id=_text(mainline_run.get("run_id")),
             phase=_text(output.get("validation_phase")),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        # Validation is an execution gate, not optional decoration.  Preserve
+        # the original exception in logs while exposing a redacted, stable
+        # reason code to downstream campaign and funnel projections.
+        logger.exception(
+            "validation gate evaluation failed for campaign %s",
+            campaign_id,
+        )
+        validation_gate = {
+            "schema_version": VALIDATION_GATE_SCHEMA,
+            "status": "FAILED",
+            "campaign_id": campaign_id,
+            "run_id": _text(mainline_run.get("run_id")),
+            "phase": _text(output.get("validation_phase")),
+            "reason_code": "VALIDATION_GATE_EXCEPTION",
+            "reason": "validation_gate_evaluation_failed",
+            "error_class": type(exc).__name__,
+            "customer_deliverable": False,
+        }
+        output["validation_gate"] = validation_gate
+        receipt = dict(_dict(output.get("campaign_validation_receipt")))
+        receipt["campaign_validation_status"] = "FAILED"
+        reasons = [
+            _text(value) for value in _list(receipt.get("reasons")) if _text(value)
+        ]
+        reasons.append("VALIDATION_GATE_EXCEPTION")
+        receipt["reasons"] = sorted(set(reasons))
+        receipt["customer_deliverable"] = False
+        output["campaign_validation_receipt"] = receipt
     return output
 
 

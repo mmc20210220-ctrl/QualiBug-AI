@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -17,6 +19,9 @@ from .discovery_mainline_contract import (
 from .implicit_rule_runtime_evolution import (
     project_implicit_rule_runtime_evolution,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,169 @@ def _plan_contract(plan: Any) -> MainlineRunContract:
 
 def _plan_value(plan: Any, field: str) -> Any:
     return plan.get(field) if isinstance(plan, dict) else getattr(plan, field, None)
+
+
+def _exception_stage_identity(
+    contract: dict[str, Any],
+    obligation_id: str,
+) -> dict[str, str]:
+    return {
+        "obligation_id": obligation_id,
+        "run_id": _text(contract.get("run_id")),
+        "campaign_id": _text(contract.get("campaign_id")),
+        "target_id": _text(contract.get("target_id")),
+        "environment_id": _text(contract.get("environment_id")),
+        "policy_version": _text(contract.get("policy_version")),
+        "evaluation_mode": _text(contract.get("evaluation_mode")),
+        "source_snapshot_hash": _text(contract.get("source_snapshot_hash")),
+        "mainline_contract_fingerprint": _text(
+            contract.get("contract_fingerprint")
+        ),
+    }
+
+
+def _selected_rows_from_plan(plan: Any) -> list[dict[str, Any]]:
+    experiments = _plan_value(plan, "experiments")
+    if not isinstance(experiments, dict):
+        return []
+    obligation_plan = experiments.get("obligation_plan")
+    if not isinstance(obligation_plan, dict):
+        return []
+    selected = obligation_plan.get("selected")
+    if not isinstance(selected, list):
+        return []
+    return [dict(row) for row in selected if isinstance(row, dict)]
+
+
+def _build_runner_exception_ledger(
+    plan: Any,
+    exc: BaseException,
+) -> dict[str, Any]:
+    """Create terminal audit receipts while preserving runner exception semantics.
+
+    This does not claim that a request was sent or that cleanup completed.  A
+    compiled obligation is terminated at execution as HARNESS_FAILED; an
+    obligation without a confirmed compile receipt is terminated at compile.
+    The ledger is still the only funnel authority.
+    """
+
+    from .obligation_attempt_ledger import build_obligation_attempt_ledger
+
+    contract = validate_mainline_run_contract(_plan_contract(plan))
+    selected = _selected_rows_from_plan(plan)
+    experiments = _plan_value(plan, "experiments")
+    by_obligation = (
+        experiments.get("by_obligation")
+        if isinstance(experiments, dict)
+        else {}
+    )
+    by_obligation = by_obligation if isinstance(by_obligation, dict) else {}
+    compile_results: dict[str, dict[str, Any]] = {}
+    execution_results: dict[str, dict[str, Any]] = {}
+    exception_class = type(exc).__name__
+    for row in selected:
+        obligation_id = _text(row.get("obligation_id"))
+        experiment = by_obligation.get(obligation_id)
+        experiment = experiment if isinstance(experiment, dict) else {}
+        source_compile = experiment.get("compile_receipt")
+        source_compile = source_compile if isinstance(source_compile, dict) else {}
+        compile_status = _text(source_compile.get("status")).upper()
+        identity = _exception_stage_identity(contract, obligation_id)
+        experiment_id = _text(
+            experiment.get("experiment_id")
+            or source_compile.get("experiment_id")
+            or row.get("experiment_id")
+        )
+        if compile_status in {"BLOCKED", "DEFERRED", "HARNESS_FAILED"}:
+            compile_receipt = {
+                "status": compile_status,
+                "reason_code": _text(source_compile.get("reason_code"))
+                or "MAINLINE_RUNTIME_EXCEPTION",
+                "experiment_id": experiment_id,
+                **identity,
+            }
+            for field in (
+                "receipt_id",
+                "input_fingerprint",
+                "output_fingerprint",
+                "elapsed_ms",
+            ):
+                value = source_compile.get(field)
+                if value not in (None, ""):
+                    compile_receipt[field] = value
+            compile_results[obligation_id] = compile_receipt
+            continue
+        if compile_status != "COMPILED":
+            compile_results[obligation_id] = {
+                "status": "HARNESS_FAILED",
+                "reason_code": "MAINLINE_RUNTIME_EXCEPTION",
+                "reason_detail": (
+                    f"compile_receipt_not_confirmed:{exception_class}"
+                ),
+                "experiment_id": experiment_id,
+                **identity,
+            }
+            continue
+        compile_results[obligation_id] = {
+            "status": "COMPILED",
+            "reason_code": "",
+            "experiment_id": experiment_id,
+            **identity,
+        }
+        execution_results[obligation_id] = {
+            "status": "HARNESS_FAILED",
+            "reason_code": "MAINLINE_RUNTIME_EXCEPTION",
+            "reason_detail": f"runner_exception:{exception_class}",
+            "experiment_id": experiment_id,
+            "cleanup_status": "UNKNOWN",
+            "target_request_status": "NOT_PROVEN",
+            **identity,
+        }
+    return build_obligation_attempt_ledger(
+        mainline_run=contract,
+        selected=selected,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        gate_results={},
+    )
+
+
+def _persist_runner_exception_audit(
+    campaign_handle: Any,
+    ledger: dict[str, Any],
+    exc: BaseException,
+) -> bool:
+    if not isinstance(campaign_handle, dict):
+        logger.error(
+            "mainline runner exception has no campaign persistence handle",
+            extra={"exception_class": type(exc).__name__},
+        )
+        return False
+    campaign = campaign_handle.get("campaign")
+    store = campaign_handle.get("store")
+    if not hasattr(campaign, "record_obligation_attempt_ledger") or not hasattr(
+        store, "save"
+    ):
+        logger.error(
+            "mainline runner exception persistence authority is incomplete",
+            extra={"exception_class": type(exc).__name__},
+        )
+        return False
+    campaign.record_obligation_attempt_ledger(ledger)
+    campaign.audit_events.append({
+        "at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": "mainline_runner_exception",
+        "reason_code": "MAINLINE_RUNTIME_EXCEPTION",
+        "exception_class": type(exc).__name__,
+        "cleanup_status": "UNKNOWN",
+        "target_request_status": "NOT_PROVEN",
+        "obligation_attempt_ledger_fingerprint": _text(
+            ledger.get("ledger_fingerprint")
+        ),
+    })
+    campaign.audit_events = campaign.audit_events[-200:]
+    store.save(campaign)
+    return True
 
 
 def _freeze_contract(inputs: DiscoveryMainlineInputs) -> MainlineRunContract:
@@ -214,7 +382,22 @@ def run_discovery_mainline(
     if contract["contract_fingerprint"] != frozen_contract["contract_fingerprint"]:
         raise MainlineContractError("mainline_plan_contract_mismatch")
 
-    result = runner(inputs, campaign, plan)
+    try:
+        result = runner(inputs, campaign, plan)
+    except Exception as exc:
+        logger.exception(
+            "discovery mainline runner failed for campaign %s",
+            campaign_id,
+        )
+        try:
+            exception_ledger = _build_runner_exception_ledger(plan, exc)
+            _persist_runner_exception_audit(campaign, exception_ledger, exc)
+        except Exception:
+            logger.exception(
+                "mainline runner exception audit failed for campaign %s",
+                campaign_id,
+            )
+        raise
     assert_result_matches_authority(result, contract)
     result["implicit_rule_runtime_evolution"] = (
         project_implicit_rule_runtime_evolution(

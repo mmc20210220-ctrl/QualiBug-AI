@@ -167,6 +167,77 @@ def _run_identity(
     return identity
 
 
+def bind_stage_receipt_identity(
+    *,
+    mainline_run: dict[str, Any],
+    selected: list[dict[str, Any]],
+    compile_results: Mapping[str, Any],
+    execution_results: Mapping[str, Any],
+    gate_results: Mapping[str, Any],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Bind the immutable run identity onto mainline-owned stage receipts.
+
+    Stage executors often return a narrow receipt containing only their local
+    execution ID.  The mainline coordinator is the authority that owns the
+    immutable run contract, so it adds the missing identity envelope before
+    the ledger seals the stage chain.  Existing conflicting values are never
+    overwritten; the ledger builder will reject them fail-closed.
+    """
+
+    run = _object(mainline_run, field="mainline_run")
+    identity = _run_identity(run)
+    selected_ids, _ = _selected_rows(selected)
+    selected_set = set(selected_ids)
+
+    def bind(
+        receipts: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        output: dict[str, dict[str, Any]] = {}
+        if not isinstance(receipts, Mapping):
+            raise ObligationAttemptLedgerError("stage_receipts_not_mapping")
+        for raw_id, raw_receipt in receipts.items():
+            obligation_id = _text(raw_id)
+            receipt = _object(
+                raw_receipt,
+                field=f"stage_receipt:{obligation_id or 'MISSING'}",
+            )
+            if obligation_id not in selected_set:
+                output[obligation_id] = receipt
+                continue
+            nested = receipt.get("identity")
+            if nested is not None and not isinstance(nested, dict):
+                raise ObligationAttemptLedgerError(
+                    f"stage_identity_not_object:{obligation_id}"
+                )
+            nested_identity = dict(nested) if isinstance(nested, dict) else {}
+            for field in _IDENTITY_FIELDS:
+                expected = _text(identity.get(field))
+                top_level = _text(receipt.get(field))
+                nested_value = _text(nested_identity.get(field))
+                if top_level and nested_value and top_level != nested_value:
+                    raise ObligationAttemptLedgerError(
+                        f"stage_identity_value_conflict:{obligation_id}:{field}"
+                    )
+                if expected and not top_level and not nested_value:
+                    nested_identity[field] = expected
+            existing_obligation_id = _text(
+                receipt.get("obligation_id") or nested_identity.get("obligation_id")
+            )
+            if existing_obligation_id and existing_obligation_id != obligation_id:
+                raise ObligationAttemptLedgerError(
+                    f"stage_obligation_identity_mismatch:{obligation_id}"
+                )
+            nested_identity["obligation_id"] = obligation_id
+            nested_identity["identity_binding_source"] = (
+                "immutable_mainline_run_contract"
+            )
+            receipt["identity"] = nested_identity
+            output[obligation_id] = receipt
+        return output
+
+    return bind(compile_results), bind(execution_results), bind(gate_results)
+
+
 def _stage_identity(
     *,
     stage: str,
@@ -174,29 +245,87 @@ def _stage_identity(
     receipt: dict[str, Any],
     identity: dict[str, Any],
 ) -> dict[str, Any]:
+    nested_identity = receipt.get("identity")
+    if nested_identity is not None and not isinstance(nested_identity, dict):
+        raise ObligationAttemptLedgerError(
+            f"stage_identity_not_object:{obligation_id}:{stage}"
+        )
+    nested_identity = nested_identity if isinstance(nested_identity, dict) else {}
+
+    # A stage identity must describe what the stage receipt actually carried.
+    # The immutable run identity remains available as ``expected_identity`` but
+    # must not be copied into the observed fields: doing that turns a missing
+    # stage binding into a false continuity PASS.
+    observed: dict[str, str] = {}
+    observed_fields: list[str] = []
     for field in _IDENTITY_FIELDS:
+        values = {
+            _text(row.get(field))
+            for row in (receipt, nested_identity)
+            if _text(row.get(field))
+        }
+        if len(values) > 1:
+            raise ObligationAttemptLedgerError(
+                f"stage_identity_value_conflict:{obligation_id}:{stage}:{field}"
+            )
+        value = next(iter(values), "")
+        if value:
+            observed[field] = value
+            observed_fields.append(field)
         expected = _text(identity.get(field))
-        observed = _text(receipt.get(field))
-        if expected and observed and expected != observed:
+        if expected and value and expected != value:
             raise ObligationAttemptLedgerError(
                 f"stage_identity_mismatch:{obligation_id}:{stage}:{field}"
             )
-    result = {
+
+    observed_obligation_ids = {
+        _text(row.get("obligation_id"))
+        for row in (receipt, nested_identity)
+        if _text(row.get("obligation_id"))
+    }
+    if observed_obligation_ids and observed_obligation_ids != {obligation_id}:
+        raise ObligationAttemptLedgerError(
+            f"stage_obligation_identity_mismatch:{obligation_id}:{stage}"
+        )
+
+    expected_identity = {
         field: _text(identity.get(field))
         for field in _IDENTITY_FIELDS
         if _text(identity.get(field))
     }
+    missing_fields = [
+        field
+        for field in _IDENTITY_FIELDS
+        if not _text(identity.get(field)) or not _text(observed.get(field))
+    ]
+    result = dict(observed)
     result["obligation_id"] = obligation_id
+    result["status"] = "COMPLETE" if not missing_fields else "INCOMPLETE"
+    result["missing_fields"] = missing_fields
+    result["observed_fields"] = sorted(observed_fields)
+    result["expected_identity"] = expected_identity
+    identity_binding_source = _text(
+        nested_identity.get("identity_binding_source")
+    )
+    if identity_binding_source:
+        result["identity_binding_source"] = identity_binding_source
+    result["observation_source"] = (
+        "mainline_contract_binding"
+        if identity_binding_source
+        else "stage_receipt"
+        if len(observed_fields) == len(_IDENTITY_FIELDS)
+        else "stage_receipt_partial"
+        if observed_fields
+        else "immutable_run_contract_only"
+    )
     for field in ("experiment_id", "execution_id", "receipt_id", "gate_receipt_id"):
         value = _text(receipt.get(field))
         if value:
             result[field] = value
-    nested_identity = receipt.get("identity")
-    if isinstance(nested_identity, dict):
-        for field in ("experiment_id", "execution_id", "finding_id"):
-            value = _text(nested_identity.get(field))
-            if value:
-                result[field] = value
+    for field in ("experiment_id", "execution_id", "finding_id"):
+        value = _text(nested_identity.get(field))
+        if value:
+            result[field] = value
     return result
 
 
@@ -332,15 +461,18 @@ def _stage_record(
             raise ObligationAttemptLedgerError(
                 f"{stage}_elapsed_ms_invalid"
             ) from exc
+    stage_identity = _stage_identity(
+        stage=stage,
+        obligation_id=obligation_id,
+        receipt=receipt,
+        identity=identity,
+    )
     return {
         "stage": stage,
         "status": status,
-        "identity": _stage_identity(
-            stage=stage,
-            obligation_id=obligation_id,
-            receipt=receipt,
-            identity=identity,
-        ),
+        "identity": stage_identity,
+        "identity_status": _text(stage_identity.get("status")),
+        "identity_missing_fields": list(stage_identity.get("missing_fields", [])),
         "reason_code": _text(receipt.get("reason_code")),
         "reason_detail": _reason_detail(receipt),
         "receipt_id": receipt_id,
@@ -946,6 +1078,42 @@ def validate_obligation_attempt_ledger(
                         raise ObligationAttemptLedgerError(
                             f"obligation_attempt_stage_identity_mismatch:{obligation_id}:{field}"
                         )
+                stage_identity_status = _text(
+                    stage_identity.get("status")
+                ).upper()
+                if stage_identity_status and stage_identity_status not in {
+                    "COMPLETE",
+                    "INCOMPLETE",
+                }:
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_stage_identity_status_invalid:{obligation_id}"
+                    )
+                declared_stage_status = _text(
+                    stage_value.get("identity_status")
+                ).upper()
+                if (
+                    declared_stage_status
+                    and stage_identity_status
+                    and declared_stage_status != stage_identity_status
+                ):
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_stage_identity_status_mismatch:{obligation_id}"
+                    )
+                missing_fields = stage_identity.get("missing_fields")
+                if missing_fields is not None and not isinstance(missing_fields, list):
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_stage_identity_missing_fields_invalid:{obligation_id}"
+                    )
+                if stage_identity_status == "COMPLETE" and (
+                    missing_fields
+                    or any(
+                        not _text(stage_identity.get(field))
+                        for field in _IDENTITY_FIELDS
+                    )
+                ):
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_stage_identity_incomplete:{obligation_id}"
+                    )
         reason_code = _text(attempt.get("reason_code"))
         reason_registry_status = _text(attempt.get("reason_registry_status"))
         if reason_code and reason_registry_status:

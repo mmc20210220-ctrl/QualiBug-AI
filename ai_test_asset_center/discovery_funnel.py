@@ -206,32 +206,65 @@ def _build_funnel_conservation(
         for value in _list(identity.get("missing_fields"))
         if _text(value)
     ]
-    identity_complete = bool(identity) and not identity_missing and all(
-        any(
-            _text(_dict(stage).get("identity", {}).get("obligation_id"))
-            == _text(attempt.get("obligation_id"))
-            for stage in _list(attempt.get("stages"))
-            if isinstance(_dict(stage).get("identity"), dict)
-        )
-        for attempt in attempts
+    identity_stage_gaps: list[dict[str, Any]] = []
+    attempt_identity_gaps: list[str] = []
+    for attempt in attempts:
+        obligation_id = _text(attempt.get("obligation_id"))
+        attempt_identity = _dict(attempt.get("identity"))
+        if (
+            _text(attempt_identity.get("status")).upper() != "COMPLETE"
+            or _list(attempt_identity.get("missing_fields"))
+        ):
+            attempt_identity_gaps.append(obligation_id or "MISSING")
+        for stage in _list(attempt.get("stages")):
+            stage_value = _dict(stage)
+            stage_identity = _dict(stage_value.get("identity"))
+            missing_fields = [
+                _text(value)
+                for value in _list(stage_identity.get("missing_fields"))
+                if _text(value)
+            ]
+            stage_status = _text(
+                stage_identity.get("status") or stage_value.get("identity_status")
+            ).upper()
+            if (
+                _text(stage_identity.get("obligation_id")) != obligation_id
+                or stage_status != "COMPLETE"
+                or missing_fields
+            ):
+                identity_stage_gaps.append({
+                    "obligation_id": obligation_id or "MISSING",
+                    "stage": _text(stage_value.get("stage")) or "MISSING",
+                    "status": stage_status or "MISSING",
+                    "missing_fields": missing_fields or ["stage_identity_receipt"],
+                })
+    identity_complete = (
+        bool(identity)
+        and not identity_missing
+        and not attempt_identity_gaps
+        and not identity_stage_gaps
     )
     identity_status = "PASS" if identity_complete else "INCOMPLETE"
-    if identity and not identity_complete:
-        checks.append({
-            "name": "identity_continuity",
-            "status": "INCOMPLETE",
-            "expected": "run/campaign/target/environment/policy/evaluation/source identity",
-            "observed": identity_missing or "attempt_identity_missing",
-            "detail": "Missing identity is visible; no value was re-derived.",
-        })
-    elif identity_complete:
-        checks.append({
-            "name": "identity_continuity",
-            "status": "PASS",
-            "expected": "one immutable identity per attempt",
-            "observed": "one immutable identity per attempt",
-            "detail": "run, campaign and stage lineage are receipt-bound",
-        })
+    checks.append({
+        "name": "identity_continuity",
+        "status": "PASS" if identity_complete else "INCOMPLETE",
+        "expected": "one immutable identity per attempt and stage receipt",
+        "observed": (
+            "one immutable identity per attempt and stage receipt"
+            if identity_complete
+            else {
+                "root_missing_fields": identity_missing,
+                "attempt_identity_gaps": attempt_identity_gaps,
+                "stage_identity_gaps": identity_stage_gaps[:50],
+                "stage_identity_gap_count": len(identity_stage_gaps),
+            }
+        ),
+        "detail": (
+            "run, campaign and stage lineage are receipt-bound"
+            if identity_complete
+            else "Missing stage identity is visible; no value was re-derived."
+        ),
+    })
 
     reason_codes = {
         _text(attempt.get("reason_code"))
@@ -279,6 +312,8 @@ def _build_funnel_conservation(
         "formal_delivery_occurrence_count": len(formal_occurrence_ids),
         "identity_status": identity_status,
         "identity_missing_fields": identity_missing,
+        "identity_stage_gaps": identity_stage_gaps,
+        "attempt_identity_gaps": attempt_identity_gaps,
         "reason_registry_schema": REASON_CODE_REGISTRY_SCHEMA,
         "unregistered_reason_codes": unregistered,
         "missing_evidence": missing_evidence,
@@ -1110,6 +1145,8 @@ def render_funnel_report_markdown(report: dict[str, Any]) -> str:
         "",
         f"- Status: `{_text(conservation.get('status')) or 'UNKNOWN'}`",
         f"- Identity status: `{_text(conservation.get('identity_status')) or 'UNKNOWN'}`",
+        f"- Identity stage gaps: `{len(_list(conservation.get('identity_stage_gaps')))}`",
+        f"- Attempt identity gaps: `{len(_list(conservation.get('attempt_identity_gaps')))}`",
         f"- Missing evidence: `{', '.join(_text(v) for v in _list(conservation.get('missing_evidence')) if _text(v)) or 'none'}`",
         "",
         "## Top blocking reasons",

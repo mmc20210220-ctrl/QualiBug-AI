@@ -166,6 +166,12 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   profile, and redacted JSON/Markdown loss report. Missing identity or stage
   receipts remain visible as `INCOMPLETE`/`FAILED_SAFE`; internal funnel counts
   never become recall, precision, or defect-free claims.
+- Mainline-owned stage receipts bind the immutable run identity through
+  `bind_stage_receipt_identity` before ledger sealing. An unhandled runner
+  exception must remain the original propagated exception while emitting a
+  terminal `HARNESS_FAILED` attempt with `MAINLINE_RUNTIME_EXCEPTION` when the
+  campaign persistence authority is available; request transport and cleanup
+  remain `NOT_PROVEN`/`UNKNOWN` rather than being inferred.
 - Trace and weakness diagnostics consume
   `qualibug.discovery-trace-ledger.v3`, keyed by obligation attempt identity.
   V1 input requires the explicit offline migration; silent schema fallback is

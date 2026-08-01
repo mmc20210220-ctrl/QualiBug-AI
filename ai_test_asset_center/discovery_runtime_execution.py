@@ -76,7 +76,10 @@ def _compiled_round0_obligation_ids(all_experiments: Any) -> set[str]:
 from .experiment_executor import execute_selected_experiments
 from .formal_delivery_authority import build_formal_delivery_authority_receipt
 from .formal_delivery_scope import formal_customer_deliverable_findings
-from .obligation_attempt_ledger import build_obligation_attempt_ledger
+from .obligation_attempt_ledger import (
+    bind_stage_receipt_identity,
+    build_obligation_attempt_ledger,
+)
 from .runtime_interface_discovery import (
     execute_runtime_interface_discovery,
     load_runtime_interface_confirmation_tokens,
@@ -501,6 +504,17 @@ def run_experiment_candidate(
         runtime_contract=runtime_contract,
         compile_results=compile_results,
         execution_results=execution_results,
+    )
+    (
+        compile_results,
+        execution_results,
+        gate_results,
+    ) = bind_stage_receipt_identity(
+        mainline_run=plan.mainline_run,
+        selected=selected_rows,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        gate_results=gate_results,
     )
     ledger = build_obligation_attempt_ledger(
         mainline_run=plan.mainline_run,

@@ -193,28 +193,25 @@ def execute_selected_experiments(
     # Pre-resolve path placeholders by calling GET list endpoints from Behavior IR.
     _pre_resolved_bindings: dict[str, str] = {}
     if base_url and tokens:
-        try:
-            from .runtime_binding_resolver import (
-                auto_resolve_bindings,
-                collect_placeholder_collection_hints,
+        from .runtime_binding_resolver import (
+            auto_resolve_bindings,
+            collect_placeholder_collection_hints,
+        )
+        _exps_for_placeholders = [
+            experiments_by_obligation.get(_text(_dict(s).get("obligation_id")), {})
+            for s in selected
+        ]
+        _ph_hints = collect_placeholder_collection_hints(
+            _exps_for_placeholders, behavior_ir
+        )
+        _required_phs = set(_ph_hints)
+        if _required_phs:
+            _resolution = auto_resolve_bindings(
+                behavior_ir, tokens, base_url,
+                required_placeholders=_required_phs,
+                placeholder_collection_hints=_ph_hints,
             )
-            _exps_for_placeholders = [
-                experiments_by_obligation.get(_text(_dict(s).get("obligation_id")), {})
-                for s in selected
-            ]
-            _ph_hints = collect_placeholder_collection_hints(
-                _exps_for_placeholders, behavior_ir
-            )
-            _required_phs = set(_ph_hints)
-            if _required_phs:
-                _resolution = auto_resolve_bindings(
-                    behavior_ir, tokens, base_url,
-                    required_placeholders=_required_phs,
-                    placeholder_collection_hints=_ph_hints,
-                )
-                _pre_resolved_bindings = dict(_resolution.get("bindings") or {})
-        except Exception as exc:
-            logger.info("batch pre-resolution skipped: %s", exc)
+            _pre_resolved_bindings = dict(_resolution.get("bindings") or {})
 
     results: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
@@ -359,7 +356,7 @@ def execute_selected_experiments(
             reason_code = _text(compile_receipt.get("reason_code")) or (
                 "COMPILE_RECEIPT_MISSING"
                 if not compile_status
-                else f"COMPILE_STATUS_INVALID:{compile_status}"
+                else "COMPILE_STATUS_INVALID"
             )
             compile_results[oid] = {
                 "status": terminal_status,
@@ -379,7 +376,10 @@ def execute_selected_experiments(
                 "campaign_id": campaign_id,
                 "status": terminal_status,
                 "reason_code": reason_code,
-                "detail": "experiment_compile_receipt_not_executable",
+                "detail": (
+                    "experiment_compile_receipt_not_executable:"
+                    f"{compile_status or 'MISSING'}"
+                ),
                 "finding": None,
                 # When compile fails, execution_receipt must NOT have terminal status
                 # to avoid duplicate_terminal_receipt in ledger validation.

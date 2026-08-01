@@ -13,6 +13,7 @@ from ai_test_asset_center.discovery_mainline_contract import (
     validate_mainline_run_contract,
 )
 from ai_test_asset_center.obligation_attempt_ledger import (
+    bind_stage_receipt_identity,
     build_obligation_attempt_ledger,
     validate_obligation_attempt_ledger,
 )
@@ -31,7 +32,28 @@ def _run() -> dict[str, str]:
     }
 
 
-def _result() -> dict:
+def _stage_identity(obligation_id: str) -> dict[str, str]:
+    return {
+        "obligation_id": obligation_id,
+        "run_id": "RUN-CLOSURE",
+        "campaign_id": "CMP-CLOSURE",
+        "target_id": "TARGET-CLOSURE",
+        "environment_id": "ENV-CLOSURE",
+        "policy_version": "POLICY-CLOSURE",
+        "evaluation_mode": "replay",
+        "source_snapshot_hash": "sha256:source-closure",
+        "mainline_contract_fingerprint": "contract-closure",
+    }
+
+
+def _stage_identity_fields(
+    obligation_id: str,
+    include_stage_identity: bool,
+) -> dict[str, str]:
+    return _stage_identity(obligation_id) if include_stage_identity else {}
+
+
+def _result(*, include_stage_identity: bool = True) -> dict:
     ledger = build_obligation_attempt_ledger(
         mainline_run=_run(),
         selected=[
@@ -50,8 +72,16 @@ def _result() -> dict:
             },
         ],
         compile_results={
-            "obl-1": {"status": "COMPILED", "experiment_id": "exp-1"},
-            "obl-2": {"status": "BLOCKED", "reason_code": "BLOCKED_MISSING_OBSERVER"},
+            "obl-1": {
+                "status": "COMPILED",
+                "experiment_id": "exp-1",
+                **_stage_identity_fields("obl-1", include_stage_identity),
+            },
+            "obl-2": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_OBSERVER",
+                **_stage_identity_fields("obl-2", include_stage_identity),
+            },
         },
         execution_results={
             "obl-1": {
@@ -59,6 +89,7 @@ def _result() -> dict:
                 "execution_id": "exec-1",
                 "observation_receipt_ids": ["obs-1"],
                 "oracle_receipt_id": "oracle-1",
+                **_stage_identity_fields("obl-1", include_stage_identity),
             }
         },
         gate_results={
@@ -66,6 +97,7 @@ def _result() -> dict:
                 "status": "REJECTED",
                 "reason_code": "ORACLE_NOT_VIOLATED",
                 "gate_receipt_id": "gate-1",
+                **_stage_identity_fields("obl-1", include_stage_identity),
             }
         },
     )
@@ -107,6 +139,94 @@ def test_funnel_conservation_uses_stage_receipts() -> None:
     assert conservation["execution_count"] == 1
     assert conservation["execution_unresolved_count"] == 0
     assert all(check["status"] == "PASS" for check in conservation["checks"])
+
+
+def test_funnel_exposes_missing_stage_identity_without_rederiving_it() -> None:
+    result = _result(include_stage_identity=False)
+
+    conservation = build_funnel_conservation(result)
+
+    assert conservation["status"] == "INCOMPLETE"
+    assert conservation["complete"] is False
+    assert conservation["identity_status"] == "INCOMPLETE"
+    assert conservation["identity_stage_gaps"]
+    assert conservation["identity_stage_gaps"][0]["status"] == "INCOMPLETE"
+
+
+def test_mainline_binds_immutable_identity_before_sealing_stage_receipts() -> None:
+    compile_results, execution_results, gate_results = bind_stage_receipt_identity(
+        mainline_run=_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={
+            "obl-1": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+            }
+        },
+        execution_results={},
+        gate_results={},
+    )
+
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results=compile_results,
+        execution_results=execution_results,
+        gate_results=gate_results,
+    )
+
+    stage_identity = ledger["attempts"][0]["stages"][0]["identity"]
+    assert stage_identity["status"] == "COMPLETE"
+    assert stage_identity["obligation_id"] == "obl-1"
+    assert stage_identity["observation_source"] == "mainline_contract_binding"
+
+
+def test_runner_exception_is_terminal_harness_failure_without_request_claim() -> None:
+    from types import SimpleNamespace
+
+    from ai_test_asset_center.discovery_mainline import (
+        _build_runner_exception_ledger,
+    )
+    from ai_test_asset_center.discovery_mainline_contract import (
+        build_mainline_run_contract,
+    )
+
+    contract = build_mainline_run_contract(
+        mainline_authority="experiment_candidate",
+        run_id="RUN-EXCEPTION",
+        campaign_id="CMP-EXCEPTION",
+        target_id="TARGET-EXCEPTION",
+        environment_id="ENV-EXCEPTION",
+        policy_version="POLICY-EXCEPTION",
+        evaluation_mode="replay",
+        source_snapshot_hash="sha256:source-exception",
+    )
+    plan = SimpleNamespace(
+        mainline_run=contract,
+        experiments={
+            "obligation_plan": {
+                "selected": [{"obligation_id": "obl-exception"}]
+            },
+            "by_obligation": {
+                "obl-exception": {
+                    "experiment_id": "exp-exception",
+                    "compile_receipt": {"status": "COMPILED"},
+                }
+            },
+        },
+    )
+
+    ledger = _build_runner_exception_ledger(
+        plan,
+        RuntimeError("transport failure"),
+    )
+    attempt = ledger["attempts"][0]
+
+    assert ledger["complete"] is True
+    assert attempt["terminal_status"] == "HARNESS_FAILED"
+    assert attempt["reason_code"] == "MAINLINE_RUNTIME_EXCEPTION"
+    assert attempt["reason_registry_status"] == "REGISTERED"
+    assert attempt["stages"][1]["identity"]["status"] == "COMPLETE"
 
 
 def test_report_exposes_top_blockers_without_claiming_external_quality() -> None:

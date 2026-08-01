@@ -29,12 +29,9 @@ def _reset_pipeline_har_entries() -> None:
 
     Avoids module-level import (circular) — v12_compat_helpers may import us.
     """
-    try:
-        from .v12_compat_helpers import _reset_v12_har_entries
+    from .v12_compat_helpers import _reset_v12_har_entries
 
-        _reset_v12_har_entries()
-    except Exception:
-        pass
+    _reset_v12_har_entries()
 
 
 from .enterprise_campaign import (
@@ -203,12 +200,9 @@ from .v12_legacy_schedule import (  # noqa: F401
 
 
 def _campaign_identity_defaults(project: str, root: Path) -> dict[str, str]:
-    try:
-        from .enterprise_pilot_runtime import load_connector_registry
+    from .enterprise_pilot_runtime import load_connector_registry
 
-        registry = load_connector_registry(project, root)
-    except Exception:
-        return {}
+    registry = load_connector_registry(project, root)
     profile = registry.get("test_profile") if isinstance(registry, dict) else {}
     if not isinstance(profile, dict):
         return {}
