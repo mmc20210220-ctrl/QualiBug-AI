@@ -8,11 +8,13 @@ on:
       - "ai_test_asset_center/feishu_connector_capability_sync.py"
       - "ai_test_asset_center/connector_sync_authority.py"
       - "ai_test_asset_center/connector_source_ingestion.py"
+      - "ai_test_asset_center/private_pilot_connector_handlers.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
       - "tests/test_connector_remote_lifecycle.py"
       - "tests/test_feishu_remote_lifecycle_integration.py"
       - "tests/test_source_occurrence_remote_retirement.py"
+      - "tests/test_private_pilot_connector_remote_lifecycle_projection.py"
       - ".github/workflows/connector-remote-lifecycle-contract.yml"
   pull_request:
     paths:
@@ -20,11 +22,13 @@ on:
       - "ai_test_asset_center/feishu_connector_capability_sync.py"
       - "ai_test_asset_center/connector_sync_authority.py"
       - "ai_test_asset_center/connector_source_ingestion.py"
+      - "ai_test_asset_center/private_pilot_connector_handlers.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
       - "tests/test_connector_remote_lifecycle.py"
       - "tests/test_feishu_remote_lifecycle_integration.py"
       - "tests/test_source_occurrence_remote_retirement.py"
+      - "tests/test_private_pilot_connector_remote_lifecycle_projection.py"
       - ".github/workflows/connector-remote-lifecycle-contract.yml"
   workflow_dispatch:
 
@@ -54,6 +58,7 @@ jobs:
         run: |
           python -m py_compile ai_test_asset_center/connector_remote_lifecycle.py
           python -m py_compile ai_test_asset_center/feishu_connector_capability_sync.py
+          python -m py_compile ai_test_asset_center/private_pilot_connector_handlers.py
           python -m py_compile ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py
           python -m py_compile ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py
 
@@ -62,4 +67,5 @@ jobs:
           python -m pytest -q \
             tests/test_connector_remote_lifecycle.py \
             tests/test_feishu_remote_lifecycle_integration.py \
-            tests/test_source_occurrence_remote_retirement.py
+            tests/test_source_occurrence_remote_retirement.py \
+            tests/test_private_pilot_connector_remote_lifecycle_projection.py
