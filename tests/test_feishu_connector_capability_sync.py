@@ -8,7 +8,10 @@ import pytest
 from ai_test_asset_center.connector_materialization_capability import (
     ResourceDisposition,
 )
-from ai_test_asset_center.connector_sync_authority import register_connector_instance
+from ai_test_asset_center.connector_sync_authority import (
+    load_connector_sync_run,
+    register_connector_instance,
+)
 from ai_test_asset_center.enterprise_knowledge_center import (
     list_enterprise_knowledge_sources,
 )
@@ -105,6 +108,45 @@ def _mixed_transport():
     return transport, calls
 
 
+def _single_node_transport(obj_type: str, revision: str):
+    def transport(method, url, headers, body, timeout, max_bytes):
+        path = urllib.parse.urlsplit(url).path
+        if path.endswith("/wiki/v2/spaces/space1/nodes"):
+            return _json_response(
+                {
+                    "code": 0,
+                    "msg": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "space_id": "space1",
+                                "node_token": "shared-node",
+                                "obj_token": "shared-token",
+                                "obj_type": obj_type,
+                                "title": "订单生命周期",
+                                "has_child": False,
+                                "obj_edit_time": revision,
+                            }
+                        ],
+                        "has_more": False,
+                    },
+                }
+            )
+        if path.endswith("/drive/v1/export_tasks") and method == "POST":
+            return _json_response({"code": 1069902, "msg": "no permission"}, 403)
+        if path.endswith("/docx/v1/documents/shared-token/raw_content"):
+            return _json_response(
+                {
+                    "code": 0,
+                    "msg": "success",
+                    "data": {"content": "# 订单生命周期\n创建、支付、取消。"},
+                }
+            )
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    return transport
+
+
 def test_classifier_separates_supported_and_observable_unsupported() -> None:
     supported = classify_feishu_resource(
         {
@@ -151,6 +193,7 @@ def test_mixed_supported_and_unsupported_resources_complete_truthfully(tmp_path)
     assert receipt["materialized_resource_count"] == 1
     assert receipt["unchanged_resource_count"] == 0
     assert receipt["unsupported_resource_count"] == 1
+    assert receipt["coverage_observation_count"] == 1
     assert receipt["known_resource_count"] == 2
     assert receipt["unknown_gap_count"] == 0
     assert receipt["knowledge_coverage_ratio"] == 0.5
@@ -163,6 +206,22 @@ def test_mixed_supported_and_unsupported_resources_complete_truthfully(tmp_path)
     assert unsupported["content_materialized"] is False
     assert unsupported["source_occurrence_created"] is False
     assert "content" not in unsupported
+
+    persisted = load_connector_sync_run(
+        PROJECT,
+        connector_instance_id=CONNECTOR,
+        sync_epoch_id=receipt["sync_epoch_id"],
+        root=tmp_path,
+    )
+    assert persisted["coverage_observation_count"] == 1
+    assert persisted["knowledge_coverage_status"] == "PARTIAL_UNSUPPORTED"
+    assert persisted["coverage_observations_create_source_occurrences"] is False
+    assert persisted["customer_material_mutation_executed"] is False
+    coverage = persisted["coverage_observations"][0]
+    assert coverage["reason_code"] == "FEISHU_OBJECT_TYPE_UNSUPPORTED"
+    assert coverage["content_materialized"] is False
+    assert coverage["source_occurrence_created"] is False
+    assert "content" not in coverage
 
     inventory = list_enterprise_knowledge_sources(PROJECT, root=tmp_path)
     assert inventory["summary"]["active_source_count"] == 1
@@ -210,9 +269,53 @@ def test_all_unsupported_resources_create_no_fake_source_occurrence(tmp_path) ->
     assert receipt["discovered_resource_count"] == 1
     assert receipt["covered_resource_count"] == 0
     assert receipt["unsupported_resource_count"] == 1
+    assert receipt["coverage_observation_count"] == 1
     assert receipt["knowledge_coverage_ratio"] == 0.0
     inventory = list_enterprise_knowledge_sources(PROJECT, root=tmp_path)
     assert inventory["summary"]["active_source_count"] == 0
+
+
+def test_existing_source_becoming_unsupported_is_preserved_from_retirement(tmp_path) -> None:
+    _register(tmp_path)
+
+    first = sync_feishu_connector(
+        PROJECT,
+        connector_instance_id=CONNECTOR,
+        resolve_connection_profile=_resolver,
+        root=tmp_path,
+        actor=ACTOR,
+        allow_raw_text_fallback=True,
+        transport=_single_node_transport("docx", "17"),
+        sleeper=lambda _: None,
+    )
+    before = list_enterprise_knowledge_sources(PROJECT, root=tmp_path)
+    assert before["summary"]["active_source_count"] == 1
+    original_source_ref = before["sources"][0]["source_ref"]
+
+    second = sync_feishu_connector(
+        PROJECT,
+        connector_instance_id=CONNECTOR,
+        resolve_connection_profile=_resolver,
+        root=tmp_path,
+        actor=ACTOR,
+        previous_cursor=first["next_cursor"],
+        deletion_policy="RETIRE_MISSING",
+        allow_raw_text_fallback=True,
+        transport=_single_node_transport("mindnote", "18"),
+        sleeper=lambda _: None,
+    )
+
+    assert second["status"] == "COMPLETE"
+    assert second["unsupported_resource_count"] == 1
+    assert second["preserved_unsupported_occurrence_count"] == 1
+    assert second["coverage_existing_occurrence_recorded_count"] == 1
+    assert second["deletion_reconciliation"]["missing_count"] == 0
+    assert second["retired_count"] == 0
+    assert second["unsupported_resources"][0]["freshness"] == "STALE_UNSUPPORTED"
+
+    after = list_enterprise_knowledge_sources(PROJECT, root=tmp_path)
+    assert after["summary"]["active_source_count"] == 1
+    assert after["sources"][0]["source_ref"] == original_source_ref
 
 
 def test_supported_export_failure_remains_fatal_and_is_not_isolated(tmp_path) -> None:
