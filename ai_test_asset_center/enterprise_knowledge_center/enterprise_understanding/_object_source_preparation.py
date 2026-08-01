@@ -255,12 +255,16 @@ def finalize_source_declared_recognition(recognition: dict[str, Any], authority:
             or bool(declaration_modes.get(parent, {}).get("prefix"))
             for parent in parent_keys
         )
-        slash_qualified = any(
-            "/" in text(row.get("quote")) or "／" in text(row.get("quote"))
+        surface_evidence = [
+            row
             for row in as_list(candidate.get("evidence"))
-            if isinstance(row, dict)
+            if isinstance(row, dict) and text(row.get("quote"))
+        ]
+        slash_only = bool(surface_evidence) and all(
+            "/" in text(row.get("quote")) or "／" in text(row.get("quote"))
+            for row in surface_evidence
         )
-        if key in parents_by_surface or (source_allows and not slash_qualified):
+        if key in parents_by_surface or (source_allows and not slash_only):
             continue
         candidate.update({
             "status": "PENDING_SOURCE_SURFACE_NOT_AUTHORIZED",

@@ -19,9 +19,9 @@ from ._object_source_conflicts import (
     business_object_source_conflicts,
     project_business_object_source_conflicts,
 )
-from ._object_source_conflict_preparation import (
-    finalize_conflict_governed_source_recognition,
-    prepare_conflict_governed_source_asset,
+from ._object_distinctness_source_authority import (
+    finalize_distinctness_source_recognition,
+    prepare_distinctness_source_asset,
 )
 
 
@@ -36,13 +36,13 @@ def recognize_business_objects(asset: dict[str, Any]) -> dict[str, Any]:
             governed,
             project_id=str(governed.get("project_id") or ""),
         )
-    prepared, authority = prepare_conflict_governed_source_asset(governed)
+    prepared, authority = prepare_distinctness_source_asset(governed)
     if (
         not authority.get("declared_labels")
         and not authority.get("structured_source_declaration_present")
     ):
         prepared, authority = prepare_narrative_declared_asset(governed)
-    return finalize_conflict_governed_source_recognition(
+    return finalize_distinctness_source_recognition(
         govern_object_candidates(prepared), authority
     )
 
