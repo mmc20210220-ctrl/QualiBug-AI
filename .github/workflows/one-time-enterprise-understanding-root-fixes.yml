@@ -1,4 +1,4 @@
-name: One-time enterprise understanding root fixes
+name: One-time cross-source identity fusion root fixes
 
 on:
   push:
@@ -10,13 +10,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: one-time-enterprise-understanding-root-fixes
+  group: one-time-cross-source-identity-fusion-root-fixes
   cancel-in-progress: false
 
 jobs:
-  apply-and-push:
+  apply-test-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout latest main
         uses: actions/checkout@v4
@@ -24,60 +24,38 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Fetch and verify fixed source patch
+      - name: Verify and decode source patch
         shell: bash
-        env:
-          PATCH_HEAD_SHA: efb8a7397a8bbc3949918f584ebcdb1070f491c6
         run: |
           set -euo pipefail
-          git fetch origin "${PATCH_HEAD_SHA}"
-          git show "${PATCH_HEAD_SHA}:.github/patches/enterprise_understanding_root_fixes.patch.gz.b64" > /tmp/fixes.patch.gz.b64
-          echo "f37fb8a8946c2f1a20fbf1702a5f514d59860724712939159872d46944600893  /tmp/fixes.patch.gz.b64" | sha256sum -c -
-          base64 -d /tmp/fixes.patch.gz.b64 | gzip -d > /tmp/fixes.patch
-          echo "b4d356ac229dc82b944eccb83e0fd1e14ac351b8eb9694dadefdc0d7328cacd1  /tmp/fixes.patch" | sha256sum -c -
+          PATCH_B64=.github/patches/cross_source_identity_fusion.patch.gz.b64
+          echo "773bda1826d0ef653f2ae3bbb201353e5a0d4d2d17760aa8b9c351ba05e631c8  ${PATCH_B64}" | sha256sum -c -
+          base64 -d "${PATCH_B64}" | gzip -d > /tmp/cross_source_identity_fusion.patch
+          echo "ed4d13783b1117e53dd63340666010e27bccedca10027fbeb48047d9a3aaed8f  /tmp/cross_source_identity_fusion.patch" | sha256sum -c -
 
       - name: Apply patch with three-way conflict detection
         shell: bash
         run: |
           set -euo pipefail
-          git apply --3way --check /tmp/fixes.patch
-          git apply --3way /tmp/fixes.patch
+          git apply --3way --check /tmp/cross_source_identity_fusion.patch
+          git apply --3way /tmp/cross_source_identity_fusion.patch
           git diff --check
 
-      - name: Verify exact source scope
+      - name: Verify exact identity-fusion scope
         shell: bash
         run: |
           set -euo pipefail
           cat > /tmp/expected-files.txt <<'EOF'
-          ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py
-          ai_test_asset_center/enterprise_knowledge_center/_chinese_business_conflicts.py
-          ai_test_asset_center/enterprise_knowledge_center/_parsing.py
+          .github/quality-gates-backend-tests.txt
+          ai_test_asset_center/enterprise_knowledge_center/_common.py
           ai_test_asset_center/enterprise_knowledge_center/composition.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/authorization_semantics.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder_legacy_v1.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_clusters.py
           ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_edges.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/lifecycle_builder.py
-          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py
-          benchmark_evaluator/enterprise_understanding/build_product_snapshot.py
-          benchmark_evaluator/enterprise_understanding/fact_slot_document.py
-          benchmark_evaluator/enterprise_understanding/root_cause.py
-          benchmark_evaluator/enterprise_understanding/ticketsla_object_baseline.py
-          tests/test_behavior_implementation_binding.py
-          tests/test_chinese_business_comprehension.py
-          tests/test_chinese_business_fact_conflicts.py
-          tests/test_enterprise_identity_resolution.py
-          tests/test_enterprise_understanding_benchmark.py
-          tests/test_enterprise_understanding_source_backed_workflow.py
-          tests/test_enterprise_understanding_structure_first_facts.py
-          tests/test_source_backed_condition_state_semantics.py
-          tests/test_source_declared_operation_identity.py
-          tests/test_source_declared_role_identity.py
-          tests/test_technical_source_understanding_attachment.py
-          tests/test_term_alias_identity_pipeline.py
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_technical_projection.py
+          ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_types.py
+          ai_test_asset_center/enterprise_knowledge_center/implicit_rule_identity_reconciliation.py
+          tests/test_enterprise_identity_governance.py
+          tests/test_identity_benchmark_composition_order.py
+          tests/test_implicit_rule_identity_reconciliation.py
           EOF
           git status --short | awk '{print $2}' | sort > /tmp/actual-files.txt
           sort -o /tmp/expected-files.txt /tmp/expected-files.txt
@@ -88,77 +66,37 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install test dependencies
+      - name: Install runtime and test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Compile changed modules
+      - name: Compile identity-fusion modules
         shell: bash
         run: |
           python -m py_compile \
-            ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py \
-            ai_test_asset_center/enterprise_knowledge_center/_chinese_business_conflicts.py \
-            ai_test_asset_center/enterprise_knowledge_center/_parsing.py \
+            ai_test_asset_center/enterprise_knowledge_center/_common.py \
             ai_test_asset_center/enterprise_knowledge_center/composition.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/authorization_semantics.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder_legacy_v1.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_clusters.py \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_edges.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/lifecycle_builder.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py \
-            benchmark_evaluator/enterprise_understanding/build_product_snapshot.py \
-            benchmark_evaluator/enterprise_understanding/fact_slot_document.py \
-            benchmark_evaluator/enterprise_understanding/root_cause.py \
-            benchmark_evaluator/enterprise_understanding/ticketsla_object_baseline.py
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_technical_projection.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_types.py \
+            ai_test_asset_center/enterprise_knowledge_center/implicit_rule_identity_reconciliation.py
 
-      - name: Run focused root-cause regressions
+      - name: Run focused identity authority regressions
         shell: bash
         run: |
           python -m pytest -q \
-            tests/test_behavior_implementation_binding.py \
-            tests/test_chinese_business_comprehension.py \
-            tests/test_chinese_business_fact_conflicts.py \
+            tests/test_enterprise_identity_governance.py \
+            tests/test_enterprise_identity_scope.py \
             tests/test_enterprise_identity_resolution.py \
-            tests/test_enterprise_understanding_benchmark.py \
-            tests/test_enterprise_understanding_source_backed_workflow.py \
-            tests/test_enterprise_understanding_structure_first_facts.py \
-            tests/test_source_backed_condition_state_semantics.py \
-            tests/test_source_declared_operation_identity.py \
-            tests/test_source_declared_role_identity.py \
-            tests/test_technical_source_understanding_attachment.py \
+            tests/test_implicit_rule_identity_reconciliation.py \
+            tests/test_identity_benchmark_composition_order.py \
+            tests/test_identity_field_evidence.py \
+            tests/test_identity_structural_evidence.py \
             tests/test_term_alias_identity_pipeline.py \
-            -k 'not semantic_gate_and_implementation_gate_remain_separate and not cross_source_identity_unresolved_without_term_alias and not fk_relation_attaches_when_both_tables_are_understood_objects'
+            tests/test_technical_source_understanding_attachment.py
 
-      - name: Run TicketSLA source-backed end-to-end workflow
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf /tmp/qualibug-submit-e2e
-          mkdir -p /tmp/qualibug-submit-e2e/workspace /tmp/qualibug-submit-e2e/output
-          python -m benchmark_evaluator.enterprise_understanding.run_source_backed_workflow \
-            --project ticketsla_d \
-            --product-root "$GITHUB_WORKSPACE" \
-            --workspace-root /tmp/qualibug-submit-e2e/workspace \
-            --manifest benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/source_manifest.json \
-            --ground-truth benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/ground_truth.json \
-            --output /tmp/qualibug-submit-e2e/output \
-            | tee /tmp/qualibug-submit-e2e/workflow.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          result = json.loads(Path('/tmp/qualibug-submit-e2e/workflow.json').read_text())
-          assert result['status'] == 'PASS', result
-          assert result['product_phase_exit_code'] == 0, result
-          assert result['hidden_ground_truth_entered_product_runtime'] is False, result
-          assert result['source_identity_validated_before_ground_truth_load'] is True, result
-          print('TicketSLA E2E PASS; next repair target:', result.get('next_repair_target'))
-          PY
-
-      - name: Commit source changes and remove one-time executor
+      - name: Commit root-cause changes and remove one-time executor
         shell: bash
         run: |
           set -euo pipefail
@@ -167,8 +105,9 @@ jobs:
           git add -A
           git rm .github/workflows/one-time-enterprise-understanding-root-fixes.yml
           git rm .github/root-fix-trigger
-          git commit -m 'fix(understanding): preserve source identities through behavior compilation' \
-            -m 'Root-cause fixes across source identity, Markdown table structure, term/role/object resolution, OpenAPI operation identity, lifecycle conditions, conflict recalculation, authorization semantics, and safe complementary behavior composition. Adds source-backed regressions and keeps evaluation truth isolated from product runtime.'
+          git rm .github/patches/cross_source_identity_fusion.patch.gz.b64
+          git commit -m 'fix(identity): close cross-source fusion authority gaps' \
+            -m 'Use the previous finalized registry as the common baseline for both understanding passes, close source-declared alias anchors without enabling name-only merges, retire stale predicate-object coordinates, form authoritative rule-to-interface relations before identity freeze, and project only source-backed Rule→Fact→Entity technical bindings. Add focused regression and quality-gate coverage.'
 
       - name: Rebase and push main without force
         shell: bash
