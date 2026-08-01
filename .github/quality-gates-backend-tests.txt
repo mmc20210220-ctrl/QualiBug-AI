@@ -68,6 +68,7 @@ tests/test_enterprise_identity_governance.py
 tests/test_identity_exact_table_semantic_binding.py
 tests/test_identity_source_governed_table_field_binding.py
 tests/test_identity_source_governed_table_api_binding.py
+tests/test_identity_unknown_reconciliation.py
 tests/test_enterprise_identity_scope.py
 tests/test_enterprise_identity_resolution.py
 tests/test_implicit_rule_identity_reconciliation.py
