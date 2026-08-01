@@ -1,0 +1,4 @@
+scope=role-permission-only
+source_bundle=99d50865a5423ff0f5215455d85a5794dd637c9b
+local_verified_commit=e1876db7905c6790897c28bb1228484830385ec9
+patch_sha256=7f64625392005c005f6fd28e9c3ac4aa9fe4d6993aede9a330f238d34c03fde2
