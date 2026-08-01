@@ -1,13 +1,12 @@
 """Read-only inventory for historical authorization artifacts across projects.
 
-The inventory does not rewrite scan results, attempt ledgers, Gate receipts,
-findings, or canonical registries. It discovers existing project artifacts, invokes
-the existing historical authorization quarantine and migration authorities, and emits
-only a content-addressed remediation report.
+The inventory never rewrites scan results, attempt ledgers, Gate receipts, findings,
+or canonical registries. It audits one immutable byte snapshot per artifact, invokes
+the existing quarantine and migration authorities, and emits only content-addressed
+remediation metadata.
 
-Counts are deduplicated by immutable attempt-ledger fingerprint plus finding ID so
-copies of one run in scan_result.json and v12_report.json cannot inflate the number
-of authorization occurrences that require rerun.
+Occurrences are deduplicated by attempt-ledger fingerprint plus finding ID, so copies
+of one run in scan_result.json and v12_report.json cannot inflate rerun counts.
 """
 from __future__ import annotations
 
@@ -37,7 +36,7 @@ from .obligation_attempt_ledger import (
     ObligationAttemptLedgerError,
     validate_obligation_attempt_ledger,
 )
-from .private_pilot_json_io import _read_json_object, _write_json_object_atomic
+from .private_pilot_json_io import _write_json_object_atomic
 
 
 INVENTORY_SCHEMA = "qualibug.historical-authorization-inventory.v1"
@@ -56,14 +55,7 @@ _PROJECT_STATUSES = (
     "UNVERIFIABLE",
     "CONTRADICTION",
 )
-_ARTIFACT_STATUSES = (
-    "CLEAR",
-    "QUARANTINED",
-    "REBUILD_BLOCKED",
-    "UNVERIFIABLE",
-    "CONTRADICTION",
-    "INVALID_ARTIFACT",
-)
+_ARTIFACT_STATUSES = _PROJECT_STATUSES + ("INVALID_ARTIFACT",)
 _ARTIFACT_FIELDS = {
     "artifact_path",
     "artifact_sha256",
@@ -163,9 +155,9 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _mtime_utc(path: Path) -> str:
+def _mtime_utc_ns(value: int) -> str:
     return datetime.fromtimestamp(
-        path.stat().st_mtime,
+        value / 1_000_000_000,
         timezone.utc,
     ).isoformat().replace("+00:00", "Z")
 
@@ -177,25 +169,62 @@ def _relative_path(path: Path, root: Path) -> str:
         return str(path.resolve())
 
 
-def _artifact_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _payload_authorities(
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     row = _dict(payload)
     nested = _dict(row.get("v12"))
-    mainline = _dict(row.get("mainline_run") or nested.get("mainline_run"))
-    ledger = _dict(
-        row.get("obligation_attempt_ledger")
-        or nested.get("obligation_attempt_ledger")
+    return (
+        _dict(row.get("mainline_run") or nested.get("mainline_run")),
+        _dict(
+            row.get("obligation_attempt_ledger")
+            or nested.get("obligation_attempt_ledger")
+        ),
+        _dict(
+            row.get("canonical_defect_registry")
+            or nested.get("canonical_defect_registry")
+        ),
     )
-    registry = _dict(
-        row.get("canonical_defect_registry")
-        or nested.get("canonical_defect_registry")
-    )
-    return mainline, ledger, registry
+
+
+def _artifact_snapshot(
+    path: Path,
+    *,
+    root: Path,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """Read and parse exactly the bytes whose SHA is placed in the report."""
+    fallback_id = _fingerprint(str(path.resolve()))
+    metadata = {
+        "artifact_path": _relative_path(path, root),
+        "artifact_sha256": fallback_id,
+        "artifact_size_bytes": 0,
+        "artifact_mtime_utc": "",
+    }
+    try:
+        before = path.stat()
+        raw = path.read_bytes()
+        after = path.stat()
+    except OSError as exc:
+        return {}, metadata, f"ARTIFACT_READ_FAILED:{type(exc).__name__}:{exc}"
+    sha256 = hashlib.sha256(raw).hexdigest()
+    metadata = {
+        "artifact_path": _relative_path(path, root),
+        "artifact_sha256": sha256,
+        "artifact_size_bytes": len(raw),
+        "artifact_mtime_utc": _mtime_utc_ns(after.st_mtime_ns),
+    }
+    if (
+        before.st_size != after.st_size
+        or before.st_mtime_ns != after.st_mtime_ns
+    ):
+        return {}, metadata, "ARTIFACT_CHANGED_DURING_READ"
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return {}, metadata, f"INVALID_JSON_ARTIFACT:{type(exc).__name__}:{exc}"
+    if not isinstance(payload, dict):
+        return {}, metadata, "JSON_ARTIFACT_MUST_BE_OBJECT"
+    return payload, metadata, ""
 
 
 def discover_historical_authorization_artifacts(
@@ -203,11 +232,9 @@ def discover_historical_authorization_artifacts(
     *,
     project_ids: Iterable[str] | None = None,
 ) -> dict[str, list[Path]]:
-    """Discover direct project artifacts without following symlinks outside root."""
+    """Discover project artifacts without following symlinks outside the project."""
     resolved_root = Path(root).expanduser().resolve()
-    requested = {
-        _text(value) for value in (project_ids or []) if _text(value)
-    }
+    requested = {_text(value) for value in (project_ids or []) if _text(value)}
     discovered: dict[str, list[Path]] = {}
     for source_root_name in ("platform_outputs", "platform_workspace"):
         source_root = resolved_root / source_root_name
@@ -221,8 +248,8 @@ def discover_historical_authorization_artifacts(
                 or (requested and project_dir.name not in requested)
             ):
                 continue
-            project_paths: set[Path] = set()
             project_root = project_dir.resolve()
+            paths: set[Path] = set()
             for artifact_name in _ARTIFACT_NAMES:
                 for candidate in project_dir.rglob(artifact_name):
                     if not candidate.is_file() or candidate.is_symlink():
@@ -232,47 +259,77 @@ def discover_historical_authorization_artifacts(
                         resolved.relative_to(project_root)
                     except ValueError:
                         continue
-                    project_paths.add(resolved)
-            if project_paths:
-                discovered.setdefault(project_dir.name, []).extend(
-                    sorted(project_paths, key=lambda value: value.as_posix())
-                )
+                    paths.add(resolved)
+            if paths:
+                discovered.setdefault(project_dir.name, []).extend(paths)
     return {
         project_id: sorted(set(paths), key=lambda value: value.as_posix())
         for project_id, paths in sorted(discovered.items())
     }
 
 
-def _empty_artifact_row(
+def _artifact_row(
+    metadata: dict[str, Any],
     *,
-    path: Path,
-    root: Path,
-    artifact_sha256: str,
     status: str,
-    reason: str,
+    reason: str = "",
+    authority_scope_id: str = "",
+    run_id: str = "",
+    campaign_id: str = "",
+    ledger_fingerprint: str = "",
+    quarantine: dict[str, Any] | None = None,
+    migration_status: str = "NOT_AVAILABLE",
+    rebuild_reason: str = "",
+    rebuilt_registry_fingerprint: str = "",
+    rebuilt_occurrence_count: int = 0,
 ) -> dict[str, Any]:
+    quarantine_row = _dict(quarantine)
     return {
-        "artifact_path": _relative_path(path, root),
-        "artifact_sha256": artifact_sha256,
-        "artifact_size_bytes": path.stat().st_size,
-        "artifact_mtime_utc": _mtime_utc(path),
-        "authority_scope_id": "artifact:" + artifact_sha256,
-        "run_id": "",
-        "campaign_id": "",
-        "attempt_ledger_fingerprint": "",
+        **metadata,
+        "authority_scope_id": authority_scope_id
+        or "artifact:"
+        + _text(metadata.get("artifact_sha256")),
+        "run_id": _text(run_id),
+        "campaign_id": _text(campaign_id),
+        "attempt_ledger_fingerprint": _text(ledger_fingerprint),
         "status": status,
-        "reason": reason,
-        "quarantine_count": 0,
-        "quarantined_finding_ids": [],
-        "rerun_required_count": 0,
-        "manual_recompile_required_count": 0,
-        "rerun_queue": [],
-        "migration_status": "NOT_AVAILABLE",
-        "registry_rebuild_reason": "",
-        "rebuilt_registry_fingerprint": "",
-        "rebuilt_delivery_occurrence_count": 0,
+        "reason": _text(reason),
+        "quarantine_count": int(quarantine_row.get("quarantine_count") or 0),
+        "quarantined_finding_ids": list(
+            quarantine_row.get("quarantined_finding_ids") or []
+        ),
+        "rerun_required_count": int(
+            quarantine_row.get("rerun_required_count") or 0
+        ),
+        "manual_recompile_required_count": int(
+            quarantine_row.get("manual_recompile_required_count") or 0
+        ),
+        "rerun_queue": list(quarantine_row.get("rerun_queue") or []),
+        "migration_status": migration_status,
+        "registry_rebuild_reason": _text(rebuild_reason),
+        "rebuilt_registry_fingerprint": _text(rebuilt_registry_fingerprint),
+        "rebuilt_delivery_occurrence_count": int(rebuilt_occurrence_count),
         "source_evidence_rewritten": False,
     }
+
+
+def _authority_identity_problem(
+    mainline: dict[str, Any],
+    ledger: dict[str, Any],
+) -> str:
+    for field in ("run_id", "campaign_id"):
+        left = _text(mainline.get(field))
+        right = _text(ledger.get(field))
+        if not left or not right or left != right:
+            return f"AUTHORITY_IDENTITY_MISMATCH:{field}:{left}!={right}"
+    mainline_fingerprint = _text(mainline.get("contract_fingerprint"))
+    ledger_fingerprint = _text(ledger.get("mainline_contract_fingerprint"))
+    if ledger_fingerprint and ledger_fingerprint != mainline_fingerprint:
+        return (
+            "AUTHORITY_IDENTITY_MISMATCH:mainline_contract_fingerprint:"
+            f"{mainline_fingerprint}!={ledger_fingerprint}"
+        )
+    return ""
 
 
 def audit_historical_authorization_artifact(
@@ -280,75 +337,74 @@ def audit_historical_authorization_artifact(
     *,
     root: str | Path,
 ) -> dict[str, Any]:
-    """Audit one artifact and return metadata only; source bytes remain untouched."""
+    """Audit one immutable artifact snapshot without modifying its source path."""
     resolved_root = Path(root).expanduser().resolve()
     artifact_path = Path(path).expanduser().resolve()
-    sha256 = _artifact_sha256(artifact_path)
-    try:
-        payload = _read_json_object(artifact_path)
-    except (OSError, ValueError) as exc:
-        return _empty_artifact_row(
-            path=artifact_path,
-            root=resolved_root,
-            artifact_sha256=sha256,
+    payload, metadata, snapshot_problem = _artifact_snapshot(
+        artifact_path,
+        root=resolved_root,
+    )
+    if snapshot_problem:
+        return _artifact_row(
+            metadata,
             status="INVALID_ARTIFACT",
-            reason=f"{type(exc).__name__}:{exc}",
+            reason=snapshot_problem,
         )
 
     mainline, ledger, registry = _payload_authorities(payload)
     if not mainline:
-        return _empty_artifact_row(
-            path=artifact_path,
-            root=resolved_root,
-            artifact_sha256=sha256,
+        return _artifact_row(
+            metadata,
             status="UNVERIFIABLE",
             reason="MAINLINE_RUN_MISSING",
         )
     if not ledger:
-        return _empty_artifact_row(
-            path=artifact_path,
-            root=resolved_root,
-            artifact_sha256=sha256,
+        return _artifact_row(
+            metadata,
             status="UNVERIFIABLE",
             reason="ATTEMPT_LEDGER_MISSING",
         )
     try:
         validated_mainline = validate_mainline_run_contract(mainline)
     except MainlineContractError as exc:
-        return _empty_artifact_row(
-            path=artifact_path,
-            root=resolved_root,
-            artifact_sha256=sha256,
+        return _artifact_row(
+            metadata,
             status="UNVERIFIABLE",
             reason=f"MAINLINE_RUN_INVALID:{exc}",
         )
     try:
         validated_ledger = validate_obligation_attempt_ledger(ledger)
     except ObligationAttemptLedgerError as exc:
-        return _empty_artifact_row(
-            path=artifact_path,
-            root=resolved_root,
-            artifact_sha256=sha256,
+        return _artifact_row(
+            metadata,
             status="UNVERIFIABLE",
             reason=f"ATTEMPT_LEDGER_INVALID:{exc}",
         )
 
     ledger_fingerprint = _text(validated_ledger.get("ledger_fingerprint"))
-    authority_scope_id = (
+    scope_id = (
         "ledger:" + ledger_fingerprint
         if ledger_fingerprint
-        else "artifact:" + sha256
+        else "artifact:" + _text(metadata.get("artifact_sha256"))
     )
-    base = {
-        "artifact_path": _relative_path(artifact_path, resolved_root),
-        "artifact_sha256": sha256,
-        "artifact_size_bytes": artifact_path.stat().st_size,
-        "artifact_mtime_utc": _mtime_utc(artifact_path),
-        "authority_scope_id": authority_scope_id,
+    identity_problem = _authority_identity_problem(
+        validated_mainline,
+        validated_ledger,
+    )
+    common = {
+        "authority_scope_id": scope_id,
         "run_id": _text(validated_mainline.get("run_id")),
         "campaign_id": _text(validated_mainline.get("campaign_id")),
-        "attempt_ledger_fingerprint": ledger_fingerprint,
+        "ledger_fingerprint": ledger_fingerprint,
     }
+    if identity_problem:
+        return _artifact_row(
+            metadata,
+            status="CONTRADICTION",
+            reason=identity_problem,
+            **common,
+        )
+
     try:
         quarantine = build_historical_authorization_quarantine_projection(
             validated_ledger,
@@ -360,39 +416,20 @@ def audit_historical_authorization_artifact(
             quarantine
         )
     except HistoricalAuthorizationQuarantineError as exc:
-        return {
-            **base,
-            "status": "CONTRADICTION",
-            "reason": f"HISTORICAL_AUTHORIZATION_CONTRADICTION:{exc}",
-            "quarantine_count": 0,
-            "quarantined_finding_ids": [],
-            "rerun_required_count": 0,
-            "manual_recompile_required_count": 0,
-            "rerun_queue": [],
-            "migration_status": "NOT_AVAILABLE",
-            "registry_rebuild_reason": "",
-            "rebuilt_registry_fingerprint": "",
-            "rebuilt_delivery_occurrence_count": 0,
-            "source_evidence_rewritten": False,
-        }
+        return _artifact_row(
+            metadata,
+            status="CONTRADICTION",
+            reason=f"HISTORICAL_AUTHORIZATION_CONTRADICTION:{exc}",
+            **common,
+        )
 
-    quarantine_count = int(quarantine.get("quarantine_count") or 0)
-    if quarantine_count == 0:
-        return {
-            **base,
-            "status": "CLEAR",
-            "reason": "",
-            "quarantine_count": 0,
-            "quarantined_finding_ids": [],
-            "rerun_required_count": 0,
-            "manual_recompile_required_count": 0,
-            "rerun_queue": [],
-            "migration_status": "NOT_REQUIRED",
-            "registry_rebuild_reason": "",
-            "rebuilt_registry_fingerprint": "",
-            "rebuilt_delivery_occurrence_count": 0,
-            "source_evidence_rewritten": False,
-        }
+    if int(quarantine.get("quarantine_count") or 0) == 0:
+        return _artifact_row(
+            metadata,
+            status="CLEAR",
+            migration_status="NOT_REQUIRED",
+            **common,
+        )
 
     try:
         migrated = migrate_historical_authorization_scan_result(payload)
@@ -405,60 +442,45 @@ def audit_historical_authorization_artifact(
             "historical_authorization_contradiction" in reason
             or "historical_authorization_formal_scope_invalid" in reason
         )
-        return {
-            **base,
-            "status": "CONTRADICTION" if contradiction else "REBUILD_BLOCKED",
-            "reason": reason,
-            "quarantine_count": quarantine_count,
-            "quarantined_finding_ids": list(
-                quarantine.get("quarantined_finding_ids") or []
-            ),
-            "rerun_required_count": int(
-                quarantine.get("rerun_required_count") or 0
-            ),
-            "manual_recompile_required_count": int(
-                quarantine.get("manual_recompile_required_count") or 0
-            ),
-            "rerun_queue": list(quarantine.get("rerun_queue") or []),
-            "migration_status": "FAILED",
-            "registry_rebuild_reason": reason,
-            "rebuilt_registry_fingerprint": "",
-            "rebuilt_delivery_occurrence_count": 0,
-            "source_evidence_rewritten": False,
-        }
+        return _artifact_row(
+            metadata,
+            status="CONTRADICTION" if contradiction else "REBUILD_BLOCKED",
+            reason=reason,
+            quarantine=quarantine,
+            migration_status="FAILED",
+            rebuild_reason=reason,
+            **common,
+        )
 
     migration_status = _text(migration.get("status")).upper()
-    return {
-        **base,
-        "status": (
+    if migration_status not in {"MIGRATED", "REBUILD_BLOCKED"}:
+        return _artifact_row(
+            metadata,
+            status="CONTRADICTION",
+            reason=f"MIGRATION_STATUS_INVALID:{migration_status}",
+            quarantine=quarantine,
+            migration_status=migration_status or "MISSING",
+            **common,
+        )
+    return _artifact_row(
+        metadata,
+        status=(
             "REBUILD_BLOCKED"
             if migration_status == "REBUILD_BLOCKED"
             else "QUARANTINED"
         ),
-        "reason": _text(migration.get("rebuild_reason")),
-        "quarantine_count": quarantine_count,
-        "quarantined_finding_ids": list(
-            quarantine.get("quarantined_finding_ids") or []
-        ),
-        "rerun_required_count": int(
-            quarantine.get("rerun_required_count") or 0
-        ),
-        "manual_recompile_required_count": int(
-            quarantine.get("manual_recompile_required_count") or 0
-        ),
-        "rerun_queue": list(quarantine.get("rerun_queue") or []),
-        "migration_status": migration_status,
-        "registry_rebuild_reason": _text(migration.get("rebuild_reason")),
-        "rebuilt_registry_fingerprint": _text(
+        reason=_text(migration.get("rebuild_reason")),
+        quarantine=quarantine,
+        migration_status=migration_status,
+        rebuild_reason=_text(migration.get("rebuild_reason")),
+        rebuilt_registry_fingerprint=_text(
             migration.get("rebuilt_registry_fingerprint")
         ),
-        "rebuilt_delivery_occurrence_count": int(
+        rebuilt_occurrence_count=int(
             migration.get("rebuilt_delivery_occurrence_count") or 0
         ),
-        "source_evidence_rewritten": bool(
-            migration.get("source_evidence_rewritten")
-        ),
-    }
+        **common,
+    )
 
 
 def _project_status(artifacts: list[dict[str, Any]]) -> str:
@@ -479,25 +501,18 @@ def _project_inventory(
     artifacts: list[dict[str, Any]],
 ) -> dict[str, Any]:
     ordered = sorted(artifacts, key=lambda value: value["artifact_path"])
-    quarantine_occurrences: dict[tuple[str, str], dict[str, Any]] = {}
+    occurrences: set[tuple[str, str]] = set()
     reruns: dict[tuple[str, str, str], dict[str, Any]] = {}
     for artifact in ordered:
         scope_id = _text(artifact.get("authority_scope_id"))
         for finding_id in _list(artifact.get("quarantined_finding_ids")):
             finding = _text(finding_id)
             if finding:
-                quarantine_occurrences.setdefault(
-                    (scope_id, finding),
-                    {
-                        "authority_scope_id": scope_id,
-                        "finding_id": finding,
-                    },
-                )
+                occurrences.add((scope_id, finding))
         for raw in _list(artifact.get("rerun_queue")):
             row = _dict(raw)
             finding = _text(row.get("finding_id"))
             action = _text(row.get("action"))
-            receipt_id = _text(row.get("quarantine_receipt_id"))
             if not finding or not action:
                 continue
             reruns.setdefault(
@@ -511,7 +526,9 @@ def _project_inventory(
                     "experiment_id": _text(row.get("experiment_id")),
                     "action": action,
                     "requirements": list(row.get("requirements") or []),
-                    "quarantine_receipt_id": receipt_id,
+                    "quarantine_receipt_id": _text(
+                        row.get("quarantine_receipt_id")
+                    ),
                 },
             )
     rerun_queue = sorted(
@@ -522,7 +539,7 @@ def _project_inventory(
             value["action"],
         ),
     )
-    status_counter = Counter(_text(value.get("status")).upper() for value in ordered)
+    statuses = Counter(_text(value.get("status")).upper() for value in ordered)
     rebuilt_scopes = {
         _text(value.get("authority_scope_id"))
         for value in ordered
@@ -531,10 +548,8 @@ def _project_inventory(
     blocked_scopes = {
         _text(value.get("authority_scope_id"))
         for value in ordered
-        if _text(value.get("migration_status")).upper() in {
-            "REBUILD_BLOCKED",
-            "FAILED",
-        }
+        if _text(value.get("migration_status")).upper()
+        in {"REBUILD_BLOCKED", "FAILED"}
     }
     return {
         "project_id": project_id,
@@ -543,9 +558,9 @@ def _project_inventory(
         "authority_scope_count": len(
             {_text(value.get("authority_scope_id")) for value in ordered}
         ),
-        "quarantine_occurrence_count": len(quarantine_occurrences),
+        "quarantine_occurrence_count": len(occurrences),
         "quarantined_finding_ids": sorted(
-            {value["finding_id"] for value in quarantine_occurrences.values()}
+            {finding_id for _, finding_id in occurrences}
         ),
         "rerun_required_count": sum(
             value["action"] == "RERUN_REQUIRED" for value in rerun_queue
@@ -556,76 +571,34 @@ def _project_inventory(
         ),
         "registry_rebuilt_scope_count": len(rebuilt_scopes),
         "registry_rebuild_blocked_scope_count": len(blocked_scopes),
-        "unverifiable_artifact_count": status_counter["UNVERIFIABLE"],
-        "contradiction_artifact_count": status_counter["CONTRADICTION"],
-        "invalid_artifact_count": status_counter["INVALID_ARTIFACT"],
+        "unverifiable_artifact_count": statuses["UNVERIFIABLE"],
+        "contradiction_artifact_count": statuses["CONTRADICTION"],
+        "invalid_artifact_count": statuses["INVALID_ARTIFACT"],
         "rerun_queue": rerun_queue,
         "artifacts": ordered,
     }
 
 
-def build_historical_authorization_inventory(
-    root: str | Path,
+def _report_summary(
+    projects: list[dict[str, Any]],
     *,
-    project_ids: Iterable[str] | None = None,
-    generated_at_utc: str | None = None,
+    missing_projects: list[str],
 ) -> dict[str, Any]:
-    """Build one read-only, project-level historical authorization inventory."""
-    resolved_root = Path(root).expanduser().resolve()
-    requested_projects = sorted(
-        {_text(value) for value in (project_ids or []) if _text(value)}
-    )
-    discovered = discover_historical_authorization_artifacts(
-        resolved_root,
-        project_ids=requested_projects,
-    )
-    projects: list[dict[str, Any]] = []
-    for project_id, paths in discovered.items():
-        projects.append(
-            _project_inventory(
-                project_id,
-                [
-                    audit_historical_authorization_artifact(
-                        path,
-                        root=resolved_root,
-                    )
-                    for path in paths
-                ],
-            )
-        )
-    projects.sort(key=lambda value: value["project_id"])
-    missing_projects = sorted(set(requested_projects) - set(discovered))
-    project_status_counts = {
-        status: sum(value["status"] == status for value in projects)
-        for status in _PROJECT_STATUSES
-    }
-    artifact_rows = [
-        artifact
-        for project in projects
-        for artifact in project["artifacts"]
+    artifacts = [
+        artifact for project in projects for artifact in project["artifacts"]
     ]
-    artifact_status_counts = {
-        status: sum(value["status"] == status for value in artifact_rows)
-        for status in _ARTIFACT_STATUSES
-    }
     project_statuses = {value["status"] for value in projects}
-    overall_status = (
+    status = (
         "CONTRADICTION"
         if "CONTRADICTION" in project_statuses
         else "ACTION_REQUIRED"
         if project_statuses - {"CLEAR"}
         else "CLEAR"
     )
-    payload: dict[str, Any] = {
-        "schema_version": INVENTORY_SCHEMA,
-        "generated_at_utc": _text(generated_at_utc) or _utc_now(),
-        "root": str(resolved_root),
-        "source_roots": ["platform_outputs", "platform_workspace"],
-        "requested_projects": requested_projects,
-        "missing_projects": missing_projects,
-        "status": overall_status,
+    return {
+        "status": status,
         "project_count": len(projects),
-        "artifact_count": len(artifact_rows),
+        "artifact_count": len(artifacts),
         "authority_scope_count": sum(
             value["authority_scope_count"] for value in projects
         ),
@@ -651,8 +624,57 @@ def build_historical_authorization_inventory(
         "manual_recompile_required_count": sum(
             value["manual_recompile_required_count"] for value in projects
         ),
-        "project_status_counts": project_status_counts,
-        "artifact_status_counts": artifact_status_counts,
+        "project_status_counts": {
+            status_name: sum(
+                value["status"] == status_name for value in projects
+            )
+            for status_name in _PROJECT_STATUSES
+        },
+        "artifact_status_counts": {
+            status_name: sum(
+                value["status"] == status_name for value in artifacts
+            )
+            for status_name in _ARTIFACT_STATUSES
+        },
+    }
+
+
+def build_historical_authorization_inventory(
+    root: str | Path,
+    *,
+    project_ids: Iterable[str] | None = None,
+    generated_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """Build one read-only, project-level historical authorization inventory."""
+    resolved_root = Path(root).expanduser().resolve()
+    requested = sorted({_text(value) for value in (project_ids or []) if _text(value)})
+    discovered = discover_historical_authorization_artifacts(
+        resolved_root,
+        project_ids=requested,
+    )
+    projects = [
+        _project_inventory(
+            project_id,
+            [
+                audit_historical_authorization_artifact(
+                    path,
+                    root=resolved_root,
+                )
+                for path in paths
+            ],
+        )
+        for project_id, paths in discovered.items()
+    ]
+    projects.sort(key=lambda value: value["project_id"])
+    missing = sorted(set(requested) - set(discovered))
+    payload: dict[str, Any] = {
+        "schema_version": INVENTORY_SCHEMA,
+        "generated_at_utc": _text(generated_at_utc) or _utc_now(),
+        "root": str(resolved_root),
+        "source_roots": ["platform_outputs", "platform_workspace"],
+        "requested_projects": requested,
+        "missing_projects": missing,
+        **_report_summary(projects, missing_projects=missing),
         "source_artifacts_modified": False,
         "projects": projects,
     }
@@ -672,47 +694,70 @@ def validate_historical_authorization_inventory(
         raise HistoricalAuthorizationInventoryError(
             "historical_authorization_inventory_schema_invalid"
         )
-    if row.get("status") not in {"CLEAR", "ACTION_REQUIRED", "CONTRADICTION"}:
+    if row.get("source_roots") != ["platform_outputs", "platform_workspace"]:
         raise HistoricalAuthorizationInventoryError(
-            "historical_authorization_inventory_status_invalid"
+            "historical_authorization_inventory_source_roots_invalid"
+        )
+    if not _text(row.get("generated_at_utc")) or not _text(row.get("root")):
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_identity_missing"
         )
     if row.get("source_artifacts_modified") is not False:
         raise HistoricalAuthorizationInventoryError(
             "historical_authorization_inventory_source_mutation_forbidden"
         )
-    projects = _list(row.get("projects"))
-    if any(set(_dict(value)) != _PROJECT_FIELDS for value in projects):
-        raise HistoricalAuthorizationInventoryError(
-            "historical_authorization_inventory_project_fields_invalid"
-        )
-    project_ids = [_text(_dict(value).get("project_id")) for value in projects]
-    if project_ids != sorted(set(project_ids)):
-        raise HistoricalAuthorizationInventoryError(
-            "historical_authorization_inventory_projects_not_canonical"
-        )
-    artifacts: list[dict[str, Any]] = []
-    for project in projects:
-        artifact_rows = [_dict(value) for value in _list(project.get("artifacts"))]
-        if any(set(value) != _ARTIFACT_FIELDS for value in artifact_rows):
-            raise HistoricalAuthorizationInventoryError(
-                "historical_authorization_inventory_artifact_fields_invalid"
-            )
-        if int(project.get("artifact_count") or 0) != len(artifact_rows):
-            raise HistoricalAuthorizationInventoryError(
-                "historical_authorization_inventory_project_artifact_count_invalid"
-            )
-        if any(value.get("source_evidence_rewritten") is not False for value in artifact_rows):
-            raise HistoricalAuthorizationInventoryError(
-                "historical_authorization_inventory_artifact_mutation_forbidden"
-            )
-        artifacts.extend(artifact_rows)
+    requested = row.get("requested_projects")
+    missing = row.get("missing_projects")
     if (
-        int(row.get("project_count") or 0) != len(projects)
-        or int(row.get("artifact_count") or 0) != len(artifacts)
+        not isinstance(requested, list)
+        or requested != sorted(set(_text(value) for value in requested if _text(value)))
+        or not isinstance(missing, list)
+        or missing != sorted(set(_text(value) for value in missing if _text(value)))
+        or not set(missing).issubset(set(requested))
     ):
         raise HistoricalAuthorizationInventoryError(
-            "historical_authorization_inventory_count_invalid"
+            "historical_authorization_inventory_requested_projects_invalid"
         )
+
+    projects = [_dict(value) for value in _list(row.get("projects"))]
+    project_ids = [_text(value.get("project_id")) for value in projects]
+    if (
+        any(set(value) != _PROJECT_FIELDS for value in projects)
+        or project_ids != sorted(set(project_ids))
+    ):
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_projects_invalid"
+        )
+    canonical_projects: list[dict[str, Any]] = []
+    for project in projects:
+        artifacts = [_dict(value) for value in _list(project.get("artifacts"))]
+        if (
+            any(set(value) != _ARTIFACT_FIELDS for value in artifacts)
+            or any(
+                value.get("source_evidence_rewritten") is not False
+                for value in artifacts
+            )
+        ):
+            raise HistoricalAuthorizationInventoryError(
+                "historical_authorization_inventory_artifacts_invalid"
+            )
+        expected_project = _project_inventory(project["project_id"], artifacts)
+        if project != expected_project:
+            raise HistoricalAuthorizationInventoryError(
+                f"historical_authorization_inventory_project_summary_invalid:"
+                f"{project['project_id']}"
+            )
+        canonical_projects.append(expected_project)
+
+    expected_summary = _report_summary(
+        canonical_projects,
+        missing_projects=missing,
+    )
+    for key, value in expected_summary.items():
+        if row.get(key) != value:
+            raise HistoricalAuthorizationInventoryError(
+                f"historical_authorization_inventory_summary_invalid:{key}"
+            )
     observed = _text(row.get("inventory_fingerprint"))
     expected = _fingerprint(
         {key: value for key, value in row.items() if key != "inventory_fingerprint"}
@@ -755,11 +800,7 @@ def main(argv: list[str] | None = None) -> int:
             "that require quarantine or rerun. Source artifacts are never modified."
         )
     )
-    parser.add_argument(
-        "--root",
-        default=".",
-        help="QualiBug repository/private-pilot root.",
-    )
+    parser.add_argument("--root", default=".", help="QualiBug root directory.")
     parser.add_argument(
         "--project",
         action="append",
