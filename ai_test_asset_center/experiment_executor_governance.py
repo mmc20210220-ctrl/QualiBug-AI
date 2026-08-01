@@ -188,6 +188,13 @@ def _actor_secret(actor: dict[str, Any]) -> str:
 
 def _actor_requires_exact_secret(actor: dict[str, Any]) -> bool:
     role = _text(actor.get("role"))
+    # Anonymous/public actors have no credentials by definition: _strict_resolve_token
+    # resolves them to "" and the main preflight skips their token check. An account
+    # coordinate on a public actor (e.g. isolation experiments comparing anonymous
+    # access across two account contexts) must not be misread as a requirement for
+    # an exact credential that cannot exist.
+    if role.lower() in {"anonymous", "public"}:
+        return False
     secret = _actor_secret(actor)
     role_aliases = {
         role,

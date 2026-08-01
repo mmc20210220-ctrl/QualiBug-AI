@@ -172,7 +172,11 @@ def test_runtime_never_falls_back_across_missing_actor_or_operation_identity(
     assert result["contract_evidence_receipts"][0]["status"] == "BLOCKED"
 
 
-def test_runtime_preflight_rejects_http_response_as_write_effect_observer() -> None:
+def test_runtime_preflight_allows_response_only_write_without_effect_observer() -> None:
+    # V1.7: response-only write experiments (authorization/validation/isolation/
+    # visibility) assert the write is REJECTED. No state change is expected, so
+    # effect observation is unnecessary: http_response supplies the status-code
+    # evidence. The preflight must allow this shape instead of blocking it.
     experiment = {
         "compile_receipt": {"status": "COMPILED"},
         "control_plan": [],
@@ -186,6 +190,53 @@ def test_runtime_preflight_rejects_http_response_as_write_effect_observer() -> N
             "kind": "http_status_class",
             "template": "permitted_operation_invocation",
         }],
+        "cleanup_plan": [{"operation_ref": "op-delete"}],
+        "safety_contract": {"governed_write": True},
+    }
+    behavior_ir = {
+        "actors": [{"id": "actor-public", "role": "public"}],
+        "operations": [
+            {
+                "id": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "read_write": "write",
+            },
+            {
+                "id": "op-delete",
+                "method": "DELETE",
+                "path": "/resources/{resourceId}",
+                "read_write": "write",
+            },
+        ],
+    }
+
+    ok, reason, detail = runtime_support.preflight_experiment_executable(
+        experiment,
+        behavior_ir=behavior_ir,
+        actor_tokens={},
+    )
+
+    assert ok is True
+    assert reason == ""
+
+
+def test_runtime_preflight_blocks_declared_effect_observer_without_readback() -> None:
+    # A write experiment that DECLARES an effect observer (entity_state) but has
+    # no source-declared observation path, no IR effect observer and no compiled
+    # readback resolver must not degrade to http_response: the response would
+    # become its own proof. This is the fail-closed half of the V1.7 observer
+    # contract.
+    experiment = {
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [],
+        "treatment_plan": [{
+            "actor_ref": "actor-public",
+            "operation_ref": "op-create",
+            "intent": "permitted_operation_invocation",
+        }],
+        "observers": [{"observer_id": "http_response"}, {"observer_id": "entity_state"}],
+        "assertions": [],
         "cleanup_plan": [{"operation_ref": "op-delete"}],
         "safety_contract": {"governed_write": True},
     }
@@ -1858,8 +1909,12 @@ def test_empty_patch_without_source_declared_body_is_blocked() -> None:
 
     assert experiment["compile_receipt"] == {
         "status": "BLOCKED",
-        "reason_code": "BLOCKED_NON_REVERSIBLE_WRITE",
-        "detail": "field_snapshot_restore_no_writable_fields",
+        # A PATCH with no source-declared request body is a source-bound failure
+        # before reversibility is even evaluated: the mutation fields must come
+        # from source material, never be invented. This replaced the older
+        # "field_snapshot_restore_no_writable_fields" classification.
+        "reason_code": "BLOCKED_MISSING_BINDING",
+        "detail": "source_declared_request_body_missing:op-update-settings",
     }
 
 
@@ -2134,10 +2189,15 @@ def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_fail
     )
 
     assert result["status"] == "BLOCKED"
-    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
-    assert "runtime_mutation_target_ambiguous" in result["detail"]
-    assert result["cleanup_failures"] == 0
-    assert governed_calls == ["experiment_control", "experiment_treatment"]
+    # V1.7 multi-write coverage gate runs before body-binding resolution: a
+    # control+treatment experiment whose cleanup plan does not scope each write
+    # step fails fail-closed with the cleanup reason before transport. The body
+    # placeholder in this experiment would also be unresolved, but the cleanup
+    # coverage violation is detected first.
+    assert result["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"
+    assert "missing_cleanup_for_steps" in result["detail"]
+    assert result.get("cleanup_failures", 0) == 0
+    assert governed_calls == []
 
 
 def test_unresolved_body_placeholder_blocks_before_any_write_transport(
@@ -2236,8 +2296,11 @@ def test_unresolved_body_placeholder_blocks_before_any_write_transport(
     )
 
     assert result["status"] == "BLOCKED"
-    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
-    assert "missing_id" in result["detail"]
+    # V1.7 multi-write coverage gate fires before body-binding resolution: the
+    # single unscoped cleanup cannot cover control+treatment writes, so the
+    # experiment blocks on the cleanup coverage violation before transport.
+    assert result["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"
+    assert "missing_cleanup_for_steps" in result["detail"]
 
 
 def test_unresolved_read_path_placeholder_blocks_before_target_transport(
@@ -2717,9 +2780,11 @@ def test_barrier_unresolved_body_placeholder_blocks_before_write_transport(
     )
 
     assert result["status"] == "BLOCKED"
-    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
-    assert "body_placeholder_unresolved:missing_id" in result["detail"]
-    assert result["cleanup_failures"] == 0
+    # V1.7 multi-write coverage gate fires before body-binding resolution (see
+    # test_unresolved_body_placeholder_blocks_before_any_write_transport).
+    assert result["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"
+    assert "missing_cleanup_for_steps" in result["detail"]
+    assert result.get("cleanup_failures", 0) == 0
 
 
 def test_single_participant_barrier_is_explicit_pretransport_block(tmp_path) -> None:
@@ -3707,7 +3772,10 @@ def test_validation_targets_field_named_by_source_invariant() -> None:
     }
 
 
-def test_validation_write_blocks_without_source_observation_path() -> None:
+def test_validation_write_compiles_with_response_only_observer() -> None:
+    # V1.7: a response-only family (validation) asserts the write is REJECTED.
+    # http_response supplies the status-code evidence; no effect observer is
+    # required, so compilation succeeds instead of blocking on write_observer.
     behavior_ir = _idempotency_ir()
     behavior_ir["operations"] = [
         operation
@@ -3745,9 +3813,21 @@ def test_validation_write_blocks_without_source_observation_path() -> None:
         environment_type="test",
     )
 
-    assert experiment["compile_receipt"]["status"] == "BLOCKED"
-    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_OBSERVER"
-    assert experiment["compile_receipt"]["detail"] == "write_observer"
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    # http_response must be attached as the status-code evidence surface.
+    assert any(
+        isinstance(observer, dict)
+        and observer.get("observer_id") == "http_response"
+        for observer in experiment["observers"]
+    )
+    # The compiled response-only experiment must pass the runtime preflight
+    # (no declared effect observer, so no effect evidence is required).
+    ok, reason, detail = runtime_support.preflight_experiment_executable(
+        experiment,
+        behavior_ir=behavior_ir,
+        actor_tokens={},
+    )
+    assert ok is True, (reason, detail)
 
 
 def test_auto_fixture_requires_identity_bound_cleanup_operation() -> None:
