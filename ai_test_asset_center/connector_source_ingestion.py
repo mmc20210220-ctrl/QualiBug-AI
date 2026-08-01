@@ -168,6 +168,9 @@ def _effective_actor(
     if requested_role in _ALLOWED_KNOWLEDGE_ROLES:
         return {"name": name, "role": requested_role}, "DIRECT_PRIVILEGED_ACTOR"
     if requested_role in _CONNECTOR_ROLES:
+        # This bridge is the trusted mutation boundary. The knowledge center currently accepts
+        # operator management roles only, so connector principals delegate through that authority
+        # without weakening the shared authorization helper.
         return (
             {"name": name, "role": "knowledge_admin"},
             "CONNECTOR_SERVICE_DELEGATION",
