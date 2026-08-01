@@ -31,6 +31,7 @@ from ..identity_resolution import (
     project_asset_for_legacy_builder,
     resolve_enterprise_identities,
 )
+from ..identity_structural_evidence import project_identity_structural_candidates
 from ..identity_technical_projection import augment_technical_identity_projection
 from ..schema import as_dict, as_list, stable_id, text
 
@@ -103,6 +104,11 @@ def _attach_identity_audit_receipts(
         or asset.get("enterprise_identity_field_evidence")
     )
     model["identity_field_evidence"] = field_evidence
+    structural_evidence = as_dict(
+        resolution.get("identity_structural_evidence")
+        or asset.get("enterprise_identity_structural_evidence")
+    )
+    model["identity_structural_evidence"] = structural_evidence
     model["identity_annotation_manifest"] = as_dict(
         resolution.get("annotation_manifest")
         or asset.get("enterprise_identity_annotation_manifest")
@@ -158,6 +164,15 @@ def _attach_identity_audit_receipts(
             "enterprise_identity_field_conflict_count": int(
                 field_evidence.get("field_conflict_count") or 0
             ),
+            "enterprise_identity_structural_profile_count": int(
+                structural_evidence.get("entity_profile_count") or 0
+            ),
+            "enterprise_identity_structural_candidate_count": int(
+                structural_evidence.get("candidate_count") or 0
+            ),
+            "enterprise_identity_strong_structural_candidate_count": int(
+                structural_evidence.get("strong_candidate_count") or 0
+            ),
         }
     )
     if measured:
@@ -192,6 +207,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     model = _legacy.build_enterprise_understanding_model(projected_asset)
     model = apply_identity_resolution_to_model(model, resolution)
     model = apply_recognition_to_model(model, recognition)
+    model = project_identity_structural_candidates(asset, model, resolution)
     return _attach_identity_audit_receipts(model, recognized_asset, resolution)
 
 
