@@ -141,6 +141,8 @@ REASON_CODE_REGISTRY.update({
     "OBLIGATION_NOT_IN_PLAN": _reason_definition("PLANNING_DEFERRED", recoverability="RECOVERABLE"),
     "DEFERRED": _reason_definition("PLANNING_DEFERRED", recoverability="RECOVERABLE"),
     "CLEANUP_COMPENSATION_FAILED": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),
+    "CLEANUP_EVIDENCE_INCOMPLETE": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),
+    "CLEANUP_WRITE_COVERAGE_MISMATCH": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),
     "LEGACY_EXECUTION_ERROR": _reason_definition("TARGET_SYSTEM_RESPONSE"),
     "ORACLE_EXCEPTION": _reason_definition("ORACLE_INPUT_GAP", recoverability="RECOVERABLE"),
     "POST_REQUEST_PRECONDITION_FAILED": _reason_definition("TARGET_SYSTEM_RESPONSE"),

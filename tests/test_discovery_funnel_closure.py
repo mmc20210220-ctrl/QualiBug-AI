@@ -334,6 +334,18 @@ def test_unknown_reason_is_visible_and_never_inferred_from_detail() -> None:
     assert profile["is_blocking"] is True
 
 
+def test_cleanup_gate_reason_codes_are_registered() -> None:
+    for reason_code in (
+        "CLEANUP_EVIDENCE_INCOMPLETE",
+        "CLEANUP_WRITE_COVERAGE_MISMATCH",
+    ):
+        profile = profile_reason_code(reason_code)
+
+        assert profile["registry_status"] == "REGISTERED"
+        assert profile["reason_family"] == "CLEANUP_CAPABILITY_GAP"
+        assert profile["is_blocking"] is True
+
+
 def test_comparison_does_not_invent_a_missing_candidate() -> None:
     report = build_funnel_comparison_report(_result())
 

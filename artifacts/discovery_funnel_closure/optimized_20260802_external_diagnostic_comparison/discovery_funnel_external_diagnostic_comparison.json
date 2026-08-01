@@ -1,0 +1,164 @@
+{
+  "schema_version": "qualibug.discovery-funnel-closure.external-diagnostic-comparison.v1",
+  "created_at_utc": "2026-08-01T19:01:00Z",
+  "status": "NOT_MEASURED",
+  "comparison_scope": "authenticated single-target replay diagnostics",
+  "quality_boundary": "The baseline has one measured held-in diagnostic. The candidate is not measured because its campaign is degraded. This is not paired champion/challenger replay plus shadow evidence and cannot authorize promotion.",
+  "evaluator_dataset": {
+    "dataset_id": "benchmark-mall-131-observed",
+    "dataset_version": "v0.6-windows-native-stable-131bugs-20260716",
+    "target_id": "benchmark-mall-held-in-131",
+    "environment_ref": "http://localhost:8080",
+    "environment_type": "test",
+    "evaluation_mode": "replay"
+  },
+  "condition_check": {
+    "target_id_match": true,
+    "environment_ref_match": true,
+    "environment_type_match": true,
+    "evaluation_mode_match": true,
+    "input_fingerprint_match": true,
+    "fixture_fingerprint_match": true,
+    "context_fingerprint_match": true,
+    "runtime_fingerprint_match": true,
+    "policy_identity_is_intentionally_different": true
+  },
+  "baseline": {
+    "policy_id": "policy-baseline-001",
+    "run_id": "RUN_d8aa69a2dcdb825b3b105ae8",
+    "claim_status": "MEASURED",
+    "external_report": "D:\\QF\\d3\\reports\\policy-baseline-001.replay.json",
+    "external_receipt": "D:\\QF\\d3\\receipts\\benchmark-mall-131-observed\\v0.6-windows-native-stable-131bugs-20260716\\policy-baseline-001\\benchmark-mall-held-in-131_RUN_d8aa69a2dcdb825b3b105ae8.json",
+    "quality": {
+      "true_positives": 4,
+      "false_positives": 8,
+      "false_negatives": 127,
+      "micro_precision": 0.3333,
+      "micro_recall": 0.0305,
+      "micro_f1": 0.0559
+    },
+    "funnel": {
+      "selected": 512,
+      "terminal": 512,
+      "compiled": 122,
+      "compile_blocked": 390,
+      "executed": 64,
+      "execution_blocked": 58,
+      "harness_failed": 0,
+      "oracle_resolved": 64,
+      "formal_delivery_occurrences": 34,
+      "funnel_conservation_status": "PASS",
+      "funnel_conservation_complete": true
+    },
+    "operations": {
+      "request_count": 503,
+      "production_http_requests": 0,
+      "cleanup_failures": 0,
+      "safety_incidents": 0,
+      "dirty_test_environments": 0,
+      "execution_success_rate": 0.52459,
+      "duplicate_rate": 0.647059,
+      "wall_clock_seconds": 583.078,
+      "estimated_cost_usd": null
+    }
+  },
+  "candidate": {
+    "policy_id": "policy-eval-8385734a62e5",
+    "run_id": "RUN_201c89b90fcaa7c0240790b3",
+    "claim_status": "NOT_MEASURED",
+    "external_report": "D:\\QF\\d9\\reports\\policy-eval-8385734a62e5.replay.json",
+    "external_receipt": "D:\\QF\\d9\\receipts\\benchmark-mall-131-observed\\v0.6-windows-native-stable-131bugs-20260716\\policy-eval-8385734a62e5\\benchmark-mall-held-in-131_RUN_201c89b90fcaa7c0240790b3.json",
+    "quality": {
+      "status": "NOT_MEASURED",
+      "reason": "obligation_campaign_degraded",
+      "true_positives": null,
+      "false_positives": null,
+      "false_negatives": null,
+      "micro_precision": null,
+      "micro_recall": null,
+      "micro_f1": null
+    },
+    "funnel": {
+      "selected": 507,
+      "terminal": 507,
+      "compiled": 150,
+      "compile_blocked": 357,
+      "executed": 108,
+      "execution_blocked": 42,
+      "harness_failed": 56,
+      "oracle_resolved": 52,
+      "oracle_indeterminate": 56,
+      "formal_delivery_occurrences": 26,
+      "funnel_conservation_status": "PASS",
+      "funnel_conservation_complete": true
+    },
+    "operations": {
+      "request_count": 778,
+      "production_http_requests": 0,
+      "cleanup_failures": 0,
+      "safety_incidents": 0,
+      "dirty_test_environments": 0,
+      "execution_success_rate": 0.72,
+      "duplicate_rate": 0.576923,
+      "wall_clock_seconds": 634.75,
+      "estimated_cost_usd": null
+    },
+    "degradation_reasons": {
+      "CLEANUP_WRITE_COVERAGE_MISMATCH": 20,
+      "CONTRACT_ORACLE_HARNESS_FAILED": 36,
+      "BLOCKED_MISSING_BINDING": 71,
+      "BLOCKED_NON_REVERSIBLE_WRITE": 240,
+      "BLOCKED_MISSING_OBSERVER": 12
+    }
+  },
+  "observed_delta_not_quality_delta": {
+    "compiled": 28,
+    "executed": 44,
+    "selected": -5,
+    "blocked": -49,
+    "harness_failed": 56,
+    "formal_delivery_occurrences": -8,
+    "interpretation": "The candidate increased execution reach but introduced harness degradation and therefore has no valid precision/recall delta or promotion evidence."
+  },
+  "root_cause_boundary": [
+    {
+      "reason_code": "BLOCKED_NON_REVERSIBLE_WRITE",
+      "baseline_count": 262,
+      "candidate_count": 240,
+      "status": "REMAINS_BLOCKED",
+      "cause": "Source materials do not provide an exact reversible cleanup authority for the write.",
+      "safe_action": "Do not invent a compensator or lower the cleanup gate."
+    },
+    {
+      "reason_code": "BLOCKED_MISSING_BINDING",
+      "baseline_count": 53,
+      "candidate_count": 71,
+      "status": "NOT_CLOSED",
+      "cause": "Exact source-declared actor, fixture, body, or placeholder binding remains unavailable for some obligations.",
+      "safe_action": "Keep the obligation blocked until a source-backed binding or governed fixture receipt exists."
+    },
+    {
+      "reason_code": "BLOCKED_MISSING_OBSERVER",
+      "baseline_count": 41,
+      "candidate_count": 12,
+      "status": "NOT_CLOSED",
+      "cause": "Required control-success or business-effect observation is not proven on the executed path.",
+      "safe_action": "Do not convert indeterminate observer evidence into a delivery finding."
+    }
+  ],
+  "promotion": {
+    "eligible": false,
+    "status": "BLOCKED",
+    "reasons": [
+      "candidate_pipeline_degraded",
+      "candidate_quality_not_measured",
+      "no_held_out_or_clean_target",
+      "estimated_cost_missing",
+      "no_paired_replay_and_shadow_comparison"
+    ]
+  },
+  "evaluator_data_boundary": {
+    "product_runtime_received_private_evaluator_answers": false,
+    "comparison_report_uses_only_authenticated_evaluator_receipt_fields": true
+  }
+}

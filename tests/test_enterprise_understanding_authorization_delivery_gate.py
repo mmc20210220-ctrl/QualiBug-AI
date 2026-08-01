@@ -252,6 +252,23 @@ def test_replay_against_different_resource_blocks_publication() -> None:
         )
 
 
+def test_replay_allows_declared_query_selector_on_same_route() -> None:
+    finding = _finding()
+
+    receipt = validate_authorization_delivery_finding(
+        finding,
+        attempt=_attempt(
+            finding,
+            reproduction=_reproduction(
+                treatment_path="/orders/order-42?owner_id=peer"
+            ),
+        ),
+        campaign_id="campaign:1",
+    )
+
+    assert receipt["status"] == "PASSED"
+
+
 def test_foreign_execution_lineage_blocks_publication() -> None:
     finding = _finding()
     finding["authorization_causality_receipt"]["execution_id"] = "execution:other"

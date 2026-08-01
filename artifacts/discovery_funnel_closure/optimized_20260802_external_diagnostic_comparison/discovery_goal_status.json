@@ -1,0 +1,23 @@
+{
+  "schema_version": "qualibug.discovery-goal-gate-status.v1",
+  "commercial_claim_status": "NOT_MEASURED",
+  "implementation_ready": true,
+  "gate_a_evaluation_integrity": "PASSED",
+  "gate_b_trace_and_weakness_mining": "PASSED",
+  "gate_c_bounded_proposal_and_real_runner": "PASSED",
+  "gate_d_capability_breakthrough": "NOT_MEASURED",
+  "controlled_commercial_pilot": "NOT_MEASURED",
+  "full_autonomy_ga": "NOT_MEASURED",
+  "blockers": [
+    "commercial_dataset_shape_not_ready",
+    "held_out_target_missing",
+    "clean_target_missing",
+    "held_out_industry_diversity_missing",
+    "candidate_replay_campaign_degraded",
+    "unit_cost_missing"
+  ],
+  "product_ports": {
+    "frontend": 5174,
+    "backend": 8088
+  }
+}

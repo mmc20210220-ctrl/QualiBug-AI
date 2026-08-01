@@ -701,10 +701,15 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         from .discovery_weakness_miner import mine_discovery_weaknesses, persist_weakness_report
         from .discovery_harness_proposer import propose_harness_candidates, persist_harness_proposals
         from .enterprise_project_config import MultiServiceProject
-        from .policy_registry import get_policy_registry
+        from .policy_wiring import get_effective_policy_strategy
 
-        _active_policy = get_policy_registry().get_active()
-        _policy_id = str(getattr(_active_policy, "policy_id", "") or getattr(_active_policy, "policy_version", "") or "unversioned-policy")
+        # Candidate evaluation runs use a ContextVar strategy override without
+        # mutating the product registry.  The run context is the policy identity
+        # authority; the global active registry would mislabel candidate traces.
+        _policy_id = str(context.get("policy_id") or "").strip()
+        if not _policy_id:
+            raise RuntimeError("scan_policy_id_missing_from_campaign_context")
+        _effective_policy_strategy = get_effective_policy_strategy()
         _industry = str(context.get("industry") or "").strip()
         if not _industry:
             _industry = str(MultiServiceProject(project, root).project_metadata().get("industry") or "").strip()
@@ -729,11 +734,9 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         result["trace_ledger"] = _trace_ledger
         v12["trace_ledger"] = _trace_ledger
         _weakness_report = mine_discovery_weaknesses([_trace_ledger])
-        if _active_policy is None:
-            raise RuntimeError("active policy is required for bounded Harness proposal generation")
         _proposal_report = propose_harness_candidates(
             _weakness_report,
-            _active_policy.strategy,
+            _effective_policy_strategy,
         )
         _evolution_root = root / "platform_outputs" / _safe_project(project) / "discovery_evolution"
         _trace_path = persist_trace_ledger(_trace_ledger, _evolution_root / "trace_ledgers")

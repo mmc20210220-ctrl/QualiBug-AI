@@ -86,6 +86,21 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _resource_route_path(value: Any) -> str:
+    """Return the source route identity without request-query serialization.
+
+    Authorization comparisons may vary one source-declared identity selector in
+    the query (for example an ownership filter).  The comparison observer uses
+    the route path as the same-resource authority, while the query mutation is
+    separately constrained by the compiled comparison contract and causal
+    receipt.  Reproduction validation must use that same route identity or a
+    valid comparison would be rejected merely because its permitted selector
+    was serialized into the URL.
+    """
+
+    return _text(value).split("?", 1)[0]
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(
         value,
@@ -303,12 +318,12 @@ def _replay_identity_problem(
     control_identity = (
         _text(control.get("operation_ref")),
         _text(control.get("method")).upper(),
-        _text(control.get("path")),
+        _resource_route_path(control.get("path")),
     )
     treatment_identity = (
         _text(treatment.get("operation_ref")),
         _text(treatment.get("method")).upper(),
-        _text(treatment.get("path")),
+        _resource_route_path(treatment.get("path")),
     )
     if not all(control_identity) or control_identity != treatment_identity:
         return "authorization_delivery_replay_resource_identity_mismatch"
