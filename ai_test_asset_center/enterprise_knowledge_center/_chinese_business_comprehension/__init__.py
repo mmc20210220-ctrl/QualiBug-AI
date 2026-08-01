@@ -12,6 +12,11 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
+from .state_guard_coordinates import (
+    close_state_guard_coordinates,
+    synchronize_rule_library_from_facts,
+)
+
 _PACKAGE = __package__.rsplit("._chinese_business_comprehension", 1)[0]
 _LEGACY_NAME = f"{_PACKAGE}._chinese_business_comprehension_extractor_v1"
 _LEGACY_PATH = Path(__file__).resolve().parents[1] / "_chinese_business_comprehension_extractor_v1.py"
@@ -68,6 +73,7 @@ def analyze_chinese_business_source(
 ):
     coverage, facts, glossary = _legacy.analyze_chinese_business_source(source, asset=asset)
     _annotate_fact_mentions(facts)
+    close_state_guard_coordinates(facts)
     return coverage, facts, glossary
 
 
@@ -78,6 +84,9 @@ def build_chinese_first_comprehension(
     enriched = _legacy.build_chinese_first_comprehension(asset, sources)
     facts = _list(_dict(enriched.get("business_fact_ledger")).get("items"))
     _annotate_fact_mentions(facts)
+    state_guard_receipt = close_state_guard_coordinates(facts)
+    synchronize_rule_library_from_facts(enriched, facts)
+    enriched["state_guard_coordinate_closure_receipt"] = state_guard_receipt
     projection = _dict(enriched.get("term_alias_identity_merge"))
     projection.update(
         {
