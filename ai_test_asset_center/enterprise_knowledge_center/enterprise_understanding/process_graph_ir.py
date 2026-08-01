@@ -91,6 +91,8 @@ def _binding_index(
                         or row.get("path_template")
                     ),
                     "binding_id": text(binding.get("binding_id")),
+                    "input_binding_refs": [dict(value) for value in as_list(row.get("input_binding_refs")) if isinstance(value, dict)],
+                    "output_binding_specs": [dict(value) for value in as_list(row.get("output_binding_specs")) if isinstance(value, dict)],
                     "evidence": dedupe_evidence(
                         [*as_list(binding.get("evidence")), *as_list(row.get("evidence"))]
                     ),
@@ -295,8 +297,22 @@ def _resolve_node(
         "to_state": text(step.get("to_state")),
         "conditions": as_list(step.get("conditions")),
         "path_kind": text(step.get("path_kind")),
-        "input_binding_refs": as_list(step.get("input_binding_refs")),
-        "output_binding_specs": as_list(step.get("output_binding_specs")),
+        "input_binding_refs": [
+            dict(value)
+            for value in (
+                as_list(step.get("input_binding_refs"))
+                or as_list(implementation.get("input_binding_refs"))
+            )
+            if isinstance(value, dict)
+        ],
+        "output_binding_specs": [
+            dict(value)
+            for value in (
+                as_list(step.get("output_binding_specs"))
+                or as_list(implementation.get("output_binding_specs"))
+            )
+            if isinstance(value, dict)
+        ],
         "observer_requirements": as_list(step.get("observer_requirements")),
         "compensation_operation_ref": text(
             step.get("compensation_operation_ref")
@@ -561,6 +577,231 @@ def _atomic_graph(
     return graph, unknowns
 
 
+def _dict_rows(value: Any) -> list[dict[str, Any]]:
+    return [dict(row) for row in as_list(value) if isinstance(row, dict)]
+
+
+def _binding_field(ref: dict[str, Any]) -> str:
+    return text(
+        ref.get("producer_output_field")
+        or ref.get("source_field")
+        or ref.get("canonical_field_id")
+        or ref.get("output_field")
+        or ref.get("field")
+    )
+
+
+def _binding_target(ref: dict[str, Any], source_field: str) -> str:
+    return text(
+        ref.get("target")
+        or ref.get("consumer_target")
+        or ref.get("target_location")
+        or source_field
+    )
+
+
+def _binding_source_path(ref: dict[str, Any]) -> str:
+    return text(
+        ref.get("producer_response_path")
+        or ref.get("json_path")
+        or ref.get("source_path")
+        or ref.get("response_field")
+    )
+
+
+def _append_unique_dict(rows: list[dict[str, Any]], candidate: dict[str, Any]) -> None:
+    if candidate not in rows:
+        rows.append(candidate)
+
+
+def _project_link_bindings(
+    *,
+    process: dict[str, Any],
+    link: dict[str, Any],
+    source_node: dict[str, Any],
+    target_node: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Bind source-declared relation handoffs to concrete graph nodes.
+
+    No field, response path, or target name is inferred.  The relation must
+    carry the canonical field identity and either its response path or an
+    identical output declaration already frozen on the producer node.
+    """
+    projected: list[dict[str, Any]] = []
+    unknowns: list[dict[str, Any]] = []
+    source_node_id = text(source_node.get("node_id"))
+    target_node_id = text(target_node.get("node_id"))
+    output_specs = _dict_rows(source_node.get("output_binding_specs"))
+    input_refs = _dict_rows(target_node.get("input_binding_refs"))
+
+    for index, raw in enumerate(_dict_rows(link.get("binding_refs"))):
+        source_field = _binding_field(raw)
+        target = _binding_target(raw, source_field)
+        source_path = _binding_source_path(raw)
+        existing_outputs = [
+            row
+            for row in output_specs
+            if text(
+                row.get("canonical_field_id")
+                or row.get("output_field")
+                or row.get("field")
+            )
+            == source_field
+        ]
+        if not source_path and len(existing_outputs) == 1:
+            source_path = text(
+                existing_outputs[0].get("json_path")
+                or existing_outputs[0].get("source_path")
+                or existing_outputs[0].get("response_field")
+            )
+        if not source_field or not target or not source_path:
+            unknowns.append(
+                new_unknown(
+                    "PROCESS_EDGE_DATA_HANDOFF_INCOMPLETE",
+                    "跨对象数据交接缺少来源明确的字段、响应位置或消费目标，不能进入运行绑定。",
+                    related_objects=unique_text(
+                        [link.get("source_object_ref"), link.get("target_object_ref")]
+                    ),
+                    evidence=dedupe_evidence(
+                        [
+                            *as_list(process.get("evidence")),
+                            *as_list(link.get("evidence")),
+                        ]
+                    ),
+                    severity="P0",
+                    blocks_formal_understanding=True,
+                    reason_code="PROCESS_EDGE_DATA_HANDOFF_INCOMPLETE",
+                    details={
+                        "process_id": process.get("process_id"),
+                        "relation_id": link.get("relation_id"),
+                        "binding_index": index,
+                    },
+                )
+            )
+            continue
+
+        output_spec = {
+            "canonical_field_id": source_field,
+            "json_path": source_path,
+            "source_relation_id": link.get("relation_id"),
+        }
+        if existing_outputs:
+            existing_paths = unique_text(
+                [
+                    row.get("json_path")
+                    or row.get("source_path")
+                    or row.get("response_field")
+                    for row in existing_outputs
+                ]
+            )
+            if existing_paths and existing_paths != [source_path]:
+                unknowns.append(
+                    new_unknown(
+                        "PROCESS_EDGE_OUTPUT_BINDING_CONFLICT",
+                        "跨对象关系声明的生产者输出位置与接口合同不一致，不能自动选择。",
+                        related_objects=unique_text(
+                            [link.get("source_object_ref"), link.get("target_object_ref")]
+                        ),
+                        evidence=dedupe_evidence(
+                            [
+                                *as_list(process.get("evidence")),
+                                *as_list(link.get("evidence")),
+                            ]
+                        ),
+                        severity="P0",
+                        blocks_formal_understanding=True,
+                        reason_code="PROCESS_EDGE_OUTPUT_BINDING_CONFLICT",
+                        details={
+                            "process_id": process.get("process_id"),
+                            "relation_id": link.get("relation_id"),
+                            "canonical_field_id": source_field,
+                            "declared_path": source_path,
+                            "existing_paths": existing_paths,
+                        },
+                    )
+                )
+                continue
+        else:
+            _append_unique_dict(output_specs, output_spec)
+
+        binding_ref = dict(raw)
+        binding_ref.update(
+            {
+                "producer_node_id": source_node_id,
+                "producer_output_field": source_field,
+                "target": target,
+                "consumer_node_id": target_node_id,
+                "source_relation_id": link.get("relation_id"),
+            }
+        )
+        matching_inputs = [
+            (position, row)
+            for position, row in enumerate(input_refs)
+            if _binding_field(row) == source_field
+            and _binding_target(row, source_field) == target
+        ]
+        conflicting_producers = unique_text(
+            [
+                row.get("producer_node_id")
+                or row.get("source_node_id")
+                or row.get("producer_step_id")
+                for _, row in matching_inputs
+                if text(
+                    row.get("producer_node_id")
+                    or row.get("source_node_id")
+                    or row.get("producer_step_id")
+                )
+                and text(
+                    row.get("producer_node_id")
+                    or row.get("source_node_id")
+                    or row.get("producer_step_id")
+                )
+                != source_node_id
+            ]
+        )
+        if conflicting_producers:
+            unknowns.append(
+                new_unknown(
+                    "PROCESS_EDGE_INPUT_BINDING_CONFLICT",
+                    "消费接口与跨对象关系对同一输入声明了不同生产者，不能自动选择。",
+                    related_objects=unique_text(
+                        [link.get("source_object_ref"), link.get("target_object_ref")]
+                    ),
+                    evidence=dedupe_evidence(
+                        [
+                            *as_list(process.get("evidence")),
+                            *as_list(link.get("evidence")),
+                        ]
+                    ),
+                    severity="P0",
+                    blocks_formal_understanding=True,
+                    reason_code="PROCESS_EDGE_INPUT_BINDING_CONFLICT",
+                    details={
+                        "process_id": process.get("process_id"),
+                        "relation_id": link.get("relation_id"),
+                        "canonical_field_id": source_field,
+                        "consumer_target": target,
+                        "producer_candidates": conflicting_producers,
+                    },
+                )
+            )
+            continue
+        if matching_inputs:
+            merged = dict(matching_inputs[0][1])
+            merged.update(binding_ref)
+            input_refs[matching_inputs[0][0]] = merged
+            for position, _row in reversed(matching_inputs[1:]):
+                input_refs.pop(position)
+            binding_ref = merged
+        else:
+            _append_unique_dict(input_refs, binding_ref)
+        _append_unique_dict(projected, binding_ref)
+
+    source_node["output_binding_specs"] = output_specs
+    target_node["input_binding_refs"] = input_refs
+    return projected, unknowns
+
+
 def _clone_child_graph(
     child: dict[str, Any], composite_id: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
@@ -663,14 +904,60 @@ def _composite_graph(
                 )
             )
             continue
+        nodes_by_id = {text(row.get("node_id")): row for row in nodes}
+        source_node = as_dict(nodes_by_id.get(sources[0]))
+        target_node = as_dict(nodes_by_id.get(targets[0]))
+        declared_source_system = text(link.get("source_system_ref"))
+        declared_target_system = text(link.get("target_system_ref"))
+        actual_source_system = text(source_node.get("system_ref"))
+        actual_target_system = text(target_node.get("system_ref"))
+        for side, declared, actual in (
+            ("source", declared_source_system, actual_source_system),
+            ("target", declared_target_system, actual_target_system),
+        ):
+            if declared and actual and declared != actual:
+                unknowns.append(
+                    new_unknown(
+                        "PROCESS_EDGE_SYSTEM_SCOPE_MISMATCH",
+                        "跨对象关系声明的系统作用域与接口实现绑定不一致，不能自动改写目标系统。",
+                        related_objects=unique_text(
+                            [link.get("source_object_ref"), link.get("target_object_ref")]
+                        ),
+                        evidence=dedupe_evidence(
+                            [
+                                *as_list(process.get("evidence")),
+                                *as_list(link.get("evidence")),
+                            ]
+                        ),
+                        severity="P0",
+                        blocks_formal_understanding=True,
+                        reason_code="PROCESS_EDGE_SYSTEM_SCOPE_MISMATCH",
+                        details={
+                            "process_id": process_id,
+                            "relation_id": link.get("relation_id"),
+                            "side": side,
+                            "declared_system_ref": declared,
+                            "implementation_system_ref": actual,
+                        },
+                    )
+                )
+        projected_bindings, binding_unknowns = _project_link_bindings(
+            process=process,
+            link=link,
+            source_node=source_node,
+            target_node=target_node,
+        )
+        unknowns.extend(binding_unknowns)
         edges.append(
             {
                 "edge_id": stable_id("multi_object_process_edge", process_id, link.get("relation_id"), sources[0], targets[0]),
                 "source_node_id": sources[0],
                 "target_node_id": targets[0],
+                "source_system_ref": actual_source_system,
+                "target_system_ref": actual_target_system,
                 "relation_type": text(link.get("relation_type")) or "DEPENDS_ON",
                 "condition": {"orchestration_markers": as_list(link.get("orchestration_markers"))},
-                "binding_refs": as_list(link.get("binding_refs")),
+                "binding_refs": projected_bindings,
                 "source_refs": unique_text(as_list(link.get("source_refs"))),
                 "relation_id": link.get("relation_id"),
             }
@@ -705,6 +992,44 @@ def _composite_graph(
         else:
             row["status"] = "BOUND"
         waits.append(row)
+
+    features = unique_text(as_list(process.get("process_features")))
+    if "CROSS_SYSTEM" in features:
+        missing_system_nodes = [
+            text(row.get("node_id"))
+            for row in nodes
+            if not text(row.get("system_ref"))
+        ]
+        systems = unique_text([row.get("system_ref") for row in nodes])
+        if missing_system_nodes:
+            unknowns.append(
+                new_unknown(
+                    "PROCESS_GRAPH_CROSS_SYSTEM_TARGET_UNRESOLVED",
+                    "跨系统流程存在未绑定目标系统的节点，不能形成可执行跨系统图。",
+                    related_objects=unique_text(as_list(process.get("inputs"))),
+                    evidence=as_list(process.get("evidence")),
+                    severity="P0",
+                    blocks_formal_understanding=True,
+                    reason_code="PROCESS_GRAPH_CROSS_SYSTEM_TARGET_UNRESOLVED",
+                    details={
+                        "process_id": process_id,
+                        "node_ids": missing_system_nodes,
+                    },
+                )
+            )
+        if not missing_system_nodes and len(systems) < 2:
+            unknowns.append(
+                new_unknown(
+                    "PROCESS_GRAPH_CROSS_SYSTEM_SCOPE_INVALID",
+                    "流程被来源标记为跨系统，但已绑定节点未覆盖两个不同系统。",
+                    related_objects=unique_text(as_list(process.get("inputs"))),
+                    evidence=as_list(process.get("evidence")),
+                    severity="P0",
+                    blocks_formal_understanding=True,
+                    reason_code="PROCESS_GRAPH_CROSS_SYSTEM_SCOPE_INVALID",
+                    details={"process_id": process_id, "system_refs": systems},
+                )
+            )
 
     ordered, starts, terminals, forks, structural_joins, cycle = _graph_shape(nodes, edges)
     joins = list(structural_joins)
@@ -741,7 +1066,7 @@ def _composite_graph(
         "process_id": process_id,
         "name": process.get("name"),
         "process_type": process.get("process_type"),
-        "process_features": unique_text(as_list(process.get("process_features"))),
+        "process_features": features,
         "nodes": nodes,
         "edges": edges,
         "start_node_refs": starts,

@@ -46,10 +46,17 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _legacy_completed_graph_scope(
+def _legacy_graph_scope_identity_valid(
     execution_set: dict[str, Any],
 ) -> bool:
-    """Accept only complete, effectful cleanup evidence from the old API shape."""
+    """Validate the governed identity envelope of the old graph API shape.
+
+    Observation completeness is intentionally not part of this gate. Once every
+    source/cleanup identity and ACCEPTED transport receipt is proven, the existing
+    per-step equivalence engine owns whether each step is EQUIVALENT or
+    INDETERMINATE. This prevents one missing observation in one system from
+    erasing measured cleanup truth for every other system in the graph.
+    """
     row = _dict(execution_set)
     if _text(row.get("schema_version")) != (
         _graph_core.GRAPH_CLEANUP_EXECUTION_SET_SCHEMA
@@ -91,9 +98,6 @@ def _legacy_completed_graph_scope(
             or node_receipt.get("succeeded") is not True
             or not 200 <= int(node_receipt.get("status_code") or 0) < 300
             or node_receipt != input_receipt
-            or not _dict(step_input.get("before_observation"))
-            or not _dict(step_input.get("after_write_observation"))
-            or not _dict(step_input.get("after_cleanup_observation"))
         ):
             return False
         receipt_id = _text(node_receipt.get("receipt_id"))
@@ -368,7 +372,7 @@ def evaluate_cleanup_equivalence(
             == "INDETERMINATE"
             and GRAPH_EQUIVALENCE_SCOPE_INVALID in detail
             and "graph_cleanup_receipt_identity_mismatch" in detail
-            and _legacy_completed_graph_scope(
+            and _legacy_graph_scope_identity_valid(
                 cleanup_execution_receipt
             )
         ):

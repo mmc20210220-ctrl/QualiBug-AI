@@ -6,6 +6,7 @@ similarity and document order never create a formal relation.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Iterable
 
@@ -81,6 +82,30 @@ _TIMED_WAIT_MARKER_RE = re.compile(
 )
 _CROSS_SYSTEM_MARKER_RE = re.compile(r"跨系统|系统间|对方系统|外部系统|异构系统|对接系统")
 _JOIN_MARKER_RE = re.compile(r"均完成|都完成|全部完成|都收到|均收到|同时满足后|汇合后|一并完成后|全部收到")
+
+
+def _dict_rows(value: Any) -> list[dict[str, Any]]:
+    return [dict(row) for row in as_list(value) if isinstance(row, dict)]
+
+
+def _dedupe_dict_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(dict(row))
+    return result
+
+
+def _source_system_ref(row: dict[str, Any], prefix: str) -> str:
+    return text(
+        row.get(f"{prefix}_system_ref")
+        or row.get(f"{prefix}_service_ref")
+        or row.get(f"{prefix}_approved_target_ref")
+    )
 
 
 def _orchestration_markers(statement: str, conditions: Iterable[Any] = ()) -> list[str]:
@@ -213,6 +238,9 @@ def build_object_graph(
                     row for row in as_list(fact.get("time_window_constraints")) if isinstance(row, dict)
                 ],
                 "orchestration_markers": _orchestration_markers(statement, conditions),
+                "source_system_ref": _source_system_ref(fact, "source"),
+                "target_system_ref": _source_system_ref(fact, "target"),
+                "binding_refs": _dict_rows(fact.get("binding_refs")),
                 "raw_relation": relation_raw,
                 "fact_refs": unique_text([fact.get("fact_id")]),
                 "evidence": evidence,
@@ -324,6 +352,9 @@ def build_object_graph(
                 "temporal_constraints": [],
                 "time_window_constraints": [],
                 "orchestration_markers": _orchestration_markers(quote or raw_relation),
+                "source_system_ref": _source_system_ref(row, "source"),
+                "target_system_ref": _source_system_ref(row, "target"),
+                "binding_refs": _dict_rows(row.get("binding_refs")),
                 "raw_relation": raw_relation,
                 "fact_refs": [],
                 "evidence": dedupe_evidence(evidence_rows),
@@ -362,6 +393,29 @@ def build_object_graph(
         )
         existing["fact_refs"] = unique_text([*as_list(existing.get("fact_refs")), *as_list(relation.get("fact_refs"))])
         existing["evidence"] = dedupe_evidence([*as_list(existing.get("evidence")), *as_list(relation.get("evidence"))])
+        existing["binding_refs"] = _dedupe_dict_rows([
+            *_dict_rows(existing.get("binding_refs")),
+            *_dict_rows(relation.get("binding_refs")),
+        ])
+        for field in ("source_system_ref", "target_system_ref"):
+            candidates = unique_text([existing.get(field), relation.get(field)])
+            if len(candidates) == 1:
+                existing[field] = candidates[0]
+            elif len(candidates) > 1:
+                existing[field] = ""
+                existing[f"{field}_candidates"] = candidates
+                unknowns.append(
+                    new_unknown(
+                        "OBJECT_RELATION_SYSTEM_SCOPE_CONFLICT",
+                        "同一跨对象关系声明了多个不一致的系统作用域，不能自动选择目标系统。",
+                        related_objects=[key[0], key[2]],
+                        evidence=existing["evidence"],
+                        severity="P0",
+                        blocks_formal_understanding=True,
+                        reason_code="OBJECT_RELATION_SYSTEM_SCOPE_CONFLICT",
+                        details={"relation_id": existing.get("relation_id"), "field": field, "candidates": candidates},
+                    )
+                )
 
     return sorted(deduped.values(), key=lambda row: (text(row.get("source_object_ref")), text(row.get("relation_type")), text(row.get("target_object_ref")))), unknowns
 

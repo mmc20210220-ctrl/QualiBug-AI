@@ -50,6 +50,21 @@ def _authoritative_relationship(edge: dict[str, Any]) -> bool:
     return True
 
 
+def _source_declared_system_ref(interface: dict[str, Any]) -> str:
+    """Return only an explicit system identity carried by the interface asset."""
+    return text(
+        interface.get("system_ref")
+        or interface.get("target_system_ref")
+        or interface.get("service_ref")
+        or interface.get("approved_target_ref")
+    )
+
+
+def _source_declared_binding_specs(interface: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """Copy source-declared runtime binding specs without inferring field identity."""
+    return [dict(row) for row in as_list(interface.get(key)) if isinstance(row, dict)]
+
+
 def _interface_evidence(interface: dict[str, Any], derivation: str) -> dict[str, Any]:
     locator = f"{text(interface.get('method')).upper()} {text(interface.get('path'))}".strip()
     return source_evidence(
@@ -250,6 +265,9 @@ def _bind_action(
             "path": row.get("path"),
             "operation_id": row.get("operation_id"),
             "summary": row.get("summary"),
+            "system_ref": _source_declared_system_ref(row),
+            "input_binding_refs": _source_declared_binding_specs(row, "input_binding_refs"),
+            "output_binding_specs": _source_declared_binding_specs(row, "output_binding_specs"),
             "status": "BOUND",
             "authoritative": True,
             "derivation": (
