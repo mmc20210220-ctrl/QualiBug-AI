@@ -100,3 +100,32 @@ def test_path_placeholder_still_requires_identity_read(monkeypatch) -> None:
     )
     # GET /api/orders/{id} exists in this IR, so the identity read resolves.
     assert result["bindings"].get("order_id") == "order-9"
+
+
+def test_owner_scoped_list_read_tries_actor_tokens(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_call_get(base_url: str, path: str, token: str, timeout: int = 10):
+        calls.append(token)
+        # Admin token sees no addresses; the buyer token owns them.
+        if token == "token-admin":
+            return {"data": []}
+        if token == "token-buyer" and path == "/api/users/addresses":
+            return {"data": [{"id": "addr-buyer"}]}
+        return None
+
+    monkeypatch.setattr(resolver, "_call_get_endpoint", fake_call_get)
+    hints = {"address_id": {"/api/users/addresses"}}
+    result = resolver.auto_resolve_bindings(
+        _ir(),
+        {
+            "admin": "token-admin",
+            "buyer": "token-buyer",
+        },
+        "http://target.test",
+        required_placeholders={"address_id"},
+        placeholder_collection_hints=hints,
+    )
+    assert result["bindings"].get("address_id") == "addr-buyer"
+    assert "token-admin" in calls
+    assert "token-buyer" in calls

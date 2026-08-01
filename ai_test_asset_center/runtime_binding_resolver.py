@@ -424,6 +424,10 @@ def auto_resolve_bindings(
             break
     if not token and actor_tokens:
         token = next(iter(actor_tokens.values()), "")
+    tokens_to_try = [token] if token else []
+    for _role, _token_value in dict(actor_tokens).items():
+        if _token_value and _token_value not in tokens_to_try:
+            tokens_to_try.append(_token_value)
 
     hints_by_placeholder = {
         _text(name): {
@@ -480,18 +484,29 @@ def auto_resolve_bindings(
             attempts += 1
 
             path = _text(endpoint.get("path") or endpoint.get("raw_path"))
-            response = _call_get_endpoint(base_url, path, token)
-
-            if response is None:
-                receipts.append({
-                    "placeholder": placeholder,
-                    "endpoint": path,
-                    "status": "no_response",
-                    "value_fingerprint": "",
-                })
-                continue
-
-            value = _extract_id_from_response(response, placeholder)
+            value = ""
+            used_token = ""
+            # Owner-scoped list reads only succeed with the resource owner's
+            # token (an admin token sees no addresses). Try every declared
+            # actor token until one yields a value.
+            for candidate_token in tokens_to_try:
+                if attempts >= max_resolution_attempts:
+                    break
+                attempts += 1
+                candidate_response = _call_get_endpoint(
+                    base_url,
+                    path,
+                    candidate_token,
+                )
+                candidate_value = (
+                    _extract_id_from_response(candidate_response, placeholder)
+                    if candidate_response is not None
+                    else ""
+                )
+                if candidate_value:
+                    value = candidate_value
+                    used_token = candidate_token
+                    break
             if not value:
                 receipts.append({
                     "placeholder": placeholder,
@@ -545,13 +560,13 @@ def auto_resolve_bindings(
                     entity_status = _call_get_status(
                         base_url,
                         entity_path,
-                        token,
+                        used_token or token,
                     )
                 else:
                     entity_status = _call_read_status(
                         base_url,
                         entity_path,
-                        token,
+                        used_token or token,
                         method=entity_method,
                     )
                 if not (200 <= entity_status < 300):
