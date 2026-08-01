@@ -3,7 +3,7 @@
 The HTTP layer owns authentication, public projection, and request shaping only. Trusted sync,
 acceptance jobs, fenced configuration, checkpoint validation, automatic refresh, and retry policy
 live in connector application services. Raw credentials, source content, cursors, report paths, and
-remote-resource identities are never returned through this surface.
+remote-resource identities are never returned through lifecycle projections.
 """
 from __future__ import annotations
 
@@ -138,6 +138,15 @@ def _public_connector_instance(value: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _safe_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _remote_lifecycle_projection(run: dict[str, Any]) -> dict[str, Any]:
     raw = run.get("remote_lifecycle")
     lifecycle = dict(raw) if isinstance(raw, dict) else {}
@@ -153,42 +162,44 @@ def _remote_lifecycle_projection(run: dict[str, Any]) -> dict[str, Any]:
         "authoritative_snapshot_complete": (
             lifecycle.get("authoritative_snapshot_complete") is True
         ),
-        "present_count": int(lifecycle.get("present_count") or 0),
-        "absent_count": int(
+        "present_count": _safe_int(lifecycle.get("present_count")),
+        "absent_count": _safe_int(
             lifecycle.get("absent_count")
-            or run.get("remote_absent_count")
-            or 0
+            if "absent_count" in lifecycle
+            else run.get("remote_absent_count")
         ),
-        "unconfirmed_missing_count": int(
+        "unconfirmed_missing_count": _safe_int(
             lifecycle.get("unconfirmed_missing_count")
-            or run.get("remote_unconfirmed_missing_count")
-            or 0
+            if "unconfirmed_missing_count" in lifecycle
+            else run.get("remote_unconfirmed_missing_count")
         ),
-        "retirement_eligible_count": int(
+        "retirement_eligible_count": _safe_int(
             lifecycle.get("retirement_eligible_count")
-            or run.get("remote_retirement_eligible_count")
-            or 0
+            if "retirement_eligible_count" in lifecycle
+            else run.get("remote_retirement_eligible_count")
         ),
-        "retired_count": int(
-            lifecycle.get("retired_count") or run.get("retired_count") or 0
+        "retired_count": _safe_int(
+            lifecycle.get("retired_count")
+            if "retired_count" in lifecycle
+            else run.get("retired_count")
         ),
-        "renamed_resource_count": int(
+        "renamed_resource_count": _safe_int(
             lifecycle.get("renamed_resource_count")
-            or run.get("renamed_resource_count")
-            or 0
+            if "renamed_resource_count" in lifecycle
+            else run.get("renamed_resource_count")
         ),
-        "moved_resource_count": int(
+        "moved_resource_count": _safe_int(
             lifecycle.get("moved_resource_count")
-            or run.get("moved_resource_count")
-            or 0
+            if "moved_resource_count" in lifecycle
+            else run.get("moved_resource_count")
         ),
-        "reappeared_resource_count": int(
+        "reappeared_resource_count": _safe_int(
             lifecycle.get("reappeared_resource_count")
-            or run.get("reappeared_resource_count")
-            or 0
+            if "reappeared_resource_count" in lifecycle
+            else run.get("reappeared_resource_count")
         ),
-        "retire_after_complete_snapshots": int(
-            lifecycle.get("retire_after_complete_snapshots") or 0
+        "retire_after_complete_snapshots": _safe_int(
+            lifecycle.get("retire_after_complete_snapshots")
         ),
         "requested_deletion_policy": _text(
             lifecycle.get("requested_deletion_policy")
@@ -284,9 +295,9 @@ def _coverage_projection(
             "customer_material_mutation_executed": False,
         }
 
-    materialized_count = int(run.get("materialized_item_count") or 0)
-    unchanged_count = int(run.get("unchanged_item_count") or 0)
-    unsupported_count = int(run.get("coverage_observation_count") or 0)
+    materialized_count = _safe_int(run.get("materialized_item_count"))
+    unchanged_count = _safe_int(run.get("unchanged_item_count"))
+    unsupported_count = _safe_int(run.get("coverage_observation_count"))
     covered_count = materialized_count + unchanged_count
     discovered_count = covered_count + unsupported_count
     ratio = covered_count / discovered_count if discovered_count else 1.0
@@ -389,33 +400,30 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
                 for row in rows
             ),
             "unsupported_resource_count": sum(
-                int(row.get("coverage", {}).get("unsupported_count") or 0)
+                _safe_int(row.get("coverage", {}).get("unsupported_count"))
                 for row in rows
             ),
             "remote_absent_resource_count": sum(
-                int(
+                _safe_int(
                     row.get("coverage", {})
                     .get("remote_lifecycle", {})
                     .get("absent_count")
-                    or 0
                 )
                 for row in rows
             ),
             "remote_unconfirmed_missing_resource_count": sum(
-                int(
+                _safe_int(
                     row.get("coverage", {})
                     .get("remote_lifecycle", {})
                     .get("unconfirmed_missing_count")
-                    or 0
                 )
                 for row in rows
             ),
             "remote_retired_resource_count": sum(
-                int(
+                _safe_int(
                     row.get("coverage", {})
                     .get("remote_lifecycle", {})
                     .get("retired_count")
-                    or 0
                 )
                 for row in rows
             ),
@@ -459,10 +467,14 @@ def _sanitize_sync_response(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload)
     for field in _PRIVATE_SYNC_RESPONSE_FIELDS:
         result.pop(field, None)
+    if isinstance(result.get("remote_lifecycle"), dict):
+        result["remote_lifecycle"] = _remote_lifecycle_projection(result)
     result["next_cursor_returned_to_client"] = False
     result["fencing_token_returned_to_client"] = False
     result["checkpoint_storage"] = "encrypted_connection_profile"
     result["source_content_returned"] = False
+    result["remote_lifecycle_remote_resource_identities_returned"] = False
+    result["remote_lifecycle_source_refs_returned"] = False
     return result
 
 
