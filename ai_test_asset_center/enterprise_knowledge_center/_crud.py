@@ -566,13 +566,24 @@ def ingest_enterprise_knowledge_documents(
                 ),
                 None,
             )
-            if duplicate or content_hash in seen_hashes:
+            batch_duplicate = next(
+                (
+                    row
+                    for row in prepared
+                    if row.get("content_hash") == content_hash
+                ),
+                None,
+            )
+            canonical_duplicate = duplicate or batch_duplicate
+            if canonical_duplicate is not None:
                 duplicates.append(
                     {
                         "filename": filename,
-                        "source_id": (duplicate or {}).get("source_id"),
+                        "source_id": canonical_duplicate.get("source_id"),
+                        "content_hash": content_hash,
                         "reason": "same_content_hash",
                         "source_type": source_type,
+                        "external_ref": str(document.get("external_ref") or ""),
                         "archive_provenance": dict(
                             document.get("archive_provenance") or {}
                         ),
