@@ -1,0 +1,64 @@
+name: One-time restore generated package metadata
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/restore-generated-metadata-trigger"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-restore-generated-metadata
+  cancel-in-progress: false
+
+jobs:
+  restore-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Restore generated metadata from pre-fix parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout 6f879f7b5e52f4d90aa6f5c03c17daa887c00cd1 -- \
+            qualibug_ai.egg-info/PKG-INFO \
+            qualibug_ai.egg-info/SOURCES.txt \
+            qualibug_ai.egg-info/entry_points.txt \
+            qualibug_ai.egg-info/requires.txt
+          git diff --check
+
+      - name: Verify exact restore scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected-files.txt <<'EOF'
+          qualibug_ai.egg-info/PKG-INFO
+          qualibug_ai.egg-info/SOURCES.txt
+          qualibug_ai.egg-info/entry_points.txt
+          qualibug_ai.egg-info/requires.txt
+          EOF
+          git status --short | awk '{print $2}' | grep -v '^.github/' | sort > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Commit cleanup to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/restore-generated-metadata-trigger \
+            .github/workflows/one-time-restore-generated-metadata.yml
+          git config user.name "mmc20210220-ctrl"
+          git config user.email "mmc20210220@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "chore(repo): restore generated package metadata"
+          git push origin HEAD:main
