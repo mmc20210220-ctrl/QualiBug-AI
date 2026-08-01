@@ -1,4 +1,4 @@
-"""Authenticated HTTP surface for the enterprise identity benchmark workflow."""
+"""Authenticated HTTP surface for enterprise identity measurement and review."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,13 +29,15 @@ def _route(path: str) -> tuple[str, str]:
         "ground-truth",
         "quality-policy",
         "run",
+        "structural-review",
+        "structural-review-decision",
     }:
         return parts[3], parts[5]
     return "", ""
 
 
 class IdentityBenchmarkHttpMixin:
-    """Route identity annotation requests before the canonical general router."""
+    """Route identity measurement and review before the canonical general router."""
 
     def _identity_benchmark_error(self, exc: Exception, *, project: str) -> Any:
         detail = _text(exc)
@@ -85,7 +87,7 @@ class IdentityBenchmarkHttpMixin:
             {
                 "ok": False,
                 "error": "IDENTITY_BENCHMARK_INTERNAL_ERROR",
-                "message": "身份标注与评测资源暂时不可用。",
+                "message": "身份标注、评测与裁决资源暂时不可用。",
             },
             500,
         )
@@ -122,6 +124,7 @@ class IdentityBenchmarkHttpMixin:
             "workspace",
             "manifest",
             "annotation-package",
+            "structural-review",
         }:
             return super().do_GET()
         self._init_request_context()
@@ -140,6 +143,18 @@ class IdentityBenchmarkHttpMixin:
                         "ok": True,
                         "project_id": project,
                         "data": get_identity_annotation_task_package(project, root),
+                    }
+                )
+            if action == "structural-review":
+                from .enterprise_knowledge_center.enterprise_understanding.identity_structural_review import (
+                    get_identity_structural_review_queue,
+                )
+
+                return self._json(
+                    {
+                        "ok": True,
+                        "project_id": project,
+                        "data": get_identity_structural_review_queue(project, root),
                     }
                 )
 
@@ -167,6 +182,7 @@ class IdentityBenchmarkHttpMixin:
             "ground-truth",
             "quality-policy",
             "run",
+            "structural-review-decision",
         }:
             return super().do_POST()
         self._init_request_context()
@@ -191,6 +207,22 @@ class IdentityBenchmarkHttpMixin:
                 )
                 status = 201 if result.get("ground_truth_imported") is True else 200
                 return self._json({"ok": True, "data": result}, status)
+            if action == "structural-review-decision":
+                from .enterprise_knowledge_center.enterprise_understanding.identity_structural_review import (
+                    record_identity_structural_review_decision,
+                )
+
+                result = record_identity_structural_review_decision(
+                    project,
+                    candidate_id=_text(body.get("candidate_id")),
+                    action=_text(body.get("action")),
+                    canonical_entity_id=_text(body.get("canonical_entity_id")),
+                    rationale=_text(body.get("rationale")),
+                    actor=actor,
+                    root=root,
+                    rebuild=True,
+                )
+                return self._json({"ok": True, "data": result}, 201)
 
             if action == "run":
                 from .enterprise_knowledge_center.enterprise_understanding.identity_benchmark_workflow import (
