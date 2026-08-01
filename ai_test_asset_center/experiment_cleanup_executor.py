@@ -23,6 +23,7 @@ _RUNTIME_IDENTITY_CONFLICTS = "_runtime_step_identity_conflicts"
 _ORIGINAL_ATTEMPTS_ATTR = "_qualibug_original_governed_write_attempts"
 _ORIGINAL_CHANGED_STATE_ATTR = "_qualibug_original_governed_write_changed_state"
 _ORIGINAL_ADAPTER_IDENTITY_ATTR = "_qualibug_original_adapter_cleanup_identity"
+_CLEANUP_PRE_HOOKS: dict[str, Any] = {}
 
 if not hasattr(_core, _ORIGINAL_ATTEMPTS_ATTR):
     setattr(_core, _ORIGINAL_ATTEMPTS_ATTR, _core._governed_write_attempts)
@@ -60,6 +61,46 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def register_cleanup_pre_hook(name: str, hook: Any) -> None:
+    """Register one named hook before governed cleanup executes.
+
+    The registry preserves the public cleanup function identity while allowing
+    source-backed observers to compose at the existing cleanup seam. Invalid
+    registrations fail fast; hooks may mutate the call-local observations or
+    return explicit context updates.
+    """
+
+    key = _text(name)
+    if not key:
+        raise ValueError("cleanup_pre_hook_name_missing")
+    if hook is None:
+        _CLEANUP_PRE_HOOKS.pop(key, None)
+        return
+    if not callable(hook):
+        raise TypeError(f"cleanup_pre_hook_not_callable:{key}")
+    _CLEANUP_PRE_HOOKS[key] = hook
+
+
+def cleanup_pre_hook_names() -> list[str]:
+    """Return installed cleanup hook names in deterministic order."""
+
+    return sorted(_CLEANUP_PRE_HOOKS)
+
+
+def _run_cleanup_pre_hooks(context: dict[str, Any]) -> dict[str, Any]:
+    """Run registered hooks against one cleanup invocation context."""
+
+    call_context = dict(context)
+    for name, hook in tuple(_CLEANUP_PRE_HOOKS.items()):
+        update = hook(call_context)
+        if update is None:
+            continue
+        if not isinstance(update, dict):
+            raise TypeError(f"cleanup_pre_hook_result_invalid:{name}")
+        call_context.update(update)
+    return call_context
 
 
 def _stable_fingerprint(value: Any) -> str:
@@ -430,24 +471,26 @@ def _strip_runtime_markers(steps: Any) -> list[dict[str, Any]]:
 
 
 def execute_experiment_cleanup_compensation(**kwargs: Any) -> dict[str, Any]:
+    call_context = _run_cleanup_pre_hooks(kwargs)
     _sync_core_hooks()
     projected_steps, binding_audit = _project_adapter_cleanup_requirements(
-        experiment=_dict(kwargs.get("exp")),
+        experiment=_dict(call_context.get("exp")),
         steps=[
-            row for row in _list(kwargs.get("steps_out")) if isinstance(row, dict)
+            row
+            for row in _list(call_context.get("steps_out"))
+            if isinstance(row, dict)
         ],
     )
     result = _dict(
         _adapter.execute_experiment_cleanup_compensation(
-            **{
-                **kwargs,
-                "steps_out": projected_steps,
-            }
+            **{**call_context, "steps_out": projected_steps}
         )
     )
     returned_steps = result.get("steps_out") or projected_steps
     result["steps_out"] = _strip_runtime_markers(returned_steps)
-    observations = _dict(result.get("observations") or kwargs.get("observations"))
+    observations = _dict(
+        result.get("observations") or call_context.get("observations")
+    )
     observations["declared_adapter_cleanup_runtime_binding"] = binding_audit
     result["observations"] = observations
     return result

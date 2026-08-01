@@ -4,7 +4,7 @@ Registered observers normally execute in the Finalizer, after cleanup compensati
 is correct for final-state observers but wrong for event delivery: cleanup may emit a second
 event or remove correlation state and contaminate the observation window. This installer:
 
-1. intercepts the mainline cleanup call;
+1. registers a first-class pre-cleanup hook on the mainline cleanup authority;
 2. performs the event observation exactly once before cleanup;
 3. stores the typed receipt and its evidence on ``observations``;
 4. makes the Finalizer's registered handler return that same receipt instead of polling again.
@@ -20,8 +20,8 @@ from . import formal_event_surface as _surface
 
 _PRE_RECEIPT_KEY = "pre_cleanup_event_observer_receipt"
 _INSTALL_MARKER = "_qualibug_event_pre_cleanup_observer_installed"
-_ORIGINAL_CLEANUP_MARKER = "_qualibug_original_cleanup_before_event_patch"
-_ORIGINAL_HANDLER_MARKER = "_qualibug_original_event_handler_before_pre_cleanup_patch"
+_BASE_HANDLER_MARKER = "_qualibug_base_event_handler_before_pre_cleanup_registration"
+_HOOK_NAME = "formal_event_pre_cleanup_observer"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -104,7 +104,7 @@ def _registered_handler() -> Any:
     from . import observer_contracts_base as observers
 
     current_surface = _surface._event_observer_handler
-    installed_base = getattr(_surface, _ORIGINAL_HANDLER_MARKER, current_surface)
+    installed_base = getattr(_surface, _BASE_HANDLER_MARKER, current_surface)
     if current_surface is not installed_base:
         return current_surface
     return observers._REGISTERED_OBSERVER_HANDLERS.get(
@@ -212,26 +212,20 @@ def _pre_observe_event(
 
 
 def install_formal_event_pre_cleanup_observer() -> None:
-    """Patch the imported mainline cleanup symbol and registered event handler idempotently."""
-    from . import experiment_executor as executor
+    """Register the pre-cleanup observer without replacing mainline symbols."""
+    from . import experiment_cleanup_executor as cleanup_executor
     from . import observer_contracts_base as observers
 
-    if getattr(executor, _INSTALL_MARKER, False):
+    if getattr(cleanup_executor, _INSTALL_MARKER, False):
         return
-    original_cleanup = getattr(
-        executor,
-        _ORIGINAL_CLEANUP_MARKER,
-        executor.execute_experiment_cleanup_compensation,
-    )
-    setattr(executor, _ORIGINAL_CLEANUP_MARKER, original_cleanup)
 
     original_handler = getattr(
         _surface,
-        _ORIGINAL_HANDLER_MARKER,
+        _BASE_HANDLER_MARKER,
         observers._REGISTERED_OBSERVER_HANDLERS.get(_surface.OBSERVER_ID)
         or _surface._event_observer_handler,
     )
-    setattr(_surface, _ORIGINAL_HANDLER_MARKER, original_handler)
+    setattr(_surface, _BASE_HANDLER_MARKER, original_handler)
 
     def event_handler_reusing_pre_cleanup(envelope: dict[str, Any]) -> dict[str, Any]:
         observations = _dict(_dict(envelope).get("observations"))
@@ -240,29 +234,28 @@ def install_formal_event_pre_cleanup_observer() -> None:
             return copy.deepcopy(precomputed)
         authority = getattr(
             _surface,
-            _ORIGINAL_HANDLER_MARKER,
+            _BASE_HANDLER_MARKER,
             _surface._event_observer_handler,
         )
         return authority(envelope)
 
-    def cleanup_after_event_observation(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        exp = _dict(kwargs.get("exp"))
-        observations = _dict(kwargs.get("observations"))
+    def pre_cleanup_hook(context: dict[str, Any]) -> None:
+        exp = _dict(context.get("exp"))
+        observations = _dict(context.get("observations"))
         _pre_observe_event(
             exp=exp,
             observations=observations,
             campaign_id=_text(
-                kwargs.get("resolved_campaign_id") or kwargs.get("campaign_id")
+                context.get("resolved_campaign_id") or context.get("campaign_id")
             ),
-            execution_id=_text(kwargs.get("resolved_execution_id")),
+            execution_id=_text(context.get("resolved_execution_id")),
         )
-        return original_cleanup(*args, **kwargs)
 
     observers._REGISTERED_OBSERVER_HANDLERS[_surface.OBSERVER_ID] = (
         event_handler_reusing_pre_cleanup
     )
-    executor.execute_experiment_cleanup_compensation = cleanup_after_event_observation
-    setattr(executor, _INSTALL_MARKER, True)
+    cleanup_executor.register_cleanup_pre_hook(_HOOK_NAME, pre_cleanup_hook)
+    setattr(cleanup_executor, _INSTALL_MARKER, True)
 
 
 __all__ = [
