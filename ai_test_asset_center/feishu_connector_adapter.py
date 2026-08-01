@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping
 
 from .connector_sync_authority import (
     ConnectorSyncError,
+    connector_snapshot_observation_index,
     list_connector_instances,
     sync_connector_snapshot_batch,
 )
@@ -48,6 +49,7 @@ _EXPORT_FORMATS = {
     "bitable": ("xlsx", "collaboration_document"),
 }
 _DIRECT_FILE_TYPES = {"file"}
+_MATERIALIZATION_CONTRACT_VERSION = "feishu-materialization-v1"
 
 
 class FeishuConnectorError(RuntimeError):
@@ -725,6 +727,57 @@ def materialize_feishu_resource(
     }
 
 
+def _materialization_fingerprint(
+    descriptor: Mapping[str, Any],
+    *,
+    allow_raw_text_fallback: bool,
+) -> str:
+    basis = {
+        "contract_version": _MATERIALIZATION_CONTRACT_VERSION,
+        "remote_resource_id": _text(
+            descriptor.get("remote_resource_id"), 1000
+        ),
+        "obj_token": _text(descriptor.get("obj_token"), 160),
+        "obj_type": _text(descriptor.get("obj_type"), 64).lower(),
+        "remote_revision": _text(descriptor.get("remote_revision"), 240),
+        "allow_raw_text_fallback": bool(allow_raw_text_fallback),
+    }
+    return hashlib.sha256(
+        json.dumps(
+            basis,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _unchanged_observation(
+    descriptor: Mapping[str, Any],
+    fingerprint: str,
+) -> dict[str, Any]:
+    remote_id = _text(descriptor.get("remote_resource_id"), 1000)
+    resource_kind = _text(descriptor.get("resource_kind"), 80)
+    return {
+        "remote_resource_id": remote_id,
+        "resource_kind": resource_kind,
+        "metadata": {
+            "source_origin": "connector_snapshot",
+            "requested_source_id": remote_id,
+            "remote_resource_id": remote_id,
+            "resource_kind": resource_kind,
+            "remote_revision": _text(descriptor.get("remote_revision"), 240),
+            "remote_updated_at": _text(
+                descriptor.get("remote_updated_at"), 80
+            ),
+            "parent_remote_id": _text(
+                descriptor.get("parent_node_token"), 1000
+            ),
+            "remote_materialization_fingerprint": fingerprint,
+        },
+    }
+
+
 def _snapshot_cursor(descriptors: list[dict[str, Any]]) -> str:
     basis = [
         {
@@ -887,9 +940,35 @@ def sync_feishu_connector(
         max_nodes=max_nodes,
         sleeper=sleeper,
     )
+    next_cursor = _snapshot_cursor(descriptors)
+    observation_index = connector_snapshot_observation_index(
+        project_id,
+        connector_instance_id=connector_instance_id,
+        root=resolved_root,
+    )
     items: list[dict[str, Any]] = []
+    unchanged_observations: list[dict[str, Any]] = []
     degraded_count = 0
     for descriptor in descriptors:
+        remote_id = _text(descriptor.get("remote_resource_id"), 1000)
+        fingerprint = _materialization_fingerprint(
+            descriptor,
+            allow_raw_text_fallback=allow_raw_text_fallback,
+        )
+        existing = dict(observation_index.get(remote_id) or {})
+        existing_metadata = dict(existing.get("source_metadata") or {})
+        if (
+            existing
+            and _text(
+                existing_metadata.get("remote_materialization_fingerprint"),
+                128,
+            )
+            == fingerprint
+        ):
+            unchanged_observations.append(
+                _unchanged_observation(descriptor, fingerprint)
+            )
+            continue
         item = materialize_feishu_resource(
             descriptor,
             access_token,
@@ -900,15 +979,16 @@ def sync_feishu_connector(
             allow_raw_text_fallback=allow_raw_text_fallback,
             sleeper=sleeper,
         )
+        item["remote_materialization_fingerprint"] = fingerprint
         degraded_count += int(bool(item.get("adapter_degraded")))
         items.append(item)
 
-    next_cursor = _snapshot_cursor(descriptors)
     try:
         run = sync_connector_snapshot_batch(
             project_id,
             connector_instance_id=connector_instance_id,
             items=items,
+            unchanged_observations=unchanged_observations,
             root=resolved_root,
             actor=actor,
             sync_mode="FULL",
@@ -931,6 +1011,8 @@ def sync_feishu_connector(
         "resource_scope": _text(instance.get("resource_scope"), 1000),
         "discovered_resource_count": len(descriptors),
         "materialized_resource_count": len(items),
+        "unchanged_resource_count": len(unchanged_observations),
+        "export_avoided_count": len(unchanged_observations),
         "degraded_resource_count": degraded_count,
         "snapshot_complete": True,
         "next_cursor": next_cursor,
