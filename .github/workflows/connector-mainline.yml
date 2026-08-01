@@ -65,6 +65,7 @@ jobs:
             tests/test_connector_sync_fencing.py \
             tests/test_connector_configuration_service.py \
             tests/test_connector_workspace_maintenance.py \
+            tests/test_connector_workspace_maintenance_security.py \
             tests/test_connector_fencing_public_projection.py \
             tests/test_connector_supervisor_lifecycle_authority.py \
             tests/test_private_pilot_connector_handlers.py \
