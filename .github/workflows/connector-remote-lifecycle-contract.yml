@@ -1,0 +1,65 @@
+name: Connector remote lifecycle contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ai_test_asset_center/connector_remote_lifecycle.py"
+      - "ai_test_asset_center/feishu_connector_capability_sync.py"
+      - "ai_test_asset_center/connector_sync_authority.py"
+      - "ai_test_asset_center/connector_source_ingestion.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
+      - "tests/test_connector_remote_lifecycle.py"
+      - "tests/test_feishu_remote_lifecycle_integration.py"
+      - "tests/test_source_occurrence_remote_retirement.py"
+      - ".github/workflows/connector-remote-lifecycle-contract.yml"
+  pull_request:
+    paths:
+      - "ai_test_asset_center/connector_remote_lifecycle.py"
+      - "ai_test_asset_center/feishu_connector_capability_sync.py"
+      - "ai_test_asset_center/connector_sync_authority.py"
+      - "ai_test_asset_center/connector_source_ingestion.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
+      - "tests/test_connector_remote_lifecycle.py"
+      - "tests/test_feishu_remote_lifecycle_integration.py"
+      - "tests/test_source_occurrence_remote_retirement.py"
+      - ".github/workflows/connector-remote-lifecycle-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile lifecycle authorities
+        run: |
+          python -m py_compile ai_test_asset_center/connector_remote_lifecycle.py
+          python -m py_compile ai_test_asset_center/feishu_connector_capability_sync.py
+          python -m py_compile ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py
+          python -m py_compile ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py
+
+      - name: Run remote lifecycle regressions
+        run: |
+          python -m pytest -q \
+            tests/test_connector_remote_lifecycle.py \
+            tests/test_feishu_remote_lifecycle_integration.py \
+            tests/test_source_occurrence_remote_retirement.py
