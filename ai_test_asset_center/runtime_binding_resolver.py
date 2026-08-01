@@ -384,15 +384,24 @@ def auto_resolve_bindings(
             "failed_count": 0,
         }
 
-    # Collect all placeholders from Behavior IR operations
+    # Collect all placeholders from Behavior IR operations (paths) plus body
+    # placeholders declared by experiment binding plans. Body values (e.g. an
+    # order's addressId) come from owner-scoped list reads, not from operation
+    # path templates, so they must be resolvable even though no operation path
+    # names them.
     operations = _list(behavior_ir.get("operations"))
     all_placeholders: set[str] = set()
+    path_placeholders: set[str] = set()
     for op in operations:
         if not isinstance(op, dict):
             continue
         path = _text(op.get("path") or op.get("raw_path"))
         for ph in _extract_placeholders(path):
             all_placeholders.add(ph)
+            path_placeholders.add(ph)
+    for ph in _dict(placeholder_collection_hints):
+        if _text(ph):
+            all_placeholders.add(_text(ph))
 
     if required_placeholders:
         all_placeholders &= required_placeholders
@@ -497,13 +506,28 @@ def auto_resolve_bindings(
                 collection_path=path,
             )
             if not identity_operations:
+                if placeholder in path_placeholders:
+                    receipts.append({
+                        "placeholder": placeholder,
+                        "endpoint": path,
+                        "status": "identity_observer_not_declared",
+                        "collection_hints": sorted(hints),
+                        "value_fingerprint": "",
+                    })
+                    continue
+                # Body placeholder: the owner-scoped list read is the source
+                # evidence (e.g. GET /api/users/addresses returns the actor's
+                # own addresses); no separate entity-detail route is required.
+                bindings[placeholder] = value
                 receipts.append({
                     "placeholder": placeholder,
                     "endpoint": path,
-                    "status": "identity_observer_not_declared",
-                    "collection_hints": sorted(hints),
-                    "value_fingerprint": "",
+                    "status": "resolved_body_from_owner_scoped_list",
+                    "value_fingerprint": (
+                        value[:8] + "..." if len(value) > 8 else value
+                    ),
                 })
+                resolved = True
                 continue
 
             for identity_operation in identity_operations[:3]:
@@ -620,5 +644,27 @@ def collect_placeholder_collection_hints(
                     bucket = hints.setdefault(ph, set())
                     if collection_path:
                         bucket.add(collection_path.lower().rstrip("/"))
+        # Body placeholders are declared on the binding plan with their exact
+        # source resolver operations (e.g. addressId -> GET /api/users/addresses).
+        # The resolver path is the owning collection evidence for the batch
+        # pre-resolution pass.
+        for binding in _list(exp.get("binding_plan")):
+            if not isinstance(binding, dict):
+                continue
+            target = _text(binding.get("target"))
+            if not target:
+                continue
+            resolvers = [
+                dict(row)
+                for row in _list(binding.get("resolver_operations"))
+                if isinstance(row, dict)
+            ]
+            if not resolvers:
+                continue
+            bucket = hints.setdefault(target, set())
+            for resolver in resolvers:
+                resolver_path = _text(resolver.get("path"))
+                if resolver_path:
+                    bucket.add(resolver_path.lower().rstrip("/"))
 
     return hints
