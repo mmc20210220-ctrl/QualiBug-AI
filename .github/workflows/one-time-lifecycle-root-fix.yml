@@ -9,7 +9,7 @@ on:
 
 permissions:
   contents: write
-  issues: read
+  issues: write
 
 concurrency:
   group: one-time-lifecycle-root-cause-delivery
@@ -28,6 +28,11 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
+      - name: Record delivery start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment 71 --repo "${GITHUB_REPOSITORY}" --body "Lifecycle root-cause delivery started from ${GITHUB_SHA}."
 
       - name: Reassemble and verify lifecycle change
         shell: bash
@@ -148,3 +153,15 @@ jobs:
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
+
+      - name: Record delivery success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment 71 --repo "${GITHUB_REPOSITORY}" --body "Lifecycle root-cause delivery passed compileall, 181 focused tests, real HTTP E2E, and pushed main. Final HEAD: $(git rev-parse HEAD)."
+
+      - name: Record delivery failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment 71 --repo "${GITHUB_REPOSITORY}" --body "Lifecycle root-cause delivery failed. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No force push was used."
