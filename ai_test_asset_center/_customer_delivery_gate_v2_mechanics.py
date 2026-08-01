@@ -858,6 +858,25 @@ def _cleanup_gate_decision(
     return "DELIVERABLE", [], expected_operational
 
 
+def _oracle_harness_reason_detail(oracle: dict[str, Any]) -> str:
+    """Preserve validated Oracle/activation failure reasons for the Gate receipt.
+
+    The public Gate reason remains the stable ``CONTRACT_ORACLE_HARNESS_FAILED``
+    registry code.  The validated activation receipt already carries the
+    concrete failure reasons (for example a cleanup receipt failure); dropping
+    them here makes the funnel impossible to diagnose from its terminal receipt.
+    """
+
+    activation = _dict(oracle.get("activation_receipt"))
+    values: list[str] = []
+    for source in (oracle, activation):
+        for value in _list(source.get("reason_codes")):
+            normalized = _text(value)
+            if normalized and normalized not in values:
+                values.append(normalized)
+    return ",".join(values)[:1000]
+
+
 def _validate_active_chain(
     *,
     execution: dict[str, Any],
@@ -1316,6 +1335,10 @@ def build_customer_delivery_gate_receipt_v2(
         ).upper(),
         "input_fingerprint": input_fingerprint,
     }
+    if status == "HARNESS_FAILED":
+        reason_detail = _oracle_harness_reason_detail(oracle)
+        if reason_detail:
+            payload["reason_detail"] = reason_detail
     gate = _seal(
         payload,
         prefix="gate_",
