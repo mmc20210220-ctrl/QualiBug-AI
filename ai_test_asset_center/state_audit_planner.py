@@ -313,6 +313,20 @@ def build_readonly_state_audit_obligations(
             })
             continue
 
+        # Conservation is causal: a read can observe a quantity, but it cannot
+        # exercise the write that should preserve or transfer that quantity.
+        # The experiment protocol therefore rejects a read-only conservation
+        # obligation.  Do not manufacture one from an entity-name GET; retain
+        # the source invariant as a visible coverage gap instead.
+        if family == "conservation":
+            skipped_unevaluable.append({
+                "invariant_ref": inv_id,
+                "reason_code": "AUDIT_REQUIRES_EXACT_WRITE_OPERATION",
+                "expression_kind": expression_kind,
+                "statement": _text(inv.get("description") or expr.get("raw"))[:160],
+            })
+            continue
+
         # An audit reads the entity and checks the invariant against what came back.
         # That needs an evaluable condition. These invariants arrive as prose with
         # ``operands: []`` -- 「同一订单不能重复成功退款」 has nothing a response can be

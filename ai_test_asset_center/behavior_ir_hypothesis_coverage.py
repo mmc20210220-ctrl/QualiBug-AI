@@ -80,6 +80,24 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _postcondition_has_bound_effect(expression: dict[str, Any]) -> bool:
+    """Return whether a postcondition names an effect an observer can verify."""
+
+    for operand in _list(_dict(expression).get("operands")):
+        if not isinstance(operand, dict):
+            continue
+        if _text(operand.get("field_id") or operand.get("field")):
+            return True
+        expected = operand.get("expected_value")
+        if expected is not None and (
+            not isinstance(expected, str) or bool(expected.strip())
+        ):
+            return True
+        if bool(operand.get("must_create")):
+            return True
+    return False
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Coverage Map: extract verifiable surface from Behavior IR
 # ═══════════════════════════════════════════════════════════════════
@@ -99,6 +117,7 @@ def build_behavior_ir_coverage_map(behavior_ir: dict[str, Any]) -> dict[str, Any
 
     nodes: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+    coverage_gaps: list[dict[str, Any]] = []
 
     operations = _list(behavior_ir.get("operations"))
     entities = _list(behavior_ir.get("entities"))
@@ -168,8 +187,26 @@ def build_behavior_ir_coverage_map(behavior_ir: dict[str, Any]) -> dict[str, Any
         if not inv_id:
             continue
         description = _text(inv.get("description"))
+        expression = _dict(inv.get("expression"))
+        invariant_kind = _text(
+            inv.get("invariant_kind")
+            or inv.get("kind")
+            or expression.get("kind")
+        ).lower()
         operation_refs = [ref for ref in _list(inv.get("operation_refs")) if _text(ref)]
         source_refs = _list(inv.get("source_refs"))
+
+        if invariant_kind == "postcondition" and not _postcondition_has_bound_effect(expression):
+            coverage_gaps.append({
+                "code": "SOURCE_POSTCONDITION_EFFECT_UNBOUND",
+                "subject_ref": inv_id,
+                "description": (
+                    "Source postcondition has no concrete field or create effect "
+                    "that an observer can verify"
+                ),
+                "source_refs": source_refs,
+            })
+            continue
 
         coverage_id = f"cov_inv_{inv_id}"
         if coverage_id in seen_ids:
@@ -274,6 +311,7 @@ def build_behavior_ir_coverage_map(behavior_ir: dict[str, Any]) -> dict[str, Any
         "schema_version": COVERAGE_SCHEMA,
         "node_count": len(nodes),
         "risk_family_counts": dict(sorted(family_counts.items())),
+        "coverage_gaps": coverage_gaps,
         "nodes": nodes,
     }
 

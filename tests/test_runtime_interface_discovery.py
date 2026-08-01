@@ -41,6 +41,29 @@ def test_runtime_interface_candidates_are_source_derived_read_only_and_bounded()
     }
 
 
+def test_general_resource_prefix_collision_is_not_planned() -> None:
+    from ai_test_asset_center.runtime_interface_discovery import (
+        plan_runtime_interface_candidates,
+    )
+
+    documented = [
+        *_documented_operations(),
+        {"method": "GET", "path": "/api/cart/items", "operation_id": "listCart"},
+    ]
+
+    plan = plan_runtime_interface_candidates(
+        documented,
+        action_markers=["health"],
+        max_candidates=500,
+    )
+    paths = {row["path"] for row in plan["candidates"]}
+
+    assert "/api/cart/health" in paths
+    assert "/api/carts/health" not in paths
+    assert "carts" in plan["general_resource_shadowed"]
+    assert plan["general_resource_shadowed_count"] >= 1
+
+
 def test_runtime_interface_observation_requires_real_request_receipt() -> None:
     from ai_test_asset_center.runtime_interface_discovery import (
         build_runtime_interface_observation_receipt,

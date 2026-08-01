@@ -344,16 +344,37 @@ def plan_runtime_interface_candidates(
         token for token, children in child_tokens.items() if len(children) >= 2
     )
 
-    # Deployment-owned general vocabulary (optional).  These extend discovery to
-    # source namespaces that the supplied documents did not enumerate (e.g. an
-    # undocumented service mounted under the same transport prefix).  They are
-    # bounded by the declared route prefix and anchored to a general provenance
-    # ref, so the probe stays source-bound rather than an unbounded fuzz.
-    general_resources = [
-        resource
-        for resource in load_runtime_interface_discovery_resources()
-        if resource not in refs_by_token
-    ]
+    # Deployment-owned general vocabulary (optional). These extend discovery to
+    # source namespaces that the supplied documents did not enumerate (for
+    # example, an undocumented service mounted under the same transport prefix).
+    # A gateway route is not necessarily segment-aware: ``/api/cart`` can match
+    # ``/api/carts/...`` and forward the leftover ``s/...`` to the cart service.
+    # Treating that malformed response as an interface would turn a policy word
+    # into a discovered operation and then into customer-facing false positives.
+    # Keep general resources available, but reject every candidate whose base
+    # path is a non-boundary extension of a source-declared route prefix.
+    source_route_prefixes = {
+        "/" + "/".join(parts[: prefix_len + 1])
+        for parts in segmented
+        if len(parts) > prefix_len
+        and not _PLACEHOLDER_RE.search(parts[prefix_len])
+    }
+    shadowed_general_resources: list[str] = []
+    general_resources: list[str] = []
+    for resource in load_runtime_interface_discovery_resources():
+        if resource in refs_by_token:
+            continue
+        candidate_base = f"{prefix_path}/{resource}" if prefix_path else f"/{resource}"
+        candidate_base = candidate_base.rstrip("/").lower()
+        if any(
+            candidate_base.startswith(route_prefix.lower())
+            and len(candidate_base) > len(route_prefix)
+            and candidate_base[len(route_prefix)] != "/"
+            for route_prefix in source_route_prefixes
+        ):
+            shadowed_general_resources.append(resource)
+            continue
+        general_resources.append(resource)
     subresources = load_runtime_interface_discovery_subresources()
     general_ref = _general_source_ref(prefix_path, _source_id_hint(operations))
 
@@ -474,6 +495,8 @@ def plan_runtime_interface_candidates(
         "source_resource_count": len(resources),
         "source_namespace_count": len(namespaces),
         "general_resource_count": len(general_resources),
+        "general_resource_shadowed_count": len(shadowed_general_resources),
+        "general_resource_shadowed": sorted(shadowed_general_resources),
         "subresource_count": len(subresources),
         "policy_action_count": len(actions),
         "candidate_budget": int(max_candidates),

@@ -87,6 +87,36 @@ def test_unbound_forbidden_transition_is_not_mapped_to_get_audit() -> None:
     assert build_readonly_state_audit_obligations(behavior_ir) == []
 
 
+def test_unbound_conservation_is_not_mapped_to_get_audit() -> None:
+    behavior_ir = {
+        "operations": [{
+            "id": "get_order",
+            "method": "GET",
+            "path": "/orders/:id",
+        }],
+        "actors": [{
+            "id": "actor_admin",
+            "role": "admin",
+            "credential_secret_ref": "secret_ref:actor:admin",
+        }],
+        "relations": [],
+        "invariants": [{
+            "id": "inv_order_amount_conservation",
+            "description": "Cancelling an order restores the reserved quantity.",
+            "expression": {
+                "kind": "business_logic",
+                "operands": [{"field": "reserved_qty"}, {"field": "available_qty"}],
+            },
+            "source_refs": [{
+                "source_id": "business_rules",
+                "locator": "order-cancel-quantity-conservation",
+            }],
+        }],
+    }
+
+    assert build_readonly_state_audit_obligations(behavior_ir) == []
+
+
 def test_prose_only_postcondition_is_reported_as_a_gap_not_scheduled() -> None:
     behavior_ir = {
         "operations": [{
@@ -110,8 +140,15 @@ def test_prose_only_postcondition_is_reported_as_a_gap_not_scheduled() -> None:
     }
     report: dict[str, object] = {}
 
+    coverage = build_behavior_ir_coverage_map(behavior_ir)
     obligations = build_exhaustive_obligation_matrix(behavior_ir, report=report)
 
+    assert not [row for row in coverage["nodes"] if row["node_type"] == "invariant"]
+    assert any(
+        row["code"] == "SOURCE_POSTCONDITION_EFFECT_UNBOUND"
+        and row["subject_ref"] == "inv_prose_only"
+        for row in coverage["coverage_gaps"]
+    )
     assert not [row for row in obligations if row.get("risk_family") == "invariant"]
     assert report["matrix_skipped"]["invariant_postcondition_unbound"] == 1
 
