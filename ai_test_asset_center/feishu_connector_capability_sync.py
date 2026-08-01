@@ -1,8 +1,8 @@
 """Public composition facade for capability-aware Feishu synchronization.
 
-The implementation body remains in ``feishu_connector_capability_sync_core``.  Production calls
+The implementation body remains in ``feishu_connector_capability_sync_core``. Production calls
 use permanent ContextVar dispatchers for discovery, snapshot commit and lifecycle reconciliation,
-so concurrent connector instances never rewrite shared module globals.  Explicit test dependency
+so concurrent connector instances never rewrite shared module globals. Explicit test dependency
 overrides retain a narrow compatibility bridge without creating a second implementation.
 """
 from __future__ import annotations
@@ -47,7 +47,7 @@ discover_feishu_wiki_resources = _DEFAULT_DISCOVERY_AUTHORITY
 sync_connector_snapshot_batch = _DEFAULT_SYNC_SNAPSHOT_AUTHORITY
 reconcile_connector_remote_lifecycle = _DEFAULT_REMOTE_LIFECYCLE_AUTHORITY
 
-# These three hooks are permanently context-dispatched.  Per-call delegates live in ContextVar.
+# These three hooks are permanently context-dispatched. Per-call delegates live in ContextVar.
 _core.discover_feishu_wiki_resources = (
     discover_feishu_resources_with_recovery_intent
 )
@@ -143,6 +143,9 @@ def _project_committed_checkpoint(result: dict[str, Any]) -> dict[str, Any]:
 def sync_feishu_connector(*args: Any, **kwargs: Any) -> dict[str, Any]:
     project_id = args[0] if args else kwargs.get("project_id")
     connector = kwargs.get("connector_instance_id")
+    grace_value = kwargs.get("retire_after_complete_snapshots")
+    count_value = kwargs.get("max_retire_count")
+    ratio_value = kwargs.get("max_retire_ratio")
     try:
         with feishu_lifecycle_recovery_scope(
             str(project_id or ""),
@@ -151,10 +154,10 @@ def sync_feishu_connector(*args: Any, **kwargs: Any) -> dict[str, Any]:
             actor=kwargs.get("actor"),
             deletion_policy=str(kwargs.get("deletion_policy") or "RETAIN"),
             retire_after_complete_snapshots=int(
-                kwargs.get("retire_after_complete_snapshots") or 2
+                2 if grace_value is None else grace_value
             ),
-            max_retire_count=int(kwargs.get("max_retire_count") or 100),
-            max_retire_ratio=float(kwargs.get("max_retire_ratio") or 0.25),
+            max_retire_count=int(100 if count_value is None else count_value),
+            max_retire_ratio=float(0.25 if ratio_value is None else ratio_value),
             discovery_delegate=globals().get(
                 "discover_feishu_wiki_resources",
                 _DEFAULT_DISCOVERY_AUTHORITY,
