@@ -52,6 +52,10 @@ def _combined_output(completed: subprocess.CompletedProcess) -> str:
     return (_decode_process_output(completed.stdout) + _decode_process_output(completed.stderr)).strip()
 
 
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def resolve_benchmark_target_root(env: Mapping[str, str] | None = None) -> Path:
     env = os.environ if env is None else env
     raw = str(env.get("QUALIBUG_BENCHMARK_TARGET_ROOT") or "").strip()
@@ -102,13 +106,17 @@ def load_benchmark_runtime_config(
 
 
 def should_skip_target_db_reset(env: Mapping[str, str] | None = None) -> bool:
+    """Require a second independent acknowledgement before preserving dirty state.
+
+    A caller-controlled default for ``QUALIBUG_SKIP_TARGET_DB_RESET`` must not
+    silently disable the benchmark reset. The destructive-measurement waiver is
+    valid only when the operator separately accepts a potentially polluted target.
+    """
     env = os.environ if env is None else env
-    return str(env.get("QUALIBUG_SKIP_TARGET_DB_RESET") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return bool(
+        _truthy(env.get("QUALIBUG_SKIP_TARGET_DB_RESET"))
+        and _truthy(env.get("QUALIBUG_BENCHMARK_ACCEPT_DIRTY_TARGET"))
+    )
 
 
 def reset_benchmark_target_db(
@@ -120,17 +128,28 @@ def reset_benchmark_target_db(
     """Re-import schema+seed so write-probe residue cannot poison the next mode.
 
     Uses the Windows-native benchmark ``scripts/init_db_windows.ps1`` (same as
-    ``02_init_database.bat``). Override root with ``QUALIBUG_BENCHMARK_TARGET_ROOT``.
-    Explicit opt-out only via ``QUALIBUG_SKIP_TARGET_DB_RESET=1`` (loud, recorded).
+    ``02_init_database.bat``). A reset waiver requires both
+    ``QUALIBUG_SKIP_TARGET_DB_RESET=1`` and
+    ``QUALIBUG_BENCHMARK_ACCEPT_DIRTY_TARGET=1``.
     """
     env = os.environ if env is None else env
+    skip_requested = _truthy(env.get("QUALIBUG_SKIP_TARGET_DB_RESET"))
     if should_skip_target_db_reset(env):
         note = (
-            "QUALIBUG_SKIP_TARGET_DB_RESET=1: target DB was NOT reset; "
-            "baseline/optimized recall comparison may be polluted by prior write probes"
+            "benchmark target DB reset explicitly waived; target may contain "
+            "prior write-probe residue and recall may be polluted"
         )
         print(f"WARN: {note}")
-        return {"status": "skipped", "reason": "QUALIBUG_SKIP_TARGET_DB_RESET", "operator_note": note}
+        return {
+            "status": "skipped",
+            "reason": "QUALIBUG_SKIP_TARGET_DB_RESET_CONFIRMED",
+            "operator_note": note,
+        }
+    if skip_requested:
+        print(
+            "WARN: QUALIBUG_SKIP_TARGET_DB_RESET ignored because "
+            "QUALIBUG_BENCHMARK_ACCEPT_DIRTY_TARGET was not confirmed"
+        )
 
     root = target_root or resolve_benchmark_target_root(env)
     script = root / "scripts" / "init_db_windows.ps1"
@@ -138,7 +157,8 @@ def reset_benchmark_target_db(
         raise FileNotFoundError(
             f"benchmark target DB reset script missing: {script}. "
             "Set QUALIBUG_BENCHMARK_TARGET_ROOT to the Windows-native benchmark root, "
-            "or set QUALIBUG_SKIP_TARGET_DB_RESET=1 only if you accept polluted recall."
+            "or explicitly confirm both reset-waiver variables only if you accept "
+            "polluted recall."
         )
 
     print(f"RESET_TARGET_DB: {script}")
