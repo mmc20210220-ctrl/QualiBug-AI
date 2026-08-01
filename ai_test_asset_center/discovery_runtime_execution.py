@@ -139,6 +139,298 @@ def _formal_obligation_rows_and_identity_receipt(
     }
 
 
+def _build_knowledge_source_flow_receipt(
+    *,
+    plan: DiscoveryPlanningBundle,
+    behavior_ir: dict[str, Any],
+    formal_obligation_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Project source-bound funnel counts without persisting source prose.
+
+    The planning bundle keeps the enterprise knowledge asset private because it
+    may contain customer material.  The product result still needs a durable
+    explanation of how that material reached the executable funnel.  This
+    receipt therefore carries only exact structural counts, identifiers and
+    explicit gate statuses from the asset and the runtime Behavior IR.
+    """
+
+    def row_count(value: Any) -> int | None:
+        return len(value) if isinstance(value, list) else None
+
+    def integer(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        return None
+
+    asset = _dict(plan.experiments.get("_knowledge_asset"))
+    receipt: dict[str, Any] = {
+        "schema_version": "qualibug.discovery-source-flow-receipt.v1",
+        "authority": (
+            "enterprise_business_knowledge_asset -> enterprise_understanding_model "
+            "-> Behavior IR -> formal obligations"
+        ),
+        "status": "NOT_MEASURED",
+        "knowledge_asset": {},
+        "source_materials": {},
+        "business_facts": {},
+        "enterprise_behavior_ir": {},
+        "runtime_behavior_ir": {},
+        "formal_obligations": {},
+        "links": {},
+        "missing_evidence": [],
+        "issues": [],
+    }
+    if not asset:
+        receipt["missing_evidence"].append("planning._knowledge_asset")
+        receipt["reason"] = "knowledge_asset_not_available_in_planning_bundle"
+        return receipt
+
+    asset_id = _text(asset.get("asset_id"))
+    model = _dict(asset.get("enterprise_understanding_model"))
+    model_id = _text(model.get("model_id"))
+    source_summary = _dict(model.get("source_summary"))
+    asset_summary = _dict(asset.get("summary"))
+    receipt["knowledge_asset"] = {
+        "asset_id": asset_id,
+        "enterprise_understanding_model_id": model_id,
+        "source_snapshot_hash": _text(
+            _dict(plan.mainline_run).get("source_snapshot_hash")
+        ),
+        "asset_gate_status": _text(_dict(model.get("gate")).get("status")),
+        "business_comprehension_status": _text(
+            asset_summary.get("business_comprehension_status")
+        ),
+    }
+    if not asset_id:
+        receipt["missing_evidence"].append("knowledge_asset.asset_id")
+    if not model_id:
+        receipt["missing_evidence"].append(
+            "enterprise_understanding_model.model_id"
+        )
+
+    source_rows = asset.get("canonical_source_inventory")
+    source_count = row_count(source_rows)
+    declared_source_count = integer(source_summary.get("canonical_source_count"))
+    if declared_source_count is None:
+        declared_source_count = integer(asset_summary.get("canonical_source_count"))
+    receipt["source_materials"] = {
+        "status": "MEASURED" if source_count is not None else "NOT_MEASURED",
+        "source_material_count": source_count,
+        "canonical_source_count": source_count,
+        "declared_canonical_source_count": declared_source_count,
+        "active_source_count": integer(source_summary.get("active_source_count"))
+        if integer(source_summary.get("active_source_count")) is not None
+        else integer(asset_summary.get("active_source_count")),
+        "parse_succeeded_count": integer(asset_summary.get("source_parse_succeeded")),
+        "evidence_path": "canonical_source_inventory",
+    }
+    if source_count is None:
+        receipt["missing_evidence"].append("canonical_source_inventory")
+    elif declared_source_count is not None and source_count != declared_source_count:
+        receipt["issues"].append(
+            "canonical_source_count_mismatch:"
+            f"observed={source_count};declared={declared_source_count}"
+        )
+
+    fact_ledger = _dict(asset.get("business_fact_ledger"))
+    fact_rows = fact_ledger.get("items")
+    fact_count = row_count(fact_rows)
+    fact_ids = [
+        _text(_dict(row).get("fact_id"))
+        for row in _list(fact_rows)
+        if isinstance(row, dict)
+    ]
+    fact_id_count = sum(bool(value) for value in fact_ids)
+    unique_fact_id_count = len({value for value in fact_ids if value})
+    compilation = _dict(asset.get("structure_first_business_fact_compilation_receipt"))
+    final_fact_count = integer(compilation.get("final_fact_count"))
+    exact_evidence_fact_count = integer(compilation.get("exact_evidence_fact_count"))
+    receipt["business_facts"] = {
+        "status": _text(compilation.get("status")) or (
+            "MEASURED" if fact_count is not None else "NOT_MEASURED"
+        ),
+        "ledger_schema": _text(fact_ledger.get("schema")),
+        "business_fact_count": fact_count,
+        "observed_row_count": fact_count,
+        "unique_fact_id_count": unique_fact_id_count,
+        "missing_fact_id_count": max(0, (fact_count or 0) - fact_id_count)
+        if fact_count is not None
+        else None,
+        "final_fact_count": final_fact_count,
+        "exact_evidence_fact_count": exact_evidence_fact_count,
+        "accepted_fact_count": integer(compilation.get("accepted_fact_count")),
+        "pending_fact_count": integer(compilation.get("pending_fact_count")),
+        "evidence_path": "business_fact_ledger.items",
+    }
+    if fact_count is None:
+        receipt["missing_evidence"].append("business_fact_ledger.items")
+    for field, value in (
+        ("final_fact_count", final_fact_count),
+        ("exact_evidence_fact_count", exact_evidence_fact_count),
+    ):
+        if fact_count is not None and value is not None and value != fact_count:
+            receipt["issues"].append(
+                f"business_fact_{field}_mismatch:observed={fact_count};declared={value}"
+            )
+    if fact_count is not None and fact_id_count != unique_fact_id_count:
+        receipt["issues"].append("business_fact_identity_duplicate_or_missing")
+    if fact_count is not None and fact_id_count != fact_count:
+        receipt["issues"].append(
+            "business_fact_identity_missing:"
+            f"observed={fact_id_count};rows={fact_count}"
+        )
+
+    enterprise_ir = _dict(model.get("business_behavior_ir"))
+    behavior_rows = enterprise_ir.get("behaviors")
+    behavior_count = row_count(behavior_rows)
+    source_fact_refs = [
+        _text(source_ref)
+        for row in _list(behavior_rows)
+        if isinstance(row, dict)
+        for source_ref in _list(row.get("source_refs"))
+        if _text(source_ref)
+    ]
+    source_fact_ref_set = set(source_fact_refs)
+    fact_id_set = {value for value in fact_ids if value}
+    accepted_behavior_fact_count = integer(
+        source_summary.get("accepted_behavior_fact_count")
+    )
+    declared_behavior_count = integer(source_summary.get("business_behavior_count"))
+    receipt["enterprise_behavior_ir"] = {
+        "status": _text(_dict(enterprise_ir.get("behavior_gate")).get("status"))
+        or ("MEASURED" if behavior_count is not None else "NOT_MEASURED"),
+        "schema": _text(enterprise_ir.get("schema")),
+        "behavior_node_count": behavior_count,
+        "behavior_ir_fact_count": len(source_fact_ref_set),
+        "declared_behavior_node_count": declared_behavior_count,
+        "source_bound_fact_ref_count": len(source_fact_refs),
+        "unique_source_bound_fact_ref_count": len(source_fact_ref_set),
+        "accepted_behavior_fact_count": accepted_behavior_fact_count,
+        "fact_refs_not_in_ledger_count": len(source_fact_ref_set - fact_id_set),
+        "facts_without_behavior_ref_count": len(fact_id_set - source_fact_ref_set),
+        "gate_status": _text(_dict(enterprise_ir.get("behavior_gate")).get("status")),
+        "evidence_path": "enterprise_understanding_model.business_behavior_ir.behaviors",
+    }
+    if behavior_count is None:
+        receipt["missing_evidence"].append(
+            "enterprise_understanding_model.business_behavior_ir.behaviors"
+        )
+    elif declared_behavior_count is not None and behavior_count != declared_behavior_count:
+        receipt["issues"].append(
+            "business_behavior_count_mismatch:"
+            f"observed={behavior_count};declared={declared_behavior_count}"
+        )
+    if (
+        accepted_behavior_fact_count is not None
+        and len(source_fact_ref_set) != accepted_behavior_fact_count
+    ):
+        receipt["issues"].append(
+            "accepted_behavior_fact_count_mismatch:"
+            f"observed={len(source_fact_ref_set)};declared={accepted_behavior_fact_count}"
+        )
+
+    runtime_ir = _dict(behavior_ir)
+    runtime_counts = {
+        field: row_count(runtime_ir.get(field))
+        for field in (
+            "sources",
+            "entities",
+            "operations",
+            "actors",
+            "invariants",
+            "relations",
+            "states",
+            "observation_surfaces",
+            "coverage_gaps",
+        )
+    }
+    receipt["runtime_behavior_ir"] = {
+        "status": "MEASURED" if runtime_ir else "NOT_MEASURED",
+        "schema": _text(runtime_ir.get("schema_version")),
+        "model_id": _text(runtime_ir.get("model_id")),
+        "source_snapshot_hash": _text(runtime_ir.get("source_snapshot_hash")),
+        "node_counts": runtime_counts,
+        "evidence_path": "runtime_behavior_ir",
+    }
+    if not runtime_ir:
+        receipt["missing_evidence"].append("runtime_behavior_ir")
+    elif not _text(runtime_ir.get("model_id")):
+        receipt["missing_evidence"].append("runtime_behavior_ir.model_id")
+
+    obligation_ids = [
+        _text(row.get("obligation_id"))
+        for row in formal_obligation_rows
+        if isinstance(row, dict)
+    ]
+    unique_obligation_ids = {value for value in obligation_ids if value}
+    missing_obligation_id_count = sum(not value for value in obligation_ids)
+    duplicate_obligation_id_count = len(obligation_ids) - len(unique_obligation_ids)
+    obligation_status = (
+        "FAILED_SAFE"
+        if duplicate_obligation_id_count or missing_obligation_id_count
+        else "MEASURED"
+        if formal_obligation_rows
+        else "NOT_MEASURED"
+    )
+    receipt["formal_obligations"] = {
+        "status": obligation_status,
+        "obligation_count": len(formal_obligation_rows),
+        "formal_obligation_count": len(formal_obligation_rows),
+        "unique_obligation_id_count": len(unique_obligation_ids),
+        "missing_obligation_id_count": missing_obligation_id_count,
+        "duplicate_obligation_id_count": duplicate_obligation_id_count,
+        "evidence_path": "test_obligations.obligations",
+    }
+    if not formal_obligation_rows:
+        receipt["missing_evidence"].append("test_obligations.obligations")
+
+    links = receipt["links"]
+    links.update({
+        "facts_to_enterprise_behavior_ir": {
+            "status": (
+                "GAP"
+                if receipt["enterprise_behavior_ir"].get(
+                    "facts_without_behavior_ref_count"
+                )
+                else "PASS"
+                if fact_count is not None and behavior_count is not None
+                else "NOT_MEASURED"
+            ),
+            "source_fact_ref_count": len(source_fact_ref_set),
+            "facts_without_behavior_ref_count": receipt["enterprise_behavior_ir"].get(
+                "facts_without_behavior_ref_count"
+            ),
+        },
+        "runtime_behavior_ir_to_formal_obligations": {
+            "status": (
+                "PASS"
+                if runtime_ir and formal_obligation_rows
+                and not missing_obligation_id_count
+                and not duplicate_obligation_id_count
+                else "NOT_MEASURED"
+            ),
+            "runtime_behavior_ir_model_id": _text(runtime_ir.get("model_id")),
+            "formal_obligation_count": len(formal_obligation_rows),
+        },
+    })
+
+    if receipt["issues"]:
+        receipt["status"] = "FAILED_SAFE"
+    elif receipt["missing_evidence"]:
+        receipt["status"] = "INCOMPLETE"
+    elif _text(receipt["business_facts"].get("status")).upper() == "BLOCKED":
+        receipt["status"] = "BLOCKED"
+    elif _text(receipt["enterprise_behavior_ir"].get("status")).upper().startswith(
+        "BLOCKED"
+    ) or receipt["enterprise_behavior_ir"].get("facts_without_behavior_ref_count"):
+        receipt["status"] = "BLOCKED"
+    else:
+        receipt["status"] = "PASS"
+    return receipt
+
+
 def _execution_ir_with_discovered_operations(
     behavior_ir: dict[str, Any],
     discovered_operations: Any,
@@ -411,6 +703,12 @@ def run_experiment_candidate(
 
     formal_obligation_rows, obligation_identity_receipt = (
         _formal_obligation_rows_and_identity_receipt(plan, expansion)
+    )
+    execution_behavior_ir = _dict(expansion.get("behavior_ir"))
+    knowledge_source_flow_receipt = _build_knowledge_source_flow_receipt(
+        plan=plan,
+        behavior_ir=execution_behavior_ir,
+        formal_obligation_rows=formal_obligation_rows,
     )
 
     # Round-1 experiments were compiled against the immutable documented IR,
@@ -906,7 +1204,7 @@ def run_experiment_candidate(
         "mainline_run": dict(plan.mainline_run),
         "runtime_contract": runtime_contract,
         "campaign": _finalize_campaign(campaign_handle, ledger),
-        "behavior_ir": dict(_dict(expansion.get("behavior_ir"))),
+        "behavior_ir": dict(execution_behavior_ir),
         "test_obligations": {
             **dict(plan.obligations),
             "obligations": formal_obligation_rows,
@@ -933,6 +1231,7 @@ def run_experiment_candidate(
         "behavior_ir_input_receipt": dict(
             _dict(plan.experiments.get("behavior_ir_input_receipt"))
         ),
+        "knowledge_source_flow_receipt": knowledge_source_flow_receipt,
         "runtime_interface_discovery": {
             "status": (
                 "EXECUTED"

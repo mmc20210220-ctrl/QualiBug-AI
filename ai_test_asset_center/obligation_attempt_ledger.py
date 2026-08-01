@@ -280,7 +280,11 @@ def reseal_obligation_attempt_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
     return validate_obligation_attempt_ledger(resealed)
 
 
-_core.validate_obligation_attempt_ledger = validate_obligation_attempt_ledger
+def derive_campaign_terminal_status(ledger: dict[str, Any]) -> str:
+    """Derive campaign status through this facade's validated ledger authority."""
+
+    validated = validate_obligation_attempt_ledger(ledger)
+    return _core.derive_campaign_terminal_status(validated)
 
 __all__ = sorted(
     name for name in globals() if not name.startswith("__") and name != "_core"

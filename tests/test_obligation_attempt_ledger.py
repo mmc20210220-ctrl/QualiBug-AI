@@ -238,6 +238,13 @@ def test_ledger_join_does_not_mutate_stage_receipts() -> None:
     assert compile_results == before
 
 
+def test_ledger_facade_does_not_replace_core_validator() -> None:
+    import ai_test_asset_center._obligation_attempt_ledger_single_occurrence_mechanics as core
+    import ai_test_asset_center.obligation_attempt_ledger as facade
+
+    assert core.validate_obligation_attempt_ledger is not facade.validate_obligation_attempt_ledger
+
+
 def test_campaign_completion_is_derived_from_attempt_ledger_and_cannot_be_overwritten_by_slice_cycle() -> None:
     ledger = build_obligation_attempt_ledger(
         mainline_run=_mainline_run(),
