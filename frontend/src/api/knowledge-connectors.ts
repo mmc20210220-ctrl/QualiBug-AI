@@ -41,6 +41,31 @@ export type KnowledgeConnectorUnsupportedResource = {
   customer_source_modified: false;
 };
 
+export type KnowledgeConnectorRemoteLifecycle = {
+  status: string;
+  authoritative_snapshot_complete: boolean;
+  present_count: number;
+  absent_count: number;
+  unconfirmed_missing_count: number;
+  retirement_eligible_count: number;
+  retired_count: number;
+  renamed_resource_count: number;
+  moved_resource_count: number;
+  reappeared_resource_count: number;
+  retire_after_complete_snapshots: number;
+  requested_deletion_policy?: string;
+  effective_deletion_policy?: string;
+  absence_interpretation?: string;
+  sync_receipt_persisted?: boolean | null;
+  evidence_persistence_status?: string;
+  remote_deletion_inferred: false;
+  permission_loss_inferred: false;
+  historical_source_bytes_retained: true;
+  customer_material_mutation_executed: false;
+  remote_resource_identities_returned: false;
+  source_refs_returned: false;
+};
+
 export type KnowledgeConnectorCoverage = {
   status: 'COMPLETE' | 'PARTIAL_UNSUPPORTED' | 'NOT_AVAILABLE' | 'UNKNOWN' | string;
   complete: boolean;
@@ -52,6 +77,7 @@ export type KnowledgeConnectorCoverage = {
   unsupported_resources_truncated?: boolean;
   last_sync_epoch_id?: string;
   last_completed_at_utc?: string;
+  remote_lifecycle?: KnowledgeConnectorRemoteLifecycle;
   source_content_returned?: boolean;
   customer_material_mutation_executed?: boolean;
 };
@@ -85,6 +111,9 @@ export type KnowledgeConnectorInventory = {
     automatic_refresh_enabled?: boolean;
     partial_coverage_connector_count?: number;
     unsupported_resource_count?: number;
+    remote_absent_resource_count?: number;
+    remote_unconfirmed_missing_resource_count?: number;
+    remote_retired_resource_count?: number;
   };
   governance?: Record<string, unknown>;
 };
@@ -120,6 +149,16 @@ export type KnowledgeConnectorActionResult = {
   knowledge_coverage_status?: string;
   knowledge_coverage_complete?: boolean;
   unsupported_resources?: KnowledgeConnectorUnsupportedResource[];
+  remote_lifecycle?: KnowledgeConnectorRemoteLifecycle;
+  remote_lifecycle_status?: string;
+  remote_absent_count?: number;
+  remote_unconfirmed_missing_count?: number;
+  remote_retirement_eligible_count?: number;
+  renamed_resource_count?: number;
+  moved_resource_count?: number;
+  reappeared_resource_count?: number;
+  remote_deletion_inferred?: boolean;
+  permission_loss_inferred?: boolean;
   degraded_resource_count?: number;
   snapshot_complete?: boolean;
   cursor_checkpoint_committed?: boolean;
@@ -271,6 +310,35 @@ function toUnsupportedResource(value: unknown): KnowledgeConnectorUnsupportedRes
   };
 }
 
+function toRemoteLifecycle(value: unknown): KnowledgeConnectorRemoteLifecycle {
+  const row = asRecord(value);
+  const receipt = row.sync_receipt_persisted;
+  return {
+    status: asString(row.status) || 'NOT_AVAILABLE',
+    authoritative_snapshot_complete: asBoolean(row.authoritative_snapshot_complete),
+    present_count: asNumber(row.present_count) || 0,
+    absent_count: asNumber(row.absent_count) || 0,
+    unconfirmed_missing_count: asNumber(row.unconfirmed_missing_count) || 0,
+    retirement_eligible_count: asNumber(row.retirement_eligible_count) || 0,
+    retired_count: asNumber(row.retired_count) || 0,
+    renamed_resource_count: asNumber(row.renamed_resource_count) || 0,
+    moved_resource_count: asNumber(row.moved_resource_count) || 0,
+    reappeared_resource_count: asNumber(row.reappeared_resource_count) || 0,
+    retire_after_complete_snapshots: asNumber(row.retire_after_complete_snapshots) || 0,
+    requested_deletion_policy: asString(row.requested_deletion_policy) || undefined,
+    effective_deletion_policy: asString(row.effective_deletion_policy) || undefined,
+    absence_interpretation: asString(row.absence_interpretation) || undefined,
+    sync_receipt_persisted: typeof receipt === 'boolean' ? receipt : null,
+    evidence_persistence_status: asString(row.evidence_persistence_status) || undefined,
+    remote_deletion_inferred: false,
+    permission_loss_inferred: false,
+    historical_source_bytes_retained: true,
+    customer_material_mutation_executed: false,
+    remote_resource_identities_returned: false,
+    source_refs_returned: false,
+  };
+}
+
 function toCoverage(value: unknown): KnowledgeConnectorCoverage {
   const row = asRecord(value);
   return {
@@ -286,6 +354,7 @@ function toCoverage(value: unknown): KnowledgeConnectorCoverage {
     unsupported_resources_truncated: asBoolean(row.unsupported_resources_truncated),
     last_sync_epoch_id: asString(row.last_sync_epoch_id) || undefined,
     last_completed_at_utc: asString(row.last_completed_at_utc) || undefined,
+    remote_lifecycle: row.remote_lifecycle ? toRemoteLifecycle(row.remote_lifecycle) : undefined,
     source_content_returned: asBoolean(row.source_content_returned),
     customer_material_mutation_executed: asBoolean(row.customer_material_mutation_executed),
   };
@@ -327,6 +396,9 @@ export async function listKnowledgeConnectors(projectId: string): Promise<Knowle
       automatic_refresh_enabled: asBoolean(summary.automatic_refresh_enabled),
       partial_coverage_connector_count: asNumber(summary.partial_coverage_connector_count),
       unsupported_resource_count: asNumber(summary.unsupported_resource_count),
+      remote_absent_resource_count: asNumber(summary.remote_absent_resource_count),
+      remote_unconfirmed_missing_resource_count: asNumber(summary.remote_unconfirmed_missing_resource_count),
+      remote_retired_resource_count: asNumber(summary.remote_retired_resource_count),
     },
     governance: asRecord(data.governance),
   };
