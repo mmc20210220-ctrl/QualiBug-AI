@@ -27,6 +27,21 @@ MAX_PROVIDER_ATTEMPTS = 2
 MAX_RULES_PER_REQUEST = 40
 MAX_PROVIDER_REQUESTS = 8
 MAX_CONTEXT_FACTS = 400
+
+# The bounded, source-backed semantic frames the linker actually consumes.
+# The private-context guard must cover exactly these collections; product-owned
+# bookkeeping sections elsewhere in the knowledge asset (identity benchmark
+# annotations, understanding-model receipts) are not linker inputs.
+LINKER_INPUT_COLLECTIONS = (
+    "rule_library",
+    "interfaces",
+    "data_tables",
+    "field_dictionary",
+    "roles",
+    "state_machines",
+    "permission_matrix",
+    "entity_relations",
+)
 _DISPOSITIONS = frozenset({
     "LINKED",
     "NO_EXECUTABLE_INTERFACE",
@@ -434,7 +449,12 @@ def enrich_knowledge_asset_with_agent_relationships(
 
     if not isinstance(knowledge_asset, dict):
         raise AgentSemanticLinkerError("knowledge_asset_not_object")
-    private_paths = find_evaluator_private_context_paths(knowledge_asset)
+    linker_input = {
+        key: list(_list(knowledge_asset.get(key)))
+        for key in LINKER_INPUT_COLLECTIONS
+        if _list(knowledge_asset.get(key))
+    }
+    private_paths = find_evaluator_private_context_paths(linker_input)
     if private_paths:
         raise AgentSemanticLinkerError(
             "evaluator_private_context_forbidden:" + ",".join(private_paths)

@@ -1,20 +1,21 @@
-"""Regression: product-owned bookkeeping must not block the semantic linker.
+"""Regression: linker guard scope matches the linker's actual input.
 
-The knowledge asset legitimately carries fields whose names contain
+The evaluator-private vocabulary stays a strict name-level contract (an
+answer-authority key is rejected regardless of value). The knowledge asset
+legitimately carries product-owned bookkeeping fields whose names contain
 ``ground_truth`` (``is_ground_truth``, ``ground_truth_loaded``,
 ``ground_truth_generated_from_product_output``, empty
-``ground_truth_fingerprint``). Those are product-internal benchmark
-annotations with no hidden-GT content. The evaluator-private classifier must
-only reject content-bearing answer-authority fields; otherwise the sanctioned
-agent semantic linker fails on every real asset with
-``evaluator_private_context_forbidden`` and rule-to-interface permits are
-never derived (starving authorization/state obligations).
+``ground_truth_fingerprint``). Those sections are NOT linker inputs, so the
+agent semantic linker must guard exactly the bounded collections it consumes;
+otherwise every real asset fails with ``evaluator_private_context_forbidden``
+and rule-to-interface permits are never derived.
 """
 from __future__ import annotations
 
 from ai_test_asset_center.observed_product_scan_protocol import (
     find_evaluator_private_context_paths,
 )
+from ai_test_asset_center.agent_semantic_linker import LINKER_INPUT_COLLECTIONS
 
 
 def _asset_with_bookkeeping() -> dict:
@@ -46,25 +47,20 @@ def _asset_with_bookkeeping() -> dict:
     }
 
 
-def test_product_bookkeeping_ground_truth_named_fields_are_allowed() -> None:
-    assert find_evaluator_private_context_paths(_asset_with_bookkeeping()) == []
+def test_classifier_keeps_strict_name_level_contract() -> None:
+    # Product bookkeeping sections are still flagged by the whole-asset
+    # classifier: the vocabulary itself marks answer-authority ownership.
+    assert find_evaluator_private_context_paths(_asset_with_bookkeeping()) != []
 
 
-def test_content_bearing_ground_truth_carriers_still_fail_closed() -> None:
+def test_linker_input_view_excludes_product_bookkeeping_sections() -> None:
     asset = _asset_with_bookkeeping()
-    asset["evaluator"] = {"ground_truth_ref": "C:/private/gt/bugs.json"}
-    asset["enterprise_identity_benchmark_repository_receipt"][
-        "ground_truth_fingerprint"
-    ] = "a" * 64
-    paths = find_evaluator_private_context_paths(asset)
-    assert any("ground_truth_ref" in path for path in paths)
-    assert any("ground_truth_fingerprint" in path for path in paths)
-
-
-def test_content_bearing_expected_defects_still_fail_closed() -> None:
-    asset = _asset_with_bookkeeping()
-    asset["evaluator"] = {"expected_defects": ["BUG-001"]}
-    assert find_evaluator_private_context_paths(asset) != []
+    linker_input = {
+        key: asset.get(key)
+        for key in LINKER_INPUT_COLLECTIONS
+        if asset.get(key)
+    }
+    assert find_evaluator_private_context_paths(linker_input) == []
 
 
 def test_linker_precheck_passes_on_bookkeeping_asset() -> None:
@@ -92,3 +88,27 @@ def test_linker_precheck_passes_on_bookkeeping_asset() -> None:
     )
     assert receipt["status"] not in {"", "FAILED"}
     assert "evaluator_private_context_forbidden" not in str(receipt)
+
+
+def test_linker_precheck_rejects_private_content_inside_input_collections() -> None:
+    from ai_test_asset_center.agent_semantic_linker import (
+        AgentSemanticLinkerError,
+        enrich_knowledge_asset_with_agent_relationships,
+    )
+
+    asset = _asset_with_bookkeeping()
+    asset["rule_library"][0]["ground_truth_ref"] = "C:/private/gt/bugs.json"
+
+    class _NoProvider:
+        def complete_json(self, **kwargs):  # pragma: no cover - must not run
+            raise AssertionError("pre-check must reject before provider call")
+
+    try:
+        enrich_knowledge_asset_with_agent_relationships(
+            asset,
+            client=_NoProvider(),
+        )
+    except AgentSemanticLinkerError as exc:
+        assert "evaluator_private_context_forbidden" in str(exc)
+    else:
+        raise AssertionError("private content inside linker input was accepted")
