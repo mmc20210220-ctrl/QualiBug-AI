@@ -85,7 +85,12 @@ def _cleanup_bindings(
     runtime_bindings: dict[str, Any],
     original_request_body: Any,
 ) -> tuple[dict[str, Any], str]:
-    bindings = dict(runtime_bindings)
+    # Compensation identity is scoped to the governed source step.  A global
+    # runtime binding may legitimately contain the same canonical field name
+    # from another object/system (the common case is ``id``).  Resolve every
+    # declared cleanup binding first from its exact authority and only then
+    # admit unrelated runtime values as non-overriding auxiliaries.
+    bindings: dict[str, Any] = {}
     response_body = source_step.get("body")
     for index, raw in enumerate(_list(cleanup.get("binding_specs"))):
         spec = _dict(raw)
@@ -112,6 +117,11 @@ def _cleanup_bindings(
         if target in bindings and bindings[target] != value:
             return {}, f"binding_conflict:{target}"
         bindings[target] = value
+
+    for key, value in runtime_bindings.items():
+        token = _text(key)
+        if token and value not in (None, "", [], {}):
+            bindings.setdefault(token, value)
     return bindings, ""
 
 
