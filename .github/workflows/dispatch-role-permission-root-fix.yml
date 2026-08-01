@@ -6,7 +6,7 @@ on:
     paths:
       - ".github/role-permission-root-fix-trigger"
   pull_request_target:
-    types: [opened]
+    types: [opened, reopened]
 
 permissions:
   actions: write
