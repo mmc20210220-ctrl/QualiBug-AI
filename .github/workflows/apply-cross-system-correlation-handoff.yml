@@ -86,13 +86,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > /tmp/expected <<'EOF'
+          cat > /tmp/expected <<'EOF_FILES'
           ai_test_asset_center/process_graph_wait_contract.py
           tests/test_process_graph_async_transition_oracle.py
           tests/test_process_graph_broker_adapter.py
           tests/test_process_graph_event_transition.py
           tests/test_process_graph_event_transition_scope.py
-          EOF
+          EOF_FILES
           git diff --name-only origin/main...HEAD | sort > /tmp/actual
           sort -o /tmp/expected /tmp/expected
           diff -u /tmp/expected /tmp/actual
@@ -103,5 +103,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git push origin --delete noop-probe-do-not-create || true
           git push --force-with-lease=refs/heads/delivery/cross-system-correlation-handoff-20260801:${DELIVERY_HEAD_SHA} \
             origin HEAD:delivery/cross-system-correlation-handoff-20260801
