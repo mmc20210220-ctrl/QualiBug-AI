@@ -372,10 +372,23 @@ class HttpRoutingMixin:
                 summary = {}
                 asset["summary"] = summary
             summary["active_source_count"] = len(asset["sources"])
+            from .connector_acl_authority import filter_connector_asset_for_actor
+
+            asset = filter_connector_asset_for_actor(
+                project,
+                asset,
+                actor={**actor, "project_id": project} if actor else actor,
+                root=root,
+            )
             return self._json({"ok": True, "knowledge_asset": asset})
         if parsed.path == "/api/knowledge/preview":
             source_id = (parse_qs(parsed.query).get("source_id") or [""])[0]
-            return self._handle_preview(project, {"source_id": source_id}, root)
+            return self._handle_preview(
+                project,
+                {"source_id": source_id},
+                root,
+                actor,
+            )
         if parsed.path == "/api/evidence/artifact":
             artifact_ref = (parse_qs(parsed.query).get("ref") or [""])[0]
             return self._handle_evidence_artifact(project, artifact_ref, root)

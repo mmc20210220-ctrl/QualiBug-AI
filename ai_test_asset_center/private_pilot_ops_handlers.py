@@ -387,6 +387,7 @@ class OpsHandlersMixin:
         project: str,
         body_or_source: dict[str, Any] | str,
         root: Path,
+        actor: dict[str, Any] | None = None,
     ) -> None:
         source_id = (
             str(body_or_source.get("source_id") or "").strip()
@@ -396,6 +397,46 @@ class OpsHandlersMixin:
         if not source_id:
             return self._json({"ok": False, "error": "MISSING_SOURCE_ID"}, 400)
         try:
+            from .connector_acl_authority import connector_source_visibility_decision
+            from .enterprise_knowledge_center import list_enterprise_knowledge_sources
+
+            inventory = list_enterprise_knowledge_sources(
+                project,
+                root=root,
+                include_deleted=True,
+            )
+            connector_source = next(
+                (
+                    row
+                    for row in inventory.get("sources") or []
+                    if isinstance(row, dict)
+                    and source_id
+                    in {
+                        str(row.get("source_id") or ""),
+                        str(row.get("source_occurrence_id") or ""),
+                        str(row.get("source_ref") or ""),
+                    }
+                    and str(row.get("source_ref") or "").startswith("connector://")
+                ),
+                None,
+            )
+            if connector_source is not None:
+                decision = connector_source_visibility_decision(
+                    project,
+                    source_ref=str(connector_source.get("source_ref") or ""),
+                    actor={**actor, "project_id": project} if actor else actor,
+                    root=root,
+                )
+                if decision.get("allowed") is not True:
+                    return self._json(
+                        {
+                            "ok": False,
+                            "error": "SOURCE_NOT_VISIBLE",
+                            "reason_code": decision.get("reason_code"),
+                            "source_content_returned": False,
+                        },
+                        404,
+                    )
             from .enterprise_knowledge_center import _load_registry
 
             registry = _load_registry(project, root)

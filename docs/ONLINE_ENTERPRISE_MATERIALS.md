@@ -208,6 +208,28 @@ The API uses the existing routes under
 connectors use the generic connector acceptance schemas. Unsupported source capabilities remain
 explicit coverage gaps and cannot be converted into an acceptance pass.
 
+## ACL Visibility and Incremental Semantic Refresh (OL-010/OL-011)
+
+Each sync records source-bound remote ACL evidence in the existing Connector Sync Registry:
+
+- Only ACL version, visibility, inheritance, capture time, and project/connector-scoped fingerprints are retained. Raw users, groups, and remote principal IDs are never persisted or returned to ordinary frontend projections.
+- Missing, incomplete, or unknown ACL availability is fail-closed as `BLOCKED_INCOMPLETE`. Permission denial, remote deletion, and remote unavailability remain distinct auditable states; absence is never inferred as deletion.
+- A local project share is an explicit action by an authorized manager and cannot bypass missing or incomplete remote ACL evidence. Historical bytes remain retained while current user visibility is re-evaluated at the projection boundary.
+- The asset, Command Center, preview, and connector-resource routes use the same visibility decision. Denied Source Occurrences, content blocks, and nested derived rows are not returned.
+
+After sync, `qualibug.connector-semantic-refresh.v1` records the bounded impact handoff:
+
+```text
+Connector Sync Complete
+  -> Source Occurrence Diff
+  -> Artifact Diff
+  -> affected ContentBlock
+  -> fact / entity / behavior impact
+  -> scenario / regression impact
+```
+
+Unchanged materials do not trigger repeated semantic analysis. Until the incremental semantic executor is installed, changed materials remain visibly `PENDING_VALIDATION` with downstream `PENDING_INCREMENTAL_EXECUTOR`; the system never claims that facts, entities, behavior models, or scenarios were refreshed. Ordinary frontend projections expose only event types, source-label fingerprints, impact counts, and stage status—not raw remote identities or content.
+
 中止操作不推进 cursor，不删除现有资料快照，只清理遗留运行状态和对应租约。
 
 ## 凭据和并发治理

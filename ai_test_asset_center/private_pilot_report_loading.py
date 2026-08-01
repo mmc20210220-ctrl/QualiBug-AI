@@ -792,6 +792,17 @@ class ReportLoadingMixin:
             sources = asset.get("source_inventory") or asset.get("sources") or asset.get("items") or []
             if isinstance(sources, dict):
                 sources = list(sources.values())
+            actor_loader = getattr(self, "_principal", None)
+            actor = actor_loader() if callable(actor_loader) else None
+            if isinstance(sources, list) and actor is not None:
+                from .connector_acl_authority import filter_connector_sources_for_actor
+
+                sources, _acl_projection = filter_connector_sources_for_actor(
+                    project_id,
+                    [row for row in sources if isinstance(row, dict)],
+                    actor={**actor, "project_id": project_id},
+                    root=root,
+                )
             for s in sources if isinstance(sources, list) else []:
                 if not isinstance(s, dict):
                     continue
@@ -851,8 +862,31 @@ class ReportLoadingMixin:
                 continue
             summary = asset.get("summary") if isinstance(asset, dict) else None
             if isinstance(summary, dict):
+                visible_source_count = int(
+                    summary.get("active_source_count")
+                    or summary.get("source_count")
+                    or 0
+                )
+                actor_loader = getattr(self, "_principal", None)
+                actor = actor_loader() if callable(actor_loader) else None
+                if actor is not None and isinstance(asset, dict):
+                    from .connector_acl_authority import filter_connector_asset_for_actor
+
+                    projected = filter_connector_asset_for_actor(
+                        project_id,
+                        asset,
+                        actor={**actor, "project_id": project_id},
+                        root=root,
+                    )
+                    projected_summary = projected.get("summary")
+                    if isinstance(projected_summary, dict):
+                        visible_source_count = int(
+                            projected_summary.get("active_source_count")
+                            or projected_summary.get("source_count")
+                            or 0
+                        )
                 return {
-                    "active_source_count": int(summary.get("active_source_count") or summary.get("source_count") or 0),
+                    "active_source_count": visible_source_count,
                     "rule_count": int(summary.get("rule_count") or 0),
                     "risk_domain_count": int(summary.get("risk_domain_count") or 0),
                     "oracle_count": int(summary.get("oracle_count") or 0),

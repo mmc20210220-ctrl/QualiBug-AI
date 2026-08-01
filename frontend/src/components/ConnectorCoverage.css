@@ -154,6 +154,57 @@
   background: rgba(245, 158, 11, 0.1);
 }
 
+.connector-sync-impact {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color, rgba(148, 163, 184, 0.22));
+}
+
+.connector-sync-impact-title,
+.connector-sync-impact-statuses {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connector-sync-impact-title strong {
+  font-size: 13px;
+}
+
+.connector-sync-impact-title span,
+.connector-sync-impact-statuses span {
+  color: var(--text-secondary, #64748b);
+  font-size: 11px;
+}
+
+.connector-sync-impact-statuses span.is-blocked,
+.connector-sync-impact-warning {
+  color: var(--danger, #b91c1c);
+}
+
+.connector-sync-impact p,
+.connector-sync-impact li {
+  margin: 0;
+  color: var(--text-secondary, #64748b);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.connector-sync-impact ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.connector-sync-impact-warning {
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(245, 158, 11, 0.1);
+}
+
 @media (max-width: 720px) {
   .connector-coverage-list article {
     display: grid;
@@ -165,6 +216,13 @@
   }
 
   .connector-remote-lifecycle-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .connector-sync-impact-title,
+  .connector-sync-impact-statuses {
     align-items: flex-start;
     flex-direction: column;
     gap: 2px;
