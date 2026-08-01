@@ -2,8 +2,9 @@
 
 Ordinary experiments use the single ``cleanup_equivalence_core`` evaluator. Before a
 created-entity absence check, this facade narrows common collection envelopes to the exact runtime
-identity when that identity is available. The core still owns every equivalence verdict and keeps
-its three-phase, fail-closed evidence requirements.
+identity only when the declared identity is fully bound and every identity field is present on a
+candidate row. The core still owns every equivalence verdict and keeps its three-phase, fail-closed
+evidence requirements.
 
 A process-graph proof set is evaluated by applying that same core engine to each source step and
 aggregating only the resulting formal receipts.
@@ -223,37 +224,33 @@ def _runtime_identity(
         for field in _list(identity_contract.get("identity_fields"))
         if _text(field)
     ]
-    return {
-        field: runtime_bindings[field]
+    if not fields or any(
+        field not in runtime_bindings
+        or runtime_bindings[field] in (None, "")
         for field in fields
-        if field in runtime_bindings
-        and runtime_bindings[field] not in (None, "")
-    }
+    ):
+        return {}
+    return {field: runtime_bindings[field] for field in fields}
 
 
 def _row_matches_identity(
     row: dict[str, Any],
     identity: dict[str, Any],
 ) -> bool | None:
-    comparable = {
-        field: expected
-        for field, expected in identity.items()
-        if field in row
-    }
-    if not comparable:
+    if not identity or any(field not in row for field in identity):
         return None
-    return all(row.get(field) == expected for field, expected in comparable.items())
+    return all(row.get(field) == expected for field, expected in identity.items())
 
 
 def _identity_scoped_collection_observation(
     observation: dict[str, Any],
     identity: dict[str, Any],
 ) -> dict[str, Any]:
-    """Narrow one collection envelope to the exact runtime identity.
+    """Narrow one collection envelope to one complete runtime identity.
 
     An empty collection proves global absence. A non-empty collection is narrowed only when at
-    least one row exposes a declared identity field; otherwise the original observation is
-    preserved so the core remains fail-closed rather than guessing.
+    least one row exposes every bound identity field; otherwise the original observation is
+    preserved so the core remains fail-closed rather than guessing from partial identity.
     """
     original = _dict(observation)
     body = original.get("body")
@@ -332,14 +329,19 @@ def _ordinary_observations(
             after_cleanup_observation,
         )
     identity = _runtime_identity(proof, runtime_bindings)
-    return tuple(
-        _identity_scoped_collection_observation(observation, identity)
-        for observation in (
-            before_observation,
-            after_write_observation,
-            after_cleanup_observation,
-        )
+    before = _identity_scoped_collection_observation(
+        before_observation,
+        identity,
     )
+    after_write = _identity_scoped_collection_observation(
+        after_write_observation,
+        identity,
+    )
+    after_cleanup = _identity_scoped_collection_observation(
+        after_cleanup_observation,
+        identity,
+    )
+    return before, after_write, after_cleanup
 
 
 def evaluate_cleanup_equivalence(
