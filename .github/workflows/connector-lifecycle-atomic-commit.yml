@@ -20,6 +20,7 @@ on:
       - "tests/test_connector_auto_sync_lifecycle_recovery.py"
       - "tests/test_connector_checkpoint_commit_authority.py"
       - "tests/test_connector_lifecycle_commit_authority.py"
+      - "tests/test_connector_lifecycle_completed_intent_cleanup.py"
       - "tests/test_connector_lifecycle_recovery_intent.py"
       - "tests/test_connector_lifecycle_recovery_supervisor.py"
       - "tests/test_connector_remote_lifecycle.py"
@@ -47,6 +48,7 @@ on:
       - "tests/test_connector_auto_sync_lifecycle_recovery.py"
       - "tests/test_connector_checkpoint_commit_authority.py"
       - "tests/test_connector_lifecycle_commit_authority.py"
+      - "tests/test_connector_lifecycle_completed_intent_cleanup.py"
       - "tests/test_connector_lifecycle_recovery_intent.py"
       - "tests/test_connector_lifecycle_recovery_supervisor.py"
       - "tests/test_connector_remote_lifecycle.py"
@@ -99,6 +101,7 @@ jobs:
             tests/test_connector_auto_sync_lifecycle_recovery.py \
             tests/test_connector_checkpoint_commit_authority.py \
             tests/test_connector_lifecycle_commit_authority.py \
+            tests/test_connector_lifecycle_completed_intent_cleanup.py \
             tests/test_connector_lifecycle_recovery_intent.py \
             tests/test_connector_lifecycle_recovery_supervisor.py \
             tests/test_connector_remote_lifecycle.py \
