@@ -1,1 +1,1 @@
-current-main-table-identity-diagnostic-v2
+current-main-table-identity-diagnostic-v3
