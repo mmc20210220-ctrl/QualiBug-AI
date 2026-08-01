@@ -61,6 +61,31 @@ export type ConnectorAcceptanceInventory = {
   };
 };
 
+export type ConnectorAcceptanceJob = {
+  job_id: string;
+  project_id: string;
+  connector_instance_id: string;
+  profile: string;
+  status: 'NOT_STARTED' | 'PENDING' | 'RUNNING' | 'COMPLETE' | 'FAILED' | 'INTERRUPTED' | string;
+  requested_at_utc?: string;
+  started_at_utc?: string;
+  completed_at_utc?: string;
+  report_id?: string;
+  verdict?: string;
+  acceptance_ready: boolean;
+  error_type?: string;
+  terminal: boolean;
+  governance: {
+    customer_material_access?: string;
+    deletion_policy?: string;
+    source_content_returned: false;
+    raw_cursor_returned: false;
+    credential_values_returned: false;
+    filesystem_path_returned: false;
+    background_execution?: boolean;
+  };
+};
+
 const asRecord = (value: unknown): JsonRecord => (
   value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as JsonRecord
@@ -85,7 +110,7 @@ function friendlyAcceptanceError(rawMessage: string, status: number): string {
     return '飞书只读权限不足，请检查知识库与云文档授权范围。';
   }
   if (message.includes('not_found') || status === 404) {
-    return '尚未找到验收报告，请先运行一次 Pilot 验收。';
+    return '尚未找到验收任务或报告，请先运行一次 Pilot 验收。';
   }
   if (message.includes('profile') || message.includes('credential') || message.includes('access_token')) {
     return '飞书连接信息未通过验收，请重新检查授权配置。';
@@ -171,22 +196,26 @@ function toCheck(value: unknown): ConnectorAcceptanceCheck {
   };
 }
 
-function assertSafeReportEnvelope(row: JsonRecord): void {
-  for (const field of [
-    'source_content_returned',
-    'raw_cursor_returned',
-    'credential_values_returned',
-    'filesystem_path_returned',
-  ]) {
+function assertFalseFields(row: JsonRecord, fields: string[], label: string): void {
+  for (const field of fields) {
     if (row[field] !== false) {
-      throw new Error('验收报告缺少完整的安全证明，已拒绝在页面展示。');
+      throw new Error(`${label}缺少完整的安全证明，已拒绝在页面展示。`);
     }
   }
 }
 
 function toReport(value: unknown): ConnectorAcceptanceReport {
   const row = asRecord(value);
-  assertSafeReportEnvelope(row);
+  assertFalseFields(
+    row,
+    [
+      'source_content_returned',
+      'raw_cursor_returned',
+      'credential_values_returned',
+      'filesystem_path_returned',
+    ],
+    '验收报告',
+  );
   const governance = asRecord(row.governance);
   return {
     ...toReportSummary(row),
@@ -213,6 +242,45 @@ function toReport(value: unknown): ConnectorAcceptanceReport {
     raw_cursor_returned: false,
     credential_values_returned: false,
     filesystem_path_returned: false,
+  };
+}
+
+function toJob(value: unknown): ConnectorAcceptanceJob {
+  const row = asRecord(value);
+  const governance = asRecord(row.governance);
+  assertFalseFields(
+    governance,
+    [
+      'source_content_returned',
+      'raw_cursor_returned',
+      'credential_values_returned',
+      'filesystem_path_returned',
+    ],
+    '验收任务',
+  );
+  return {
+    job_id: asString(row.job_id),
+    project_id: asString(row.project_id),
+    connector_instance_id: asString(row.connector_instance_id),
+    profile: asString(row.profile),
+    status: asString(row.status) || 'NOT_STARTED',
+    requested_at_utc: asString(row.requested_at_utc) || undefined,
+    started_at_utc: asString(row.started_at_utc) || undefined,
+    completed_at_utc: asString(row.completed_at_utc) || undefined,
+    report_id: asString(row.report_id) || undefined,
+    verdict: asString(row.verdict) || undefined,
+    acceptance_ready: asBoolean(row.acceptance_ready),
+    error_type: asString(row.error_type) || undefined,
+    terminal: asBoolean(row.terminal),
+    governance: {
+      customer_material_access: asString(governance.customer_material_access) || undefined,
+      deletion_policy: asString(governance.deletion_policy) || undefined,
+      source_content_returned: false,
+      raw_cursor_returned: false,
+      credential_values_returned: false,
+      filesystem_path_returned: false,
+      background_execution: asBoolean(governance.background_execution),
+    },
   };
 }
 
@@ -248,11 +316,22 @@ export async function getConnectorAcceptanceReport(
   return toReport(asRecord(payload.data));
 }
 
-export async function runConnectorAcceptance(
+export async function getConnectorAcceptanceJob(
+  projectId: string,
+  connectorId: string,
+  jobId = 'current',
+): Promise<ConnectorAcceptanceJob> {
+  const payload = await acceptanceRequest(
+    connectorPath(projectId, connectorId, `/acceptance-jobs/${encodeURIComponent(jobId)}`),
+  );
+  return toJob(asRecord(payload.data));
+}
+
+export async function startConnectorAcceptance(
   projectId: string,
   connectorId: string,
   profile: 'smoke' | 'pilot' | 'enterprise' = 'pilot',
-): Promise<ConnectorAcceptanceReport> {
+): Promise<ConnectorAcceptanceJob> {
   const payload = await acceptanceRequest(
     connectorPath(projectId, connectorId, '/acceptance'),
     {
@@ -263,5 +342,5 @@ export async function runConnectorAcceptance(
       }),
     },
   );
-  return toReport(asRecord(payload.data));
+  return toJob(asRecord(payload.data));
 }
