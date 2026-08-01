@@ -163,6 +163,18 @@ def _reactivate_retired_occurrence(
     return True
 
 
+def _was_absent_or_retired(rows: list[dict[str, Any]]) -> bool:
+    for row in rows:
+        if row.get("status") == "retired_remote_scope":
+            return True
+        metadata = dict(row.get("source_metadata") or {})
+        if _text(metadata.get("remote_lifecycle_state"), 100).startswith(
+            "ABSENT_FROM_CONFIGURED_SCOPE"
+        ):
+            return True
+    return False
+
+
 def _present_state(
     previous: Mapping[str, Any],
     current: Mapping[str, Any],
@@ -196,20 +208,26 @@ def _attach_to_sync_receipt(
     if not sync_epoch_id:
         return False
     try:
+        persisted_lifecycle = {
+            **lifecycle,
+            "sync_receipt_persisted": True,
+            "evidence_persistence_status": "COMPLETE",
+        }
         run = load_connector_sync_run(
             project,
             connector_instance_id=connector,
             sync_epoch_id=sync_epoch_id,
             root=root,
         )
-        run["requested_deletion_policy"] = lifecycle[
+        run["requested_deletion_policy"] = persisted_lifecycle[
             "requested_deletion_policy"
         ]
-        run["effective_deletion_policy"] = lifecycle[
+        run["effective_deletion_policy"] = persisted_lifecycle[
             "effective_deletion_policy"
         ]
-        run["remote_lifecycle"] = lifecycle
-        run["retired_count"] = int(lifecycle.get("retired_count") or 0)
+        run["remote_lifecycle"] = persisted_lifecycle
+        run["remote_lifecycle_status"] = persisted_lifecycle["status"]
+        run["retired_count"] = int(persisted_lifecycle.get("retired_count") or 0)
         path = _write_run_receipt(
             project,
             connector,
@@ -230,23 +248,24 @@ def _attach_to_sync_receipt(
         if summary is not None:
             summary.update(
                 {
-                    "remote_lifecycle_status": lifecycle.get("status"),
-                    "remote_absent_count": lifecycle.get("absent_count", 0),
-                    "remote_unconfirmed_missing_count": lifecycle.get(
+                    "remote_lifecycle_status": persisted_lifecycle.get("status"),
+                    "remote_absent_count": persisted_lifecycle.get("absent_count", 0),
+                    "remote_unconfirmed_missing_count": persisted_lifecycle.get(
                         "unconfirmed_missing_count", 0
                     ),
-                    "remote_retirement_eligible_count": lifecycle.get(
+                    "remote_retirement_eligible_count": persisted_lifecycle.get(
                         "retirement_eligible_count", 0
                     ),
-                    "renamed_resource_count": lifecycle.get(
+                    "renamed_resource_count": persisted_lifecycle.get(
                         "renamed_resource_count", 0
                     ),
-                    "moved_resource_count": lifecycle.get(
+                    "moved_resource_count": persisted_lifecycle.get(
                         "moved_resource_count", 0
                     ),
-                    "reappeared_resource_count": lifecycle.get(
+                    "reappeared_resource_count": persisted_lifecycle.get(
                         "reappeared_resource_count", 0
                     ),
+                    "remote_lifecycle_evidence_persisted": True,
                 }
             )
         _save_connector_registry(project, root, registry)
@@ -311,11 +330,12 @@ def reconcile_connector_remote_lifecycle(
     present_existing_count = 0
     for remote_id, resource in present.items():
         candidates = by_remote.get(remote_id, [])
+        previously_absent = _was_absent_or_retired(candidates)
         occurrence = next(
             (row for row in candidates if row.get("status") == "active"),
             None,
         )
-        reappeared = False
+        reactivated = False
         if occurrence is None:
             retired = _latest_occurrence(
                 [
@@ -325,7 +345,7 @@ def reconcile_connector_remote_lifecycle(
                 ]
             )
             if retired is not None:
-                reappeared = _reactivate_retired_occurrence(
+                reactivated = _reactivate_retired_occurrence(
                     project,
                     resolved_root,
                     registry,
@@ -340,10 +360,7 @@ def reconcile_connector_remote_lifecycle(
         lifecycle_state, renamed, moved = _present_state(
             previous,
             resource,
-            reappeared=reappeared
-            or _text(previous.get("remote_lifecycle_state"), 100).startswith(
-                "ABSENT_FROM_CONFIGURED_SCOPE"
-            ),
+            reappeared=reactivated or previously_absent,
         )
         renamed_count += int(renamed)
         moved_count += int(moved)
@@ -573,13 +590,23 @@ def reconcile_connector_remote_lifecycle(
         "customer_material_mutation_executed": False,
         "second_source_registry_created": False,
     }
-    lifecycle["sync_receipt_persisted"] = _attach_to_sync_receipt(
+    persisted = _attach_to_sync_receipt(
         project,
         connector,
         _text(sync_epoch_id, 160),
         resolved_root,
         lifecycle,
     )
+    lifecycle["sync_receipt_persisted"] = persisted
+    lifecycle["evidence_persistence_status"] = (
+        "COMPLETE" if persisted else "FAILED"
+    )
+    if not persisted:
+        lifecycle["status"] = (
+            "PARTIAL_RECEIPT_NOT_PERSISTED"
+            if status == "COMPLETE"
+            else f"{status}_RECEIPT_NOT_PERSISTED"
+        )
     return lifecycle
 
 
