@@ -1,0 +1,107 @@
+name: Apply cross-system correlation handoff
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/patches/cross-system-correlation-handoff.patch.gz.b64'
+      - '.github/workflows/apply-cross-system-correlation-handoff.yml'
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  apply-verify:
+    if: github.event.pull_request.head.ref == 'delivery/cross-system-correlation-handoff-20260801'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch verified patch
+        env:
+          PATCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${PATCH_HEAD_SHA}"
+          git show "${PATCH_HEAD_SHA}:.github/patches/cross-system-correlation-handoff.patch.gz.b64" > /tmp/fixes.b64
+          echo "b23638bc8a94ea864b2bd0db3c795ae15fc1379a5a3eadf8253212abdeeccd09  /tmp/fixes.b64" | sha256sum -c -
+          base64 -d /tmp/fixes.b64 | gzip -d > /tmp/fixes.patch
+          echo "3d546db2cb1fb0b31a9e7fbe7a86caa42b21f1aa1547def031db84329f52476a  /tmp/fixes.patch" | sha256sum -c -
+
+      - name: Apply with three-way merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "QualiBug Automation"
+          git config user.email "automation@qualibug.local"
+          git am --3way /tmp/fixes.patch
+          git diff --check HEAD^
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile changed modules
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/process_graph_wait_contract.py \
+            tests/test_process_graph_async_transition_oracle.py \
+            tests/test_process_graph_broker_adapter.py \
+            tests/test_process_graph_event_transition.py \
+            tests/test_process_graph_event_transition_scope.py
+
+      - name: Run async correlation regressions
+        run: |
+          python -m pytest -q \
+            tests/test_process_graph_event_transition.py \
+            tests/test_process_graph_event_transition_scope.py \
+            tests/test_process_graph_event_transition_ledger.py \
+            tests/test_process_graph_async_transition_oracle.py \
+            tests/test_process_graph_broker_delivery.py \
+            tests/test_process_graph_broker_adapter.py \
+            tests/test_process_graph_broker_oracle.py \
+            tests/test_process_graph_wait_outcome.py \
+            tests/test_process_graph_wait_source_authority.py \
+            tests/test_process_graph_plan_executor.py \
+            tests/test_v150_multi_step_protocol.py \
+            tests/test_process_graph_dependency_rollback.py \
+            tests/test_process_graph_write_rollback_integration.py \
+            tests/test_cross_system_process_graph_closure.py \
+            tests/test_enterprise_process_graph_ir.py
+
+      - name: Verify exact final diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected <<'EOF'
+          ai_test_asset_center/process_graph_wait_contract.py
+          tests/test_process_graph_async_transition_oracle.py
+          tests/test_process_graph_broker_adapter.py
+          tests/test_process_graph_event_transition.py
+          tests/test_process_graph_event_transition_scope.py
+          EOF
+          git diff --name-only origin/main...HEAD | sort > /tmp/actual
+          sort -o /tmp/expected /tmp/expected
+          diff -u /tmp/expected /tmp/actual
+
+      - name: Publish source-only branch
+        env:
+          DELIVERY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force-with-lease=refs/heads/delivery/cross-system-correlation-handoff-20260801:${DELIVERY_HEAD_SHA} \
+            origin HEAD:delivery/cross-system-correlation-handoff-20260801
