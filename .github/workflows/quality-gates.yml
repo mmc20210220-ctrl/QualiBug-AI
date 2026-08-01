@@ -164,16 +164,42 @@ jobs:
           print('TicketSLA E2E PASS; next repair target:', result.get('next_repair_target'))
           PY
 
-      - name: Commit verified source changes and remove temporary transport
+      - name: Commit verified source changes
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'QualiBug Automation'
           git config user.email 'automation@qualibug.local'
-          git show f79c62d5e954d27af1bf3a01be884fc0d74c2ebc:.github/workflows/quality-gates.yml > .github/workflows/quality-gates.yml
-          git rm .github/workflows/one-time-enterprise-understanding-root-fixes.yml
-          git rm .github/root-fix-trigger
-          git add -A
+          git add \
+            ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py \
+            ai_test_asset_center/enterprise_knowledge_center/_chinese_business_conflicts.py \
+            ai_test_asset_center/enterprise_knowledge_center/_parsing.py \
+            ai_test_asset_center/enterprise_knowledge_center/composition.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/authorization_semantics.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder_legacy_v1.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/explicit_fact_semantic_normalization.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_clusters.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/identity_edges.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/lifecycle_builder.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py \
+            benchmark_evaluator/enterprise_understanding/build_product_snapshot.py \
+            benchmark_evaluator/enterprise_understanding/fact_slot_document.py \
+            benchmark_evaluator/enterprise_understanding/root_cause.py \
+            benchmark_evaluator/enterprise_understanding/ticketsla_object_baseline.py \
+            tests/test_behavior_implementation_binding.py \
+            tests/test_chinese_business_comprehension.py \
+            tests/test_chinese_business_fact_conflicts.py \
+            tests/test_enterprise_identity_resolution.py \
+            tests/test_enterprise_understanding_benchmark.py \
+            tests/test_enterprise_understanding_source_backed_workflow.py \
+            tests/test_enterprise_understanding_structure_first_facts.py \
+            tests/test_source_backed_condition_state_semantics.py \
+            tests/test_source_declared_operation_identity.py \
+            tests/test_source_declared_role_identity.py \
+            tests/test_technical_source_understanding_attachment.py \
+            tests/test_term_alias_identity_pipeline.py
           git commit -m 'fix(understanding): preserve source identities through behavior compilation' \
             -m 'Root-cause fixes across source identity, Markdown table structure, term/role/object resolution, OpenAPI operation identity, lifecycle conditions, conflict recalculation, authorization semantics, and safe complementary behavior composition. Adds source-backed regressions and keeps evaluation truth isolated from product runtime.'
 
