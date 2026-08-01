@@ -120,8 +120,12 @@ def build_chinese_first_comprehension(
     from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.role_inheritance_authority import (
         materialize_role_inheritance_contracts,
     )
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.segregation_of_duties_authority import (
+        materialize_sod_contracts,
+    )
     from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.fact_permission_matrix import (
         materialize_fact_permission_matrix,
     )
     materialize_role_inheritance_contracts(enriched, sources)
+    materialize_sod_contracts(enriched, sources)
     return materialize_fact_permission_matrix(enriched)

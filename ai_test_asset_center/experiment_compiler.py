@@ -46,6 +46,7 @@ from .database_state_transition_finding_bridge import (
     install_database_state_transition_finding_bridge,
 )
 from .experiment_compiler_conflict_base import *  # noqa: F401,F403
+from .experiment_compiler_sod import attach_sod_fixture_owner_binding
 from .runtime_materialization_experiment_bridge import (
     bind_experiment_pack_to_captured_materializations,
     install_runtime_materialization_execution_bridge,
@@ -298,6 +299,9 @@ def compile_experiment_for_obligation(
         environment_type=environment_type,
         policy_version=policy_version,
         available_adapters=available_adapters,
+    )
+    experiment = attach_sod_fixture_owner_binding(
+        experiment, obligation, behavior_ir
     )
     experiment = _attach_source_observed_mutations(experiment, behavior_ir)
     governed, reason, detail = attach_authorization_comparison_contract(

@@ -19,12 +19,19 @@ from .authorization_semantics import (
     resolve_fact_authorization_delegation,
 )
 
-_PERMISSION_METHOD_ACTIONS: dict[str, frozenset[str]] = {
+_METHOD_ACTIONS: dict[str, frozenset[str]] = {
     "GET": frozenset({"get", "read", "view", "list", "search", "query", "lookup"}),
     "POST": frozenset({
         "post", "create", "add", "submit", "send", "start",
         "approve", "review", "reject", "authorize",
     }),
+    "PUT": frozenset({"put", "update", "edit", "modify", "replace"}),
+    "PATCH": frozenset({"patch", "update", "edit", "modify", "change"}),
+    "DELETE": frozenset({"delete", "remove", "cancel", "revoke"}),
+}
+_METHOD_DEFAULT_ACTIONS: dict[str, frozenset[str]] = {
+    "GET": frozenset({"get", "read", "view", "list", "search", "query", "lookup"}),
+    "POST": frozenset({"post", "create", "add", "submit", "send", "start"}),
     "PUT": frozenset({"put", "update", "edit", "modify", "replace"}),
     "PATCH": frozenset({"patch", "update", "edit", "modify", "change"}),
     "DELETE": frozenset({"delete", "remove", "cancel", "revoke"}),
@@ -140,6 +147,43 @@ def _source_identity(fact: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _interface_action_tokens(interface: dict[str, Any]) -> set[str]:
+    method = _text(interface.get("method")).upper()
+    metadata_values = [
+        interface.get("semantic_action"), interface.get("action"),
+        interface.get("operation_id"), interface.get("interface_id"),
+        interface.get("summary"), interface.get("description"),
+        *_list(interface.get("tags")),
+    ]
+    path = _text(interface.get("path") or interface.get("raw_path"))
+    segments = [segment for segment in path.split("/") if segment and not segment.startswith("{") and not segment.startswith(":")]
+    terminal = segments[-1] if segments else ""
+    metadata_values.append(terminal)
+    ascii_tokens: set[str] = set()
+    chinese_text = "".join(_text(value) for value in metadata_values)
+    for value in metadata_values:
+        raw = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", _text(value))
+        ascii_tokens.update(re.findall(r"[a-z0-9]+", raw.casefold()))
+    # ``order`` is a resource noun in operation ids such as approveOrder; using it
+    # as the verb alias of Chinese 下单 would bind create permission to approve.
+    ascii_tokens.discard("order")
+    explicit: set[str] = set()
+    for source, targets in _verb_action_lexicon().items():
+        members = {_norm(source), *(_norm(item) for item in targets)}
+        members.discard("")
+        matched = False
+        for member in members:
+            if member.isascii():
+                matched = matched or member in ascii_tokens
+            else:
+                matched = matched or member in _norm(chinese_text)
+        if matched:
+            explicit.update(members)
+    compatible = _METHOD_ACTIONS.get(method, frozenset())
+    explicit = {token for token in explicit if token in compatible}
+    return explicit or set(_METHOD_DEFAULT_ACTIONS.get(method, frozenset()))
+
+
 def _interface_matches(
     interface: dict[str, Any],
     *,
@@ -148,9 +192,11 @@ def _interface_matches(
 ) -> bool:
     method = _text(interface.get("method")).upper()
     path = _text(interface.get("path") or interface.get("raw_path"))
-    if method not in _PERMISSION_METHOD_ACTIONS or not path:
+    if method not in _METHOD_ACTIONS or not path:
         return False
-    if not action_tokens.intersection(_PERMISSION_METHOD_ACTIONS[method]):
+    if not action_tokens.intersection(_METHOD_ACTIONS[method]):
+        return False
+    if not action_tokens.intersection(_interface_action_tokens(interface)):
         return False
     interface_resources: set[str] = set()
     for value in (
@@ -159,8 +205,6 @@ def _interface_matches(
         interface.get("resource"),
     ):
         interface_resources.update(_resource_tokens(value))
-    # Resource identity is exact after normalization. Path fragments, descriptions and
-    # substring similarity are not authorization authority.
     return bool(resource_tokens and resource_tokens.intersection(interface_resources))
 
 

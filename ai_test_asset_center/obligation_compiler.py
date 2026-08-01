@@ -8,6 +8,7 @@ from typing import Any
 
 from . import obligation_compiler_privacy_pair_base as _pair
 from .obligation_compiler_privacy_pair_base import *  # noqa: F401,F403
+from .obligation_compiler_sod import compile_sod_obligations
 
 
 _original_compile = _pair._original_compile
@@ -286,9 +287,11 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             expanded_keys.add((_text(prop.get("invariant_ref")), operation_ref))
 
     output = dict(paired_result)
+    sod_obligations, sod_gaps = compile_sod_obligations(behavior_ir)
     obligations = _pair._base.dedupe_obligations([
         *[dict(item) for item in _list(output.get("obligations")) if isinstance(item, dict)],
         *additions,
+        *sod_obligations,
     ])
     gaps = []
     for gap in _list(output.get("coverage_gaps")):
@@ -299,7 +302,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             continue
         gaps.append(dict(gap))
     existing_gap_ids = {_text(item.get("id")) for item in gaps}
-    for gap in field_gaps:
+    for gap in [*field_gaps, *sod_gaps]:
         if _text(gap.get("id")) not in existing_gap_ids:
             gaps.append(gap)
             existing_gap_ids.add(_text(gap.get("id")))
