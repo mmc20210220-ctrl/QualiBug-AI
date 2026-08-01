@@ -1,0 +1,281 @@
++        identities = exact_interface_operation_identities(
++            source_asset, exact_interface_refs
++        )
++        if not semantic_action and not identities:
+             continue
++
+         object_refs = _fact_object_refs(fact, alias_map)
+         actor_refs = _fact_actor_refs(fact)
+         evidence = evidence_from_fact(fact)
+         conditions = unique_text(as_list(fact.get("conditions")))
+         combinator = text(fact.get("condition_combinator"))
++        diagnostic_operation = (
++            text(identities[0].get("operation_ref"))
++            if len(identities) == 1
++            else semantic_action
++        )
+         if len(conditions) > 1 and combinator not in {"AND", "OR"}:
+             combinator = "UNRESOLVED"
+             unknowns.append(
+                 new_unknown(
+                     "CONDITION_COMBINATOR_UNRESOLVED",
+-                    f"业务动作“{action_name}”存在多个条件，但原文未给出明确的并且/或者组合关系。",
++                    f"业务动作“{diagnostic_operation}”存在多个条件，但原文未给出明确的并且/或者组合关系。",
+                     related_objects=object_refs,
+-                    related_operations=[action_name],
++                    related_operations=unique_text(
++                        [
++                            *(row.get("operation_ref") for row in identities),
++                            semantic_action,
++                        ]
++                    ),
+                     evidence=evidence,
+                     severity="P0" if fact.get("critical") else "P1",
+                     blocks_formal_understanding=bool(fact.get("critical")),
+@@ -1660,122 +1690,231 @@ def _build_operations(
+             )
+         elif len(conditions) <= 1:
+             combinator = "SINGLE_CONDITION" if conditions else ""
++
+         if not object_refs:
+             unknowns.append(
+                 new_unknown(
+                     "OPERATION_OBJECT_UNRESOLVED",
+-                    f"业务动作“{action_name}”无法唯一确定作用对象。",
+-                    related_operations=[action_name],
++                    f"业务动作“{diagnostic_operation}”无法唯一确定作用对象。",
++                    related_operations=unique_text(
++                        [
++                            *(row.get("operation_ref") for row in identities),
++                            semantic_action,
++                        ]
++                    ),
+                     evidence=evidence,
+                     severity="P0" if fact.get("critical") else "P1",
+                     blocks_formal_understanding=bool(fact.get("critical")),
+                     reason_code="OPERATION_OBJECT_UNRESOLVED",
+-                    details={"fact_id": fact.get("fact_id"), "statement": fact.get("raw_statement")},
++                    details={
++                        "fact_id": fact.get("fact_id"),
++                        "statement": fact.get("raw_statement"),
++                    },
+                 )
+             )
+             continue
+-        key = (action_name, tuple(sorted(object_refs)))
+-        operation = operations.setdefault(
+-            key,
++
++        projections = identities or [
+             {
+-                "schema": OPERATION_SCHEMA,
+-                "operation_id": stable_id("business_operation", action_name, sorted(object_refs)),
+-                "name": action_name,
+-                "raw_action_names": [],
+-                "actor_refs": [],
+-                "object_refs": sorted(object_refs),
+-                "interface_refs": [],
+-                "preconditions": [],
+-                "condition_combinator": combinator,
+-                "condition_frames": [],
+-                "effects": [],
+-                "exceptions": [],
+-                "exception_scopes": [],
+-                "temporal_constraints": [],
+-                "quantity_constraints": [],
+-                "time_window_constraints": [],
+-                "formula_constraints": [],
+-                "authorization_delegations": [],
+-                "compensations": [],
+-                "scopes": [],
+-                "modality_contracts": [],
+-                "fact_refs": [],
++                "interface_id": "",
++                "operation_ref": semantic_action,
++                "operation_aliases": unique_text(
++                    [semantic_action, action.get("raw")]
++                ),
+                 "evidence": [],
+-                "status": "UNDERSTOOD",
+-            },
+-        )
+-        operation["raw_action_names"] = unique_text([*as_list(operation.get("raw_action_names")), action.get("raw"), action_name])
+-        operation["actor_refs"] = unique_text([*as_list(operation.get("actor_refs")), *actor_refs])
+-        interface_id = text(fact.get("interface_id"))
+-        if interface_id:
++                "authority": "SOURCE_SEMANTIC_ACTION",
++                "source_backed": True,
++            }
++        ]
++
++        for projection in projections:
++            operation_ref = text(projection.get("operation_ref"))
++            if not operation_ref:
++                continue
++            interface_id = text(projection.get("interface_id"))
++            if interface_id:
++                key: tuple[Any, ...] = ("interface", interface_id)
++                operation_id = stable_id(
++                    "business_operation", "interface", interface_id, operation_ref
++                )
++            else:
++                key = ("semantic", operation_ref, tuple(sorted(object_refs)))
++                operation_id = stable_id(
++                    "business_operation", operation_ref, sorted(object_refs)
++                )
++            operation = operations.setdefault(
++                key,
++                {
++                    "schema": OPERATION_SCHEMA,
++                    "operation_id": operation_id,
++                    "operation_ref": operation_ref,
++                    "canonical_name": operation_ref,
++                    "name": operation_ref,
++                    "aliases": [],
++                    "raw_action_names": [],
++                    "actor_refs": [],
++                    "object_refs": [],
++                    "interface_refs": [],
++                    "preconditions": [],
++                    "condition_combinator": combinator,
++                    "condition_frames": [],
++                    "effects": [],
++                    "exceptions": [],
++                    "exception_scopes": [],
++                    "temporal_constraints": [],
++                    "quantity_constraints": [],
++                    "time_window_constraints": [],
++                    "formula_constraints": [],
++                    "authorization_delegations": [],
++                    "compensations": [],
++                    "scopes": [],
++                    "modality_contracts": [],
++                    "fact_refs": [],
++                    "evidence": [],
++                    "identity_authority": text(projection.get("authority")),
++                    "status": "UNDERSTOOD",
++                },
++            )
++            operation["aliases"] = unique_text(
++                [
++                    *as_list(operation.get("aliases")),
++                    *as_list(projection.get("operation_aliases")),
++                ]
++            )
++            operation["raw_action_names"] = unique_text(
++                [
++                    *as_list(operation.get("raw_action_names")),
++                    *as_list(projection.get("operation_aliases")),
++                    action.get("raw"),
++                    semantic_action,
++                ]
++            )
++            operation["actor_refs"] = unique_text(
++                [*as_list(operation.get("actor_refs")), *actor_refs]
++            )
++            operation["object_refs"] = unique_text(
++                [*as_list(operation.get("object_refs")), *object_refs]
++            )
+             operation["interface_refs"] = unique_text(
+-                [*as_list(operation.get("interface_refs")), interface_id]
++                [
++                    *as_list(operation.get("interface_refs")),
++                    interface_id,
++                ]
+             )
+-        operation["preconditions"] = unique_text([*as_list(operation.get("preconditions")), *conditions])
+-        existing_combinator = text(operation.get("condition_combinator"))
+-        merged_preconditions = as_list(operation.get("preconditions"))
+-        if len(merged_preconditions) > 1:
+-            if existing_combinator and combinator and existing_combinator != combinator:
+-                operation["condition_combinator"] = "UNRESOLVED"
+-            elif combinator:
+-                operation["condition_combinator"] = combinator
+-            elif existing_combinator not in {"AND", "OR"}:
+-                operation["condition_combinator"] = "UNRESOLVED"
+-        elif merged_preconditions:
+-            operation["condition_combinator"] = existing_combinator or combinator or "SINGLE_CONDITION"
+-        else:
+-            operation["condition_combinator"] = ""
+-        frame = as_dict(fact.get("condition_frame"))
+-        if frame:
+-            frames = [
+-                dict(row) for row in as_list(operation.get("condition_frames")) if isinstance(row, dict)
+-            ]
+-            frame_key = json.dumps(frame, ensure_ascii=False, sort_keys=True, default=str)
+-            if frame_key not in {
+-                json.dumps(row, ensure_ascii=False, sort_keys=True, default=str) for row in frames
+-            }:
+-                frames.append(dict(frame))
+-            operation["condition_frames"] = frames
+-        operation["effects"] = unique_text([*as_list(operation.get("effects")), *_effect_texts(fact)])
+-        operation["exceptions"] = unique_text([*as_list(operation.get("exceptions")), *as_list(fact.get("exceptions"))])
+-        operation["exception_scopes"] = unique_text(
+-            [*as_list(operation.get("exception_scopes")), *as_list(fact.get("exception_scope"))]
+-        )
+-        operation["temporal_constraints"] = unique_text([*as_list(operation.get("temporal_constraints")), *as_list(fact.get("temporal_constraints"))])
+-        operation["compensations"] = unique_text(
+-            [
+-                *as_list(operation.get("compensations")),
+-                *as_list(fact.get("compensations")),
+-                *as_list(fact.get("compensation")),
+-            ]
+-        )
+-        for row in as_list(fact.get("quantity_constraints")):
+-            if isinstance(row, dict) and row not in operation["quantity_constraints"]:
+-                operation["quantity_constraints"].append(dict(row))
+-        for row in as_list(fact.get("time_window_constraints")):
+-            if isinstance(row, dict) and row not in operation["time_window_constraints"]:
+-                operation["time_window_constraints"].append(dict(row))
+-        for row in as_list(fact.get("formula_constraints")):
+-            if isinstance(row, dict) and row not in operation["formula_constraints"]:
+-                operation["formula_constraints"].append(dict(row))
+-        delegation = as_dict(fact.get("authorization_delegation"))
+-        if delegation and delegation not in operation["authorization_delegations"]:
+-            operation["authorization_delegations"].append(dict(delegation))
+-        scope = {key: value for key, value in as_dict(fact.get("scope")).items() if text(value)}
+-        if scope and scope not in operation["scopes"]:
+-            operation["scopes"].append(scope)
+-        modality_contract = {
+-            "modality": text(fact.get("modality")),
+-            "polarity": text(fact.get("polarity")),
+-            "fact_id": text(fact.get("fact_id")),
+-        }
+-        if modality_contract not in operation["modality_contracts"]:
+-            operation["modality_contracts"].append(modality_contract)
+-        operation["fact_refs"] = unique_text([*as_list(operation.get("fact_refs")), fact.get("fact_id")])
+-        operation["evidence"] = dedupe_evidence([*as_list(operation.get("evidence")), *evidence])
+-        if text(operation.get("condition_combinator")) == "UNRESOLVED" and len(as_list(operation.get("preconditions"))) > 1:
+-            operation["status"] = "PARTIAL"
+-    return sorted(operations.values(), key=lambda row: (text(row.get("name")), tuple(as_list(row.get("object_refs"))))), unknowns
++            operation["preconditions"] = unique_text(
++                [*as_list(operation.get("preconditions")), *conditions]
++            )
++            existing_combinator = text(operation.get("condition_combinator"))
++            merged_preconditions = as_list(operation.get("preconditions"))
++            if len(merged_preconditions) > 1:
++                if existing_combinator and combinator and existing_combinator != combinator:
++                    operation["condition_combinator"] = "UNRESOLVED"
++                elif combinator:
++                    operation["condition_combinator"] = combinator
++                elif existing_combinator not in {"AND", "OR"}:
++                    operation["condition_combinator"] = "UNRESOLVED"
++            elif merged_preconditions:
++                operation["condition_combinator"] = (
++                    existing_combinator or combinator or "SINGLE_CONDITION"
++                )
++            else:
++                operation["condition_combinator"] = ""
++            frame = as_dict(fact.get("condition_frame"))
++            if frame:
++                frames = [
++                    dict(row)
++                    for row in as_list(operation.get("condition_frames"))
++                    if isinstance(row, dict)
++                ]
++                frame_key = json.dumps(
++                    frame, ensure_ascii=False, sort_keys=True, default=str
++                )
++                if frame_key not in {
++                    json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
++                    for row in frames
