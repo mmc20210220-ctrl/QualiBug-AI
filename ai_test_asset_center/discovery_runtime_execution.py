@@ -45,6 +45,34 @@ from .discovery_runtime_execution_support import (  # noqa: F401
     _sum_batch_int,
     _text,
 )
+
+import re as _re
+
+_VARIANT_RE = _re.compile(r"^(.+?)__v_[a-f0-9]+$")
+
+
+def _compiled_round0_obligation_ids(all_experiments: Any) -> set[str]:
+    """Round-0 obligation identities that actually compiled.
+
+    Variant experiments (``obl_x__v_<digest>``) collapse to their base
+    identity. Compile-blocked obligations are excluded so the observation-
+    driven expansion round may re-compile them against the expanded IR: they
+    made zero target requests and no behavior slice was attempted, which the
+    ledger reopening rule allows.
+    """
+
+    compiled: set[str] = set()
+    for row in _list(all_experiments):
+        if not isinstance(row, dict):
+            continue
+        if _text(_dict(row.get("compile_receipt")).get("status")).upper() != "COMPILED":
+            continue
+        obligation_id = _text(row.get("obligation_id"))
+        if not obligation_id:
+            continue
+        match = _VARIANT_RE.match(obligation_id)
+        compiled.add(match.group(1) if match else obligation_id)
+    return compiled
 from .experiment_executor import execute_selected_experiments
 from .formal_delivery_authority import build_formal_delivery_authority_receipt
 from .formal_delivery_scope import formal_customer_deliverable_findings
@@ -219,11 +247,9 @@ def run_experiment_candidate(
     if runtime_approved and surface_plan:
         expansion = expand_behavior_ir_from_runtime_observations(
             initial_behavior_ir=plan.behavior_ir,
-            existing_obligation_ids={
-                _text(row.get("obligation_id"))
-                for row in _list(plan.obligations.get("obligations"))
-                if isinstance(row, dict) and _text(row.get("obligation_id"))
-            },
+            existing_obligation_ids=_compiled_round0_obligation_ids(
+                plan.experiments.get("all_experiments")
+            ),
             knowledge_asset=_dict(plan.experiments.get("_knowledge_asset")),
             documented_operations=[
                 dict(row)
