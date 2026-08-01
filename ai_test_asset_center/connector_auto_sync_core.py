@@ -266,7 +266,7 @@ def _managed_context(
         "connection_profile_ref": _text(
             instance.get("connection_profile_ref"), 500
         ),
-        "resource_scope": _text(instance.get("resource_scope"), 1000),
+        "resource_scope": _text(instance.get("resource_scope"), 20000),
         "root": root,
         "actor": dict(actor),
         "resolve_connection_profile": _profile_resolver(project, root),

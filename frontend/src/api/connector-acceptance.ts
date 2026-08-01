@@ -105,21 +105,21 @@ function friendlyAcceptanceError(rawMessage: string, status: number): string {
     || message.includes('owner_active')
     || message.includes('transaction_busy')
   ) {
-    return '飞书资料正在同步或验收，请在当前任务完成后重试。';
+    return '在线资料正在同步或验收，请在当前任务完成后重试。';
   }
   if (message.includes('permission') || message.includes('forbidden')) {
-    return '飞书只读权限不足，请检查知识库与云文档授权范围。';
+    return '连接器只读权限不足，请检查Manifest声明的授权范围。';
   }
   if (message.includes('not_found') || status === 404) {
     return '尚未找到验收任务或报告，请先运行一次 Pilot 验收。';
   }
   if (message.includes('profile') || message.includes('credential') || message.includes('access_token')) {
-    return '飞书连接信息未通过验收，请重新检查授权配置。';
+    return '连接器信息未通过验收，请重新检查授权配置。';
   }
   if (message.includes('transport') || message.includes('api_failed') || status >= 500) {
-    return '飞书服务暂时不可用，已有资料不受影响，请稍后重试验收。';
+    return '连接器服务暂时不可用，已有资料不受影响，请稍后重试验收。';
   }
-  return '飞书资料验收未完成，请检查连接和同步状态后重试。';
+  return '在线资料验收未完成，请检查连接和同步状态后重试。';
 }
 
 async function acceptanceRequest(path: string, init?: RequestInit): Promise<JsonRecord> {
@@ -154,7 +154,7 @@ async function acceptanceRequest(path: string, init?: RequestInit): Promise<Json
 function connectorPath(projectId: string, connectorId: string, suffix: string): string {
   const project = projectId.trim();
   const connector = connectorId.trim();
-  if (!project || !connector) throw new Error('缺少项目或飞书连接器标识。');
+  if (!project || !connector) throw new Error('缺少项目或在线连接器标识。');
   return `/api/v1/projects/${encodeURIComponent(project)}/knowledge-connectors/${encodeURIComponent(connector)}${suffix}`;
 }
 

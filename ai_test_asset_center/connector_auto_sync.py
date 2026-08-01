@@ -33,6 +33,7 @@ _CORE_AUTO_SYNC_STATUS = _core.connector_auto_sync_status
 _CORE_RUN_MANAGED = _core.run_managed_connector_sync
 _CORE_TEST_MANAGED = _core.test_managed_connector_connection
 _CORE_RUN_SWEEP = _core.run_connector_auto_sync_sweep
+_CORE_VALIDATE_CHECKPOINT = _core.validate_connector_checkpoint
 _FEISHU_SYNC_DEFAULT = sync_feishu_connector
 
 for _name, _value in _CORE_BASELINE.items():
@@ -61,6 +62,7 @@ _FACADE_OWNED_NAMES = {
     "_CORE_RUN_MANAGED",
     "_CORE_TEST_MANAGED",
     "_CORE_RUN_SWEEP",
+    "_CORE_VALIDATE_CHECKPOINT",
     "_FEISHU_SYNC_DEFAULT",
     "_RECOVERY_ONLY_ACTIONS",
     "_OVERRIDE_LOCK",
@@ -352,6 +354,12 @@ def test_managed_feishu_connection(
     return test_managed_connector_connection(*args, **kwargs)
 
 
+def validate_connector_checkpoint(*args: Any, **kwargs: Any) -> None:
+    """Validate through the facade so explicit test/runtime overrides stay scoped."""
+    with _temporary_explicit_core_overrides():
+        return _CORE_VALIDATE_CHECKPOINT(*args, **kwargs)
+
+
 # ``new_registry_created`` remains a historical status field and is always false; the
 # auto-sync authority never creates a parallel registry.
 _LEGACY_STATUS_FIELD = "new_registry_created"
@@ -371,9 +379,6 @@ stop_connector_auto_sync_supervisor = _core.stop_connector_auto_sync_supervisor
 stop_all_connector_auto_sync_supervisors = (
     _core.stop_all_connector_auto_sync_supervisors
 )
-validate_connector_checkpoint = _core.validate_connector_checkpoint
-
-
 __all__ = [
     "connector_auto_sync_status",
     "ensure_connector_auto_sync_supervisor",

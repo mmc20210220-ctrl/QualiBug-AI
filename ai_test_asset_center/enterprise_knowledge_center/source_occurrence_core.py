@@ -49,7 +49,13 @@ def _format_identity(value: Any) -> str:
 
 
 def _registry_rows(registry: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    rows = [row for row in registry.get(key) or [] if isinstance(row, dict)]
+    raw = registry.get(key)
+    if isinstance(raw, list) and all(isinstance(row, dict) for row in raw):
+        # Keep the existing list object stable across nested authority calls. Replacing a list
+        # here while a caller still holds it loses newly appended source occurrences when the
+        # same registry is normalized again by _supersede_active_source_ref_peers or cleanup.
+        return raw
+    rows = [row for row in raw or [] if isinstance(row, dict)] if isinstance(raw, list) else []
     registry[key] = rows
     return rows
 

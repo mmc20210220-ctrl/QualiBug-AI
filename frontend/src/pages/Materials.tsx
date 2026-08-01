@@ -2,10 +2,17 @@ import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'rea
 import { Link, useSearchParams } from 'react-router-dom';
 import { getKnowledgeAsset, ingestKnowledge } from '../api/client';
 import {
-  connectFeishuKnowledge,
+  connectKnowledgeConnector,
+  listConnectorResources,
+  listConnectorTypes,
   listKnowledgeConnectors,
+  pauseKnowledgeConnector,
+  reauthorizeKnowledgeConnector,
   refreshKnowledgeConnector,
-  type ConfigureFeishuConnectorInput,
+  resumeKnowledgeConnector,
+  type ConfigureConnectorInput,
+  type ConnectorManifest,
+  type ConnectorResourceInventory,
   type KnowledgeConnectorActionResult,
   type KnowledgeConnectorRecord,
 } from '../api/knowledge-connectors';
@@ -16,8 +23,6 @@ import { usePageTitle } from '../lib/page-title';
 import './Materials.css';
 
 type JsonRecord = Record<string, unknown>;
-type AuthMode = ConfigureFeishuConnectorInput['connection_profile']['auth_mode'];
-type ScopeMode = 'all' | 'space' | 'advanced';
 
 type KnowledgeSource = {
   source_id: string;
@@ -28,9 +33,8 @@ type KnowledgeSource = {
   version?: number;
 };
 
-const MASKED_SECRET = '********';
-const DEFAULT_CONNECTOR_ID = 'feishu-main';
-const DEFAULT_CONNECTOR_NAME = '飞书企业资料';
+const DEFAULT_CONNECTOR_ID = 'connector-main';
+const DEFAULT_CONNECTOR_NAME = '在线资料连接器';
 
 const asRecord = (value: unknown): JsonRecord => (
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -57,8 +61,8 @@ function sourceRows(payload: unknown): KnowledgeSource[] {
     .filter((row) => Boolean(row.source_id || row.source_ref));
 }
 
-function formatTime(value?: string): string {
-  if (!value) return '尚未完成首次更新';
+function formatTime(value?: string, empty = '尚未完成首次更新'): string {
+  if (!value) return empty;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString('zh-CN', { hour12: false });
@@ -71,14 +75,14 @@ function syncCompletionMessage(prefix: string, result: KnowledgeConnectorActionR
   const unsupported = result.unsupported_resource_count ?? 0;
   const discovered = result.discovered_resource_count ?? covered + unsupported;
   if (unsupported > 0) {
-    return `${prefix}。发现 ${discovered} 份，已读取 ${covered} 份，${unsupported} 份资料类型暂不支持。`;
+    return `${prefix}。发现 ${discovered} 项，已读取 ${covered} 项，${unsupported} 项资料类型暂不支持。`;
   }
   return `${prefix}，已读取 ${covered} 份在线资料。`;
 }
 
 function connectorTone(connector: KnowledgeConnectorRecord): string {
   if (connector.active_sync_epoch_id || connector.auto_sync?.state === 'running') return 'warning';
-  if (connector.auto_sync?.maintenance_required_by_user) return 'danger';
+  if (connector.auto_sync?.maintenance_required_by_user || connector.connection_profile?.reauthorization_required) return 'danger';
   if (connector.auto_sync?.state === 'retrying') return 'warning';
   if (connector.coverage?.status === 'PARTIAL_UNSUPPORTED') return 'warning';
   if (connector.last_successful_sync_epoch_id) return 'success';
@@ -87,7 +91,9 @@ function connectorTone(connector: KnowledgeConnectorRecord): string {
 
 function connectorLabel(connector: KnowledgeConnectorRecord): string {
   if (connector.active_sync_epoch_id || connector.auto_sync?.state === 'running') return '正在自动更新';
-  if (connector.auto_sync?.maintenance_required_by_user) return connector.auto_sync.message || '需要重新授权';
+  if (connector.auto_sync?.maintenance_required_by_user || connector.connection_profile?.reauthorization_required) {
+    return connector.auto_sync?.message || '需要重新授权';
+  }
   if (connector.auto_sync?.state === 'retrying') return connector.auto_sync.message || '系统正在自动恢复';
   if (connector.coverage?.status === 'PARTIAL_UNSUPPORTED') {
     return `已读取 ${connector.coverage.covered_count}/${connector.coverage.discovered_count}`;
@@ -97,14 +103,55 @@ function connectorLabel(connector: KnowledgeConnectorRecord): string {
   return '等待首次更新';
 }
 
-function scopeDraft(resourceScope: string): { mode: ScopeMode; spaceId: string; advanced: string } {
-  if (!resourceScope || resourceScope === 'wiki-all-accessible') {
-    return { mode: 'all', spaceId: '', advanced: '' };
-  }
-  if (resourceScope.startsWith('wiki-space:')) {
-    return { mode: 'space', spaceId: resourceScope.slice('wiki-space:'.length), advanced: '' };
-  }
-  return { mode: 'advanced', spaceId: '', advanced: resourceScope };
+function manifestFields(manifest: ConnectorManifest | undefined, authMode: string) {
+  return (manifest?.credential_fields || []).filter((field) => (
+    !field.auth_modes?.length || field.auth_modes.includes(authMode)
+  ));
+}
+
+function scopePresets(manifest: ConnectorManifest | undefined): string[] {
+  const presets = manifest?.scope_schema?.presets;
+  return Array.isArray(presets)
+    ? presets.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    : [];
+}
+
+function scopeSchemaHint(manifest: ConnectorManifest | undefined): string {
+  const schema = asRecord(manifest?.scope_schema);
+  const required = asArray(schema.required)
+    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  const description = asString(schema.description);
+  const shorthand = asString(schema.shorthand);
+  return [
+    description,
+    shorthand ? `支持格式：${shorthand}` : '',
+    required.length > 0 ? `必填字段：${required.join('、')}` : '',
+  ].filter(Boolean).join('；');
+}
+
+function ConnectorResourcePreview({ preview }: { preview?: ConnectorResourceInventory }) {
+  if (!preview || preview.status === 'NOT_AVAILABLE') return null;
+  return (
+    <section className="connector-resource-preview" aria-label="发现资源预览">
+      <div className="connector-resource-preview-heading">
+        <span>发现资源预览</span>
+        <strong>{preview.discovered_count} 项 · 已接入 {preview.covered_count} 项</strong>
+      </div>
+      {preview.resources.length === 0 ? (
+        <p>尚未形成可展示的资源摘要，完成首次同步后会自动更新。</p>
+      ) : (
+        <div className="connector-resource-preview-list">
+          {preview.resources.slice(0, 5).map((resource) => (
+            <article key={resource.resource_index}>
+              <strong>{resource.display_title || '未命名资源'}</strong>
+              <span>{resource.remote_object_type || resource.resource_kind || resource.state}</span>
+            </article>
+          ))}
+        </div>
+      )}
+      {preview.preview_truncated && <small>资源较多，当前仅展示前 100 项摘要。</small>}
+    </section>
+  );
 }
 
 export function Materials() {
@@ -114,6 +161,8 @@ export function Materials() {
   const toast = useToast();
 
   const [connectors, setConnectors] = useState<KnowledgeConnectorRecord[]>([]);
+  const [manifests, setManifests] = useState<ConnectorManifest[]>([]);
+  const [resourcePreviews, setResourcePreviews] = useState<Record<string, ConnectorResourceInventory>>({});
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -121,34 +170,55 @@ export function Materials() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState('');
-  const [scopeMode, setScopeMode] = useState<ScopeMode>('all');
-  const [spaceId, setSpaceId] = useState('');
-  const [advancedScope, setAdvancedScope] = useState('');
-  const [authMode, setAuthMode] = useState<AuthMode>('internal_app');
-  const [appId, setAppId] = useState('');
-  const [appSecret, setAppSecret] = useState('');
-  const [tenantToken, setTenantToken] = useState('');
-  const [userToken, setUserToken] = useState('');
+  const [connectorType, setConnectorType] = useState('');
+  const [resourceScope, setResourceScope] = useState('');
+  const [authMode, setAuthMode] = useState('');
+  const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadType, setUploadType] = useState('prd');
   const [uploading, setUploading] = useState(false);
 
+  const selectedManifest = useMemo(
+    () => manifests.find((manifest) => manifest.connector_type === connectorType),
+    [connectorType, manifests],
+  );
+  const selectedCredentialFields = useMemo(
+    () => manifestFields(selectedManifest, authMode),
+    [authMode, selectedManifest],
+  );
+
   const refresh = useCallback(async () => {
     if (!project) {
       setConnectors([]);
+      setManifests([]);
+      setResourcePreviews({});
       setSources([]);
       return;
     }
     setLoading(true);
     setLoadError('');
     try {
-      const [inventory, asset] = await Promise.all([
+      const [inventory, asset, catalog] = await Promise.all([
         listKnowledgeConnectors(project),
         getKnowledgeAsset(project),
+        listConnectorTypes(),
       ]);
       setConnectors(inventory.connectors);
+      setManifests(catalog.connector_types);
+      setConnectorType((current) => (
+        current && catalog.connector_types.some((manifest) => manifest.connector_type === current)
+          ? current
+          : catalog.connector_types[0]?.connector_type || ''
+      ));
+      const previews = await Promise.all(
+        inventory.connectors.map(async (connector) => [
+          connector.connector_instance_id,
+          await listConnectorResources(project, connector.connector_instance_id),
+        ] as const),
+      );
+      setResourcePreviews(Object.fromEntries(previews));
       setSources(sourceRows(asset));
     } catch (error: unknown) {
       setLoadError(error instanceof Error ? error.message : '企业资料加载失败');
@@ -172,14 +242,11 @@ export function Materials() {
 
   const resetForm = () => {
     setEditingId('');
-    setScopeMode('all');
-    setSpaceId('');
-    setAdvancedScope('');
-    setAuthMode('internal_app');
-    setAppId('');
-    setAppSecret('');
-    setTenantToken('');
-    setUserToken('');
+    const firstManifest = manifests[0];
+    setConnectorType(firstManifest?.connector_type || '');
+    setResourceScope(scopePresets(firstManifest)[0] || '');
+    setAuthMode(firstManifest?.auth_modes[0] || '');
+    setCredentialValues({});
   };
 
   const openCreateForm = () => {
@@ -188,76 +255,57 @@ export function Materials() {
   };
 
   const openEditForm = (connector: KnowledgeConnectorRecord) => {
-    const scope = scopeDraft(connector.resource_scope);
     setEditingId(connector.connector_instance_id);
-    setScopeMode(scope.mode);
-    setSpaceId(scope.spaceId);
-    setAdvancedScope(scope.advanced);
-    setAuthMode(
-      connector.connection_profile?.auth_mode === 'tenant_access_token'
-        || connector.connection_profile?.auth_mode === 'user_access_token'
-        ? connector.connection_profile.auth_mode
-        : 'internal_app',
-    );
-    setAppId('');
-    setAppSecret('');
-    setTenantToken('');
-    setUserToken('');
+    setConnectorType(connector.connector_type);
+    setResourceScope(connector.resource_scope);
+    const mode = connector.connection_profile?.auth_mode
+      || manifests.find((manifest) => manifest.connector_type === connector.connector_type)?.auth_modes[0]
+      || '';
+    setAuthMode(mode);
+    setCredentialValues({});
     setFormOpen(true);
   };
 
-  const profilePayload = (): ConfigureFeishuConnectorInput['connection_profile'] => {
-    if (authMode === 'tenant_access_token') {
-      return {
-        auth_mode: authMode,
-        tenant_access_token: tenantToken.trim() || (editingId ? MASKED_SECRET : undefined),
-      };
-    }
-    if (authMode === 'user_access_token') {
-      return {
-        auth_mode: authMode,
-        user_access_token: userToken.trim() || (editingId ? MASKED_SECRET : undefined),
-      };
-    }
-    return {
-      auth_mode: authMode,
-      app_id: appId.trim() || (editingId ? MASKED_SECRET : undefined),
-      app_secret: appSecret.trim() || (editingId ? MASKED_SECRET : undefined),
-    };
+  const profilePayload = (): ConfigureConnectorInput['connection_profile'] => {
+    const fields = Object.fromEntries(
+      selectedCredentialFields
+        .map((field) => [field.name, credentialValues[field.name]?.trim()] as const)
+        .filter(([, value]) => Boolean(value)),
+    );
+    return authMode ? { auth_mode: authMode, ...fields } : fields;
   };
 
   const credentialsReady = (): boolean => {
     if (editingId) return true;
-    if (authMode === 'tenant_access_token') return Boolean(tenantToken.trim());
-    if (authMode === 'user_access_token') return Boolean(userToken.trim());
-    return Boolean(appId.trim() && appSecret.trim());
-  };
-
-  const resourceScope = (): string => {
-    if (scopeMode === 'all') return 'wiki-all-accessible';
-    if (scopeMode === 'space') return spaceId.trim() ? `wiki-space:${spaceId.trim()}` : '';
-    return advancedScope.trim();
+    return selectedCredentialFields.every(
+      (field) => !field.required || Boolean(credentialValues[field.name]?.trim()),
+    );
   };
 
   const saveAndStart = async () => {
     if (!project) return;
-    const scope = resourceScope();
+    const scope = resourceScope.trim();
     if (!scope) {
-      toast.show('请选择同步全部知识库，或填写一个飞书知识空间 ID。', 'warning');
+      toast.show('请选择同步范围，或填写Manifest声明的范围值。', 'warning');
+      return;
+    }
+    if (!selectedManifest) {
+      toast.show('请先选择一个可用的连接器类型。', 'warning');
       return;
     }
     if (!credentialsReady()) {
-      toast.show('请填写完整的飞书授权信息。', 'warning');
+      toast.show('请填写完整的连接器授权信息。', 'warning');
       return;
     }
 
-    const connectorId = editingId || DEFAULT_CONNECTOR_ID;
+    const connectorId = editingId || `${DEFAULT_CONNECTOR_ID}-${selectedManifest.connector_type}`;
     setSaving(true);
-    setOperation((current) => ({ ...current, [connectorId]: '正在连接飞书并读取资料…' }));
+    setOperation((current) => ({ ...current, [connectorId]: '正在连接在线资料并读取资源…' }));
     try {
-      const result = await connectFeishuKnowledge(project, {
+      const result = await connectKnowledgeConnector(project, {
+        connector_type: selectedManifest.connector_type,
         connector_instance_id: connectorId,
-        display_name: DEFAULT_CONNECTOR_NAME,
+        display_name: selectedManifest.display_name || DEFAULT_CONNECTOR_NAME,
         resource_scope: scope,
         status: 'ACTIVE',
         connection_profile: profilePayload(),
@@ -265,10 +313,10 @@ export function Materials() {
       setFormOpen(false);
       resetForm();
       await refresh();
-      toast.show(syncCompletionMessage('飞书资料已连接', result.sync), 'success');
+      toast.show(syncCompletionMessage(`${selectedManifest.display_name || '在线资料'}已连接`, result.sync), 'success');
     } catch (error: unknown) {
       await refresh();
-      toast.show(error instanceof Error ? error.message : '飞书资料连接未完成，请重试。', 'danger');
+      toast.show(error instanceof Error ? error.message : '在线资料连接未完成，请重试。', 'danger');
     } finally {
       setSaving(false);
       setOperation((current) => ({ ...current, [connectorId]: '' }));
@@ -277,7 +325,7 @@ export function Materials() {
 
   const checkNow = async (connector: KnowledgeConnectorRecord) => {
     const id = connector.connector_instance_id;
-    setOperation((current) => ({ ...current, [id]: '正在检查飞书最新资料…' }));
+    setOperation((current) => ({ ...current, [id]: '正在检查在线资料最新状态…' }));
     try {
       const result = await refreshKnowledgeConnector(project, id);
       await refresh();
@@ -285,6 +333,26 @@ export function Materials() {
     } catch (error: unknown) {
       await refresh();
       toast.show(error instanceof Error ? error.message : '检查未完成，系统仍会自动重试。', 'danger');
+    } finally {
+      setOperation((current) => ({ ...current, [id]: '' }));
+    }
+  };
+
+  const runLifecycleAction = async (
+    connector: KnowledgeConnectorRecord,
+    action: 'pause' | 'resume' | 'reauthorize',
+  ) => {
+    const id = connector.connector_instance_id;
+    setOperation((current) => ({ ...current, [id]: '正在更新连接器状态…' }));
+    try {
+      if (action === 'pause') await pauseKnowledgeConnector(project, id);
+      if (action === 'resume') await resumeKnowledgeConnector(project, id);
+      if (action === 'reauthorize') await reauthorizeKnowledgeConnector(project, id);
+      await refresh();
+      toast.show('连接器状态已更新。', 'success');
+    } catch (error: unknown) {
+      await refresh();
+      toast.show(error instanceof Error ? error.message : '连接器状态更新未完成。', 'danger');
     } finally {
       setOperation((current) => ({ ...current, [id]: '' }));
     }
@@ -302,7 +370,7 @@ export function Materials() {
       const input = document.getElementById('materials-upload-file') as HTMLInputElement | null;
       if (input) input.value = '';
       await refresh();
-      toast.show('补充资料已加入企业知识库。', 'success');
+      toast.show('补充资料已加入统一企业知识库。', 'success');
     } catch (error: unknown) {
       toast.show(error instanceof Error ? error.message : '资料上传失败', 'danger');
     } finally {
@@ -315,7 +383,7 @@ export function Materials() {
       <div className="materials-empty-project">
         <span className="panel-kicker">Enterprise Materials</span>
         <h1>企业资料</h1>
-        <p>请先选择客户项目，再接入飞书资料或上传补充文件。</p>
+        <p>请先选择客户项目，再接入在线资料或上传补充文件。</p>
         <Link className="btn btn-primary" to="/settings">选择客户</Link>
       </div>
     );
@@ -335,11 +403,9 @@ export function Materials() {
             <span className="summary-pill">资料总数 {sources.length}</span>
           </div>
         </div>
-        {connectors.length === 0 && (
-          <button className="btn btn-primary" type="button" onClick={openCreateForm}>
-            接入飞书资料
-          </button>
-        )}
+        <button className="btn btn-primary" type="button" onClick={openCreateForm}>
+          接入在线资料
+        </button>
       </header>
 
       {loadError && <div className="materials-alert tone-danger">{loadError}</div>}
@@ -348,7 +414,7 @@ export function Materials() {
         <div className="materials-section-heading">
           <div>
             <span className="settings-hero-kicker">自动维护</span>
-            <h2>飞书在线资料</h2>
+            <h2>在线连接器</h2>
             <p>系统定期检查更新，遇到临时故障自动重试；只有授权失效时才需要你处理。</p>
           </div>
           <button className="btn btn-secondary" type="button" onClick={() => void refresh()} disabled={loading}>
@@ -358,8 +424,8 @@ export function Materials() {
 
         {connectors.length === 0 ? (
           <div className="materials-empty-state">
-            <strong>尚未连接飞书资料</strong>
-            <span>填写授权并选择范围，系统会自动验证并完成首次读取。</span>
+            <strong>尚未连接在线资料</strong>
+            <span>选择连接器类型、填写授权并选择范围，系统会自动验证并完成首次读取。</span>
             <button className="btn btn-primary" type="button" onClick={openCreateForm}>开始连接</button>
           </div>
         ) : (
@@ -369,79 +435,72 @@ export function Materials() {
               const running = Boolean(connector.active_sync_epoch_id) || connector.auto_sync?.state === 'running';
               const needsHelp = Boolean(
                 connector.auto_sync?.maintenance_required_by_user
+                || connector.connection_profile?.reauthorization_required
                 || !connector.connection_profile?.credentials_configured,
               );
               return (
                 <article className="materials-connector-card" key={connector.connector_instance_id}>
                   <div className="materials-connector-top">
                     <div>
-                      <span className="materials-source-kind">飞书知识库</span>
-                      <h3>{connector.display_name || DEFAULT_CONNECTOR_NAME}</h3>
-                      <span className="materials-simple-scope">
-                        {connector.resource_scope === 'wiki-all-accessible'
-                          ? '读取全部可访问知识库'
-                          : '读取指定资料范围'}
-                      </span>
+                      <span className="materials-source-kind">{connector.connector_type || '在线连接器'}</span>
+                      <h3>{connector.display_name || connector.connector_type || DEFAULT_CONNECTOR_NAME}</h3>
+                      <span className="materials-simple-scope">{connector.resource_scope || '按Manifest默认范围读取'}</span>
                     </div>
-                    <span className={`status status-${connectorTone(connector)}`}>
-                      {connectorLabel(connector)}
-                    </span>
+                    <span className={`status status-${connectorTone(connector)}`}>{connectorLabel(connector)}</span>
                   </div>
 
                   <div className="materials-connector-meta">
-                    <div>
-                      <span>自动更新</span>
-                      <strong>{connector.auto_sync?.enabled === false ? '已关闭' : '已开启'}</strong>
-                    </div>
-                    <div>
-                      <span>最近完成</span>
-                      <strong>{formatTime(connector.last_successful_sync_at_utc)}</strong>
-                    </div>
-                    <div>
-                      <span>异常处理</span>
-                      <strong>{needsHelp ? '需要重新授权' : '系统自动恢复'}</strong>
-                    </div>
+                    <div><span>自动更新</span><strong>{connector.auto_sync?.enabled === false ? '已关闭' : '已开启'}</strong></div>
+                    <div><span>最近完成</span><strong>{formatTime(connector.last_successful_sync_at_utc)}</strong></div>
+                    <div><span>最近失败</span><strong>{formatTime(connector.last_failed_sync_at_utc, '暂无记录')}</strong></div>
+                    <div><span>授权状态</span><strong>{needsHelp ? '需要处理' : '正常'}</strong></div>
                   </div>
 
+                  {connector.last_failed_sync_epoch_id && (
+                    <div className="materials-operation-note">
+                      {connector.auto_sync?.message || '最近一次同步未完成，系统会自动重试。'}
+                    </div>
+                  )}
+
                   <ConnectorCoverage coverage={connector.coverage} />
+                  <ConnectorResourcePreview preview={resourcePreviews[connector.connector_instance_id]} />
 
                   <ConnectorAcceptancePanel
                     projectId={project}
                     connectorId={connector.connector_instance_id}
+                    connectorName={connector.display_name || connector.connector_type}
                     disabled={busy || running || needsHelp || connector.status !== 'ACTIVE'}
                   />
 
                   {(operation[connector.connector_instance_id] || running || connector.auto_sync?.state === 'retrying') && (
                     <div className="materials-operation-note">
-                      {operation[connector.connector_instance_id]
-                        || connector.auto_sync?.message
-                        || '系统正在自动更新资料…'}
+                      {operation[connector.connector_instance_id] || connector.auto_sync?.message || '系统正在自动更新资料。'}
                     </div>
                   )}
 
-                  {needsHelp && (
-                    <div className="materials-card-actions">
-                      <button
-                        className="btn btn-primary"
-                        type="button"
-                        onClick={() => openEditForm(connector)}
-                        disabled={busy || running}
-                      >
+                  <div className="materials-card-actions">
+                    {connector.status === 'ACTIVE' && (
+                      <button className="btn btn-secondary" type="button" onClick={() => void runLifecycleAction(connector, 'pause')} disabled={busy || running}>
+                        暂停自动更新
+                      </button>
+                    )}
+                    {connector.status === 'PAUSED' && (
+                      <button className="btn btn-secondary" type="button" onClick={() => void runLifecycleAction(connector, 'resume')} disabled={busy}>
+                        恢复自动更新
+                      </button>
+                    )}
+                    {needsHelp && (
+                      <button className="btn btn-primary" type="button" onClick={() => openEditForm(connector)} disabled={busy || running}>
                         重新授权
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
 
                   <details className="materials-advanced">
                     <summary>遇到问题时</summary>
                     <div className="materials-advanced-field">
                       <p>系统会自动更新和重试。只有需要立即确认最新资料时，才手动检查一次。</p>
-                      <button
-                        className="btn btn-secondary"
-                        type="button"
-                        onClick={() => void checkNow(connector)}
-                        disabled={busy || running || connector.status !== 'ACTIVE'}
-                      >
+                      <button className="btn btn-secondary" type="button" onClick={() => void checkNow(connector)} disabled={busy || running || connector.status !== 'ACTIVE'}>
                         现在检查一次
                       </button>
                     </div>
@@ -454,12 +513,12 @@ export function Materials() {
       </section>
 
       {formOpen && (
-        <section className="materials-config-card" aria-label="飞书资料连接">
+        <section className="materials-config-card" aria-label="在线资料连接">
           <div className="materials-section-heading">
             <div>
               <span className="settings-hero-kicker">两步完成</span>
-              <h2>{editingId ? '重新授权飞书' : '连接飞书资料'}</h2>
-              <p>保存后自动验证并读取资料，后续更新和重试由系统处理。</p>
+              <h2>{editingId ? `重新授权${selectedManifest?.display_name || '连接器'}` : `连接${selectedManifest?.display_name || '在线资料'}`}</h2>
+              <p>保存后自动测试并读取资料，后续更新和重试由系统处理。</p>
             </div>
             <button className="btn btn-ghost" type="button" onClick={() => setFormOpen(false)}>关闭</button>
           </div>
@@ -467,130 +526,103 @@ export function Materials() {
           <div className="materials-step">
             <span className="materials-step-number">1</span>
             <div>
-              <h3>填写飞书授权</h3>
-              <p>推荐使用企业自建应用，只需要 App ID 与 App Secret。</p>
+              <h3>选择连接器并填写授权</h3>
+              <p>权限要求、认证字段和支持的资料类型均来自连接器Manifest。</p>
             </div>
           </div>
 
           <div className="materials-form-grid">
-            {authMode === 'internal_app' ? (
-              <>
-                <label className="form-group">
-                  <span className="form-label">App ID</span>
-                  <input
-                    className="form-input"
-                    value={appId}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setAppId(event.target.value)}
-                    placeholder={editingId ? '留空保持当前值' : 'cli_xxx'}
-                  />
-                </label>
-                <label className="form-group">
-                  <span className="form-label">App Secret</span>
-                  <input
-                    className="form-input"
-                    type="password"
-                    value={appSecret}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setAppSecret(event.target.value)}
-                    placeholder={editingId ? '留空保持当前值' : '输入应用密钥'}
-                    autoComplete="new-password"
-                  />
-                </label>
-              </>
-            ) : (
-              <label className="form-group materials-form-wide">
-                <span className="form-label">
-                  {authMode === 'tenant_access_token' ? 'Tenant Access Token' : 'User Access Token'}
-                </span>
-                <input
-                  className="form-input"
-                  type="password"
-                  value={authMode === 'tenant_access_token' ? tenantToken : userToken}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => (
-                    authMode === 'tenant_access_token'
-                      ? setTenantToken(event.target.value)
-                      : setUserToken(event.target.value)
-                  )}
-                  placeholder={editingId ? '留空保持当前值' : '输入访问令牌'}
-                  autoComplete="new-password"
-                />
-              </label>
+            <label className="form-group">
+              <span className="form-label">连接器类型</span>
+              <select
+                className="form-input"
+                value={connectorType}
+                disabled={Boolean(editingId)}
+                onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                  const next = event.target.value;
+                  const manifest = manifests.find((item) => item.connector_type === next);
+                  setConnectorType(next);
+                  setAuthMode(manifest?.auth_modes[0] || '');
+                  setResourceScope(scopePresets(manifest)[0] || '');
+                  setCredentialValues({});
+                }}
+              >
+                {manifests.map((manifest) => <option key={manifest.connector_type} value={manifest.connector_type}>{manifest.display_name}</option>)}
+              </select>
+            </label>
+            {selectedManifest && (
+              <div className="form-group">
+                <span className="form-label">权限与能力</span>
+                <p>{selectedManifest.read_only ? '只读访问' : '按Manifest声明的访问方式'} · {selectedManifest.supported_resource_types.join('、') || '资料类型由连接器声明'}</p>
+              </div>
             )}
           </div>
 
-          <details className="materials-advanced">
-            <summary>其他授权方式</summary>
-            <div className="materials-advanced-field">
-              <select
-                className="form-input"
-                value={authMode}
-                onChange={(event: ChangeEvent<HTMLSelectElement>) => setAuthMode(event.target.value as AuthMode)}
-              >
-                <option value="internal_app">企业自建应用（推荐）</option>
-                <option value="tenant_access_token">Tenant Access Token</option>
-                <option value="user_access_token">User Access Token</option>
-              </select>
-            </div>
-          </details>
+          {selectedManifest && selectedManifest.auth_modes.length > 1 && (
+            <details className="materials-advanced" open>
+              <summary>认证方式</summary>
+              <div className="materials-advanced-field">
+                <select className="form-input" value={authMode} onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                  setAuthMode(event.target.value);
+                  setCredentialValues({});
+                }}>
+                  {selectedManifest.auth_modes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+                </select>
+              </div>
+            </details>
+          )}
+
+          <div className="materials-form-grid">
+            {selectedCredentialFields.map((field) => (
+              <label className="form-group" key={field.name}>
+                <span className="form-label">{field.name}{field.required ? ' *' : ''}</span>
+                <input
+                  className="form-input"
+                  type={field.secret || field.field_type.includes('token') || field.field_type.includes('password') ? 'password' : 'text'}
+                  value={credentialValues[field.name] || ''}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setCredentialValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                  placeholder={editingId ? '留空保持当前授权' : field.description || '按Manifest填写'}
+                  autoComplete="new-password"
+                />
+                {field.description && <small>{field.description}</small>}
+              </label>
+            ))}
+          </div>
 
           <div className="materials-step">
             <span className="materials-step-number">2</span>
             <div>
               <h3>选择资料范围</h3>
-              <p>默认读取应用有权限访问的全部知识库。</p>
+              <p>范围格式由Manifest声明；系统只会读取授权允许的在线资料。</p>
             </div>
           </div>
 
-          <div className="materials-choice-grid">
-            <button
-              className={`materials-choice${scopeMode === 'all' ? ' active' : ''}`}
-              type="button"
-              onClick={() => setScopeMode('all')}
-            >
-              <strong>全部可访问知识库</strong>
-              <span>推荐。权限变化后系统会自动按最新范围读取。</span>
-            </button>
-            <button
-              className={`materials-choice${scopeMode === 'space' ? ' active' : ''}`}
-              type="button"
-              onClick={() => setScopeMode('space')}
-            >
-              <strong>指定一个知识空间</strong>
-              <span>仅读取一个明确的飞书知识空间。</span>
-            </button>
-          </div>
-
-          {scopeMode === 'space' && (
-            <label className="form-group materials-scope-field">
-              <span className="form-label">知识空间 ID</span>
-              <input
-                className="form-input"
-                value={spaceId}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => setSpaceId(event.target.value)}
-                placeholder="space_id"
-              />
+          <div className="materials-form-grid">
+            {scopePresets(selectedManifest).length > 0 && (
+              <label className="form-group">
+                <span className="form-label">范围预设</span>
+                <select className="form-input" value={resourceScope} onChange={(event: ChangeEvent<HTMLSelectElement>) => setResourceScope(event.target.value)}>
+                  {scopePresets(selectedManifest).map((preset) => <option key={preset} value={preset}>{preset}</option>)}
+                </select>
+              </label>
+            )}
+            <label className="form-group materials-form-wide">
+              <span className="form-label">同步范围</span>
+              <input className="form-input form-input-mono" value={resourceScope} onChange={(event: ChangeEvent<HTMLInputElement>) => setResourceScope(event.target.value)} placeholder="填写Manifest声明的范围值" />
+              {scopeSchemaHint(selectedManifest) && <small>{scopeSchemaHint(selectedManifest)}</small>}
             </label>
-          )}
+          </div>
 
           <details className="materials-advanced">
             <summary>高级资料范围</summary>
             <div className="materials-advanced-field">
-              <p>仅用于多空间或指定节点场景，普通接入无需填写。</p>
-              <input
-                className="form-input form-input-mono"
-                value={advancedScope}
-                onFocus={() => setScopeMode('advanced')}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  setScopeMode('advanced');
-                  setAdvancedScope(event.target.value);
-                }}
-                placeholder="wiki-spaces:ID1,ID2 或 wiki-node:SPACE:NODE"
-              />
+              <p>仅用于连接器声明的多空间或节点场景，普通接入无需额外配置。</p>
             </div>
           </details>
 
           <div className="materials-form-actions">
             <button className="btn btn-secondary" type="button" onClick={() => setFormOpen(false)}>取消</button>
-            <button className="btn btn-primary" type="button" onClick={() => void saveAndStart()} disabled={saving}>
+            <button className="btn btn-primary" type="button" onClick={() => void saveAndStart()} disabled={saving || !selectedManifest}>
               {saving ? '正在连接并读取…' : editingId ? '保存并重新读取' : '保存并开始读取'}
             </button>
           </div>
@@ -602,7 +634,7 @@ export function Materials() {
           <div>
             <span className="settings-hero-kicker">补充方式</span>
             <h2>离线资料上传</h2>
-            <p>用于补充飞书里没有的 PRD、接口文档、历史缺陷、数据库说明或设计稿。</p>
+            <p>用于补充在线资料没有的 PRD、接口文档、历史缺陷、数据库说明或设计稿。</p>
           </div>
         </div>
         <div className="materials-upload-row">
@@ -613,12 +645,7 @@ export function Materials() {
             <option value="database_schema">数据库结构</option>
             <option value="ui_ux">原型 / 设计稿</option>
           </select>
-          <input
-            id="materials-upload-file"
-            className="form-input"
-            type="file"
-            onChange={(event) => setUploadFile(event.target.files?.[0] || null)}
-          />
+          <input id="materials-upload-file" className="form-input" type="file" onChange={(event) => setUploadFile(event.target.files?.[0] || null)} />
           <button className="btn btn-secondary" type="button" onClick={() => void uploadSupplement()} disabled={uploading}>
             {uploading ? '上传中…' : '补充上传'}
           </button>
@@ -630,22 +657,24 @@ export function Materials() {
           <div>
             <span className="settings-hero-kicker">统一企业知识库</span>
             <h2>已接入资料</h2>
-            <p>飞书资料和上传文件统一进入同一企业知识主链。</p>
+            <p>在线资料和上传文件统一进入同一企业知识主链。</p>
           </div>
         </div>
         {sources.length === 0 ? (
-          <div className="materials-empty-state compact">尚无资料。</div>
+          <div className="materials-empty-state compact">暂无资料。</div>
         ) : (
           <div className="materials-source-list">
             {sources.map((source) => {
               const online = source.source_ref.startsWith('connector://');
               return (
                 <article className="materials-source-row" key={source.source_id || source.source_ref}>
-                  <span className={`materials-source-icon ${online ? 'online' : 'upload'}`}>{online ? '云' : '文'}</span>
+                  <span className={`materials-source-icon ${online ? 'online' : 'upload'}`}>{online ? '在线' : '文件'}</span>
                   <div className="materials-source-copy">
-                    <strong>{source.original_name || source.source_id || '企业资料'}</strong>
-                    <span>{online ? '飞书在线资料' : '离线补充资料'} · {source.source_type || '自动识别'}</span>
-                    <code>{source.source_ref}</code>
+                    <strong>{source.original_name || '企业资料'}</strong>
+                    <span>
+                      {online ? '在线资料' : '离线补充资料'} · {source.source_type || '自动识别'}
+                      {source.version ? ` · v${source.version}` : ''}
+                    </span>
                   </div>
                   <span className="status status-success">{source.status === 'active' ? '可用' : source.status}</span>
                 </article>

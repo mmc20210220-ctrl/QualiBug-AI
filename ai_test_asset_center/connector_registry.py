@@ -365,8 +365,16 @@ class ConnectorRegistry:
 def build_default_connector_registry() -> ConnectorRegistry:
     """Build the installed product registry without importing adapters at module import time."""
     from .feishu_connector_adapter import FeishuConnectorAdapter
+    from .openapi_connector_adapter import OpenApiConnectorAdapter
+    from .website_connector_adapter import WebsiteConnectorAdapter
 
-    return ConnectorRegistry((FeishuConnectorAdapter(),))
+    return ConnectorRegistry(
+        (
+            FeishuConnectorAdapter(),
+            OpenApiConnectorAdapter(),
+            WebsiteConnectorAdapter(),
+        )
+    )
 
 
 __all__ = [

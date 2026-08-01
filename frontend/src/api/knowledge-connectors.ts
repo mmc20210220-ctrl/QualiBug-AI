@@ -10,7 +10,44 @@ export type KnowledgeConnectorProfile = {
   configured_fields?: Record<string, boolean>;
   credentials_configured: boolean;
   checkpoint_configured: boolean;
+  credential_status?: string;
+  credential_expires_at_utc?: string;
+  reauthorization_required?: boolean;
+  reauthorization_reason?: string;
   plaintext_returned?: boolean;
+};
+
+export type ConnectorCredentialField = {
+  name: string;
+  field_type: string;
+  required: boolean;
+  secret: boolean;
+  description?: string;
+  auth_modes?: string[];
+};
+
+export type ConnectorManifest = {
+  schema?: string;
+  connector_type: string;
+  display_name: string;
+  category: string;
+  version: string;
+  auth_modes: string[];
+  scope_schema: Record<string, unknown>;
+  supported_resource_types: string[];
+  sync_modes: string[];
+  webhook_supported: boolean;
+  local_runner_supported: boolean;
+  local_runner_required: boolean;
+  read_only: boolean;
+  credential_fields: ConnectorCredentialField[];
+  capability_contract_version: string;
+};
+
+export type ConnectorTypeCatalog = {
+  schema: string;
+  connector_types: ConnectorManifest[];
+  governance: Record<string, unknown>;
 };
 
 export type KnowledgeConnectorAutoSync = {
@@ -30,7 +67,8 @@ export type KnowledgeConnectorAutoSync = {
 };
 
 export type KnowledgeConnectorUnsupportedResource = {
-  remote_resource_id: string;
+  remote_resource_id?: string;
+  resource_index?: number;
   resource_kind?: string;
   remote_object_type?: string;
   display_title?: string;
@@ -94,9 +132,11 @@ export type KnowledgeConnectorRecord = {
   last_failed_sync_epoch_id?: string;
   last_failed_sync_at_utc?: string;
   last_sync_completed_at_utc?: string;
+  metadata?: Record<string, unknown>;
   connection_profile?: KnowledgeConnectorProfile;
   auto_sync?: KnowledgeConnectorAutoSync;
   coverage?: KnowledgeConnectorCoverage;
+  acceptance?: KnowledgeConnectorAcceptance;
 };
 
 export type KnowledgeConnectorInventory = {
@@ -130,6 +170,78 @@ export type ConfigureFeishuConnectorInput = {
     tenant_access_token?: string;
     user_access_token?: string;
   };
+};
+
+export type ConfigureConnectorInput = {
+  connector_type: string;
+  connector_instance_id: string;
+  display_name: string;
+  resource_scope: string;
+  status?: 'ACTIVE' | 'PAUSED' | 'DISABLED' | string;
+  connection_profile: Record<string, string | undefined>;
+  credential_expires_at_utc?: string;
+  sync_policy?: Record<string, unknown>;
+};
+
+export type ConnectorResource = {
+  resource_index: number;
+  display_title?: string;
+  resource_kind?: string;
+  remote_object_type?: string;
+  state: string;
+  reason_code?: string;
+  updated_at_utc?: string;
+};
+
+export type ConnectorResourceInventory = {
+  schema?: string;
+  project_id: string;
+  connector_instance_id: string;
+  status: string;
+  discovered_count: number;
+  covered_count: number;
+  unsupported_count: number;
+  materialized_preview_count: number;
+  resources: ConnectorResource[];
+  preview_truncated: boolean;
+  source_content_returned: false;
+  raw_cursor_returned: false;
+  credential_values_returned: false;
+  remote_resource_identities_returned: false;
+  source_refs_returned: false;
+};
+
+export type ConnectorRunSummary = KnowledgeConnectorActionResult & {
+  item_count?: number;
+  materialized_success_count?: number;
+  unchanged_success_count?: number;
+  coverage_observation_count?: number;
+  sync_mode?: string;
+  started_at_utc?: string;
+  completed_at_utc?: string;
+  raw_cursor_returned?: false;
+  source_content_returned?: false;
+};
+
+export type ConnectorRunInventory = {
+  project_id: string;
+  connector_instance_id: string;
+  runs: ConnectorRunSummary[];
+  truncated: boolean;
+  raw_cursor_returned: false;
+  source_content_returned: false;
+  credential_values_returned: false;
+};
+
+export type KnowledgeConnectorAcceptance = {
+  schema?: string;
+  status: string;
+  acceptance_ready: boolean;
+  latest_report?: Record<string, unknown> | null;
+  source_content_returned: false;
+  raw_cursor_returned: false;
+  credential_values_returned: false;
+  filesystem_path_returned: false;
 };
 
 export type KnowledgeConnectorActionResult = {
@@ -187,6 +299,12 @@ const asString = (value: unknown): string => typeof value === 'string' ? value :
 const asBoolean = (value: unknown): boolean => value === true;
 const asNumber = (value: unknown): number | undefined => typeof value === 'number' ? value : undefined;
 
+function assertFalseFields(row: JsonRecord, fields: string[], label: string): void {
+  if (fields.some((field) => row[field] !== false)) {
+    throw new Error(`${label}缂哄皯瀹屾暣鐨勫畨鍏ㄨ瘉鏄庯紝宸叉嫆缁濆湪椤甸潰灞曠ず。`);
+  }
+}
+
 function friendlyConnectorError(rawMessage: string, status: number): string {
   const message = rawMessage.toLowerCase();
   if (
@@ -204,19 +322,19 @@ function friendlyConnectorError(rawMessage: string, status: number): string {
     return '上次更新状态不完整，系统已保留原有资料并会自动重试。仍未恢复时，请重新授权。';
   }
   if (message.includes('permission') || message.includes('forbidden') || message.includes('code_1069902') || message.includes('code_99991663')) {
-    return '飞书授权范围不足。请在飞书开放平台补充知识库与云文档只读权限，然后重新授权。';
+    return '在线资料授权范围不足，请检查连接器声明的只读权限，然后重新授权。';
   }
   if (message.includes('credential') || message.includes('profile') || message.includes('app_secret') || message.includes('access_token') || message.includes('auth_mode')) {
-    return '飞书连接信息未通过验证。请检查 App ID 与 App Secret，或重新填写访问令牌。';
+    return '连接器信息未通过验证，请检查 Manifest 声明的授权字段。';
   }
   if (message.includes('rate') || message.includes('99991400') || status === 429) {
-    return '飞书暂时限制了访问频率，原有资料不受影响，系统会自动重试。';
+    return '在线连接器暂时限制了访问频率，原有资料不受影响，系统会自动重试。';
   }
   if (message.includes('transport_failed') || message.includes('api_failed') || message.includes('download_failed') || status >= 500) {
-    return '暂时无法读取飞书资料，原有资料不受影响，系统会自动重试。';
+    return '暂时无法读取在线资料，原有资料不受影响，系统会自动重试。';
   }
   if (message.includes('unsupported') || message.includes('export')) {
-    return '部分飞书资料暂时无法读取，系统没有覆盖原有资料。请确认文档权限或格式。';
+    return '部分在线资料暂时无法读取，系统没有覆盖原有资料。请确认连接器权限或格式。';
   }
   return '在线资料操作未完成，原有资料不受影响。系统会自动重试；仍失败时请重新授权。';
 }
@@ -272,6 +390,10 @@ function toProfile(value: unknown): KnowledgeConnectorProfile {
     ),
     credentials_configured: asBoolean(row.credentials_configured),
     checkpoint_configured: asBoolean(row.checkpoint_configured),
+    credential_status: asString(row.credential_status) || undefined,
+    credential_expires_at_utc: asString(row.credential_expires_at_utc) || undefined,
+    reauthorization_required: asBoolean(row.reauthorization_required),
+    reauthorization_reason: asString(row.reauthorization_reason) || undefined,
     plaintext_returned: asBoolean(row.plaintext_returned),
   };
 }
@@ -297,8 +419,14 @@ function toAutoSync(value: unknown): KnowledgeConnectorAutoSync {
 
 function toUnsupportedResource(value: unknown): KnowledgeConnectorUnsupportedResource {
   const row = asRecord(value);
+  assertFalseFields(
+    row,
+    ['content_materialized', 'source_occurrence_created', 'customer_source_modified'],
+    '涓嶆敮鎸佺殑璧勬枡鎽樿',
+  );
   return {
-    remote_resource_id: asString(row.remote_resource_id),
+    remote_resource_id: asString(row.remote_resource_id) || undefined,
+    resource_index: asNumber(row.resource_index),
     resource_kind: asString(row.resource_kind) || undefined,
     remote_object_type: asString(row.remote_object_type) || undefined,
     display_title: asString(row.display_title) || undefined,
@@ -358,6 +486,11 @@ function toRemoteLifecycle(value: unknown): KnowledgeConnectorRemoteLifecycle {
 
 function toCoverage(value: unknown): KnowledgeConnectorCoverage {
   const row = asRecord(value);
+  assertFalseFields(
+    row,
+    ['source_content_returned', 'customer_material_mutation_executed'],
+    '璧勬枡瑕嗙洊鎶ュ憡',
+  );
   return {
     status: asString(row.status) || 'NOT_AVAILABLE',
     complete: asBoolean(row.complete),
@@ -367,7 +500,9 @@ function toCoverage(value: unknown): KnowledgeConnectorCoverage {
     coverage_ratio: asNumber(row.coverage_ratio) || 0,
     unsupported_resources: asArray(row.unsupported_resources)
       .map(toUnsupportedResource)
-      .filter((item) => Boolean(item.remote_resource_id)),
+      .filter((item) => Boolean(
+        item.resource_index !== undefined || item.display_title || item.resource_kind,
+      )),
     unsupported_resources_truncated: asBoolean(row.unsupported_resources_truncated),
     last_sync_epoch_id: asString(row.last_sync_epoch_id) || undefined,
     last_completed_at_utc: asString(row.last_completed_at_utc) || undefined,
@@ -391,9 +526,96 @@ function toConnector(value: unknown): KnowledgeConnectorRecord {
     last_failed_sync_epoch_id: asString(row.last_failed_sync_epoch_id) || undefined,
     last_failed_sync_at_utc: asString(row.last_failed_sync_at_utc) || undefined,
     last_sync_completed_at_utc: asString(row.last_sync_completed_at_utc) || undefined,
+    metadata: asRecord(row.metadata),
     connection_profile: row.connection_profile ? toProfile(row.connection_profile) : undefined,
     auto_sync: row.auto_sync ? toAutoSync(row.auto_sync) : undefined,
     coverage: row.coverage ? toCoverage(row.coverage) : undefined,
+    acceptance: row.acceptance ? toAcceptance(row.acceptance) : undefined,
+  };
+}
+
+function toAcceptance(value: unknown): KnowledgeConnectorAcceptance {
+  const row = asRecord(value);
+  assertFalseFields(
+    row,
+    [
+      'source_content_returned',
+      'raw_cursor_returned',
+      'credential_values_returned',
+      'filesystem_path_returned',
+    ],
+    '璧勬枡楠屾敹鎶ュ憡',
+  );
+  const latest = row.latest_report ? asRecord(row.latest_report) : null;
+  const latestReport = latest
+    ? Object.fromEntries(
+      [
+        'report_id',
+        'acceptance_id',
+        'profile',
+        'verdict',
+        'acceptance_ready',
+        'started_at_utc',
+        'completed_at_utc',
+      ].flatMap((field) => (field in latest ? [[field, latest[field]]] : [])),
+    )
+    : null;
+  if (latest && 'summary' in latest) {
+    const summary = asRecord(latest.summary);
+    if (Object.keys(summary).length) {
+      latestReport!.summary = Object.fromEntries(
+        [
+          'check_count',
+          'blocker_failure_count',
+          'executed_run_count',
+          'required_run_count',
+          'maximum_run_duration_seconds',
+          'minimum_coverage_ratio',
+          'maximum_discovered_resource_count',
+        ].flatMap((field) => (field in summary ? [[field, summary[field]]] : [])),
+      );
+    }
+  }
+  return {
+    schema: asString(row.schema) || undefined,
+    status: asString(row.status) || 'NOT_RUN',
+    acceptance_ready: asBoolean(row.acceptance_ready),
+    latest_report: latestReport,
+    source_content_returned: false,
+    raw_cursor_returned: false,
+    credential_values_returned: false,
+    filesystem_path_returned: false,
+  };
+}
+
+function toManifest(value: unknown): ConnectorManifest {
+  const row = asRecord(value);
+  return {
+    schema: asString(row.schema) || undefined,
+    connector_type: asString(row.connector_type),
+    display_name: asString(row.display_name),
+    category: asString(row.category),
+    version: asString(row.version),
+    auth_modes: asArray(row.auth_modes).map(asString).filter(Boolean),
+    scope_schema: asRecord(row.scope_schema),
+    supported_resource_types: asArray(row.supported_resource_types).map(asString).filter(Boolean),
+    sync_modes: asArray(row.sync_modes).map(asString).filter(Boolean),
+    webhook_supported: asBoolean(row.webhook_supported),
+    local_runner_supported: asBoolean(row.local_runner_supported),
+    local_runner_required: asBoolean(row.local_runner_required),
+    read_only: asBoolean(row.read_only),
+    credential_fields: asArray(row.credential_fields).map((field) => {
+      const item = asRecord(field);
+      return {
+        name: asString(item.name),
+        field_type: asString(item.field_type),
+        required: asBoolean(item.required),
+        secret: asBoolean(item.secret),
+        description: asString(item.description) || undefined,
+        auth_modes: asArray(item.auth_modes).map(asString).filter(Boolean),
+      };
+    }).filter((field) => Boolean(field.name)),
+    capability_contract_version: asString(row.capability_contract_version),
   };
 }
 
@@ -421,6 +643,76 @@ export async function listKnowledgeConnectors(projectId: string): Promise<Knowle
   };
 }
 
+export async function listConnectorTypes(): Promise<ConnectorTypeCatalog> {
+  const payload = await connectorRequest('/api/v1/connector-types');
+  const data = asRecord(payload.data);
+  return {
+    schema: asString(data.schema),
+    connector_types: asArray(data.connector_types)
+      .map(toManifest)
+      .filter((manifest) => Boolean(manifest.connector_type)),
+    governance: asRecord(data.governance),
+  };
+}
+
+export async function getConnectorType(connectorType: string): Promise<ConnectorManifest> {
+  const type = connectorType.trim();
+  if (!type) throw new Error('connector_type_required');
+  const payload = await connectorRequest(`/api/v1/connector-types/${encodeURIComponent(type)}`);
+  const row = asRecord(asRecord(payload.data).connector_type);
+  const manifest = toManifest(row);
+  if (!manifest.connector_type || !manifest.display_name) throw new Error('connector_manifest_incomplete');
+  return manifest;
+}
+
+export async function getKnowledgeConnector(
+  projectId: string,
+  connectorId: string,
+): Promise<KnowledgeConnectorRecord> {
+  const connector = connectorId.trim();
+  if (!connector) throw new Error('connector_instance_id_required');
+  const payload = await connectorRequest(
+    projectConnectorPath(projectId, `/${encodeURIComponent(connector)}`),
+  );
+  return toConnector(payload.data);
+}
+
+export async function configureKnowledgeConnector(
+  projectId: string,
+  input: ConfigureConnectorInput,
+): Promise<KnowledgeConnectorRecord> {
+  if (!input.connector_type.trim()) throw new Error('connector_type_required');
+  const payload = await connectorRequest(projectConnectorPath(projectId), {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  const data = asRecord(payload.data);
+  return toConnector({
+    ...asRecord(data.connector_instance),
+    connection_profile: data.connection_profile,
+  });
+}
+
+export async function patchKnowledgeConnector(
+  projectId: string,
+  connectorId: string,
+  patch: Partial<Omit<ConfigureConnectorInput, 'connector_type' | 'connector_instance_id'>> & {
+    connector_type?: string;
+  },
+): Promise<KnowledgeConnectorRecord> {
+  const connector = connectorId.trim();
+  if (!connector) throw new Error('connector_instance_id_required');
+  const payload = await connectorRequest(
+    projectConnectorPath(projectId, `/${encodeURIComponent(connector)}`),
+    { method: 'PATCH', body: JSON.stringify(patch) },
+  );
+  const data = asRecord(payload.data);
+  return toConnector({
+    ...asRecord(data.connector_instance),
+    connection_profile: data.connection_profile,
+  });
+}
+
 export async function configureFeishuConnector(
   projectId: string,
   input: ConfigureFeishuConnectorInput,
@@ -439,7 +731,7 @@ export async function configureFeishuConnector(
 async function connectorAction(
   projectId: string,
   connectorId: string,
-  action: 'test' | 'sync',
+  action: 'test' | 'sync' | 'pause' | 'resume' | 'reauthorize',
   body: JsonRecord = {},
 ): Promise<KnowledgeConnectorActionResult> {
   const connector = connectorId.trim();
@@ -460,6 +752,162 @@ export function syncKnowledgeConnector(projectId: string, connectorId: string): 
     deletion_policy: 'RETAIN',
     allow_raw_text_fallback: false,
   });
+}
+
+export function pauseKnowledgeConnector(
+  projectId: string,
+  connectorId: string,
+): Promise<KnowledgeConnectorActionResult> {
+  return connectorAction(projectId, connectorId, 'pause');
+}
+
+export function resumeKnowledgeConnector(
+  projectId: string,
+  connectorId: string,
+): Promise<KnowledgeConnectorActionResult> {
+  return connectorAction(projectId, connectorId, 'resume');
+}
+
+export function reauthorizeKnowledgeConnector(
+  projectId: string,
+  connectorId: string,
+  body: JsonRecord = {},
+): Promise<KnowledgeConnectorActionResult> {
+  return connectorAction(projectId, connectorId, 'reauthorize', body);
+}
+
+export async function listConnectorResources(
+  projectId: string,
+  connectorId: string,
+): Promise<ConnectorResourceInventory> {
+  const connector = connectorId.trim();
+  if (!connector) throw new Error('connector_instance_id_required');
+  const payload = await connectorRequest(
+    projectConnectorPath(projectId, `/${encodeURIComponent(connector)}/resources`),
+  );
+  const data = asRecord(payload.data);
+  assertFalseFields(
+    data,
+    [
+      'source_content_returned',
+      'raw_cursor_returned',
+      'credential_values_returned',
+      'remote_resource_identities_returned',
+      'source_refs_returned',
+    ],
+    '璧勬枡棰勮',
+  );
+  return {
+    schema: asString(data.schema) || undefined,
+    project_id: asString(data.project_id) || projectId,
+    connector_instance_id: asString(data.connector_instance_id) || connector,
+    status: asString(data.status) || 'NOT_AVAILABLE',
+    discovered_count: asNumber(data.discovered_count) || 0,
+    covered_count: asNumber(data.covered_count) || 0,
+    unsupported_count: asNumber(data.unsupported_count) || 0,
+    materialized_preview_count: asNumber(data.materialized_preview_count) || 0,
+    resources: asArray(data.resources).map((value, index) => {
+      const row = asRecord(value);
+      return {
+        resource_index: asNumber(row.resource_index) ?? index,
+        display_title: asString(row.display_title) || undefined,
+        resource_kind: asString(row.resource_kind) || undefined,
+        remote_object_type: asString(row.remote_object_type) || undefined,
+        state: asString(row.state) || 'UNKNOWN',
+        reason_code: asString(row.reason_code) || undefined,
+        updated_at_utc: asString(row.updated_at_utc) || undefined,
+      };
+    }),
+    preview_truncated: asBoolean(data.preview_truncated),
+    source_content_returned: false,
+    raw_cursor_returned: false,
+    credential_values_returned: false,
+    remote_resource_identities_returned: false,
+    source_refs_returned: false,
+  };
+}
+
+export async function getConnectorCoverage(
+  projectId: string,
+  connectorId: string,
+): Promise<KnowledgeConnectorCoverage> {
+  const connector = connectorId.trim();
+  if (!connector) throw new Error('connector_instance_id_required');
+  const payload = await connectorRequest(
+    projectConnectorPath(projectId, `/${encodeURIComponent(connector)}/coverage`),
+  );
+  return toCoverage(payload.data);
+}
+
+export async function listConnectorRuns(
+  projectId: string,
+  connectorId: string,
+): Promise<ConnectorRunInventory> {
+  const connector = connectorId.trim();
+  if (!connector) throw new Error('connector_instance_id_required');
+  const payload = await connectorRequest(
+    projectConnectorPath(projectId, `/${encodeURIComponent(connector)}/runs`),
+  );
+  const data = asRecord(payload.data);
+  assertFalseFields(
+    data,
+    ['raw_cursor_returned', 'source_content_returned', 'credential_values_returned'],
+    '同步运行记录',
+  );
+  return {
+    project_id: asString(data.project_id) || projectId,
+    connector_instance_id: asString(data.connector_instance_id) || connector,
+    runs: asArray(data.runs).map((value) => {
+      const row = asRecord(value);
+      return {
+        sync_epoch_id: asString(row.sync_epoch_id) || undefined,
+        connector_instance_id: asString(row.connector_instance_id) || connector,
+        sync_mode: asString(row.sync_mode) || undefined,
+        status: asString(row.status) || undefined,
+        item_count: asNumber(row.item_count),
+        success_count: asNumber(row.success_count),
+        materialized_success_count: asNumber(row.materialized_success_count),
+        unchanged_success_count: asNumber(row.unchanged_success_count),
+        coverage_observation_count: asNumber(row.coverage_observation_count),
+        knowledge_coverage_status: asString(row.knowledge_coverage_status) || undefined,
+        failure_count: asNumber(row.failure_count),
+        retired_count: asNumber(row.retired_count),
+        cursor_checkpoint_committed: typeof row.cursor_checkpoint_committed === 'boolean'
+          ? row.cursor_checkpoint_committed
+          : undefined,
+        started_at_utc: asString(row.started_at_utc) || undefined,
+        completed_at_utc: asString(row.completed_at_utc) || undefined,
+        raw_cursor_returned: false,
+        source_content_returned: false,
+      } as ConnectorRunSummary;
+    }),
+    truncated: asBoolean(data.truncated),
+    raw_cursor_returned: false,
+    source_content_returned: false,
+    credential_values_returned: false,
+  };
+}
+
+export async function getConnectorAcceptance(
+  projectId: string,
+  connectorId: string,
+): Promise<KnowledgeConnectorAcceptance> {
+  const connector = connectorId.trim();
+  if (!connector) throw new Error('connector_instance_id_required');
+  const payload = await connectorRequest(
+    projectConnectorPath(projectId, `/${encodeURIComponent(connector)}/acceptance`),
+  );
+  return toAcceptance(payload.data);
+}
+
+export async function connectKnowledgeConnector(
+  projectId: string,
+  input: ConfigureConnectorInput,
+): Promise<{ connector: KnowledgeConnectorRecord; connection: KnowledgeConnectorActionResult; sync: KnowledgeConnectorActionResult }> {
+  const connector = await configureKnowledgeConnector(projectId, input);
+  const connection = await testKnowledgeConnector(projectId, input.connector_instance_id);
+  const sync = await syncKnowledgeConnector(projectId, input.connector_instance_id);
+  return { connector, connection, sync };
 }
 
 export async function connectFeishuKnowledge(

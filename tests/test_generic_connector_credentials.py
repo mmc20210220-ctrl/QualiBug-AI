@@ -75,6 +75,19 @@ class _GenericAdapter:
         return ""
 
 
+class _NoAuthAdapter(_GenericAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self._manifest = ConnectorManifest(
+            connector_type="public-docs",
+            display_name="Public Docs",
+            category="knowledge_base",
+            version="1",
+            supported_resource_types=("document",),
+            capability_contract_version="public-docs-v1",
+        )
+
+
 @pytest.fixture
 def generic_registry(monkeypatch):
     import ai_test_asset_center.connector_connection_profiles as profiles
@@ -194,6 +207,35 @@ def test_reauthorization_and_rotation_preserve_generic_source_binding(
     )["api_key"] == "rotated-secret-token"
     assert rotated["connection_profile"]["reauthorization_required"] is False
     assert rotated["connection_profile"]["credential_status"] == "ACTIVE"
+
+
+def test_no_auth_manifest_does_not_require_a_synthetic_auth_mode(
+    tmp_path,
+    monkeypatch,
+):
+    import ai_test_asset_center.connector_connection_profiles as profiles
+
+    registry = ConnectorRegistry([_NoAuthAdapter()])
+    monkeypatch.setattr(profiles, "build_default_connector_registry", lambda: registry)
+
+    result = configure_connector_profile(
+        PROJECT,
+        connector_type="public-docs",
+        connector_instance_id="public-docs-main",
+        resource_scope="docs-root",
+        profile={},
+        root=tmp_path,
+        actor=ACTOR,
+        display_name="Public Docs",
+    )
+
+    assert result["connection_profile"]["auth_mode"] == ""
+    assert result["connection_profile"]["credentials_configured"] is True
+    assert resolve_connector_profile(
+        PROJECT,
+        result["connection_profile"]["profile_ref"],
+        root=tmp_path,
+    ) == {"auth_mode": ""}
 
 
 def test_generic_profile_rejects_undeclared_credential_fields(

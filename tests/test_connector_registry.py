@@ -110,6 +110,42 @@ def test_default_registry_exposes_existing_feishu_adapter_without_network() -> N
     assert registry.catalog()["governance"]["network_access_performed"] is False
 
 
+def test_default_registry_exposes_manifest_driven_website_adapter_without_network() -> None:
+    registry = build_default_connector_registry()
+
+    manifest = registry.manifest("website")
+    assert manifest.category == "website"
+    assert manifest.read_only is True
+    assert manifest.auth_modes == ("anonymous", "cookie_session")
+    assert manifest.scope_schema["required"] == ["seed_urls"]
+    assert {
+        field.name
+        for field in manifest.credential_fields_for_auth_mode("cookie_session")
+    } == {"session_cookie"}
+    assert {row["connector_type"] for row in registry.catalog()["connector_types"]} == {
+        "feishu",
+        "openapi",
+        "website",
+    }
+    assert registry.catalog()["governance"]["network_access_performed"] is False
+
+
+def test_default_registry_exposes_manifest_driven_openapi_adapter_without_network() -> None:
+    registry = build_default_connector_registry()
+
+    manifest = registry.manifest("openapi")
+    assert manifest.category == "api_contract"
+    assert manifest.read_only is True
+    assert manifest.scope_schema["required"] == ["document_urls"]
+    assert set(manifest.auth_modes) == {
+        "anonymous",
+        "bearer_token",
+        "api_key",
+        "cookie_session",
+    }
+    assert registry.catalog()["governance"]["network_access_performed"] is False
+
+
 def test_default_feishu_adapter_builds_cursor_from_discovery_descriptors() -> None:
     adapter = build_default_connector_registry().get("feishu")
 

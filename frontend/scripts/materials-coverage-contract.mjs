@@ -38,7 +38,7 @@ requireText(panel, 'role="progressbar"', 'coverage panel accessibility');
 requireText(panel, '已发现 {coverage.discovered_count} 份资料', 'coverage explanation');
 requireText(panel, '其余资料仍可正常用于分析和测试', 'partial coverage behavior');
 requireText(panel, '已有资料不会被覆盖或删除', 'unknown coverage safety');
-requireText(panel, '系统不会修改飞书原资料', 'non-mutating coverage boundary');
+requireText(panel, '系统不会修改原资料', 'non-mutating coverage boundary');
 
 if (panel.includes('重新授权')) {
   throw new Error('unsupported material types must not be presented as an authorization failure');

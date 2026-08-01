@@ -53,7 +53,7 @@ requireText(page, 'ConnectorAcceptancePanel', 'materials page');
 requireText(page, 'disabled={busy || running || needsHelp', 'acceptance operation guard');
 requireText(panel, '运行 Pilot 验收', 'acceptance action');
 requireText(panel, '连续执行两轮只读同步', 'acceptance explanation');
-requireText(panel, '不删除或修改飞书原资料', 'non-mutating acceptance boundary');
+requireText(panel, '不删除或修改原资料', 'non-mutating acceptance boundary');
 requireText(panel, '查看阻断项', 'acceptance blockers');
 requireText(panel, '关闭或刷新页面不会中断', 'persistent job behavior');
 requireText(panel, '正在后台执行两轮验收', 'background job state');

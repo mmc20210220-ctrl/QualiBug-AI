@@ -8,12 +8,17 @@ import {
   type ConnectorAcceptanceReport,
   type ConnectorAcceptanceReportSummary,
 } from '../api/connector-acceptance';
+import {
+  getConnectorAcceptance,
+  type KnowledgeConnectorAcceptance,
+} from '../api/knowledge-connectors';
 import { useToast } from './useToast';
 import './ConnectorAcceptancePanel.css';
 
 type ConnectorAcceptancePanelProps = {
   projectId: string;
   connectorId: string;
+  connectorName?: string;
   disabled?: boolean;
 };
 
@@ -35,10 +40,10 @@ function isActiveJob(job: ConnectorAcceptanceJob | null): boolean {
 
 function checkLabel(checkId: string): string {
   const labels: Record<string, string> = {
-    CONNECTION_AVAILABLE: '飞书连接可用',
-    REMOTE_ACCESS_READ_ONLY: '客户资料访问只读',
-    TENANT_SCALE_MEETS_PROFILE: '资料规模达到 Pilot 门槛',
-    KNOWLEDGE_COVERAGE_MEETS_PROFILE: '知识覆盖率达到 Pilot 门槛',
+    CONNECTION_AVAILABLE: '连接可用',
+    REMOTE_ACCESS_READ_ONLY: '资料访问只读',
+    TENANT_SCALE_MEETS_PROFILE: '资料规模达到验收门槛',
+    KNOWLEDGE_COVERAGE_MEETS_PROFILE: '资料覆盖率达到验收门槛',
     UNSUPPORTED_RATIO_WITHIN_PROFILE: '不支持资料比例在门槛内',
     ACCEPTANCE_REQUIRED_RUNS_COMPLETED: '完成规定轮次',
   };
@@ -55,10 +60,12 @@ function checkLabel(checkId: string): string {
 export function ConnectorAcceptancePanel({
   projectId,
   connectorId,
+  connectorName = '在线资料',
   disabled = false,
 }: ConnectorAcceptancePanelProps) {
   const toast = useToast();
   const [latest, setLatest] = useState<ConnectorAcceptanceReportSummary | null>(null);
+  const [acceptance, setAcceptance] = useState<KnowledgeConnectorAcceptance | null>(null);
   const [report, setReport] = useState<ConnectorAcceptanceReport | null>(null);
   const [job, setJob] = useState<ConnectorAcceptanceJob | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,10 +86,12 @@ export function ConnectorAcceptancePanel({
     setLoading(true);
     setError('');
     try {
-      const [inventory, currentJob] = await Promise.all([
+      const [summary, inventory, currentJob] = await Promise.all([
+        getConnectorAcceptance(projectId, connectorId),
         listConnectorAcceptanceReports(projectId, connectorId),
         getConnectorAcceptanceJob(projectId, connectorId),
       ]);
+      setAcceptance(summary);
       setJob(currentJob);
       setRunning(isActiveJob(currentJob));
       const nextLatest = inventory.reports[0] || null;
@@ -94,7 +103,7 @@ export function ConnectorAcceptancePanel({
         setReport(null);
       }
       if (currentJob.status === 'FAILED' || currentJob.status === 'INTERRUPTED') {
-        setError('上一次验收任务未完整结束，可重新运行 Pilot 验收。');
+        setError('上一次验收任务未完整结束，可重新运行验收。');
       }
     } catch (loadError: unknown) {
       setError(loadError instanceof Error ? loadError.message : '验收状态加载失败。');
@@ -134,7 +143,7 @@ export function ConnectorAcceptancePanel({
           if (cancelled) return;
           setError('');
           if (completed.acceptance_ready) {
-            notifyOnce(next.job_id, '飞书真实租户 Pilot 验收已通过。', 'success');
+            notifyOnce(next.job_id, `${connectorName}验收已通过。`, 'success');
           } else {
             notifyOnce(
               next.job_id,
@@ -143,8 +152,8 @@ export function ConnectorAcceptancePanel({
             );
           }
         } else if (next.status === 'FAILED' || next.status === 'INTERRUPTED') {
-          setError('验收任务未完整结束，已有资料不受影响，可重新运行。');
-          notifyOnce(next.job_id, '验收任务未完整结束，已有资料不受影响。', 'warning');
+          setError('验收任务未完整结束，现有资料不受影响，可重新运行。');
+          notifyOnce(next.job_id, '验收任务未完整结束，现有资料不受影响。', 'warning');
         } else {
           setError('');
         }
@@ -162,7 +171,7 @@ export function ConnectorAcceptancePanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeJobId, activeJob, projectId, connectorId, loadReport, toast]);
+  }, [activeJobId, activeJob, projectId, connectorId, connectorName, loadReport, toast]);
 
   const blockers = useMemo(
     () => (report?.checks || []).filter((check) => check.severity === 'BLOCKER' && check.status === 'FAIL'),
@@ -177,7 +186,7 @@ export function ConnectorAcceptancePanel({
       notifiedJobRef.current = '';
       setJob(started);
       setRunning(isActiveJob(started));
-      toast.show('Pilot 验收任务已启动，可刷新页面后继续查看进度。', 'success');
+      toast.show('Pilot 验收任务已启动，页面刷新后会继续显示进度。', 'success');
     } catch (runError: unknown) {
       const message = runError instanceof Error ? runError.message : '验收任务启动失败。';
       setRunning(false);
@@ -188,66 +197,45 @@ export function ConnectorAcceptancePanel({
 
   const active = isActiveJob(job) || running;
   const interrupted = job?.status === 'FAILED' || job?.status === 'INTERRUPTED';
-  const tone = active ? 'running' : interrupted ? 'fail' : latest?.acceptance_ready ? 'pass' : latest ? 'fail' : 'idle';
+  const acceptanceReady = latest?.acceptance_ready ?? acceptance?.acceptance_ready ?? false;
+  const hasAcceptanceResult = Boolean(latest || acceptance?.status === 'PASS' || acceptance?.status === 'FAIL');
+  const tone = active ? 'running' : interrupted ? 'fail' : acceptanceReady ? 'pass' : hasAcceptanceResult ? 'fail' : 'idle';
   const status = active
     ? '验收运行中'
     : interrupted
       ? '任务未完整结束'
-      : latest?.acceptance_ready
+      : acceptanceReady
         ? '已通过'
-        : latest
+        : hasAcceptanceResult
           ? '未通过'
           : '尚未验收';
   const coverage = percent(latest?.summary.minimum_coverage_ratio || 0);
 
   return (
-    <section className={`connector-acceptance connector-acceptance-${tone}`} aria-label="飞书真实租户验收">
+    <section className={`connector-acceptance connector-acceptance-${tone}`} aria-label={`${connectorName}验收`}>
       <div className="connector-acceptance-heading">
         <div>
-          <span>真实租户验收</span>
+          <span>{connectorName}验收</span>
           <strong>{loading ? '读取中…' : status}</strong>
         </div>
-        <button
-          className="btn btn-secondary"
-          type="button"
-          onClick={() => void runPilot()}
-          disabled={disabled || loading || active}
-        >
+        <button className="btn btn-secondary" type="button" onClick={() => void runPilot()} disabled={disabled || loading || active}>
           {active ? '正在后台执行两轮验收…' : latest ? '重新运行 Pilot 验收' : '运行 Pilot 验收'}
         </button>
       </div>
 
       <p className="connector-acceptance-note">
-        连续执行两轮只读同步，验证连接、覆盖率、增量复用、检查点和客户资料非修改边界。
-        验收固定使用 RETAIN，不删除或修改飞书原资料。
+        连续执行两轮只读同步，验证连接、覆盖率、增量复用、检查点和客户资料非修改边界。验收固定使用 RETAIN，不删除或修改原资料。
       </p>
 
-      {active && (
-        <div className="connector-acceptance-running-note">
-          任务在服务端持续运行，关闭或刷新页面不会中断；页面会自动恢复并查询最新状态。
-        </div>
-      )}
-
+      {active && <div className="connector-acceptance-running-note">任务在服务端持续运行，关闭或刷新页面不会中断；页面会自动恢复并查询最新状态。</div>}
       {error && <div className="connector-acceptance-error">{error}</div>}
 
       {latest && (
         <div className="connector-acceptance-metrics">
-          <div>
-            <span>最低覆盖率</span>
-            <strong>{coverage}%</strong>
-          </div>
-          <div>
-            <span>最大资料数</span>
-            <strong>{latest.summary.maximum_discovered_resource_count}</strong>
-          </div>
-          <div>
-            <span>完成轮次</span>
-            <strong>{latest.summary.executed_run_count}/{latest.summary.required_run_count}</strong>
-          </div>
-          <div>
-            <span>阻断项</span>
-            <strong>{latest.summary.blocker_failure_count}</strong>
-          </div>
+          <div><span>最低覆盖率</span><strong>{coverage}%</strong></div>
+          <div><span>最大资料数</span><strong>{latest.summary.maximum_discovered_resource_count}</strong></div>
+          <div><span>完成轮次</span><strong>{latest.summary.executed_run_count}/{latest.summary.required_run_count}</strong></div>
+          <div><span>阻断项</span><strong>{latest.summary.blocker_failure_count}</strong></div>
         </div>
       )}
 
@@ -273,11 +261,7 @@ export function ConnectorAcceptancePanel({
         </details>
       )}
 
-      {latest?.acceptance_ready && !active && (
-        <div className="connector-acceptance-success">
-          当前连接已满足 Pilot 真实租户准入门槛，可进入试点运行。
-        </div>
-      )}
+      {acceptanceReady && !active && <div className="connector-acceptance-success">当前连接已满足 Pilot 验收准入门槛，可进入试点运行。</div>}
     </section>
   );
 }

@@ -37,7 +37,11 @@ def test_materials_page_keeps_online_primary_and_upload_supplemental():
     assert "连接一次，系统自动读取、识别、去重、更新和恢复" in page
     assert page.index("自动维护") < page.index("补充方式")
     assert "listKnowledgeConnectors" in page
-    assert "connectFeishuKnowledge" in page
+    assert "listConnectorTypes" in page
+    assert "connectKnowledgeConnector" in page
+    assert "listConnectorResources" in page
+    assert "last_failed_sync_at_utc" in page
+    assert "最近失败" in page
     assert "refreshKnowledgeConnector" in page
     assert "ingestKnowledge" in page
     assert "统一企业知识库" in page
@@ -46,12 +50,12 @@ def test_materials_page_keeps_online_primary_and_upload_supplemental():
 def test_normal_user_path_is_two_steps_and_daily_maintenance_disappears():
     page = _text(PAGE)
     assert "两步完成" in page
-    assert "填写飞书授权" in page
+    assert "选择连接器并填写授权" in page
     assert "选择资料范围" in page
     assert "保存并开始读取" in page
     assert "后续更新和重试由系统处理" in page
     assert "自动更新" in page
-    assert "系统自动恢复" in page
+    assert "系统正在自动恢复" in page
     assert "立即更新" not in page
     assert "测试连接" not in page
     assert "资料源标识" not in page
@@ -71,12 +75,13 @@ def test_normal_user_path_is_two_steps_and_daily_maintenance_disappears():
 
 def test_manual_check_and_advanced_choices_are_hidden_behind_disclosure():
     page = _text(PAGE)
-    assert page.count('<details className="materials-advanced">') >= 3
+    assert page.count('className="materials-advanced"') >= 3
     assert "遇到问题时" in page
     assert "现在检查一次" in page
-    assert "其他授权方式" in page
+    assert "认证方式" in page
     assert "高级资料范围" in page
-    assert '<option value="internal_app">企业自建应用（推荐）</option>' in page
+    assert "selectedManifest.auth_modes.map" in page
+    assert "selectedManifest.credential_fields" in page or "manifestFields" in page
 
 
 def test_frontend_connector_client_owns_safe_orchestration_and_friendly_errors():
@@ -86,7 +91,7 @@ def test_frontend_connector_client_owns_safe_orchestration_and_friendly_errors()
     assert orchestration.index("configureFeishuConnector") < orchestration.index("testKnowledgeConnector")
     assert orchestration.index("testKnowledgeConnector") < orchestration.index("syncKnowledgeConnector")
     assert "上次更新状态不完整，系统已保留原有资料并会自动重试" in client
-    assert "飞书授权范围不足" in client
+    assert "在线资料授权范围不足" in client
     assert "原有资料不受影响，系统会自动重试" in client
     assert "KnowledgeConnectorAutoSync" in client
     assert "maintenance_required_by_user" in client

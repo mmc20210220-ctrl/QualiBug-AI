@@ -197,6 +197,10 @@ def _normalized_auth_mode(
     manifest: ConnectorManifest,
 ) -> str:
     mode = _text(value, 64).lower()
+    if not manifest.auth_modes and not manifest.credential_fields:
+        if mode:
+            raise ConnectorProfileError("connector_profile_auth_mode_invalid")
+        return ""
     if mode not in manifest.auth_modes:
         raise ConnectorProfileError("connector_profile_auth_mode_invalid")
     return mode
@@ -206,6 +210,10 @@ def _manifest_fields_for_auth_mode(
     manifest: ConnectorManifest,
     auth_mode: str,
 ) -> tuple[Any, ...]:
+    if not manifest.auth_modes and not manifest.credential_fields:
+        if auth_mode:
+            raise ConnectorProfileError("connector_profile_auth_mode_invalid")
+        return ()
     try:
         return manifest.credential_fields_for_auth_mode(auth_mode)
     except ConnectorRegistryError as exc:
@@ -717,7 +725,7 @@ def rotate_connector_credentials(
         project,
         connector_type=_text(instance.get("connector_type"), 160),
         connector_instance_id=connector,
-        resource_scope=_text(instance.get("resource_scope"), 1000),
+        resource_scope=_text(instance.get("resource_scope"), 20000),
         profile=profile,
         root=resolved_root,
         actor=actor,

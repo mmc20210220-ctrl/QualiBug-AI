@@ -76,14 +76,25 @@ def write_json_artifact(path: Path | str, data: Any) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
+    staging_suffix = ".tmp"
+    if os.name == "nt" and len(str(target.parent)) + 1 + 8 + len(staging_suffix) >= 260:
+        # A transaction journal can sit at the edge of the Win32 legacy path
+        # limit.  The orphan is still inside a recovery transaction directory,
+        # so an unadorned random staging name is safer than failing the atomic
+        # write before the journal exists.
+        staging_suffix = ""
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
             newline="\n",
             dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
+            # Keep the staging prefix to tempfile's eight random characters. On
+            # Windows the final artifact path may already be near MAX_PATH (for
+            # example under a pytest temp root), and repeating the target name
+            # in the prefix can turn an otherwise valid atomic write into FileNotFoundError.
+            prefix="",
+            suffix=staging_suffix,
             delete=False,
         ) as stream:
             temporary = Path(stream.name)

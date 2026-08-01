@@ -14,12 +14,7 @@ function percentage(value: number): number {
 }
 
 function reasonLabel(reason?: string): string {
-  switch (reason) {
-    case 'FEISHU_OBJECT_TYPE_UNSUPPORTED':
-      return '当前版本暂不支持该飞书资料类型';
-    default:
-      return reason || '当前版本暂时无法读取';
-  }
+  return reason || '当前连接器版本暂时无法读取';
 }
 
 function hasLifecycleActivity(lifecycle?: KnowledgeConnectorRemoteLifecycle): boolean {
@@ -88,7 +83,7 @@ function ConnectorRemoteLifecycle({ lifecycle }: { lifecycle?: KnowledgeConnecto
         </p>
       )}
       <small>
-        系统不会根据一次缺失推断远端原因，也不会修改飞书原资料。
+        系统不会根据一次缺失推断远端原因，也不会修改原资料。
       </small>
     </div>
   );
@@ -138,15 +133,15 @@ export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
         <>
           <p>
             已发现 {coverage.discovered_count} 份资料，其中 {coverage.covered_count} 份已进入企业知识库，
-            {coverage.unsupported_count} 份资料类型暂不支持。其余资料仍可正常用于分析和测试，系统不会修改飞书原资料。
+            {coverage.unsupported_count} 份资料类型暂不支持。其余资料仍可正常用于分析和测试，系统不会修改原资料。
           </p>
           <details className="connector-coverage-details">
             <summary>查看暂不支持的资料（{coverage.unsupported_count}）</summary>
             <div className="connector-coverage-list">
               {coverage.unsupported_resources.map((resource) => (
-                <article key={`${resource.remote_resource_id}:${resource.resource_kind || ''}`}>
+                <article key={`${resource.resource_index ?? resource.display_title ?? 'resource'}:${resource.resource_kind || ''}`}>
                   <div>
-                    <strong>{resource.display_title || '未命名飞书资料'}</strong>
+                    <strong>{resource.display_title || '未命名资料'}</strong>
                     <span>{resource.remote_object_type || resource.resource_kind || '未知类型'}</span>
                   </div>
                   <p>{reasonLabel(resource.reason_code)}</p>
@@ -162,7 +157,7 @@ export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
           </details>
         </>
       ) : (
-        <p>本次发现的在线资料均已读取，没有已知资料类型缺口；系统不会修改飞书原资料。</p>
+        <p>本次发现的在线资料均已读取，没有已知资料类型缺口；系统不会修改原资料。</p>
       )}
 
       <ConnectorRemoteLifecycle lifecycle={coverage.remote_lifecycle} />

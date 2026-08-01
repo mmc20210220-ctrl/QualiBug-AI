@@ -14,6 +14,7 @@ files.  After that decision recovery completes the commit instead of rolling it 
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -52,6 +53,10 @@ from .enterprise_source_registry import _paths as runtime_source_paths
 CONNECTOR_LIFECYCLE_COMMIT_SCHEMA = "qualibug.connector-lifecycle-commit.v1"
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 _FINAL_STATES = {"COMMITTED", "ROLLED_BACK", "ABANDONED_BEFORE_APPLY"}
+_LEGACY_TRANSACTION_DIR = "connector_lifecycle_transactions"
+_COMPACT_TRANSACTION_DIR = "txn"
+_WINDOWS_COMPACT_TRANSACTION_ID_LENGTH = 20
+_WINDOWS_MAX_PATH_LENGTH = 260
 
 
 class ConnectorLifecycleCommitError(RuntimeError):
@@ -93,8 +98,11 @@ def _write_bytes_atomic(path: Path, content: bytes) -> None:
         with tempfile.NamedTemporaryFile(
             mode="wb",
             dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
+            # The transaction directory is already deliberately compact on
+            # Windows.  Keep tempfile's random name unadorned so staging does
+            # not cross MAX_PATH when the final backup path is valid.
+            prefix="",
+            suffix="",
             delete=False,
         ) as handle:
             temporary = Path(handle.name)
@@ -128,7 +136,24 @@ def _within_root(path: Path, root: Path) -> Path:
 
 def _transaction_base(project: str, connector: str, root: Path) -> Path:
     workspace = knowledge_paths(project, root)["workspace"]
-    return workspace / "connector_lifecycle_transactions" / connector
+    legacy = workspace / _LEGACY_TRANSACTION_DIR / connector
+    # The transaction directory is nested below the user-selected artifact root.  On
+    # Windows, a normal pytest or application temp root can leave enough room for the
+    # run receipt but not for the recovery directory plus its 128-bit transaction id.
+    # Keep the established path for normal roots and use a deterministic compact path
+    # only when the legacy path would cross the Win32 MAX_PATH boundary.  All callers
+    # resolve through this function, so recovery and commit share the same choice.
+    if os.name == "nt":
+        compact_dir = legacy / "pending" / (
+            "x" * _WINDOWS_COMPACT_TRANSACTION_ID_LENGTH
+        )
+        worst_case = max(
+            len(str(compact_dir / "j")),
+            len(str(compact_dir / ("x" * 8))),
+        )
+        if worst_case >= _WINDOWS_MAX_PATH_LENGTH:
+            return workspace / _COMPACT_TRANSACTION_DIR / connector
+    return legacy
 
 
 def _pending_root(project: str, connector: str, root: Path) -> Path:
@@ -157,7 +182,11 @@ def _target_paths(
 
 
 def _journal_path(transaction_dir: Path) -> Path:
-    return transaction_dir / "journal.json"
+    compact = transaction_dir / "j"
+    legacy = transaction_dir / "journal.json"
+    if os.name == "nt" and not compact.exists() and legacy.exists():
+        return legacy
+    return compact if os.name == "nt" else legacy
 
 
 def _final_receipt_path(
@@ -188,8 +217,18 @@ def _begin_transaction(
     root: Path,
     actor: dict[str, str],
 ) -> tuple[Path, dict[str, Any]]:
-    transaction_id = "lctx_" + uuid.uuid4().hex
-    transaction_dir = _pending_root(project, connector, root) / transaction_id
+    transaction_root = _transaction_base(project, connector, root)
+    if os.name == "nt":
+        # A URL-safe UUID encoding retains 120 bits in 20 characters.  Windows'
+        # legacy path limit makes the shorter opaque identity necessary for
+        # deeply nested artifact roots; it remains collision-resistant for
+        # local transaction recovery and avoids customer-specific path rules.
+        transaction_id = base64.urlsafe_b64encode(uuid.uuid4().bytes).decode(
+            "ascii"
+        ).rstrip("=")[:_WINDOWS_COMPACT_TRANSACTION_ID_LENGTH]
+    else:
+        transaction_id = "lctx_" + uuid.uuid4().hex
+    transaction_dir = transaction_root / "pending" / transaction_id
     transaction_dir.mkdir(parents=True, exist_ok=False)
     os.chmod(transaction_dir, 0o700)
     targets = _target_paths(project, connector, sync_epoch_id, root)
@@ -212,7 +251,7 @@ def _begin_transaction(
     for order, (name, target) in enumerate(targets.items()):
         existed = target.is_file()
         content = target.read_bytes() if existed else b""
-        backup_name = f"{order:02d}_{name}.backup"
+        backup_name = f"b{order:02d}"
         if existed:
             _write_bytes_atomic(transaction_dir / backup_name, content)
         snapshots.append(

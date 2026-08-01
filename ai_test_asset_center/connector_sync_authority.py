@@ -307,7 +307,7 @@ def register_connector_instance(
     else:
         instance.setdefault("display_name", "")
     if resource_scope is not None:
-        instance["resource_scope"] = _text(resource_scope, 1000)
+        instance["resource_scope"] = _text(resource_scope, 20000)
     else:
         instance.setdefault("resource_scope", "")
     if connection_profile_ref is not None:
@@ -368,6 +368,72 @@ def list_connector_instances(
             "running_count": sum(bool(row.get("active_sync_epoch_id")) for row in rows),
         },
         "governance": dict(registry.get("governance") or {}),
+    }
+
+
+def list_connector_sync_runs(
+    project_id: str,
+    *,
+    connector_instance_id: str,
+    root: Path | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Return bounded, cursor-free run summaries for one connector instance."""
+    resolved_root = root or ROOT
+    project = _safe_project_id(project_id)
+    connector = _identifier(connector_instance_id, "connector_instance_id")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ConnectorSyncError("connector_sync_run_limit_invalid")
+    registry = _load_connector_registry(project, resolved_root)
+    runs = [
+        dict(row)
+        for row in registry.get("sync_runs") or []
+        if isinstance(row, dict)
+        and _text(row.get("connector_instance_id"), 160) == connector
+    ]
+    runs.sort(
+        key=lambda row: _text(
+            row.get("completed_at_utc") or row.get("started_at_utc"),
+            80,
+        ),
+        reverse=True,
+    )
+    public_fields = {
+        "sync_epoch_id",
+        "connector_instance_id",
+        "sync_mode",
+        "status",
+        "started_at_utc",
+        "completed_at_utc",
+        "item_count",
+        "success_count",
+        "materialized_success_count",
+        "unchanged_success_count",
+        "coverage_observation_count",
+        "knowledge_coverage_status",
+        "failure_count",
+        "retired_count",
+        "cursor_checkpoint_committed",
+    }
+    safe_runs: list[dict[str, Any]] = []
+    for row in runs[:limit]:
+        safe = {
+            key: row[key]
+            for key in public_fields
+            if key in row
+        }
+        safe["raw_cursor_returned"] = False
+        safe["source_content_returned"] = False
+        safe_runs.append(safe)
+    return {
+        "schema": "qualibug.connector-sync-run-inventory.v1",
+        "project_id": project,
+        "connector_instance_id": connector,
+        "runs": safe_runs,
+        "truncated": len(runs) > len(safe_runs),
+        "raw_cursor_returned": False,
+        "source_content_returned": False,
+        "credential_values_returned": False,
     }
 
 
@@ -572,12 +638,19 @@ def _normalize_items(connector: str, items: list[dict[str, Any]]) -> list[dict[s
         if source_ref in refs:
             raise ConnectorSyncError(f"connector_sync_duplicate_remote_identity:{source_ref}")
         refs.add(source_ref)
+        raw_metadata = row.get("metadata")
+        if raw_metadata not in (None, "") and not isinstance(raw_metadata, dict):
+            raise ConnectorSyncError(
+                f"connector_sync_item_metadata_must_be_object:{index}"
+            )
+        metadata = _sanitize_metadata(dict(raw_metadata or {}) if raw_metadata else None)
         row.update(
             {
                 "_remote_resource_id": remote_id,
                 "_source_type": source_type,
                 "_resource_kind": kind,
                 "_source_ref": source_ref,
+                "_metadata": metadata,
             }
         )
         normalized.append(row)
@@ -877,12 +950,37 @@ def sync_connector_snapshot_batch(
                                 "declared_mime": _text(
                                     row.get("declared_mime"), 160
                                 ),
+                                "display_title": _text(
+                                    row.get("display_title"), 300
+                                ),
+                                "etag": _text(row.get("etag"), 1000),
+                                "last_modified": _text(
+                                    row.get("last_modified"), 1000
+                                ),
+                                "source_relationships_json": _text(
+                                    row.get("source_relationships_json"), 100000
+                                ),
+                                "aliases_json": _text(
+                                    row.get("aliases_json"), 100000
+                                ),
+                                "forms_present": (
+                                    bool(row.get("forms_present"))
+                                    if "forms_present" in row
+                                    else None
+                                ),
+                                "robots_status": _text(
+                                    row.get("robots_status"), 80
+                                ),
+                                "sitemap_last_modified": _text(
+                                    row.get("sitemap_last_modified"), 160
+                                ),
                                 "remote_materialization_fingerprint": _text(
                                     row.get(
                                         "remote_materialization_fingerprint"
                                     ),
                                     128,
                                 ),
+                                "metadata": dict(row.get("_metadata") or {}),
                                 "filename": _text(row.get("filename"), 500),
                             }
                             for row in normalized
@@ -1228,6 +1326,7 @@ __all__ = [
     "ConnectorSyncError",
     "abort_connector_sync_run",
     "list_connector_instances",
+    "list_connector_sync_runs",
     "load_connector_sync_run",
     "register_connector_instance",
     "sync_connector_snapshot_batch",
