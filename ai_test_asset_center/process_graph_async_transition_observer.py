@@ -167,6 +167,12 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
                 "event_id_reuse_conflict_count": int(
                     receipt.get("event_id_reuse_conflict_count") or 0
                 ),
+                "event_identity_type_conflict_count": int(
+                    receipt.get("event_identity_type_conflict_count") or 0
+                ),
+                "correlation_identity_mismatch_count": int(
+                    receipt.get("correlation_identity_mismatch_count") or 0
+                ),
                 "idempotency_mismatch_count": int(
                     receipt.get("idempotency_mismatch_count") or 0
                 ),

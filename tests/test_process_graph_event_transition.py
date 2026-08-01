@@ -4,8 +4,10 @@ import json
 from copy import deepcopy
 
 from ai_test_asset_center.process_graph_wait_contract import (
+    EVENT_CORRELATION_IDENTITY_MISMATCH,
     EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM,
     EVENT_IDEMPOTENCY_KEY_MISMATCH,
+    EVENT_IDENTITY_TYPE_CONFLICT,
     EVENT_TRANSITION_INVALID,
     STATUS_BLOCKED,
     STATUS_COMPILED,
@@ -39,6 +41,34 @@ def _execute(graph: dict, responses: list[dict]) -> dict:
     ticks = iter([0.0, 0.0, 0.001, 0.002, 0.003])
     step = next(row for row in graph["nodes"] if row["node_id"] == "consume_notification")
     return execute_process_graph_wait(graph=graph, step=step, context={"base_url": "https://notifications.example.test", "bindings": {"order_id": "ORD-42", "request_id": "REQ-1"}}, actors={"actor_1": {"role": "public"}}, tokens={}, read_once=lambda: next(iterator), sleep=lambda _: None, monotonic=lambda: next(ticks))
+
+
+
+def _execute_with_bindings(
+    graph: dict,
+    responses: list[dict],
+    bindings: dict,
+) -> dict:
+    iterator = iter(responses)
+    ticks = iter([0.0, 0.0, 0.001, 0.002, 0.003])
+    step = next(
+        row
+        for row in graph["nodes"]
+        if row["node_id"] == "consume_notification"
+    )
+    return execute_process_graph_wait(
+        graph=graph,
+        step=step,
+        context={
+            "base_url": "https://notifications.example.test",
+            "bindings": bindings,
+        },
+        actors={"actor_1": {"role": "public"}},
+        tokens={},
+        read_once=lambda: next(iterator),
+        sleep=lambda _: None,
+        monotonic=lambda: next(ticks),
+    )
 
 
 def test_event_transition_compiles_behind_existing_wait_contract() -> None:
@@ -115,3 +145,86 @@ def test_event_idempotency_violation_is_not_harness_block() -> None:
     assert receipt["semantic_status"] == "VIOLATION"
     assert receipt["reason_code"] == EVENT_IDEMPOTENCY_KEY_MISMATCH
     assert receipt["idempotency_mismatch_count"] == 1
+
+
+def test_correlation_identity_is_type_sensitive_across_systems() -> None:
+    graph = _compiled_graph()
+    response = {
+        "status_code": 200,
+        "body": {
+            "items": [
+                {
+                    "event_id": "evt-typed-correlation",
+                    "event_type": "OrderCreated",
+                    "aggregate_id": "42",
+                    "idempotency_key": "REQ-1",
+                    "delivery_attempt": 1,
+                }
+            ]
+        },
+    }
+    receipt = _execute_with_bindings(
+        graph,
+        [response, response, response],
+        {"order_id": 42, "request_id": "REQ-1"},
+    )
+    assert receipt["status"] == STATUS_CONVERGED
+    assert receipt["semantic_status"] == "VIOLATION"
+    assert receipt["reason_code"] == EVENT_CORRELATION_IDENTITY_MISMATCH
+    assert receipt["correlation_identity_mismatch_count"] == 1
+    assert receipt["observed_unique_event_count"] == 0
+
+
+def test_idempotency_identity_is_type_sensitive_across_systems() -> None:
+    graph = _compiled_graph()
+    response = {
+        "status_code": 200,
+        "body": {
+            "items": [
+                {
+                    "event_id": "evt-typed-idempotency",
+                    "event_type": "OrderCreated",
+                    "aggregate_id": "ORD-42",
+                    "idempotency_key": "1",
+                    "delivery_attempt": 1,
+                }
+            ]
+        },
+    }
+    receipt = _execute_with_bindings(
+        graph,
+        [response, response, response],
+        {"order_id": "ORD-42", "request_id": 1},
+    )
+    assert receipt["status"] == STATUS_CONVERGED
+    assert receipt["semantic_status"] == "VIOLATION"
+    assert receipt["reason_code"] == EVENT_IDEMPOTENCY_KEY_MISMATCH
+    assert receipt["idempotency_mismatch_count"] == 1
+
+
+def test_event_identity_does_not_collapse_integer_and_string_ids() -> None:
+    graph = _compiled_graph()
+    rows = [
+        {
+            "event_id": 1,
+            "event_type": "OrderCreated",
+            "aggregate_id": "ORD-42",
+            "idempotency_key": "REQ-1",
+            "delivery_attempt": 1,
+        },
+        {
+            "event_id": "1",
+            "event_type": "OrderCreated",
+            "aggregate_id": "ORD-42",
+            "idempotency_key": "REQ-1",
+            "delivery_attempt": 1,
+        },
+    ]
+    response = {"status_code": 200, "body": {"items": rows}}
+    receipt = _execute(graph, [response, response, response])
+    assert receipt["status"] == STATUS_CONVERGED
+    assert receipt["semantic_status"] == "VIOLATION"
+    assert receipt["reason_code"] == EVENT_IDENTITY_TYPE_CONFLICT
+    assert receipt["event_identity_type_conflict_count"] == 1
+    assert receipt["observed_unique_event_count"] == 2
+    assert len(receipt["event_id_fingerprints"]) == 2
