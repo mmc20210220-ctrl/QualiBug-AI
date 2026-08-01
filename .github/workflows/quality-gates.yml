@@ -117,6 +117,8 @@ jobs:
             tests/test_process_graph_event_transition_scope.py \
             tests/test_process_graph_event_transition_ledger.py \
             tests/test_process_graph_async_transition_oracle.py \
+            tests/test_process_graph_broker_delivery.py \
+            tests/test_process_graph_broker_oracle.py \
             tests/test_process_graph_experiment_contract.py \
             tests/test_process_graph_event_finalizer_scope.py \
             tests/test_compiled_http_observer_bundle_scope.py \
