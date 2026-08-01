@@ -222,7 +222,7 @@ def set_managed_connector_status(
         connector_instance_id=connector,
         connector_type=_text(existing.get("connector_type"), 160),
         display_name=_text(existing.get("display_name"), 240),
-        resource_scope=_text(existing.get("resource_scope"), 1000),
+        resource_scope=_text(existing.get("resource_scope"), 20000),
         connection_profile_ref=_text(
             existing.get("connection_profile_ref"),
             500,

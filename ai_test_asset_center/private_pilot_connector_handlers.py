@@ -910,7 +910,7 @@ class KnowledgeConnectorHandlersMixin:
         connector_type = _text(body.get("connector_type"), 160)
         configuration_kwargs = {
             "connector_instance_id": connector,
-            "resource_scope": _text(body.get("resource_scope"), 1000),
+            "resource_scope": _text(body.get("resource_scope"), 20000),
             "profile": profile,
             "root": root,
             "actor": actor,
@@ -985,9 +985,9 @@ class KnowledgeConnectorHandlersMixin:
             "connector_type": current_type,
             "connector_instance_id": connector,
             "resource_scope": (
-                _text(body.get("resource_scope"), 1000)
+                _text(body.get("resource_scope"), 20000)
                 if "resource_scope" in body
-                else _text(current.get("resource_scope"), 1000)
+                else _text(current.get("resource_scope"), 20000)
             ),
             "profile": profile,
             "root": root,

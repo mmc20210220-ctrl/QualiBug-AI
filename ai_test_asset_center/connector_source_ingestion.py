@@ -238,8 +238,16 @@ def _observation_metadata(
     export_format: str,
     declared_mime: str,
     remote_materialization_fingerprint: str,
+    display_title: str = "",
+    etag: str = "",
+    last_modified: str = "",
+    source_relationships_json: str = "",
+    aliases_json: str = "",
+    forms_present: bool | None = None,
+    robots_status: str = "",
+    sitemap_last_modified: str = "",
 ) -> dict[str, Any]:
-    return {
+    metadata: dict[str, Any] = {
         "source_origin": "connector_snapshot",
         "connector_id": connector,
         "connector_instance_id": connector,
@@ -259,6 +267,21 @@ def _observation_metadata(
             remote_materialization_fingerprint, 128
         ),
     }
+    for key, value, limit in (
+        ("etag", etag, 1000),
+        ("display_title", display_title, 300),
+        ("last_modified", last_modified, 1000),
+        ("source_relationships_json", source_relationships_json, 100000),
+        ("aliases_json", aliases_json, 100000),
+        ("robots_status", robots_status, 80),
+        ("sitemap_last_modified", sitemap_last_modified, 160),
+    ):
+        bounded = _text(value, limit)
+        if bounded:
+            metadata[key] = bounded
+    if forms_present is not None:
+        metadata["forms_present"] = bool(forms_present)
+    return metadata
 
 
 def ingest_connector_snapshots_batch(
@@ -345,6 +368,22 @@ def ingest_connector_snapshots_batch(
             declared_mime=_text(row.get("declared_mime"), 160),
             remote_materialization_fingerprint=_text(
                 row.get("remote_materialization_fingerprint"), 128
+            ),
+            display_title=_text(row.get("display_title"), 300),
+            etag=_text(row.get("etag"), 1000),
+            last_modified=_text(row.get("last_modified"), 1000),
+            source_relationships_json=_text(
+                row.get("source_relationships_json"), 100000
+            ),
+            aliases_json=_text(row.get("aliases_json"), 100000),
+            forms_present=(
+                bool(row.get("forms_present"))
+                if "forms_present" in row
+                else None
+            ),
+            robots_status=_text(row.get("robots_status"), 80),
+            sitemap_last_modified=_text(
+                row.get("sitemap_last_modified"), 160
             ),
         )
         envelopes.append(
@@ -495,6 +534,14 @@ def ingest_connector_snapshot(
     export_format: str = "",
     declared_mime: str = "",
     remote_materialization_fingerprint: str = "",
+    display_title: str = "",
+    etag: str = "",
+    last_modified: str = "",
+    source_relationships_json: str = "",
+    aliases_json: str = "",
+    forms_present: bool | None = None,
+    robots_status: str = "",
+    sitemap_last_modified: str = "",
     actor: dict[str, Any] | None = None,
     filename: str = "",
 ) -> dict[str, Any]:
@@ -594,6 +641,14 @@ def ingest_connector_snapshot(
                 remote_materialization_fingerprint=(
                     remote_materialization_fingerprint
                 ),
+                display_title=display_title,
+                etag=etag,
+                last_modified=last_modified,
+                source_relationships_json=source_relationships_json,
+                aliases_json=aliases_json,
+                forms_present=forms_present,
+                robots_status=robots_status,
+                sitemap_last_modified=sitemap_last_modified,
             ),
             root=root,
             actor=effective_actor,

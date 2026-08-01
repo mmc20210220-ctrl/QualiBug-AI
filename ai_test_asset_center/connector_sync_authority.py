@@ -307,7 +307,7 @@ def register_connector_instance(
     else:
         instance.setdefault("display_name", "")
     if resource_scope is not None:
-        instance["resource_scope"] = _text(resource_scope, 1000)
+        instance["resource_scope"] = _text(resource_scope, 20000)
     else:
         instance.setdefault("resource_scope", "")
     if connection_profile_ref is not None:
@@ -942,6 +942,30 @@ def sync_connector_snapshot_batch(
                                 ),
                                 "declared_mime": _text(
                                     row.get("declared_mime"), 160
+                                ),
+                                "display_title": _text(
+                                    row.get("display_title"), 300
+                                ),
+                                "etag": _text(row.get("etag"), 1000),
+                                "last_modified": _text(
+                                    row.get("last_modified"), 1000
+                                ),
+                                "source_relationships_json": _text(
+                                    row.get("source_relationships_json"), 100000
+                                ),
+                                "aliases_json": _text(
+                                    row.get("aliases_json"), 100000
+                                ),
+                                "forms_present": (
+                                    bool(row.get("forms_present"))
+                                    if "forms_present" in row
+                                    else None
+                                ),
+                                "robots_status": _text(
+                                    row.get("robots_status"), 80
+                                ),
+                                "sitemap_last_modified": _text(
+                                    row.get("sitemap_last_modified"), 160
                                 ),
                                 "remote_materialization_fingerprint": _text(
                                     row.get(

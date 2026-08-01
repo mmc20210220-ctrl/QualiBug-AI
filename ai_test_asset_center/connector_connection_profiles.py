@@ -725,7 +725,7 @@ def rotate_connector_credentials(
         project,
         connector_type=_text(instance.get("connector_type"), 160),
         connector_instance_id=connector,
-        resource_scope=_text(instance.get("resource_scope"), 1000),
+        resource_scope=_text(instance.get("resource_scope"), 20000),
         profile=profile,
         root=resolved_root,
         actor=actor,

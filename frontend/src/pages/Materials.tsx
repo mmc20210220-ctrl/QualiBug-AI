@@ -116,6 +116,19 @@ function scopePresets(manifest: ConnectorManifest | undefined): string[] {
     : [];
 }
 
+function scopeSchemaHint(manifest: ConnectorManifest | undefined): string {
+  const schema = asRecord(manifest?.scope_schema);
+  const required = asArray(schema.required)
+    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  const description = asString(schema.description);
+  const shorthand = asString(schema.shorthand);
+  return [
+    description,
+    shorthand ? `支持格式：${shorthand}` : '',
+    required.length > 0 ? `必填字段：${required.join('、')}` : '',
+  ].filter(Boolean).join('；');
+}
+
 function ConnectorResourcePreview({ preview }: { preview?: ConnectorResourceInventory }) {
   if (!preview || preview.status === 'NOT_AVAILABLE') return null;
   return (
@@ -596,6 +609,7 @@ export function Materials() {
             <label className="form-group materials-form-wide">
               <span className="form-label">同步范围</span>
               <input className="form-input form-input-mono" value={resourceScope} onChange={(event: ChangeEvent<HTMLInputElement>) => setResourceScope(event.target.value)} placeholder="填写Manifest声明的范围值" />
+              {scopeSchemaHint(selectedManifest) && <small>{scopeSchemaHint(selectedManifest)}</small>}
             </label>
           </div>
 
