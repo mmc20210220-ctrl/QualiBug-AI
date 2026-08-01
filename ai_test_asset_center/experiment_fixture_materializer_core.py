@@ -180,9 +180,21 @@ def _auto_fixture_create_for_binding_target(
                 continue
             owner = _text(binding.get("fixture_owner_actor_ref"))
             actor_refs = [owner] if owner else []
-            # Auto-create has no permits-bound owner: declare every campaign
-            # actor so runtime can prefer control/treatment, then fall back
-            # when dependency rows (e.g. addresses) are owned by a buyer.
+            # Auto-create has no permits-bound owner. The runtime actor picker
+            # (_select_fixture_actor) prefers the control/treatment plan actors
+            # and only falls back to another executable declared actor, so the
+            # candidate pool may safely contain every non-anonymous campaign
+            # actor: the created disposable resource stays plan-visible while
+            # the final identity is still plan-aligned. Anonymous/public actors
+            # cannot own a resource, so they are excluded.
+            if not actor_refs and actors:
+                actor_refs = [
+                    candidate_ref
+                    for candidate_ref, candidate in actors.items()
+                    if isinstance(candidate, dict)
+                    and _text(candidate.get("role")).lower()
+                    not in {"anonymous", "public"}
+                ]
             if not actor_refs:
                 continue
             return {

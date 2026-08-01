@@ -16,6 +16,7 @@ from ai_test_asset_center.experiment_executor import (
 )
 from ai_test_asset_center.experiment_fixture_materializer import (
     _auto_fixture_create_for_binding_target,
+    materialize_experiment_fixtures,
 )
 from ai_test_asset_center.fixture_dag import build_fixture_dag_for_experiment
 from ai_test_asset_center.behavior_ir import empty_behavior_ir
@@ -1192,6 +1193,270 @@ def test_fixture_actor_selection_prefers_control_actor_from_declared_refs() -> N
     assert actor_ref == "actor-control"
     assert actor["id"] == "actor-control"
     assert token == "token-control"
+
+
+def _cart_collection_operations() -> dict[str, dict]:
+    return {
+        "cart_list": {
+            "id": "cart_list",
+            "method": "GET",
+            "path": "/api/cart/items",
+        },
+        "cart_create": {
+            "id": "cart_create",
+            "method": "POST",
+            "path": "/api/cart/items",
+            "request_example": {"sku": "SKU-PHONE-001", "qty": 1},
+        },
+        "cart_delete": {
+            "id": "cart_delete",
+            "method": "DELETE",
+            "path": "/api/cart/items/{id}",
+        },
+        "cart_patch": {
+            "id": "cart_patch",
+            "method": "PATCH",
+            "path": "/api/cart/items/{id}",
+            "request_example": {"qty": 2},
+        },
+    }
+
+
+def test_auto_fixture_create_uses_campaign_actors_when_owner_absent() -> None:
+    """Regression: a resolver-only binding (no fixture_owner_actor_ref) on an
+    empty collection used to block auto-fixture entirely, so a cart {id} binding
+    with an available POST create + DELETE cleanup stayed BLOCKED_MISSING_BINDING.
+    The runtime actor picker prefers control/treatment actors from the declared
+    candidate pool, so the pool may contain every executable campaign actor.
+    """
+    binding = {
+        "status": "runtime_resolvable",
+        "target": "id",
+        "target_path": "/api/cart/items/{id}",
+        "resolver_operations": [
+            {"operation_ref": "cart_list", "method": "GET", "path": "/api/cart/items"},
+        ],
+    }
+    actors = {
+        "buyer": {"id": "buyer", "role": "customer", "credential_secret_ref": "secret:buyer"},
+        "admin": {"id": "admin", "role": "admin", "credential_secret_ref": "secret:admin"},
+    }
+
+    auto_create = _auto_fixture_create_for_binding_target(
+        "id",
+        binding,
+        _cart_collection_operations(),
+        {},
+        actors=actors,
+    )
+
+    assert auto_create is not None
+    assert auto_create["create_operation_ref"] == "cart_create"
+    assert auto_create["force_fixture_setup"] is True
+    fixture_setup = validated_fixture_setup(
+        {"fixture_setup": auto_create["fixture_setup"]},
+        _cart_collection_operations(),
+        actors,
+    )
+    assert set(fixture_setup["actor_refs"]) == {"buyer", "admin"}
+    assert fixture_setup["cleanup_operations"]
+    # The disposable create must remain plan-aligned at runtime: control actor
+    # is preferred from the candidate pool.
+    selected_ref, selected, selected_token = _select_fixture_actor(
+        fixture_setup,
+        control_plan=[{"actor_ref": "buyer"}],
+        treatment_plan=[{"actor_ref": "admin"}],
+        actors=actors,
+        tokens={"secret:buyer": "token-buyer", "secret:admin": "token-admin"},
+    )
+    assert selected_ref == "buyer"
+    assert selected_token == "token-buyer"
+
+
+def test_auto_fixture_create_stays_fail_closed_without_executable_actor() -> None:
+    binding = {
+        "status": "runtime_resolvable",
+        "target": "id",
+        "target_path": "/api/cart/items/{id}",
+        "resolver_operations": [
+            {"operation_ref": "cart_list", "method": "GET", "path": "/api/cart/items"},
+        ],
+    }
+    # Only anonymous actors exist: no one can own the disposable resource.
+    assert (
+        _auto_fixture_create_for_binding_target(
+            "id",
+            binding,
+            _cart_collection_operations(),
+            {},
+            actors={"anon": {"id": "anon", "role": "anonymous"}},
+        )
+        is None
+    )
+    # No declared actors at all: still fail closed, never invent an identity.
+    assert (
+        _auto_fixture_create_for_binding_target(
+            "id",
+            binding,
+            _cart_collection_operations(),
+            {},
+            actors={},
+        )
+        is None
+    )
+
+
+def test_auto_fixture_create_prefers_declared_owner_actor() -> None:
+    binding = {
+        "status": "runtime_resolvable",
+        "target": "id",
+        "target_path": "/api/cart/items/{id}",
+        "fixture_owner_actor_ref": "buyer",
+        "resolver_operations": [
+            {"operation_ref": "cart_list", "method": "GET", "path": "/api/cart/items"},
+        ],
+    }
+    actors = {
+        "buyer": {"id": "buyer", "role": "customer", "credential_secret_ref": "secret:buyer"},
+        "admin": {"id": "admin", "role": "admin", "credential_secret_ref": "secret:admin"},
+    }
+    auto_create = _auto_fixture_create_for_binding_target(
+        "id",
+        binding,
+        _cart_collection_operations(),
+        {},
+        actors=actors,
+    )
+    assert auto_create is not None
+    fixture_setup = validated_fixture_setup(
+        {"fixture_setup": auto_create["fixture_setup"]},
+        _cart_collection_operations(),
+        actors,
+    )
+    assert fixture_setup["actor_refs"] == ["buyer"]
+
+
+def test_empty_collection_binding_uses_auto_fixture_and_binds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Full materialization path regression: a resolver-only binding on an EMPTY
+    collection (e.g. a cart with no items after a target reset) used to block
+    with BLOCKED_MISSING_BINDING because auto-fixture required a declared owner
+    actor. The campaign actors are the candidate pool; the runtime picker
+    prefers the control actor, the disposable create runs, and the created id
+    becomes the binding value.
+    """
+    import ai_test_asset_center.experiment_runtime_support as runtime_support
+    import ai_test_asset_center.sandbox_write_executor as sandbox_executor
+
+    new_item_id = "c8f0aaaa-1111-2222-3333-444455556666"
+    cart_state: list[dict] = []  # reset target: cart is empty
+
+    def mock_http_request(method, url, headers=None, body=None, timeout=10.0, token=""):
+        path = "/" + url.split("://", 1)[-1].split("/", 1)[1]
+        if method == "GET" and path == "/api/cart/items":
+            return {"status": 200, "body": list(cart_state), "headers": {}, "error": ""}
+        if method == "POST" and path == "/api/cart/items":
+            item = {
+                "id": new_item_id,
+                "user_id": "buyer-user-id",
+                "sku": (body or {}).get("sku", "SKU-PHONE-001"),
+                "qty": (body or {}).get("qty", 1),
+                "price_snapshot": "6999.00",
+                "selected": True,
+                "created_at": "2026-08-01T00:00:00Z",
+            }
+            cart_state.append(item)
+            return {"status": 201, "body": item, "headers": {}, "error": ""}
+        if method == "DELETE" and path.startswith("/api/cart/items/"):
+            cart_state[:] = [
+                row for row in cart_state if row["id"] != path.rsplit("/", 1)[-1]
+            ]
+            return {"status": 200, "body": {"ok": True}, "headers": {}, "error": ""}
+        return {"status": 404, "body": {"error": "no route"}, "headers": {}, "error": ""}
+
+    def mock_sandbox_allowed(*args, **kwargs):
+        return True, "test"
+
+    monkeypatch.setattr(runtime_support, "_http_request", mock_http_request)
+    monkeypatch.setattr(sandbox_executor, "_http_request", mock_http_request)
+    monkeypatch.setattr(sandbox_executor, "sandbox_write_allowed", mock_sandbox_allowed)
+
+    exp = {
+        "experiment_id": "exp-cart",
+        "obligation_id": "obl-cart",
+        "source_refs": [],
+        "assertions": [],
+        "fixture_dag": {
+            "nodes": [
+                {"node_id": "bind-id", "kind": "runtime_read_binding", "target": "id"}
+            ],
+            "setup_order": ["bind-id"],
+        },
+        "binding_plan": [
+            {
+                "target": "id",
+                "target_path": "/api/cart/items/{id}",
+                "status": "runtime_resolvable",
+                "source_priority": "same_actor_list_read",
+                "resolver_operations": [
+                    {
+                        "operation_ref": "cart_list",
+                        "method": "GET",
+                        "path": "/api/cart/items",
+                    }
+                ],
+            }
+        ],
+        "control_plan": [
+            {"actor_ref": "buyer", "operation_ref": "cart_patch", "body": {"qty": 2}}
+        ],
+        "treatment_plan": [],
+    }
+    binding_plan = {
+        item["target"]: item
+        for item in exp["binding_plan"]
+        if isinstance(item, dict) and item.get("target")
+    }
+    actors = {
+        "buyer": {
+            "id": "buyer",
+            "role": "customer",
+            "credential_secret_ref": "secret:buyer",
+        },
+        "admin": {"id": "admin", "role": "admin", "credential_secret_ref": "secret:admin"},
+    }
+
+    result = materialize_experiment_fixtures(
+        exp=exp,
+        eid="exp-cart",
+        oid="obl-cart",
+        resolved_campaign_id="campaign-1",
+        resolved_execution_id="execution-1",
+        started=0.0,
+        actors=actors,
+        ops=_cart_collection_operations(),
+        tokens={"secret:buyer": "token-buyer", "secret:admin": "token-admin"},
+        binding_plan=binding_plan,
+        resolver_actor_ref="buyer",
+        resolver_token="token-buyer",
+        activation_requirements={"actor": ["buyer"], "fixture": []},
+        root=tmp_path,
+        project="benchmark_mall",
+        base_url="http://localhost:8080",
+        runtime_contract={"environment_kind": "test"},
+        campaign_id="campaign-1",
+    )
+
+    assert result["status"] == "ready", result
+    assert result["runtime_bindings"].get("id") == new_item_id
+    assert any(
+        row.get("kind") == "runtime_read_binding" and row.get("status") == "resolved"
+        for row in result["fixture_receipts"]
+    )
+    # The disposable fixture ran a real create and left the cart observable.
+    assert len(cart_state) == 1
 
 
 def test_runtime_binding_prefers_entity_that_differs_from_declared_mutation() -> None:
