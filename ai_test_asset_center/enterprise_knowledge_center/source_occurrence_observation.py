@@ -13,6 +13,7 @@ from typing import Any
 
 from ._common import ROOT, _safe_project_id
 from ._utils import _load_registry, _now, _require_manage_actor, _save_registry
+from .transaction_lock import knowledge_transaction
 
 SOURCE_OCCURRENCE_OBSERVATION_SCHEMA = (
     "qualibug.enterprise-source-occurrence-observation.v1"
@@ -158,8 +159,156 @@ def record_source_occurrence_observation(
     }
 
 
+def list_source_occurrence_observations(
+    project_id: str,
+    *,
+    source_ref_prefix: str = "",
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Return active occurrence transport observations without exposing content bytes."""
+    resolved_root = root or ROOT
+    project = _safe_project_id(project_id)
+    prefix = _text(source_ref_prefix, 2000)
+    registry = _load_registry(project, resolved_root)
+    rows: list[dict[str, Any]] = []
+    for raw in registry.get("source_occurrences") or []:
+        if not isinstance(raw, dict) or raw.get("status") != "active":
+            continue
+        source_ref = _text(raw.get("source_ref"), 2000)
+        if prefix and not source_ref.startswith(prefix):
+            continue
+        rows.append(
+            {
+                "source_occurrence_id": _text(raw.get("source_occurrence_id"), 300),
+                "source_ref": source_ref,
+                "content_hash": _text(raw.get("content_hash"), 128),
+                "source_metadata": dict(raw.get("source_metadata") or {}),
+                "last_seen_at_utc": _text(raw.get("last_seen_at_utc"), 80),
+                "observation_count": int(raw.get("observation_count") or 0),
+            }
+        )
+    return {
+        "schema": SOURCE_OCCURRENCE_OBSERVATION_SCHEMA,
+        "project_id": project,
+        "source_occurrences": rows,
+        "source_occurrence_count": len(rows),
+        "content_bytes_returned": False,
+        "credentials_returned": False,
+    }
+
+
+def record_source_occurrence_observations_batch(
+    project_id: str,
+    observations: list[dict[str, Any]],
+    *,
+    root: Path | None = None,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Merge many transport observations under one knowledge transaction and registry write."""
+    if not isinstance(observations, list):
+        raise SourceOccurrenceObservationError(
+            "source_occurrence_observation_batch_must_be_list"
+        )
+    if len(observations) > 100_000:
+        raise SourceOccurrenceObservationError(
+            "source_occurrence_observation_batch_limit_exceeded"
+        )
+    resolved_root = (root or ROOT).resolve()
+    project = _safe_project_id(project_id)
+    clean_actor = _require_manage_actor(actor)
+    prepared: list[tuple[str, dict[str, Any]]] = []
+    identities: set[str] = set()
+    for index, raw in enumerate(observations):
+        if not isinstance(raw, dict):
+            raise SourceOccurrenceObservationError(
+                f"source_occurrence_observation_batch_item_invalid:{index}"
+            )
+        identity = _text(raw.get("occurrence_identity") or raw.get("source_ref"), 2000)
+        if not identity:
+            raise SourceOccurrenceObservationError(
+                f"source_occurrence_observation_identity_required:{index}"
+            )
+        if identity in identities:
+            raise SourceOccurrenceObservationError(
+                f"source_occurrence_observation_identity_duplicate:{identity}"
+            )
+        identities.add(identity)
+        prepared.append((identity, _sanitize_metadata(raw.get("metadata"))))
+
+    if not prepared:
+        return {
+            "schema": SOURCE_OCCURRENCE_OBSERVATION_SCHEMA,
+            "status": "NOT_REQUIRED",
+            "project_id": project,
+            "recorded_count": 0,
+            "credential_values_recorded": False,
+        }
+
+    with knowledge_transaction(
+        resolved_root,
+        project,
+        operation="record_source_occurrence_observations_batch",
+        actor=clean_actor,
+    ):
+        registry = _load_registry(project, resolved_root)
+        observed_at = _now()
+        recorded: list[dict[str, Any]] = []
+        metadata_keys: set[str] = set()
+        for identity, sanitized in prepared:
+            occurrence = _resolve_active_occurrence(registry, identity)
+            merged = dict(occurrence.get("source_metadata") or {})
+            merged.update(sanitized)
+            occurrence["source_metadata"] = merged
+            occurrence["last_seen_at_utc"] = observed_at
+            occurrence["observation_count"] = int(
+                occurrence.get("observation_count") or 0
+            ) + 1
+            occurrence["last_observed_by"] = clean_actor
+            metadata_keys.update(sanitized)
+            recorded.append(
+                {
+                    "source_occurrence_id": occurrence.get("source_occurrence_id"),
+                    "source_ref": occurrence.get("source_ref"),
+                    "observation_count": occurrence.get("observation_count"),
+                }
+            )
+        registry.setdefault("governance", {}).update(
+            {
+                "source_occurrence_transport_metadata_is_provenance_only": True,
+                "source_occurrence_transport_metadata_cannot_change_interpretation": True,
+                "source_occurrence_credentials_forbidden": True,
+                "source_occurrence_batch_observation_authority": (
+                    "source_occurrence_observation"
+                ),
+            }
+        )
+        registry.setdefault("audit_events", []).append(
+            {
+                "event": "record_source_occurrence_observations_batch",
+                "at_utc": observed_at,
+                "actor": clean_actor,
+                "source_occurrence_count": len(recorded),
+                "metadata_keys": sorted(metadata_keys),
+                "credential_values_recorded": False,
+            }
+        )
+        _save_registry(project, resolved_root, registry)
+    return {
+        "schema": SOURCE_OCCURRENCE_OBSERVATION_SCHEMA,
+        "status": "RECORDED",
+        "project_id": project,
+        "recorded_count": len(recorded),
+        "source_occurrences": recorded,
+        "credential_values_recorded": False,
+        "content_identity_changed": False,
+        "interpretation_identity_changed": False,
+    }
+
+
 __all__ = [
     "SOURCE_OCCURRENCE_OBSERVATION_SCHEMA",
     "SourceOccurrenceObservationError",
     "record_source_occurrence_observation",
+    "record_source_occurrence_observations_batch",
+    "list_source_occurrence_observations",
 ]
