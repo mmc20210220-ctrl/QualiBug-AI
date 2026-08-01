@@ -61,21 +61,25 @@ jobs:
   # BEGIN EXACT_INTERFACE_ROOT_DELIVERY
   exact-interface-root-direct:
     if: github.head_ref == 'automation/exact-interface-root-delivery-20260801-v3'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout latest main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
+      - name: Clone latest main without external actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git init repo
+          cd repo
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git"
+          git fetch origin main
+          git checkout -B main origin/main
+          git config user.name 'QualiBug Automation'
+          git config user.email 'automation@qualibug.local'
 
       - name: Verify and apply immutable source change
+        working-directory: repo
         run: |
           set -euo pipefail
           payload=.github/delivery/exact-interface-root.patch.gz.b64
@@ -96,15 +100,18 @@ jobs:
           diff -u /tmp/expected-files /tmp/actual-files
 
       - name: Install product and test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e '.[dev]'
-
-      - name: Compile and run focused regressions
+        working-directory: repo
         run: |
           set -euo pipefail
-          python -m compileall -q ai_test_asset_center benchmark_evaluator tests
-          python -m pytest -q \
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e '.[dev]'
+
+      - name: Compile and run focused regressions
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q ai_test_asset_center benchmark_evaluator tests
+          python3 -m pytest -q \
             tests/test_behavior_exact_interface_attachment.py \
             tests/test_behavior_implementation_binding_relationships.py \
             tests/test_enterprise_understanding_responsibility_authorization_boundary.py \
@@ -112,14 +119,13 @@ jobs:
           git diff --check
 
       - name: Commit normal source and remove all delivery assets
+        working-directory: repo
         run: |
           set -euo pipefail
-          git config user.name 'QualiBug Automation'
-          git config user.email 'automation@qualibug.local'
           rm -f .github/delivery/exact-interface-root.patch.gz.b64
           rm -f .github/workflows/one-time-exact-interface-root-delivery.yml
           rm -f .github/exact-interface-root-delivery.trigger
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           import re
           path = Path('.github/workflows/quality-gates.yml')
@@ -140,13 +146,14 @@ jobs:
             -m 'Carry ingestion-authored OpenAPI interface identity through Fact to Behavior evidence, prevent own-scope and tenant-scope behaviors from remerging, and let the existing governed binder consume exact source attachments without fuzzy endpoint selection.'
 
       - name: Rebase, reverify, and push main
+        working-directory: repo
         run: |
           set -euo pipefail
           git fetch origin main
           if [[ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD^)" ]]; then
             git rebase origin/main
-            python -m compileall -q ai_test_asset_center benchmark_evaluator tests
-            python -m pytest -q \
+            python3 -m compileall -q ai_test_asset_center benchmark_evaluator tests
+            python3 -m pytest -q \
               tests/test_behavior_exact_interface_attachment.py \
               tests/test_behavior_implementation_binding_relationships.py \
               tests/test_enterprise_understanding_responsibility_authorization_boundary.py \
