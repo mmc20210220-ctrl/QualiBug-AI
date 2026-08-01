@@ -1,8 +1,9 @@
-"""Managed Feishu synchronization and automatic refresh supervisor.
+"""Generic managed connector synchronization and automatic refresh supervisor.
 
 One application authority owns trusted synchronization, crash recovery, fencing, scheduling,
-retry backoff, and operator-safe status. It reuses the existing connector registry, encrypted
-profile authority, Feishu adapter, and source ingestion pipeline.
+retry backoff, and operator-safe status. Adapter-specific work is selected from the existing
+Connector Registry; checkpoint, lifecycle, source-occurrence, and fencing authorities remain
+unchanged.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from .connector_checkpoint_recovery import (
     _legacy_stale_seconds,
@@ -29,18 +30,14 @@ from .connector_connection_profiles import (
     load_connector_sync_checkpoint,
     resolve_connector_connection_profile,
 )
+from .connector_registry import (
+    ConnectorRegistryError,
+    build_default_connector_registry,
+)
 from .connector_sync_authority import ConnectorSyncError, list_connector_instances
 from .connector_sync_fencing import _takeover_seconds, managed_connector_sync_fence
 from .connector_sync_ownership import inspect_connector_sync_ownership
 from .enterprise_knowledge_center._common import ROOT
-from .feishu_connector_adapter import (
-    _default_transport,
-    _resolve_access_token,
-    _snapshot_cursor,
-    discover_feishu_wiki_resources,
-    test_feishu_connector_connection,
-)
-from .feishu_connector_capability_sync import sync_feishu_connector
 from .real_project_onboarding import _safe_project_id
 
 _AUTO_SYNC_ACTOR = {"name": "qualibug_auto_sync", "role": "knowledge_admin"}
@@ -106,7 +103,74 @@ def _policy() -> dict[str, int]:
             60,
             24 * 60 * 60,
         ),
+        "rate_limit_per_minute": _env_int(
+            "QUALIBUG_CONNECTOR_AUTO_SYNC_RATE_LIMIT_PER_MINUTE",
+            60,
+            1,
+            600,
+        ),
+        "max_resources": _env_int(
+            "QUALIBUG_CONNECTOR_AUTO_SYNC_MAX_RESOURCES",
+            5000,
+            1,
+            100000,
+        ),
+        "max_export_polls": _env_int(
+            "QUALIBUG_CONNECTOR_AUTO_SYNC_MAX_EXPORT_POLLS",
+            20,
+            1,
+            200,
+        ),
+        "timeout_seconds": _env_int(
+            "QUALIBUG_CONNECTOR_AUTO_SYNC_TIMEOUT_SECONDS",
+            15,
+            1,
+            300,
+        ),
     }
+
+
+_INSTANCE_POLICY_FIELDS: dict[str, tuple[str, int, int]] = {
+    "refresh_seconds": ("sync_interval_seconds", 15 * 60, 7 * 24 * 60 * 60),
+    "retry_base_seconds": ("sync_retry_base_seconds", 10, 60 * 60),
+    "retry_max_seconds": ("sync_retry_max_seconds", 60, 24 * 60 * 60),
+    "rate_limit_per_minute": ("sync_rate_limit_per_minute", 1, 600),
+    "max_resources": ("sync_max_resources", 1, 100000),
+    "max_export_polls": ("sync_max_export_polls", 1, 200),
+    "timeout_seconds": ("sync_timeout_seconds", 1, 300),
+}
+
+
+def _instance_policy(instance: Mapping[str, Any], *, base: Mapping[str, Any] | None = None) -> dict[str, int]:
+    """Resolve only non-secret scheduling/resource policy from one instance metadata row."""
+    policy = dict(base or _policy())
+    metadata = instance.get("metadata") or {}
+    if not isinstance(metadata, Mapping):
+        raise ConnectorSyncError("connector_instance_metadata_must_be_object")
+    for field, (metadata_key, minimum, maximum) in _INSTANCE_POLICY_FIELDS.items():
+        fallback = int(policy.get(field, minimum))
+        raw = metadata.get(metadata_key)
+        if raw in (None, ""):
+            value = fallback
+        else:
+            if isinstance(raw, bool):
+                raise ConnectorSyncError(
+                    f"connector_auto_sync_policy_invalid:{metadata_key}"
+                )
+            try:
+                value = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise ConnectorSyncError(
+                    f"connector_auto_sync_policy_invalid:{metadata_key}"
+                ) from exc
+            if not minimum <= value <= maximum:
+                raise ConnectorSyncError(
+                    f"connector_auto_sync_policy_out_of_range:{metadata_key}"
+                )
+        policy[field] = value
+    if policy["retry_max_seconds"] < policy["retry_base_seconds"]:
+        raise ConnectorSyncError("connector_auto_sync_retry_policy_invalid")
+    return {key: int(value) for key, value in policy.items()}
 
 
 def _parse_utc(value: Any) -> float:
@@ -157,6 +221,107 @@ def _profile_resolver(project: str, root: Path):
     return resolve
 
 
+def _managed_adapter(
+    project: str,
+    connector: str,
+    root: Path,
+    *,
+    instance: Mapping[str, Any] | None = None,
+) -> Any:
+    row = instance or _instance(project, connector, root)
+    connector_type = _text(row.get("connector_type"), 160)
+    if not connector_type:
+        raise ConnectorSyncError("connector_instance_type_missing")
+    try:
+        return build_default_connector_registry().get(connector_type)
+    except ConnectorRegistryError as exc:
+        raise ConnectorSyncError(str(exc)) from exc
+
+
+def _managed_context(
+    project: str,
+    connector: str,
+    root: Path,
+    actor: Mapping[str, Any],
+    instance: Mapping[str, Any],
+    policy: Mapping[str, Any],
+    *,
+    timeout: float,
+    transport: Any,
+    sleeper: Callable[[float], None],
+    previous_cursor: str = "",
+    deletion_policy: str = "RETAIN",
+    max_retire_count: int = 100,
+    max_retire_ratio: float = 0.25,
+    max_nodes: int | None = None,
+    max_export_polls: int | None = None,
+    export_poll_interval: float = 0.5,
+    allow_raw_text_fallback: bool = False,
+    sync_runner: Callable[..., Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "project_id": project,
+        "connector_instance_id": connector,
+        "connector_type": _text(instance.get("connector_type"), 160),
+        "connection_profile_ref": _text(
+            instance.get("connection_profile_ref"), 500
+        ),
+        "resource_scope": _text(instance.get("resource_scope"), 1000),
+        "root": root,
+        "actor": dict(actor),
+        "resolve_connection_profile": _profile_resolver(project, root),
+        "previous_cursor": previous_cursor,
+        "deletion_policy": deletion_policy,
+        "max_retire_count": max_retire_count,
+        "max_retire_ratio": max_retire_ratio,
+        "max_resources": int(max_nodes if max_nodes is not None else policy["max_resources"]),
+        "max_export_polls": int(
+            max_export_polls
+            if max_export_polls is not None
+            else policy["max_export_polls"]
+        ),
+        "export_poll_interval": export_poll_interval,
+        "allow_raw_text_fallback": allow_raw_text_fallback,
+        "timeout": timeout,
+        "transport": transport,
+        "sleeper": sleeper,
+        "sync_policy": dict(policy),
+        "sync_runner": sync_runner,
+    }
+
+
+def _adapter_remote_checkpoint(
+    adapter: Any,
+    context: Mapping[str, Any],
+) -> str:
+    resolver = getattr(adapter, "managed_remote_checkpoint", None)
+    if not callable(resolver):
+        connector_type = _text(context.get("connector_type"), 160)
+        raise ConnectorSyncError(
+            f"connector_remote_checkpoint_not_supported:{connector_type}"
+        )
+    value = resolver(context)
+    if not isinstance(value, str):
+        raise ConnectorSyncError("connector_remote_checkpoint_invalid")
+    return value
+
+
+def _adapter_managed_sync(
+    adapter: Any,
+    context: Mapping[str, Any],
+) -> dict[str, Any]:
+    runner = getattr(adapter, "managed_sync", None)
+    if not callable(runner):
+        connector_type = _text(context.get("connector_type"), 160)
+        raise ConnectorSyncError(
+            f"connector_managed_sync_not_supported:{connector_type}"
+        )
+    result = runner(context)
+    if not isinstance(result, Mapping):
+        raise ConnectorSyncError("connector_managed_sync_result_invalid")
+    return dict(result)
+
+
 def validate_connector_checkpoint(
     project_id: str,
     connector_instance_id: str,
@@ -183,37 +348,7 @@ def validate_connector_checkpoint(
         raise ConnectorProfileError("connector_checkpoint_registry_mismatch")
 
 
-def _current_remote_checkpoint(
-    project: str,
-    connector: str,
-    root: Path,
-    *,
-    timeout: float = 15.0,
-    transport: Any = None,
-    sleeper: Callable[[float], None] = time.sleep,
-) -> str:
-    instance = _instance(project, connector, root)
-    profile_ref = _text(instance.get("connection_profile_ref"), 500)
-    profile = resolve_connector_connection_profile(project, profile_ref, root=root)
-    client = transport or _default_transport
-    access_token, _ = _resolve_access_token(
-        profile,
-        transport=client,
-        timeout=timeout,
-        sleeper=sleeper,
-    )
-    descriptors = discover_feishu_wiki_resources(
-        access_token,
-        _text(instance.get("resource_scope"), 1000),
-        transport=client,
-        timeout=timeout,
-        max_nodes=5000,
-        sleeper=sleeper,
-    )
-    return _snapshot_cursor(descriptors)
-
-
-def recover_managed_feishu_checkpoint(
+def recover_managed_connector_checkpoint(
     project_id: str,
     connector_instance_id: str,
     *,
@@ -227,23 +362,38 @@ def recover_managed_feishu_checkpoint(
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
     clean_actor = dict(actor or _AUTO_SYNC_ACTOR)
+    instance = _instance(project, connector, resolved_root)
+    policy = _instance_policy(instance)
+    adapter = _managed_adapter(
+        project,
+        connector,
+        resolved_root,
+        instance=instance,
+    )
+    context = _managed_context(
+        project,
+        connector,
+        resolved_root,
+        clean_actor,
+        instance,
+        policy,
+        timeout=float(timeout),
+        transport=transport,
+        sleeper=sleeper,
+    )
     return recover_connector_checkpoint_commit(
         project,
         connector,
         root=resolved_root,
         actor=clean_actor,
-        remote_checkpoint_resolver=lambda: _current_remote_checkpoint(
-            project,
-            connector,
-            resolved_root,
-            timeout=timeout,
-            transport=transport,
-            sleeper=sleeper,
+        remote_checkpoint_resolver=lambda: _adapter_remote_checkpoint(
+            adapter,
+            context,
         ),
     )
 
 
-def test_managed_feishu_connection(
+def test_managed_connector_connection(
     project_id: str,
     connector_instance_id: str,
     *,
@@ -254,15 +404,32 @@ def test_managed_feishu_connection(
 ) -> dict[str, Any]:
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
-    return test_feishu_connector_connection(
+    connector = _text(connector_instance_id, 160)
+    instance = _instance(project, connector, resolved_root)
+    adapter = _managed_adapter(
         project,
-        connector_instance_id=connector_instance_id,
-        resolve_connection_profile=_profile_resolver(project, resolved_root),
-        root=resolved_root,
-        timeout=timeout,
+        connector,
+        resolved_root,
+        instance=instance,
+    )
+    context = _managed_context(
+        project,
+        connector,
+        resolved_root,
+        _AUTO_SYNC_ACTOR,
+        instance,
+        _instance_policy(instance),
+        timeout=float(timeout),
         transport=transport,
         sleeper=sleeper,
     )
+    tester = getattr(adapter, "test_connection", None)
+    if not callable(tester):
+        raise ConnectorSyncError("connector_test_connection_not_supported")
+    result = tester(context)
+    if not isinstance(result, Mapping):
+        raise ConnectorSyncError("connector_test_connection_result_invalid")
+    return dict(result)
 
 
 def _clear_intent_if_registry_did_not_advance(
@@ -290,7 +457,7 @@ def _clear_intent_if_registry_did_not_advance(
         return
 
 
-def run_managed_feishu_sync(
+def run_managed_connector_sync(
     project_id: str,
     connector_instance_id: str,
     *,
@@ -299,19 +466,28 @@ def run_managed_feishu_sync(
     deletion_policy: str = "RETAIN",
     max_retire_count: int = 100,
     max_retire_ratio: float = 0.25,
-    max_nodes: int = 5000,
-    max_export_polls: int = 20,
+    max_nodes: int | None = None,
+    max_export_polls: int | None = None,
     export_poll_interval: float = 0.5,
     allow_raw_text_fallback: bool = False,
-    timeout: float = 15.0,
+    timeout: float | None = None,
     transport: Any = None,
     sleeper: Callable[[float], None] = time.sleep,
+    sync_policy: Mapping[str, Any] | None = None,
+    sync_runner: Callable[..., Mapping[str, Any]] | None = None,
+    recovery_runner: Callable[..., Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Execute the only trusted, recoverable, and fenced Feishu sync path."""
+    """Execute one registry-selected connector through the managed authority."""
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
     clean_actor = dict(actor or _AUTO_SYNC_ACTOR)
+    base_policy = dict(sync_policy or _policy())
+    timeout_value = float(
+        timeout
+        if timeout is not None
+        else base_policy.get("timeout_seconds", 15)
+    )
 
     with managed_connector_sync_fence(
         project,
@@ -319,12 +495,12 @@ def run_managed_feishu_sync(
         root=resolved_root,
         actor=clean_actor,
     ) as fence:
-        recovery = recover_managed_feishu_checkpoint(
+        recovery = (recovery_runner or recover_managed_connector_checkpoint)(
             project,
             connector,
             root=resolved_root,
             actor=clean_actor,
-            timeout=timeout,
+            timeout=timeout_value,
             transport=transport,
             sleeper=sleeper,
         )
@@ -349,24 +525,79 @@ def run_managed_feishu_sync(
         attempt_id = _text(intent.get("attempt_id"), 160)
 
         try:
-            run = sync_feishu_connector(
-                project,
-                connector_instance_id=connector,
-                resolve_connection_profile=_profile_resolver(project, resolved_root),
-                root=resolved_root,
-                actor=clean_actor,
-                previous_cursor=previous_cursor,
-                deletion_policy=deletion_policy,
-                max_retire_count=max_retire_count,
-                max_retire_ratio=max_retire_ratio,
-                max_nodes=max_nodes,
-                max_export_polls=max_export_polls,
-                export_poll_interval=export_poll_interval,
-                allow_raw_text_fallback=allow_raw_text_fallback,
-                timeout=timeout,
-                transport=transport,
-                sleeper=sleeper,
-            )
+            if sync_runner is not None:
+                raw_run = sync_runner(
+                    project,
+                    connector_instance_id=connector,
+                    resolve_connection_profile=_profile_resolver(
+                        project,
+                        resolved_root,
+                    ),
+                    root=resolved_root,
+                    actor=clean_actor,
+                    previous_cursor=previous_cursor,
+                    deletion_policy=deletion_policy,
+                    max_retire_count=max_retire_count,
+                    max_retire_ratio=max_retire_ratio,
+                    max_nodes=int(
+                        max_nodes
+                        if max_nodes is not None
+                        else base_policy.get("max_resources", 5000)
+                    ),
+                    max_export_polls=int(
+                        max_export_polls
+                        if max_export_polls is not None
+                        else base_policy.get("max_export_polls", 20)
+                    ),
+                    export_poll_interval=export_poll_interval,
+                    allow_raw_text_fallback=allow_raw_text_fallback,
+                    timeout=timeout_value,
+                    transport=transport,
+                    sleeper=sleeper,
+                )
+                if not isinstance(raw_run, Mapping):
+                    raise ConnectorSyncError("connector_managed_sync_result_invalid")
+                run = dict(raw_run)
+            else:
+                instance = _instance(project, connector, resolved_root)
+                policy = _instance_policy(instance, base=base_policy)
+                adapter = _managed_adapter(
+                    project,
+                    connector,
+                    resolved_root,
+                    instance=instance,
+                )
+                context = _managed_context(
+                    project,
+                    connector,
+                    resolved_root,
+                    clean_actor,
+                    instance,
+                    policy,
+                    timeout=timeout_value,
+                    transport=transport,
+                    sleeper=sleeper,
+                    previous_cursor=previous_cursor,
+                    deletion_policy=deletion_policy,
+                    max_retire_count=max_retire_count,
+                    max_retire_ratio=max_retire_ratio,
+                    max_nodes=max_nodes,
+                    max_export_polls=max_export_polls,
+                    export_poll_interval=export_poll_interval,
+                    allow_raw_text_fallback=allow_raw_text_fallback,
+                )
+                run = _adapter_managed_sync(adapter, context)
+                discovered_count = run.get("discovered_resource_count")
+                if discovered_count is not None:
+                    try:
+                        if int(discovered_count) > int(context["max_resources"]):
+                            raise ConnectorSyncError(
+                                "connector_resource_limit_exceeded"
+                            )
+                    except (TypeError, ValueError) as exc:
+                        raise ConnectorSyncError(
+                            "connector_discovered_resource_count_invalid"
+                        ) from exc
             if run.get("status") != "COMPLETE":
                 clear_connector_checkpoint_journal(
                     project,
@@ -536,8 +767,6 @@ def _due(
 ) -> bool:
     if instance.get("status") != "ACTIVE":
         return False
-    if _text(instance.get("connector_type"), 160).lower() != "feishu":
-        return False
     if instance.get("active_sync_epoch_id") and not force:
         return False
     next_attempt = float(attempt.get("next_attempt_unix") or 0)
@@ -577,6 +806,7 @@ def _record_success(
     now: float,
 ) -> None:
     with _STATE_LOCK:
+        previous = dict(_ATTEMPTS.get(key) or {})
         _ATTEMPTS[key] = {
             "state": "healthy",
             "failure_count": 0,
@@ -587,6 +817,7 @@ def _record_success(
             "next_attempt_at_utc": "",
             "last_error_category": "",
             "raw_error_persisted": False,
+            "attempt_timestamps": list(previous.get("attempt_timestamps") or []),
         }
 
 
@@ -615,6 +846,61 @@ def _record_failure(
             "last_error_category": _failure_category(exc),
             "last_error_type": type(exc).__name__,
             "raw_error_persisted": False,
+            "attempt_timestamps": list(previous.get("attempt_timestamps") or []),
+        }
+
+
+def _rate_limit_blocked(
+    key: tuple[str, str, str],
+    now: float,
+    *,
+    limit_per_minute: int,
+) -> tuple[bool, float]:
+    limit = max(1, int(limit_per_minute))
+    with _STATE_LOCK:
+        previous = dict(_ATTEMPTS.get(key) or {})
+        history: list[float] = []
+        for raw in previous.get("attempt_timestamps") or []:
+            try:
+                timestamp = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if timestamp > now or now - timestamp < 60.0:
+                history.append(timestamp)
+        if len(history) >= limit:
+            next_attempt = min(history) + 60.0
+            _ATTEMPTS[key] = {
+                **previous,
+                "attempt_timestamps": history,
+                "rate_limited": True,
+                "next_attempt_unix": next_attempt,
+                "next_attempt_at_utc": _utc(next_attempt),
+            }
+            return True, next_attempt
+        history.append(now)
+        _ATTEMPTS[key] = {
+            **previous,
+            "attempt_timestamps": history,
+            "rate_limited": False,
+        }
+    return False, 0.0
+
+
+def _record_rate_limited(
+    key: tuple[str, str, str],
+    now: float,
+    next_attempt: float,
+) -> None:
+    with _STATE_LOCK:
+        previous = dict(_ATTEMPTS.get(key) or {})
+        _ATTEMPTS[key] = {
+            **previous,
+            "state": "scheduled",
+            "last_attempt_at_utc": _utc(now),
+            "next_attempt_unix": next_attempt,
+            "next_attempt_at_utc": _utc(next_attempt),
+            "last_error_category": "RATE_LIMITED",
+            "raw_error_persisted": False,
         }
 
 
@@ -622,12 +908,14 @@ def run_connector_auto_sync_sweep(
     root: Path,
     *,
     now: float | None = None,
-    sync_runner: Callable[..., dict[str, Any]] = run_managed_feishu_sync,
+    sync_runner: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Refresh or recover configured connectors through the single managed sync path."""
+    """Refresh configured connector instances through the single managed sync path."""
     resolved_root = root.resolve()
     timestamp = time.time() if now is None else float(now)
     policy = _policy()
+    managed_default = sync_runner is None
+    selected_runner = sync_runner or run_managed_connector_sync
     attempted = succeeded = failed = skipped = 0
 
     for project in _project_ids(resolved_root):
@@ -653,8 +941,22 @@ def run_connector_auto_sync_sweep(
             key = _key(resolved_root, project, connector)
             with _STATE_LOCK:
                 attempt = dict(_ATTEMPTS.get(key) or {})
+            try:
+                instance_policy = _instance_policy(raw, base=policy)
+            except Exception as exc:
+                failed += 1
+                _record_failure(
+                    key,
+                    exc,
+                    timestamp,
+                    retry_base_seconds=int(
+                        policy.get("retry_base_seconds", 60)
+                    ),
+                    retry_max_seconds=int(policy.get("retry_max_seconds", 3600)),
+                )
+                continue
             force_recovery = (
-                sync_runner is run_managed_feishu_sync
+                managed_default
                 and _recovery_pending(
                     resolved_root,
                     project,
@@ -668,25 +970,60 @@ def run_connector_auto_sync_sweep(
                 raw,
                 attempt,
                 now=timestamp,
-                refresh_seconds=policy["refresh_seconds"],
+                refresh_seconds=instance_policy["refresh_seconds"],
                 force=force_recovery,
             ):
                 skipped += 1
                 continue
 
+            if managed_default:
+                try:
+                    _managed_adapter(
+                        project,
+                        connector,
+                        resolved_root,
+                        instance=raw,
+                    )
+                except Exception as exc:
+                    failed += 1
+                    _record_failure(
+                        key,
+                        exc,
+                        timestamp,
+                        retry_base_seconds=instance_policy["retry_base_seconds"],
+                        retry_max_seconds=instance_policy["retry_max_seconds"],
+                    )
+                    continue
+
+            rate_blocked, next_attempt = _rate_limit_blocked(
+                key,
+                timestamp,
+                limit_per_minute=instance_policy["rate_limit_per_minute"],
+            )
+            if rate_blocked:
+                skipped += 1
+                _record_rate_limited(key, timestamp, next_attempt)
+                continue
+
             attempted += 1
             with _STATE_LOCK:
+                current_attempt = dict(_ATTEMPTS.get(key) or attempt)
                 _ATTEMPTS[key] = {
-                    **attempt,
+                    **current_attempt,
                     "state": "running",
                     "last_attempt_at_utc": _utc(timestamp),
                 }
             try:
-                run = sync_runner(
+                runner_kwargs = {
+                    "root": resolved_root,
+                    "actor": _AUTO_SYNC_ACTOR,
+                }
+                if managed_default:
+                    runner_kwargs["sync_policy"] = instance_policy
+                run = selected_runner(
                     project,
                     connector,
-                    root=resolved_root,
-                    actor=_AUTO_SYNC_ACTOR,
+                    **runner_kwargs,
                 )
                 if run.get("status") != "COMPLETE":
                     raise ConnectorSyncError("connector_auto_sync_incomplete")
@@ -696,8 +1033,8 @@ def run_connector_auto_sync_sweep(
                     key,
                     exc,
                     timestamp,
-                    retry_base_seconds=policy["retry_base_seconds"],
-                    retry_max_seconds=policy["retry_max_seconds"],
+                    retry_base_seconds=instance_policy["retry_base_seconds"],
+                    retry_max_seconds=instance_policy["retry_max_seconds"],
                 )
             else:
                 succeeded += 1
@@ -723,6 +1060,13 @@ def connector_auto_sync_status(
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
     policy = _policy()
+    try:
+        policy = _instance_policy(
+            _instance(project, connector, resolved_root),
+            base=policy,
+        )
+    except Exception:
+        policy = _instance_policy({}, base=policy)
     with _STATE_LOCK:
         state = dict(_ATTEMPTS.get(_key(resolved_root, project, connector)) or {})
     status = _text(state.get("state"), 32) or (
@@ -746,6 +1090,9 @@ def connector_auto_sync_status(
         "failure_count": int(state.get("failure_count") or 0),
         "attention": attention,
         "refresh_interval_seconds": policy["refresh_seconds"],
+        "rate_limit_per_minute": policy["rate_limit_per_minute"],
+        "max_resources": policy["max_resources"],
+        "max_export_polls": policy["max_export_polls"],
         "maintenance_required_by_user": status == "retrying"
         and attention in {"AUTHORIZATION_REQUIRED", "PERMISSION_REQUIRED"},
         "checkpoint_recovery_is_automatic": True,
@@ -834,11 +1181,11 @@ def stop_all_connector_auto_sync_supervisors() -> None:
 __all__ = [
     "connector_auto_sync_status",
     "ensure_connector_auto_sync_supervisor",
-    "recover_managed_feishu_checkpoint",
+    "recover_managed_connector_checkpoint",
     "run_connector_auto_sync_sweep",
-    "run_managed_feishu_sync",
+    "run_managed_connector_sync",
     "stop_all_connector_auto_sync_supervisors",
     "stop_connector_auto_sync_supervisor",
-    "test_managed_feishu_connection",
+    "test_managed_connector_connection",
     "validate_connector_checkpoint",
 ]

@@ -12,7 +12,7 @@ import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from .connector_registry import (
     ConnectorManifest,
@@ -476,6 +476,7 @@ def _configure_connector_profile(
     operation: str,
     event_name: str = "",
     credential_expires_at_utc: Any = "",
+    instance_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist a Manifest-validated encrypted profile and bind its opaque ref."""
     resolved_root = root or ROOT
@@ -555,6 +556,30 @@ def _configure_connector_profile(
         )
         _save_store(project, resolved_root, store)
 
+        existing_instance = next(
+            (
+                dict(row)
+                for row in (
+                    list_connector_instances(
+                        project,
+                        root=resolved_root,
+                        include_disabled=True,
+                    ).get("connector_instances")
+                    or []
+                )
+                if isinstance(row, dict)
+                and _text(row.get("connector_instance_id"), 160) == connector
+            ),
+            None,
+        )
+        metadata = {
+            "profile_storage": "encrypted_local_authority",
+            **dict((existing_instance or {}).get("metadata") or {}),
+        }
+        if instance_metadata is not None:
+            if not isinstance(instance_metadata, Mapping):
+                raise ConnectorProfileError("connector_instance_metadata_must_be_object")
+            metadata.update(dict(instance_metadata))
         try:
             instance_receipt = register_connector_instance(
                 project,
@@ -566,7 +591,7 @@ def _configure_connector_profile(
                 resource_scope=resource_scope,
                 connection_profile_ref=profile_ref,
                 status=status,
-                metadata={"profile_storage": "encrypted_local_authority"},
+                metadata=metadata,
             )
         except Exception:
             _save_store(project, resolved_root, before_store)
@@ -599,6 +624,7 @@ def configure_connector_profile(
     display_name: str = "",
     status: str = "ACTIVE",
     credential_expires_at_utc: Any = "",
+    instance_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _configure_connector_profile(
         project_id,
@@ -612,6 +638,7 @@ def configure_connector_profile(
         status=status,
         operation="configure_connector_profile",
         credential_expires_at_utc=credential_expires_at_utc,
+        instance_metadata=instance_metadata,
     )
 
 
@@ -626,6 +653,7 @@ def configure_feishu_connector(
     display_name: str = "",
     status: str = "ACTIVE",
     credential_expires_at_utc: Any = "",
+    instance_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the generic Manifest-driven profile authority."""
     return _configure_connector_profile(
@@ -640,6 +668,7 @@ def configure_feishu_connector(
         status=status,
         operation="configure_feishu_connector",
         credential_expires_at_utc=credential_expires_at_utc,
+        instance_metadata=instance_metadata,
     )
 
 

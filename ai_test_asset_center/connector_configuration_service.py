@@ -8,7 +8,7 @@ canonical encrypted profile/configuration authority.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .connector_checkpoint_recovery import recover_connector_checkpoint_commit
 from .connector_connection_profiles import (
@@ -23,6 +23,28 @@ from .real_project_onboarding import _safe_project_id
 
 def _text(value: Any, limit: int = 1000) -> str:
     return str(value or "").strip()[:limit]
+
+
+_SYNC_POLICY_KEYS = {
+    "sync_interval_seconds",
+    "sync_retry_base_seconds",
+    "sync_retry_max_seconds",
+    "sync_rate_limit_per_minute",
+    "sync_max_resources",
+    "sync_max_export_polls",
+    "sync_timeout_seconds",
+}
+
+
+def _sync_policy_metadata(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("connector_sync_policy_must_be_object")
+    unknown = sorted(set(value) - _SYNC_POLICY_KEYS)
+    if unknown:
+        raise ValueError(f"connector_sync_policy_field_not_supported:{unknown[0]}")
+    return {str(key): item for key, item in value.items()}
 
 
 def _existing_connector(
@@ -59,6 +81,7 @@ def _configure_managed_connector(
     display_name: str = "",
     status: str = "ACTIVE",
     credential_expires_at_utc: Any = "",
+    sync_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create normally or replace an existing configuration under a newer fence."""
     resolved_root = (root or ROOT).resolve()
@@ -74,6 +97,7 @@ def _configure_managed_connector(
         "display_name": display_name,
         "status": status,
         "credential_expires_at_utc": credential_expires_at_utc,
+        "instance_metadata": _sync_policy_metadata(sync_policy),
     }
     if connector_type is not None:
         kwargs["connector_type"] = connector_type
@@ -125,6 +149,7 @@ def configure_managed_connector(
     display_name: str = "",
     status: str = "ACTIVE",
     credential_expires_at_utc: Any = "",
+    sync_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _configure_managed_connector(
         project_id,
@@ -138,6 +163,7 @@ def configure_managed_connector(
         display_name=display_name,
         status=status,
         credential_expires_at_utc=credential_expires_at_utc,
+        sync_policy=sync_policy,
     )
 
 
@@ -152,6 +178,7 @@ def configure_managed_feishu_connector(
     display_name: str = "",
     status: str = "ACTIVE",
     credential_expires_at_utc: Any = "",
+    sync_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the generic managed configuration service."""
     return _configure_managed_connector(
@@ -166,6 +193,7 @@ def configure_managed_feishu_connector(
         display_name=display_name,
         status=status,
         credential_expires_at_utc=credential_expires_at_utc,
+        sync_policy=sync_policy,
     )
 
 
