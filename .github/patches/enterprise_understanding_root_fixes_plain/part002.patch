@@ -1,0 +1,309 @@
++) -> dict[str, Any] | None:
+     if text(fact.get("status")) != "ACCEPTED":
+         return None
+     action = as_dict(fact.get("action"))
+-    operation = text(action.get("canonical") or action.get("raw"))
+-    objects = _fact_object_refs(fact)
++    identity = as_dict(operation_identity)
++    operation = text(
++        identity.get("operation_ref")
++        or action.get("canonical")
++        or action.get("raw")
++    )
++    objects = _fact_object_refs(fact) or unique_text(as_list(identity.get("object_refs")))
+     if not operation and text(fact.get("kind")) not in {"RULE", "STATE_TRANSITION"}:
+         return None
+-    evidence = evidence_from_fact(fact)
++    evidence = dedupe_evidence(
++        [*evidence_from_fact(fact), *as_list(identity.get("evidence"))]
++    )
+     conditions = _fact_conditions(fact)
+     combinator = text(fact.get("condition_combinator"))
+     if len(conditions) > 1 and combinator not in {"AND", "OR"}:
+@@ -539,6 +563,20 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
+         "behavior_family_id": stable_id("behavior_family", operation, objects, _fact_actor_refs(fact)),
+         "source_kind": "ACCEPTED_BUSINESS_FACT",
+         "source_refs": unique_text([fact.get("fact_id")]),
++        "interface_refs": unique_text(
++            [
++                identity.get("interface_id"),
++                *(
++                    []
++                    if identity
++                    else [fact.get("interface_id"), *as_list(fact.get("interface_refs"))]
++                ),
++            ]
++        ),
++        "operation_aliases": unique_text(
++            [*as_list(identity.get("operation_aliases")), action.get("raw")]
++        ),
++        "operation_identity_authority": text(identity.get("authority")),
+         "actor_refs": _fact_actor_refs(fact),
+         "operation_ref": operation,
+         "object_refs": objects,
+@@ -585,6 +623,31 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
+     }
+ 
+ 
++def _behaviors_from_fact(
++    asset: dict[str, Any],
++    fact: dict[str, Any],
++) -> list[dict[str, Any]]:
++    """Project one source fact into every exact source-declared operation identity.
++
++    A rule may be explicitly attached to several OpenAPI operations. Keeping one
++    generic behavior would erase which operation each rule governs and later force
++    endpoint guessing. The existing Behavior IR authority therefore fans the same
++    source fact out once per exact interface operation.
++    """
++    interface_refs = unique_text(
++        [fact.get("interface_id"), *as_list(fact.get("interface_refs"))]
++    )
++    identities = exact_interface_operation_identities(asset, interface_refs)
++    if not identities:
++        behavior = _behavior_from_fact(fact)
++        return [behavior] if behavior is not None else []
++    return [
++        behavior
++        for identity in identities
++        if (behavior := _behavior_from_fact(fact, identity)) is not None
++    ]
++
++
+ def _matrix_behavior(
+     row: dict[str, Any], operation_index: dict[str, list[dict[str, Any]]]
+ ) -> dict[str, Any]:
+@@ -640,6 +703,15 @@ def _matrix_behavior(
+         ),
+         "source_kind": "DECISION_MATRIX_ROW",
+         "source_refs": unique_text([row.get("row_ledger_id")]),
++        "interface_refs": unique_text(
++            [
++                value
++                for operation_row in matched_operations
++                for value in as_list(operation_row.get("interface_refs"))
++            ]
++        )
++        if len(matched_operations) == 1
++        else [],
+         "actor_refs": unique_text(as_list(row.get("actor_refs_candidate"))),
+         "operation_ref": operation,
+         "object_refs": object_refs,
+@@ -735,6 +807,12 @@ def _merge_exact_behaviors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+         existing["source_refs"] = unique_text(
+             [*as_list(existing.get("source_refs")), *as_list(row.get("source_refs"))]
+         )
++        existing["interface_refs"] = unique_text(
++            [
++                *as_list(existing.get("interface_refs")),
++                *as_list(row.get("interface_refs")),
++            ]
++        )
+         existing["evidence"] = dedupe_evidence(
+             [*as_list(existing.get("evidence")), *as_list(row.get("evidence"))]
+         )
+@@ -757,6 +835,141 @@ def _merge_exact_behaviors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+     return sorted(merged.values(), key=lambda row: text(row.get("behavior_id")))
+ 
+ 
++def _pure_authorization_context(row: dict[str, Any]) -> bool:
++    return bool(
++        text(row.get("source_kind")) == "ACCEPTED_BUSINESS_FACT"
++        and bool(row.get("authorization_semantics_explicit"))
++        and text(row.get("authorization_semantics_status")) == "RESOLVED"
++        and text(row.get("permission_decision")) in {"ALLOW", "DENY"}
++        and not as_list(row.get("preconditions"))
++        and not as_list(row.get("state_effects"))
++        and not as_list(row.get("data_effects"))
++        and text(row.get("operation_ref"))
++        and as_list(row.get("interface_refs"))
++        and as_list(row.get("object_refs"))
++    )
++
++
++def _composable_behavior_branch(row: dict[str, Any]) -> bool:
++    unresolved = set(unique_text(as_list(row.get("unresolved_semantics"))))
++    hard_missing = {
++        "BEHAVIOR_OPERATION_UNRESOLVED",
++        "BEHAVIOR_OBJECT_UNRESOLVED",
++        "BEHAVIOR_EVIDENCE_MISSING",
++        "BEHAVIOR_CONDITION_COMBINATOR_UNRESOLVED",
++        "BEHAVIOR_AUTHORIZATION_DECISION_UNRESOLVED",
++    }
++    return bool(
++        text(row.get("source_kind")) == "ACCEPTED_BUSINESS_FACT"
++        and text(row.get("permission_decision")) == "UNSPECIFIED"
++        and not unresolved.intersection(hard_missing)
++        and (
++            as_list(row.get("preconditions"))
++            or as_list(row.get("state_effects"))
++            or as_list(row.get("data_effects"))
++            or as_list(row.get("expected_effects"))
++        )
++        and text(row.get("operation_ref"))
++        and as_list(row.get("interface_refs"))
++        and as_list(row.get("object_refs"))
++    )
++
++
++def _authorization_composition_key(row: dict[str, Any]) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
++    return (
++        text(row.get("operation_ref")),
++        tuple(sorted(unique_text(as_list(row.get("interface_refs"))))),
++        tuple(sorted(unique_text(as_list(row.get("object_refs"))))),
++    )
++
++
++def _compose_exact_authorization_contexts(
++    rows: list[dict[str, Any]],
++) -> list[dict[str, Any]]:
++    """Compose pure authorization context into exact executable branches.
++
++    Source documents commonly state authorization and state/data constraints in
++    separate atomic rules.  Keeping both as parallel executable behaviors loses
++    the complete operation contract.  Composition is allowed only when operation,
++    concrete interface identities and business objects are exactly equal and all
++    pure authorization facts agree on one decision.  Conditional authorization
++    rules stay independent; conflicting decisions are never composed.
++    """
++    authorities: dict[
++        tuple[str, tuple[str, ...], tuple[str, ...]], list[dict[str, Any]]
++    ] = defaultdict(list)
++    branches: dict[
++        tuple[str, tuple[str, ...], tuple[str, ...]], list[dict[str, Any]]
++    ] = defaultdict(list)
++    for row in rows:
++        if _pure_authorization_context(row):
++            authorities[_authorization_composition_key(row)].append(row)
++        elif _composable_behavior_branch(row):
++            branches[_authorization_composition_key(row)].append(row)
++
++    absorbed_ids: set[str] = set()
++    for key, context_rows in authorities.items():
++        target_rows = branches.get(key, [])
++        decisions = {
++            text(row.get("permission_decision")) for row in context_rows
++        }
++        if not target_rows or len(decisions) != 1:
++            continue
++        decision = next(iter(decisions))
++        actor_refs = unique_text(
++            actor
++            for row in context_rows
++            for actor in as_list(row.get("actor_refs"))
++        )
++        if not actor_refs:
++            continue
++        context_source_refs = unique_text(
++            source_ref
++            for row in context_rows
++            for source_ref in as_list(row.get("source_refs"))
++        )
++        context_behavior_refs = unique_text(
++            row.get("behavior_id") for row in context_rows
++        )
++        context_evidence = dedupe_evidence(
++            evidence
++            for row in context_rows
++            for evidence in as_list(row.get("evidence"))
++        )
++        for target in target_rows:
++            existing_actors = unique_text(as_list(target.get("actor_refs")))
++            if existing_actors and not set(existing_actors).issubset(set(actor_refs)):
++                continue
++            target["actor_refs"] = unique_text([*existing_actors, *actor_refs])
++            target["permission_decision"] = decision
++            target["authorization_semantics_explicit"] = True
++            target["authorization_semantic_kind"] = "AUTHORIZATION"
++            target["authorization_semantics_status"] = "RESOLVED"
++            target["authorization_resolution_reason"] = ""
++            target["authorization_derivation"] = "exact_operation_authorization_context"
++            target["authorization_text_fallback_used"] = False
++            target["authorization_context_behavior_refs"] = context_behavior_refs
++            target["authorization_context_source_refs"] = context_source_refs
++            target["source_refs"] = unique_text(
++                [*as_list(target.get("source_refs")), *context_source_refs]
++            )
++            target["evidence"] = dedupe_evidence(
++                [*as_list(target.get("evidence")), *context_evidence]
++            )
++            target["behavior_family_id"] = stable_id(
++                "behavior_family",
++                target.get("operation_ref"),
++                target.get("object_refs"),
++                target.get("actor_refs"),
++            )
++        absorbed_ids.update(context_behavior_refs)
++
++    return sorted(
++        [row for row in rows if text(row.get("behavior_id")) not in absorbed_ids],
++        key=lambda row: text(row.get("behavior_id")),
++    )
++
++
+ def _detect_behavior_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+     conflicts: list[dict[str, Any]] = []
+     by_family_and_conditions: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+@@ -934,10 +1147,11 @@ def build_business_behavior_ir(
+         behavior
+         for fact in facts
+         if isinstance(fact, dict)
+-        if (behavior := _behavior_from_fact(fact)) is not None
++        for behavior in _behaviors_from_fact(asset, fact)
+     ]
+     behaviors.extend(_matrix_behavior(row, operation_index) for row in row_ledger)
+     behaviors = _merge_exact_behaviors(behaviors)
++    behaviors = _compose_exact_authorization_contexts(behaviors)
+     conflicts = _detect_behavior_conflicts(behaviors)
+     unknowns = [*ledger_unknowns, *_behavior_unknowns(behaviors)]
+     gate = _behavior_gate(behaviors, conflicts, row_ledger)
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder_legacy_v1.py b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder_legacy_v1.py
+index cdfe6a0..8ba7956 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder_legacy_v1.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder_legacy_v1.py
+@@ -9,6 +9,7 @@ from typing import Any, Iterable
+ from .authorization_semantics import resolve_fact_authorization
+ from .gate import assess_understanding_model
+ from .lifecycle_builder import build_lifecycles
++from .implementation_binding import exact_interface_operation_identities
+ from .object_graph import build_object_graph
+ from .schema import (
+     ACTOR_SCHEMA,
+@@ -1167,7 +1168,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
+         asset, facts, alias_map
+     )
+     object_names = [text(row.get("name")) for row in business_objects]
+-    operations, operation_unknowns = _build_operations(facts, alias_to_name)
++    operations, operation_unknowns = _build_operations(facts, alias_to_name, asset=asset)
+     actors, authorization_unknowns = _build_actors(asset, facts, operations)
+     rewritten_facts: list[dict[str, Any]] = []
+     for fact in facts:
+@@ -1625,28 +1626,57 @@ def _effect_texts(fact: dict[str, Any]) -> list[str]:
+ def _build_operations(
+     facts: list[dict[str, Any]],
+     alias_map: dict[str, str] | None = None,
++    *,
++    asset: dict[str, Any] | None = None,
+ ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+-    operations: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
++    """Build one operation model while preserving exact interface operation identity.
++
++    Source-declared OpenAPI ``operationId`` values are the canonical operation
++    coordinate when a fact carries an exact interface attachment.  One semantic fact
++    may legitimately apply to several interfaces, so it is projected into each exact
++    operation instead of collapsing those interfaces into one generic verb.  Facts
++    without an exact interface keep the established semantic-action path.
++    """
++    operations: dict[tuple[Any, ...], dict[str, Any]] = {}
+     unknowns: list[dict[str, Any]] = []
+     alias_map = alias_map or {}
++    source_asset = asset or {}
++
+     for fact in _accepted_facts(facts):
+         action = as_dict(fact.get("action"))
+-        action_name = text(action.get("canonical") or action.get("raw"))
+-        if not action_name:
++        semantic_action = text(action.get("canonical") or action.get("raw"))
++        exact_interface_refs = unique_text(
++            [fact.get("interface_id"), *as_list(fact.get("interface_refs"))]
++        )
