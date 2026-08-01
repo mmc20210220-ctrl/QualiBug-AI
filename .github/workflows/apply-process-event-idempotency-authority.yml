@@ -3,6 +3,10 @@ name: Apply process event idempotency authority
 on:
   issues:
     types: [opened]
+  push:
+    branches: [main]
+    paths:
+      - tools/.one_shot/process_event_idempotency_authority/.dispatch
 
 permissions:
   contents: write
@@ -15,8 +19,12 @@ concurrency:
 jobs:
   apply:
     if: >-
-      github.event.issue.title == 'APPLY_PROCESS_EVENT_IDEMPOTENCY_AUTHORITY_20260801'
-      && github.event.issue.user.login == github.repository_owner
+      (github.event_name == 'issues'
+       && github.event.issue.title == 'APPLY_PROCESS_EVENT_IDEMPOTENCY_AUTHORITY_20260801'
+       && github.event.issue.user.login == github.repository_owner)
+      ||
+      (github.event_name == 'push'
+       && github.actor == github.repository_owner)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
