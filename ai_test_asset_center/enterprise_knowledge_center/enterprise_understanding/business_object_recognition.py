@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .._chinese_business_authority_decision import apply_authority_decisions_to_conflicts
 from ._object_candidate_governance import govern_object_candidates
 from ._object_narrative_preparation import prepare_narrative_declared_asset
 from ._object_recognition_projection import (
@@ -14,17 +15,34 @@ from ._object_recognition_projection import (
     project_asset_for_recognized_objects,
     publish_recognition_and_identity,
 )
-from ._object_source_preparation import (
-    finalize_source_declared_recognition,
-    prepare_source_declared_asset,
+from ._object_source_conflicts import (
+    business_object_source_conflicts,
+    project_business_object_source_conflicts,
+)
+from ._object_source_conflict_preparation import (
+    finalize_conflict_governed_source_recognition,
+    prepare_conflict_governed_source_asset,
 )
 
 
 def recognize_business_objects(asset: dict[str, Any]) -> dict[str, Any]:
-    prepared, authority = prepare_source_declared_asset(asset)
-    if not authority.get("declared_labels"):
-        prepared, authority = prepare_narrative_declared_asset(asset)
-    return finalize_source_declared_recognition(
+    # Object declaration conflicts are projected at the public object authority
+    # boundary, then resolved only through the repository's existing durable
+    # SELECT_FACT / LEAVE_UNRESOLVED operator ledger.
+    governed = asset
+    if not business_object_source_conflicts(governed):
+        governed = project_business_object_source_conflicts(governed)
+        governed = apply_authority_decisions_to_conflicts(
+            governed,
+            project_id=str(governed.get("project_id") or ""),
+        )
+    prepared, authority = prepare_conflict_governed_source_asset(governed)
+    if (
+        not authority.get("declared_labels")
+        and not authority.get("structured_source_declaration_present")
+    ):
+        prepared, authority = prepare_narrative_declared_asset(governed)
+    return finalize_conflict_governed_source_recognition(
         govern_object_candidates(prepared), authority
     )
 

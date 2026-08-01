@@ -1,0 +1,65 @@
+{
+  "schema": "qualibug.enterprise-business-object-ground-truth.v1",
+  "project_id": "object_source_conflict",
+  "annotation_scope": "CLOSED_WORLD_SOURCE_LABELS",
+  "ground_truth_generated_from_product_output": false,
+  "source_snapshot": [
+    {
+      "path": "benchmark/multi_source_object_conflict/PRD_LEGACY.md",
+      "blob_sha": "0c1bb7d7fb329f2ee920def7680a6d4154817e71"
+    },
+    {
+      "path": "benchmark/multi_source_object_conflict/PRD_CURRENT.md",
+      "blob_sha": "358e8f4b554816b937e381f5923151e8581c6aca"
+    }
+  ],
+  "labels": [
+    {
+      "ground_truth_id": "object-conflict-object-1",
+      "canonical_label": "CustomerAccount",
+      "aliases": ["客户"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT"],
+      "source_refs": ["PRD_CURRENT.md#line=5"]
+    },
+    {
+      "ground_truth_id": "object-conflict-object-2",
+      "canonical_label": "Contract",
+      "aliases": ["合同"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT"],
+      "source_refs": ["PRD_CURRENT.md#line=8", "PRD_LEGACY.md#line=8"]
+    },
+    {
+      "ground_truth_id": "object-conflict-non-object-1",
+      "canonical_label": "CustomerProfile",
+      "expected_business_object": false,
+      "semantic_roles": ["OTHER_NON_OBJECT"],
+      "source_refs": ["PRD_LEGACY.md#line=5"]
+    },
+    {
+      "ground_truth_id": "object-conflict-non-object-2",
+      "canonical_label": "历史版本",
+      "aliases": ["当前批准版本"],
+      "expected_business_object": false,
+      "semantic_roles": ["OTHER_NON_OBJECT"],
+      "source_refs": ["PRD_LEGACY.md#line=1", "PRD_CURRENT.md#line=1"]
+    },
+    {
+      "ground_truth_id": "object-conflict-non-object-3",
+      "canonical_label": "客户基础档案",
+      "aliases": ["当前客户账户"],
+      "expected_business_object": false,
+      "semantic_roles": ["OTHER_NON_OBJECT"],
+      "source_refs": ["PRD_LEGACY.md#line=6", "PRD_CURRENT.md#line=6"]
+    },
+    {
+      "ground_truth_id": "object-conflict-non-object-4",
+      "canonical_label": "记录客户合同",
+      "aliases": ["记录当前客户合同"],
+      "expected_business_object": false,
+      "semantic_roles": ["OTHER_NON_OBJECT"],
+      "source_refs": ["PRD_LEGACY.md#line=9", "PRD_CURRENT.md#line=9"]
+    }
+  ]
+}
