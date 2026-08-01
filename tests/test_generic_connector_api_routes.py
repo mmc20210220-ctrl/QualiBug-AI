@@ -94,11 +94,61 @@ def test_generic_read_routes_project_safe_projections(monkeypatch, tmp_path):
     )
 
     handler = DummyHandler()
-    for tail in ([CONNECTOR, "resources"], [CONNECTOR, "coverage"], [CONNECTOR, "runs"], [CONNECTOR, "acceptance"]):
+    monkeypatch.setattr(
+        handlers,
+        "project_connector_webhook",
+        lambda project, connector, root: {
+            "connector_instance_id": connector,
+            "status": "ENABLED",
+            "supported": True,
+            "enabled": True,
+        },
+    )
+    for tail in (
+        [CONNECTOR, "resources"],
+        [CONNECTOR, "coverage"],
+        [CONNECTOR, "runs"],
+        [CONNECTOR, "acceptance"],
+        [CONNECTOR, "webhook"],
+    ):
         result = handler._handle_knowledge_connector_get(PROJECT, list(tail), tmp_path)
         assert result["status"] == 200
         assert result["body"]["ok"] is True
         assert result["body"]["data"]["connector_instance_id"] == CONNECTOR
+
+
+def test_webhook_post_uses_event_authority_and_returns_async_projection(monkeypatch, tmp_path):
+    import ai_test_asset_center.private_pilot_connector_handlers as handlers
+
+    captured: dict[str, Any] = {}
+
+    def fake_receive(project, connector, **kwargs):
+        captured.update({"project": project, "connector": connector, **kwargs})
+        return {
+            "status": "SYNC_TRIGGERED",
+            "accepted": True,
+            "event": {"event_record_id": "webhook_evt_1"},
+            "sync": {"status": "COMPLETE", "raw_cursor_returned": False},
+        }
+
+    monkeypatch.setattr(handlers, "receive_connector_webhook", fake_receive)
+    handler = DummyHandler()
+    handler.headers = {"X-Webhook-Signature": "fingerprint-only"}
+
+    result = handler._handle_connector_webhook(
+        PROJECT,
+        CONNECTOR,
+        tmp_path,
+        b'{"event":"changed"}',
+    )
+
+    assert result["status"] == 202
+    assert result["body"]["ok"] is True
+    assert captured["project"] == PROJECT
+    assert captured["connector"] == CONNECTOR
+    assert captured["body"] == b'{"event":"changed"}'
+    assert captured["headers"] == handler.headers
+    assert result["body"]["raw_cursor_returned"] is False
 
 
 def test_pause_and_resume_use_the_existing_connector_registry(monkeypatch, tmp_path):

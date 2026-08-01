@@ -50,6 +50,28 @@ _SECRET_FIELD_TYPES = {
     "client_certificate_reference",
     "cookie_session_reference",
 }
+_WEBHOOK_SECRET_FIELD_NAME = "webhook_secret"
+_DEFAULT_WEBHOOK_POLICY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": "Configuration-driven HMAC webhook verification and sync triggering.",
+    "properties": {
+        "enabled": {"type": "boolean", "default": False},
+        "signature_header": {"type": "string", "default": "X-Webhook-Signature"},
+        "event_id_header": {"type": "string", "default": "X-Webhook-Event-Id"},
+        "timestamp_header": {"type": "string", "default": "X-Webhook-Timestamp"},
+        "sequence_header": {"type": "string", "default": "X-Webhook-Sequence"},
+        "algorithm": {"type": "string", "enum": ["hmac-sha256"]},
+        "encoding": {"type": "string", "enum": ["hex", "base64"]},
+        "signed_payload": {
+            "type": "string",
+            "enum": ["body", "timestamp.body", "event_id.timestamp.body"],
+        },
+        "signature_prefix": {"type": "string"},
+        "max_age_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "future_skew_seconds": {"type": "integer", "minimum": 0, "maximum": 600},
+        "event_retention_count": {"type": "integer", "minimum": 100, "maximum": 2000},
+    },
+}
 _REQUIRED_ADAPTER_METHODS = (
     "manifest",
     "test_connection",
@@ -210,6 +232,7 @@ class ConnectorManifest:
     credential_fields: tuple[ConnectorCredentialField, ...] = ()
     capability_contract_version: str = ""
     schema: str = CONNECTOR_MANIFEST_SCHEMA
+    webhook_policy_schema: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "connector_type", _identifier(self.connector_type, "connector_type"))
@@ -250,6 +273,18 @@ class ConnectorManifest:
             raise ConnectorRegistryError("local_runner_required_without_support")
 
         fields = tuple(self.credential_fields)
+        if self.webhook_supported and not any(
+            item.name == _WEBHOOK_SECRET_FIELD_NAME for item in fields
+        ):
+            fields += (
+                ConnectorCredentialField(
+                    name=_WEBHOOK_SECRET_FIELD_NAME,
+                    field_type="secret",
+                    required=False,
+                    secret=True,
+                    description="Encrypted HMAC secret used only to verify configured webhook events.",
+                ),
+            )
         if any(not isinstance(item, ConnectorCredentialField) for item in fields):
             raise ConnectorRegistryError("credential_field_invalid")
         names = [field.name for field in fields]
@@ -262,6 +297,12 @@ class ConnectorManifest:
         ):
             raise ConnectorRegistryError("credential_field_auth_mode_not_supported")
         object.__setattr__(self, "credential_fields", fields)
+        policy_schema = dict(self.webhook_policy_schema)
+        if self.webhook_supported and not policy_schema:
+            policy_schema = dict(_DEFAULT_WEBHOOK_POLICY_SCHEMA)
+        if not self.webhook_supported and policy_schema:
+            raise ConnectorRegistryError("webhook_policy_schema_without_support")
+        object.__setattr__(self, "webhook_policy_schema", policy_schema)
         if self.schema != CONNECTOR_MANIFEST_SCHEMA:
             raise ConnectorRegistryError("manifest_schema_invalid")
 
@@ -296,6 +337,7 @@ class ConnectorManifest:
             "read_only": self.read_only,
             "credential_fields": [field.as_dict() for field in self.credential_fields],
             "capability_contract_version": self.capability_contract_version,
+            "webhook_policy_schema": dict(self.webhook_policy_schema),
         }
 
 

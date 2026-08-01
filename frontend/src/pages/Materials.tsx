@@ -16,6 +16,7 @@ import {
   type KnowledgeConnectorActionResult,
   type KnowledgeConnectorHealth,
   type KnowledgeConnectorRecord,
+  type KnowledgeConnectorWebhook,
 } from '../api/knowledge-connectors';
 import { ConnectorAcceptancePanel } from '../components/ConnectorAcceptancePanel';
 import { ConnectorCoverage } from '../components/ConnectorCoverage';
@@ -96,12 +97,23 @@ function connectorHealthLabel(health?: KnowledgeConnectorHealth): string {
     case 'DUE': return '等待自动更新';
     case 'NOT_SYNCED': return '等待首次更新';
     case 'DOWNSTREAM_DEGRADED': return '资料已读取，语义刷新未完成';
+    case 'CALIBRATION_REQUIRED': return '事件中断，等待完整校准';
     case 'PARTIAL_COVERAGE': return '部分资料未读取';
     case 'RETRYING': return '系统正在重试';
     case 'DISABLED': return '连接已关闭';
     case 'PAUSED': return '自动更新已暂停';
     case 'DEGRADED': return '最近一次更新未完成';
     default: return '健康状态待确认';
+  }
+}
+
+function connectorWebhookLabel(webhook?: KnowledgeConnectorWebhook): string {
+  if (!webhook?.supported) return '';
+  switch (webhook.status) {
+    case 'CALIBRATION_REQUIRED': return '事件中断，需要完整校准';
+    case 'ENABLED': return '事件触发已启用';
+    case 'DISABLED': return '事件触发未启用';
+    default: return `事件状态：${webhook.status || 'NOT_AVAILABLE'}`;
   }
 }
 
@@ -129,7 +141,7 @@ function connectorHealthActionLabel(health?: KnowledgeConnectorHealth): string {
 
 function connectorTone(connector: KnowledgeConnectorRecord): string {
   const healthStatus = connector.health?.status;
-  if (healthStatus === 'REAUTHORIZATION_REQUIRED' || healthStatus === 'PERMISSION_INSUFFICIENT' || healthStatus === 'AUTHORIZATION_EXPIRING' || healthStatus === 'DOWNSTREAM_DEGRADED' || healthStatus === 'DEGRADED') return 'danger';
+  if (healthStatus === 'REAUTHORIZATION_REQUIRED' || healthStatus === 'PERMISSION_INSUFFICIENT' || healthStatus === 'AUTHORIZATION_EXPIRING' || healthStatus === 'DOWNSTREAM_DEGRADED' || healthStatus === 'CALIBRATION_REQUIRED' || healthStatus === 'DEGRADED') return 'danger';
   if (healthStatus === 'STALE' || healthStatus === 'DUE' || healthStatus === 'PARTIAL_COVERAGE' || healthStatus === 'RETRYING' || healthStatus === 'SYNCING') return 'warning';
   if (healthStatus === 'HEALTHY') return 'success';
   if (connector.active_sync_epoch_id || connector.auto_sync?.state === 'running') return 'warning';
@@ -320,6 +332,7 @@ export function Materials() {
   const [scopeParseError, setScopeParseError] = useState('');
   const [authMode, setAuthMode] = useState('');
   const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -395,6 +408,7 @@ export function Materials() {
     setScopeParseError('');
     setAuthMode(firstManifest?.auth_modes[0] || '');
     setCredentialValues({});
+    setWebhookEnabled(false);
   };
 
   const openCreateForm = () => {
@@ -415,6 +429,7 @@ export function Materials() {
       || '';
     setAuthMode(mode);
     setCredentialValues({});
+    setWebhookEnabled(connector.webhook?.enabled === true);
     setFormOpen(true);
   };
 
@@ -428,9 +443,17 @@ export function Materials() {
   };
 
   const credentialsReady = (): boolean => {
-    if (editingId) return true;
-    return selectedCredentialFields.every(
+    const requiredCredentialsReady = editingId || selectedCredentialFields.every(
       (field) => !field.required || Boolean(credentialValues[field.name]?.trim()),
+    );
+    if (!requiredCredentialsReady) return false;
+    if (!selectedManifest?.webhook_supported || !webhookEnabled) return true;
+    const editingConnector = connectors.find(
+      (connector) => connector.connector_instance_id === editingId,
+    );
+    return Boolean(
+      credentialValues.webhook_secret?.trim()
+      || editingConnector?.connection_profile?.configured_fields?.webhook_secret,
     );
   };
 
@@ -470,6 +493,9 @@ export function Materials() {
         resource_scope: scope,
         status: 'ACTIVE',
         connection_profile: profilePayload(),
+        webhook_policy: selectedManifest.webhook_supported
+          ? { enabled: webhookEnabled }
+          : undefined,
       });
       setFormOpen(false);
       resetForm();
@@ -599,6 +625,7 @@ export function Materials() {
                 || connector.connection_profile?.reauthorization_required
                 || connector.health?.status === 'PERMISSION_INSUFFICIENT'
                 || connector.health?.status === 'AUTHORIZATION_EXPIRING'
+                || connector.health?.status === 'CALIBRATION_REQUIRED'
                 || !connector.connection_profile?.credentials_configured,
               );
               return (
@@ -630,6 +657,20 @@ export function Materials() {
                         {connectorHealthActionLabel(connector.health)
                           ? ` · ${connectorHealthActionLabel(connector.health)}`
                           : ''}
+                      </span>
+                    </div>
+                  )}
+
+                  {connector.webhook?.supported && (
+                    <div className={`materials-health-summary tone-${connector.webhook.status === 'CALIBRATION_REQUIRED' ? 'danger' : 'neutral'}`}>
+                      <div>
+                        <strong>事件触发</strong>
+                        <span>{connectorWebhookLabel(connector.webhook)}</span>
+                      </div>
+                      <span>
+                        {connector.webhook.status === 'CALIBRATION_REQUIRED'
+                          ? '请执行一次完整数据同步以恢复事件序列'
+                          : '事件仅触发现有同步，不会直接修改资料'}
                       </span>
                     </div>
                   )}
@@ -725,6 +766,7 @@ export function Materials() {
                   setScopeValues(defaultScopeValues(manifest));
                   setScopeParseError('');
                   setCredentialValues({});
+                  setWebhookEnabled(false);
                 }}
               >
                 {manifests.map((manifest) => <option key={manifest.connector_type} value={manifest.connector_type}>{manifest.display_name}</option>)}
@@ -768,6 +810,21 @@ export function Materials() {
               </label>
             ))}
           </div>
+
+          {selectedManifest?.webhook_supported && (
+            <label className="form-group materials-webhook-toggle">
+              <span className="form-label">事件触发同步</span>
+              <span>
+                <input
+                  type="checkbox"
+                  checked={webhookEnabled}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setWebhookEnabled(event.target.checked)}
+                />
+                {' '}启用签名事件触发已有同步
+              </span>
+              <small>事件不会直接修改资料；检测到事件丢失时会要求一次完整校准。</small>
+            </label>
+          )}
 
           <div className="materials-step">
             <span className="materials-step-number">2</span>

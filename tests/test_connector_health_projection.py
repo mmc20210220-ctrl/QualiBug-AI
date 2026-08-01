@@ -63,6 +63,28 @@ def test_health_is_receipt_backed_and_exposes_staleness_and_coverage_gap() -> No
     assert health["credentials_returned"] is False
 
 
+def test_webhook_calibration_is_visible_without_claiming_source_loss() -> None:
+    payload = _base()
+    payload["webhook"] = {
+        "supported": True,
+        "enabled": True,
+        "status": "CALIBRATION_REQUIRED",
+        "state": {
+            "calibration_required": True,
+            "last_success_event": None,
+            "last_failure_event": None,
+        },
+    }
+
+    health = project_connector_health(**payload)
+
+    assert health["status"] == "CALIBRATION_REQUIRED"
+    assert health["recommended_action"] == "RUN_SYNC"
+    assert "WEBHOOK_CALIBRATION_REQUIRED" in health["attention_reasons"]
+    assert health["webhook"]["calibration_required"] is True
+    assert health["customer_material_mutation_executed"] is False
+
+
 def test_reauthorization_takes_precedence_over_sync_health() -> None:
     payload = _base()
     payload["connection_profile"] = {

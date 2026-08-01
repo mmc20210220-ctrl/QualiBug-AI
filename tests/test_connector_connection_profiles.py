@@ -65,6 +65,7 @@ def test_feishu_profile_is_encrypted_and_frontend_projection_is_masked(tmp_path)
     assert profile["configured_fields"] == {
         "app_id": True,
         "app_secret": True,
+        "webhook_secret": False,
     }
     assert profile["plaintext_returned"] is False
 

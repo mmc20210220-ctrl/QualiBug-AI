@@ -101,6 +101,7 @@ def test_manifest_and_default_registry_are_provider_manifest_driven() -> None:
 
     registry = build_default_connector_registry()
     assert {row["connector_type"] for row in registry.catalog()["connector_types"]} == {
+        "apifox",
         "feishu",
         "git",
         "gitee",
@@ -108,6 +109,7 @@ def test_manifest_and_default_registry_are_provider_manifest_driven() -> None:
         "gitlab",
         "openapi",
         "website",
+        "yapi",
     }
     for connector_type in ("gitee", "gitlab", "github", "git"):
         manifest = registry.manifest(connector_type)
@@ -115,7 +117,10 @@ def test_manifest_and_default_registry_are_provider_manifest_driven() -> None:
         assert manifest.read_only is True
         assert manifest.sync_modes == ("FULL", "INCREMENTAL")
         assert manifest.scope_schema["required"] == ["repository_url"]
-        assert {field.name for field in manifest.credential_fields} == {"token"}
+        assert {field.name for field in manifest.credential_fields} == {
+            "token",
+            "webhook_secret",
+        }
 
 
 def test_github_full_discovery_and_materialization_are_read_only_and_provenance_bound(

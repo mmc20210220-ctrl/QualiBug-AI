@@ -91,22 +91,25 @@ def test_default_registry_exposes_existing_feishu_adapter_without_network() -> N
     assert manifest.category == "knowledge_base"
     assert manifest.read_only is True
     assert "FULL" in manifest.sync_modes
+    assert manifest.webhook_supported is True
+    assert manifest.webhook_policy_schema["properties"]["signature_header"]["type"] == "string"
     assert {field.name for field in manifest.credential_fields} == {
         "app_id",
         "app_secret",
         "tenant_access_token",
         "user_access_token",
+        "webhook_secret",
     }
     assert {
         field.name
         for field in manifest.credential_fields_for_auth_mode("internal_app")
-    } == {"app_id", "app_secret"}
+    } == {"app_id", "app_secret", "webhook_secret"}
     assert {
         field.name
         for field in manifest.credential_fields_for_auth_mode(
             "tenant_access_token"
         )
-    } == {"tenant_access_token"}
+    } == {"tenant_access_token", "webhook_secret"}
     assert registry.catalog()["governance"]["network_access_performed"] is False
 
 
