@@ -53,6 +53,13 @@ from .feishu_tenant_acceptance_reports import (
     load_feishu_tenant_acceptance_report,
 )
 from .enterprise_knowledge_center import list_enterprise_knowledge_sources
+from .local_runner_connector import (
+    LocalRunnerError,
+    accept_local_runner_result,
+    issue_local_runner_task,
+    list_local_runner_registrations,
+    register_local_runner,
+)
 from .real_project_onboarding import _safe_project_id
 
 _ROUTE_MARKER = "knowledge-connectors"
@@ -707,6 +714,8 @@ class KnowledgeConnectorHandlersMixin:
             if isinstance(exc, FeishuTenantAcceptanceJobError)
             else "FEISHU_ACCEPTANCE_REPORT_ERROR"
             if isinstance(exc, FeishuTenantAcceptanceReportError)
+            else "LOCAL_RUNNER_ERROR"
+            if isinstance(exc, LocalRunnerError)
             else "KNOWLEDGE_CONNECTOR_ERROR"
         )
         return self._json(
@@ -765,6 +774,18 @@ class KnowledgeConnectorHandlersMixin:
         root: Path,
     ) -> Any:
         try:
+            if tail and tail[0] == "runners":
+                if len(tail) == 1:
+                    return self._json(
+                        {
+                            "ok": True,
+                            "data": list_local_runner_registrations(
+                                project,
+                                root=root,
+                            ),
+                        }
+                    )
+                return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
             inventory = _connector_inventory(project, root)
             if not tail:
                 return self._json({"ok": True, "data": inventory})
@@ -880,6 +901,7 @@ class KnowledgeConnectorHandlersMixin:
         except (
             ConnectorProfileError,
             ConnectorSyncError,
+            LocalRunnerError,
             FeishuTenantAcceptanceJobError,
             FeishuTenantAcceptanceReportError,
             KeyError,
@@ -1046,6 +1068,141 @@ class KnowledgeConnectorHandlersMixin:
             "credential_storage": dict(result.get("credential_storage") or {}),
         }
         return self._json({"ok": True, "data": public_result})
+
+    def _handle_local_runner_register(
+        self,
+        project: str,
+        body: dict[str, Any],
+        root: Path,
+        actor: dict[str, Any],
+    ) -> Any:
+        allowed = {
+            "runner_id",
+            "allowed_hosts",
+            "supported_connector_types",
+            "runner_version",
+        }
+        unknown = sorted(set(body) - allowed)
+        if unknown:
+            raise LocalRunnerError(
+                f"local_runner_registration_field_not_supported:{unknown[0]}"
+            )
+        result = register_local_runner(
+            project,
+            runner_id=_text(body.get("runner_id"), 160),
+            allowed_hosts=body.get("allowed_hosts") or [],
+            supported_connector_types=body.get("supported_connector_types") or [],
+            runner_version=_text(body.get("runner_version"), 80) or "1.0.0",
+            root=root,
+            actor=actor,
+        )
+        return self._json(
+            {
+                "ok": True,
+                "data": result,
+                "source_content_returned": False,
+                "source_credentials_returned": False,
+            },
+            201 if result.get("bootstrap_key_returned") else 200,
+        )
+
+    def _handle_local_runner_task(
+        self,
+        project: str,
+        connector: str,
+        body: dict[str, Any],
+        root: Path,
+        actor: dict[str, Any],
+    ) -> Any:
+        allowed = {
+            "runner_id",
+            "result_mode",
+            "ttl_seconds",
+            "deletion_policy",
+            "max_retire_count",
+            "max_retire_ratio",
+            "max_resources",
+            "timeout_seconds",
+        }
+        unknown = sorted(set(body) - allowed)
+        if unknown:
+            raise LocalRunnerError(
+                f"local_runner_task_field_not_supported:{unknown[0]}"
+            )
+        result = issue_local_runner_task(
+            project,
+            connector_instance_id=connector,
+            runner_id=_text(body.get("runner_id"), 160),
+            root=root,
+            actor=actor,
+            result_mode=_text(body.get("result_mode"), 40) or "SANITIZED_SNAPSHOT",
+            ttl_seconds=_bounded_int(
+                body.get("ttl_seconds"),
+                900,
+                60,
+                86_400,
+            ),
+            deletion_policy=_text(body.get("deletion_policy"), 40) or "RETAIN",
+            max_retire_count=_bounded_int(
+                body.get("max_retire_count"),
+                100,
+                0,
+                10_000,
+            ),
+            max_retire_ratio=_bounded_float(
+                body.get("max_retire_ratio"),
+                0.25,
+                0.0,
+                1.0,
+            ),
+            max_resources=_bounded_int(
+                body.get("max_resources"),
+                5_000,
+                1,
+                100_000,
+            ),
+            timeout_seconds=_bounded_float(
+                body.get("timeout_seconds"),
+                30.0,
+                1.0,
+                300.0,
+            ),
+        )
+        return self._json(
+            {
+                "ok": True,
+                "data": result,
+                "source_credentials_returned": False,
+                "source_content_returned": False,
+                "raw_cursor_returned": True,
+            },
+            201,
+        )
+
+    def _handle_local_runner_result(
+        self,
+        project: str,
+        body: dict[str, Any],
+        root: Path,
+        actor: dict[str, Any],
+    ) -> Any:
+        incoming = body.get("result") if isinstance(body.get("result"), dict) else body
+        result = accept_local_runner_result(
+            project,
+            result=incoming,
+            root=root,
+            actor=actor,
+        )
+        return self._json(
+            {
+                "ok": bool(result.get("accepted")),
+                "data": result,
+                "source_content_returned": False,
+                "source_credentials_returned": False,
+                "raw_cursor_returned": False,
+            },
+            200 if result.get("accepted") else 409,
+        )
 
     def _handle_knowledge_connector_action(
         self,
@@ -1325,6 +1482,28 @@ class KnowledgeConnectorHandlersMixin:
         try:
             body = self._body()
             tail = route[1]
+            if tail == ["runners", "register"]:
+                return self._handle_local_runner_register(
+                    project,
+                    body,
+                    root,
+                    actor,
+                )
+            if len(tail) == 3 and tail[1] == "runner" and tail[2] == "tasks":
+                return self._handle_local_runner_task(
+                    project,
+                    _text(tail[0], 160),
+                    body,
+                    root,
+                    actor,
+                )
+            if len(tail) == 3 and tail[1] == "runner" and tail[2] == "results":
+                return self._handle_local_runner_result(
+                    project,
+                    body,
+                    root,
+                    actor,
+                )
             if not tail:
                 return self._handle_knowledge_connector_configure(
                     project,
@@ -1352,6 +1531,7 @@ class KnowledgeConnectorHandlersMixin:
         except (
             ConnectorProfileError,
             ConnectorSyncError,
+            LocalRunnerError,
             FeishuConnectorError,
             FeishuTenantAcceptanceJobError,
             FeishuTenantAcceptanceReportError,

@@ -111,7 +111,27 @@ Gitee、GitLab、GitHub 和 generic Git 使用同一套配置形状；`connector
 }
 ```
 
-支持的范围字段包括默认/指定分支、包含/排除路径、文件类型、单文件/总字节数、最大文件数，以及是否读取 Issue、Wiki、Release 和 Commit。同步 cursor 绑定仓库、分支 ref、commit SHA、tree hash、平台事件 ID 和范围指纹；普通提交只物化变化文件，重命名、删除、分支删除和 force-push 会产生可追踪生命周期事件或可见覆盖缺口。私有仓库的 Local Runner 尚未纳入本项完成范围。
+支持的范围字段包括默认/指定分支、包含/排除路径、文件类型、单文件/总字节数、最大文件数，以及是否读取 Issue、Wiki、Release 和 Commit。同步 cursor 绑定仓库、分支 ref、commit SHA、tree hash、平台事件 ID 和范围指纹；普通提交只物化变化文件，重命名、删除、分支删除和 force-push 会产生可追踪生命周期事件或可见覆盖缺口。
+
+### Local Runner 内网访问（OL-009）
+
+内网 GitLab 等资料源必须由客户侧 Local Runner 执行；控制面只签发任务并接收签名结果，不直接访问内网地址，也不持有 Runner 本地凭据。Runner 使用精确 host 白名单、只读适配器和本地加密 profile，任务与结果均为 HMAC 签名。结果进入控制面后仍调用同一个 `sync_connector_snapshot_batch` Source Occurrence 入库主链，不创建第二套资料注册表。
+
+一次性注册和本地初始化可使用随包提供的命令：
+
+```text
+qualibug-local-runner register --control-root <control-root> --project <project> \
+  --runner-id <runner-id> --allowed-host <gitlab-host> --connector-type gitlab \
+  --output bootstrap.json
+qualibug-local-runner init --root <runner-root> --bootstrap-file bootstrap.json \
+  --profiles-file local-source-profiles.json
+```
+
+`local-source-profiles.json` 只在 Runner 端读取并加密保存；不得把 token、密码或数据库 DSN 放进普通配置 API。Runner 断线时保留加密任务和结果 outbox，只有控制面返回同一结果指纹的接受回执后才清理 outbox。`STRUCTURED_ONLY` 模式只上传结构化覆盖观察，不推进内容 cursor，因而不会把“未上传正文”伪装成完整资料接入。
+
+当前产品只将实际具备本地执行契约的 Git 适配器标记为 Local Runner 支持；Confluence、YApi、禅道和数据库在适配器与安全契约完成前保持显式未支持，不生成假资料或假成功。
+
+控制面也提供同一协议的项目范围 API：`POST /api/v1/projects/{project_id}/knowledge-connectors/runners/register` 一次性返回 bootstrap，`GET /api/v1/projects/{project_id}/knowledge-connectors/runners` 只返回 Runner 能力和任务状态，`POST /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/runner/tasks` 签发任务，`POST /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/runner/results` 接收签名结果。所有接口继续复用租户、项目范围和连接器管理角色校验。
 
 ### 测试连接
 
