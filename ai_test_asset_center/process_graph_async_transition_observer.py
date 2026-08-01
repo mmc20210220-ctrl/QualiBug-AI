@@ -170,6 +170,19 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
                 "source_request_contract_fingerprint": _text(
                     receipt.get("source_request_contract_fingerprint")
                 ),
+                "termination_epoch_authority": _text(
+                    receipt.get("termination_epoch_authority")
+                ),
+                "termination_epoch_contract_fingerprint": _text(
+                    receipt.get("termination_epoch_contract_fingerprint")
+                ),
+                "termination_cleanup_receipt_ids": [
+                    _text(value)
+                    for value in _list(
+                        receipt.get("termination_cleanup_receipt_ids")
+                    )
+                    if _text(value)
+                ],
                 "observed_correlated_row_count": int(
                     receipt.get("observed_correlated_row_count") or 0
                 ),
@@ -279,8 +292,6 @@ def evaluate_process_async_completion(
         if _text(value)
     ]
 
-    # Async evidence is evaluated first because a complete violation is a
-    # settled business verdict, independent of what a downstream node later did.
     if async_rows.get("coverage_complete") is not True:
         return {
             "passed": None,
