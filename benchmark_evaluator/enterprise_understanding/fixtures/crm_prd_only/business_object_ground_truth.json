@@ -1,0 +1,66 @@
+{
+  "schema": "qualibug.enterprise-business-object-ground-truth.v1",
+  "project_id": "crm_prd_only",
+  "annotation_scope": "CLOSED_WORLD_SOURCE_LABELS",
+  "ground_truth_generated_from_product_output": false,
+  "source_snapshot": [
+    {
+      "path": "benchmark/multi_industry/crm/PRD.md",
+      "blob_sha": "c983ccc1889d2582bf9c242f1d9eb3ddda1199c0"
+    }
+  ],
+  "labels": [
+    {
+      "ground_truth_id": "crm-object-1",
+      "canonical_label": "客户线索",
+      "aliases": ["线索"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT"],
+      "source_refs": ["PRD.md#line=2"]
+    },
+    {
+      "ground_truth_id": "crm-object-2",
+      "canonical_label": "商机",
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT"],
+      "source_refs": ["PRD.md#line=2"]
+    },
+    {
+      "ground_truth_id": "crm-object-3",
+      "canonical_label": "合同",
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT"],
+      "source_refs": ["PRD.md#line=2"]
+    },
+    {
+      "ground_truth_id": "crm-non-object-1",
+      "canonical_label": "客户",
+      "expected_business_object": false,
+      "semantic_roles": ["OTHER_NON_OBJECT"],
+      "source_refs": ["PRD.md#line=2"]
+    },
+    {
+      "ground_truth_id": "crm-non-object-2",
+      "canonical_label": "销售",
+      "aliases": ["归属销售"],
+      "expected_business_object": false,
+      "semantic_roles": ["ACTOR"],
+      "source_refs": ["PRD.md#line=2"]
+    },
+    {
+      "ground_truth_id": "crm-non-object-3",
+      "canonical_label": "折扣",
+      "expected_business_object": false,
+      "semantic_roles": ["FIELD"],
+      "source_refs": ["PRD.md#line=2"]
+    },
+    {
+      "ground_truth_id": "crm-non-object-4",
+      "canonical_label": "审批",
+      "aliases": ["访问"],
+      "expected_business_object": false,
+      "semantic_roles": ["ACTION"],
+      "source_refs": ["PRD.md#line=2"]
+    }
+  ]
+}

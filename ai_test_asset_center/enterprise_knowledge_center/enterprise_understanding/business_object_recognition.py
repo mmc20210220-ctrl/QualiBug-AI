@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from ._object_candidate_governance import govern_object_candidates
+from ._object_narrative_preparation import prepare_narrative_declared_asset
 from ._object_recognition_projection import (
     apply_recognition_to_model,
     project_asset_for_recognized_objects,
@@ -21,6 +22,8 @@ from ._object_source_preparation import (
 
 def recognize_business_objects(asset: dict[str, Any]) -> dict[str, Any]:
     prepared, authority = prepare_source_declared_asset(asset)
+    if not authority.get("declared_labels"):
+        prepared, authority = prepare_narrative_declared_asset(asset)
     return finalize_source_declared_recognition(
         govern_object_candidates(prepared), authority
     )
