@@ -1,17 +1,19 @@
 """Bind connector cursor checkpoints to durable remote-lifecycle commit decisions.
 
 The generic sync authority remains unchanged for connectors that do not have a second lifecycle
-phase.  Feishu uses this composition authority: its material snapshot completes with a hashed
+phase. Feishu uses this composition authority: its material snapshot completes with a hashed
 cursor in ``PENDING_LIFECYCLE_COMMIT`` state, then the cursor is made current only after the
-remote-lifecycle transaction has a durable COMMITTED decision.  A crash after that decision is
+remote-lifecycle transaction has a durable COMMITTED decision. A crash after that decision is
 recovered forward; a lifecycle rollback never advances the checkpoint.
 """
 from __future__ import annotations
 
 import re
 import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from . import connector_sync_authority as _sync
 from .connector_lifecycle_commit_authority import (
@@ -27,7 +29,13 @@ from .enterprise_knowledge_center.transaction_lock import (
 
 CONNECTOR_CHECKPOINT_COMMIT_SCHEMA = "qualibug.connector-checkpoint-commit.v1"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_FINISH_OVERRIDE_LOCK = threading.RLock()
+_FINISH_STATE_LOCK = threading.RLock()
+_DEFER_FINISH_CONTEXT: ContextVar[bool] = ContextVar(
+    "qualibug_connector_defer_checkpoint_finish",
+    default=False,
+)
+_FINISH_OVERRIDE_DEPTH = 0
+_FINISH_ORIGINAL: Callable[..., str] | None = None
 
 
 class ConnectorCheckpointCommitError(RuntimeError):
@@ -78,6 +86,14 @@ def _pending_finish(
         for key in (
             "last_successful_sync_epoch_id",
             "last_successful_sync_at_utc",
+        )
+    }
+    prior_pending = {
+        key: (key in before_instance, before_instance.get(key))
+        for key in (
+            "pending_lifecycle_sync_epoch_id",
+            "pending_cursor_fingerprint",
+            "pending_checkpoint_since_utc",
         )
     }
     prior_pending_epoch = _text(
@@ -179,10 +195,7 @@ def _pending_finish(
         instance = _sync._instance_by_id(registry, connector)
         if instance is not None:
             _restore_optional_fields(instance, prior_success)
-            if _text(instance.get("pending_lifecycle_sync_epoch_id"), 160) == epoch:
-                instance["pending_lifecycle_sync_epoch_id"] = prior_pending_epoch
-                instance["pending_cursor_fingerprint"] = ""
-                instance["pending_checkpoint_since_utc"] = ""
+            _restore_optional_fields(instance, prior_pending)
             registry.setdefault("audit_events", []).append(
                 {
                     "event": "defer_connector_cursor_checkpoint_failed",
@@ -191,11 +204,49 @@ def _pending_finish(
                     "connector_instance_id": connector,
                     "sync_epoch_id": epoch,
                     "previous_success_pointer_restored": True,
+                    "previous_pending_pointer_restored": True,
                     "cursor_checkpoint_committed": False,
                 }
             )
             _sync._save_connector_registry(project, root, registry)
         raise
+
+
+def _finish_dispatcher(*args: Any, **kwargs: Any) -> str:
+    original = _FINISH_ORIGINAL
+    if original is None:
+        raise ConnectorCheckpointCommitError(
+            "checkpoint_finish_dispatcher_without_original"
+        )
+    if _DEFER_FINISH_CONTEXT.get():
+        return _pending_finish(original, *args, **kwargs)
+    return original(*args, **kwargs)
+
+
+@contextmanager
+def _deferred_finish_binding() -> Iterator[None]:
+    """Install one context-aware dispatcher without serializing concurrent syncs."""
+    global _FINISH_OVERRIDE_DEPTH, _FINISH_ORIGINAL
+    with _FINISH_STATE_LOCK:
+        if _FINISH_OVERRIDE_DEPTH == 0:
+            _FINISH_ORIGINAL = _sync._finish_run
+            _sync._finish_run = _finish_dispatcher
+        elif _sync._finish_run is not _finish_dispatcher:
+            raise ConnectorCheckpointCommitError(
+                "checkpoint_finish_authority_changed_during_binding"
+            )
+        _FINISH_OVERRIDE_DEPTH += 1
+    token = _DEFER_FINISH_CONTEXT.set(True)
+    try:
+        yield
+    finally:
+        _DEFER_FINISH_CONTEXT.reset(token)
+        with _FINISH_STATE_LOCK:
+            _FINISH_OVERRIDE_DEPTH -= 1
+            if _FINISH_OVERRIDE_DEPTH == 0:
+                if _sync._finish_run is _finish_dispatcher and _FINISH_ORIGINAL is not None:
+                    _sync._finish_run = _FINISH_ORIGINAL
+                _FINISH_ORIGINAL = None
 
 
 def sync_connector_snapshot_batch_deferred(
@@ -217,37 +268,24 @@ def sync_connector_snapshot_batch_deferred(
     sync_epoch_id: str = "",
 ) -> dict[str, Any]:
     """Execute the canonical batch while deferring only its cursor commit."""
-    owner_thread = threading.get_ident()
-    with _FINISH_OVERRIDE_LOCK:
-        original_finish = _sync._finish_run
-
-        def finish_dispatcher(*args: Any, **kwargs: Any) -> str:
-            if threading.get_ident() != owner_thread:
-                return original_finish(*args, **kwargs)
-            return _pending_finish(original_finish, *args, **kwargs)
-
-        _sync._finish_run = finish_dispatcher
-        try:
-            return _sync.sync_connector_snapshot_batch(
-                project_id,
-                connector_instance_id=connector_instance_id,
-                items=items,
-                unchanged_observations=unchanged_observations,
-                coverage_observations=coverage_observations,
-                root=root,
-                actor=actor,
-                sync_mode=sync_mode,
-                previous_cursor=previous_cursor,
-                next_cursor=next_cursor,
-                deletion_policy=deletion_policy,
-                snapshot_complete=snapshot_complete,
-                max_retire_count=max_retire_count,
-                max_retire_ratio=max_retire_ratio,
-                sync_epoch_id=sync_epoch_id,
-            )
-        finally:
-            if _sync._finish_run is finish_dispatcher:
-                _sync._finish_run = original_finish
+    with _deferred_finish_binding():
+        return _sync.sync_connector_snapshot_batch(
+            project_id,
+            connector_instance_id=connector_instance_id,
+            items=items,
+            unchanged_observations=unchanged_observations,
+            coverage_observations=coverage_observations,
+            root=root,
+            actor=actor,
+            sync_mode=sync_mode,
+            previous_cursor=previous_cursor,
+            next_cursor=next_cursor,
+            deletion_policy=deletion_policy,
+            snapshot_complete=snapshot_complete,
+            max_retire_count=max_retire_count,
+            max_retire_ratio=max_retire_ratio,
+            sync_epoch_id=sync_epoch_id,
+        )
 
 
 def _finalize_connector_sync_checkpoint_unlocked(
