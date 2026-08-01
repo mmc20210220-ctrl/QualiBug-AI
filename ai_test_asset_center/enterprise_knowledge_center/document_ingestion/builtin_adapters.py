@@ -210,6 +210,42 @@ class GenericTextDocumentAdapter(DocumentAdapter):
         r"[①②③④⑤⑥⑦⑧⑨⑩]|[A-Za-z][.)、）])\s*\S"
     )
 
+    _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+    _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|[\s:\-|]+\|\s*$")
+
+    @staticmethod
+    def _split_table_cells(raw: str) -> list[str]:
+        text = str(raw or "").strip()
+        if not text.startswith("|"):
+            return []
+        return [part.strip() for part in text.strip("|").split("|")]
+
+    @staticmethod
+    def _markdown_table_runs(lines: list[str]) -> list[tuple[int, int]]:
+        """Return (start, end) 0-based index ranges of consecutive table lines.
+
+        A run qualifies as a markdown table only when it contains a separator
+        row (``|---|``), so pipe-delimited prose is never misclassified.
+        """
+
+        runs: list[tuple[int, int]] = []
+        index = 0
+        count = len(lines)
+        while index < count:
+            if not GenericTextDocumentAdapter._TABLE_ROW_RE.match(lines[index]):
+                index += 1
+                continue
+            end = index
+            while end < count and GenericTextDocumentAdapter._TABLE_ROW_RE.match(lines[end]):
+                end += 1
+            if any(
+                GenericTextDocumentAdapter._TABLE_SEPARATOR_RE.match(lines[candidate])
+                for candidate in range(index, end)
+            ):
+                runs.append((index, end))
+            index = end
+        return runs
+
     def probe(self, source: DocumentSource) -> AdapterMatch | None:
         decoded, confidence = _decoded_text(source.data)
         if source.legacy_text.strip() and not decoded.strip():
@@ -227,11 +263,87 @@ class GenericTextDocumentAdapter(DocumentAdapter):
         blocks: list[dict[str, Any]] = []
         sections: list[dict[str, Any]] = []
         heading_stack: list[dict[str, Any]] = []
+        table_assets: list[dict[str, Any]] = []
         offset = 0
         order = 0
-        for line_number, raw in enumerate(value.splitlines(), start=1):
+        source_lines = value.splitlines()
+        table_runs = self._markdown_table_runs(source_lines)
+        table_cell_ids: dict[tuple[int, int, int], str] = {}
+        table_run_of_line: dict[int, tuple[int, int]] = {}
+        for run_index, (start, end) in enumerate(table_runs):
+            for line_index in range(start, end):
+                table_run_of_line[line_index] = (run_index, start, end)
+        for line_number, raw in enumerate(source_lines, start=1):
+            line_index = line_number - 1
             line = raw.strip()
             if not line:
+                offset += len(raw) + 1
+                continue
+            table_run = table_run_of_line.get(line_index)
+            if table_run is not None:
+                run_index, run_start, run_end = table_run
+                run_lines = source_lines[run_start:run_end]
+                separator_index = next(
+                    (
+                        candidate
+                        for candidate in range(len(run_lines))
+                        if self._TABLE_SEPARATOR_RE.match(run_lines[candidate])
+                    ),
+                    -1,
+                )
+                header_cells = self._split_table_cells(run_lines[0])
+                if separator_index < 0 or not header_cells:
+                    offset += len(raw) + 1
+                    continue
+                if line_index == run_start + separator_index:
+                    offset += len(raw) + 1
+                    continue
+                else:
+                    prior_lines = [
+                        candidate
+                        for candidate in range(run_start, line_index)
+                        if candidate != run_start + separator_index
+                    ]
+                    row_index = len(prior_lines) + 1
+                table_id = _stable_id("table", source.source_id, run_index + 1, "markdown_table")
+                cells = self._split_table_cells(raw)
+                for column_index, cell_text in enumerate(cells, start=1):
+                    order += 1
+                    block_id = _stable_id(
+                        "table_cell",
+                        source.source_id,
+                        run_index + 1,
+                        row_index,
+                        column_index,
+                    )
+                    start = offset + max(0, raw.find(cell_text)) if cell_text else offset
+                    end = start + max(0, len(cell_text) - 1)
+                    blocks.append(
+                        {
+                            "block_id": block_id,
+                            "type": "TABLE_CELL",
+                            "parent_id": table_id,
+                            "order": order,
+                            "region": "body",
+                            "level": None,
+                            "text": cell_text,
+                            "row_index": row_index,
+                            "column_index": column_index,
+                            "row_span": 1,
+                            "column_span": 1,
+                            "start_offset": start,
+                            "end_offset": end,
+                            "source_locator": (
+                                f"{source.filename or 'document.txt'}#line={line_number};"
+                                f"table-cell={table_id}:r{row_index}c{column_index}"
+                            ),
+                            "structure_evidence": {
+                                "method": "markdown_table_row",
+                                "decode_confidence": confidence,
+                            },
+                        }
+                    )
+                    table_cell_ids[(run_index, row_index, column_index)] = block_id
                 offset += len(raw) + 1
                 continue
             order += 1
@@ -284,6 +396,35 @@ class GenericTextDocumentAdapter(DocumentAdapter):
                     }
                 )
             offset += len(raw) + 1
+        for run_index, (start, end) in enumerate(table_runs):
+            run_cell_ids = [
+                table_cell_ids[key]
+                for key in sorted(table_cell_ids)
+                if key[0] == run_index
+            ]
+            if not run_cell_ids:
+                continue
+            run_lines = source_lines[start:end]
+            header_cells = self._split_table_cells(run_lines[0])
+            row_count = (
+                max((key[1] for key in table_cell_ids if key[0] == run_index), default=0)
+                + 1
+            )
+            table_id = _stable_id("table", source.source_id, run_index + 1, "markdown_table")
+            table_assets.append(
+                {
+                    "block_id": table_id,
+                    "table_id": table_id,
+                    "cell_block_ids": run_cell_ids,
+                    "row_count": row_count,
+                    "column_count": max(len(header_cells), 1),
+                    "source_locator": f"{source.filename or 'document.txt'}#table={run_index + 1}",
+                    "structure_evidence": {
+                        "method": "markdown_table_separator_detected",
+                        "decode_confidence": confidence,
+                    },
+                }
+            )
         block_counts = Counter(str(row.get("type") or "") for row in blocks)
         unsupported = []
         status = "COMPLETE"
@@ -308,7 +449,7 @@ class GenericTextDocumentAdapter(DocumentAdapter):
             "plain_text": value,
             "blocks": blocks,
             "sections": sections,
-            "tables": [],
+            "tables": table_assets,
             "unsupported_content": unsupported,
             "structure_receipt": {
                 "schema": STRUCTURE_RECEIPT_SCHEMA,
