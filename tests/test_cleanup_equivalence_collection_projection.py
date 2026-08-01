@@ -7,13 +7,14 @@ from ai_test_asset_center.cleanup_equivalence import evaluate_cleanup_equivalenc
 
 
 TARGET_ID = "order-1"
+TENANT_ID = "tenant-a"
 
 
-def _proof() -> dict[str, Any]:
+def _proof(*, identity_fields: list[str] | None = None) -> dict[str, Any]:
     return {
         "proof_id": "wrp_collection_identity",
         "identity_contract": {
-            "identity_fields": ["id"],
+            "identity_fields": identity_fields or ["id"],
         },
         "equivalence_contract": {
             "mode": "created_entity_absent",
@@ -39,9 +40,11 @@ def _evaluate(
     before_rows: list[dict[str, Any]],
     after_write_rows: list[dict[str, Any]],
     after_cleanup_rows: list[dict[str, Any]],
+    proof: dict[str, Any] | None = None,
+    runtime_bindings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return evaluate_cleanup_equivalence(
-        proof=_proof(),
+        proof=proof or _proof(),
         before_observation={
             "status_code": 200,
             "body": {"items": before_rows},
@@ -54,7 +57,7 @@ def _evaluate(
             "status_code": 200,
             "body": {"items": after_cleanup_rows},
         },
-        runtime_bindings={"id": TARGET_ID},
+        runtime_bindings=runtime_bindings or {"id": TARGET_ID},
         cleanup_execution_receipt=_cleanup_receipt(),
     )
 
@@ -96,6 +99,30 @@ def test_non_comparable_collection_remains_fail_closed() -> None:
         before_rows=[],
         after_write_rows=[{"sku": "SKU-1"}],
         after_cleanup_rows=[{"sku": "SKU-1"}],
+    )
+    assert receipt["equivalence_status"] == "NOT_EQUIVALENT"
+    assert receipt["reason_code"] == "ENTITY_STILL_PRESENT_AFTER_CLEANUP"
+
+
+def test_missing_composite_runtime_binding_remains_fail_closed() -> None:
+    receipt = _evaluate(
+        proof=_proof(identity_fields=["tenant_id", "id"]),
+        runtime_bindings={"id": TARGET_ID},
+        before_rows=[],
+        after_write_rows=[{"tenant_id": TENANT_ID, "id": TARGET_ID}],
+        after_cleanup_rows=[{"tenant_id": TENANT_ID, "id": TARGET_ID}],
+    )
+    assert receipt["equivalence_status"] == "NOT_EQUIVALENT"
+    assert receipt["reason_code"] == "ENTITY_STILL_PRESENT_AFTER_CLEANUP"
+
+
+def test_row_missing_composite_identity_field_remains_fail_closed() -> None:
+    receipt = _evaluate(
+        proof=_proof(identity_fields=["tenant_id", "id"]),
+        runtime_bindings={"tenant_id": TENANT_ID, "id": TARGET_ID},
+        before_rows=[],
+        after_write_rows=[{"tenant_id": TENANT_ID, "id": TARGET_ID}],
+        after_cleanup_rows=[{"id": TARGET_ID}],
     )
     assert receipt["equivalence_status"] == "NOT_EQUIVALENT"
     assert receipt["reason_code"] == "ENTITY_STILL_PRESENT_AFTER_CLEANUP"
