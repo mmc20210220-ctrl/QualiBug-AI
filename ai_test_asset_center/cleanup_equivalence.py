@@ -1,13 +1,16 @@
 """Public cleanup equivalence authority.
 
-Ordinary experiments delegate byte-for-byte to ``cleanup_equivalence_core``.
-A process-graph proof set is evaluated by applying that same core engine to each
-source step and aggregating only the resulting formal receipts.
+Ordinary experiments use the single ``cleanup_equivalence_core`` evaluator. Before a
+created-entity absence check, this facade narrows common collection envelopes to the exact runtime
+identity when that identity is available. The core still owns every equivalence verdict and keeps
+its three-phase, fail-closed evidence requirements.
 
-The strict graph authority requires graph cleanup receipts for every non-
-transport conclusion. A narrow compatibility path remains for completed cleanup
-rows that already carry one exact governed transport/readback receipt and one
-matching ACCEPTED Cleanup Execution Receipt per source step.
+A process-graph proof set is evaluated by applying that same core engine to each source step and
+aggregating only the resulting formal receipts.
+
+The strict graph authority requires graph cleanup receipts for every non-transport conclusion. A
+narrow compatibility path remains for completed cleanup rows that already carry one exact governed
+transport/readback receipt and one matching ACCEPTED Cleanup Execution Receipt per source step.
 """
 from __future__ import annotations
 
@@ -201,6 +204,144 @@ def _bind_graph_verification_outputs(
         )
 
 
+_COLLECTION_ENVELOPE_KEYS = (
+    "items",
+    "rows",
+    "results",
+    "records",
+    "data",
+)
+
+
+def _runtime_identity(
+    proof: dict[str, Any],
+    runtime_bindings: dict[str, Any],
+) -> dict[str, Any]:
+    identity_contract = _dict(proof.get("identity_contract"))
+    fields = [
+        _text(field)
+        for field in _list(identity_contract.get("identity_fields"))
+        if _text(field)
+    ]
+    return {
+        field: runtime_bindings[field]
+        for field in fields
+        if field in runtime_bindings
+        and runtime_bindings[field] not in (None, "")
+    }
+
+
+def _row_matches_identity(
+    row: dict[str, Any],
+    identity: dict[str, Any],
+) -> bool | None:
+    comparable = {
+        field: expected
+        for field, expected in identity.items()
+        if field in row
+    }
+    if not comparable:
+        return None
+    return all(row.get(field) == expected for field, expected in comparable.items())
+
+
+def _identity_scoped_collection_observation(
+    observation: dict[str, Any],
+    identity: dict[str, Any],
+) -> dict[str, Any]:
+    """Narrow one collection envelope to the exact runtime identity.
+
+    An empty collection proves global absence. A non-empty collection is narrowed only when at
+    least one row exposes a declared identity field; otherwise the original observation is
+    preserved so the core remains fail-closed rather than guessing.
+    """
+    original = _dict(observation)
+    body = original.get("body")
+    if not isinstance(body, dict):
+        return original
+
+    collection_key = next(
+        (
+            key
+            for key in _COLLECTION_ENVELOPE_KEYS
+            if isinstance(body.get(key), list)
+        ),
+        "",
+    )
+    if not collection_key:
+        return original
+    rows = list(body.get(collection_key) or [])
+    if not rows:
+        projected = deepcopy(original)
+        projected["body"] = []
+        projected["identity_scope_projection"] = {
+            "status": "EMPTY_COLLECTION",
+            "collection_key": collection_key,
+            "raw_rows_returned": False,
+        }
+        return projected
+    if not identity:
+        return original
+
+    matched: list[dict[str, Any]] = []
+    comparable_row_count = 0
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        verdict = _row_matches_identity(raw, identity)
+        if verdict is None:
+            continue
+        comparable_row_count += 1
+        if verdict:
+            matched.append(raw)
+    if not comparable_row_count:
+        return original
+
+    projected = deepcopy(original)
+    projected["body"] = matched
+    projected["identity_scope_projection"] = {
+        "status": "PROJECTED",
+        "collection_key": collection_key,
+        "source_row_count": len(rows),
+        "comparable_row_count": comparable_row_count,
+        "matched_row_count": len(matched),
+        "identity_fields": sorted(identity),
+        "raw_rows_returned": False,
+    }
+    return projected
+
+
+def _ordinary_observations(
+    *,
+    proof: dict[str, Any],
+    before_observation: dict[str, Any],
+    after_write_observation: dict[str, Any],
+    after_cleanup_observation: dict[str, Any],
+    runtime_bindings: dict[str, Any],
+    cleanup_execution_receipt: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    equivalence_contract = _dict(proof.get("equivalence_contract"))
+    mode = _core._effective_equivalence_mode(
+        _text(equivalence_contract.get("mode")),
+        cleanup_execution_receipt,
+    )
+    if mode != "created_entity_absent":
+        return (
+            before_observation,
+            after_write_observation,
+            after_cleanup_observation,
+        )
+    identity = _runtime_identity(proof, runtime_bindings)
+    return tuple(
+        _identity_scoped_collection_observation(observation, identity)
+        for observation in (
+            before_observation,
+            after_write_observation,
+            after_cleanup_observation,
+        )
+    )
+
+
 def evaluate_cleanup_equivalence(
     *,
     proof: dict[str, Any],
@@ -235,11 +376,20 @@ def evaluate_cleanup_equivalence(
             result,
         )
         return result
-    return _core.evaluate_cleanup_equivalence(
+
+    before, after_write, after_cleanup = _ordinary_observations(
         proof=proof,
         before_observation=before_observation,
         after_write_observation=after_write_observation,
         after_cleanup_observation=after_cleanup_observation,
+        runtime_bindings=runtime_bindings,
+        cleanup_execution_receipt=cleanup_execution_receipt,
+    )
+    return _core.evaluate_cleanup_equivalence(
+        proof=proof,
+        before_observation=before,
+        after_write_observation=after_write,
+        after_cleanup_observation=after_cleanup,
         runtime_bindings=runtime_bindings,
         cleanup_execution_receipt=cleanup_execution_receipt,
     )
