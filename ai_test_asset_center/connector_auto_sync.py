@@ -38,9 +38,9 @@ from .feishu_connector_adapter import (
     _resolve_access_token,
     _snapshot_cursor,
     discover_feishu_wiki_resources,
-    sync_feishu_connector,
     test_feishu_connector_connection,
 )
+from .feishu_connector_capability_sync import sync_feishu_connector
 from .real_project_onboarding import _safe_project_id
 
 _AUTO_SYNC_ACTOR = {"name": "qualibug_auto_sync", "role": "knowledge_admin"}
