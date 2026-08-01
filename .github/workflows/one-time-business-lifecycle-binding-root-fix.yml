@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   apply-test-and-push:
-    runs-on: macos-latest
+    runs-on: macos-14
     timeout-minutes: 45
     steps:
       - name: Checkout trusted latest main
