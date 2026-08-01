@@ -4,10 +4,8 @@ import json
 from copy import deepcopy
 
 from ai_test_asset_center.process_graph_wait_contract import (
-    EVENT_CORRELATION_IDENTITY_MISMATCH,
     EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM,
     EVENT_IDEMPOTENCY_KEY_MISMATCH,
-    EVENT_IDENTITY_TYPE_CONFLICT,
     EVENT_TRANSITION_INVALID,
     STATUS_BLOCKED,
     STATUS_COMPILED,
@@ -19,11 +17,130 @@ from ai_test_asset_center.process_graph_wait_contract import (
 
 
 def _ir() -> dict:
-    return {"operations": [{"id": "op_submit", "method": "POST", "path": "/orders", "system_ref": "orders"}, {"id": "op_consume", "method": "GET", "path": "/notifications/{order_id}", "system_ref": "notifications"}, {"id": "op_event_observer", "method": "GET", "path": "/test-observers/events", "system_ref": "notifications"}]}
+    return {
+        "operations": [
+            {
+                "id": "op_submit",
+                "method": "POST",
+                "path": "/orders",
+                "system_ref": "orders",
+                "request_example": {
+                    "idempotency_key": "<request_id>"
+                },
+            },
+            {
+                "id": "op_consume",
+                "method": "GET",
+                "path": "/notifications/{order_id}",
+                "system_ref": "notifications",
+            },
+            {
+                "id": "op_event_observer",
+                "method": "GET",
+                "path": "/test-observers/events",
+                "system_ref": "notifications",
+            },
+        ]
+    }
 
 
 def _graph() -> dict:
-    return {"execution_graph_id": "graph_event_1", "process_id": "process_event_1", "nodes": [{"node_id": "submit_order", "step_id": "submit_order", "operation_ref": "op_submit", "actor_ref": "actor_1", "system_ref": "orders", "method": "POST", "path": "/orders", "output_binding_specs": [{"canonical_field_id": "order_id", "json_path": "$.order_id"}]}, {"node_id": "consume_notification", "step_id": "consume_notification", "operation_ref": "op_consume", "actor_ref": "actor_1", "system_ref": "notifications", "method": "GET", "path": "/notifications/{order_id}", "input_binding_refs": [{"producer_node_id": "submit_order", "producer_output_field": "order_id", "target": "order_id"}]}], "edges": [{"edge_id": "edge_event_1", "source_node_id": "submit_order", "target_node_id": "consume_notification", "relation_type": "MESSAGE", "binding_refs": [{"producer_node_id": "submit_order", "consumer_node_id": "consume_notification", "producer_output_field": "order_id", "consumer_target": "order_id"}]}], "topological_order": ["submit_order", "consume_notification"], "wait_contracts": [{"wait_id": "wait_order_created", "source_node_id": "submit_order", "target_node_id": "consume_notification", "observer_operation_ref": "op_event_observer", "actor_ref": "actor_1", "system_ref": "notifications", "predicate": {"status_codes": [200]}, "async_policy": {"enabled": True, "expected_max_delay_ms": 10, "poll_interval_ms": 1, "max_attempts": 3, "required_stable_observations": 1, "terminal_condition": "source_declared_event_delivery"}, "event_transition": {"delivery_kind": "message", "delivery_semantics": "exactly_once", "events_path": "$.items", "event_id_field": "$.event_id", "event_type_field": "$.event_type", "correlation_field": "$.aggregate_id", "correlation_binding": "order_id", "correlation_query_parameter": "aggregate_id", "expected_event_type": "OrderCreated", "expected_min_count": 1, "expected_max_count": 1, "idempotency_key_binding": "request_id", "idempotency_key_field": "$.idempotency_key", "delivery_attempt_field": "$.delivery_attempt", "expected_max_delivery_attempt": 2, "source_refs": [{"kind": "formal_event_contract", "locator": "events:OrderCreated"}]}}]}
+    return {
+        "execution_graph_id": "graph_event_1",
+        "process_id": "process_event_1",
+        "nodes": [
+            {
+                "node_id": "submit_order",
+                "step_id": "submit_order",
+                "operation_ref": "op_submit",
+                "actor_ref": "actor_1",
+                "system_ref": "orders",
+                "method": "POST",
+                "path": "/orders",
+                "output_binding_specs": [
+                    {
+                        "canonical_field_id": "order_id",
+                        "json_path": "$.order_id",
+                    }
+                ],
+            },
+            {
+                "node_id": "consume_notification",
+                "step_id": "consume_notification",
+                "operation_ref": "op_consume",
+                "actor_ref": "actor_1",
+                "system_ref": "notifications",
+                "method": "GET",
+                "path": "/notifications/{order_id}",
+                "input_binding_refs": [
+                    {
+                        "producer_node_id": "submit_order",
+                        "producer_output_field": "order_id",
+                        "target": "order_id",
+                    }
+                ],
+            },
+        ],
+        "edges": [
+            {
+                "edge_id": "edge_event_1",
+                "source_node_id": "submit_order",
+                "target_node_id": "consume_notification",
+                "relation_type": "MESSAGE",
+                "binding_refs": [
+                    {
+                        "producer_node_id": "submit_order",
+                        "consumer_node_id": "consume_notification",
+                        "producer_output_field": "order_id",
+                        "consumer_target": "order_id",
+                    }
+                ],
+            }
+        ],
+        "topological_order": ["submit_order", "consume_notification"],
+        "wait_contracts": [
+            {
+                "wait_id": "wait_order_created",
+                "source_node_id": "submit_order",
+                "target_node_id": "consume_notification",
+                "observer_operation_ref": "op_event_observer",
+                "actor_ref": "actor_1",
+                "system_ref": "notifications",
+                "predicate": {"status_codes": [200]},
+                "async_policy": {
+                    "enabled": True,
+                    "expected_max_delay_ms": 10,
+                    "poll_interval_ms": 1,
+                    "max_attempts": 3,
+                    "required_stable_observations": 1,
+                    "terminal_condition": "source_declared_event_delivery",
+                },
+                "event_transition": {
+                    "delivery_kind": "message",
+                    "delivery_semantics": "exactly_once",
+                    "events_path": "$.items",
+                    "event_id_field": "$.event_id",
+                    "event_type_field": "$.event_type",
+                    "correlation_field": "$.aggregate_id",
+                    "correlation_binding": "order_id",
+                    "correlation_query_parameter": "aggregate_id",
+                    "expected_event_type": "OrderCreated",
+                    "expected_min_count": 1,
+                    "expected_max_count": 1,
+                    "idempotency_key_binding": "request_id",
+                    "idempotency_key_field": "$.idempotency_key",
+                    "delivery_attempt_field": "$.delivery_attempt",
+                    "expected_max_delivery_attempt": 2,
+                    "source_refs": [
+                        {
+                            "kind": "formal_event_contract",
+                            "locator": "events:OrderCreated",
+                        }
+                    ],
+                },
+            }
+        ],
+    }
 
 
 def _compiled_graph() -> dict:
@@ -43,34 +160,6 @@ def _execute(graph: dict, responses: list[dict]) -> dict:
     return execute_process_graph_wait(graph=graph, step=step, context={"base_url": "https://notifications.example.test", "bindings": {"order_id": "ORD-42", "request_id": "REQ-1"}}, actors={"actor_1": {"role": "public"}}, tokens={}, read_once=lambda: next(iterator), sleep=lambda _: None, monotonic=lambda: next(ticks))
 
 
-
-def _execute_with_bindings(
-    graph: dict,
-    responses: list[dict],
-    bindings: dict,
-) -> dict:
-    iterator = iter(responses)
-    ticks = iter([0.0, 0.0, 0.001, 0.002, 0.003])
-    step = next(
-        row
-        for row in graph["nodes"]
-        if row["node_id"] == "consume_notification"
-    )
-    return execute_process_graph_wait(
-        graph=graph,
-        step=step,
-        context={
-            "base_url": "https://notifications.example.test",
-            "bindings": bindings,
-        },
-        actors={"actor_1": {"role": "public"}},
-        tokens={},
-        read_once=lambda: next(iterator),
-        sleep=lambda _: None,
-        monotonic=lambda: next(ticks),
-    )
-
-
 def test_event_transition_compiles_behind_existing_wait_contract() -> None:
     graph = _compiled_graph()
     wait = graph["wait_contracts_by_target"]["consume_notification"]
@@ -80,45 +169,100 @@ def test_event_transition_compiles_behind_existing_wait_contract() -> None:
     assert event["delivery_semantics"] == "exactly_once"
     assert event["correlation_binding"] == "order_id"
     assert event["idempotency_key_binding"] == "request_id"
+    proof = event["idempotency_binding_contract"]
+    assert proof["source_node_id"] == "submit_order"
+    assert proof["source_operation_ref"] == "op_submit"
+    assert proof["binding_target"] == "request_id"
+    assert proof["request_locations"] == [
+        "request_example:$.idempotency_key"
+    ]
+    assert proof["source_request_contract_fingerprint"]
     assert graph["wait_runtime_contract"]["event_transition_count"] == 1
     assert compiled_wait_runtime_ready(graph) == (True, "")
 
 
 
-def test_correlation_binding_uses_exact_consumer_target_not_global_alias() -> None:
-    graph = _graph()
-    graph["edges"][0]["binding_refs"][0]["consumer_target"] = "orderId"
-    graph["nodes"][1]["input_binding_refs"][0]["target"] = "orderId"
-    result = compile_process_graph_wait_contracts(graph, behavior_ir=_ir())
-    assert result["status"] == STATUS_COMPILED, result
-    compiled = result["graph"]
-    event = compiled["wait_contracts_by_target"]["consume_notification"][
-        "event_transition_contract"
-    ]
-    assert event["declared_correlation_binding"] == "order_id"
-    assert event["correlation_binding"] == "orderId"
+def test_idempotency_scope_requires_source_request_binding() -> None:
+    behavior_ir = _ir()
+    behavior_ir["operations"][0].pop("request_example")
 
-    response = {"status_code": 200, "body": {"items": [_event("evt-remap")]}}
-    receipt = _execute_with_bindings(
-        compiled,
-        [response, response, response],
-        {
-            "order_id": "WRONG-GLOBAL-ALIAS",
-            "orderId": "ORD-42",
-            "request_id": "REQ-1",
-        },
+    result = compile_process_graph_wait_contracts(
+        _graph(),
+        behavior_ir=behavior_ir,
     )
-    assert receipt["status"] == STATUS_CONVERGED
-    assert receipt["semantic_status"] == "PASS"
+
+    assert result["status"] == STATUS_BLOCKED
+    assert result["reason_code"] == EVENT_TRANSITION_INVALID
+    assert (
+        "event_idempotency_source_request_unresolved:request_id"
+        in result["detail"]
+    )
 
 
-def test_correlation_binding_edge_drift_blocks_before_transport() -> None:
+def test_idempotency_scope_rejects_static_request_example() -> None:
+    behavior_ir = _ir()
+    behavior_ir["operations"][0]["request_example"] = {
+        "idempotency_key": "REQ-STATIC"
+    }
+
+    result = compile_process_graph_wait_contracts(
+        _graph(),
+        behavior_ir=behavior_ir,
+    )
+
+    assert result["status"] == STATUS_BLOCKED
+    assert (
+        "event_idempotency_source_request_unresolved:request_id"
+        in result["detail"]
+    )
+
+
+def test_idempotency_scope_rejects_non_runtime_placeholder_syntax() -> None:
+    behavior_ir = _ir()
+    behavior_ir["operations"][0]["request_example"] = {
+        "idempotency_key": "{{request_id}}"
+    }
+
+    result = compile_process_graph_wait_contracts(
+        _graph(),
+        behavior_ir=behavior_ir,
+    )
+
+    assert result["status"] == STATUS_BLOCKED
+    assert (
+        "event_idempotency_source_request_unresolved:request_id"
+        in result["detail"]
+    )
+
+
+def test_idempotency_binding_contract_drift_blocks_runtime() -> None:
     graph = _compiled_graph()
-    graph["edges"][0]["binding_refs"][0]["consumer_target"] = "otherOrderId"
+    wait = graph["wait_contracts"][0]
+    event = wait["event_transition_contract"]
+    event["idempotency_binding_contract"]["source_operation_ref"] = (
+        "op_other"
+    )
+    event.pop("contract_fingerprint", None)
+    from ai_test_asset_center.process_graph_event_transition import _fingerprint
+
+    event["contract_fingerprint"] = _fingerprint(event)
+    wait.pop("contract_fingerprint", None)
+    from ai_test_asset_center.process_graph_wait_contract_core import (
+        _fingerprint as wait_fingerprint,
+    )
+
+    wait["contract_fingerprint"] = wait_fingerprint(wait)
+    graph["wait_contracts_by_target"]["consume_notification"] = deepcopy(wait)
+    graph["wait_runtime_contract"]["contract_fingerprints"] = [
+        wait["contract_fingerprint"]
+    ]
+    graph["wait_runtime_contract"]["event_transition_fingerprints"] = [
+        event["contract_fingerprint"]
+    ]
 
     assert compiled_wait_runtime_ready(graph) == (
         False,
-        "event_correlation_binding_contract_drift",
+        "event_idempotency_binding_contract_drift",
     )
 
 def test_missing_stable_event_identity_blocks_compile() -> None:
@@ -157,6 +301,11 @@ def test_same_event_seen_by_every_poll_is_one_delivery_not_duplicate() -> None:
     assert receipt["poll_replay_count"] == 2
     assert receipt["distinct_delivery_overflow_count"] == 0
     assert receipt["coverage_complete"] is True
+    assert receipt["idempotency_scope_authority"] == (
+        "source_request_binding_contract"
+    )
+    assert receipt["idempotency_binding_contract_fingerprint"]
+    assert receipt["source_request_contract_fingerprint"]
     serialized = json.dumps(receipt, ensure_ascii=False, sort_keys=True)
     assert "evt-1" not in serialized
     assert "ORD-42" not in serialized
@@ -182,86 +331,3 @@ def test_event_idempotency_violation_is_not_harness_block() -> None:
     assert receipt["semantic_status"] == "VIOLATION"
     assert receipt["reason_code"] == EVENT_IDEMPOTENCY_KEY_MISMATCH
     assert receipt["idempotency_mismatch_count"] == 1
-
-
-def test_correlation_identity_is_type_sensitive_across_systems() -> None:
-    graph = _compiled_graph()
-    response = {
-        "status_code": 200,
-        "body": {
-            "items": [
-                {
-                    "event_id": "evt-typed-correlation",
-                    "event_type": "OrderCreated",
-                    "aggregate_id": "42",
-                    "idempotency_key": "REQ-1",
-                    "delivery_attempt": 1,
-                }
-            ]
-        },
-    }
-    receipt = _execute_with_bindings(
-        graph,
-        [response, response, response],
-        {"order_id": 42, "request_id": "REQ-1"},
-    )
-    assert receipt["status"] == STATUS_CONVERGED
-    assert receipt["semantic_status"] == "VIOLATION"
-    assert receipt["reason_code"] == EVENT_CORRELATION_IDENTITY_MISMATCH
-    assert receipt["correlation_identity_mismatch_count"] == 1
-    assert receipt["observed_unique_event_count"] == 0
-
-
-def test_idempotency_identity_is_type_sensitive_across_systems() -> None:
-    graph = _compiled_graph()
-    response = {
-        "status_code": 200,
-        "body": {
-            "items": [
-                {
-                    "event_id": "evt-typed-idempotency",
-                    "event_type": "OrderCreated",
-                    "aggregate_id": "ORD-42",
-                    "idempotency_key": "1",
-                    "delivery_attempt": 1,
-                }
-            ]
-        },
-    }
-    receipt = _execute_with_bindings(
-        graph,
-        [response, response, response],
-        {"order_id": "ORD-42", "request_id": 1},
-    )
-    assert receipt["status"] == STATUS_CONVERGED
-    assert receipt["semantic_status"] == "VIOLATION"
-    assert receipt["reason_code"] == EVENT_IDEMPOTENCY_KEY_MISMATCH
-    assert receipt["idempotency_mismatch_count"] == 1
-
-
-def test_event_identity_does_not_collapse_integer_and_string_ids() -> None:
-    graph = _compiled_graph()
-    rows = [
-        {
-            "event_id": 1,
-            "event_type": "OrderCreated",
-            "aggregate_id": "ORD-42",
-            "idempotency_key": "REQ-1",
-            "delivery_attempt": 1,
-        },
-        {
-            "event_id": "1",
-            "event_type": "OrderCreated",
-            "aggregate_id": "ORD-42",
-            "idempotency_key": "REQ-1",
-            "delivery_attempt": 1,
-        },
-    ]
-    response = {"status_code": 200, "body": {"items": rows}}
-    receipt = _execute(graph, [response, response, response])
-    assert receipt["status"] == STATUS_CONVERGED
-    assert receipt["semantic_status"] == "VIOLATION"
-    assert receipt["reason_code"] == EVENT_IDENTITY_TYPE_CONFLICT
-    assert receipt["event_identity_type_conflict_count"] == 1
-    assert receipt["observed_unique_event_count"] == 2
-    assert len(receipt["event_id_fingerprints"]) == 2

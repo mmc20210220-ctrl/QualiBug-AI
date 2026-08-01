@@ -19,7 +19,8 @@ from typing import Any
 from . import process_graph_broker_adapter as _adapter
 from . import process_graph_event_transition as _event
 from . import process_graph_wait_contract_core as _core
-from .real_id_resolver import normalize_path_placeholders
+from .real_id_resolver import infer_path_params, normalize_path_placeholders
+from .runtime_binding_materializer import materialize_body_template
 
 
 for _name in dir(_core):
@@ -126,6 +127,9 @@ def _edge_scope(
 
 _EVENT_CORRELATION_BINDING_SCHEMA = (
     "qualibug.process-graph-event-correlation-binding.v1"
+)
+_EVENT_IDEMPOTENCY_BINDING_SCHEMA = (
+    "qualibug.process-graph-event-idempotency-binding.v1"
 )
 
 
@@ -300,6 +304,128 @@ def _correlation_binding_proof_valid(
     )
 
 
+def _request_binding_locations(
+    value: Any,
+    binding: str,
+    path: str = "$",
+) -> list[str]:
+    """Return only placeholders the existing runtime will materialize."""
+    locations: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            locations.extend(
+                _request_binding_locations(child, binding, f"{path}.{key}")
+            )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            locations.extend(
+                _request_binding_locations(child, binding, f"{path}[{index}]")
+            )
+    elif isinstance(value, str):
+        sentinel = object()
+        materialized = materialize_body_template(value, {binding: sentinel})
+        if materialized is sentinel:
+            locations.append(path)
+    return locations
+
+def _idempotency_binding_proof(
+    *,
+    graph: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+    event_contract: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Prove the event idempotency key is consumed by the source request.
+
+    A graph-wide binding may be stale or belong to another branch. It can scope
+    an async event only when the exact source operation request materializes that
+    binding in its path or body. Static examples and name similarity are not
+    request authority.
+    """
+    binding = _text(event_contract.get("idempotency_key_binding"))
+    if not binding:
+        return {}, ""
+    source_node_id = _text(event_contract.get("source_node_id"))
+    source_node = _dict(_nodes(graph).get(source_node_id))
+    operation_ref = _text(source_node.get("operation_ref"))
+    operation = _dict(operations.get(operation_ref))
+    if not source_node or not operation_ref or not operation:
+        return {}, (
+            "event_idempotency_source_operation_unresolved:"
+            f"{source_node_id or '<empty>'}"
+        )
+
+    locations: list[str] = []
+    raw_path = _text(
+        source_node.get("path")
+        or operation.get("path")
+        or operation.get("raw_path")
+        or operation.get("path_template")
+    )
+    if binding in {_text(value) for value in infer_path_params(raw_path)}:
+        locations.append(f"path:{binding}")
+
+    request_example = operation.get("request_example")
+    for location in _request_binding_locations(request_example, binding):
+        locations.append(f"request_example:{location}")
+
+    locations = sorted(set(locations))
+    if not locations:
+        return {}, f"event_idempotency_source_request_unresolved:{binding}"
+
+    request_contract = {
+        "source_operation_ref": operation_ref,
+        "method": _text(source_node.get("method") or operation.get("method")).upper(),
+        "path_template": normalize_path_placeholders(raw_path),
+        "request_example": deepcopy(request_example),
+    }
+    payload = {
+        "schema_version": _EVENT_IDEMPOTENCY_BINDING_SCHEMA,
+        "source_node_id": source_node_id,
+        "source_operation_ref": operation_ref,
+        "binding_target": binding,
+        "request_locations": locations,
+        "source_request_contract_fingerprint": _core._fingerprint(
+            request_contract
+        ),
+        "source_system_ref": _text(source_node.get("system_ref")),
+    }
+    payload["contract_fingerprint"] = _core._fingerprint(payload)
+    return payload, ""
+
+
+def _idempotency_binding_proof_valid(
+    *,
+    graph: dict[str, Any],
+    event_contract: dict[str, Any],
+) -> bool:
+    binding = _text(event_contract.get("idempotency_key_binding"))
+    proof = deepcopy(_dict(event_contract.get("idempotency_binding_contract")))
+    if not binding:
+        return not proof
+    attached = _text(proof.pop("contract_fingerprint", ""))
+    source_node_id = _text(event_contract.get("source_node_id"))
+    source_node = _dict(_nodes(graph).get(source_node_id))
+    return bool(
+        attached
+        and attached == _core._fingerprint(proof)
+        and _text(proof.get("schema_version"))
+        == _EVENT_IDEMPOTENCY_BINDING_SCHEMA
+        and _text(proof.get("source_node_id")) == source_node_id
+        and _text(proof.get("source_operation_ref"))
+        == _text(source_node.get("operation_ref"))
+        and _text(proof.get("binding_target")) == binding
+        and _text(proof.get("source_system_ref"))
+        == _text(source_node.get("system_ref"))
+        and bool(_list(proof.get("request_locations")))
+        and len(_list(proof.get("request_locations")))
+        == len(set(_list(proof.get("request_locations"))))
+        and all(_text(value) for value in _list(proof.get("request_locations")))
+        and bool(_text(proof.get("source_request_contract_fingerprint")))
+        and _dict(event_contract.get("idempotency_binding_contract"))
+        == {**proof, "contract_fingerprint": attached}
+    )
+
+
 def _fingerprint_valid(row: dict[str, Any]) -> bool:
     value = deepcopy(_dict(row))
     attached = _text(value.pop("contract_fingerprint", ""))
@@ -373,6 +499,11 @@ def _validate_event_wait_runtime(
         event_contract=event,
     ):
         return "event_correlation_binding_contract_drift"
+    if not _idempotency_binding_proof_valid(
+        graph=graph,
+        event_contract=event,
+    ):
+        return "event_idempotency_binding_contract_drift"
     return ""
 
 
@@ -644,6 +775,19 @@ def compile_process_graph_wait_contracts(
             correlation_proof.get("consumer_target")
         )
         event_contract["correlation_binding_contract"] = correlation_proof
+
+        idempotency_proof, idempotency_error = _idempotency_binding_proof(
+            graph=compiled_graph,
+            operations=operations,
+            event_contract=event_contract,
+        )
+        if idempotency_error:
+            event_issues.append(f"{wait_id}:{idempotency_error}")
+            continue
+        if idempotency_proof:
+            event_contract["idempotency_binding_contract"] = (
+                idempotency_proof
+            )
 
         original_adapter_event = _dict(adapter_event_specs.get(wait_id))
         if original_adapter_event:
