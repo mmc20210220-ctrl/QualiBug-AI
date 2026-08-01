@@ -161,8 +161,20 @@ class ProcessStepSemanticView:
             )
 
     def _projection(self) -> dict[str, list[str]]:
+        """Project strict business completion while preserving raw ledger facts.
+
+        ``project_step_sets`` deliberately reports transport execution separately
+        from semantic completion. Finalization's public ``executed_step_ids`` is a
+        strict semantic set, so it must contain only exact-scoped positive verdicts.
+        The raw transport execution set remains available on every row as
+        ``ledger_executed_step_ids`` through ``build_fact_snapshot``.
+        """
         self._synchronize()
-        return project_step_sets(self._ledger)
+        projection = project_step_sets(self._ledger)
+        return {
+            **projection,
+            "executed_step_ids": list(projection["completed_step_ids"]),
+        }
 
     def _publish_receipt_declarations(self) -> tuple[list[dict[str, Any]], str]:
         """Publish reconstructable ledger declarations on every receipt."""
