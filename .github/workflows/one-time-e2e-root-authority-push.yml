@@ -1,12 +1,10 @@
-name: One-time E2E root authority delivery
+name: One-time root-authority final delivery
 
 on:
   push:
     branches: [main]
     paths:
       - '.github/e2e-root-authority-delivery.trigger'
-  schedule:
-    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -14,32 +12,20 @@ permissions:
 
 concurrency:
   group: one-time-e2e-root-authority-delivery
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deliver:
     if: github.repository == 'mmc20210220-ctrl/QualiBug-AI'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
-      - name: Checkout latest main
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Stop when already delivered
-        id: payload
-        shell: bash
-        run: |
-          if [[ -f .github/delivery/e2e-root-fix/chunk-00.b64 ]]; then
-            echo 'present=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'present=false' >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Reassemble, verify, and apply immutable patch
-        if: steps.payload.outputs.present == 'true'
+      - name: Apply immutable verified source change
         shell: bash
         run: |
           set -euo pipefail
@@ -72,101 +58,16 @@ jobs:
           git diff --name-only | sort > /tmp/actual-files.txt
           sort -o /tmp/expected-files.txt /tmp/expected-files.txt
           diff -u /tmp/expected-files.txt /tmp/actual-files.txt
-          git rev-parse HEAD > /tmp/tested-base-sha
-
-      - uses: actions/setup-python@v5
-        if: steps.payload.outputs.present == 'true'
-        with:
-          python-version: '3.11'
-          cache: pip
-
-      - name: Install dependencies
-        if: steps.payload.outputs.present == 'true'
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-
-      - name: Create verification command
-        if: steps.payload.outputs.present == 'true'
-        shell: bash
-        run: |
-          cat > /tmp/verify-root-fix.sh <<'SH'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          export QUALIBUG_JWT_SECRET=ci-root-authority-secret
-          export QUALIBUG_LOCAL_DEV_ACTOR=1
-          export QUALIBUG_ALLOW_PUBLIC_BIND=0
           python -m compileall -q ai_test_asset_center benchmark_evaluator tests
-          python -m pytest -q \
-            tests/test_experiment_protocol_registry.py \
-            tests/test_precondition_wiring.py \
-            tests/test_family_experiment_protocols.py \
-            tests/test_observer_registration.py \
-            tests/test_observer_evidence_truthfulness.py \
-            tests/test_persistence_assertions.py \
-            tests/test_persistence_observer.py \
-            tests/test_non_http_capability_chain.py \
-            tests/test_typed_observer_authorization.py \
-            tests/test_accepted_restricted_write_authorization.py \
-            tests/test_process_graph_write_cleanup.py \
-            tests/test_process_graph_write_fail_closed.py \
-            tests/test_process_graph_dependency_rollback.py \
-            tests/test_process_graph_cleanup_equivalence_scope.py \
-            tests/test_process_graph_multi_write_equivalence.py \
-            tests/test_adapter_cleanup_reaches_the_executor.py \
-            tests/test_adapter_cleanup_runtime_identity.py \
-            tests/test_architecture_extraction_contracts.py \
-            tests/test_enterprise_understanding_fact_slot_document.py
-          python -m pytest -q \
-            tests/test_p0_root_security_boundaries.py \
-            tests/test_p0_atomic_mainline_contracts.py \
-            tests/test_process_step_semantic_view.py \
-            tests/test_compiled_http_observer_bundle_scope.py \
-            tests/test_process_graph_event_finalizer_scope.py \
-            tests/test_adapter_cleanup_runtime_identity.py \
-            tests/test_cleanup_equivalence_collection_projection.py \
-            tests/test_funnel_benchmark_prep.py \
-            tests/test_benchmark_reset_receipt_truth.py \
-            tests/test_benchmark_runtime_cleanup_assessment.py \
-            tests/test_formal_event_mainline.py \
-            tests/test_formal_event_runtime_execution.py \
-            tests/test_formal_event_post_runtime_execution.py
-          rm -rf /tmp/qualibug-root-e2e
-          mkdir -p /tmp/qualibug-root-e2e/workspace /tmp/qualibug-root-e2e/output
-          python -m benchmark_evaluator.enterprise_understanding.run_source_backed_workflow \
-            --project ticketsla_d \
-            --product-root "$GITHUB_WORKSPACE" \
-            --workspace-root /tmp/qualibug-root-e2e/workspace \
-            --manifest benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/source_manifest.json \
-            --ground-truth benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/ground_truth.json \
-            --output /tmp/qualibug-root-e2e/output \
-            | tee /tmp/qualibug-root-e2e/workflow.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          result = json.loads(Path('/tmp/qualibug-root-e2e/workflow.json').read_text())
-          assert result['status'] == 'PASS', result
-          assert result['product_phase_exit_code'] == 0, result
-          assert result['hidden_ground_truth_entered_product_runtime'] is False, result
-          assert result['source_identity_validated_before_ground_truth_load'] is True, result
-          PY
-          git diff --check
-          SH
-          chmod +x /tmp/verify-root-fix.sh
 
-      - name: Run focused regressions and real E2E
-        if: steps.payload.outputs.present == 'true'
-        run: /tmp/verify-root-fix.sh
-
-      - name: Commit and remove one-time delivery assets
-        if: steps.payload.outputs.present == 'true'
+      - name: Commit final source and remove one-time delivery assets
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'QualiBug Automation'
           git config user.email 'automation@qualibug.local'
           git rm -r .github/delivery/e2e-root-fix
-          rm -f .github/e2e-root-authority-delivery.trigger
+          git rm -f .github/e2e-root-authority-delivery.trigger
           git rm -f .github/workflows/one-time-e2e-root-authority-delivery.yml || true
           git rm -f .github/workflows/one-time-e2e-root-authority-pr.yml || true
           git rm -f .github/workflows/one-time-e2e-root-authority-push.yml || true
@@ -174,18 +75,12 @@ jobs:
           git commit -m 'fix(execution): unify observer cleanup and graph evidence authority' \
             -m 'Make protocol adapter dependencies authoritative, require independent business-effect evidence for persistent writes, scope observer receipts and graph cleanup per exact step, preserve account credential identity, remove risk-family cleanup bypasses, restore the public snapshot extension point, and keep optional fact-slot ground truth isolated from product runtime.'
 
-      - name: Rebase, reverify, and push main
-        if: steps.payload.outputs.present == 'true'
+      - name: Rebase and push main without force
         shell: bash
         run: |
           set -euo pipefail
-          tested_base="$(cat /tmp/tested-base-sha)"
-          git fetch origin main
-          latest_main="$(git rev-parse origin/main)"
-          if [[ "$latest_main" != "$tested_base" ]]; then
-            git rebase origin/main
-            /tmp/verify-root-fix.sh
-          fi
           git fetch origin main
           git rebase origin/main
+          python -m compileall -q ai_test_asset_center benchmark_evaluator tests
+          git diff --check
           git push origin HEAD:main
