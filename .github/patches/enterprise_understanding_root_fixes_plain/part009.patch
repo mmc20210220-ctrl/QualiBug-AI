@@ -1,0 +1,321 @@
++        payload["unresolved_source_frame_boundary"] = frame_ids or source_boundaries or [
++            _text(fact.get("fact_id"))
++        ]
++    return payload
+ 
+ 
+ def _semantic_signature(fact: dict[str, Any]) -> str:
+@@ -445,6 +549,7 @@ def _atomize_existing_fact(fact: dict[str, Any]) -> dict[str, Any]:
+     )
+     row["statement_frame_id"] = frame_id
+     row["fact_type"] = _fact_type(row)
++    _project_exact_interface_refs(row)
+     subject = _dict(row.get("subject"))
+     actor_refs = [_text(item) for item in _list(subject.get("actor_refs")) if _text(item)]
+     entity_refs = [_text(item) for item in _list(subject.get("entity_refs")) if _text(item)]
+@@ -576,10 +681,12 @@ def _atomize_existing_fact(fact: dict[str, Any]) -> dict[str, Any]:
+         if _text(span.get("document_block_id"))
+         or _text(span.get("address_kind")) in {"EXACT_SOURCE_LOCATOR", "PAGE_BBOX"}
+     ]
++    actor_coordinate_declared = _declares_actor_coordinate(statement, entity_refs)
+     row["resolution_quality"] = {
+         "status": _text(row.get("status")) or "PENDING",
+         "ambiguity_count": len(ambiguities),
+-        "actor_resolved": bool(actor_refs) or "OMITTED_ACTOR" not in " ".join(ambiguities),
++        "actor_coordinate_declared": actor_coordinate_declared,
++        "actor_resolved": bool(actor_refs) if actor_coordinate_declared else True,
+         "entity_resolved": bool(entity_refs) or "COREFERENCE" not in " ".join(ambiguities),
+         "condition_logic_resolved": _text(row.get("condition_combinator")) != "UNRESOLVED",
+         "manual_confidence_is_accuracy": False,
+@@ -891,7 +998,10 @@ def _merge_same_signature(facts: list[dict[str, Any]]) -> tuple[list[dict[str, A
+     merge_count = 0
+     for raw in facts:
+         fact = _atomize_existing_fact(raw)
+-        signature = _text(fact.get("semantic_signature")) or _semantic_signature(fact)
++        # Recompute at the merge authority. Upstream compatibility rows may carry
++        # signatures produced before newer typed coordinates were attached.
++        signature = _semantic_signature(fact)
++        fact["semantic_signature"] = signature
+         existing = merged.get(signature)
+         if existing is None:
+             merged[signature] = fact
+@@ -918,6 +1028,17 @@ def _merge_same_signature(facts: list[dict[str, Any]]) -> tuple[list[dict[str, A
+                 existing_spans.append(span)
+                 seen_spans.add(identity)
+         existing["source_spans"] = existing_spans
++        existing["interface_refs"] = sorted(
++            {
++                *_exact_interface_refs(existing),
++                *_exact_interface_refs(fact),
++            }
++        )
++        existing["interface_id"] = (
++            existing["interface_refs"][0]
++            if len(existing["interface_refs"]) == 1
++            else ""
++        )
+         existing_claims = {
+             _text(row.get("claim_id")): dict(row)
+             for row in _list(existing.get("claims"))
+diff --git a/benchmark_evaluator/enterprise_understanding/build_product_snapshot.py b/benchmark_evaluator/enterprise_understanding/build_product_snapshot.py
+index 6691086..cc77257 100644
+--- a/benchmark_evaluator/enterprise_understanding/build_product_snapshot.py
++++ b/benchmark_evaluator/enterprise_understanding/build_product_snapshot.py
+@@ -20,6 +20,30 @@ from .capture_product_asset import capture_finalized_product_asset
+ SOURCE_MANIFEST_SCHEMA = "qualibug.enterprise-understanding-source-manifest.v1"
+ PRODUCT_PHASE_RECEIPT_SCHEMA = "qualibug.enterprise-understanding-product-phase.v2"
+ 
++_CANONICAL_TEXT_SUFFIXES = frozenset(
++    {
++        ".cfg",
++        ".conf",
++        ".csv",
++        ".graphql",
++        ".htm",
++        ".html",
++        ".ini",
++        ".json",
++        ".md",
++        ".openapi",
++        ".properties",
++        ".rst",
++        ".sql",
++        ".toml",
++        ".tsv",
++        ".txt",
++        ".xml",
++        ".yaml",
++        ".yml",
++    }
++)
++
+ 
+ class ProductPhaseError(RuntimeError):
+     """The isolated product phase could not produce a trustworthy finalized asset."""
+@@ -30,6 +54,49 @@ def _git_blob_sha(data: bytes) -> str:
+     return hashlib.sha1(header + data).hexdigest()
+ 
+ 
++def _canonical_source_bytes(path_ref: str, data: bytes) -> tuple[bytes, bool]:
++    """Normalize only transport-level line endings for declared text sources.
++
++    Git checkouts and ZIP exports may materialize the same repository blob with
++    LF or CRLF line endings. Treating that transport difference as enterprise
++    source drift blocks the whole comprehension pipeline on Windows. The
++    canonical identity therefore normalizes CRLF/lone-CR to LF for known text
++    artifacts, while binary and unknown file types retain exact-byte identity.
++
++    No whitespace, Unicode, BOM, ordering, or semantic normalization occurs.
++    Any content change beyond line-ending representation still fails closed.
++    """
++
++    if Path(path_ref).suffix.lower() not in _CANONICAL_TEXT_SUFFIXES:
++        return data, False
++    try:
++        data.decode("utf-8")
++    except UnicodeDecodeError:
++        return data, False
++    canonical = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
++    return canonical, canonical != data
++
++
++def _source_blob_identity(path_ref: str, data: bytes) -> dict[str, Any]:
++    """Return exact and portable source identities from one authority."""
++
++    canonical, normalized = _canonical_source_bytes(path_ref, data)
++    raw_sha = _git_blob_sha(data)
++    canonical_sha = _git_blob_sha(canonical)
++    return {
++        "raw_blob_sha": raw_sha,
++        "canonical_blob_sha": canonical_sha,
++        "raw_size": len(data),
++        "canonical_size": len(canonical),
++        "line_ending_normalized": normalized,
++        "identity_mode": (
++            "CANONICAL_UTF8_TEXT_GIT_BLOB"
++            if canonical_sha != raw_sha
++            else "EXACT_GIT_BLOB"
++        ),
++    }
++
++
+ def _portable_source_ref(value: Any) -> str:
+     """Return one workspace-independent source reference from the public manifest."""
+     reference = str(value or "").replace("\\", "/").strip()
+@@ -106,10 +173,14 @@ def _resolve_sources(
+         if not resolved.is_file():
+             raise ProductPhaseError(f"source_file_missing:{path_ref}")
+         data = resolved.read_bytes()
+-        actual_sha = _git_blob_sha(data)
+-        if actual_sha != expected_sha:
++        identity = _source_blob_identity(path_ref, data)
++        raw_sha = str(identity["raw_blob_sha"])
++        canonical_sha = str(identity["canonical_blob_sha"])
++        if expected_sha not in {raw_sha, canonical_sha}:
+             raise ProductPhaseError(
+-                f"source_blob_sha_mismatch:{path_ref}:expected={expected_sha}:actual={actual_sha}"
++                "source_blob_sha_mismatch:"
++                f"{path_ref}:expected={expected_sha}:"
++                f"raw={raw_sha}:canonical={canonical_sha}"
+             )
+         seen_paths.add(resolved)
+         seen_refs.add(source_ref)
+@@ -127,8 +198,15 @@ def _resolve_sources(
+                 "path": path_ref,
+                 "source_ref": source_ref,
+                 "source_type": source_type,
+-                "blob_sha": actual_sha,
++                "blob_sha": expected_sha,
++                "raw_blob_sha": raw_sha,
++                "canonical_blob_sha": canonical_sha,
+                 "size": len(data),
++                "canonical_size": identity["canonical_size"],
++                "source_content_identity_mode": identity["identity_mode"],
++                "line_ending_normalized_for_identity": identity[
++                    "line_ending_normalized"
++                ],
+                 "source_identity_authority": "SOURCE_MANIFEST_EXTERNAL_REF",
+                 "fixture_path_separate_from_source_identity": path_ref != source_ref,
+                 "absolute_workspace_path_persisted_as_identity": False,
+@@ -242,10 +320,12 @@ def build_isolated_product_snapshot(
+         asset.get("enterprise_understanding_model"), dict
+     ):
+         raise ProductPhaseError("composition_root_did_not_return_understanding_model")
++    asset_target = Path(asset_output_path).resolve()
++    asset_target.parent.mkdir(parents=True, exist_ok=True)
+     capture_receipt = capture_finalized_product_asset(
+         project_id=project,
+         root=workspace,
+-        output_path=asset_output_path,
++        output_path=asset_target,
+     )
+     receipt = {
+         "schema_version": PRODUCT_PHASE_RECEIPT_SCHEMA,
+diff --git a/benchmark_evaluator/enterprise_understanding/fact_slot_document.py b/benchmark_evaluator/enterprise_understanding/fact_slot_document.py
+index ab99878..7d0ac72 100644
+--- a/benchmark_evaluator/enterprise_understanding/fact_slot_document.py
++++ b/benchmark_evaluator/enterprise_understanding/fact_slot_document.py
+@@ -63,7 +63,18 @@ def validate_business_fact_slot_document(document: dict[str, Any]) -> dict[str,
+         raise FactSlotGroundTruthValidationError(
+             "explicit_fact_scope_complete=true requires explicit_fact_scope_locators"
+         )
+-    missing_from_scope = sorted(annotated_locators.difference(scope_locators))
++    # A locator membership check is meaningful only when the Ground Truth has
++    # declared an explicit locator scope. Legacy/incremental annotations may
++    # carry exact source locators while intentionally leaving the denominator
++    # open (scope_complete=false and no scope locator list). Treating the empty
++    # optional scope as a closed empty set blocks every annotated fact and makes
++    # source-backed evaluation impossible. Once any scope locators are declared,
++    # membership remains fail-closed even for an incomplete/partial scope.
++    missing_from_scope = (
++        sorted(annotated_locators.difference(scope_locators))
++        if scope_locators
++        else []
++    )
+     if missing_from_scope:
+         raise FactSlotGroundTruthValidationError(
+             "annotated source_locators must belong to explicit_fact_scope_locators: "
+@@ -86,6 +97,7 @@ def validate_business_fact_slot_document(document: dict[str, Any]) -> dict[str,
+             "explicit_fact_scope_complete": scope_complete,
+             "explicit_fact_scope_locator_count": len(scope_locators),
+             "annotated_fact_locator_count": len(annotated_locators),
++            "explicit_fact_scope_membership_enforced": bool(scope_locators),
+             "all_annotated_fact_locators_inside_explicit_scope": not missing_from_scope,
+         }
+     )
+diff --git a/benchmark_evaluator/enterprise_understanding/root_cause.py b/benchmark_evaluator/enterprise_understanding/root_cause.py
+index 6ede9aa..48af91b 100644
+--- a/benchmark_evaluator/enterprise_understanding/root_cause.py
++++ b/benchmark_evaluator/enterprise_understanding/root_cause.py
+@@ -36,34 +36,143 @@ def _model(asset: dict[str, Any]) -> dict[str, Any]:
+     return value if isinstance(value, dict) else asset
+ 
+ 
++_SOURCE_ALIAS_FIELDS = (
++    "source_id",
++    "canonical_source_id",
++    "source_occurrence_id",
++    "runtime_source_id",
++    "id",
++    "external_ref",
++    "original_name",
++    "filename",
++    "path",
++    "source_locator",
++    "content_asset_id",
++    "interpretation_asset_id",
++)
++
++
+ def _evidence_tokens(value: Any) -> set[str]:
+     result: set[str] = set()
+     for row in _rows(value):
+-        for field in ("source_id", "source_locator", "asset_ref", "filename", "fact_id"):
++        for field in (
++            "source_id",
++            "canonical_source_id",
++            "source_occurrence_id",
++            "source_locator",
++            "asset_ref",
++            "filename",
++            "fact_id",
++            "content_asset_id",
++            "interpretation_asset_id",
++        ):
+             item = _text(row.get(field))
+             if item:
+                 result.add(item)
+     return result
+ 
+ 
+-def _asset_source_tokens(asset: dict[str, Any]) -> set[str]:
+-    result: set[str] = set()
+-    for key in ("sources", "source_manifest", "knowledge_sources"):
+-        for row in _rows(asset.get(key)):
+-            for field in ("source_id", "id", "filename", "path", "source_locator"):
+-                value = _text(row.get(field))
+-                if value:
+-                    result.add(value)
+-    structures = asset.get("document_structure_assets")
+-    if isinstance(structures, dict):
+-        for row in _rows(structures.get("items")):
+-            for field in ("source_id", "filename"):
+-                value = _text(row.get(field))
+-                if value:
+-                    result.add(value)
++def _explicit_source_aliases(row: dict[str, Any]) -> set[str]:
++    """Return only aliases explicitly bound by one source-inventory record.
++
++    Basename guessing is intentionally forbidden.  A portable path, canonical
++    source id, occurrence id, runtime id, and content/interpretation asset id
++    are equivalent only when the finalized product asset binds them in the
++    same authority record.
++    """
++    result = {
++        value
++        for field in _SOURCE_ALIAS_FIELDS
++        if (value := _text(row.get(field)))
++    }
++    parse = row.get("parse") if isinstance(row.get("parse"), dict) else {}
++    for nested in (
++        parse,
++        parse.get("chunk_index") if isinstance(parse.get("chunk_index"), dict) else {},
++        parse.get("receipt") if isinstance(parse.get("receipt"), dict) else {},
++    ):
++        for field in _SOURCE_ALIAS_FIELDS:
++            value = _text(nested.get(field))
++            if value:
++                result.add(value)
+     return result
+ 
+ 
++def _source_alias_groups(asset: dict[str, Any]) -> list[set[str]]:
++    """Build merged alias groups from the asset's existing source authorities."""
++    model = _model(asset)
++    groups: list[set[str]] = []
++    for container in (asset, model):
++        for key in (
++            "source_inventory",
++            "source_occurrence_inventory",
++            "sources",
++            "source_manifest",
