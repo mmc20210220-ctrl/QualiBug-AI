@@ -1,0 +1,343 @@
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py b/ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py
+index b61688b..00a7689 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py
+@@ -179,13 +179,21 @@ _ALIAS_PATTERNS = (
+     ),
+ )
+ _GLOSSARY_TERM_HEADER_RE = re.compile(
+-    r"术语|名称|中文名|中文|全称|词条|对象名|业务对象|定义项|标准名|canonical|term|name",
++    r"术语|名称|中文名|中文|全称|词条|对象名|业务对象|实体|定义项|标准名|canonical|term|name|entity",
+     re.I,
+ )
+ _GLOSSARY_ALIAS_HEADER_RE = re.compile(
+     r"别名|简称|英文名|英文|代号|代码|别称|又称|缩写|同义词|alias|code|abbr|abbreviation|english",
+     re.I,
+ )
++_GLOSSARY_DEFINITION_HEADER_RE = re.compile(
++    r"说明|描述|含义|释义|定义|description|meaning|definition",
++    re.I,
++)
++_NON_IDENTITY_ALIAS_RE = re.compile(
++    r"除外|例外|必须|应当|可以|不得|只能|仅能|禁止|不允许|不可|不能|"
++    r"如果|若|一旦|则|否则|之后|以后|完成后"
++)
+ _GENERIC_TERM_SUFFIX_RE = re.compile(r"(?:单据|对象|记录|数据|实体|术语|名称)$")
+ _TRIGGER_THEN_EFFECT_RE = re.compile(
+     r"(?P<trigger>[^，,；;。]{1,48}?)(?:之后|以后|后)"
+@@ -382,6 +390,8 @@ def _alias_fact(
+         return None
+     if re.fullmatch(r"(?:必须|应当|可以|不得|如果|当|后|时|则|和|与|或|及)", alias):
+         return None
++    if _NON_IDENTITY_ALIAS_RE.search(canonical) or _NON_IDENTITY_ALIAS_RE.search(alias):
++        return None
+     canonical, alias = _prefer_canonical_alias(canonical, alias)
+     return {
+         "fact_id": _stable_id("fact", source_id, locator, "TERM_ALIAS", canonical, alias),
+@@ -404,43 +414,105 @@ def _alias_fact(
+     }
+ 
+ 
+-def _extract_glossary_table_aliases(
+-    text: str, source_id: str, locator: str
++def _definition_identity(value: str) -> str:
++    """Return only the source-declared identity phrase from a definition cell."""
++    raw = _text(value)
++    if not raw:
++        return ""
++    head = re.split(r"[，,；;。]", raw, maxsplit=1)[0]
++    head = _clean_term(head)
++    if not head or len(head) > 40 or _NON_IDENTITY_ALIAS_RE.search(head):
++        return ""
++    return head
++
++
++def _markdown_table_blocks(text: str) -> list[list[str]]:
++    """Return contiguous Markdown table blocks without crossing prose boundaries.
++
++    A document may contain many unrelated tables. Header semantics are local to one
++    contiguous table; applying the first table's header to later rows invents false
++    TERM_ALIAS facts (for example treating rule IDs as entity aliases).
++    """
++    blocks: list[list[str]] = []
++    current: list[str] = []
++    for raw_line in str(text or "").splitlines():
++        line = raw_line.strip()
++        if line and "|" in line:
++            current.append(line)
++            continue
++        if current:
++            blocks.append(current)
++            current = []
++    if current:
++        blocks.append(current)
++    return blocks
++
++
++def _glossary_aliases_from_table(
++    table_lines: list[str], source_id: str, locator: str
+ ) -> list[dict[str, Any]]:
+-    """Extract TERM_ALIAS rows from source-backed glossary/definition markdown tables."""
+-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+-    if len(lines) < 2:
+-        return []
+     rows: list[list[str]] = []
+-    for line in lines:
+-        if "|" not in line:
+-            continue
++    for line in table_lines:
+         cells = [cell.strip() for cell in line.strip("|").split("|")]
+-        if not cells or all(re.fullmatch(r":?-{2,}:?", cell or "") for cell in cells):
++        if not cells or all(
++            re.fullmatch(r":?-{2,}:?", cell or "") for cell in cells
++        ):
+             continue
+         rows.append(cells)
+     if len(rows) < 2:
+         return []
++
+     header = rows[0]
+-    term_indexes = [index for index, cell in enumerate(header) if _GLOSSARY_TERM_HEADER_RE.search(cell)]
+-    alias_indexes = [index for index, cell in enumerate(header) if _GLOSSARY_ALIAS_HEADER_RE.search(cell)]
+-    if not term_indexes or not alias_indexes:
++    term_indexes = [
++        index
++        for index, cell in enumerate(header)
++        if _GLOSSARY_TERM_HEADER_RE.search(cell)
++    ]
++    alias_indexes = [
++        index
++        for index, cell in enumerate(header)
++        if _GLOSSARY_ALIAS_HEADER_RE.search(cell)
++    ]
++    definition_indexes = [
++        index
++        for index, cell in enumerate(header)
++        if _GLOSSARY_DEFINITION_HEADER_RE.search(cell)
++    ]
++    if not term_indexes or not (alias_indexes or definition_indexes):
+         return []
+-    # Prefer the first non-overlapping alias column.
++
+     term_idx = term_indexes[0]
+-    alias_idx = next((index for index in alias_indexes if index != term_idx), None)
++    alias_idx = next(
++        (index for index in alias_indexes if index != term_idx),
++        None,
++    )
++    definition_mode = False
++    if alias_idx is None:
++        alias_idx = next(
++            (index for index in definition_indexes if index != term_idx),
++            None,
++        )
++        definition_mode = alias_idx is not None
+     if alias_idx is None:
+         return []
++
+     aliases: list[dict[str, Any]] = []
+     seen: set[tuple[str, str]] = set()
+     for cells in rows[1:]:
+         if max(term_idx, alias_idx) >= len(cells):
+             continue
+         canonical = _clean_term(cells[term_idx])
+-        alias = _clean_term(cells[alias_idx])
++        alias = (
++            _definition_identity(cells[alias_idx])
++            if definition_mode
++            else _clean_term(cells[alias_idx])
++        )
+         if not canonical or not alias:
+             continue
+-        quote = f"{header[term_idx]}={canonical};{header[alias_idx]}={alias}"
++        quote = (
++            f"{header[term_idx]}={canonical};"
++            f"{header[alias_idx]}={_text(cells[alias_idx])}"
++        )
+         row = _alias_fact(
+             source_id=source_id,
+             locator=locator,
+@@ -450,6 +522,16 @@ def _extract_glossary_table_aliases(
+         )
+         if not row:
+             continue
++        # A structured glossary row explicitly declares identity. Preserve that
++        # authority instead of re-classifying the synthetic ``header=value``
++        # evidence string as a mathematical definition later in the pipeline.
++        row["identity_evidence_class"] = "EXPLICIT_ALIAS"
++        row["formal_identity_union_allowed"] = True
++        row["identity_evidence_origin"] = (
++            "GLOSSARY_DEFINITION_TABLE"
++            if definition_mode
++            else "GLOSSARY_ALIAS_TABLE"
++        )
+         key = (row["canonical_term"], row["alias"])
+         if key in seen:
+             continue
+@@ -458,6 +540,27 @@ def _extract_glossary_table_aliases(
+     return aliases
+ 
+ 
++def _extract_glossary_table_aliases(
++    text: str, source_id: str, locator: str
++) -> list[dict[str, Any]]:
++    """Extract TERM_ALIAS facts from each source-backed glossary table only."""
++    aliases: list[dict[str, Any]] = []
++    seen: set[tuple[str, str]] = set()
++    for table_index, table_lines in enumerate(_markdown_table_blocks(text)):
++        table_locator = f"{locator};table={table_index + 1}"
++        for row in _glossary_aliases_from_table(
++            table_lines,
++            source_id,
++            table_locator,
++        ):
++            key = (row["canonical_term"], row["alias"])
++            if key in seen:
++                continue
++            seen.add(key)
++            aliases.append(row)
++    return aliases
++
++
+ def _extract_aliases(text: str, source_id: str, locator: str) -> list[dict[str, Any]]:
+     aliases: list[dict[str, Any]] = []
+     seen: set[tuple[str, str]] = set()
+@@ -1021,7 +1124,25 @@ def _canonicalize_names(names: Iterable[str], alias_map: dict[str, str] | None =
+ 
+ 
+ def _split_rule_units(text: str) -> list[str]:
+-    units = [unit.strip() for unit in re.split(r"[。！？!?；;]+", text) if unit.strip()]
++    """Split source prose into atomic rule units without merging list bullets.
++
++    OpenAPI descriptions commonly encode independent constraints as Markdown-style
++    bullet lines. Treating the whole description as one sentence makes one actor,
++    object, condition, and outcome overwrite the others. Newline boundaries are
++    therefore structural rule boundaries; punctuation and contrast splitting remain
++    the existing secondary authorities.
++    """
++    physical_lines = [
++        re.sub(r"^(?:[-*•]|\d+[.)、])\s*", "", line.strip())
++        for line in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
++        if line.strip()
++    ]
++    units = [
++        unit.strip()
++        for line in physical_lines
++        for unit in re.split(r"[。！？!?；;]+", line)
++        if unit.strip()
++    ]
+     result: list[str] = []
+     for unit in units:
+         contrast = re.search(r"[，,](?:但|但是|不过|然而)", unit)
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/_chinese_business_conflicts.py b/ai_test_asset_center/enterprise_knowledge_center/_chinese_business_conflicts.py
+index ea7b685..9736816 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/_chinese_business_conflicts.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/_chinese_business_conflicts.py
+@@ -23,6 +23,11 @@ _DISALLOWED_AUTHORITY_SIGNALS = (
+     "model_confidence",
+     "industry_default",
+ )
++_MANAGED_CONFLICT_REF_PREFIXES = (
++    "conflict:business_modality_contradiction:",
++    "conflict:state_transition_target_contradiction:",
++    "conflict:term_alias_identity_conflict:",
++)
+ 
+ 
+ def _text(value: Any) -> str:
+@@ -294,6 +299,71 @@ def _pairs(rows: list[dict[str, Any]]):
+             yield left, right
+ 
+ 
++def _managed_conflict_refs(fact: dict[str, Any]) -> list[str]:
++    return [
++        _text(value)
++        for value in _list(fact.get("conflict_refs"))
++        if _text(value).startswith(_MANAGED_CONFLICT_REF_PREFIXES)
++    ]
++
++
++def _status_without_managed_conflict(fact: dict[str, Any]) -> str:
++    """Recover the source fact status after a no-longer-present conflict.
++
++    Conflict reconciliation is recomputed after semantic normalization. A broad
++    early pass may temporarily group two facts; later exact actors, conditions or
++    interface identities can prove they are different statements. The conflict
++    authority must therefore be a current-state projection, not an append-only
++    mutation of the fact ledger.
++    """
++    lifecycle = _dict(fact.get("conflict_lifecycle"))
++    previous = _text(lifecycle.get("previous_status"))
++    if previous in {"ACCEPTED", "PENDING"}:
++        return previous
++    quality = _dict(fact.get("resolution_quality"))
++    evidence = _dict(fact.get("evidence_closure"))
++    complete = (
++        not _list(fact.get("ambiguities"))
++        and _text(evidence.get("status")) == "PASS"
++        and quality.get("actor_resolved") is not False
++        and quality.get("entity_resolved") is not False
++        and quality.get("condition_logic_resolved") is not False
++    )
++    return "ACCEPTED" if complete else "PENDING"
++
++
++def _clear_stale_managed_conflict(fact: dict[str, Any]) -> bool:
++    refs = _managed_conflict_refs(fact)
++    all_refs = [_text(value) for value in _list(fact.get("conflict_refs")) if _text(value)]
++    if _text(fact.get("status")) != "CONFLICTING" or not refs:
++        return False
++    # Another conflict authority may still own this fact. Only clear when every
++    # attached reference belongs to this recomputed authority.
++    if set(refs) != set(all_refs):
++        return False
++    restored = _status_without_managed_conflict(fact)
++    fact["status"] = restored
++    fact.pop("conflict_refs", None)
++    fact.pop("formal_promotion_allowed", None)
++    if _text(fact.get("authority_resolution")) == "UNRESOLVED":
++        fact.pop("authority_resolution", None)
++    quality = _dict(fact.get("resolution_quality"))
++    if quality:
++        quality["status"] = restored
++        fact["resolution_quality"] = quality
++    lifecycle = _dict(fact.get("conflict_lifecycle"))
++    lifecycle.update(
++        {
++            "status": "CLEARED_AFTER_RECOMPUTE",
++            "previous_status": restored,
++            "stale_conflict_refs_removed": sorted(refs),
++            "automatic_authority_winner_selected": False,
++        }
++    )
++    fact["conflict_lifecycle"] = lifecycle
++    return True
++
++
+ def reconcile_chinese_business_fact_conflicts(
+     asset: dict[str, Any],
+     *,
+@@ -370,16 +440,35 @@ def reconcile_chinese_business_fact_conflicts(
+             if fact_id:
+                 refs.setdefault(fact_id, []).append(_text(conflict.get("conflict_id")))
+ 
++    stale_conflicting_fact_ids_cleared: list[str] = []
+     for fact in facts:
+         fact_id = _fact_id(fact)
+         if fact_id in conflicting_ids:
++            lifecycle = _dict(fact.get("conflict_lifecycle"))
++            current_status = _text(fact.get("status"))
++            if current_status != "CONFLICTING" and current_status in {"ACCEPTED", "PENDING"}:
++                lifecycle["previous_status"] = current_status
++            lifecycle.update(
++                {
++                    "status": "ACTIVE",
++                    "current_conflict_refs": sorted(set(refs.get(fact_id, []))),
++                    "automatic_authority_winner_selected": False,
++                }
++            )
+             fact.update(
+                 {
+                     "status": "CONFLICTING",
+                     "conflict_refs": sorted(set(refs.get(fact_id, []))),
+                     "formal_promotion_allowed": False,
