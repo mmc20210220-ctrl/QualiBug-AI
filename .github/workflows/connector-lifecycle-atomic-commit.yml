@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "ai_test_asset_center/connector_checkpoint_commit_authority.py"
       - "ai_test_asset_center/connector_lifecycle_commit_authority.py"
       - "ai_test_asset_center/connector_remote_lifecycle.py"
       - "ai_test_asset_center/connector_sync_authority.py"
@@ -11,6 +12,7 @@ on:
       - "ai_test_asset_center/feishu_connector_capability_sync_core.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
+      - "tests/test_connector_checkpoint_commit_authority.py"
       - "tests/test_connector_lifecycle_commit_authority.py"
       - "tests/test_connector_remote_lifecycle.py"
       - "tests/test_connector_remote_lifecycle_transaction.py"
@@ -19,6 +21,7 @@ on:
       - ".github/workflows/connector-lifecycle-atomic-commit.yml"
   pull_request:
     paths:
+      - "ai_test_asset_center/connector_checkpoint_commit_authority.py"
       - "ai_test_asset_center/connector_lifecycle_commit_authority.py"
       - "ai_test_asset_center/connector_remote_lifecycle.py"
       - "ai_test_asset_center/connector_sync_authority.py"
@@ -26,6 +29,7 @@ on:
       - "ai_test_asset_center/feishu_connector_capability_sync_core.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
+      - "tests/test_connector_checkpoint_commit_authority.py"
       - "tests/test_connector_lifecycle_commit_authority.py"
       - "tests/test_connector_remote_lifecycle.py"
       - "tests/test_connector_remote_lifecycle_transaction.py"
@@ -58,6 +62,7 @@ jobs:
 
       - name: Compile atomic lifecycle authorities
         run: |
+          python -m py_compile ai_test_asset_center/connector_checkpoint_commit_authority.py
           python -m py_compile ai_test_asset_center/connector_lifecycle_commit_authority.py
           python -m py_compile ai_test_asset_center/connector_remote_lifecycle.py
           python -m py_compile ai_test_asset_center/feishu_connector_capability_sync.py
@@ -66,6 +71,7 @@ jobs:
       - name: Run atomic lifecycle regressions
         run: |
           python -m pytest -q \
+            tests/test_connector_checkpoint_commit_authority.py \
             tests/test_connector_lifecycle_commit_authority.py \
             tests/test_connector_remote_lifecycle.py \
             tests/test_connector_remote_lifecycle_transaction.py \
