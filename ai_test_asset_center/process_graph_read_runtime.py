@@ -229,6 +229,48 @@ def _predecessors(
     return result, ""
 
 
+def _validate_declared_join_groups(
+    graph: dict[str, Any],
+    *,
+    node_ids: set[str],
+    predecessors: dict[str, list[str]],
+) -> str:
+    """Validate optional join metadata against the executable edge authority.
+
+    Edges remain the scheduler authority.  A source-declared join may enrich that
+    structure, but it must identify exactly one existing node and exactly the
+    incoming edge set.  Duplicate or partial join declarations are blocked before
+    transport so runtime never silently changes an AND-join scope.
+    """
+    seen_nodes: set[str] = set()
+    for index, raw in enumerate(_list(graph.get("join_groups"))):
+        if not isinstance(raw, dict):
+            return f"join_{index + 1}_invalid"
+        join_node_id = _text(raw.get("join_node_id"))
+        declared = [
+            _text(value)
+            for value in _list(raw.get("predecessor_node_ids"))
+            if _text(value)
+        ]
+        if join_node_id not in node_ids:
+            return f"join_{index + 1}_node_invalid:{join_node_id}"
+        if join_node_id in seen_nodes:
+            return f"join_node_declared_more_than_once:{join_node_id}"
+        seen_nodes.add(join_node_id)
+        if len(declared) < 2 or len(set(declared)) != len(declared):
+            return f"join_{index + 1}_predecessor_identity_invalid:{join_node_id}"
+        actual = predecessors.get(join_node_id, [])
+        if set(declared) != set(actual):
+            return (
+                f"join_predecessor_scope_mismatch:{join_node_id}:"
+                f"declared={sorted(declared)}:actual={sorted(actual)}"
+            )
+        status = _text(raw.get("status")).upper()
+        if status and status != "BOUND":
+            return f"join_{index + 1}_not_bound:{join_node_id}:{status}"
+    return ""
+
+
 def _waves(
     order: list[str], predecessors: dict[str, list[str]]
 ) -> tuple[dict[str, int], str]:
@@ -322,6 +364,17 @@ def prepare_graph_runtime(
             "status": "BLOCKED",
             "reason_code": GRAPH_RUNTIME_INVALID,
             "detail": error,
+        }
+    join_error = _validate_declared_join_groups(
+        graph,
+        node_ids=set(nodes),
+        predecessors=predecessors,
+    )
+    if join_error:
+        return {
+            "status": "BLOCKED",
+            "reason_code": GRAPH_RUNTIME_INVALID,
+            "detail": join_error,
         }
     waves, error = _waves(order, predecessors)
     if error:

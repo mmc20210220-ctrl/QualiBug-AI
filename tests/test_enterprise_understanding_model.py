@@ -682,8 +682,16 @@ def test_explicit_join_marker_projects_multi_object_join() -> None:
     assert multi["joins"][0]["join_kind"] == "SOURCE_EXPLICIT_JOIN"
     assert set(multi["joins"][0]["incoming_object_refs"]) == {"采购申请", "库存检查"}
     assert multi["joins"][0]["target_object_ref"] == "采购订单"
+    assert multi["status"] == "UNDERSTOOD"
+    assert multi["entry_mode"] == "SOURCE_DECLARED_MULTI_START_JOIN"
+    assert set(multi["trigger"]["object_refs"]) == {"采购申请", "库存检查"}
     assert not any(
-        row["reason_code"] == "MULTI_OBJECT_PROCESS_UNDERDETERMINED" for row in model["unknowns"]
+        row["reason_code"]
+        in {
+            "MULTI_OBJECT_PROCESS_UNDERDETERMINED",
+            "MULTI_OBJECT_PROCESS_START_UNDERDETERMINED",
+        }
+        for row in model["unknowns"]
     )
 
 

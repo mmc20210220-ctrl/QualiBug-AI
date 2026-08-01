@@ -1032,25 +1032,134 @@ def _composite_graph(
             )
 
     ordered, starts, terminals, forks, structural_joins, cycle = _graph_shape(nodes, edges)
-    joins = list(structural_joins)
+    joins_by_node = {
+        text(row.get("join_node_id")): dict(row)
+        for row in structural_joins
+        if text(row.get("join_node_id"))
+    }
     for join in as_list(process.get("joins")):
         if not isinstance(join, dict):
             continue
         target_process = object_to_process.get(text(join.get("target_object_ref")), "")
         target_nodes = child_start.get(target_process, [])
         predecessor_nodes: list[str] = []
+        unresolved_objects: list[str] = []
         for object_ref in unique_text(as_list(join.get("incoming_object_refs"))):
-            predecessor_nodes.extend(child_terminal.get(object_to_process.get(object_ref, ""), []))
-        joins.append(
+            terminals_for_object = child_terminal.get(
+                object_to_process.get(object_ref, ""), []
+            )
+            if len(terminals_for_object) != 1:
+                unresolved_objects.append(object_ref)
+                continue
+            predecessor_nodes.extend(terminals_for_object)
+        join_node_id = target_nodes[0] if len(target_nodes) == 1 else ""
+        declared_predecessors = unique_text(predecessor_nodes)
+        if not join_node_id or unresolved_objects or not declared_predecessors:
+            unknowns.append(
+                new_unknown(
+                    "PROCESS_JOIN_ENDPOINT_UNRESOLVED",
+                    "来源声明的跨对象汇合无法唯一绑定到每个上游终点和下游起点。",
+                    related_objects=unique_text(
+                        [
+                            *as_list(join.get("incoming_object_refs")),
+                            join.get("target_object_ref"),
+                        ]
+                    ),
+                    evidence=dedupe_evidence(
+                        [
+                            *as_list(process.get("evidence")),
+                            *as_list(join.get("evidence")),
+                        ]
+                    ),
+                    severity="P0",
+                    blocks_formal_understanding=True,
+                    reason_code="PROCESS_JOIN_ENDPOINT_UNRESOLVED",
+                    details={
+                        "process_id": process_id,
+                        "join_id": join.get("join_id"),
+                        "target_node_refs": target_nodes,
+                        "unresolved_incoming_objects": unresolved_objects,
+                    },
+                )
+            )
+            continue
+        structural = joins_by_node.get(join_node_id)
+        structural_predecessors = unique_text(
+            as_list(as_dict(structural).get("predecessor_node_ids"))
+        )
+        if not structural or set(structural_predecessors) != set(declared_predecessors):
+            unknowns.append(
+                new_unknown(
+                    "PROCESS_JOIN_PREDECESSOR_SCOPE_MISMATCH",
+                    "来源声明的汇合参与者与流程边实际前驱不一致，不能自动扩大或缩小汇合范围。",
+                    related_objects=unique_text(
+                        [
+                            *as_list(join.get("incoming_object_refs")),
+                            join.get("target_object_ref"),
+                        ]
+                    ),
+                    evidence=dedupe_evidence(
+                        [
+                            *as_list(process.get("evidence")),
+                            *as_list(join.get("evidence")),
+                        ]
+                    ),
+                    severity="P0",
+                    blocks_formal_understanding=True,
+                    reason_code="PROCESS_JOIN_PREDECESSOR_SCOPE_MISMATCH",
+                    details={
+                        "process_id": process_id,
+                        "join_id": join.get("join_id"),
+                        "join_node_id": join_node_id,
+                        "declared_predecessor_node_ids": declared_predecessors,
+                        "structural_predecessor_node_ids": structural_predecessors,
+                    },
+                )
+            )
+            continue
+        if text(structural.get("join_kind")) and text(
+            structural.get("join_kind")
+        ) != text(join.get("join_kind")):
+            unknowns.append(
+                new_unknown(
+                    "PROCESS_JOIN_KIND_CONFLICT",
+                    "同一汇合节点声明了多个不一致的汇合语义，不能自动选择。",
+                    related_objects=unique_text(
+                        [
+                            *as_list(join.get("incoming_object_refs")),
+                            join.get("target_object_ref"),
+                        ]
+                    ),
+                    evidence=dedupe_evidence(
+                        [
+                            *as_list(process.get("evidence")),
+                            *as_list(join.get("evidence")),
+                        ]
+                    ),
+                    severity="P0",
+                    blocks_formal_understanding=True,
+                    reason_code="PROCESS_JOIN_KIND_CONFLICT",
+                    details={
+                        "process_id": process_id,
+                        "join_id": join.get("join_id"),
+                        "join_node_id": join_node_id,
+                    },
+                )
+            )
+            continue
+        structural.update(
             {
                 "join_id": join.get("join_id"),
-                "join_kind": join.get("join_kind"),
-                "join_node_id": target_nodes[0] if len(target_nodes) == 1 else "",
-                "predecessor_node_ids": unique_text(predecessor_nodes),
+                "join_kind": text(join.get("join_kind"))
+                or "SOURCE_EXPLICIT_JOIN",
+                "predecessor_node_ids": sorted(declared_predecessors),
                 "source_refs": unique_text(as_list(join.get("source_refs"))),
-                "status": "BOUND" if len(target_nodes) == 1 and predecessor_nodes else "PARTIAL",
+                "evidence": dedupe_evidence(as_list(join.get("evidence"))),
+                "status": "BOUND",
             }
         )
+
+    joins = [joins_by_node[node_id] for node_id in sorted(joins_by_node)]
 
     status = "COMPILED"
     child_partial = any(

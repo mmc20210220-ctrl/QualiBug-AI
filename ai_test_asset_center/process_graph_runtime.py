@@ -236,6 +236,17 @@ def prepare_graph_runtime(
             "reason_code": GRAPH_RUNTIME_INVALID,
             "detail": error,
         }
+    join_error = _core._validate_declared_join_groups(
+        graph,
+        node_ids=set(nodes),
+        predecessors=predecessors,
+    )
+    if join_error:
+        return {
+            "status": "BLOCKED",
+            "reason_code": GRAPH_RUNTIME_INVALID,
+            "detail": join_error,
+        }
     waves, error = _core._waves(order, predecessors)
     if error:
         return {
