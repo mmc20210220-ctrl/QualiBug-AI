@@ -74,7 +74,8 @@ def analyze_chinese_business_source(
 def build_chinese_first_comprehension(
     asset: dict[str, Any], parsed_sources: Iterable[dict[str, Any]]
 ) -> dict[str, Any]:
-    enriched = _legacy.build_chinese_first_comprehension(asset, parsed_sources)
+    sources = list(parsed_sources)
+    enriched = _legacy.build_chinese_first_comprehension(asset, sources)
     facts = _list(_dict(enriched.get("business_fact_ledger")).get("items"))
     _annotate_fact_mentions(facts)
     projection = _dict(enriched.get("term_alias_identity_merge"))
@@ -116,7 +117,11 @@ def build_chinese_first_comprehension(
         )
         rule["authorization_derivation"] = _text(authorization.get("derivation"))
 
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.role_inheritance_authority import (
+        materialize_role_inheritance_contracts,
+    )
     from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.fact_permission_matrix import (
         materialize_fact_permission_matrix,
     )
+    materialize_role_inheritance_contracts(enriched, sources)
     return materialize_fact_permission_matrix(enriched)

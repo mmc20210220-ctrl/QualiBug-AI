@@ -1,10 +1,9 @@
-"""Reduce exact delegated permission revocation before Behavior IR consumes the matrix.
+"""Reduce exact direct revocation over derived role permissions.
 
-This authority does not parse permissions or create relations.  It consumes the existing
-permission-matrix authority and removes only an exact delegated ALLOW that is superseded
-by a source-backed direct DENY for the same role, bound interface, scope and action.
-Direct source contradictions remain active so the existing Behavior IR conflict gate
-continues to fail closed.
+This authority does not parse permissions, role hierarchy or delegation. It consumes the
+existing permission matrix and removes only a derived ALLOW superseded by a source-backed
+direct DENY for the same role, bound interface, scope and overlapping action. Direct source
+contradictions remain active so the existing Behavior IR conflict gate stays fail-closed.
 """
 from __future__ import annotations
 
@@ -14,7 +13,10 @@ from typing import Any
 
 
 RECEIPT_SCHEMA = "qualibug.authorization-precedence-receipt.v1"
-_REASON = "DIRECT_DENY_REVOKES_DELEGATED_ALLOW"
+_DERIVED_REASONS = {
+    "delegated_permission": "DIRECT_DENY_REVOKES_DELEGATED_ALLOW",
+    "role_inherited_permission": "DIRECT_DENY_REVOKES_INHERITED_ALLOW",
+}
 
 
 def _text(value: Any) -> str:
@@ -73,12 +75,12 @@ def _coordinate(row: dict[str, Any]) -> tuple[str, str, str] | None:
     return role, operation, scope
 
 
-def apply_delegated_permission_precedence(asset: dict[str, Any]) -> dict[str, Any]:
-    """Apply direct-DENY precedence only to an exact delegated-ALLOW coordinate."""
+def apply_effective_permission_precedence(asset: dict[str, Any]) -> dict[str, Any]:
+    """Apply direct-DENY precedence only to exact derived-ALLOW coordinates."""
     rows = [dict(row) for row in _list(asset.get("permission_matrix")) if isinstance(row, dict)]
     direct_denies: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for row in rows:
-        if _text(row.get("authorization_kind")) == "delegated_permission":
+        if _text(row.get("authorization_kind")) in _DERIVED_REASONS:
             continue
         denied_actions = _actions(row, deny=True)
         if _decision(row) != "DENY" and not denied_actions:
@@ -91,40 +93,41 @@ def apply_delegated_permission_precedence(asset: dict[str, Any]) -> dict[str, An
     superseded: list[dict[str, Any]] = []
     receipts: list[dict[str, Any]] = []
     for row in rows:
-        if (
-            _text(row.get("authorization_kind")) != "delegated_permission"
-            or _decision(row) != "ALLOW"
-        ):
+        derived_kind = _text(row.get("authorization_kind"))
+        reason = _DERIVED_REASONS.get(derived_kind, "")
+        if not reason or _decision(row) != "ALLOW":
             active.append(row)
             continue
         coordinate = _coordinate(row)
-        delegated_actions = _actions(row, deny=False)
+        derived_actions = _actions(row, deny=False)
         overriding = []
         for candidate in direct_denies.get(coordinate or (), []):
             candidate_actions = _actions(candidate, deny=True)
-            if not candidate_actions or delegated_actions.intersection(candidate_actions):
+            if not candidate_actions or derived_actions.intersection(candidate_actions):
                 overriding.append(candidate)
         if not overriding:
             active.append(row)
             continue
 
+        superseded_permission_id = _text(row.get("permission_id"))
         superseded.append(
             {
                 **row,
                 "status": "SUPERSEDED",
-                "supersession_reason": _REASON,
+                "supersession_reason": reason,
             }
         )
         payload = {
             "schema_version": RECEIPT_SCHEMA,
             "status": "SUPERSEDED",
-            "reason_code": _REASON,
+            "reason_code": reason,
+            "superseded_authorization_kind": derived_kind,
             "role": _text(row.get("role")),
             "interface_id": _text(row.get("interface_id")),
             "resource": _text(row.get("resource")),
             "scope": _text(row.get("scope") or "unspecified"),
-            "delegated_permission_id": _text(row.get("permission_id")),
-            "delegated_fact_id": _text(row.get("fact_id")),
+            "superseded_permission_id": superseded_permission_id,
+            "superseded_fact_id": _text(row.get("fact_id")),
             "overriding_permission_ids": sorted(
                 _text(value.get("permission_id"))
                 for value in overriding
@@ -138,12 +141,23 @@ def apply_delegated_permission_precedence(asset: dict[str, Any]) -> dict[str, An
                 }
             ),
         }
+        if derived_kind == "delegated_permission":
+            payload["delegated_permission_id"] = superseded_permission_id
+            payload["delegated_fact_id"] = _text(row.get("fact_id"))
+        elif derived_kind == "role_inherited_permission":
+            payload["inherited_permission_id"] = superseded_permission_id
+            payload["source_permission_id"] = _text(row.get("source_permission_id"))
+            payload["inheritance_contract_ids"] = sorted(
+                _text(value) for value in _list(row.get("inheritance_contract_ids"))
+                if _text(value)
+            )
         receipts.append(
             {
                 **payload,
                 "receipt_id": _stable_id(
                     "authorization_precedence",
-                    payload["delegated_permission_id"],
+                    derived_kind,
+                    superseded_permission_id,
                     *payload["overriding_permission_ids"],
                 ),
             }
@@ -180,24 +194,45 @@ def apply_delegated_permission_precedence(asset: dict[str, Any]) -> dict[str, An
         key=lambda row: _text(row.get("receipt_id")),
     )
     summary = _dict(asset.get("summary"))
-    generated = int(summary.get("source_fact_delegated_permission_count") or 0)
-    summary["source_fact_delegated_permission_generated_count"] = generated
+    delegated_generated = int(summary.get("source_fact_delegated_permission_count") or 0)
+    summary["source_fact_delegated_permission_generated_count"] = delegated_generated
     summary["source_fact_delegated_permission_count"] = sum(
         _text(row.get("authorization_kind")) == "delegated_permission"
         for row in active
     )
-    summary["source_fact_delegated_permission_superseded_count"] = len(superseded_by_id)
+    summary["source_fact_delegated_permission_superseded_count"] = sum(
+        _text(row.get("authorization_kind")) == "delegated_permission"
+        for row in superseded_by_id.values()
+    )
+    summary["role_inherited_permission_count"] = sum(
+        _text(row.get("authorization_kind")) == "role_inherited_permission"
+        for row in active
+    )
+    summary["role_inherited_permission_superseded_count"] = sum(
+        _text(row.get("authorization_kind")) == "role_inherited_permission"
+        for row in superseded_by_id.values()
+    )
     asset["summary"] = summary
     governance = _dict(asset.get("governance"))
     governance.update(
         {
             "direct_deny_revokes_exact_delegated_allow": True,
+            "direct_deny_revokes_exact_inherited_allow": True,
             "direct_permission_conflicts_remain_fail_closed": True,
-            "delegated_permission_precedence_requires_exact_scope_and_interface": True,
+            "derived_permission_precedence_requires_exact_scope_and_interface": True,
         }
     )
     asset["governance"] = governance
     return asset
 
 
-__all__ = ["RECEIPT_SCHEMA", "apply_delegated_permission_precedence"]
+def apply_delegated_permission_precedence(asset: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility alias for the generalized effective-permission authority."""
+    return apply_effective_permission_precedence(asset)
+
+
+__all__ = [
+    "RECEIPT_SCHEMA",
+    "apply_delegated_permission_precedence",
+    "apply_effective_permission_precedence",
+]
