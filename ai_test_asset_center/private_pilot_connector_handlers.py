@@ -20,7 +20,10 @@ from .connector_registry import (
     ConnectorRegistryError,
     build_default_connector_registry,
 )
-from .connector_configuration_service import configure_managed_feishu_connector
+from .connector_configuration_service import (
+    configure_managed_connector,
+    configure_managed_feishu_connector,
+)
 from .connector_connection_profiles import (
     ConnectorProfileError,
     list_connector_connection_profiles,
@@ -702,16 +705,30 @@ class KnowledgeConnectorHandlersMixin:
                 )
                 if key in body
             }
-        result = configure_managed_feishu_connector(
-            project,
-            connector_instance_id=connector,
-            resource_scope=_text(body.get("resource_scope"), 1000),
-            profile=profile,
-            root=root,
-            actor=actor,
-            display_name=_text(body.get("display_name"), 240),
-            status=_text(body.get("status"), 32) or "ACTIVE",
-        )
+        connector_type = _text(body.get("connector_type"), 160)
+        configuration_kwargs = {
+            "connector_instance_id": connector,
+            "resource_scope": _text(body.get("resource_scope"), 1000),
+            "profile": profile,
+            "root": root,
+            "actor": actor,
+            "display_name": _text(body.get("display_name"), 240),
+            "status": _text(body.get("status"), 32) or "ACTIVE",
+            "credential_expires_at_utc": body.get(
+                "credential_expires_at_utc"
+            ),
+        }
+        if connector_type:
+            result = configure_managed_connector(
+                project,
+                connector_type=connector_type,
+                **configuration_kwargs,
+            )
+        else:
+            result = configure_managed_feishu_connector(
+                project,
+                **configuration_kwargs,
+            )
         public_result = {
             "ok": bool(result.get("ok")),
             "created": bool(result.get("created")),

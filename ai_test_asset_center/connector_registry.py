@@ -145,6 +145,7 @@ class ConnectorCredentialField:
     required: bool = False
     secret: bool = False
     description: str = ""
+    auth_modes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _identifier(self.name, "credential_field_name"))
@@ -157,6 +158,11 @@ class ConnectorCredentialField:
         if field_type in _SECRET_FIELD_TYPES and not self.secret:
             raise ConnectorRegistryError("secret_credential_field_must_be_secret")
         object.__setattr__(self, "description", str(self.description or "").strip()[:300])
+        object.__setattr__(
+            self,
+            "auth_modes",
+            _unique_strings(self.auth_modes, "credential_field_auth_modes"),
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -165,6 +171,7 @@ class ConnectorCredentialField:
             "required": self.required,
             "secret": self.secret,
             "description": self.description,
+            "auth_modes": list(self.auth_modes),
         }
 
 
@@ -232,9 +239,28 @@ class ConnectorManifest:
         names = [field.name for field in fields]
         if len(names) != len(set(names)):
             raise ConnectorRegistryError("credential_field_name_duplicate")
+        supported_auth_modes = set(self.auth_modes)
+        if any(
+            field.auth_modes and not set(field.auth_modes) <= supported_auth_modes
+            for field in fields
+        ):
+            raise ConnectorRegistryError("credential_field_auth_mode_not_supported")
         object.__setattr__(self, "credential_fields", fields)
         if self.schema != CONNECTOR_MANIFEST_SCHEMA:
             raise ConnectorRegistryError("manifest_schema_invalid")
+
+    def credential_fields_for_auth_mode(
+        self,
+        auth_mode: str,
+    ) -> tuple[ConnectorCredentialField, ...]:
+        mode = str(auth_mode or "").strip()
+        if mode not in self.auth_modes:
+            raise ConnectorRegistryError("auth_mode_not_supported")
+        return tuple(
+            field
+            for field in self.credential_fields
+            if not field.auth_modes or mode in field.auth_modes
+        )
 
     def as_dict(self) -> dict[str, Any]:
         """Return only public capability metadata; no configured credential value exists here."""

@@ -1019,6 +1019,7 @@ def feishu_connector_manifest() -> ConnectorManifest:
                 required=True,
                 secret=False,
                 description="企业应用标识",
+                auth_modes=("internal_app",),
             ),
             ConnectorCredentialField(
                 name="app_secret",
@@ -1026,6 +1027,7 @@ def feishu_connector_manifest() -> ConnectorManifest:
                 required=True,
                 secret=True,
                 description="企业应用密钥",
+                auth_modes=("internal_app",),
             ),
             ConnectorCredentialField(
                 name="tenant_access_token",
@@ -1033,6 +1035,7 @@ def feishu_connector_manifest() -> ConnectorManifest:
                 required=True,
                 secret=True,
                 description="租户访问令牌",
+                auth_modes=("tenant_access_token",),
             ),
             ConnectorCredentialField(
                 name="user_access_token",
@@ -1040,6 +1043,7 @@ def feishu_connector_manifest() -> ConnectorManifest:
                 required=True,
                 secret=True,
                 description="用户访问令牌",
+                auth_modes=("user_access_token",),
             ),
         ),
         capability_contract_version=_MATERIALIZATION_CONTRACT_VERSION,

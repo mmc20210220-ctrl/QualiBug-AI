@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from .connector_checkpoint_recovery import recover_connector_checkpoint_commit
-from .connector_connection_profiles import configure_feishu_connector
+from .connector_connection_profiles import (
+    configure_connector_profile,
+    configure_feishu_connector,
+)
 from .connector_sync_authority import list_connector_instances
 from .connector_sync_fencing import managed_connector_sync_fence
 from .enterprise_knowledge_center._common import ROOT
@@ -43,9 +46,11 @@ def _existing_connector(
     )
 
 
-def configure_managed_feishu_connector(
+def _configure_managed_connector(
     project_id: str,
     *,
+    connector_type: str | None,
+    configuration_writer,
     connector_instance_id: str,
     resource_scope: str,
     profile: dict[str, Any],
@@ -53,6 +58,7 @@ def configure_managed_feishu_connector(
     actor: dict[str, Any] | None = None,
     display_name: str = "",
     status: str = "ACTIVE",
+    credential_expires_at_utc: Any = "",
 ) -> dict[str, Any]:
     """Create normally or replace an existing configuration under a newer fence."""
     resolved_root = (root or ROOT).resolve()
@@ -67,9 +73,12 @@ def configure_managed_feishu_connector(
         "actor": actor,
         "display_name": display_name,
         "status": status,
+        "credential_expires_at_utc": credential_expires_at_utc,
     }
+    if connector_type is not None:
+        kwargs["connector_type"] = connector_type
     if existing is None:
-        result = configure_feishu_connector(project, **kwargs)
+        result = configuration_writer(project, **kwargs)
         return {
             **result,
             "configuration_write_fencing": "NOT_REQUIRED_FOR_FIRST_CREATION",
@@ -90,7 +99,7 @@ def configure_managed_feishu_connector(
             actor=actor,
             remote_checkpoint_resolver=None,
         )
-        result = configure_feishu_connector(project, **kwargs)
+        result = configuration_writer(project, **kwargs)
         return {
             **result,
             "configuration_write_fencing": "MONOTONIC_REGISTRY_TOKEN",
@@ -104,4 +113,63 @@ def configure_managed_feishu_connector(
         }
 
 
-__all__ = ["configure_managed_feishu_connector"]
+def configure_managed_connector(
+    project_id: str,
+    *,
+    connector_type: str,
+    connector_instance_id: str,
+    resource_scope: str,
+    profile: dict[str, Any],
+    root: Path | None = None,
+    actor: dict[str, Any] | None = None,
+    display_name: str = "",
+    status: str = "ACTIVE",
+    credential_expires_at_utc: Any = "",
+) -> dict[str, Any]:
+    return _configure_managed_connector(
+        project_id,
+        connector_type=connector_type,
+        configuration_writer=configure_connector_profile,
+        connector_instance_id=connector_instance_id,
+        resource_scope=resource_scope,
+        profile=profile,
+        root=root,
+        actor=actor,
+        display_name=display_name,
+        status=status,
+        credential_expires_at_utc=credential_expires_at_utc,
+    )
+
+
+def configure_managed_feishu_connector(
+    project_id: str,
+    *,
+    connector_instance_id: str,
+    resource_scope: str,
+    profile: dict[str, Any],
+    root: Path | None = None,
+    actor: dict[str, Any] | None = None,
+    display_name: str = "",
+    status: str = "ACTIVE",
+    credential_expires_at_utc: Any = "",
+) -> dict[str, Any]:
+    """Compatibility facade for the generic managed configuration service."""
+    return _configure_managed_connector(
+        project_id,
+        connector_type=None,
+        configuration_writer=configure_feishu_connector,
+        connector_instance_id=connector_instance_id,
+        resource_scope=resource_scope,
+        profile=profile,
+        root=root,
+        actor=actor,
+        display_name=display_name,
+        status=status,
+        credential_expires_at_utc=credential_expires_at_utc,
+    )
+
+
+__all__ = [
+    "configure_managed_connector",
+    "configure_managed_feishu_connector",
+]
