@@ -15,128 +15,21 @@ concurrency:
 jobs:
   apply-and-verify:
     if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: one-shot/single-object-complex-lifecycle
           fetch-depth: 0
           persist-credentials: true
-
-      - name: Verify delivery payload
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > /tmp/segments.sha256 <<'EOF'
-          e04b059ed567d9e45c5896a4c0fb4ee765c1f9931b2326a4936e1318bf7d8792  .github/delivery/single-object-complex/part-00.b64
-          7afac08e7bbe069d7aa630f609ae1e2bc41459f87fcdb15391e5bd1b20d98104  .github/delivery/single-object-complex/p01-0.b64
-          daa794112e2b672e2e51e2efe22ecb8812addf87dd50807f9b5c6457cfd51ac1  .github/delivery/single-object-complex/p01-1.b64
-          921b87db181aca25a3ad743739af394f2343df700f1ba6229b0d81dc239a3b70  .github/delivery/single-object-complex/p01-2.b64
-          662cff60a51416de998e22d9e66640d0b2cf145784d735764c7b594d6244bbdb  .github/delivery/single-object-complex/p01-3.b64
-          8c5603e3f94de8683806a2a07e3ca0d78cb06466968b37b2af6b13da8de1d4c2  .github/delivery/single-object-complex/p01-4.b64
-          0e75dcb7cfd1c7b72516879404defb1163e54cc83fcdb405e92d2949d719b5c5  .github/delivery/single-object-complex/part-02.b64
-          e73832b67d562d01844db0865a5b46c5e6a3944288b9ffc176c8ed7e2d866fa5  .github/delivery/single-object-complex/part-03.b64
-          6c6857ce5df18d69032b885b9b1c85ee33d4bde418dc0195c31f0a77ff92898a  .github/delivery/single-object-complex/part-04.b64
-          6bcec3002b63c70c28e2bdd4ff0fe70bf1d5691f3f89fa26b2dba9f5aa946357  .github/delivery/single-object-complex/part-05.b64
-          2dc4cdd41ce8794845140827a397f335814244939398c887259eb1fd761b86af  .github/delivery/single-object-complex/part-06.b64
-          7dc5b4da57d6333efe213e7dc75ca0fad2925df4a6a11e6bc519d17f9ac2dd7a  .github/delivery/single-object-complex/part-07.b64
-          525fc163044fafc1375f6aa636053c702981ebf877448dab5107b0e8b6e0937d  .github/delivery/single-object-complex/p08-0.b64
-          1d5a0883e98bd7a1cb3537c2e5259354b0258cd44af5c2208268fe0a15bf0bae  .github/delivery/single-object-complex/p08-1.b64
-          3a4584b33c4a84182f107c235265f5939390ddd2de605f2128452154eb734b9c  .github/delivery/single-object-complex/p08-2.b64
-          661cb4f4bb3060cfb65ed548d61648d5df471bb50623273e114623a3ac3239ce  .github/delivery/single-object-complex/p08-3.b64
-          e58c747ed851f201aa24ef82de2deddedd4d91316d9bf51c1845db2f5ea4fc44  .github/delivery/single-object-complex/p08-4.b64
-          e909e169a8f8740b6617a609e1f35b54b8dffe67b41c17df30b88d3ed23d2e07  .github/delivery/single-object-complex/part-09.b64
-          EOF
-          sha256sum --check /tmp/segments.sha256
-
-          cat .github/delivery/single-object-complex/p01-*.b64 > /tmp/part-01.b64
-          cat .github/delivery/single-object-complex/p08-*.b64 > /tmp/part-08.b64
-          cat > /tmp/rebuilt-parts.sha256 <<'EOF'
-          db93ceb61c51b88072be81258867b48b7afaecd7e6d9497b3746becd49c989c1  /tmp/part-01.b64
-          711dfe7deb1ca9b3b43c9551ff9359454448cfb98eabd1a88af68208a6f6df26  /tmp/part-08.b64
-          EOF
-          sha256sum --check /tmp/rebuilt-parts.sha256
-
-          cat \
-            .github/delivery/single-object-complex/part-00.b64 \
-            /tmp/part-01.b64 \
-            .github/delivery/single-object-complex/part-02.b64 \
-            .github/delivery/single-object-complex/part-03.b64 \
-            .github/delivery/single-object-complex/part-04.b64 \
-            .github/delivery/single-object-complex/part-05.b64 \
-            .github/delivery/single-object-complex/part-06.b64 \
-            .github/delivery/single-object-complex/part-07.b64 \
-            /tmp/part-08.b64 \
-            .github/delivery/single-object-complex/part-09.b64 \
-            | base64 --decode \
-            | gzip --decompress \
-            > /tmp/single-object-complex.patch
-          echo '5e5eb773c380771e0dc3b3d68c2c3147df2b7e167e039324403ae6a70733eeeb  /tmp/single-object-complex.patch' \
-            | sha256sum --check
-
-      - name: Merge current main and replay verified commit
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'OpenAI Codex'
-          git config user.email 'codex@openai.com'
-          git fetch origin main
-          git merge --no-edit origin/main
-          git am -3 --ignore-space-change --ignore-whitespace \
-            /tmp/single-object-complex.patch
-          git diff --check origin/main...HEAD
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
-
       - name: Install runtime dependencies
-        shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-
-      - name: Compile Python source
-        shell: bash
-        run: python -m compileall -q ai_test_asset_center tests
-
-      - name: Run single-object authority and overlap regressions
-        shell: bash
+      - name: Apply, compile, test, and seal
         env:
           PYTHONPATH: .
-        run: |
-          pytest -q \
-            tests/test_single_object_complex_flow_compiler.py \
-            tests/test_single_object_complex_flow_real_network_e2e.py \
-            tests/test_process_graph_runtime.py \
-            tests/test_process_graph_plan_executor.py \
-            tests/test_process_graph_wait_contract.py \
-            tests/test_process_graph_event_transition_ledger.py \
-            tests/test_process_graph_rollback_contract.py \
-            tests/test_process_graph_dependency_rollback.py \
-            tests/test_process_graph_write_rollback_integration.py \
-            tests/test_process_graph_cleanup_equivalence_scope.py \
-            tests/test_process_graph_cleanup_bundle_layers.py \
-            tests/test_write_reversibility_contract.py \
-            tests/test_experiment_lifecycle_fixture_authority.py \
-            tests/test_process_step_receipt_scope_runtime.py \
-            tests/test_process_step_typed_observer_scope.py \
-            tests/test_process_step_semantic_view.py \
-            tests/test_process_step_semantic_projection.py \
-            tests/test_process_step_execution_semantics.py \
-            tests/test_process_step_fact_separation.py \
-            tests/test_process_step_ledger_authority.py \
-            tests/test_process_step_bundle_receipt_separation.py \
-            tests/test_process_step_graph_aggregate_scope.py \
-            tests/test_cross_system_process_graph_closure.py \
-            tests/test_v150_multi_step_protocol.py
-
-      - name: Remove one-time delivery assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          git rm -r .github/delivery/single-object-complex
-          git rm .github/workflows/apply-single-object-complex-lifecycle.yml
-          git commit -m 'chore(process): remove single-object delivery assets'
-          git push origin HEAD:one-shot/single-object-complex-lifecycle
+        run: bash .github/delivery/single-object-complex/apply-and-verify.sh
