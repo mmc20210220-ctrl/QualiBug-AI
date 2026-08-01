@@ -9,11 +9,8 @@ permissions:
 
 jobs:
   benchmark-current-main:
-    if: >-
-      github.event.pull_request.base.ref == 'main' &&
-      github.event.pull_request.head.ref == 'internal-identity-table-diagnostic' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    if: github.head_ref == 'internal-identity-table-diagnostic'
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout current main
@@ -21,10 +18,10 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
       - name: Install package
         run: |
           python -m pip install --upgrade pip
@@ -32,7 +29,7 @@ jobs:
       - name: Run identity benchmark twice
         shell: bash
         run: |
-          python - <<'PY'
+          cat > /tmp/identity_diagnostic.py <<'PY'
           import json
           from pathlib import Path
           from ai_test_asset_center.enterprise_knowledge_center.composition import build_enterprise_business_knowledge_asset
@@ -44,11 +41,12 @@ jobs:
               clusters = resolution.get('clusters') or []
               bindings = model.get('identity_bindings') or []
               unknowns = model.get('identity_unknowns') or []
-              unresolved = []
-              for row in unknowns:
-                  for item in (row.get('details') or {}).get('unresolved_artifacts') or []:
-                      if isinstance(item, dict):
-                          unresolved.append(item)
+              unresolved = [
+                  item
+                  for row in unknowns
+                  for item in (row.get('details') or {}).get('unresolved_artifacts') or []
+                  if isinstance(item, dict)
+              ]
               return {
                   'gate': gate.get('status'),
                   'cluster_count': len(clusters),
@@ -67,8 +65,9 @@ jobs:
               asset = build_enterprise_business_knowledge_asset('benchmark_mall', Path.cwd(), {'probe_limit': 0})
               runs.append(summary(asset))
           print('IDENTITY_DIAGNOSTIC=' + json.dumps({
-              'run1': {k: v for k, v in runs[0].items() if k != 'entity_ids'},
-              'run2': {k: v for k, v in runs[1].items() if k != 'entity_ids'},
+              'run1': {key: value for key, value in runs[0].items() if key != 'entity_ids'},
+              'run2': {key: value for key, value in runs[1].items() if key != 'entity_ids'},
               'stable_entity_ids': runs[0]['entity_ids'] == runs[1]['entity_ids'],
           }, ensure_ascii=False, sort_keys=True))
           PY
+          python /tmp/identity_diagnostic.py
