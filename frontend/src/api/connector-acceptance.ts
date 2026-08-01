@@ -71,6 +71,31 @@ const asString = (value: unknown): string => typeof value === 'string' ? value :
 const asBoolean = (value: unknown): boolean => value === true;
 const asNumber = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? value : 0;
 
+function friendlyAcceptanceError(rawMessage: string, status: number): string {
+  const message = rawMessage.toLowerCase();
+  if (
+    message.includes('already_running')
+    || message.includes('lock_held')
+    || message.includes('owner_active')
+    || message.includes('transaction_busy')
+  ) {
+    return '飞书资料正在同步或验收，请在当前任务完成后重试。';
+  }
+  if (message.includes('permission') || message.includes('forbidden')) {
+    return '飞书只读权限不足，请检查知识库与云文档授权范围。';
+  }
+  if (message.includes('not_found') || status === 404) {
+    return '尚未找到验收报告，请先运行一次 Pilot 验收。';
+  }
+  if (message.includes('profile') || message.includes('credential') || message.includes('access_token')) {
+    return '飞书连接信息未通过验收，请重新检查授权配置。';
+  }
+  if (message.includes('transport') || message.includes('api_failed') || status >= 500) {
+    return '飞书服务暂时不可用，已有资料不受影响，请稍后重试验收。';
+  }
+  return '飞书资料验收未完成，请检查连接和同步状态后重试。';
+}
+
 async function acceptanceRequest(path: string, init?: RequestInit): Promise<JsonRecord> {
   const session = await getSession();
   if (!session) throw new Error('未登录或会话已失效，请重新登录。');
@@ -95,7 +120,7 @@ async function acceptanceRequest(path: string, init?: RequestInit): Promise<Json
   }
   if (!response.ok) {
     const message = asString(payload.message) || asString(payload.error);
-    throw new Error(message || '飞书资料验收未完成，请检查连接状态后重试。');
+    throw new Error(friendlyAcceptanceError(message, response.status));
   }
   return payload;
 }
@@ -146,8 +171,22 @@ function toCheck(value: unknown): ConnectorAcceptanceCheck {
   };
 }
 
+function assertSafeReportEnvelope(row: JsonRecord): void {
+  for (const field of [
+    'source_content_returned',
+    'raw_cursor_returned',
+    'credential_values_returned',
+    'filesystem_path_returned',
+  ]) {
+    if (row[field] !== false) {
+      throw new Error('验收报告缺少完整的安全证明，已拒绝在页面展示。');
+    }
+  }
+}
+
 function toReport(value: unknown): ConnectorAcceptanceReport {
   const row = asRecord(value);
+  assertSafeReportEnvelope(row);
   const governance = asRecord(row.governance);
   return {
     ...toReportSummary(row),
