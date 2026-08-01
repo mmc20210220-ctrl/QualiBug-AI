@@ -43,6 +43,7 @@ on:
       - "ai_test_asset_center/process_graph_wait_contract.py"
       - "ai_test_asset_center/process_graph_wait_contract_core.py"
       - "ai_test_asset_center/process_graph_broker_delivery.py"
+      - "ai_test_asset_center/process_graph_broker_adapter.py"
       - "ai_test_asset_center/process_graph_event_transition.py"
       - "ai_test_asset_center/process_graph_async_transition_observer.py"
       - "ai_test_asset_center/process_graph_runtime.py"
@@ -85,6 +86,7 @@ on:
       - "tests/test_process_graph_async_transition_oracle.py"
       - "tests/test_process_graph_broker_delivery.py"
       - "tests/test_process_graph_broker_oracle.py"
+      - "tests/test_process_graph_broker_adapter.py"
       - "tests/test_process_graph_experiment_contract.py"
       - "tests/test_process_graph_event_finalizer_scope.py"
       - "tests/test_wait_flow_data_requirement.py"
@@ -160,6 +162,7 @@ jobs:
             ai_test_asset_center/process_graph_wait_contract.py \
             ai_test_asset_center/process_graph_wait_contract_core.py \
             ai_test_asset_center/process_graph_broker_delivery.py \
+            ai_test_asset_center/process_graph_broker_adapter.py \
             ai_test_asset_center/process_graph_event_transition.py \
             ai_test_asset_center/process_graph_async_transition_observer.py \
             ai_test_asset_center/process_graph_runtime.py \
@@ -205,6 +208,7 @@ jobs:
             tests/test_process_graph_async_transition_oracle.py \
             tests/test_process_graph_broker_delivery.py \
             tests/test_process_graph_broker_oracle.py \
+            tests/test_process_graph_broker_adapter.py \
             tests/test_process_graph_experiment_contract.py \
             tests/test_process_graph_event_finalizer_scope.py \
             tests/test_wait_flow_data_requirement.py \
