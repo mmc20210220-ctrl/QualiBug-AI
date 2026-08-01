@@ -43,8 +43,15 @@ from typing import Any, Iterable
 logger = logging.getLogger(__name__)
 
 try:
-    from .multi_industry_business_reasoning import infer_multi_industry_business_model
+    from ..multi_industry_business_reasoning import infer_multi_industry_business_model
 except ImportError:
+    logger.warning(
+        "multi_industry_business_reasoning unavailable; industry business "
+        "understanding falls back to an empty model (silent-empty is a bug, "
+        "not a design choice)",
+        exc_info=True,
+    )
+
     def infer_multi_industry_business_model(*a: Any, **kw: Any) -> dict[str, Any]:
         return {"summary": {}, "business_objects": [], "roles": [], "state_machines": [],
                 "permission_boundaries": [], "data_dependencies": [], "business_rules": [],
