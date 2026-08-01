@@ -124,7 +124,24 @@ def test_default_registry_exposes_manifest_driven_website_adapter_without_networ
     } == {"session_cookie"}
     assert {row["connector_type"] for row in registry.catalog()["connector_types"]} == {
         "feishu",
+        "openapi",
         "website",
+    }
+    assert registry.catalog()["governance"]["network_access_performed"] is False
+
+
+def test_default_registry_exposes_manifest_driven_openapi_adapter_without_network() -> None:
+    registry = build_default_connector_registry()
+
+    manifest = registry.manifest("openapi")
+    assert manifest.category == "api_contract"
+    assert manifest.read_only is True
+    assert manifest.scope_schema["required"] == ["document_urls"]
+    assert set(manifest.auth_modes) == {
+        "anonymous",
+        "bearer_token",
+        "api_key",
+        "cookie_session",
     }
     assert registry.catalog()["governance"]["network_access_performed"] is False
 

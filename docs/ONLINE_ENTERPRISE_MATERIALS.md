@@ -156,7 +156,8 @@ Content-Type: application/json
 - 前端永不回显密钥明文
 - Profile 配置和 checkpoint 提交复用项目级 Enterprise Knowledge Transaction Lease
 - 同一 Connector Instance 的同步批次使用独占文件系统租约
-- 在线访问固定限制到 `https://open.feishu.cn/open-apis`
+- 在线访问由每个 Connector Manifest 和用户声明的 `resource_scope` 决定；不得在通用路径中硬编码厂商域名，所有远端 URL 都必须经过 SSRF 校验
+- 在线 OpenAPI/Swagger JSON 或 YAML 通过 `connector_type: "openapi"` 接入，使用只读 GET、ETag/Last-Modified/内容哈希和有界 `$ref` 解析，并复用同一 Source Occurrence 主链
 - 所有重定向继续经过 SSRF 校验
 
 ## 离线补充

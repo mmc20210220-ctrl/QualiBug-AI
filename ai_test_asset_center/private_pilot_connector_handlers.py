@@ -894,20 +894,18 @@ class KnowledgeConnectorHandlersMixin:
         actor: dict[str, Any],
     ) -> Any:
         connector = _text(body.get("connector_instance_id"), 160)
+        connector_type = _text(body.get("connector_type"), 160) or "feishu"
         profile = body.get("connection_profile")
         if not isinstance(profile, dict):
+            manifest = build_default_connector_registry().manifest(connector_type)
+            declared_fields = {
+                field.name for field in manifest.credential_fields
+            }
             profile = {
                 key: body.get(key)
-                for key in (
-                    "auth_mode",
-                    "app_id",
-                    "app_secret",
-                    "tenant_access_token",
-                    "user_access_token",
-                )
+                for key in ("auth_mode", *sorted(declared_fields))
                 if key in body
             }
-        connector_type = _text(body.get("connector_type"), 160)
         configuration_kwargs = {
             "connector_instance_id": connector,
             "resource_scope": _text(body.get("resource_scope"), 20000),
@@ -921,7 +919,7 @@ class KnowledgeConnectorHandlersMixin:
             ),
             "sync_policy": body.get("sync_policy"),
         }
-        if connector_type:
+        if _text(body.get("connector_type"), 160):
             result = configure_managed_connector(
                 project,
                 connector_type=connector_type,

@@ -246,6 +246,7 @@ def _observation_metadata(
     forms_present: bool | None = None,
     robots_status: str = "",
     sitemap_last_modified: str = "",
+    extra_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "source_origin": "connector_snapshot",
@@ -267,6 +268,14 @@ def _observation_metadata(
             remote_materialization_fingerprint, 128
         ),
     }
+    if extra_metadata:
+        metadata.update(
+            {
+                str(key): value
+                for key, value in dict(extra_metadata).items()
+                if str(key) not in metadata
+            }
+        )
     for key, value, limit in (
         ("etag", etag, 1000),
         ("display_title", display_title, 300),
@@ -384,6 +393,11 @@ def ingest_connector_snapshots_batch(
             robots_status=_text(row.get("robots_status"), 80),
             sitemap_last_modified=_text(
                 row.get("sitemap_last_modified"), 160
+            ),
+            extra_metadata=(
+                dict(row.get("metadata") or {})
+                if isinstance(row.get("metadata"), dict)
+                else None
             ),
         )
         envelopes.append(

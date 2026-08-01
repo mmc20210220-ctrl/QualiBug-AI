@@ -159,3 +159,40 @@ def test_patch_preserves_masked_credentials_and_updates_generic_instance(monkeyp
         "app_id": "********",
         "app_secret": "********",
     }
+
+
+def test_configure_without_nested_profile_uses_selected_manifest_fields(monkeypatch, tmp_path):
+    import ai_test_asset_center.private_pilot_connector_handlers as handlers
+
+    captured: dict[str, Any] = {}
+
+    def fake_configure(project, **kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "created": True,
+            "connector_instance": {"connector_type": kwargs["connector_type"]},
+            "connection_profile": {"credentials_configured": True},
+            "credential_storage": {"mode": "encrypted_at_rest"},
+        }
+
+    monkeypatch.setattr(handlers, "configure_managed_connector", fake_configure)
+    result = DummyHandler()._handle_knowledge_connector_configure(
+        PROJECT,
+        {
+            "connector_instance_id": "openapi-main",
+            "connector_type": "openapi",
+            "resource_scope": '{"document_urls":["https://api.example.com/openapi.json"]}',
+            "auth_mode": "bearer_token",
+            "token": "opaque-token",
+        },
+        tmp_path,
+        ACTOR,
+    )
+
+    assert result["status"] == 201
+    assert captured["connector_type"] == "openapi"
+    assert captured["profile"] == {
+        "auth_mode": "bearer_token",
+        "token": "opaque-token",
+    }

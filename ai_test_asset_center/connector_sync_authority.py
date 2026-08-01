@@ -638,12 +638,19 @@ def _normalize_items(connector: str, items: list[dict[str, Any]]) -> list[dict[s
         if source_ref in refs:
             raise ConnectorSyncError(f"connector_sync_duplicate_remote_identity:{source_ref}")
         refs.add(source_ref)
+        raw_metadata = row.get("metadata")
+        if raw_metadata not in (None, "") and not isinstance(raw_metadata, dict):
+            raise ConnectorSyncError(
+                f"connector_sync_item_metadata_must_be_object:{index}"
+            )
+        metadata = _sanitize_metadata(dict(raw_metadata or {}) if raw_metadata else None)
         row.update(
             {
                 "_remote_resource_id": remote_id,
                 "_source_type": source_type,
                 "_resource_kind": kind,
                 "_source_ref": source_ref,
+                "_metadata": metadata,
             }
         )
         normalized.append(row)
@@ -973,6 +980,7 @@ def sync_connector_snapshot_batch(
                                     ),
                                     128,
                                 ),
+                                "metadata": dict(row.get("_metadata") or {}),
                                 "filename": _text(row.get("filename"), 500),
                             }
                             for row in normalized
