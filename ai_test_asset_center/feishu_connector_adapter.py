@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -37,6 +39,9 @@ _JSON_RESPONSE_LIMIT = 2 * 1024 * 1024
 _DEFAULT_PAGE_SIZE = 50
 _DEFAULT_MAX_NODES = 5000
 _DEFAULT_MAX_EXPORT_POLLS = 20
+_DEFAULT_MATERIALIZATION_WORKERS = 4
+_MAX_MATERIALIZATION_WORKERS = 8
+_MATERIALIZATION_WORKERS_ENV = "QUALIBUG_FEISHU_MATERIALIZATION_WORKERS"
 _RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 _RETRYABLE_FEISHU_CODES = {99991400, 1069923}
 _TOKEN_RE = re.compile(r"^[^\s]{8,4096}$")
@@ -778,6 +783,91 @@ def _unchanged_observation(
     }
 
 
+def _materialization_worker_count(task_count: int) -> int:
+    if task_count <= 0:
+        return 0
+    configured = _DEFAULT_MATERIALIZATION_WORKERS
+    raw = os.environ.get(_MATERIALIZATION_WORKERS_ENV, "").strip()
+    if raw:
+        try:
+            configured = int(raw)
+        except ValueError as exc:
+            raise FeishuConnectorError(
+                "feishu_materialization_workers_invalid"
+            ) from exc
+        if not 1 <= configured <= _MAX_MATERIALIZATION_WORKERS:
+            raise FeishuConnectorError(
+                "feishu_materialization_workers_out_of_range"
+            )
+    return min(configured, task_count)
+
+
+def _materialize_changed_resources(
+    pending: list[tuple[dict[str, Any], str]],
+    access_token: str,
+    *,
+    transport: FeishuTransport,
+    timeout: float,
+    max_export_polls: int,
+    export_poll_interval: float,
+    allow_raw_text_fallback: bool,
+    sleeper: Callable[[float], None],
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Materialize only changed resources with bounded, deterministic concurrency."""
+    worker_count = _materialization_worker_count(len(pending))
+    if worker_count == 0:
+        return [], 0, 0
+
+    def materialize(index: int, descriptor: dict[str, Any], fingerprint: str):
+        item = materialize_feishu_resource(
+            descriptor,
+            access_token,
+            transport=transport,
+            timeout=timeout,
+            max_export_polls=max_export_polls,
+            export_poll_interval=export_poll_interval,
+            allow_raw_text_fallback=allow_raw_text_fallback,
+            sleeper=sleeper,
+        )
+        item["remote_materialization_fingerprint"] = fingerprint
+        return index, item
+
+    if worker_count == 1:
+        ordered = [
+            materialize(index, descriptor, fingerprint)[1]
+            for index, (descriptor, fingerprint) in enumerate(pending)
+        ]
+    else:
+        ordered_slots: list[dict[str, Any] | None] = [None] * len(pending)
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="qualibug-feishu-materialize",
+        ) as executor:
+            futures = {
+                executor.submit(materialize, index, descriptor, fingerprint): index
+                for index, (descriptor, fingerprint) in enumerate(pending)
+            }
+            try:
+                for future in as_completed(futures):
+                    index, item = future.result()
+                    ordered_slots[index] = item
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+        if any(item is None for item in ordered_slots):
+            raise FeishuConnectorError(
+                "feishu_materialization_result_incomplete"
+            )
+        ordered = [item for item in ordered_slots if item is not None]
+
+    degraded_count = sum(
+        int(bool(item.get("adapter_degraded"))) for item in ordered
+    )
+    return ordered, degraded_count, worker_count
+
+
+
 def _snapshot_cursor(descriptors: list[dict[str, Any]]) -> str:
     basis = [
         {
@@ -946,9 +1036,8 @@ def sync_feishu_connector(
         connector_instance_id=connector_instance_id,
         root=resolved_root,
     )
-    items: list[dict[str, Any]] = []
     unchanged_observations: list[dict[str, Any]] = []
-    degraded_count = 0
+    pending_materializations: list[tuple[dict[str, Any], str]] = []
     for descriptor in descriptors:
         remote_id = _text(descriptor.get("remote_resource_id"), 1000)
         fingerprint = _materialization_fingerprint(
@@ -969,8 +1058,11 @@ def sync_feishu_connector(
                 _unchanged_observation(descriptor, fingerprint)
             )
             continue
-        item = materialize_feishu_resource(
-            descriptor,
+        pending_materializations.append((dict(descriptor), fingerprint))
+
+    items, degraded_count, materialization_worker_count = (
+        _materialize_changed_resources(
+            pending_materializations,
             access_token,
             transport=client,
             timeout=timeout,
@@ -979,10 +1071,7 @@ def sync_feishu_connector(
             allow_raw_text_fallback=allow_raw_text_fallback,
             sleeper=sleeper,
         )
-        item["remote_materialization_fingerprint"] = fingerprint
-        degraded_count += int(bool(item.get("adapter_degraded")))
-        items.append(item)
-
+    )
     try:
         run = sync_connector_snapshot_batch(
             project_id,
@@ -1013,6 +1102,8 @@ def sync_feishu_connector(
         "materialized_resource_count": len(items),
         "unchanged_resource_count": len(unchanged_observations),
         "export_avoided_count": len(unchanged_observations),
+        "materialization_worker_count": materialization_worker_count,
+        "parallel_materialization_used": materialization_worker_count > 1,
         "degraded_resource_count": degraded_count,
         "snapshot_complete": True,
         "next_cursor": next_cursor,
