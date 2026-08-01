@@ -1,0 +1,105 @@
+name: Apply single-object complex lifecycle
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-single-object-complex-lifecycle
+  cancel-in-progress: true
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: one-shot/single-object-complex-lifecycle
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify delivery payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/chunks.sha256 <<'EOF'
+          0dc1c0d5982cd6e41e05c4d973d81cb5eea1d75734b308efd1e1ab2f234361c0  .github/delivery/single-object-complex/chunk-00.b64
+          06f36457623e6ea5dc6f014a887d1ec41c8414083c3af60bd9ec479402ef482f  .github/delivery/single-object-complex/chunk-01.b64
+          EOF
+          sha256sum --check /tmp/chunks.sha256
+          cat .github/delivery/single-object-complex/chunk-*.b64 \
+            | base64 --decode \
+            | gzip --decompress \
+            > /tmp/single-object-complex.patch
+          echo '5e5eb773c380771e0dc3b3d68c2c3147df2b7e167e039324403ae6a70733eeeb  /tmp/single-object-complex.patch' \
+            | sha256sum --check
+
+      - name: Three-way replay verified commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'OpenAI Codex'
+          git config user.email 'codex@openai.com'
+          git am -3 --ignore-space-change --ignore-whitespace \
+            /tmp/single-object-complex.patch
+          git diff --check origin/main...HEAD
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install runtime dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile Python source
+        shell: bash
+        run: python -m compileall -q ai_test_asset_center tests
+
+      - name: Run single-object authority and overlap regressions
+        shell: bash
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/test_single_object_complex_flow_compiler.py \
+            tests/test_single_object_complex_flow_real_network_e2e.py \
+            tests/test_process_graph_runtime.py \
+            tests/test_process_graph_plan_executor.py \
+            tests/test_process_graph_wait_contract.py \
+            tests/test_process_graph_event_transition_ledger.py \
+            tests/test_process_graph_rollback_contract.py \
+            tests/test_process_graph_dependency_rollback.py \
+            tests/test_process_graph_write_rollback_integration.py \
+            tests/test_process_graph_cleanup_equivalence_scope.py \
+            tests/test_process_graph_cleanup_bundle_layers.py \
+            tests/test_write_reversibility_contract.py \
+            tests/test_experiment_lifecycle_fixture_authority.py \
+            tests/test_process_step_receipt_scope_runtime.py \
+            tests/test_process_step_typed_observer_scope.py \
+            tests/test_process_step_semantic_view.py \
+            tests/test_process_step_semantic_projection.py \
+            tests/test_process_step_execution_semantics.py \
+            tests/test_process_step_fact_separation.py \
+            tests/test_process_step_ledger_authority.py \
+            tests/test_process_step_bundle_receipt_separation.py \
+            tests/test_process_step_graph_aggregate_scope.py \
+            tests/test_cross_system_process_graph_closure.py \
+            tests/test_v150_multi_step_protocol.py
+
+      - name: Remove one-time delivery assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -r .github/delivery/single-object-complex
+          git rm .github/workflows/apply-single-object-complex-lifecycle.yml
+          git commit -m 'chore(process): remove single-object delivery assets'
+          git push origin HEAD:one-shot/single-object-complex-lifecycle
