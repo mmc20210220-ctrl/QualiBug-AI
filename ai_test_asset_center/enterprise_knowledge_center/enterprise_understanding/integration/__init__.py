@@ -12,6 +12,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..business_world_model import project_business_world_model
 from ..identity_downstream_projection import project_identity_to_downstream
 from ..schema import as_dict
 
@@ -45,6 +46,7 @@ def enrich_asset_with_enterprise_understanding(
     )
     model = as_dict(enriched.get("enterprise_understanding_model"))
     model = project_identity_to_downstream(enriched, model)
+    model = project_business_world_model(enriched, model)
     _legacy.project_final_scenario_planning_gate(enriched, model)
     enriched["enterprise_understanding_model"] = model
 
@@ -58,6 +60,17 @@ def enrich_asset_with_enterprise_understanding(
             "enterprise_identity_unresolved_behavior_count": len(
                 admission.get("unresolved_behavior_refs") or []
             ),
+            "business_world_model_id": as_dict(
+                model.get("business_world_model")
+            ).get("world_model_id"),
+            "business_world_model_status": as_dict(
+                as_dict(model.get("business_world_model")).get("gate")
+            ).get("status"),
+            "business_world_model_ready": bool(
+                as_dict(
+                    as_dict(model.get("business_world_model")).get("gate")
+                ).get("world_model_ready")
+            ),
         }
     )
     enriched["summary"] = summary
@@ -69,6 +82,9 @@ def enrich_asset_with_enterprise_understanding(
             "stable_enterprise_entity_id_projects_to_runtime_plan": True,
             "governed_implementation_bindings_project_identity_bindings": True,
             "name_only_execution_allowed": False,
+            "business_world_model_reuses_enterprise_understanding_authority": True,
+            "business_world_model_semantic_payload_duplication_allowed": False,
+            "business_world_model_automatic_entity_union_allowed": False,
         }
     )
     enriched["governance"] = governance

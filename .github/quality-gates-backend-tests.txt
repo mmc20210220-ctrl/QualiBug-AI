@@ -110,3 +110,5 @@ tests/test_implementation_binding_relationship_authority.py
 tests/test_semantic_operation_binding_mainline.py
 tests/test_semantic_operation_relationship_authority.py
 tests/test_agent_semantic_existing_relationship_authority.py
+tests/test_business_world_model.py
+tests/test_business_world_model_gate.py

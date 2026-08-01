@@ -13,6 +13,13 @@ from .behavior_ir import (
 from .behavior_ir_governance import build_governed_business_behavior_ir
 from .behavior_ir_logic_gate import build_business_behavior_ir_v1
 from .builder import build_enterprise_understanding_model
+from .business_world_model import build_business_world_model, project_business_world_model
+from .business_world_model_schema import (
+    BUSINESS_WORLD_MODEL_GATE_SCHEMA,
+    BUSINESS_WORLD_MODEL_SCHEMA,
+    empty_business_world_model,
+    validate_business_world_model_shape,
+)
 from .gate import assess_understanding_model
 from .identity_structural_review import (
     ACTION_CONFIRM_ALIAS,
@@ -157,6 +164,12 @@ __all__ = [
     "probe_generation_allowed",
     "probe_generation_block_reason",
     "build_enterprise_understanding_model",
+    "BUSINESS_WORLD_MODEL_SCHEMA",
+    "BUSINESS_WORLD_MODEL_GATE_SCHEMA",
+    "empty_business_world_model",
+    "validate_business_world_model_shape",
+    "build_business_world_model",
+    "project_business_world_model",
     "assess_understanding_model",
     "enrich_asset_with_enterprise_understanding",
     "install_enterprise_understanding_model",
