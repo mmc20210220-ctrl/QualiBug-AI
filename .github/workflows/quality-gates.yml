@@ -56,6 +56,32 @@ jobs:
       - name: Apply, verify, test and push role permission root fix
         run: bash .github/delivery/role-permission/apply-verified-root-fix.sh
 
+  # BEGIN SINGLE_OBJECT_COMPLEX_DELIVERY
+  single-object-complex-direct:
+    if: github.head_ref == 'one-shot/single-object-complex-lifecycle'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install product and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Apply, verify, test and push single-object complex lifecycle
+        run: bash .github/delivery/single-object-complex-main/apply-verified-root-fix.sh
+  # END SINGLE_OBJECT_COMPLEX_DELIVERY
+
   lifecycle-root-dispatch:
     if: github.head_ref == 'automation/lifecycle-root-cause-delivery-20260801'
     runs-on: ubuntu-latest
