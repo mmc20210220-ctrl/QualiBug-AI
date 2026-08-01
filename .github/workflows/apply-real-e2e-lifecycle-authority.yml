@@ -1,9 +1,6 @@
 name: Apply real E2E lifecycle authority
 
 on:
-  push:
-    branches:
-      - one-shot/real-e2e-lifecycle-authority
   pull_request:
     branches:
       - main
@@ -13,7 +10,7 @@ permissions:
 
 concurrency:
   group: apply-real-e2e-lifecycle-authority
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   apply-and-verify:
