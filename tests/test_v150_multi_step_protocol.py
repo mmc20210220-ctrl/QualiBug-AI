@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ai_test_asset_center.multi_step_protocol import (
+    MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE,
     MULTI_STEP_PROCESS_GRAPH_AMBIGUOUS,
     TEMPLATE_MULTI_STEP_PROCESS,
     TEMPLATE_SEQUENCE_VERIFICATION,
@@ -16,10 +17,6 @@ from ai_test_asset_center.experiment_protocol_registry import (
     resolve_family_protocol,
 )
 from ai_test_asset_center.process_step_observer import install_process_step_surface
-from ai_test_asset_center.process_graph_wait_contract_core import (
-    WAIT_ASYNC_EDGE_UNCOVERED,
-)
-
 
 
 def _envelope_with_steps():
@@ -222,10 +219,14 @@ class TestMultiStepProcessProtocol:
         }
         result = compile_multi_step_process_protocol(envelope)
         assert result["status"] == "BLOCKED"
-        assert result["reason_code"] == WAIT_ASYNC_EDGE_UNCOVERED
-        assert result["detail"] == (
-            "async_edge_uncovered:create_order->charge_payment"
+        assert result["reason_code"] == MULTI_STEP_GRAPH_RUNTIME_NOT_AVAILABLE
+        assert (
+            result["semantic_reason_code"]
+            == "PROCESS_GRAPH_ASYNC_EDGE_WAIT_UNCOVERED"
         )
+        assert result["wait_contract_compile_receipt"]["issues"] == [
+            "async_edge_uncovered:create_order->charge_payment"
+        ]
         assert result["execution_graph"]["process_id"] == "order_to_payment"
 
     def test_fork_and_join_compile_as_dependency_graph(self):
