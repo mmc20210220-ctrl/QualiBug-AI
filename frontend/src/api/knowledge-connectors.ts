@@ -29,6 +29,33 @@ export type KnowledgeConnectorAutoSync = {
   raw_error_returned?: boolean;
 };
 
+export type KnowledgeConnectorUnsupportedResource = {
+  remote_resource_id: string;
+  resource_kind?: string;
+  remote_object_type?: string;
+  display_title?: string;
+  reason_code?: string;
+  retry_trigger?: string;
+  content_materialized: false;
+  source_occurrence_created: false;
+  customer_source_modified: false;
+};
+
+export type KnowledgeConnectorCoverage = {
+  status: 'COMPLETE' | 'PARTIAL_UNSUPPORTED' | 'NOT_AVAILABLE' | 'UNKNOWN' | string;
+  complete: boolean;
+  discovered_count: number;
+  covered_count: number;
+  unsupported_count: number;
+  coverage_ratio: number;
+  unsupported_resources: KnowledgeConnectorUnsupportedResource[];
+  unsupported_resources_truncated?: boolean;
+  last_sync_epoch_id?: string;
+  last_completed_at_utc?: string;
+  source_content_returned?: boolean;
+  customer_material_mutation_executed?: boolean;
+};
+
 export type KnowledgeConnectorRecord = {
   connector_instance_id: string;
   connector_type: string;
@@ -43,6 +70,7 @@ export type KnowledgeConnectorRecord = {
   last_sync_completed_at_utc?: string;
   connection_profile?: KnowledgeConnectorProfile;
   auto_sync?: KnowledgeConnectorAutoSync;
+  coverage?: KnowledgeConnectorCoverage;
 };
 
 export type KnowledgeConnectorInventory = {
@@ -55,6 +83,8 @@ export type KnowledgeConnectorInventory = {
     profile_count?: number;
     credentials_configured_count?: number;
     automatic_refresh_enabled?: boolean;
+    partial_coverage_connector_count?: number;
+    unsupported_resource_count?: number;
   };
   governance?: Record<string, unknown>;
 };
@@ -82,6 +112,14 @@ export type KnowledgeConnectorActionResult = {
   retired_count?: number;
   discovered_resource_count?: number;
   materialized_resource_count?: number;
+  unchanged_resource_count?: number;
+  covered_resource_count?: number;
+  unsupported_resource_count?: number;
+  unknown_gap_count?: number;
+  knowledge_coverage_ratio?: number;
+  knowledge_coverage_status?: string;
+  knowledge_coverage_complete?: boolean;
+  unsupported_resources?: KnowledgeConnectorUnsupportedResource[];
   degraded_resource_count?: number;
   snapshot_complete?: boolean;
   cursor_checkpoint_committed?: boolean;
@@ -89,6 +127,7 @@ export type KnowledgeConnectorActionResult = {
   next_cursor_returned_to_client?: boolean;
   fencing_token_returned_to_client?: boolean;
   source_content_returned?: boolean;
+  customer_material_mutation_executed?: boolean;
   errors?: Array<Record<string, unknown>>;
   [key: string]: unknown;
 };
@@ -217,6 +256,41 @@ function toAutoSync(value: unknown): KnowledgeConnectorAutoSync {
   };
 }
 
+function toUnsupportedResource(value: unknown): KnowledgeConnectorUnsupportedResource {
+  const row = asRecord(value);
+  return {
+    remote_resource_id: asString(row.remote_resource_id),
+    resource_kind: asString(row.resource_kind) || undefined,
+    remote_object_type: asString(row.remote_object_type) || undefined,
+    display_title: asString(row.display_title) || undefined,
+    reason_code: asString(row.reason_code) || undefined,
+    retry_trigger: asString(row.retry_trigger) || undefined,
+    content_materialized: false,
+    source_occurrence_created: false,
+    customer_source_modified: false,
+  };
+}
+
+function toCoverage(value: unknown): KnowledgeConnectorCoverage {
+  const row = asRecord(value);
+  return {
+    status: asString(row.status) || 'NOT_AVAILABLE',
+    complete: asBoolean(row.complete),
+    discovered_count: asNumber(row.discovered_count) || 0,
+    covered_count: asNumber(row.covered_count) || 0,
+    unsupported_count: asNumber(row.unsupported_count) || 0,
+    coverage_ratio: asNumber(row.coverage_ratio) || 0,
+    unsupported_resources: asArray(row.unsupported_resources)
+      .map(toUnsupportedResource)
+      .filter((item) => Boolean(item.remote_resource_id)),
+    unsupported_resources_truncated: asBoolean(row.unsupported_resources_truncated),
+    last_sync_epoch_id: asString(row.last_sync_epoch_id) || undefined,
+    last_completed_at_utc: asString(row.last_completed_at_utc) || undefined,
+    source_content_returned: asBoolean(row.source_content_returned),
+    customer_material_mutation_executed: asBoolean(row.customer_material_mutation_executed),
+  };
+}
+
 function toConnector(value: unknown): KnowledgeConnectorRecord {
   const row = asRecord(value);
   return {
@@ -233,6 +307,7 @@ function toConnector(value: unknown): KnowledgeConnectorRecord {
     last_sync_completed_at_utc: asString(row.last_sync_completed_at_utc) || undefined,
     connection_profile: row.connection_profile ? toProfile(row.connection_profile) : undefined,
     auto_sync: row.auto_sync ? toAutoSync(row.auto_sync) : undefined,
+    coverage: row.coverage ? toCoverage(row.coverage) : undefined,
   };
 }
 
@@ -250,6 +325,8 @@ export async function listKnowledgeConnectors(projectId: string): Promise<Knowle
       profile_count: asNumber(summary.profile_count),
       credentials_configured_count: asNumber(summary.credentials_configured_count),
       automatic_refresh_enabled: asBoolean(summary.automatic_refresh_enabled),
+      partial_coverage_connector_count: asNumber(summary.partial_coverage_connector_count),
+      unsupported_resource_count: asNumber(summary.unsupported_resource_count),
     },
     governance: asRecord(data.governance),
   };
