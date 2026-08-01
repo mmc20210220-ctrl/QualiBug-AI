@@ -41,6 +41,7 @@ from ..identity_structural_review import (
     scrub_operator_structural_review_mentions,
 )
 from ..identity_structural_review_governance import (
+    attach_identity_structural_review_admission,
     govern_identity_structural_review_decision_admission,
     preserve_identity_structural_review_registry_merges,
 )
@@ -265,9 +266,11 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     if review_rebuild:
         pending = consume_identity_structural_review_pending_receipt(asset)
         model = finalize_identity_structural_review_measurement(asset, model, pending)
+        model = attach_identity_structural_review_admission(asset, model)
     else:
         model = govern_identity_structural_review_decision_admission(asset, model)
         model = apply_identity_structural_review_decisions(asset, model, resolution)
+        model = attach_identity_structural_review_admission(asset, model)
         review_receipt = as_dict(
             model.get("identity_structural_review_receipt")
             or asset.get("enterprise_identity_structural_review_receipt")
