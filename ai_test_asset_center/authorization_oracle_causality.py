@@ -193,6 +193,78 @@ def _authorization_observer(
     return receipt, reasons
 
 
+def authorization_resource_identity_proof_targets(
+    contract: dict[str, Any],
+) -> list[str]:
+    """Return the canonical runtime resource-identity proof coordinates.
+
+    Placeholder-backed operations already expose materialization targets. Collection
+    and fixed-path operations do not, even though the comparison observer can prove
+    both actors observed the same response resource. In that case the compiled
+    operation identity is the stable source-backed coordinate; no path parameter is
+    invented and no second binding engine is introduced.
+    """
+
+    row = _dict(contract)
+    explicit = sorted({
+        _text(value)
+        for value in _list(row.get("resource_identity_binding_targets"))
+        if _text(value)
+    })
+    if explicit:
+        return explicit
+    control_operation = _text(row.get("control_operation_ref"))
+    treatment_operation = _text(row.get("treatment_operation_ref"))
+    if not control_operation or control_operation != treatment_operation:
+        return []
+    return [f"operation:{control_operation}:observed_resource_identity"]
+
+
+def build_authorization_observer_binding_proofs(
+    observer_receipt: dict[str, Any],
+    targets: Iterable[Any],
+) -> tuple[str, list[dict[str, str]]]:
+    """Content-address an observer-proven same-resource identity.
+
+    A comparison observer may prove that control and treatment reached the same
+    resource even when the operation has no runtime placeholder binding.  That proof
+    must still use the same ``target -> value_fingerprint`` shape as materialized
+    bindings; a human-readable sentinel is not a valid identity fingerprint.
+    """
+
+    observer = validate_observer_receipt(_dict(observer_receipt))
+    evidence = _dict(observer.get("evidence"))
+    receipt_id = _text(observer.get("receipt_id"))
+    normalized_targets = sorted({
+        _text(value) for value in targets if _text(value)
+    })
+    if (
+        _text(observer.get("observer_id")) != "authorization_comparison"
+        or _text(observer.get("status")).upper() != "OBSERVED"
+        or evidence.get("same_resource_proven") is not True
+        or not receipt_id
+        or not normalized_targets
+    ):
+        raise ValueError("authorization_observer_binding_proof_incomplete")
+    values: dict[str, str] = {}
+    proofs: list[dict[str, str]] = []
+    for target in normalized_targets:
+        value_fingerprint = hashlib.sha256(_canonical({
+            "authority": "authorization_comparison_observer",
+            "observer_receipt_id": receipt_id,
+            "target": target,
+            "same_resource_proven": True,
+        }).encode("utf-8")).hexdigest()
+        values[target] = value_fingerprint
+        proofs.append({
+            "receipt_id": receipt_id,
+            "target": target,
+            "status": "BOUND",
+            "value_fingerprint": value_fingerprint,
+        })
+    return hashlib.sha256(_canonical(values).encode("utf-8")).hexdigest(), proofs
+
+
 def _binding_proof(
     contract: dict[str, Any], rows: Iterable[Any]
 ) -> tuple[str, list[str], list[str]]:
@@ -313,17 +385,31 @@ def build_authorization_causality_receipt(
         contract,
         _list(output.get("binding_materialization_receipts")),
     )
-    # V1.7: When the authorization_comparison observer has already proven
-    # same_resource_proven=True (via any mechanism: dual write status, path
-    # identity, body comparison), the runtime binding receipt is redundant.
-    # The observer's evidence is the authoritative same-resource proof.
+    # When the authorization_comparison observer has already proven the same
+    # resource, materialized placeholder receipts are optional. The observer is
+    # projected into the exact same target/value-fingerprint authority shape.
     _observer_evidence = _dict(observer.get("evidence"))
     _observer_proved_same_resource = (
         _observer_evidence.get("same_resource_proven") is True
     )
-    if _observer_proved_same_resource:
+    explicit_binding_targets = [
+        _text(value)
+        for value in _list(contract.get("resource_identity_binding_targets"))
+        if _text(value)
+    ]
+    if _observer_proved_same_resource and not explicit_binding_targets:
+        # Fixed-path and collection operations have no runtime placeholder to
+        # materialize. The sealed comparison observer is their resource-identity
+        # authority. Explicit placeholder targets remain stricter: their exact
+        # materialization receipts cannot be replaced by response similarity.
         binding_reasons = []
-        binding_fingerprint = binding_fingerprint or "observer_same_resource_proven"
+        if not binding_fingerprint:
+            binding_fingerprint, _observer_binding_proofs = (
+                build_authorization_observer_binding_proofs(
+                    observer,
+                    authorization_resource_identity_proof_targets(contract),
+                )
+            )
     reasons.extend(binding_reasons)
     verified_ids.extend(binding_ids)
     if not _text(contract.get("shared_binding_graph_fingerprint")):
@@ -484,6 +570,8 @@ def enforce_authorization_oracle_causality(
 
 __all__ = [
     "SCHEMA_VERSION",
+    "authorization_resource_identity_proof_targets",
     "build_authorization_causality_receipt",
+    "build_authorization_observer_binding_proofs",
     "enforce_authorization_oracle_causality",
 ]

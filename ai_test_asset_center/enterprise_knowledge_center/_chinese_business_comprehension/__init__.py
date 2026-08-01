@@ -90,4 +90,33 @@ def build_chinese_first_comprehension(
     governance["cross_document_identity_authority"] = "enterprise_understanding.identity_resolution"
     governance["legacy_alias_rewrite_is_fact_authority"] = False
     enriched["governance"] = governance
-    return enriched
+
+    # Reclassify compatibility rules from the same fact authorization authority.
+    # The historical extractor used "actor present" as permission evidence, which
+    # incorrectly upgraded ordinary responsibilities to authorization scenarios.
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.authorization_semantics import (
+        resolve_fact_authorization,
+    )
+    for raw_rule in _list(enriched.get("rule_library")):
+        if not isinstance(raw_rule, dict):
+            continue
+        rule = raw_rule
+        authorization = resolve_fact_authorization(_dict(rule.get("semantic_contract")))
+        kind = _text(authorization.get("semantic_kind"))
+        declared = bool(authorization.get("authority_declared"))
+        resolved_auth = kind == "AUTHORIZATION" and declared
+        if not _list(_dict(rule.get("semantic_contract")).get("state_effects")):
+            rule["risk_type"] = "authorization" if resolved_auth else "business_logic"
+            rule["rule_type"] = "permission" if resolved_auth else "business_rule"
+        rule["authorization_decision"] = _text(authorization.get("decision"))
+        rule["authorization_semantic_kind"] = kind
+        rule["authorization_declared"] = declared
+        rule["authorization_status"] = (
+            _text(authorization.get("resolution_status")) or "NOT_DECLARED"
+        )
+        rule["authorization_derivation"] = _text(authorization.get("derivation"))
+
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.fact_permission_matrix import (
+        materialize_fact_permission_matrix,
+    )
+    return materialize_fact_permission_matrix(enriched)

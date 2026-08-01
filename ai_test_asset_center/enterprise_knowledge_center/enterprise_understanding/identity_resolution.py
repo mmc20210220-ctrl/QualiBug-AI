@@ -20,10 +20,65 @@ from .identity_types import (
     collect_identity_mentions,
     fact_mentions,
 )
+from .authorization_semantics import resolve_fact_authorization
 from .schema import as_dict, as_list, stable_id, text, unique_text
 
 
+def _authorization_contract_identity(row: dict[str, Any]) -> dict[str, Any]:
+    contract = as_dict(row)
+    return {
+        "authorization_contract_id": text(
+            contract.get("authorization_contract_id")
+        ),
+        "decision": text(contract.get("decision")),
+        "declared_decision": text(contract.get("declared_decision")),
+        "resource_refs": unique_text(as_list(contract.get("resource_refs"))),
+        "actions": unique_text(as_list(contract.get("actions"))),
+        "scope": contract.get("scope"),
+        "conditions": unique_text(as_list(contract.get("conditions"))),
+        "source_ref": text(contract.get("source_ref")),
+        "derivation": text(contract.get("derivation")),
+        "coordinate_complete": contract.get("coordinate_complete") is True,
+    }
+
+
+def _actor_authorization_identity(model: dict[str, Any]) -> list[dict[str, Any]]:
+    actors: list[dict[str, Any]] = []
+    for raw_actor in as_list(model.get("actors")):
+        if not isinstance(raw_actor, dict):
+            continue
+        actor = as_dict(raw_actor)
+        contracts = [
+            _authorization_contract_identity(row)
+            for row in as_list(actor.get("authorization_contracts"))
+            if isinstance(row, dict)
+        ]
+        contracts.sort(
+            key=lambda row: (
+                text(row.get("authorization_contract_id")),
+                text(row.get("decision")),
+                text(row.get("source_ref")),
+            )
+        )
+        actors.append(
+            {
+                "actor_id": text(actor.get("actor_id")),
+                "name": text(actor.get("name")),
+                "authorization_status": text(actor.get("authorization_status")),
+                "authorization_contracts": contracts,
+            }
+        )
+    actors.sort(key=lambda row: (row["actor_id"], row["name"]))
+    return actors
+
+
 def resolve_enterprise_identities(asset: dict[str, Any]) -> dict[str, Any]:
+    # Identity resolution is the first stage after all structured facts and current
+    # interfaces have converged. Materialize source-backed role permissions into the
+    # existing permission_matrix SSOT before identity/model fingerprints are sealed.
+    from .fact_permission_matrix import materialize_fact_permission_matrix
+
+    materialize_fact_permission_matrix(asset)
     annotate_fact_identity_mentions(asset)
     facts = [
         row
@@ -147,20 +202,44 @@ def project_asset_for_legacy_builder(
     canonical_by_entity = dict(as_dict(resolution.get("canonical_label_by_entity")))
     ledger = dict(as_dict(projected.get("business_fact_ledger")))
     projected_facts: list[dict[str, Any]] = []
-    for raw in as_list(ledger.get("items")):
-        if not isinstance(raw, dict) or text(raw.get("kind")) == "TERM_ALIAS":
+    for raw_fact in as_list(ledger.get("items")):
+        if not isinstance(raw_fact, dict):
             continue
-        fact = deepcopy(raw)
+        fact = deepcopy(raw_fact)
+        authorization = resolve_fact_authorization(fact)
+        preserve_authorization_source_refs = (
+            text(authorization.get("semantic_kind")).upper() == "AUTHORIZATION"
+            and authorization.get("authority_declared") is True
+        )
         if text(fact.get("kind")) in {"RULE", "STATE_TRANSITION"}:
             for side in ("subject", "object"):
                 slot = dict(as_dict(fact.get(side)))
+                source_refs = unique_text(as_list(slot.get("entity_refs")))
                 mentions = fact_mentions(fact, side)
                 entity_ids = unique_text(label_to_entity.get(label) for label in mentions)
+                canonical_refs = unique_text(
+                    canonical_by_entity.get(entity_id) for entity_id in entity_ids
+                )
                 slot["entity_mentions"] = mentions
                 slot["resolved_entity_refs"] = entity_ids
                 slot["entity_refs"] = unique_text(
-                    canonical_by_entity.get(entity_id) for entity_id in entity_ids
+                    [
+                        *canonical_refs,
+                        *(
+                            source_refs
+                            if preserve_authorization_source_refs and not canonical_refs
+                            else []
+                        ),
+                    ]
                 )
+                if preserve_authorization_source_refs:
+                    slot["source_entity_refs"] = source_refs
+                    slot["authorization_identity_projection_status"] = (
+                        "RESOLVED"
+                        if canonical_refs
+                        else "UNRESOLVED_SOURCE_REF_PRESERVED"
+                    )
+                    slot["automatic_identity_merge_allowed"] = False
                 fact[side] = slot
         projected_facts.append(fact)
     ledger["items"] = projected_facts
@@ -171,7 +250,8 @@ def project_asset_for_legacy_builder(
             "object": row.get("canonical_label"),
             "name": row.get("canonical_label"),
             "aliases": row.get("aliases"),
-            "evidence": row.get("evidence"),
+            "source_refs": row.get("source_refs"),
+            "identity_confidence": row.get("confidence"),
         }
         for row in as_list(resolution.get("clusters"))
         if isinstance(row, dict)
@@ -354,6 +434,12 @@ def apply_identity_resolution_to_model(
             for row in as_list(model.get("lifecycles"))
             if isinstance(row, dict)
         ),
+        _actor_authorization_identity(model),
+        sorted(
+            text(row.get("unknown_id"))
+            for row in as_list(model.get("authorization_unknowns"))
+            if isinstance(row, dict) and text(row.get("unknown_id"))
+        ),
     )
     metrics = dict(as_dict(model.get("metrics")))
     metrics.update(
@@ -363,6 +449,7 @@ def apply_identity_resolution_to_model(
             "enterprise_identity_unknown_count": len(as_list(resolution.get("unknowns"))),
             "enterprise_identity_conflict_count": len(as_list(resolution.get("conflicts"))),
             "enterprise_identity_name_independent": True,
+            "actor_authorization_bound_to_model_identity": True,
         }
     )
     model["metrics"] = metrics

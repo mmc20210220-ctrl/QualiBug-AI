@@ -315,24 +315,44 @@ def classify_historical_authorization_attempt(
         )
 
     proofs = _list(finding.get("authorization_causality_binding_proofs"))
-    # V1.7: When the observer proved same_resource_proven=True, binding
-    # materialization receipts are redundant. The causality receipt's
-    # fingerprint records this bypass; proofs may be observer-synthetic.
-    _observer_proven = (
+    # Legacy artifacts may carry the pre-content-addressed observer sentinel. New
+    # runs always emit a SHA-256 fingerprint plus an observer-backed proof row.
+    legacy_observer_sentinel = (
         _text(causality.get("runtime_resource_identity_fingerprint"))
         == "observer_same_resource_proven"
     )
-    if not proofs and not _observer_proven:
+    if not proofs and not legacy_observer_sentinel:
         return _quarantine_receipt(
             attempt=row,
             run_id=run_id,
             campaign_id=campaign_id,
             reason_detail="authorization_delivery_binding_proofs_missing",
         )
-    if not _observer_proven:
+    if not legacy_observer_sentinel:
+        authorization_observer_ids = {
+            _text(_dict(value).get("receipt_id"))
+            for value in _list(bundle.get("observer_receipts"))
+            if _text(_dict(value).get("observer_id"))
+            == "authorization_comparison"
+            and _text(_dict(value).get("receipt_id"))
+        }
         try:
             for proof in proofs:
-                validate_binding_materialization_identity_receipt(_dict(proof))
+                proof_row = _dict(proof)
+                proof_receipt_id = _text(proof_row.get("receipt_id"))
+                proof_target = _text(proof_row.get("target"))
+                if proof_receipt_id in authorization_observer_ids:
+                    if (
+                        not proof_target.startswith("operation:")
+                        or not proof_target.endswith(
+                            ":observed_resource_identity"
+                        )
+                    ):
+                        raise BindingMaterializationIdentityError(
+                            "authorization_observer_resource_target_invalid"
+                        )
+                    continue
+                validate_binding_materialization_identity_receipt(proof_row)
         except BindingMaterializationIdentityError as exc:
             raise HistoricalAuthorizationQuarantineError(
                 f"historical_authorization_contradiction:{_error_code(exc)}:{exc}"

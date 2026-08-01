@@ -16,7 +16,11 @@ import hashlib
 import json
 from typing import Any
 
-from .authorization_oracle_causality import SCHEMA_VERSION
+from .authorization_oracle_causality import (
+    SCHEMA_VERSION,
+    authorization_resource_identity_proof_targets,
+    build_authorization_observer_binding_proofs,
+)
 from .customer_delivery_gate_v2 import validate_reproduction_receipt
 
 
@@ -377,20 +381,14 @@ def validate_authorization_delivery_finding(
             "authorization_delivery_finding_evidence_mismatch"
         )
 
-    # V1.7: When the observer proved same_resource_proven=True, the causality
-    # gate sets fingerprint to "observer_same_resource_proven" and binding
-    # materialization receipts are redundant. Skip the SHA256 proof check.
     _causal_fingerprint = _text(receipt.get("runtime_resource_identity_fingerprint"))
-    if _causal_fingerprint == "observer_same_resource_proven":
-        binding_receipt_ids: set[str] = set()
-    else:
-        binding_fingerprint, binding_receipt_ids = _binding_proof_fingerprint(
-            _list(finding_row.get("authorization_causality_binding_proofs"))
+    binding_fingerprint, binding_receipt_ids = _binding_proof_fingerprint(
+        _list(finding_row.get("authorization_causality_binding_proofs"))
+    )
+    if binding_fingerprint != _causal_fingerprint:
+        raise AuthorizationDeliveryGateError(
+            "authorization_delivery_binding_fingerprint_mismatch"
         )
-        if binding_fingerprint != _causal_fingerprint:
-            raise AuthorizationDeliveryGateError(
-                "authorization_delivery_binding_fingerprint_mismatch"
-            )
 
     bundle = _dict(attempt_row.get("delivery_evidence_bundle"))
     contract_ids = {
@@ -447,37 +445,34 @@ def attach_authorization_delivery_evidence(
     if _text(validated.get("status")) != "PASSED":
         return output
 
-    targets = {
-        _text(value)
-        for value in _list(contract.get("resource_identity_binding_targets"))
-        if _text(value)
-    }
+    targets = set(authorization_resource_identity_proof_targets(contract))
     proofs: list[dict[str, str]] = []
-    # V1.7: When the observer proved same_resource_proven=True, binding
-    # materialization receipts are redundant. Use the observer receipt as
-    # the authoritative binding proof for each declared target.
-    _observer_proven = (
-        _text(validated.get("runtime_resource_identity_fingerprint"))
-        == "observer_same_resource_proven"
+    observer = next(
+        (
+            _dict(row)
+            for row in _list(output.get("observer_receipts"))
+            if _text(_dict(row).get("observer_id"))
+            == "authorization_comparison"
+        ),
+        {},
     )
-    if _observer_proven:
-        _obs_receipt_id = _text(
-            next(
-                (
-                    _dict(r).get("receipt_id")
-                    for r in _list(output.get("observer_receipts"))
-                    if _text(_dict(r).get("observer_id")) == "authorization_comparison"
-                ),
-                "",
+    observer_fingerprint = ""
+    observer_proofs: list[dict[str, str]] = []
+    if observer and targets:
+        try:
+            observer_fingerprint, observer_proofs = (
+                build_authorization_observer_binding_proofs(
+                    observer,
+                    targets,
+                )
             )
-        )
-        for target in sorted(targets):
-            proofs.append({
-                "receipt_id": _obs_receipt_id or "observer_same_resource_proven",
-                "target": target,
-                "status": "BOUND",
-                "value_fingerprint": "observer_same_resource_proven",
-            })
+        except (TypeError, ValueError):
+            observer_fingerprint = ""
+            observer_proofs = []
+    if observer_fingerprint == _text(
+        validated.get("runtime_resource_identity_fingerprint")
+    ):
+        proofs = observer_proofs
     else:
         for raw in _list(output.get("binding_materialization_receipts")):
             row = _dict(raw)

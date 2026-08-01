@@ -252,3 +252,42 @@ def test_projection_preserves_ledger_and_builds_minimal_rerun_queue(
     assert validate_historical_authorization_quarantine_projection(
         projection
     ) == projection
+
+
+def test_current_observer_backed_resource_proof_is_not_treated_as_materialization(
+    monkeypatch,
+) -> None:
+    causality = _causality_receipt()
+    causality["runtime_resource_identity_fingerprint"] = "4" * 64
+    causality["verified_receipt_ids"] = sorted([
+        "contract:control",
+        "contract:treatment",
+        "observer:authorization",
+    ])
+    unsigned = {key: value for key, value in causality.items() if key != "receipt_id"}
+    causality["receipt_id"] = "auth_causality_" + hashlib.sha256(
+        _canonical(unsigned).encode("utf-8")
+    ).hexdigest()[:24]
+    attempt = _early_v2_attempt(causal_receipt=causality)
+    finding = attempt["delivery_evidence_bundle"]["finding"]
+    finding["authorization_causality_binding_proofs"] = [{
+        "receipt_id": "observer:authorization",
+        "target": "operation:op:get-orders:observed_resource_identity",
+        "status": "BOUND",
+        "value_fingerprint": "5" * 64,
+    }]
+    attempt["delivery_evidence_bundle"]["observer_receipts"] = [{
+        "observer_id": "authorization_comparison",
+        "receipt_id": "observer:authorization",
+    }]
+    monkeypatch.setattr(
+        quarantine,
+        "validate_authorization_delivery_finding",
+        lambda finding, attempt, campaign_id: {"status": "PASSED"},
+    )
+
+    assert classify_historical_authorization_attempt(
+        attempt,
+        run_id="run:1",
+        campaign_id="campaign:1",
+    ) == {}

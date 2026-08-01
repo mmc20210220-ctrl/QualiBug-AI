@@ -310,7 +310,7 @@ def test_gate_does_not_mutate_input_result() -> None:
     assert original == snapshot
 
 
-def test_non_comparison_experiment_is_unchanged() -> None:
+def test_non_comparison_authorization_records_not_applicable_receipt() -> None:
     result = _result()
     experiment = _experiment()
     experiment.pop("authorization_comparison_contract")
@@ -322,7 +322,10 @@ def test_non_comparison_experiment_is_unchanged() -> None:
         account_rows=_accounts(),
     )
 
-    assert output == result
+    receipt = output["authorization_causality_receipt"]
+    assert receipt["status"] == "NOT_APPLICABLE"
+    assert output["finding"]["authorization_causality_receipt"] == receipt
+    assert result["finding"].get("authorization_causality_receipt") is None
 
 
 def test_public_executor_applies_causal_gate(monkeypatch, tmp_path: Path) -> None:
@@ -374,3 +377,27 @@ def test_receipt_is_content_addressed() -> None:
 
     assert first == second
     assert first["receipt_id"].startswith("auth_causality_")
+
+
+def test_collection_operation_uses_observer_resource_identity_proof() -> None:
+    experiment = deepcopy(_experiment())
+    experiment["binding_plan"] = []
+    experiment["source_identity_fields"] = []
+    contract = experiment["authorization_comparison_contract"]
+    contract["resource_identity_binding_targets"] = []
+    contract["same_resource_identity_required"] = True
+    result = _result()
+    result["binding_materialization_receipts"] = []
+
+    receipt = build_authorization_causality_receipt(
+        result=result,
+        experiment=experiment,
+        behavior_ir=_behavior_ir(),
+        account_rows=_accounts(),
+    )
+
+    assert receipt["status"] == "PASSED"
+    assert len(receipt["runtime_resource_identity_fingerprint"]) == 64
+    assert receipt["runtime_resource_identity_fingerprint"] != (
+        "observer_same_resource_proven"
+    )

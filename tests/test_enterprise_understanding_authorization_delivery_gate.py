@@ -347,7 +347,7 @@ def test_non_authorization_occurrence_is_not_reclassified() -> None:
     ) == {"status": "NOT_APPLICABLE", "receipt_id": ""}
 
 
-def test_formal_scope_rejects_authorization_gate_without_causal_receipt(
+def test_formal_scope_quarantines_authorization_gate_without_causal_receipt(
     monkeypatch,
 ) -> None:
     finding = _finding(include_receipt=False)
@@ -385,13 +385,106 @@ def test_formal_scope_rejects_authorization_gate_without_causal_receipt(
         lambda value, finding=None: deepcopy(gate),
     )
 
-    with pytest.raises(
-        MainlineContractError,
-        match="formal_authorization_delivery_invalid",
-    ):
-        formal_delivery_scope.validated_deliverable_gate_index(ledger)
+    assert formal_delivery_scope.validated_deliverable_gate_index(ledger) == {}
 
 
 def test_causality_receipt_is_content_addressed() -> None:
     receipt = _causality_receipt()
     assert validate_authorization_causality_receipt(receipt) == receipt
+
+
+def test_collection_observer_proof_is_packaged_and_validated() -> None:
+    from ai_test_asset_center.authorization_oracle_causality import (
+        build_authorization_observer_binding_proofs,
+    )
+    from ai_test_asset_center.observer_contracts_base import build_observer_receipt
+
+    observer = build_observer_receipt(
+        observer_id="authorization_comparison",
+        status="OBSERVED",
+        campaign_id="campaign:1",
+        execution_id="execution:1",
+        evidence={
+            "owner_can_access": True,
+            "viewer_can_access": True,
+            "leak_detected": True,
+            "same_resource_proven": True,
+            "resource_match_basis": "identity_overlap",
+        },
+    )
+    target = "operation:op:get-orders:observed_resource_identity"
+    runtime_fingerprint, expected_proofs = (
+        build_authorization_observer_binding_proofs(observer, [target])
+    )
+    unsigned = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "PASSED",
+        "experiment_id": "exp:auth",
+        "obligation_id": "obl:auth",
+        "campaign_id": "campaign:1",
+        "execution_id": "execution:1",
+        "reason_codes": [],
+        "comparison_dimension": "ROLE_PERMISSION",
+        "comparison_contract_fingerprint": _sha({"comparison": "collection"}),
+        "compile_binding_graph_fingerprint": _sha({"binding": "collection"}),
+        "runtime_resource_identity_fingerprint": runtime_fingerprint,
+        "control_target_reached": True,
+        "treatment_target_reached": True,
+        "single_identity_dimension_proven": True,
+        "same_resource_proven": True,
+        "verified_receipt_ids": sorted([
+            "contract:control",
+            "contract:treatment",
+            observer["receipt_id"],
+        ]),
+    }
+    causality = {
+        **unsigned,
+        "receipt_id": "auth_causality_" + hashlib.sha256(
+            _canonical(unsigned).encode("utf-8")
+        ).hexdigest()[:24],
+    }
+    finding = _finding()
+    finding["authorization_causality_receipt"] = causality
+    finding["oracle"]["authorization_causality_receipt_id"] = causality["receipt_id"]
+    finding["evidence"].update({
+        "authorization_causality_receipt_id": causality["receipt_id"],
+        "runtime_resource_identity_fingerprint": runtime_fingerprint,
+        "single_identity_dimension_proven": True,
+        "same_resource_proven": True,
+    })
+    finding.pop("authorization_causality_binding_proofs", None)
+    result = {
+        "finding": finding,
+        "authorization_causality_receipt": causality,
+        "observer_receipts": [observer],
+        "binding_materialization_receipts": [],
+    }
+    experiment = {
+        "authorization_comparison_contract": {
+            "control_operation_ref": "op:get-orders",
+            "treatment_operation_ref": "op:get-orders",
+            "resource_identity_binding_targets": [],
+        }
+    }
+
+    packaged = attach_authorization_delivery_evidence(
+        result,
+        experiment=experiment,
+    )
+    packaged_finding = packaged["finding"]
+    assert packaged_finding["authorization_causality_binding_proofs"] == (
+        expected_proofs
+    )
+    attempt = _attempt(packaged_finding)
+    attempt["delivery_evidence_bundle"]["observer_receipts"] = [observer]
+    attempt["delivery_evidence_bundle"]["contract_evidence_receipts"] = [
+        {"kind": "control", "receipt_id": "contract:control"},
+        {"kind": "treatment", "receipt_id": "contract:treatment"},
+    ]
+
+    assert validate_authorization_delivery_finding(
+        packaged_finding,
+        attempt=attempt,
+        campaign_id="campaign:1",
+    )["status"] == "PASSED"

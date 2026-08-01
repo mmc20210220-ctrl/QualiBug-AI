@@ -293,7 +293,11 @@ def attach_authorization_comparison_contract(
             "TENANT_SCOPE": ["account_ref", "tenant_ref"],
         }[dimension],
         "resource_identity_binding_targets": targets,
-        "same_resource_identity_required": bool(targets),
+        # Every control/treatment authorization comparison must address the same
+        # business resource. Placeholder targets determine materialization needs;
+        # fixed-path and collection operations may prove identity from the sealed
+        # comparison observer instead.
+        "same_resource_identity_required": True,
         "shared_binding_graph_fingerprint": _fingerprint(
             {
                 "targets": targets,

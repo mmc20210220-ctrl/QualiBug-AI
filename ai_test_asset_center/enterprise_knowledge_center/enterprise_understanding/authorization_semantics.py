@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .schema import as_dict, as_list, text
+from .schema import as_dict, as_list, text, unique_text
 
 _AUTHORIZATION_DECISIONS = frozenset({"ALLOW", "DENY"})
 _GOVERNANCE_DECISIONS = frozenset({"REQUIRE_APPROVAL", "REQUIRE_CONFIRMATION"})
@@ -76,6 +76,10 @@ _CONFIRMATION_RE = re.compile(
     r"(?:需要|必须|须|需).{0,8}(?:确认)|require.{0,8}confirmation",
     re.I,
 )
+_SOURCE_MODAL_ALLOW_RE = re.compile(
+    r"(?:可以|允许|有权|准许|\bmay\b|\bcan\b|\bpermitted\b)",
+    re.I,
+)
 
 
 def _normalized_decision(value: Any) -> str:
@@ -89,6 +93,30 @@ def _fact_actor_refs(fact: dict[str, Any]) -> list[str]:
         for value in as_list(as_dict(fact.get("subject")).get("actor_refs"))
         if text(value) and text(value) != "系统"
     ]
+
+
+def _fact_action(fact: dict[str, Any]) -> str:
+    action = as_dict(fact.get("action"))
+    return text(action.get("canonical") or action.get("raw"))
+
+
+def _fact_resource_refs(fact: dict[str, Any]) -> list[str]:
+    subject = as_dict(fact.get("subject"))
+    object_part = as_dict(fact.get("object"))
+    return unique_text(
+        [
+            *as_list(subject.get("entity_refs")),
+            *as_list(object_part.get("entity_refs")),
+        ]
+    )
+
+
+def _authorization_coordinate_complete(fact: dict[str, Any]) -> bool:
+    return bool(
+        _fact_actor_refs(fact)
+        and _fact_action(fact)
+        and _fact_resource_refs(fact)
+    )
 
 
 def _identity_scope_declared(scope: dict[str, Any]) -> bool:
@@ -105,6 +133,7 @@ def _resolved(
     semantic_kind: str,
     derivation: str,
     authority_declared: bool,
+    text_fallback_used: bool | None = None,
 ) -> dict[str, Any]:
     return {
         "decision": decision,
@@ -113,9 +142,77 @@ def _resolved(
         "resolution_status": "RESOLVED",
         "reason_code": "",
         "derivation": derivation,
-        "text_fallback_used": derivation != "explicit_authorization_semantics",
+        "text_fallback_used": (
+            derivation != "explicit_authorization_semantics"
+            if text_fallback_used is None
+            else bool(text_fallback_used)
+        ),
         "automatic_inference_allowed": False,
     }
+
+
+def derive_source_authorization_semantics(
+    fact: dict[str, Any],
+) -> dict[str, Any]:
+    """Project only source-explicit actor authorization onto an existing fact.
+
+    This function does not create a fact or infer a role from business participation.
+    It only classifies an already source-backed actor/action/resource coordinate when
+    the same statement explicitly grants access, explicitly denies access, or carries
+    an identity/data-scope boundary. Generic MUST/MUST_NOT business obligations remain
+    business rules.
+    """
+
+    raw = text(fact.get("raw_statement"))
+    actors = _fact_actor_refs(fact)
+    if not raw or not actors:
+        return {}
+
+    if _EXPLICIT_AUTH_DENY_RE.search(raw):
+        return {
+            "decision": "DENY",
+            "source_backed": True,
+            "derivation": "explicit_authorization_deny_text",
+            "coordinate_complete": _authorization_coordinate_complete(fact),
+        }
+    if _EXPLICIT_AUTH_ALLOW_RE.search(raw):
+        return {
+            "decision": "ALLOW",
+            "source_backed": True,
+            "derivation": "explicit_authorization_allow_text",
+            "coordinate_complete": _authorization_coordinate_complete(fact),
+        }
+
+    modality = text(fact.get("modality")).upper()
+    scope = as_dict(fact.get("scope"))
+    if _identity_scope_declared(scope):
+        if modality in {"MUST_NOT", "FORBIDDEN", "PROHIBITED", "DENY"}:
+            return {
+                "decision": "DENY",
+                "source_backed": True,
+                "derivation": "actor_scoped_authorization_boundary",
+                "coordinate_complete": _authorization_coordinate_complete(fact),
+            }
+        if modality in {"MAY", "CAN", "ALLOW", "PERMITTED", "ONLY_IF"}:
+            return {
+                "decision": "ALLOW",
+                "source_backed": True,
+                "derivation": "actor_scoped_authorization_boundary",
+                "coordinate_complete": _authorization_coordinate_complete(fact),
+            }
+
+    if (
+        modality in {"MAY", "CAN", "ALLOW", "PERMITTED"}
+        and _SOURCE_MODAL_ALLOW_RE.search(raw)
+        and _authorization_coordinate_complete(fact)
+    ):
+        return {
+            "decision": "ALLOW",
+            "source_backed": True,
+            "derivation": "source_modal_authorization",
+            "coordinate_complete": True,
+        }
+    return {}
 
 
 def resolve_fact_authorization(fact: dict[str, Any]) -> dict[str, Any]:
@@ -133,19 +230,22 @@ def resolve_fact_authorization(fact: dict[str, Any]) -> dict[str, Any]:
     explicit = as_dict(explicit_raw)
     if isinstance(explicit_raw, dict):
         decision = _normalized_decision(explicit.get("decision") or explicit.get("effect"))
+        derivation = text(explicit.get("derivation")) or "explicit_authorization_semantics"
         if decision in _AUTHORIZATION_DECISIONS:
             return _resolved(
                 decision,
                 semantic_kind="AUTHORIZATION",
-                derivation="explicit_authorization_semantics",
+                derivation=derivation,
                 authority_declared=True,
+                text_fallback_used=False,
             )
         if decision in _GOVERNANCE_DECISIONS:
             return _resolved(
                 decision,
                 semantic_kind="GOVERNANCE",
-                derivation="explicit_authorization_semantics",
+                derivation=derivation,
                 authority_declared=False,
+                text_fallback_used=False,
             )
         return {
             "decision": "UNKNOWN",
@@ -187,36 +287,14 @@ def resolve_fact_authorization(fact: dict[str, Any]) -> dict[str, Any]:
             "text_fallback_used": False,
             "automatic_inference_allowed": False,
         }
-    if _EXPLICIT_AUTH_DENY_RE.search(raw):
+    source_semantics = derive_source_authorization_semantics(fact)
+    source_decision = _normalized_decision(source_semantics.get("decision"))
+    if source_decision in _AUTHORIZATION_DECISIONS:
         return _resolved(
-            "DENY",
+            source_decision,
             semantic_kind="AUTHORIZATION",
-            derivation="explicit_authorization_deny_text",
-            authority_declared=True,
-        )
-    if _EXPLICIT_AUTH_ALLOW_RE.search(raw):
-        return _resolved(
-            "ALLOW",
-            semantic_kind="AUTHORIZATION",
-            derivation="explicit_authorization_allow_text",
-            authority_declared=True,
-        )
-
-    modality = text(fact.get("modality")).upper()
-    scope = as_dict(fact.get("scope"))
-    identity_boundary = _identity_scope_declared(scope)
-    if identity_boundary and modality in {"MUST_NOT", "FORBIDDEN", "PROHIBITED", "DENY"}:
-        return _resolved(
-            "DENY",
-            semantic_kind="AUTHORIZATION",
-            derivation="actor_scoped_authorization_boundary",
-            authority_declared=True,
-        )
-    if identity_boundary and modality in {"MAY", "CAN", "ALLOW", "PERMITTED", "ONLY_IF"}:
-        return _resolved(
-            "ALLOW",
-            semantic_kind="AUTHORIZATION",
-            derivation="actor_scoped_authorization_boundary",
+            derivation=text(source_semantics.get("derivation"))
+            or "source_authorization_semantics",
             authority_declared=True,
         )
 
@@ -232,4 +310,7 @@ def resolve_fact_authorization(fact: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-__all__ = ["resolve_fact_authorization"]
+__all__ = [
+    "derive_source_authorization_semantics",
+    "resolve_fact_authorization",
+]
