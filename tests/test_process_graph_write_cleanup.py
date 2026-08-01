@@ -204,6 +204,8 @@ def _accepted_source_step(*, system_ref: str = "orders") -> dict:
         "operation_ref": "op-create-order",
         "actor_ref": "actor-writer",
         "system_ref": system_ref,
+        "method": "POST",
+        "path": "/orders",
         "status_code": 201,
         "body": {"order_id": "ORD-9"},
         "governance_receipt": {
@@ -446,3 +448,55 @@ def test_graph_cleanup_never_guesses_missing_identity(tmp_path: Path) -> None:
         GRAPH_CLEANUP_BINDING_UNRESOLVED
     )
     assert receipt["evidence"]["request_reached_transport"] is False
+
+
+def test_graph_cleanup_prefers_step_scoped_response_over_global_binding_collision(
+    tmp_path: Path,
+) -> None:
+    exp = finalize_process_graph_write_contract(
+        _experiment(system_ref="orders"),
+        _ir(),
+    )
+    calls: list[dict] = []
+
+    result = execute_process_graph_cleanup(
+        exp=exp,
+        steps_out=[_accepted_source_step(system_ref="orders")],
+        observations={},
+        contract_evidence_receipts=[],
+        request_bodies_for_cleanup={"create-order": {"sku": "SKU-1"}},
+        # A different system may already have published the same canonical
+        # field name. The cleanup contract for create-order is step-scoped and
+        # must use its own governed write response (ORD-9), not this value.
+        runtime_bindings={"order_id": "PAYMENT-SYSTEM-ORDER-ID"},
+        cleanup_failures=0,
+        actors={
+            "actor-writer": {
+                "id": "actor-writer",
+                "role": "writer",
+                "credential_secret_ref": "primary:actor-writer",
+            }
+        },
+        tokens={
+            "primary:actor-writer": "erp-token",
+            "orders:actor-writer": "orders-token",
+        },
+        eid="exp-graph-write",
+        oid="obl-graph-write",
+        resolved_campaign_id="campaign",
+        resolved_execution_id="execution",
+        campaign_id="campaign",
+        root=tmp_path,
+        project="project",
+        base_url="https://erp.test.example",
+        runtime_contract=_secondary_runtime_contract(),
+        execute_governed_control_write=lambda **kwargs: (
+            calls.append(kwargs) or _cleanup_result(**kwargs)
+        ),
+        sandbox_write_allowed=lambda **kwargs: (True, ""),
+    )
+
+    assert result["cleanup_failures"] == 0
+    assert len(calls) == 1
+    assert calls[0]["base_url"] == "https://orders.test.example"
+    assert calls[0]["path"] == "/orders/ORD-9"
