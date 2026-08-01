@@ -1,8 +1,10 @@
-"""Compact formal authority for independently gated delivery occurrences.
+"""Compact, content-addressed authority for externally scored findings.
 
-A single obligation attempt may contribute multiple finding occurrences when one execution
-violates several mandatory outcomes. Every entry remains tied to the same immutable attempt
-fingerprint while carrying its own Gate-v2 and finding payload fingerprints.
+The receipt is built only after the complete Gate-v2 evidence bundle and the
+obligation-attempt ledger have been revalidated.  It contains no request or
+response bodies, so it can cross persistence and evaluator boundaries without
+rewriting the signed evidence chain. Historical authorization attempts remain in
+the source ledger but cannot enter this authority without current causal proof.
 """
 from __future__ import annotations
 
@@ -10,8 +12,6 @@ import hashlib
 import json
 from typing import Any
 
-from . import _formal_delivery_authority_single_occurrence_mechanics as _core
-from ._formal_delivery_authority_single_occurrence_mechanics import *  # noqa: F401,F403
 from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
@@ -30,18 +30,43 @@ from .historical_authorization_quarantine import (
 )
 from .obligation_attempt_ledger import (
     ObligationAttemptLedgerError,
-    delivery_occurrence_views,
     validate_obligation_attempt_ledger,
 )
 
-FORMAL_DELIVERY_AUTHORITY_SCHEMA = _core.FORMAL_DELIVERY_AUTHORITY_SCHEMA
-_ENTRY_FIELDS = set(_core._ENTRY_FIELDS)
-_RECEIPT_FIELDS = set(_core._RECEIPT_FIELDS)
-FormalDeliveryAuthorityError = _core.FormalDeliveryAuthorityError
+
+FORMAL_DELIVERY_AUTHORITY_SCHEMA = "qualibug.formal-delivery-authority.v2"
+
+_ENTRY_FIELDS = {
+    "obligation_id",
+    "experiment_id",
+    "execution_id",
+    "finding_id",
+    "attempt_fingerprint",
+    "gate_receipt_id",
+    "gate_output_fingerprint",
+    "finding_payload_fingerprint",
+}
+_RECEIPT_FIELDS = {
+    "schema_version",
+    "status",
+    "run_id",
+    "campaign_id",
+    "target_id",
+    "environment_id",
+    "policy_version",
+    "evaluation_mode",
+    "mainline_contract_fingerprint",
+    "attempt_ledger_fingerprint",
+    "gate_schema_version",
+    "delivery_occurrence_count",
+    "delivery_occurrence_finding_ids",
+    "deliverable_attempts",
+    "receipt_fingerprint",
+}
 
 
-def __getattr__(name: str) -> Any:
-    return getattr(_core, name)
+class FormalDeliveryAuthorityError(ValueError):
+    """The formal authority is missing, foreign, or internally inconsistent."""
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -103,7 +128,7 @@ def validate_formal_delivery_authority_receipt(
     if not isinstance(attempts, list):
         raise FormalDeliveryAuthorityError("formal_authority_attempts_invalid")
     attempt_ids: list[str] = []
-    occurrence_keys: list[tuple[str, str]] = []
+    obligation_ids: list[str] = []
     for raw in attempts:
         entry = _dict(raw)
         if set(entry) != _ENTRY_FIELDS or not all(
@@ -113,9 +138,7 @@ def validate_formal_delivery_authority_receipt(
                 "formal_authority_attempt_entry_invalid"
             )
         attempt_ids.append(_text(entry.get("finding_id")))
-        occurrence_keys.append(
-            (_text(entry.get("obligation_id")), _text(entry.get("finding_id")))
-        )
+        obligation_ids.append(_text(entry.get("obligation_id")))
     if attempts != sorted(attempts, key=lambda item: _text(item.get("finding_id"))):
         raise FormalDeliveryAuthorityError(
             "formal_authority_attempts_not_canonical"
@@ -124,9 +147,9 @@ def validate_formal_delivery_authority_receipt(
         raise FormalDeliveryAuthorityError(
             "formal_authority_finding_id_duplicate"
         )
-    if len(occurrence_keys) != len(set(occurrence_keys)):
+    if len(obligation_ids) != len(set(obligation_ids)):
         raise FormalDeliveryAuthorityError(
-            "formal_authority_occurrence_identity_duplicate"
+            "formal_authority_obligation_id_duplicate"
         )
     if attempt_ids != formal_ids:
         raise FormalDeliveryAuthorityError(
@@ -137,9 +160,9 @@ def validate_formal_delivery_authority_receipt(
             "formal_authority_count_mismatch"
         )
     observed = _text(row.get("receipt_fingerprint"))
-    expected = _fingerprint(
-        {key: value for key, value in row.items() if key != "receipt_fingerprint"}
-    )
+    expected = _fingerprint({
+        key: value for key, value in row.items() if key != "receipt_fingerprint"
+    })
     if not observed or observed != expected:
         raise FormalDeliveryAuthorityError(
             "formal_authority_fingerprint_invalid"
@@ -153,6 +176,8 @@ def build_formal_delivery_authority_receipt(
     findings: list[dict[str, Any]],
     obligation_attempt_ledger: dict[str, Any],
 ) -> dict[str, Any]:
+    """Revalidate the formal, non-quarantined chain and emit an audit receipt."""
+
     try:
         mainline = validate_mainline_run_contract(mainline_run)
         ledger = validate_obligation_attempt_ledger(obligation_attempt_ledger)
@@ -190,85 +215,81 @@ def build_formal_delivery_authority_receipt(
         raise FormalDeliveryAuthorityError(
             "formal_authority_finding_identity_invalid"
         )
-
     entries: list[dict[str, str]] = []
-    for raw_parent in _list(ledger.get("attempts")):
-        parent = _dict(raw_parent)
-        if _text(parent.get("terminal_status")).upper() != "DELIVERABLE":
+    for raw_attempt in _list(ledger.get("attempts")):
+        attempt = _dict(raw_attempt)
+        if _text(attempt.get("terminal_status")).upper() != "DELIVERABLE":
             continue
-        for attempt in delivery_occurrence_views(parent):
-            finding_id = _text(attempt.get("finding_id"))
-            try:
-                quarantine = classify_historical_authorization_attempt(
-                    attempt,
-                    run_id=mainline["run_id"],
-                    campaign_id=mainline["campaign_id"],
-                )
-            except HistoricalAuthorizationQuarantineError as exc:
-                raise FormalDeliveryAuthorityError(
-                    f"formal_authority_historical_authorization_invalid:{finding_id}:{exc}"
-                ) from exc
-            if quarantine:
-                continue
-            finding = finding_by_id.get(finding_id)
-            if finding is None:
-                raise FormalDeliveryAuthorityError(
-                    f"formal_authority_finding_missing:{finding_id}"
-                )
-            gate_receipt = _dict(attempt.get("gate_receipt"))
-            if (
-                gate_receipt.get("schema_version")
-                == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
-            ):
-                if (
-                    _text(gate_receipt.get("status")).upper() != "DELIVERABLE"
-                    or _text(gate_receipt.get("finding_id")) != finding_id
-                ):
-                    raise FormalDeliveryAuthorityError(
-                        f"formal_authority_gate_invalid:{finding_id}:legacy_gate_mismatch"
-                    )
-                gate = gate_receipt
-            else:
-                try:
-                    gate = validate_customer_delivery_gate_receipt_v2(
-                        gate_receipt,
-                        finding=finding,
-                    )
-                except DeliveryGateV2Error as exc:
-                    raise FormalDeliveryAuthorityError(
-                        f"formal_authority_gate_invalid:{finding_id}:{exc}"
-                    ) from exc
-                identity = _dict(gate.get("identity"))
-                expected_gate_identity = {
-                    "run_id": mainline["run_id"],
-                    "campaign_id": mainline["campaign_id"],
-                    "target_id": mainline["target_id"],
-                    "environment_id": mainline["environment_id"],
-                    "mainline_contract_fingerprint": mainline[
-                        "contract_fingerprint"
-                    ],
-                    "finding_id": finding_id,
-                }
-                for field, value in expected_gate_identity.items():
-                    if _text(identity.get(field)) != value:
-                        raise FormalDeliveryAuthorityError(
-                            f"formal_authority_gate_identity_mismatch:{field}"
-                        )
-            entries.append(
-                {
-                    "obligation_id": _text(attempt.get("obligation_id")),
-                    "experiment_id": _text(attempt.get("experiment_id")),
-                    "execution_id": _text(attempt.get("execution_id")),
-                    "finding_id": finding_id,
-                    "attempt_fingerprint": _text(parent.get("attempt_fingerprint")),
-                    "gate_receipt_id": _text(gate.get("gate_receipt_id")),
-                    "gate_output_fingerprint": _text(gate.get("output_fingerprint")),
-                    "finding_payload_fingerprint": _text(
-                        gate.get("finding_payload_fingerprint")
-                        or finding_payload_fingerprint(finding)
-                    ),
-                }
+        finding_id = _text(attempt.get("finding_id"))
+        try:
+            quarantine = classify_historical_authorization_attempt(
+                attempt,
+                run_id=mainline["run_id"],
+                campaign_id=mainline["campaign_id"],
             )
+        except HistoricalAuthorizationQuarantineError as exc:
+            raise FormalDeliveryAuthorityError(
+                f"formal_authority_historical_authorization_invalid:{finding_id}:{exc}"
+            ) from exc
+        if quarantine:
+            continue
+        finding = finding_by_id.get(finding_id)
+        if finding is None:
+            raise FormalDeliveryAuthorityError(
+                f"formal_authority_finding_missing:{finding_id}"
+            )
+        gate_receipt = _dict(attempt.get("gate_receipt"))
+        if (
+            gate_receipt.get("schema_version")
+            == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+        ):
+            if (
+                _text(gate_receipt.get("status")).upper() != "DELIVERABLE"
+                or _text(gate_receipt.get("finding_id")) != finding_id
+            ):
+                raise FormalDeliveryAuthorityError(
+                    f"formal_authority_gate_invalid:{finding_id}:legacy_gate_mismatch"
+                )
+            gate = gate_receipt
+        else:
+            try:
+                gate = validate_customer_delivery_gate_receipt_v2(
+                    gate_receipt,
+                    finding=finding,
+                )
+            except DeliveryGateV2Error as exc:
+                raise FormalDeliveryAuthorityError(
+                    f"formal_authority_gate_invalid:{finding_id}:{exc}"
+                ) from exc
+            identity = _dict(gate.get("identity"))
+            expected_gate_identity = {
+                "run_id": mainline["run_id"],
+                "campaign_id": mainline["campaign_id"],
+                "target_id": mainline["target_id"],
+                "environment_id": mainline["environment_id"],
+                "mainline_contract_fingerprint": mainline[
+                    "contract_fingerprint"
+                ],
+                "finding_id": finding_id,
+            }
+            for field, value in expected_gate_identity.items():
+                if _text(identity.get(field)) != value:
+                    raise FormalDeliveryAuthorityError(
+                        f"formal_authority_gate_identity_mismatch:{field}"
+                    )
+        entries.append({
+            "obligation_id": _text(attempt.get("obligation_id")),
+            "experiment_id": _text(attempt.get("experiment_id")),
+            "execution_id": _text(attempt.get("execution_id")),
+            "finding_id": finding_id,
+            "attempt_fingerprint": _text(attempt.get("attempt_fingerprint")),
+            "gate_receipt_id": _text(gate.get("gate_receipt_id")),
+            "gate_output_fingerprint": _text(gate.get("output_fingerprint")),
+            "finding_payload_fingerprint": _text(
+                gate.get("finding_payload_fingerprint")
+                or finding_payload_fingerprint(finding)
+            ),
+        })
     entries.sort(key=lambda item: item["finding_id"])
     formal_ids = sorted(finding_by_id)
     if [entry["finding_id"] for entry in entries] != formal_ids:
@@ -294,12 +315,3 @@ def build_formal_delivery_authority_receipt(
     }
     payload["receipt_fingerprint"] = _fingerprint(payload)
     return validate_formal_delivery_authority_receipt(payload)
-
-
-_core.validate_formal_delivery_authority_receipt = (
-    validate_formal_delivery_authority_receipt
-)
-
-__all__ = sorted(
-    name for name in globals() if not name.startswith("__") and name != "_core"
-)
