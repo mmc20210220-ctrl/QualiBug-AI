@@ -1,37 +1,110 @@
 """Recovery-aware facade for managed connector auto synchronization.
 
 The original scheduling, fencing, profile checkpoint and retry implementation remains in
-``connector_auto_sync_core``.  This facade permanently composes the newer lifecycle checkpoint
-recovery authority into the existing managed path and projects persisted recovery state to
-operators.  No second scheduler, connector registry or retry loop is introduced.
+``connector_auto_sync_core``. This facade permanently composes the lifecycle checkpoint recovery
+authority into the existing managed path and projects persisted recovery state to operators.
+Production calls do not rewrite shared globals; explicit dependency overrides retain a narrow,
+serialized compatibility bridge for focused tests and embedders.
 """
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from . import connector_auto_sync_core as _core
-from .connector_lifecycle_recovery_intent import (
-    lifecycle_recovery_intent_path,
-)
+from .connector_lifecycle_recovery_intent import lifecycle_recovery_intent_path
 from .connector_lifecycle_recovery_supervisor import (
     ConnectorLifecycleRecoverySupervisorError,
     inspect_pending_connector_lifecycle_checkpoint,
     recover_pending_connector_lifecycle_checkpoint,
 )
 
+_CORE_BASELINE = {
+    name: value
+    for name, value in vars(_core).items()
+    if not name.startswith("__")
+}
 _CORE_RECOVER_MANAGED_CHECKPOINT = _core.recover_managed_feishu_checkpoint
 _CORE_RECOVERY_PENDING = _core._recovery_pending
 _CORE_AUTO_SYNC_STATUS = _core.connector_auto_sync_status
+_CORE_RUN_MANAGED = _core.run_managed_feishu_sync
+_CORE_RUN_SWEEP = _core.run_connector_auto_sync_sweep
 
-for _name, _value in vars(_core).items():
-    if not _name.startswith("__"):
-        globals().setdefault(_name, _value)
+for _name, _value in _CORE_BASELINE.items():
+    globals().setdefault(_name, _value)
 
 _RECOVERY_ONLY_ACTIONS = {
     "RECOVERED_COMMITTED_CHECKPOINT",
     "REPLAYED_LIFECYCLE_AND_COMMITTED_CHECKPOINT",
 }
+_OVERRIDE_LOCK = threading.RLock()
+_PERMANENT_COMPOSITION_NAMES = {
+    "recover_managed_feishu_checkpoint",
+    "_recovery_pending",
+    "connector_auto_sync_status",
+    "run_managed_feishu_sync",
+    "run_connector_auto_sync_sweep",
+}
+_FACADE_OWNED_NAMES = {
+    "_core",
+    "_CORE_BASELINE",
+    "_CORE_RECOVER_MANAGED_CHECKPOINT",
+    "_CORE_RECOVERY_PENDING",
+    "_CORE_AUTO_SYNC_STATUS",
+    "_CORE_RUN_MANAGED",
+    "_CORE_RUN_SWEEP",
+    "_RECOVERY_ONLY_ACTIONS",
+    "_OVERRIDE_LOCK",
+    "_PERMANENT_COMPOSITION_NAMES",
+    "_FACADE_OWNED_NAMES",
+    "_explicit_core_overrides",
+    "_temporary_explicit_core_overrides",
+    "recover_managed_feishu_checkpoint",
+    "_recovery_pending",
+    "connector_auto_sync_status",
+    "run_managed_feishu_sync",
+    "run_connector_auto_sync_sweep",
+    "threading",
+    "contextmanager",
+    "Path",
+    "Any",
+    "Callable",
+    "Iterator",
+    "ConnectorLifecycleRecoverySupervisorError",
+    "inspect_pending_connector_lifecycle_checkpoint",
+    "recover_pending_connector_lifecycle_checkpoint",
+    "lifecycle_recovery_intent_path",
+}
+
+
+def _explicit_core_overrides() -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    for name, baseline in _CORE_BASELINE.items():
+        if name in _PERMANENT_COMPOSITION_NAMES or name in _FACADE_OWNED_NAMES:
+            continue
+        current = globals().get(name, baseline)
+        if current is not baseline:
+            overrides[name] = current
+    return overrides
+
+
+@contextmanager
+def _temporary_explicit_core_overrides() -> Iterator[None]:
+    overrides = _explicit_core_overrides()
+    if not overrides:
+        yield
+        return
+    with _OVERRIDE_LOCK:
+        saved = {name: getattr(_core, name) for name in overrides}
+        try:
+            for name, value in overrides.items():
+                setattr(_core, name, value)
+            yield
+        finally:
+            for name, value in saved.items():
+                setattr(_core, name, value)
 
 
 def recover_managed_feishu_checkpoint(
@@ -69,9 +142,6 @@ def recover_managed_feishu_checkpoint(
         )
     post_lifecycle_profile = {}
     if action in _RECOVERY_ONLY_ACTIONS:
-        # The internal cursor fingerprint is now committed.  Re-run the existing encrypted
-        # profile recovery so a crash before raw-checkpoint staging can reconstruct the same
-        # remote checkpoint before validation or a new sync.
         post_lifecycle_profile = _CORE_RECOVER_MANAGED_CHECKPOINT(
             project_id,
             connector_instance_id,
@@ -143,8 +213,9 @@ def connector_auto_sync_status(
     except Exception:
         return {
             **base,
-            "lifecycle_recovery_state": "STATUS_UNAVAILABLE",
-            "lifecycle_recovery_attention_required": True,
+            "lifecycle_recovery_state": "NOT_AVAILABLE",
+            "lifecycle_recovery_attention_required": False,
+            "lifecycle_checkpoint_recovery_is_automatic": True,
             "lifecycle_recovery_raw_error_returned": False,
         }
 
@@ -193,13 +264,41 @@ def connector_auto_sync_status(
     }
 
 
+def run_managed_feishu_sync(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    with _temporary_explicit_core_overrides():
+        previous_recovery = _core.recover_managed_feishu_checkpoint
+        _core.recover_managed_feishu_checkpoint = globals().get(
+            "recover_managed_feishu_checkpoint",
+            recover_managed_feishu_checkpoint,
+        )
+        try:
+            return _CORE_RUN_MANAGED(*args, **kwargs)
+        finally:
+            _core.recover_managed_feishu_checkpoint = previous_recovery
+
+
+def run_connector_auto_sync_sweep(
+    root: Path,
+    *,
+    now: float | None = None,
+    sync_runner: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    selected_runner = sync_runner or run_managed_feishu_sync
+    with _temporary_explicit_core_overrides():
+        return _CORE_RUN_SWEEP(
+            root,
+            now=now,
+            sync_runner=selected_runner,
+        )
+
+
 # Permanently compose the original managed path and supervisor loop with the new boundaries.
 _core.recover_managed_feishu_checkpoint = recover_managed_feishu_checkpoint
 _core._recovery_pending = _recovery_pending
 _core.connector_auto_sync_status = connector_auto_sync_status
+_core.run_managed_feishu_sync = run_managed_feishu_sync
+_core.run_connector_auto_sync_sweep = run_connector_auto_sync_sweep
 
-run_managed_feishu_sync = _core.run_managed_feishu_sync
-run_connector_auto_sync_sweep = _core.run_connector_auto_sync_sweep
 ensure_connector_auto_sync_supervisor = _core.ensure_connector_auto_sync_supervisor
 stop_connector_auto_sync_supervisor = _core.stop_connector_auto_sync_supervisor
 stop_all_connector_auto_sync_supervisors = (
