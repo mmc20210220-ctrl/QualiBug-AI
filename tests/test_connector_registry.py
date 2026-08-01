@@ -97,6 +97,16 @@ def test_default_registry_exposes_existing_feishu_adapter_without_network() -> N
         "tenant_access_token",
         "user_access_token",
     }
+    assert {
+        field.name
+        for field in manifest.credential_fields_for_auth_mode("internal_app")
+    } == {"app_id", "app_secret"}
+    assert {
+        field.name
+        for field in manifest.credential_fields_for_auth_mode(
+            "tenant_access_token"
+        )
+    } == {"tenant_access_token"}
     assert registry.catalog()["governance"]["network_access_performed"] is False
 
 

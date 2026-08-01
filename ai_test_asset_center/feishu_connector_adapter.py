@@ -1019,6 +1019,7 @@ def feishu_connector_manifest() -> ConnectorManifest:
                 required=True,
                 secret=False,
                 description="企业应用标识",
+                auth_modes=("internal_app",),
             ),
             ConnectorCredentialField(
                 name="app_secret",
@@ -1026,6 +1027,7 @@ def feishu_connector_manifest() -> ConnectorManifest:
                 required=True,
                 secret=True,
                 description="企业应用密钥",
+                auth_modes=("internal_app",),
             ),
             ConnectorCredentialField(
                 name="tenant_access_token",
@@ -1033,6 +1035,7 @@ def feishu_connector_manifest() -> ConnectorManifest:
                 required=True,
                 secret=True,
                 description="租户访问令牌",
+                auth_modes=("tenant_access_token",),
             ),
             ConnectorCredentialField(
                 name="user_access_token",
@@ -1040,6 +1043,7 @@ def feishu_connector_manifest() -> ConnectorManifest:
                 required=True,
                 secret=True,
                 description="用户访问令牌",
+                auth_modes=("user_access_token",),
             ),
         ),
         capability_contract_version=_MATERIALIZATION_CONTRACT_VERSION,
@@ -1125,6 +1129,65 @@ class FeishuConnectorAdapter:
         if not isinstance(descriptors, list):
             raise FeishuConnectorError("connector_discovery_descriptors_missing")
         return _snapshot_cursor([dict(item) for item in descriptors])
+
+    def managed_remote_checkpoint(self, context: ConnectorContext) -> SyncCursor:
+        """Build a recovery cursor through the same read-only adapter boundary."""
+        resolver = _context_value(context, "resolve_connection_profile")
+        profile_ref = _context_value(context, "connection_profile_ref")
+        profile = resolver(profile_ref)
+        client = context.get("transport") or _default_transport
+        access_token, _ = _resolve_access_token(
+            profile,
+            transport=client,
+            timeout=float(context.get("timeout", 15.0)),
+            sleeper=context.get("sleeper", time.sleep),
+        )
+        discovery_context = dict(context)
+        discovery_context["access_token"] = access_token
+        discovery_context["max_nodes"] = int(
+            context.get("max_resources", _DEFAULT_MAX_NODES)
+        )
+        return self.build_cursor(self.discover(discovery_context))
+
+    def managed_sync(self, context: ConnectorContext) -> dict[str, Any]:
+        """Bridge the existing Feishu capability sync into the generic managed authority."""
+        sync_runner = context.get("sync_runner") or sync_feishu_connector
+        return dict(
+            sync_runner(
+                _context_value(context, "project_id"),
+                connector_instance_id=_context_value(
+                    context,
+                    "connector_instance_id",
+                ),
+                resolve_connection_profile=_context_value(
+                    context,
+                    "resolve_connection_profile",
+                ),
+                root=context.get("root"),
+                actor=context.get("actor"),
+                previous_cursor=str(context.get("previous_cursor") or ""),
+                deletion_policy=str(
+                    context.get("deletion_policy") or "RETAIN"
+                ),
+                max_retire_count=int(context.get("max_retire_count", 100)),
+                max_retire_ratio=float(context.get("max_retire_ratio", 0.25)),
+                max_nodes=int(
+                    context.get("max_resources", _DEFAULT_MAX_NODES)
+                ),
+                max_export_polls=int(
+                    context.get("max_export_polls", _DEFAULT_MAX_EXPORT_POLLS)
+                ),
+                export_poll_interval=float(
+                    context.get("export_poll_interval", 0.5)
+                ),
+                allow_raw_text_fallback=bool(
+                    context.get("allow_raw_text_fallback", False)
+                ),
+                timeout=float(context.get("timeout", 15.0)),
+                transport=context.get("transport"),
+                sleeper=context.get("sleeper", time.sleep),
+            )
+        )
 
 
 def sync_feishu_connector(

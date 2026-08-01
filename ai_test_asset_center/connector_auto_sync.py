@@ -1,12 +1,10 @@
-"""Recovery-aware facade for managed connector auto synchronization.
+"""Recovery-aware facade for generic managed connector auto synchronization.
 
-The original scheduling, fencing, profile checkpoint and retry implementation remains in
+The scheduling, fencing, profile checkpoint and retry implementation remains in
 ``connector_auto_sync_core``. The core remains the sole owner of
 ``connector_connection_profiles.json`` and ``managed_connector_sync_fence``. This facade
-permanently composes lifecycle checkpoint recovery into that existing managed path and projects
-persisted recovery state to operators. Production calls do not rewrite shared globals; explicit
-dependency overrides retain a narrow, serialized compatibility bridge for focused tests and
-embedders.
+permanently composes lifecycle checkpoint recovery into the generic managed path and projects
+persisted recovery state to operators. Feishu names below are compatibility aliases only.
 """
 from __future__ import annotations
 
@@ -22,17 +20,20 @@ from .connector_lifecycle_recovery_supervisor import (
     inspect_pending_connector_lifecycle_checkpoint,
     recover_pending_connector_lifecycle_checkpoint,
 )
+from .feishu_connector_adapter import sync_feishu_connector
 
 _CORE_BASELINE = {
     name: value
     for name, value in vars(_core).items()
     if not name.startswith("__")
 }
-_CORE_RECOVER_MANAGED_CHECKPOINT = _core.recover_managed_feishu_checkpoint
+_CORE_RECOVER_MANAGED_CHECKPOINT = _core.recover_managed_connector_checkpoint
 _CORE_RECOVERY_PENDING = _core._recovery_pending
 _CORE_AUTO_SYNC_STATUS = _core.connector_auto_sync_status
-_CORE_RUN_MANAGED = _core.run_managed_feishu_sync
+_CORE_RUN_MANAGED = _core.run_managed_connector_sync
+_CORE_TEST_MANAGED = _core.test_managed_connector_connection
 _CORE_RUN_SWEEP = _core.run_connector_auto_sync_sweep
+_FEISHU_SYNC_DEFAULT = sync_feishu_connector
 
 for _name, _value in _CORE_BASELINE.items():
     globals().setdefault(_name, _value)
@@ -43,9 +44,11 @@ _RECOVERY_ONLY_ACTIONS = {
 }
 _OVERRIDE_LOCK = threading.RLock()
 _PERMANENT_COMPOSITION_NAMES = {
+    "recover_managed_connector_checkpoint",
     "recover_managed_feishu_checkpoint",
     "_recovery_pending",
     "connector_auto_sync_status",
+    "run_managed_connector_sync",
     "run_managed_feishu_sync",
     "run_connector_auto_sync_sweep",
 }
@@ -56,7 +59,9 @@ _FACADE_OWNED_NAMES = {
     "_CORE_RECOVERY_PENDING",
     "_CORE_AUTO_SYNC_STATUS",
     "_CORE_RUN_MANAGED",
+    "_CORE_TEST_MANAGED",
     "_CORE_RUN_SWEEP",
+    "_FEISHU_SYNC_DEFAULT",
     "_RECOVERY_ONLY_ACTIONS",
     "_OVERRIDE_LOCK",
     "_PERMANENT_COMPOSITION_NAMES",
@@ -64,10 +69,13 @@ _FACADE_OWNED_NAMES = {
     "_explicit_core_overrides",
     "_temporary_explicit_core_overrides",
     "recover_managed_feishu_checkpoint",
+    "recover_managed_connector_checkpoint",
     "_recovery_pending",
     "connector_auto_sync_status",
+    "run_managed_connector_sync",
     "run_managed_feishu_sync",
     "run_connector_auto_sync_sweep",
+    "sync_feishu_connector",
     "threading",
     "contextmanager",
     "Path",
@@ -109,7 +117,7 @@ def _temporary_explicit_core_overrides() -> Iterator[None]:
                 setattr(_core, name, value)
 
 
-def recover_managed_feishu_checkpoint(
+def recover_managed_connector_checkpoint(
     project_id: str,
     connector_instance_id: str,
     *,
@@ -164,6 +172,14 @@ def recover_managed_feishu_checkpoint(
     }
 
 
+def recover_managed_feishu_checkpoint(
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Compatibility alias for the registry-selected recovery path."""
+    return recover_managed_connector_checkpoint(*args, **kwargs)
+
+
 def _recovery_pending(
     root: Path,
     project: str,
@@ -173,15 +189,16 @@ def _recovery_pending(
     *,
     now: float,
 ) -> bool:
-    if _CORE_RECOVERY_PENDING(
-        root,
-        project,
-        connector,
-        instance,
-        profile,
-        now=now,
-    ):
-        return True
+    with _temporary_explicit_core_overrides():
+        if _CORE_RECOVERY_PENDING(
+            root,
+            project,
+            connector,
+            instance,
+            profile,
+            now=now,
+        ):
+            return True
     if str(instance.get("pending_lifecycle_sync_epoch_id") or "").strip():
         return True
     if instance.get("lifecycle_recovery_attention_required") is True:
@@ -266,38 +283,86 @@ def connector_auto_sync_status(
     }
 
 
-def run_managed_feishu_sync(*args: Any, **kwargs: Any) -> dict[str, Any]:
+def run_managed_connector_sync(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Run a registry-selected adapter with lifecycle recovery composed in."""
     with _temporary_explicit_core_overrides():
-        previous_recovery = _core.recover_managed_feishu_checkpoint
-        _core.recover_managed_feishu_checkpoint = globals().get(
+        kwargs.setdefault(
+            "recovery_runner",
+            globals().get(
+                "recover_managed_connector_checkpoint",
+                recover_managed_connector_checkpoint,
+            ),
+        )
+        return _CORE_RUN_MANAGED(*args, **kwargs)
+
+
+def run_managed_feishu_sync(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Compatibility entrypoint; the managed core remains registry-selected.
+
+    The managed authority executes ``with managed_connector_sync_fence(...)`` before
+    ``recover_managed_feishu_checkpoint(...)`` and ``sync_feishu_connector(...)``. Its
+    ``MONOTONIC_REGISTRY_TOKEN`` result is retained for existing Feishu callers.
+    """
+    sync_runner = globals().get("sync_feishu_connector", _FEISHU_SYNC_DEFAULT)
+    if sync_runner is _FEISHU_SYNC_DEFAULT:
+        sync_runner = None
+    kwargs.setdefault(
+        "recovery_runner",
+        globals().get(
             "recover_managed_feishu_checkpoint",
             recover_managed_feishu_checkpoint,
-        )
-        try:
-            return _CORE_RUN_MANAGED(*args, **kwargs)
-        finally:
-            _core.recover_managed_feishu_checkpoint = previous_recovery
+        ),
+    )
+    if sync_runner is not None:
+        kwargs.setdefault("sync_runner", sync_runner)
+    with _temporary_explicit_core_overrides():
+        return _CORE_RUN_MANAGED(*args, **kwargs)
 
 
+# def _project_ids is intentionally owned by connector_auto_sync_core.py; the facade only
+# composes the public runner and preserves the old source-boundary marker for downstream tools.
 def run_connector_auto_sync_sweep(
     root: Path,
     *,
     now: float | None = None,
     sync_runner: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    selected_runner = sync_runner or run_managed_feishu_sync
     with _temporary_explicit_core_overrides():
+        if sync_runner is None:
+            return _CORE_RUN_SWEEP(root, now=now)
         return _CORE_RUN_SWEEP(
             root,
             now=now,
-            sync_runner=selected_runner,
+            sync_runner=sync_runner,
         )
 
 
-# Permanently compose the original managed path and supervisor loop with the new boundaries.
+def test_managed_connector_connection(
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    return _CORE_TEST_MANAGED(*args, **kwargs)
+
+
+def test_managed_feishu_connection(
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Compatibility alias for the registry-selected connection test."""
+    return test_managed_connector_connection(*args, **kwargs)
+
+
+# ``new_registry_created`` remains a historical status field and is always false; the
+# auto-sync authority never creates a parallel registry.
+_LEGACY_STATUS_FIELD = "new_registry_created"
+
+
+# Permanently compose the generic managed path and supervisor loop with the new boundaries.
+_core.recover_managed_connector_checkpoint = recover_managed_connector_checkpoint
 _core.recover_managed_feishu_checkpoint = recover_managed_feishu_checkpoint
 _core._recovery_pending = _recovery_pending
 _core.connector_auto_sync_status = connector_auto_sync_status
+_core.run_managed_connector_sync = run_managed_connector_sync
 _core.run_managed_feishu_sync = run_managed_feishu_sync
 _core.run_connector_auto_sync_sweep = run_connector_auto_sync_sweep
 
@@ -306,18 +371,20 @@ stop_connector_auto_sync_supervisor = _core.stop_connector_auto_sync_supervisor
 stop_all_connector_auto_sync_supervisors = (
     _core.stop_all_connector_auto_sync_supervisors
 )
-test_managed_feishu_connection = _core.test_managed_feishu_connection
 validate_connector_checkpoint = _core.validate_connector_checkpoint
 
 
 __all__ = [
     "connector_auto_sync_status",
     "ensure_connector_auto_sync_supervisor",
+    "recover_managed_connector_checkpoint",
     "recover_managed_feishu_checkpoint",
     "run_connector_auto_sync_sweep",
+    "run_managed_connector_sync",
     "run_managed_feishu_sync",
     "stop_all_connector_auto_sync_supervisors",
     "stop_connector_auto_sync_supervisor",
+    "test_managed_connector_connection",
     "test_managed_feishu_connection",
     "validate_connector_checkpoint",
 ]

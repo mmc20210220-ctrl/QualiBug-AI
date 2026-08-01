@@ -280,6 +280,47 @@ def test_handler_uses_managed_configuration_and_hides_takeover_details(
     assert data["connector_instance"]["fencing_token_returned_to_client"] is False
 
 
+def test_generic_connector_type_uses_manifest_driven_configuration_service(
+    monkeypatch,
+    tmp_path: Path,
+):
+    observed: dict[str, object] = {}
+
+    def configure(project, **kwargs):
+        observed["project"] = project
+        observed.update(kwargs)
+        return {
+            **_configured(True),
+            "connector_instance": {
+                **_configured(True)["connector_instance"],
+                "connector_type": "generic-docs",
+            },
+        }
+
+    monkeypatch.setattr(handlers, "configure_managed_connector", configure)
+    response = DummyHandler()._handle_knowledge_connector_configure(
+        PROJECT,
+        {
+            "connector_type": "generic-docs",
+            "connector_instance_id": CONNECTOR,
+            "display_name": "Generic Docs",
+            "resource_scope": "docs-root",
+            "connection_profile": {
+                "auth_mode": "api_key",
+                "endpoint": "https://docs.example.test",
+                "api_key": "secret",
+            },
+        },
+        tmp_path,
+        ACTOR,
+    )
+
+    assert response["status"] == 201
+    assert observed["project"] == PROJECT
+    assert observed["connector_type"] == "generic-docs"
+    assert observed["profile"]["auth_mode"] == "api_key"
+
+
 def test_handler_imports_managed_configuration_not_low_level_authority():
     source = (
         Path(__file__).resolve().parents[1]

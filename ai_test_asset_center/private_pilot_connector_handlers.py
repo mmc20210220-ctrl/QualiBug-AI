@@ -13,14 +13,19 @@ from urllib.parse import unquote, urlparse
 
 from .connector_auto_sync import (
     connector_auto_sync_status,
+    run_managed_connector_sync,
     run_managed_feishu_sync,
+    test_managed_connector_connection,
     test_managed_feishu_connection,
 )
 from .connector_registry import (
     ConnectorRegistryError,
     build_default_connector_registry,
 )
-from .connector_configuration_service import configure_managed_feishu_connector
+from .connector_configuration_service import (
+    configure_managed_connector,
+    configure_managed_feishu_connector,
+)
 from .connector_connection_profiles import (
     ConnectorProfileError,
     list_connector_connection_profiles,
@@ -46,6 +51,8 @@ from .feishu_tenant_acceptance_reports import (
 from .real_project_onboarding import _safe_project_id
 
 _ROUTE_MARKER = "knowledge-connectors"
+_DEFAULT_MANAGED_FEISHU_SYNC = run_managed_feishu_sync
+_DEFAULT_TEST_MANAGED_FEISHU_CONNECTION = test_managed_feishu_connection
 _PRIVATE_CONNECTOR_FIELDS = {
     "fencing_generation",
     "last_fencing_token_issued_at_utc",
@@ -69,6 +76,22 @@ def _service():
     from . import private_pilot_service as service
 
     return service
+
+
+def _managed_sync_runner():
+    """Use the generic dispatcher; retain the Feishu alias only for embedders/tests."""
+    if run_managed_feishu_sync is not _DEFAULT_MANAGED_FEISHU_SYNC:
+        return run_managed_feishu_sync
+    return run_managed_connector_sync
+
+
+def _managed_connection_tester():
+    if (
+        test_managed_feishu_connection
+        is not _DEFAULT_TEST_MANAGED_FEISHU_CONNECTION
+    ):
+        return test_managed_feishu_connection
+    return test_managed_connector_connection
 
 
 def _connector_route(path: str) -> tuple[str, list[str]] | None:
@@ -702,16 +725,31 @@ class KnowledgeConnectorHandlersMixin:
                 )
                 if key in body
             }
-        result = configure_managed_feishu_connector(
-            project,
-            connector_instance_id=connector,
-            resource_scope=_text(body.get("resource_scope"), 1000),
-            profile=profile,
-            root=root,
-            actor=actor,
-            display_name=_text(body.get("display_name"), 240),
-            status=_text(body.get("status"), 32) or "ACTIVE",
-        )
+        connector_type = _text(body.get("connector_type"), 160)
+        configuration_kwargs = {
+            "connector_instance_id": connector,
+            "resource_scope": _text(body.get("resource_scope"), 1000),
+            "profile": profile,
+            "root": root,
+            "actor": actor,
+            "display_name": _text(body.get("display_name"), 240),
+            "status": _text(body.get("status"), 32) or "ACTIVE",
+            "credential_expires_at_utc": body.get(
+                "credential_expires_at_utc"
+            ),
+            "sync_policy": body.get("sync_policy"),
+        }
+        if connector_type:
+            result = configure_managed_connector(
+                project,
+                connector_type=connector_type,
+                **configuration_kwargs,
+            )
+        else:
+            result = configure_managed_feishu_connector(
+                project,
+                **configuration_kwargs,
+            )
         public_result = {
             "ok": bool(result.get("ok")),
             "created": bool(result.get("created")),
@@ -736,7 +774,7 @@ class KnowledgeConnectorHandlersMixin:
         actor: dict[str, Any],
     ) -> Any:
         if action == "test":
-            result = test_managed_feishu_connection(
+            result = _managed_connection_tester()(
                 project,
                 connector,
                 root=root,
@@ -746,7 +784,7 @@ class KnowledgeConnectorHandlersMixin:
             )
             return self._json({"ok": True, "data": result})
         if action == "sync":
-            run = run_managed_feishu_sync(
+            run = _managed_sync_runner()(
                 project,
                 connector,
                 root=root,
