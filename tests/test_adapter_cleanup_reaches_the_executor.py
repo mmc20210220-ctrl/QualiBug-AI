@@ -49,7 +49,7 @@ def test_the_adapter_branch_precedes_the_http_path_logic() -> None:
     row is left behind, which is exactly what happened.
     """
     source = inspect.getsource(cleanup_core.execute_experiment_cleanup_compensation)
-    loop_at = source.index("for cleanup_index in reversed(range(len(cleanup_plan)))")
+    loop_at = source.index("for cleanup_index in range(len(cleanup_plan))")
     adapter_at = source.index('adapter")) == "db_sql"', loop_at)
     # The HTTP fallback INSIDE the same loop, not an earlier unrelated occurrence.
     http_at = source.index("cleanup_compensation_unresolved", adapter_at)
@@ -59,7 +59,7 @@ def test_the_adapter_branch_precedes_the_http_path_logic() -> None:
 def test_the_branch_is_inside_the_cleanup_plan_loop() -> None:
     """It must run per step, not once per experiment."""
     source = inspect.getsource(cleanup_core.execute_experiment_cleanup_compensation)
-    loop_at = source.index("for cleanup_index in reversed(range(len(cleanup_plan)))")
+    loop_at = source.index("for cleanup_index in range(len(cleanup_plan))")
     adapter_at = source.index('adapter")) == "db_sql"')
     assert loop_at < adapter_at
 

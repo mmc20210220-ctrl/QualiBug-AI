@@ -963,7 +963,12 @@ def execute_experiment_cleanup_compensation(
                         "resource_id": _cr_id,
                         "table": _text(_dict(cleanup_plan[0]).get("table")) if cleanup_plan else "",
                     })
-        for cleanup_index in reversed(range(len(cleanup_plan))):
+        # The compiler emits cleanup plans in compensation order (reverse write
+        # order: later writes are compensated first). Iterating them in that
+        # emitted order preserves reverse-order compensation semantics for
+        # per-step plans; the per-target reversal inside the DELETE branch still
+        # handles the legacy single-plan full-step case.
+        for cleanup_index in range(len(cleanup_plan)):
             cleanup = cleanup_plan[cleanup_index]
             cleanup_subject_id = (
                 cleanup_subjects[cleanup_index]
@@ -1444,7 +1449,25 @@ def execute_experiment_cleanup_compensation(
                     elif not cleanup_failures:
                         observations["cleanup_status"] = "completed"
                 continue
-            cleanup_targets, missing_bindings = _runtime_cleanup_paths(path_template, steps_out)
+            # Per-step cleanup plans (source_step_id scoped) must compensate only
+            # the write they were compiled for. Using every step here made each
+            # plan delete every accepted write, so a control+treatment experiment
+            # with one cleanup plan per step removed each resource twice. Fall
+            # back to the full step list only for legacy unscoped cleanup plans.
+            _cleanup_scoped_steps = steps_out
+            _source_step_id = _text(_dict(cleanup).get("source_step_id"))
+            if _source_step_id:
+                _scoped_steps = [
+                    step
+                    for step in steps_out
+                    if _text(_dict(step).get("step_id")) == _source_step_id
+                ]
+                if _scoped_steps:
+                    _cleanup_scoped_steps = _scoped_steps
+            cleanup_targets, missing_bindings = _runtime_cleanup_paths(
+                path_template,
+                _cleanup_scoped_steps,
+            )
             if missing_bindings or not cleanup_targets:
                 cleanup_failures += 1
                 observations["cleanup_status"] = "failed"

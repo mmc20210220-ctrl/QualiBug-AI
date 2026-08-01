@@ -56,6 +56,7 @@ def _patch_governed_write(monkeypatch: pytest.MonkeyPatch, governed_write) -> No
     for mod in (
         "ai_test_asset_center.experiment_executor",
         "ai_test_asset_center.experiment_fixture_materializer",
+        "ai_test_asset_center.experiment_fixture_materializer_core",
         "ai_test_asset_center.experiment_barrier_executor",
         "ai_test_asset_center.experiment_plan_executor",
         "ai_test_asset_center.experiment_cleanup_executor",
@@ -81,7 +82,14 @@ def test_partial_execution_preserves_later_pretransport_block_reason(
     )
 
     result = outcome_finalizer.finalize_experiment_execution(
-        exp={"source_refs": [], "assertions": []},
+        exp={
+            "experiment_id": "experiment-1",
+            "obligation_id": "obligation-1",
+            "campaign_id": "campaign-1",
+            "execution_id": "execution-1",
+            "source_refs": [],
+            "assertions": [],
+        },
         steps_out=[{
             "phase": "control",
             "method": "GET",
@@ -1081,9 +1089,12 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
             "status": "executed",
             "method": kwargs["method"],
             "path": kwargs["path"],
-            "before": {"status": 200, "body": {"id": kwargs["path"].rsplit("/", 1)[-1]}},
+            # Equivalence hard gate: cleanup must return the environment to the
+            # pre-write state, which the after-observation proves via a 2xx with
+            # an empty collection (the created resource is gone).
+            "before": {"status": 200, "body": [{"id": "r-1"}]},
             "write": {"status": 204, "body": {}},
-            "after": {"status": 404, "body": {}},
+            "after": {"status": 200, "body": []},
             "audit_path": "sandbox_write_audit.jsonl",
             "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
         }
@@ -1121,9 +1132,23 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
         actor_tokens={},
     )
 
-    assert result["status"] == "EXECUTED"
-    assert result["cleanup_failures"] == 0
-    assert cleanup_paths == ["/resources/r-2", "/resources/r-1"]
+    # V1.7 per-step cleanup: each accepted write is compensated exactly once, in
+    # reverse write order, and every cleanup write reaches transport with 2xx.
+    cleanup_steps = [
+        step for step in result["steps"] if step.get("phase") == "cleanup"
+    ]
+    assert [step.get("path") for step in cleanup_steps] == [
+        "/resources/r-2",
+        "/resources/r-1",
+    ]
+    assert all(
+        200 <= int(step.get("status_code") or 0) < 300
+        for step in cleanup_steps
+    )
+    # V1.3.0 equivalence hard gate: this mocked harness has no sealed
+    # after-cleanup readback, so environment restoration stays unproven and the
+    # lifecycle is EXECUTED_BUT_NOT_RESTORED with no finding produced.
+    assert result["status"] == "EXECUTED_BUT_NOT_RESTORED"
     effect = next(
         receipt
         for receipt in result["observer_receipts"]
@@ -1131,7 +1156,7 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
     )
     assert effect["status"] == "OBSERVED"
     assert effect["evidence"]["effect_count"] == 2
-    assert result["finding"] is not None
+    assert result["finding"] is None
 
 
 def _isolation_ir() -> dict:
