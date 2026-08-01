@@ -6,6 +6,7 @@ from typing import Any
 
 from ._object_role_evidence import comparison_key, object_slot_mentions
 from ._object_source_declarations import source_object_declarations
+from ._object_source_surfaces import collect_source_attested_object_surfaces
 from .schema import as_dict, as_list, evidence_from_fact, stable_id, text, unique_text
 
 
@@ -85,19 +86,39 @@ def prepare_source_declared_asset(asset: dict[str, Any]) -> tuple[dict[str, Any]
         return asset, {"declared_keys": [], "surface_parents": {}}
 
     prepared = deepcopy(asset)
+    # The parser emits ``entity_inventory_table`` for both explicit entity
+    # inventories and weak database table directories.  Source structure has
+    # already selected the declarations above, so raw tables return to
+    # technical-only evidence before the existing candidate collector runs.
+    for table in as_list(prepared.get("data_tables")):
+        if not isinstance(table, dict):
+            continue
+        if text(table.get("derivation")) == "entity_inventory_table":
+            table["derivation"] = "source_data_table"
+        table["derivations"] = [
+            value
+            for value in as_list(table.get("derivations"))
+            if text(value) != "entity_inventory_table"
+        ]
     existing_business_objects = [
         dict(row) for row in as_list(prepared.get("business_objects"))
         if isinstance(row, dict)
     ]
     business_objects: list[dict[str, Any]] = []
     labels: dict[str, str] = {}
+    declaration_surface_modes: dict[str, dict[str, bool]] = {}
     for declaration in declarations:
         values = unique_text(as_list(declaration.get("labels")))
         if not values:
             continue
         canonical = text(declaration.get("canonical_label")) or values[0]
         for value in values:
-            labels[comparison_key(value)] = value
+            key = comparison_key(value)
+            labels[key] = value
+            declaration_surface_modes[key] = {
+                "suffix": bool(declaration.get("surface_suffix_discovery_allowed", True)),
+                "prefix": bool(declaration.get("surface_prefix_discovery_allowed", False)),
+            }
         evidence = [dict(row) for row in as_list(declaration.get("evidence")) if isinstance(row, dict)]
         business_objects.append({
             "object_id": text(declaration.get("declaration_id")) or stable_id("source_declared_object", canonical, values),
@@ -110,6 +131,15 @@ def prepare_source_declared_asset(asset: dict[str, Any]) -> tuple[dict[str, Any]
             "source_excerpt": text(evidence[0].get("quote") if evidence else ""),
             "source": "source_object_declaration",
             "derivation": text(declaration.get("authority")),
+            "source_declaration_authorities": unique_text(
+                [declaration.get("authority"), *as_list(declaration.get("authorities"))]
+            ),
+            "surface_suffix_discovery_allowed": bool(
+                declaration.get("surface_suffix_discovery_allowed")
+            ),
+            "surface_prefix_discovery_allowed": bool(
+                declaration.get("surface_prefix_discovery_allowed")
+            ),
         })
     retained_existing = [
         row for row in existing_business_objects
@@ -126,6 +156,15 @@ def prepare_source_declared_asset(asset: dict[str, Any]) -> tuple[dict[str, Any]
     prepared["business_objects"] = business_objects
 
     surfaces: dict[str, dict[str, Any]] = {}
+    for surface in collect_source_attested_object_surfaces(prepared, declarations):
+        key = comparison_key(surface.get("label"))
+        if not key:
+            continue
+        surfaces[key] = {
+            "label": text(surface.get("label")),
+            "parents": set(as_list(surface.get("parents"))),
+            "evidence": list(as_list(surface.get("evidence"))),
+        }
     rejected: list[dict[str, Any]] = []
     ledger = dict(as_dict(prepared.get("business_fact_ledger")))
     items: list[dict[str, Any]] = []
@@ -173,6 +212,8 @@ def prepare_source_declared_asset(asset: dict[str, Any]) -> tuple[dict[str, Any]
             "source_excerpt": text(evidence[0].get("quote") if evidence else ""),
             "source": "source_object_surface",
             "derivation": "direct_source_object_slot_surface",
+            "surface_suffix_discovery_allowed": False,
+            "surface_prefix_discovery_allowed": False,
         })
     prepared["business_objects"] = business_objects
     if ledger:
@@ -180,6 +221,7 @@ def prepare_source_declared_asset(asset: dict[str, Any]) -> tuple[dict[str, Any]
         prepared["business_fact_ledger"] = ledger
     return prepared, {
         "declared_labels": labels,
+        "declaration_surface_modes": declaration_surface_modes,
         "surface_parents": {key: sorted(row["parents"]) for key, row in surfaces.items()},
         "rejected_fact_mentions": rejected,
     }
@@ -191,12 +233,50 @@ def finalize_source_declared_recognition(recognition: dict[str, Any], authority:
         text(key): [text(value) for value in as_list(values) if text(value)]
         for key, values in as_dict(authority.get("surface_parents")).items()
     }
+    declaration_modes = {
+        text(key): as_dict(value)
+        for key, value in as_dict(authority.get("declaration_surface_modes")).items()
+    }
     rejected = [dict(row) for row in as_list(authority.get("rejected_fact_mentions")) if isinstance(row, dict)]
-    if not parents_by_surface and not rejected:
+    if not parents_by_surface and not rejected and not declaration_modes:
         return recognition
     result = deepcopy(recognition)
     eligible = set(as_list(result.get("identity_resolution_eligible_comparison_keys")))
+    accepted = set(as_list(result.get("accepted_comparison_keys")))
+    unauthorized_labels: set[str] = set()
     review_count = 0
+    for candidate in as_list(result.get("candidates")):
+        if not isinstance(candidate, dict) or not candidate.get("source_surface_origin"):
+            continue
+        key = text(candidate.get("comparison_key"))
+        parent_keys = [text(value) for value in as_list(candidate.get("surface_parent_keys"))]
+        source_allows = any(
+            bool(declaration_modes.get(parent, {}).get("suffix"))
+            or bool(declaration_modes.get(parent, {}).get("prefix"))
+            for parent in parent_keys
+        )
+        slash_qualified = any(
+            "/" in text(row.get("quote")) or "／" in text(row.get("quote"))
+            for row in as_list(candidate.get("evidence"))
+            if isinstance(row, dict)
+        )
+        if key in parents_by_surface or (source_allows and not slash_qualified):
+            continue
+        candidate.update({
+            "status": "PENDING_SOURCE_SURFACE_NOT_AUTHORIZED",
+            "reason_code": "SOURCE_SURFACE_NOT_AUTHORIZED_BY_DECLARATION_GATE",
+            "identity_resolution_eligible": False,
+            "requires_identity_review": False,
+            "automatic_identity_union_allowed": False,
+        })
+        accepted.discard(key)
+        eligible.discard(key)
+        unauthorized_labels.update(text(value) for value in as_list(candidate.get("labels")))
+    result["accepted_comparison_keys"] = sorted(accepted)
+    result["accepted_labels"] = [
+        value for value in as_list(result.get("accepted_labels"))
+        if text(value) not in unauthorized_labels
+    ]
     for candidate in as_list(result.get("candidates")):
         if not isinstance(candidate, dict):
             continue
