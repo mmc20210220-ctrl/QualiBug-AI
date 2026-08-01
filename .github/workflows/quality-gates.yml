@@ -15,14 +15,14 @@ concurrency:
 
 jobs:
   role-permission-direct:
-    if: github.head_ref == 'automation/role-permission-root-cause-delivery-20260801-v3'
+    if: github.head_ref == 'role-permission-root-fix'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout latest main
+      - name: Checkout role-permission branch
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: role-permission-root-fix
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -35,8 +35,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e '.[dev]'
 
-      - name: Apply, verify, test and push role permission root fix
-        run: bash .github/delivery/role-permission/apply-verified-root-fix.sh
+      - name: Apply, verify, test and commit role permission root fix
+        run: bash .github/delivery/role-permission-v2/apply.sh
 
   # BEGIN SINGLE_OBJECT_COMPLEX_DELIVERY
   single-object-complex-direct:
