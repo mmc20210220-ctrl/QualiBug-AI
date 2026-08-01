@@ -161,6 +161,15 @@ def observe_async_transitions(envelope: dict[str, Any]) -> dict[str, Any]:
                 "event_scope_mode": _text(
                     receipt.get("event_scope_mode")
                 ),
+                "idempotency_scope_authority": _text(
+                    receipt.get("idempotency_scope_authority")
+                ),
+                "idempotency_binding_contract_fingerprint": _text(
+                    receipt.get("idempotency_binding_contract_fingerprint")
+                ),
+                "source_request_contract_fingerprint": _text(
+                    receipt.get("source_request_contract_fingerprint")
+                ),
                 "observed_correlated_row_count": int(
                     receipt.get("observed_correlated_row_count") or 0
                 ),
