@@ -6,13 +6,14 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding i
 from tests.test_business_object_recognition_types import _asset, _rule, _span
 
 
+
+
 def _bind_primary_object(fact: dict, label: str) -> None:
     fact["claims"] = [{
         "claim_type": "PRIMARY_OPERATION",
         "predicate": (fact.get("action") or {}).get("canonical") or "查看",
         "object_refs": [label],
     }]
-
 
 def _entity_heading_tree(title: str, *, parent: str = "核心实体") -> dict:
     return {
@@ -307,3 +308,209 @@ def test_source_prose_prefix_does_not_drop_object_classifier_into_action() -> No
     assert "拣货" not in {
         label for row in recognition["candidates"] for label in row["labels"]
     }
+
+
+def _api_resource_tree(resources: dict[str, list[str]]) -> dict:
+    nodes: list[dict] = []
+    for resource, operations in resources.items():
+        nodes.append(
+            {
+                "node_id": f"resource:{resource}",
+                "semantic_heading": True,
+                "raw_heading": resource,
+                "title": resource,
+                "path_titles": ["API 接口文档", resource],
+                "evidence": {
+                    "source_id": "api-source",
+                    "source_locator": f"API_SPEC.md#{resource}",
+                    "quote": resource,
+                    "quote_hash": f"hash-{resource}",
+                },
+            }
+        )
+        for operation in operations:
+            nodes.append(
+                {
+                    "node_id": f"operation:{resource}:{operation}",
+                    "semantic_heading": True,
+                    "raw_heading": operation,
+                    "title": operation,
+                    "path_titles": ["API 接口文档", resource, operation],
+                    "evidence": {
+                        "source_id": "api-source",
+                        "source_locator": f"API_SPEC.md#{operation}",
+                        "quote": operation,
+                        "quote_hash": f"hash-{resource}-{operation}",
+                    },
+                }
+            )
+    return {"items": [{"source_id": "api-source", "nodes": nodes}]}
+
+
+def _operation_fact(
+    fact_id: str,
+    statement: str,
+    action: str,
+    *,
+    source_id: str = "api-source",
+    object_refs: list[str] | None = None,
+) -> dict:
+    refs = list(object_refs or [])
+    claims = [
+        {
+            "claim_type": "PRIMARY_OPERATION",
+            "predicate": action,
+            "object_refs": [],
+        }
+    ]
+    if refs:
+        claims.append(
+            {
+                "claim_type": "DATA_EFFECT",
+                "predicate": action,
+                "object_refs": refs,
+            }
+        )
+    return {
+        "fact_id": fact_id,
+        "kind": "RULE",
+        "status": "ACCEPTED",
+        "raw_statement": statement,
+        "normalized_statement": statement,
+        "subject": {"entity_refs": []},
+        "object": {"entity_refs": refs},
+        "action": {"canonical": action, "raw": action},
+        "claims": claims,
+        "conditions": [],
+        "state_effects": [],
+        "postconditions": [],
+        "data_effects": [],
+        "exceptions": [],
+        "scope": {},
+        "modality": "ASSERTS",
+        "polarity": "POSITIVE",
+        "source_spans": _span(source_id, statement),
+    }
+
+
+def test_weak_technical_inventory_requires_source_structure_and_keeps_identity_pending() -> None:
+    resources = {
+        "Cart": ["DELETE /api/cart/items/:id"],
+        "Payment": ["GET /api/payments/order/:orderId"],
+        "Refund": ["GET /api/refunds/:id", "POST /api/refunds/:id/approve"],
+        "User": ["GET /api/users/addresses", "PATCH /api/users/admin/users/:id/status"],
+        "Product": ["DELETE /api/products/admin/:sku"],
+        "Report": ["GET /api/reports/sales"],
+    }
+    data_tables = [
+        ("cart_items", "购物车"),
+        ("payments", "支付流水"),
+        ("refunds", "退款售后"),
+        ("users", "用户与角色"),
+        ("addresses", "收货地址"),
+        ("products", "商品"),
+        ("audit_logs", "操作日志"),
+    ]
+    interfaces = [
+        ("DELETE", "/api/cart/items/:id", "删除购物车条目"),
+        ("GET", "/api/payments/order/:orderId", "按订单 ID 查询支付记录"),
+        ("GET", "/api/refunds/:id", "查询退款单详情"),
+        ("POST", "/api/refunds/:id/approve", "审批退款"),
+        ("GET", "/api/users/addresses", "查询用户地址（应校验归属）"),
+        ("PATCH", "/api/users/admin/users/:id/status", "修改用户状态（应仅限管理员）"),
+        ("DELETE", "/api/products/admin/:sku", "后台删除/下架商品。seller/admin 可用"),
+        ("GET", "/api/reports/sales", "销售报表"),
+    ]
+    facts = [
+        _operation_fact("cart-item", "删除购物车条目", "删除", object_refs=["购物车条目"]),
+        _operation_fact("refund-action", "审批退款", "审批"),
+        _operation_fact(
+            "audit-log",
+            "只读查看报表和审计日志",
+            "查看",
+            source_id="role-source",
+        ),
+        _operation_fact("down-sell", "下架商品", "下架"),
+        _operation_fact("query-verb", "查询商品", "查询"),
+    ]
+    model = build_enterprise_understanding_model(
+        _asset(
+            facts,
+            document_semantic_trees=_api_resource_tree(resources),
+            data_tables=[
+                {
+                    "table_id": f"table:{name}",
+                    "name": name,
+                    "description": description,
+                    "source_id": "db-source",
+                    "source_locator": f"DB_SCHEMA.md#{name}",
+                    "derivation": "entity_inventory_table",
+                    "field_dictionary": (
+                        [{"field": "role", "description": "角色"}]
+                        if name == "users"
+                        else []
+                    ),
+                }
+                for name, description in data_tables
+            ],
+            interfaces=[
+                {
+                    "interface_id": f"api:{method}:{path}",
+                    "method": method,
+                    "path": path,
+                    "summary": summary,
+                    "source_id": "api-source",
+                    "source_locator": f"API_SPEC.md#{method}:{path}",
+                }
+                for method, path, summary in interfaces
+            ],
+            source_inventory=[
+                {
+                    "source_id": "role-source",
+                    "source_type": "collaboration_document",
+                    "parse": {"permission_count": 1},
+                }
+            ],
+        )
+    )
+    recognition = model["business_object_recognition"]
+    accepted = set(recognition["accepted_labels"])
+
+    assert {
+        "Cart",
+        "购物车",
+        "Payment",
+        "支付流水",
+        "Refund",
+        "退款售后",
+        "User",
+        "用户",
+        "收货地址",
+        "Product",
+        "商品",
+        "操作日志",
+        "购物车条目",
+        "支付记录",
+        "退款单",
+        "退款",
+        "用户地址",
+        "审计日志",
+    }.issubset(accepted)
+    assert "Report" not in accepted
+    assert "用户状态" not in accepted
+    assert "下架商品" not in accepted
+    assert not ({name for name, _description in data_tables} & accepted)
+
+    for label in ("购物车条目", "支付记录", "退款单", "退款", "用户地址", "审计日志"):
+        candidate = next(row for row in recognition["candidates"] if label in row["labels"])
+        assert candidate["status"] == "ACCEPTED_SURFACE_FORM_IDENTITY_PENDING"
+        assert candidate["identity_resolution_eligible"] is False
+    formal_names = {row["name"] for row in model["business_objects"]}
+    assert not {
+        "购物车条目",
+        "支付记录",
+        "退款单",
+        "退款",
+        "用户地址",
+        "审计日志",
+    } & formal_names
