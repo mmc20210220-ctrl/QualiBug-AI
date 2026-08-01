@@ -2,9 +2,9 @@
 
 Ordinary experiments use the single ``cleanup_equivalence_core`` evaluator. Before a
 created-entity absence check, this facade narrows common collection envelopes to the exact runtime
-identity only when the declared identity is fully bound and every identity field is present on a
-candidate row. The core still owns every equivalence verdict and keeps its three-phase, fail-closed
-evidence requirements.
+identity only when the declared identity is fully bound and every identity field is present with a
+comparable value type on a candidate row. The core still owns every equivalence verdict and keeps
+its three-phase, fail-closed evidence requirements.
 
 A process-graph proof set is evaluated by applying that same core engine to each source step and
 aggregating only the resulting formal receipts.
@@ -239,6 +239,8 @@ def _row_matches_identity(
 ) -> bool | None:
     if not identity or any(field not in row for field in identity):
         return None
+    if any(type(row[field]) is not type(expected) for field, expected in identity.items()):
+        return None
     return all(row.get(field) == expected for field, expected in identity.items())
 
 
@@ -249,8 +251,9 @@ def _identity_scoped_collection_observation(
     """Narrow one collection envelope to one complete runtime identity.
 
     An empty collection proves global absence. A non-empty collection is narrowed only when at
-    least one row exposes every bound identity field; otherwise the original observation is
-    preserved so the core remains fail-closed rather than guessing from partial identity.
+    least one row exposes every bound identity field with the same JSON value types; otherwise the
+    original observation is preserved so the core remains fail-closed rather than guessing from
+    partial or type-coerced identity.
     """
     original = _dict(observation)
     body = original.get("body")
