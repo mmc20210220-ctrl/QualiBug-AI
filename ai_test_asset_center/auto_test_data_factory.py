@@ -428,26 +428,36 @@ def _score_related_path(target: str, candidate: str) -> int:
     return score
 
 
-def _resource_path_tokens(path: str) -> set[str]:
+def _resource_path_tokens(path: str) -> tuple[str, ...]:
     """Return source path resource tokens without protocol/role scaffolding."""
     ignored = {
         "api", "rest", "rpc", "v1", "v2", "v3", "v4", "admin", "internal",
         "public", "private", "id", "uuid", "key", "code",
     }
-    return {
+    return tuple(
         token
         for token in _path_tokens(path)
         if token not in ignored and not re.fullmatch(r"v\d+", token)
-    }
+    )
 
 
 def _same_resource_surface(target_path: str, candidate_path: str) -> bool:
-    """Require a real resource relation before selecting a cleanup route."""
-    target_tokens = _resource_path_tokens(target_path)
-    candidate_tokens = _resource_path_tokens(candidate_path)
+    """Require the same source-declared resource collection.
+
+    Token intersection was too permissive here.  For example, ``/auth/.../users``
+    and ``/users/.../balance`` both contain ``users`` and were therefore treated
+    as one cleanup surface.  That allowed an unrelated PATCH to be selected as
+    the cleanup for an authentication/status probe.  Compare the collection
+    portion after removing only documented path scaffolding instead; action
+    suffixes such as ``/cancel`` still share the collection with their resource.
+    """
+    target_collection = _collection_prefix(target_path)
+    candidate_collection = _collection_prefix(candidate_path)
+    target_tokens = _resource_path_tokens(target_collection)
+    candidate_tokens = _resource_path_tokens(candidate_collection)
     if not target_tokens or not candidate_tokens:
         return False
-    return bool(target_tokens & candidate_tokens)
+    return target_tokens == candidate_tokens
 
 
 def _find_create_endpoint(spec: dict[str, Any], target_path: str) -> str:
@@ -457,6 +467,8 @@ def _find_create_endpoint(spec: dict[str, Any], target_path: str) -> str:
         if not isinstance(ops, dict) or "post" not in ops:
             continue
         if path_has_placeholders(str(p)):
+            continue
+        if not _same_resource_surface(target_path, str(p)):
             continue
         score = _score_related_path(target_path, str(p))
         if target_collection and _canonical_suffix(str(p)) == _canonical_suffix(target_collection):

@@ -385,6 +385,55 @@ def test_bootstrap_rejects_login_only_fixture_surface_before_authentication(tmp_
     assert result["reason"] == "bootstrap_probe_not_found"
 
 
+def test_auto_fixture_does_not_cross_resource_surface_for_action_probe() -> None:
+    from ai_test_asset_center.auto_test_data_factory import build_auto_fixture_for_probe
+
+    api_doc = """# API
+
+### POST /api/auth/login
+```json
+{"email":"buyer@example.com","password":"secret"}
+```
+
+### POST /api/auth/admin/users/:id/status
+```json
+{"status":"DISABLED"}
+```
+
+### PATCH /api/users/admin/users/:id/balance
+```json
+{"delta":1,"reason":"adjustment"}
+```
+
+### POST /api/users/auth
+```json
+{"name":"unrelated"}
+```
+"""
+    bundle = build_auto_fixture_for_probe(
+        {
+            "candidate_id": "QBBOOT-ACTION-SURFACE",
+            "risk_type": "conservation_probe",
+            "execution_policy": "disposable_sandbox_required",
+            "endpoint": {
+                "method": "POST",
+                "path": "/api/auth/admin/users/{id}/status",
+            },
+            "probe_plan": {
+                "mutation": {
+                    "mutation_kind": "bootstrap_disposable_fixture",
+                    "field_selector": "resource",
+                    "value": 1,
+                }
+            },
+        },
+        config={"qualibug_auto_create_test_data": True, "api_doc_text": api_doc},
+    )
+
+    assert bundle["setup_requests"] == []
+    assert bundle["cleanup_requests"] == []
+
+
 def test_auto_fixture_generation_errors_are_not_swallowed(monkeypatch) -> None:
     from ai_test_asset_center.grounded_probe_executor import _auto_fixture_bundle
 
