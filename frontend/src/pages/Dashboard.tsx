@@ -15,6 +15,7 @@ import { DecisionCards } from '../components/dashboard/DecisionCards';
 import { EnterpriseUnderstandingPanel } from '../components/dashboard/EnterpriseUnderstandingPanel';
 import { JourneyStrip } from '../components/dashboard/JourneyStrip';
 import { TrustPanel, type TrustSignal } from '../components/dashboard/TrustPanel';
+import { DiscoveryFunnelPanel } from '../components/dashboard/DiscoveryFunnelPanel';
 import {
   asRecord, asText, asNum, formatScanTime,
   getSeverityWeight, getFindingModule, riskLevel, releaseDecision,
@@ -119,7 +120,7 @@ export function Dashboard() {
   const level = riskLevel(conclusion);
   const decision = releaseDecision(currentScanP0Count, currentScanDefects, pipelineUnhealthy, campaignStatus === 'blocked');
 
-  const hasMaterializedMetrics = totalRiskCount > 0 || clueCount > 0 || asNum(asRecord(record.business_flow_summary).total, 0) > 0 || Boolean(campaignStatus);
+  const hasMaterializedMetrics = totalRiskCount > 0 || clueCount > 0 || asNum(asRecord(record.business_flow_summary).total, 0) > 0 || Boolean(campaignStatus) || Object.keys(asRecord(record.discovery_funnel)).length > 0;
 
   // 「为什么可信」信号：全部来自后端真实字段；缺失字段如实标注「后端暂未提供」。
   const deliveryGuard = asRecord(record.customer_delivery_guard);
@@ -223,6 +224,8 @@ export function Dashboard() {
         modulesCount={modulesCount}
         evidenceTrust={evidenceTrust}
       />
+
+      <DiscoveryFunnelPanel funnel={record.discovery_funnel} />
 
       {/* 决策卡片 */}
       <DecisionCards cards={[

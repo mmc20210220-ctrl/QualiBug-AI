@@ -1,0 +1,133 @@
+{
+  "schema_version": "qualibug.discovery-funnel-comparison.v1",
+  "status": "NOT_MEASURED",
+  "receipt_authority": "qualibug.obligation-attempt-ledger.v1",
+  "baseline": {
+    "report_status": "READY",
+    "quality": {
+      "status": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "precision": "NOT_MEASURED",
+      "basis": "no_authenticated_external_evaluator_receipt"
+    },
+    "metrics": {
+      "generated_count": null,
+      "selected_count": 1270,
+      "terminal_count": 1270,
+      "compiled_count": 999,
+      "executed_count": 999,
+      "oracle_count": 939,
+      "formal_delivery_count": 16,
+      "delivery_occurrence_count": 79
+    },
+    "pipeline_health": {
+      "status": "DEGRADED",
+      "funnel_conservation_status": "INCOMPLETE",
+      "funnel_conservation_complete": false
+    },
+    "reason_registry": {
+      "schema_version": "qualibug.discovery-reason-code-registry.v1",
+      "status": "PASS",
+      "unregistered_reason_codes": []
+    },
+    "top_blocking_reasons": [
+      {
+        "reason": "BLOCKED_MISSING_BINDING",
+        "count": 109,
+        "reason_family": "BINDING_GRAPH_GAP",
+        "registry_status": "REGISTERED"
+      },
+      {
+        "reason": "BLOCKED_NON_REVERSIBLE_WRITE",
+        "count": 91,
+        "reason_family": "CLEANUP_CAPABILITY_GAP",
+        "registry_status": "REGISTERED"
+      },
+      {
+        "reason": "BLOCKED_MISSING_OBSERVER",
+        "count": 59,
+        "reason_family": "OBSERVER_CAPABILITY_GAP",
+        "registry_status": "REGISTERED"
+      },
+      {
+        "reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+        "count": 36,
+        "reason_family": "COMPILER_GAP",
+        "registry_status": "REGISTERED"
+      },
+      {
+        "reason": "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+        "count": 14,
+        "reason_family": "COMPILER_GAP",
+        "registry_status": "REGISTERED"
+      },
+      {
+        "reason": "BLOCKED_MISSING_OPERATION",
+        "count": 12,
+        "reason_family": "BEHAVIOR_MODEL_GAP",
+        "registry_status": "REGISTERED"
+      },
+      {
+        "reason": "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+        "count": 4,
+        "reason_family": "ORACLE_INPUT_GAP",
+        "registry_status": "REGISTERED"
+      },
+      {
+        "reason": "BLOCKED_MISSING_FIXTURE",
+        "count": 4,
+        "reason_family": "FIXTURE_CAPABILITY_GAP",
+        "registry_status": "REGISTERED"
+      },
+      {
+        "reason": "CONTRACT_ORACLE_HARNESS_FAILED",
+        "count": 4,
+        "reason_family": "TARGET_SYSTEM_RESPONSE",
+        "registry_status": "REGISTERED"
+      },
+      {
+        "reason": "HARNESS_CONNECTION_FAILED",
+        "count": 2,
+        "reason_family": "TARGET_SYSTEM_RESPONSE",
+        "registry_status": "REGISTERED"
+      }
+    ],
+    "unresolved_top_10": [
+      "BLOCKED_MISSING_BINDING",
+      "BLOCKED_NON_REVERSIBLE_WRITE",
+      "BLOCKED_MISSING_OBSERVER",
+      "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+      "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+      "BLOCKED_MISSING_OPERATION",
+      "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+      "BLOCKED_MISSING_FIXTURE",
+      "CONTRACT_ORACLE_HARNESS_FAILED",
+      "HARNESS_CONNECTION_FAILED"
+    ]
+  },
+  "candidate": {
+    "report_status": "NOT_MEASURED",
+    "quality": {
+      "status": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "precision": "NOT_MEASURED",
+      "basis": "candidate_receipt_missing"
+    },
+    "metrics": null,
+    "pipeline_health": null,
+    "reason_registry": null,
+    "top_blocking_reasons": [],
+    "unresolved_top_10": []
+  },
+  "delta": {
+    "status": "NOT_MEASURED",
+    "reason": "candidate_receipt_missing",
+    "metrics": "NOT_MEASURED"
+  },
+  "quality_boundary": {
+    "recall": "NOT_MEASURED",
+    "precision": "NOT_MEASURED",
+    "promotion": "NOT_MEASURED",
+    "reason": "An authenticated evaluator comparison and matching run conditions are required before any commercial claim."
+  }
+}

@@ -81,6 +81,95 @@ _REASON_ATTRIBUTION: dict[str, tuple[str, str, bool]] = {
 }
 
 
+# The funnel and ledger must classify a terminal reason from the reason code
+# itself.  Keep this registry beside the existing blocker-attribution authority
+# so there is one mapping, rather than teaching each projection to infer a
+# family from free-form detail text.  ``reason_family`` deliberately contains
+# a few explicit non-blocking/deferred families which are not attribution
+# categories (for example, a normal oracle rejection).
+REASON_CODE_REGISTRY_SCHEMA = "qualibug.discovery-reason-code-registry.v1"
+
+
+def _reason_definition(
+    reason_family: str,
+    *,
+    recoverability: str = "UNKNOWN",
+    is_blocking: bool = True,
+    must_remain_blocked: bool = False,
+) -> dict[str, Any]:
+    return {
+        "reason_family": reason_family,
+        "recoverability": recoverability,
+        "is_blocking": is_blocking,
+        "must_remain_blocked": must_remain_blocked,
+    }
+
+
+REASON_CODE_REGISTRY: dict[str, dict[str, Any]] = {
+    code: _reason_definition(
+        attribution,
+        recoverability=recoverability,
+        must_remain_blocked=must_remain_blocked,
+    )
+    for code, (attribution, recoverability, must_remain_blocked)
+    in _REASON_ATTRIBUTION.items()
+}
+REASON_CODE_REGISTRY.update({
+    "ORACLE_NOT_VIOLATED": _reason_definition(
+        "NORMAL_OUTCOME", recoverability="NOT_APPLICABLE", is_blocking=False,
+    ),
+    "ORACLE_NO_VIOLATION": _reason_definition(
+        "NORMAL_OUTCOME", recoverability="NOT_APPLICABLE", is_blocking=False,
+    ),
+    "ASSERTION_NOT_VIOLATED": _reason_definition(
+        "NORMAL_OUTCOME", recoverability="NOT_APPLICABLE", is_blocking=False,
+    ),
+    "SURFACE_DISCOVERY_OBSERVATION_ONLY": _reason_definition(
+        "DISCOVERY_DIAGNOSTIC", recoverability="NOT_APPLICABLE", is_blocking=False,
+    ),
+    "FIELD_LEVEL_RULE_NOT_EXECUTABLE": _reason_definition("COMPILER_GAP", recoverability="RECOVERABLE"),
+    "STATE_RULE_PRECONDITION_NOT_ESTABLISHED": _reason_definition("COMPILER_GAP", recoverability="RECOVERABLE"),
+    "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE": _reason_definition("ORACLE_INPUT_GAP", recoverability="RECOVERABLE"),
+    "CONTRACT_ORACLE_HARNESS_FAILED": _reason_definition("TARGET_SYSTEM_RESPONSE"),
+    "HARNESS_CONNECTION_FAILED": _reason_definition("TARGET_SYSTEM_RESPONSE"),
+    "EXECUTION_OBSERVABILITY_GAP": _reason_definition("OBSERVER_CAPABILITY_GAP", recoverability="RECOVERABLE"),
+    "BLOCKED_POLICY": _reason_definition("POLICY_SAFETY_BLOCK", must_remain_blocked=True),
+    "BLOCKED_TARGET_POLICY": _reason_definition("POLICY_SAFETY_BLOCK", must_remain_blocked=True),
+    "BLOCKED_RUNTIME_TARGET": _reason_definition("POLICY_SAFETY_BLOCK", must_remain_blocked=True),
+    "SLICE_BUDGET_REACHED": _reason_definition("EXECUTION_BUDGET", recoverability="RECOVERABLE"),
+    "OBLIGATION_BUDGET_REACHED": _reason_definition("EXECUTION_BUDGET", recoverability="RECOVERABLE"),
+    "OBLIGATION_NOT_IN_PLAN": _reason_definition("PLANNING_DEFERRED", recoverability="RECOVERABLE"),
+    "DEFERRED": _reason_definition("PLANNING_DEFERRED", recoverability="RECOVERABLE"),
+    "CLEANUP_COMPENSATION_FAILED": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),
+    "LEGACY_EXECUTION_ERROR": _reason_definition("TARGET_SYSTEM_RESPONSE"),
+    "ORACLE_EXCEPTION": _reason_definition("ORACLE_INPUT_GAP", recoverability="RECOVERABLE"),
+    "POST_REQUEST_PRECONDITION_FAILED": _reason_definition("TARGET_SYSTEM_RESPONSE"),
+})
+
+
+def profile_reason_code(reason_code: str) -> dict[str, Any]:
+    """Return the explicit registry row for a terminal reason code.
+
+    Unknown codes are not guessed from their detail.  They are returned as an
+    unregistered reason so the funnel can fail safe and operators can extend
+    this single registry with the real emitter's contract.
+    """
+
+    normalized = _text(reason_code)
+    definition = REASON_CODE_REGISTRY.get(normalized)
+    if definition is None:
+        return {
+            "registry_status": "UNREGISTERED",
+            "reason_code": normalized,
+            **_reason_definition("UNREGISTERED", is_blocking=True),
+        }
+    return {
+        "registry_status": "REGISTERED",
+        "reason_code": normalized,
+        **dict(definition),
+    }
+
+
 # ─── SPEC v1.2.1 §11.2: Phase B Evidence Refinement ─────────────────────────
 
 
@@ -327,41 +416,19 @@ def attribute_blocker(
     must_remain_blocked = False
     confidence = 0.5
 
-    if reason_code in _REASON_ATTRIBUTION:
-        attribution, recoverability, must_remain_blocked = _REASON_ATTRIBUTION[reason_code]
+    registry_profile = profile_reason_code(reason_code)
+    if registry_profile["registry_status"] == "REGISTERED":
+        attribution = str(registry_profile["reason_family"])
+        recoverability = str(registry_profile["recoverability"])
+        must_remain_blocked = bool(registry_profile["must_remain_blocked"])
         confidence = 0.9
     else:
-        # Heuristic attribution from reason detail
-        detail_lower = reason_detail.lower()
-        if "observer" in detail_lower or "observation" in detail_lower:
-            attribution = "OBSERVER_CAPABILITY_GAP"
-            recoverability = "RECOVERABLE"
-            confidence = 0.7
-        elif "binding" in detail_lower or "placeholder" in detail_lower:
-            attribution = "BINDING_GRAPH_GAP"
-            recoverability = "RECOVERABLE"
-            confidence = 0.7
-        elif "fixture" in detail_lower:
-            attribution = "FIXTURE_CAPABILITY_GAP"
-            recoverability = "RECOVERABLE"
-            confidence = 0.7
-        elif "actor" in detail_lower or "secret" in detail_lower:
-            attribution = "SOURCE_GAP"
-            recoverability = "SOURCE_DEPENDENT"
-            confidence = 0.7
-        elif "cleanup" in detail_lower or "reversib" in detail_lower:
-            attribution = "CLEANUP_CAPABILITY_GAP"
-            recoverability = "SOURCE_DEPENDENT"
-            confidence = 0.7
-        elif "environment" in detail_lower or "production" in detail_lower:
-            attribution = "ENVIRONMENT_GAP"
-            recoverability = "ENVIRONMENT_DEPENDENT"
-            must_remain_blocked = True
-            confidence = 0.8
-        elif "oracle" in detail_lower:
-            attribution = "ORACLE_INPUT_GAP"
-            recoverability = "RECOVERABLE"
-            confidence = 0.7
+        # An unregistered code is a visible contract defect.  Never infer its
+        # family from free-form detail because that can turn an unknown failure
+        # into a misleading customer capability claim.
+        attribution = "UNKNOWN"
+        recoverability = "UNKNOWN"
+        confidence = 0.0
 
     # ── Phase B: Evidence Refinement (SPEC v1.2.1 §11.2) ──
     refinement = _phase_b_evidence_refinement(
@@ -414,6 +481,7 @@ def attribute_blocker(
     fp_content = {
         "obligation_id": oid,
         "reason_code": primary_reason,
+        "reason_registry_status": registry_profile["registry_status"],
         "attribution": primary_attribution,
         "recoverability": recoverability,
     }

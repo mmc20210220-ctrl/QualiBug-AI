@@ -555,9 +555,18 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         selected_slices=selected_slices,
         plan_only_scenarios=v12.get("plan_only_scenarios") if isinstance(v12.get("plan_only_scenarios"), list) else [],
     )
-    from .discovery_funnel import build_funnel, reconcile_product_pipeline_health
+    from .discovery_funnel import (
+        build_funnel,
+        build_funnel_report,
+        reconcile_product_pipeline_health,
+        write_funnel_report_files,
+    )
 
     discovery_funnel = build_funnel(v12)
+    discovery_funnel_report = build_funnel_report(
+        v12,
+        funnel=discovery_funnel,
+    )
     pipeline_health = reconcile_product_pipeline_health(
         _as_dict(discovery_funnel.get("pipeline_health")),
         execution_status=execution_status,
@@ -619,6 +628,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         "dedupe_report": dedupe_report,
         "discovery_verdict": _discovery_verdict(confirmed, db_verification),
         "discovery_funnel": discovery_funnel,
+        "discovery_funnel_report": discovery_funnel_report,
         "pipeline_health": pipeline_health,
         "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
         "auto_har": v12.get("auto_har", {}), "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution": ui_execution, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "external_signal_execution": external_signal_execution, "v12": v12,
@@ -768,6 +778,10 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             ),
             file=_evolution_sys.stderr,
         )
+    result["discovery_funnel_report"] = build_funnel_report(
+        result,
+        funnel=_as_dict(result.get("discovery_funnel")),
+    )
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"
@@ -804,8 +818,15 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "ui_followup_assets": ui_followup_assets,
             "external_reproduction_assets": external_reproduction_assets,
             "external_commercial_assets": external_commercial_assets,
+            "discovery_funnel": result.get("discovery_funnel"),
+            "discovery_funnel_report": result.get("discovery_funnel_report"),
         })
         result["report_path"] = str(report_path)
+        result["discovery_funnel_report_paths"] = write_funnel_report_files(
+            result,
+            output,
+            funnel=_as_dict(result.get("discovery_funnel")),
+        )
     output_root = root / "platform_outputs" / _safe_project(project)
     _write_json(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")

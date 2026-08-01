@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from .discovery_event_loss_projection import attach_formal_event_loss_funnel
+from .discovery_funnel import build_funnel_report
 from .discovery_loss_funnel import build_discovery_loss_funnel
 from .discovery_performance_loss_projection import (
     attach_formal_performance_loss_funnel,
@@ -29,6 +30,35 @@ def project_discovery_quality(result: dict[str, Any]) -> dict[str, Any]:
     projected["discovery_loss_funnel"] = (
         attach_formal_performance_loss_funnel(projected, with_event)
     )
+    raw_ledger = projected.get("obligation_attempt_ledger")
+    if (
+        isinstance(raw_ledger, dict)
+        and raw_ledger.get("schema_version")
+        == "qualibug.obligation-attempt-ledger.v1"
+    ):
+        projected["discovery_funnel_report"] = build_funnel_report(
+            projected,
+            funnel=(
+                projected.get("discovery_funnel")
+                if isinstance(projected.get("discovery_funnel"), dict)
+                else None
+            ),
+        )
+    elif isinstance(raw_ledger, dict):
+        # This projection is also used by legacy diagnostic fixtures that do
+        # not carry the authoritative ledger schema. Keep the missing authority
+        # explicit instead of manufacturing a funnel from partial rows.
+        projected["discovery_funnel_report"] = {
+            "schema_version": "qualibug.discovery-funnel-report.v1",
+            "report_status": "NOT_AVAILABLE",
+            "reason": "obligation_attempt_ledger_schema_invalid",
+            "quality": {
+                "status": "NOT_MEASURED",
+                "recall": "NOT_MEASURED",
+                "precision": "NOT_MEASURED",
+            },
+            "receipt_authority": "qualibug.obligation-attempt-ledger.v1",
+        }
     return projected
 
 

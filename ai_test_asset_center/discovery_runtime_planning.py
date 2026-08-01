@@ -62,6 +62,13 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _source_snapshot_hash(context: dict[str, Any]) -> str:
+    manifest = context.get("source_manifest")
+    if not isinstance(manifest, dict):
+        return ""
+    return _text(manifest.get("source_hash"))
+
+
 def _campaign_object(handle: Any) -> Any:
     campaign = _dict(handle).get("campaign") if isinstance(handle, dict) else handle
     if campaign is None or not _text(getattr(campaign, "campaign_id", "")):
@@ -236,6 +243,7 @@ def _contract(inputs: DiscoveryMainlineInputs, campaign_id: str) -> MainlineRunC
         environment_id=_text(context.get("environment_id")),
         policy_version=_text(context.get("policy_version")),
         evaluation_mode=_text(context.get("evaluation_mode")),
+        source_snapshot_hash=_source_snapshot_hash(context),
     )
 
 

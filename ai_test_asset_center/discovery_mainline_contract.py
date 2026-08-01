@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 
 MAINLINE_RUN_SCHEMA = "qualibug.discovery-mainline-run.v1"
@@ -32,6 +32,7 @@ class MainlineRunContract(TypedDict):
     product_evaluation_submission_published: bool
     private_evaluator_observation_allowed: bool
     contract_fingerprint: str
+    source_snapshot_hash: NotRequired[str]
 
 
 def _required(value: Any, field: str) -> str:
@@ -60,6 +61,7 @@ def build_mainline_run_contract(
     environment_id: str,
     policy_version: str,
     evaluation_mode: str,
+    source_snapshot_hash: str = "",
 ) -> MainlineRunContract:
     """Build a content-addressed pre-run authority contract."""
 
@@ -84,6 +86,9 @@ def build_mainline_run_contract(
         "product_evaluation_submission_published": mode == "operational",
         "private_evaluator_observation_allowed": evaluator_owned,
     }
+    snapshot = str(source_snapshot_hash or "").strip()
+    if snapshot:
+        payload["source_snapshot_hash"] = snapshot
     payload["contract_fingerprint"] = _fingerprint(payload)
     return cast(MainlineRunContract, payload)
 
@@ -103,6 +108,7 @@ def validate_mainline_run_contract(value: dict[str, Any]) -> MainlineRunContract
         environment_id=str(value.get("environment_id") or ""),
         policy_version=str(value.get("policy_version") or ""),
         evaluation_mode=str(value.get("evaluation_mode") or ""),
+        source_snapshot_hash=str(value.get("source_snapshot_hash") or ""),
     )
     for field, expected_value in expected.items():
         if value.get(field) != expected_value:

@@ -1,0 +1,3159 @@
+{
+  "schema_version": "qualibug.discovery-funnel-report.v1",
+  "report_status": "READY",
+  "mainline_identity": {
+    "run_id": "RUN_3a64e17b962c4171e6f9824a",
+    "campaign_id": "CMP_e3b1acd53286d62f1b12f17e",
+    "target_id": "benchmark-mall-held-in-131",
+    "environment_id": "http://localhost:8080",
+    "policy_version": "v1.0.0-baseline",
+    "evaluation_mode": "replay",
+    "contract_fingerprint": "6695435e57a9e117d8ec6c4ffd4e8778bfd2cb8f7a65d9a7ca3fdee63c4adca7"
+  },
+  "ledger_identity": {},
+  "quality": {
+    "status": "NOT_MEASURED",
+    "recall": "NOT_MEASURED",
+    "precision": "NOT_MEASURED",
+    "basis": "no_authenticated_external_evaluator_receipt"
+  },
+  "metrics": {
+    "generated_count": null,
+    "selected_count": 1270,
+    "terminal_count": 1270,
+    "compiled_count": 999,
+    "executed_count": 999,
+    "oracle_count": 939,
+    "formal_delivery_count": 16,
+    "delivery_occurrence_count": 79
+  },
+  "pipeline_health": {
+    "status": "DEGRADED",
+    "execution_status": "completed",
+    "selected_obligation_count": 1270,
+    "terminal_obligation_count": 1270,
+    "executed_obligation_count": 939,
+    "blocked_obligation_count": 329,
+    "harness_failure_count": 6,
+    "cleanup_failure_count": 0,
+    "observation_receipt_missing_count": 0,
+    "empty_findings_means_no_bugs": false,
+    "usage_cost_unknown": true,
+    "reasoner_status": "",
+    "reasoner_failure_count": 0,
+    "reasoner_error_class_counts": {},
+    "secret_scan_failed": false,
+    "formal_id_mismatch": false,
+    "observability_gap_count": 0,
+    "observability_gaps": [],
+    "funnel_conservation_status": "INCOMPLETE",
+    "funnel_conservation_complete": false,
+    "funnel_conservation": {
+      "schema_version": "qualibug.discovery-funnel-conservation.v1",
+      "status": "INCOMPLETE",
+      "complete": false,
+      "generated_count": null,
+      "selected_count": 1270,
+      "terminal_count": 1270,
+      "compile_count": 1270,
+      "pre_execution_blocked_count": 271,
+      "execution_count": 999,
+      "execution_unresolved_count": 60,
+      "oracle_count": 939,
+      "delivery_count": 79,
+      "formal_delivery_occurrence_count": 79,
+      "identity_status": "INCOMPLETE",
+      "identity_missing_fields": [],
+      "reason_registry_schema": "qualibug.discovery-reason-code-registry.v1",
+      "unregistered_reason_codes": [],
+      "missing_evidence": [
+        "test_obligations.obligations",
+        "ledger.identity"
+      ],
+      "failures": [],
+      "checks": [
+        {
+          "name": "selected_terminal_conservation",
+          "status": "PASS",
+          "expected": 1270,
+          "observed": 1270,
+          "detail": ""
+        },
+        {
+          "name": "compile_stage_conservation",
+          "status": "PASS",
+          "expected": 1270,
+          "observed": 1270,
+          "detail": ""
+        },
+        {
+          "name": "compile_to_execution_conservation",
+          "status": "PASS",
+          "expected": 1270,
+          "observed": 1270,
+          "detail": ""
+        },
+        {
+          "name": "execution_to_oracle_conservation",
+          "status": "PASS",
+          "expected": 999,
+          "observed": 999,
+          "detail": ""
+        },
+        {
+          "name": "oracle_terminal_conservation",
+          "status": "PASS",
+          "expected": 939,
+          "observed": 939,
+          "detail": ""
+        },
+        {
+          "name": "delivery_occurrence_conservation",
+          "status": "PASS",
+          "expected": 79,
+          "observed": 79,
+          "detail": ""
+        },
+        {
+          "name": "delivery_identity_conservation",
+          "status": "PASS",
+          "expected": [
+            "finding_0537f2516e25a6380efd",
+            "finding_06974dd39ace4c0a0383",
+            "finding_06c5164e6849fe869afe",
+            "finding_0f2fdf477e7d64ec3115",
+            "finding_0f6ce65affc0ce4460d8",
+            "finding_1110f99585b9ea8e0e31",
+            "finding_15f75403d466ce757e3a",
+            "finding_1bc54b1233e614a3930d",
+            "finding_1c3f73a16e83ba1b24ba",
+            "finding_20b9e7dabbe7dd5061c1",
+            "finding_20f5c480156e1c05895b",
+            "finding_277e74407148ca0001e3",
+            "finding_282a94a9b0eb40c99d44",
+            "finding_2ecf11c876a1d7fcaefe",
+            "finding_31232dfabc6730c51fb9",
+            "finding_35ea5bf334c35c2d42d8",
+            "finding_36ea178404019a010c3e",
+            "finding_372816fa59dca8febd0a",
+            "finding_39de9691f8bf71eb2f14",
+            "finding_3b9cdd886ee10163d134",
+            "finding_3d23ebb54f45aa685a8c",
+            "finding_40358bec324f1e0d2d10",
+            "finding_45f3716dfc6ba7fe8e3a",
+            "finding_471ad4b6eb103c21b9f1",
+            "finding_4e94ab663f3b68001f96",
+            "finding_52e23166c3874d167a78",
+            "finding_56e51ab69fc280dd6162",
+            "finding_5c7c00307dca206b1625",
+            "finding_5dc26a6dd0e93170316c",
+            "finding_5eb31694a8841e7c928c",
+            "finding_5efc84e731cf13d738d5",
+            "finding_5fdd440df2b20a3020e6",
+            "finding_602426f1b6fed80b305d",
+            "finding_666cdc1410700ac38c82",
+            "finding_66f25a4d8848d5a679e6",
+            "finding_676e8870a6af90c4c61a",
+            "finding_6b08b8d4a5e68c7c4ede",
+            "finding_6fc47297473ddd638b74",
+            "finding_745dcd5db080351318b4",
+            "finding_7501f0e6a79de996902e",
+            "finding_7517955768ee53379092",
+            "finding_76319fe25ecf0b3e95b2",
+            "finding_7676777beb73af76de94",
+            "finding_79696f375eedff0a0a3f",
+            "finding_7dcd8f043008338aaa2b",
+            "finding_7e99f1519fdd14ba063a",
+            "finding_7f78b630bf8b8023b7b8",
+            "finding_81f48f4cc1d9a392afc0",
+            "finding_82ddb2fcbd6e2f91fbf9",
+            "finding_8fc8efef32306da344df",
+            "finding_908f100761457d41d519",
+            "finding_9251f86985b4b4569846",
+            "finding_92cde62add7b54c8d50e",
+            "finding_932ca5e3e4b5c6f2d741",
+            "finding_95e50a5f54132388f6cd",
+            "finding_9674343801f4b28cbc7e",
+            "finding_9cffdd3eecee3242f216",
+            "finding_9dbb0614f12aa989dddc",
+            "finding_9e13793f693e4e9c3fbb",
+            "finding_9fcc61557af942ac2434",
+            "finding_ac0b80bfe0765b6a9cc4",
+            "finding_b023354103d8aa5ba5d7",
+            "finding_b0a6277d022640b79586",
+            "finding_b163b947459acc73b817",
+            "finding_b21cad19e8d09c892f67",
+            "finding_b65a3126dd577aef65c9",
+            "finding_b6a1c0f5c035d3fa93c3",
+            "finding_be8a4d518835ee38b3be",
+            "finding_bf49de05f6be9c999410",
+            "finding_c6ee9db077bab9619436",
+            "finding_c889258849d5d8a3eb86",
+            "finding_ca7a7908817d2054911d",
+            "finding_cc703f6848d2fcc94697",
+            "finding_d62d3edc585e1896ba1a",
+            "finding_e379cf381b0d0186acdf",
+            "finding_f61e9713f5e285c2ceb3",
+            "finding_f8210b68428c479c9bf7",
+            "finding_f92fe0886b2beb85fcc7",
+            "finding_f97e0701cb8ef241bc70"
+          ],
+          "observed": [
+            "finding_0537f2516e25a6380efd",
+            "finding_06974dd39ace4c0a0383",
+            "finding_06c5164e6849fe869afe",
+            "finding_0f2fdf477e7d64ec3115",
+            "finding_0f6ce65affc0ce4460d8",
+            "finding_1110f99585b9ea8e0e31",
+            "finding_15f75403d466ce757e3a",
+            "finding_1bc54b1233e614a3930d",
+            "finding_1c3f73a16e83ba1b24ba",
+            "finding_20b9e7dabbe7dd5061c1",
+            "finding_20f5c480156e1c05895b",
+            "finding_277e74407148ca0001e3",
+            "finding_282a94a9b0eb40c99d44",
+            "finding_2ecf11c876a1d7fcaefe",
+            "finding_31232dfabc6730c51fb9",
+            "finding_35ea5bf334c35c2d42d8",
+            "finding_36ea178404019a010c3e",
+            "finding_372816fa59dca8febd0a",
+            "finding_39de9691f8bf71eb2f14",
+            "finding_3b9cdd886ee10163d134",
+            "finding_3d23ebb54f45aa685a8c",
+            "finding_40358bec324f1e0d2d10",
+            "finding_45f3716dfc6ba7fe8e3a",
+            "finding_471ad4b6eb103c21b9f1",
+            "finding_4e94ab663f3b68001f96",
+            "finding_52e23166c3874d167a78",
+            "finding_56e51ab69fc280dd6162",
+            "finding_5c7c00307dca206b1625",
+            "finding_5dc26a6dd0e93170316c",
+            "finding_5eb31694a8841e7c928c",
+            "finding_5efc84e731cf13d738d5",
+            "finding_5fdd440df2b20a3020e6",
+            "finding_602426f1b6fed80b305d",
+            "finding_666cdc1410700ac38c82",
+            "finding_66f25a4d8848d5a679e6",
+            "finding_676e8870a6af90c4c61a",
+            "finding_6b08b8d4a5e68c7c4ede",
+            "finding_6fc47297473ddd638b74",
+            "finding_745dcd5db080351318b4",
+            "finding_7501f0e6a79de996902e",
+            "finding_7517955768ee53379092",
+            "finding_76319fe25ecf0b3e95b2",
+            "finding_7676777beb73af76de94",
+            "finding_79696f375eedff0a0a3f",
+            "finding_7dcd8f043008338aaa2b",
+            "finding_7e99f1519fdd14ba063a",
+            "finding_7f78b630bf8b8023b7b8",
+            "finding_81f48f4cc1d9a392afc0",
+            "finding_82ddb2fcbd6e2f91fbf9",
+            "finding_8fc8efef32306da344df",
+            "finding_908f100761457d41d519",
+            "finding_9251f86985b4b4569846",
+            "finding_92cde62add7b54c8d50e",
+            "finding_932ca5e3e4b5c6f2d741",
+            "finding_95e50a5f54132388f6cd",
+            "finding_9674343801f4b28cbc7e",
+            "finding_9cffdd3eecee3242f216",
+            "finding_9dbb0614f12aa989dddc",
+            "finding_9e13793f693e4e9c3fbb",
+            "finding_9fcc61557af942ac2434",
+            "finding_ac0b80bfe0765b6a9cc4",
+            "finding_b023354103d8aa5ba5d7",
+            "finding_b0a6277d022640b79586",
+            "finding_b163b947459acc73b817",
+            "finding_b21cad19e8d09c892f67",
+            "finding_b65a3126dd577aef65c9",
+            "finding_b6a1c0f5c035d3fa93c3",
+            "finding_be8a4d518835ee38b3be",
+            "finding_bf49de05f6be9c999410",
+            "finding_c6ee9db077bab9619436",
+            "finding_c889258849d5d8a3eb86",
+            "finding_ca7a7908817d2054911d",
+            "finding_cc703f6848d2fcc94697",
+            "finding_d62d3edc585e1896ba1a",
+            "finding_e379cf381b0d0186acdf",
+            "finding_f61e9713f5e285c2ceb3",
+            "finding_f8210b68428c479c9bf7",
+            "finding_f92fe0886b2beb85fcc7",
+            "finding_f97e0701cb8ef241bc70"
+          ],
+          "detail": ""
+        },
+        {
+          "name": "terminal_attempt_identity_unique",
+          "status": "PASS",
+          "expected": 1270,
+          "observed": 1270,
+          "detail": ""
+        },
+        {
+          "name": "reason_code_registry",
+          "status": "PASS",
+          "expected": "all terminal reason codes registered",
+          "observed": "all terminal reason codes registered",
+          "detail": "Classification uses the explicit code registry; detail text is not used."
+        }
+      ]
+    },
+    "terminal_reason_counts": {
+      "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE": 4,
+      "BLOCKED_MISSING_BINDING": 109,
+      "BLOCKED_MISSING_FIXTURE": 4,
+      "BLOCKED_MISSING_OBSERVER": 59,
+      "BLOCKED_MISSING_OPERATION": 12,
+      "BLOCKED_NON_REVERSIBLE_WRITE": 91,
+      "CONTRACT_ORACLE_HARNESS_FAILED": 4,
+      "FIELD_LEVEL_RULE_NOT_EXECUTABLE": 36,
+      "HARNESS_CONNECTION_FAILED": 2,
+      "ORACLE_NOT_VIOLATED": 56,
+      "STATE_RULE_PRECONDITION_NOT_ESTABLISHED": 14,
+      "SURFACE_DISCOVERY_OBSERVATION_ONLY": 800
+    },
+    "formal_customer_deliverable_count": 16,
+    "canonical_defect_count": 16,
+    "canonical_defect_ids": [
+      "cdef_013a0501e419277926d624036b086c98",
+      "cdef_0e3b001031b330d8b582ca0c26d0c1e0",
+      "cdef_17279f660365d937cccad7d0b9ad2191",
+      "cdef_2ee205e24ef2e1b9ff8fd268be9acef6",
+      "cdef_3cfd73ac9c55f3c8f7f5a1ebc85e94a7",
+      "cdef_4297a1df8d6a7d5764fae5e8ec4467e0",
+      "cdef_616c4c3a58f6176363fda4d715d35a2f",
+      "cdef_64b602a16bcb743156815512ee358c2a",
+      "cdef_70a15775310917951540c068b6917f08",
+      "cdef_72633fbdb07f1ebb51eca9b5ec1b567c",
+      "cdef_8b22ac1c2f4c46400339dc4204478019",
+      "cdef_97ff94013f63692434063431c1e3a561",
+      "cdef_a32b106f157019525517e31f8ad6f9d7",
+      "cdef_b28b1b7115b782731449154c8c3289f8",
+      "cdef_c3b8927ce4f7d786ad6828ef5c596b1a",
+      "cdef_eafcf11f3c7471bfe1e45873857ee5fc"
+    ],
+    "delivery_occurrence_count": 79,
+    "delivery_occurrence_finding_ids": [
+      "finding_0537f2516e25a6380efd",
+      "finding_06974dd39ace4c0a0383",
+      "finding_06c5164e6849fe869afe",
+      "finding_0f2fdf477e7d64ec3115",
+      "finding_0f6ce65affc0ce4460d8",
+      "finding_1110f99585b9ea8e0e31",
+      "finding_15f75403d466ce757e3a",
+      "finding_1bc54b1233e614a3930d",
+      "finding_1c3f73a16e83ba1b24ba",
+      "finding_20b9e7dabbe7dd5061c1",
+      "finding_20f5c480156e1c05895b",
+      "finding_277e74407148ca0001e3",
+      "finding_282a94a9b0eb40c99d44",
+      "finding_2ecf11c876a1d7fcaefe",
+      "finding_31232dfabc6730c51fb9",
+      "finding_35ea5bf334c35c2d42d8",
+      "finding_36ea178404019a010c3e",
+      "finding_372816fa59dca8febd0a",
+      "finding_39de9691f8bf71eb2f14",
+      "finding_3b9cdd886ee10163d134",
+      "finding_3d23ebb54f45aa685a8c",
+      "finding_40358bec324f1e0d2d10",
+      "finding_45f3716dfc6ba7fe8e3a",
+      "finding_471ad4b6eb103c21b9f1",
+      "finding_4e94ab663f3b68001f96",
+      "finding_52e23166c3874d167a78",
+      "finding_56e51ab69fc280dd6162",
+      "finding_5c7c00307dca206b1625",
+      "finding_5dc26a6dd0e93170316c",
+      "finding_5eb31694a8841e7c928c",
+      "finding_5efc84e731cf13d738d5",
+      "finding_5fdd440df2b20a3020e6",
+      "finding_602426f1b6fed80b305d",
+      "finding_666cdc1410700ac38c82",
+      "finding_66f25a4d8848d5a679e6",
+      "finding_676e8870a6af90c4c61a",
+      "finding_6b08b8d4a5e68c7c4ede",
+      "finding_6fc47297473ddd638b74",
+      "finding_745dcd5db080351318b4",
+      "finding_7501f0e6a79de996902e",
+      "finding_7517955768ee53379092",
+      "finding_76319fe25ecf0b3e95b2",
+      "finding_7676777beb73af76de94",
+      "finding_79696f375eedff0a0a3f",
+      "finding_7dcd8f043008338aaa2b",
+      "finding_7e99f1519fdd14ba063a",
+      "finding_7f78b630bf8b8023b7b8",
+      "finding_81f48f4cc1d9a392afc0",
+      "finding_82ddb2fcbd6e2f91fbf9",
+      "finding_8fc8efef32306da344df",
+      "finding_908f100761457d41d519",
+      "finding_9251f86985b4b4569846",
+      "finding_92cde62add7b54c8d50e",
+      "finding_932ca5e3e4b5c6f2d741",
+      "finding_95e50a5f54132388f6cd",
+      "finding_9674343801f4b28cbc7e",
+      "finding_9cffdd3eecee3242f216",
+      "finding_9dbb0614f12aa989dddc",
+      "finding_9e13793f693e4e9c3fbb",
+      "finding_9fcc61557af942ac2434",
+      "finding_ac0b80bfe0765b6a9cc4",
+      "finding_b023354103d8aa5ba5d7",
+      "finding_b0a6277d022640b79586",
+      "finding_b163b947459acc73b817",
+      "finding_b21cad19e8d09c892f67",
+      "finding_b65a3126dd577aef65c9",
+      "finding_b6a1c0f5c035d3fa93c3",
+      "finding_be8a4d518835ee38b3be",
+      "finding_bf49de05f6be9c999410",
+      "finding_c6ee9db077bab9619436",
+      "finding_c889258849d5d8a3eb86",
+      "finding_ca7a7908817d2054911d",
+      "finding_cc703f6848d2fcc94697",
+      "finding_d62d3edc585e1896ba1a",
+      "finding_e379cf381b0d0186acdf",
+      "finding_f61e9713f5e285c2ceb3",
+      "finding_f8210b68428c479c9bf7",
+      "finding_f92fe0886b2beb85fcc7",
+      "finding_f97e0701cb8ef241bc70"
+    ],
+    "shadow_attempt_deliverable_count": 79,
+    "planning_gap_reason": "",
+    "operator_note": "Attempt receipts expose incomplete, blocked, failed, or unmeasured discovery work; empty findings must not be interpreted as a defect-free target. Health flags: usage/cost_coverage_unknown, blocked_or_deferred_obligations, funnel_conservation_incomplete. Terminal reasons: blocked_assertion_evidence_unproducible=4, blocked_missing_binding=109, blocked_missing_fixture=4, blocked_missing_observer=59, blocked_missing_operation=12, blocked_non_reversible_write=91, contract_oracle_harness_failed=4, field_level_rule_not_executable=36, harness_connection_failed=2, oracle_not_violated=56, state_rule_precondition_not_established=14, surface_discovery_observation_only=800."
+  },
+  "conservation": {
+    "schema_version": "qualibug.discovery-funnel-conservation.v1",
+    "status": "INCOMPLETE",
+    "complete": false,
+    "generated_count": null,
+    "selected_count": 1270,
+    "terminal_count": 1270,
+    "compile_count": 1270,
+    "pre_execution_blocked_count": 271,
+    "execution_count": 999,
+    "execution_unresolved_count": 60,
+    "oracle_count": 939,
+    "delivery_count": 79,
+    "formal_delivery_occurrence_count": 79,
+    "identity_status": "INCOMPLETE",
+    "identity_missing_fields": [],
+    "reason_registry_schema": "qualibug.discovery-reason-code-registry.v1",
+    "unregistered_reason_codes": [],
+    "missing_evidence": [
+      "test_obligations.obligations",
+      "ledger.identity"
+    ],
+    "failures": [],
+    "checks": [
+      {
+        "name": "selected_terminal_conservation",
+        "status": "PASS",
+        "expected": 1270,
+        "observed": 1270,
+        "detail": ""
+      },
+      {
+        "name": "compile_stage_conservation",
+        "status": "PASS",
+        "expected": 1270,
+        "observed": 1270,
+        "detail": ""
+      },
+      {
+        "name": "compile_to_execution_conservation",
+        "status": "PASS",
+        "expected": 1270,
+        "observed": 1270,
+        "detail": ""
+      },
+      {
+        "name": "execution_to_oracle_conservation",
+        "status": "PASS",
+        "expected": 999,
+        "observed": 999,
+        "detail": ""
+      },
+      {
+        "name": "oracle_terminal_conservation",
+        "status": "PASS",
+        "expected": 939,
+        "observed": 939,
+        "detail": ""
+      },
+      {
+        "name": "delivery_occurrence_conservation",
+        "status": "PASS",
+        "expected": 79,
+        "observed": 79,
+        "detail": ""
+      },
+      {
+        "name": "delivery_identity_conservation",
+        "status": "PASS",
+        "expected": [
+          "finding_0537f2516e25a6380efd",
+          "finding_06974dd39ace4c0a0383",
+          "finding_06c5164e6849fe869afe",
+          "finding_0f2fdf477e7d64ec3115",
+          "finding_0f6ce65affc0ce4460d8",
+          "finding_1110f99585b9ea8e0e31",
+          "finding_15f75403d466ce757e3a",
+          "finding_1bc54b1233e614a3930d",
+          "finding_1c3f73a16e83ba1b24ba",
+          "finding_20b9e7dabbe7dd5061c1",
+          "finding_20f5c480156e1c05895b",
+          "finding_277e74407148ca0001e3",
+          "finding_282a94a9b0eb40c99d44",
+          "finding_2ecf11c876a1d7fcaefe",
+          "finding_31232dfabc6730c51fb9",
+          "finding_35ea5bf334c35c2d42d8",
+          "finding_36ea178404019a010c3e",
+          "finding_372816fa59dca8febd0a",
+          "finding_39de9691f8bf71eb2f14",
+          "finding_3b9cdd886ee10163d134",
+          "finding_3d23ebb54f45aa685a8c",
+          "finding_40358bec324f1e0d2d10",
+          "finding_45f3716dfc6ba7fe8e3a",
+          "finding_471ad4b6eb103c21b9f1",
+          "finding_4e94ab663f3b68001f96",
+          "finding_52e23166c3874d167a78",
+          "finding_56e51ab69fc280dd6162",
+          "finding_5c7c00307dca206b1625",
+          "finding_5dc26a6dd0e93170316c",
+          "finding_5eb31694a8841e7c928c",
+          "finding_5efc84e731cf13d738d5",
+          "finding_5fdd440df2b20a3020e6",
+          "finding_602426f1b6fed80b305d",
+          "finding_666cdc1410700ac38c82",
+          "finding_66f25a4d8848d5a679e6",
+          "finding_676e8870a6af90c4c61a",
+          "finding_6b08b8d4a5e68c7c4ede",
+          "finding_6fc47297473ddd638b74",
+          "finding_745dcd5db080351318b4",
+          "finding_7501f0e6a79de996902e",
+          "finding_7517955768ee53379092",
+          "finding_76319fe25ecf0b3e95b2",
+          "finding_7676777beb73af76de94",
+          "finding_79696f375eedff0a0a3f",
+          "finding_7dcd8f043008338aaa2b",
+          "finding_7e99f1519fdd14ba063a",
+          "finding_7f78b630bf8b8023b7b8",
+          "finding_81f48f4cc1d9a392afc0",
+          "finding_82ddb2fcbd6e2f91fbf9",
+          "finding_8fc8efef32306da344df",
+          "finding_908f100761457d41d519",
+          "finding_9251f86985b4b4569846",
+          "finding_92cde62add7b54c8d50e",
+          "finding_932ca5e3e4b5c6f2d741",
+          "finding_95e50a5f54132388f6cd",
+          "finding_9674343801f4b28cbc7e",
+          "finding_9cffdd3eecee3242f216",
+          "finding_9dbb0614f12aa989dddc",
+          "finding_9e13793f693e4e9c3fbb",
+          "finding_9fcc61557af942ac2434",
+          "finding_ac0b80bfe0765b6a9cc4",
+          "finding_b023354103d8aa5ba5d7",
+          "finding_b0a6277d022640b79586",
+          "finding_b163b947459acc73b817",
+          "finding_b21cad19e8d09c892f67",
+          "finding_b65a3126dd577aef65c9",
+          "finding_b6a1c0f5c035d3fa93c3",
+          "finding_be8a4d518835ee38b3be",
+          "finding_bf49de05f6be9c999410",
+          "finding_c6ee9db077bab9619436",
+          "finding_c889258849d5d8a3eb86",
+          "finding_ca7a7908817d2054911d",
+          "finding_cc703f6848d2fcc94697",
+          "finding_d62d3edc585e1896ba1a",
+          "finding_e379cf381b0d0186acdf",
+          "finding_f61e9713f5e285c2ceb3",
+          "finding_f8210b68428c479c9bf7",
+          "finding_f92fe0886b2beb85fcc7",
+          "finding_f97e0701cb8ef241bc70"
+        ],
+        "observed": [
+          "finding_0537f2516e25a6380efd",
+          "finding_06974dd39ace4c0a0383",
+          "finding_06c5164e6849fe869afe",
+          "finding_0f2fdf477e7d64ec3115",
+          "finding_0f6ce65affc0ce4460d8",
+          "finding_1110f99585b9ea8e0e31",
+          "finding_15f75403d466ce757e3a",
+          "finding_1bc54b1233e614a3930d",
+          "finding_1c3f73a16e83ba1b24ba",
+          "finding_20b9e7dabbe7dd5061c1",
+          "finding_20f5c480156e1c05895b",
+          "finding_277e74407148ca0001e3",
+          "finding_282a94a9b0eb40c99d44",
+          "finding_2ecf11c876a1d7fcaefe",
+          "finding_31232dfabc6730c51fb9",
+          "finding_35ea5bf334c35c2d42d8",
+          "finding_36ea178404019a010c3e",
+          "finding_372816fa59dca8febd0a",
+          "finding_39de9691f8bf71eb2f14",
+          "finding_3b9cdd886ee10163d134",
+          "finding_3d23ebb54f45aa685a8c",
+          "finding_40358bec324f1e0d2d10",
+          "finding_45f3716dfc6ba7fe8e3a",
+          "finding_471ad4b6eb103c21b9f1",
+          "finding_4e94ab663f3b68001f96",
+          "finding_52e23166c3874d167a78",
+          "finding_56e51ab69fc280dd6162",
+          "finding_5c7c00307dca206b1625",
+          "finding_5dc26a6dd0e93170316c",
+          "finding_5eb31694a8841e7c928c",
+          "finding_5efc84e731cf13d738d5",
+          "finding_5fdd440df2b20a3020e6",
+          "finding_602426f1b6fed80b305d",
+          "finding_666cdc1410700ac38c82",
+          "finding_66f25a4d8848d5a679e6",
+          "finding_676e8870a6af90c4c61a",
+          "finding_6b08b8d4a5e68c7c4ede",
+          "finding_6fc47297473ddd638b74",
+          "finding_745dcd5db080351318b4",
+          "finding_7501f0e6a79de996902e",
+          "finding_7517955768ee53379092",
+          "finding_76319fe25ecf0b3e95b2",
+          "finding_7676777beb73af76de94",
+          "finding_79696f375eedff0a0a3f",
+          "finding_7dcd8f043008338aaa2b",
+          "finding_7e99f1519fdd14ba063a",
+          "finding_7f78b630bf8b8023b7b8",
+          "finding_81f48f4cc1d9a392afc0",
+          "finding_82ddb2fcbd6e2f91fbf9",
+          "finding_8fc8efef32306da344df",
+          "finding_908f100761457d41d519",
+          "finding_9251f86985b4b4569846",
+          "finding_92cde62add7b54c8d50e",
+          "finding_932ca5e3e4b5c6f2d741",
+          "finding_95e50a5f54132388f6cd",
+          "finding_9674343801f4b28cbc7e",
+          "finding_9cffdd3eecee3242f216",
+          "finding_9dbb0614f12aa989dddc",
+          "finding_9e13793f693e4e9c3fbb",
+          "finding_9fcc61557af942ac2434",
+          "finding_ac0b80bfe0765b6a9cc4",
+          "finding_b023354103d8aa5ba5d7",
+          "finding_b0a6277d022640b79586",
+          "finding_b163b947459acc73b817",
+          "finding_b21cad19e8d09c892f67",
+          "finding_b65a3126dd577aef65c9",
+          "finding_b6a1c0f5c035d3fa93c3",
+          "finding_be8a4d518835ee38b3be",
+          "finding_bf49de05f6be9c999410",
+          "finding_c6ee9db077bab9619436",
+          "finding_c889258849d5d8a3eb86",
+          "finding_ca7a7908817d2054911d",
+          "finding_cc703f6848d2fcc94697",
+          "finding_d62d3edc585e1896ba1a",
+          "finding_e379cf381b0d0186acdf",
+          "finding_f61e9713f5e285c2ceb3",
+          "finding_f8210b68428c479c9bf7",
+          "finding_f92fe0886b2beb85fcc7",
+          "finding_f97e0701cb8ef241bc70"
+        ],
+        "detail": ""
+      },
+      {
+        "name": "terminal_attempt_identity_unique",
+        "status": "PASS",
+        "expected": 1270,
+        "observed": 1270,
+        "detail": ""
+      },
+      {
+        "name": "reason_code_registry",
+        "status": "PASS",
+        "expected": "all terminal reason codes registered",
+        "observed": "all terminal reason codes registered",
+        "detail": "Classification uses the explicit code registry; detail text is not used."
+      }
+    ]
+  },
+  "reason_registry": {
+    "schema_version": "qualibug.discovery-reason-code-registry.v1",
+    "status": "PASS",
+    "unregistered_reason_codes": []
+  },
+  "top_blocking_reasons": [
+    {
+      "reason": "BLOCKED_MISSING_BINDING",
+      "count": 109,
+      "reason_family": "BINDING_GRAPH_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-declared path/body binding and resolver operation"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_0139fa8c508dc6a6b53a",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_5ac20bf28da670d7"
+          ],
+          "actor_refs": [
+            "bir_965134c05dec5028",
+            "bir_d47ed4feefc332e2"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_080fd4dc63756443",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "runtime_read_binding_unresolved:order_id:resolver_status_200_fixture_setup_not_generated:/api/orders"
+        },
+        {
+          "obligation_id": "obl_072771d83a3307fd1243",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_5ac20bf28da670d7"
+          ],
+          "actor_refs": [
+            "bir_a5c4b5fb44a6f19a",
+            "bir_d47ed4feefc332e2"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "admin",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "admin:admin",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "runtime_read_binding_unresolved:order_id:resolver_status_200_fixture_setup_not_generated:/api/orders"
+        },
+        {
+          "obligation_id": "obl_1feb747715f24e3da617",
+          "risk_family": "validation",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_3b3a5b5ce2e90655"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "order",
+              "source_id": "unknown"
+            },
+            {
+              "locator": "orders",
+              "source_id": "src_2b045d07c26eef39"
+            },
+            {
+              "locator": "orders",
+              "source_id": "unknown"
+            },
+            {
+              "locator": "POST /api/orders/:id/cancel",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/orders/:id/cancel",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            }
+          ],
+          "reason_detail": "runtime_read_binding_unresolved:id:resolver_status_200_fixture_setup_not_generated:/api/orders"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_NON_REVERSIBLE_WRITE",
+      "count": 91,
+      "reason_family": "CLEANUP_CAPABILITY_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "SOURCE_DEPENDENT",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-declared compensating action or adapter cleanup authority"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_b4df2ebd8ce00dd88ff6",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_9c14fd249f745565"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "line:39",
+              "source_id": "runtime:prd:99a0209c562b736d13a2bd35"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "cleanup_unresolved:"
+        },
+        {
+          "obligation_id": "obl_ae1b5aa72039c5f2a836",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_9c14fd249f745565"
+          ],
+          "actor_refs": [
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "locator": "line:39",
+              "source_id": "runtime:prd:99a0209c562b736d13a2bd35"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "cleanup_unresolved:"
+        },
+        {
+          "obligation_id": "obl_b3b76391fbae1a19c5c7",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_9c14fd249f745565"
+          ],
+          "actor_refs": [
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "locator": "line:39",
+              "source_id": "runtime:prd:99a0209c562b736d13a2bd35"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_080fd4dc63756443",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "cleanup_unresolved:"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_MISSING_OBSERVER",
+      "count": 59,
+      "reason_family": "OBSERVER_CAPABILITY_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-declared read or observable effect contract"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_20fc1c0b927166a051b9",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_8b84c00bd763ed97"
+          ],
+          "actor_refs": [
+            "bir_dd4b94d517549c41",
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "seller",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "seller:seller01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "CONTROL_SUCCESS_NOT_PROVEN:control_1,OBSERVER_RECEIPT_INDETERMINATE:authorization_comparison"
+        },
+        {
+          "obligation_id": "obl_15e7d1454f0553878b45",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_8b84c00bd763ed97"
+          ],
+          "actor_refs": [
+            "bir_a5c4b5fb44a6f19a",
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "admin",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "admin:admin",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "CONTROL_SUCCESS_NOT_PROVEN:control_1,OBSERVER_RECEIPT_INDETERMINATE:authorization_comparison"
+        },
+        {
+          "obligation_id": "obl_af2efda895b77d7ec5de",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_8b84c00bd763ed97"
+          ],
+          "actor_refs": [
+            "bir_a5c4b5fb44a6f19a",
+            "bir_dd4b94d517549c41"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "admin",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "admin:admin",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "CONTROL_SUCCESS_NOT_PROVEN:control_1,OBSERVER_RECEIPT_INDETERMINATE:authorization_comparison"
+        }
+      ]
+    },
+    {
+      "reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+      "count": 36,
+      "reason_family": "COMPILER_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-backed field/state contract with exact expected values"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_8a11b6e29edf8e96a6dc",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "source_id": "src_3faa1607c458fe0e",
+              "kind": "causal_postcondition"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "postcondition_missing_field_observer"
+        },
+        {
+          "obligation_id": "obl_646e31652eab12563272",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "source_id": "src_3faa1607c458fe0e",
+              "kind": "causal_postcondition"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "postcondition_missing_field_observer"
+        },
+        {
+          "obligation_id": "obl_f04cb1a2eb184f0154ad",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "source_id": "src_3faa1607c458fe0e",
+              "kind": "causal_postcondition"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_080fd4dc63756443",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "postcondition_missing_field_observer"
+        }
+      ]
+    },
+    {
+      "reason": "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+      "count": 14,
+      "reason_family": "COMPILER_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-backed field/state contract with exact expected values"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_70ecbb9240393c6f",
+          "risk_family": "state_integrity",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_b7b588dff7feba44"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "PATCH /api/products/admin/:sku",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/products/admin/:sku",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/products/admin/:sku",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "product",
+              "source_id": "unknown"
+            },
+            {
+              "locator": "products",
+              "source_id": "src_2b045d07c26eef39"
+            }
+          ],
+          "reason_detail": "state_transition_requires_concrete_from_to"
+        },
+        {
+          "obligation_id": "obl_eedf15749472a725",
+          "risk_family": "state_integrity",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_f0a5e2bd75d3f240"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "cart_items",
+              "source_id": "src_2b045d07c26eef39"
+            },
+            {
+              "locator": "cart_items",
+              "source_id": "unknown"
+            }
+          ],
+          "reason_detail": "state_transition_requires_concrete_from_to"
+        },
+        {
+          "obligation_id": "obl_2bb3c8658bdd30cf",
+          "risk_family": "invariant",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_6bdeb1f16937c950",
+            "bir_dff5e016338935e6",
+            "bir_cd93d22bc648c06d"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "USER_ROLES.md#line=5;table-cell=table:c69f131ab94840c64b80:r2c2",
+              "source_id": "src_9145c47941017fc8"
+            }
+          ],
+          "reason_detail": "state_transition_requires_concrete_from_to"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_MISSING_OPERATION",
+      "count": 12,
+      "reason_family": "BEHAVIOR_MODEL_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source operation/interface definition"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_84b8a9a218b1e35b3112",
+          "risk_family": "conservation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "conservation_requires_write_operation"
+        },
+        {
+          "obligation_id": "obl_39267b7c411438744566",
+          "risk_family": "conservation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer02",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "conservation_requires_write_operation"
+        },
+        {
+          "obligation_id": "obl_4effe874b0018e081efb",
+          "risk_family": "conservation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_080fd4dc63756443",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "conservation_requires_write_operation"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+      "count": 4,
+      "reason_family": "ORACLE_INPUT_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-backed assertion inputs and observer evidence"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_93b39bd067c70189",
+          "risk_family": "consistency",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "edge:9a95d87899545b4a2e4f",
+              "source_id": "agent_semantic_linker",
+              "kind": "rule_to_interface"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "BUSINESS_RULES.md#line=26;chars=457-508",
+              "source_id": "src_3faa1607c458fe0e"
+            }
+          ],
+          "reason_detail": "assertion_kind=cross_surface_consistency:missing_observation_key=surfaces_agree"
+        },
+        {
+          "obligation_id": "obl_5e7e14d6d2ffccad",
+          "risk_family": "consistency",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "edge:9b2c399f970c9cee1df8",
+              "source_id": "agent_semantic_linker",
+              "kind": "rule_to_interface"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            }
+          ],
+          "reason_detail": "assertion_kind=cross_surface_consistency:missing_observation_key=surfaces_agree"
+        },
+        {
+          "obligation_id": "obl_0ed5f7bc38eaa6f3",
+          "risk_family": "consistency",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "edge:9b2c399f970c9cee1df8",
+              "source_id": "agent_semantic_linker",
+              "kind": "rule_to_interface"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            }
+          ],
+          "reason_detail": "assertion_kind=cross_surface_consistency:missing_observation_key=surfaces_agree"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_MISSING_FIXTURE",
+      "count": 4,
+      "reason_family": "FIXTURE_CAPABILITY_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-declared fixture setup and ownership scope"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_fa1c4e4b290b81b47471",
+          "risk_family": "isolation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_f0a5e2bd75d3f240"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21",
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            },
+            {
+              "locator": "buyer:buyer02",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "owned_resource"
+        },
+        {
+          "obligation_id": "obl_efcbb219f156f1772188",
+          "risk_family": "isolation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_f0a5e2bd75d3f240"
+          ],
+          "actor_refs": [
+            "bir_8ad96084ee2d24ba",
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer02",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            },
+            {
+              "locator": "buyer:buyer01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "owned_resource"
+        },
+        {
+          "obligation_id": "obl_bb8bc1381e7d1bc524be",
+          "risk_family": "isolation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_3b3a5b5ce2e90655"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21",
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/orders/:id/cancel",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/orders/:id/cancel",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            },
+            {
+              "locator": "buyer:buyer02",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "owned_resource"
+        }
+      ]
+    },
+    {
+      "reason": "CONTRACT_ORACLE_HARNESS_FAILED",
+      "count": 4,
+      "reason_family": "TARGET_SYSTEM_RESPONSE",
+      "registry_status": "REGISTERED",
+      "recoverability": "UNKNOWN",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "target health evidence and the original transport receipt"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_6f4e6f562ab6766c",
+          "risk_family": "validation",
+          "terminal_stage": "gate",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            }
+          ],
+          "reason_detail": ""
+        },
+        {
+          "obligation_id": "obl_b4fb3d6bfb0cca83",
+          "risk_family": "validation",
+          "terminal_stage": "gate",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            }
+          ],
+          "reason_detail": ""
+        },
+        {
+          "obligation_id": "obl_7ccf332d16072c52",
+          "risk_family": "validation",
+          "terminal_stage": "gate",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            }
+          ],
+          "reason_detail": ""
+        }
+      ]
+    },
+    {
+      "reason": "HARNESS_CONNECTION_FAILED",
+      "count": 2,
+      "reason_family": "TARGET_SYSTEM_RESPONSE",
+      "registry_status": "REGISTERED",
+      "recoverability": "UNKNOWN",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "target health evidence and the original transport receipt"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_55e456f6fdc4aa8a",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_8bac7412db88bf00"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "auditor",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "auditor:auditor01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "HARNESS_CONNECTION_FAILED"
+        },
+        {
+          "obligation_id": "obl_e045db1b6d717783",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_a5c4b5fb44a6f19a"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "admin",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "admin:admin",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "HARNESS_CONNECTION_FAILED"
+        }
+      ]
+    }
+  ],
+  "unresolved_top_10": [
+    {
+      "reason": "BLOCKED_MISSING_BINDING",
+      "count": 109,
+      "reason_family": "BINDING_GRAPH_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-declared path/body binding and resolver operation"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_0139fa8c508dc6a6b53a",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_5ac20bf28da670d7"
+          ],
+          "actor_refs": [
+            "bir_965134c05dec5028",
+            "bir_d47ed4feefc332e2"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_080fd4dc63756443",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "runtime_read_binding_unresolved:order_id:resolver_status_200_fixture_setup_not_generated:/api/orders"
+        },
+        {
+          "obligation_id": "obl_072771d83a3307fd1243",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_5ac20bf28da670d7"
+          ],
+          "actor_refs": [
+            "bir_a5c4b5fb44a6f19a",
+            "bir_d47ed4feefc332e2"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/refunds",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "admin",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "admin:admin",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "runtime_read_binding_unresolved:order_id:resolver_status_200_fixture_setup_not_generated:/api/orders"
+        },
+        {
+          "obligation_id": "obl_1feb747715f24e3da617",
+          "risk_family": "validation",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_3b3a5b5ce2e90655"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "order",
+              "source_id": "unknown"
+            },
+            {
+              "locator": "orders",
+              "source_id": "src_2b045d07c26eef39"
+            },
+            {
+              "locator": "orders",
+              "source_id": "unknown"
+            },
+            {
+              "locator": "POST /api/orders/:id/cancel",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/orders/:id/cancel",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            }
+          ],
+          "reason_detail": "runtime_read_binding_unresolved:id:resolver_status_200_fixture_setup_not_generated:/api/orders"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_NON_REVERSIBLE_WRITE",
+      "count": 91,
+      "reason_family": "CLEANUP_CAPABILITY_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "SOURCE_DEPENDENT",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-declared compensating action or adapter cleanup authority"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_b4df2ebd8ce00dd88ff6",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_9c14fd249f745565"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "line:39",
+              "source_id": "runtime:prd:99a0209c562b736d13a2bd35"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "cleanup_unresolved:"
+        },
+        {
+          "obligation_id": "obl_ae1b5aa72039c5f2a836",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_9c14fd249f745565"
+          ],
+          "actor_refs": [
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "locator": "line:39",
+              "source_id": "runtime:prd:99a0209c562b736d13a2bd35"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "cleanup_unresolved:"
+        },
+        {
+          "obligation_id": "obl_b3b76391fbae1a19c5c7",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_9c14fd249f745565"
+          ],
+          "actor_refs": [
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "locator": "line:39",
+              "source_id": "runtime:prd:99a0209c562b736d13a2bd35"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/payments/pay",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_080fd4dc63756443",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "cleanup_unresolved:"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_MISSING_OBSERVER",
+      "count": 59,
+      "reason_family": "OBSERVER_CAPABILITY_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-declared read or observable effect contract"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_20fc1c0b927166a051b9",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_8b84c00bd763ed97"
+          ],
+          "actor_refs": [
+            "bir_dd4b94d517549c41",
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "seller",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "seller:seller01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "CONTROL_SUCCESS_NOT_PROVEN:control_1,OBSERVER_RECEIPT_INDETERMINATE:authorization_comparison"
+        },
+        {
+          "obligation_id": "obl_15e7d1454f0553878b45",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_8b84c00bd763ed97"
+          ],
+          "actor_refs": [
+            "bir_a5c4b5fb44a6f19a",
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "admin",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "admin:admin",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "CONTROL_SUCCESS_NOT_PROVEN:control_1,OBSERVER_RECEIPT_INDETERMINATE:authorization_comparison"
+        },
+        {
+          "obligation_id": "obl_af2efda895b77d7ec5de",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_8b84c00bd763ed97"
+          ],
+          "actor_refs": [
+            "bir_a5c4b5fb44a6f19a",
+            "bir_dd4b94d517549c41"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/products/admin",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "admin",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "admin:admin",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "CONTROL_SUCCESS_NOT_PROVEN:control_1,OBSERVER_RECEIPT_INDETERMINATE:authorization_comparison"
+        }
+      ]
+    },
+    {
+      "reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+      "count": 36,
+      "reason_family": "COMPILER_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-backed field/state contract with exact expected values"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_8a11b6e29edf8e96a6dc",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "source_id": "src_3faa1607c458fe0e",
+              "kind": "causal_postcondition"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "postcondition_missing_field_observer"
+        },
+        {
+          "obligation_id": "obl_646e31652eab12563272",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "source_id": "src_3faa1607c458fe0e",
+              "kind": "causal_postcondition"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "postcondition_missing_field_observer"
+        },
+        {
+          "obligation_id": "obl_f04cb1a2eb184f0154ad",
+          "risk_family": "state",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "source_id": "src_3faa1607c458fe0e",
+              "kind": "causal_postcondition"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_080fd4dc63756443",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "postcondition_missing_field_observer"
+        }
+      ]
+    },
+    {
+      "reason": "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+      "count": 14,
+      "reason_family": "COMPILER_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-backed field/state contract with exact expected values"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_70ecbb9240393c6f",
+          "risk_family": "state_integrity",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_b7b588dff7feba44"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "PATCH /api/products/admin/:sku",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/products/admin/:sku",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/products/admin/:sku",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "product",
+              "source_id": "unknown"
+            },
+            {
+              "locator": "products",
+              "source_id": "src_2b045d07c26eef39"
+            }
+          ],
+          "reason_detail": "state_transition_requires_concrete_from_to"
+        },
+        {
+          "obligation_id": "obl_eedf15749472a725",
+          "risk_family": "state_integrity",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_f0a5e2bd75d3f240"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "cart_items",
+              "source_id": "src_2b045d07c26eef39"
+            },
+            {
+              "locator": "cart_items",
+              "source_id": "unknown"
+            }
+          ],
+          "reason_detail": "state_transition_requires_concrete_from_to"
+        },
+        {
+          "obligation_id": "obl_2bb3c8658bdd30cf",
+          "risk_family": "invariant",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_6bdeb1f16937c950",
+            "bir_dff5e016338935e6",
+            "bir_cd93d22bc648c06d"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "USER_ROLES.md#line=5;table-cell=table:c69f131ab94840c64b80:r2c2",
+              "source_id": "src_9145c47941017fc8"
+            }
+          ],
+          "reason_detail": "state_transition_requires_concrete_from_to"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_MISSING_OPERATION",
+      "count": 12,
+      "reason_family": "BEHAVIOR_MODEL_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source operation/interface definition"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_84b8a9a218b1e35b3112",
+          "risk_family": "conservation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "conservation_requires_write_operation"
+        },
+        {
+          "obligation_id": "obl_39267b7c411438744566",
+          "risk_family": "conservation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer02",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "conservation_requires_write_operation"
+        },
+        {
+          "obligation_id": "obl_4effe874b0018e081efb",
+          "risk_family": "conservation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_965134c05dec5028"
+          ],
+          "source_refs": [
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_080fd4dc63756443",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "finance",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            }
+          ],
+          "reason_detail": "conservation_requires_write_operation"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+      "count": 4,
+      "reason_family": "ORACLE_INPUT_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-backed assertion inputs and observer evidence"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_93b39bd067c70189",
+          "risk_family": "consistency",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "edge:9a95d87899545b4a2e4f",
+              "source_id": "agent_semantic_linker",
+              "kind": "rule_to_interface"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "BUSINESS_RULES.md#line=26;chars=457-508",
+              "source_id": "src_3faa1607c458fe0e"
+            }
+          ],
+          "reason_detail": "assertion_kind=cross_surface_consistency:missing_observation_key=surfaces_agree"
+        },
+        {
+          "obligation_id": "obl_5e7e14d6d2ffccad",
+          "risk_family": "consistency",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "edge:9b2c399f970c9cee1df8",
+              "source_id": "agent_semantic_linker",
+              "kind": "rule_to_interface"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            }
+          ],
+          "reason_detail": "assertion_kind=cross_surface_consistency:missing_observation_key=surfaces_agree"
+        },
+        {
+          "obligation_id": "obl_0ed5f7bc38eaa6f3",
+          "risk_family": "consistency",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_4652619ca59aca8e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "edge:9b2c399f970c9cee1df8",
+              "source_id": "agent_semantic_linker",
+              "kind": "rule_to_interface"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "GET /api/orders/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "BUSINESS_RULES.md#line=23;chars=342-386",
+              "source_id": "src_3faa1607c458fe0e"
+            }
+          ],
+          "reason_detail": "assertion_kind=cross_surface_consistency:missing_observation_key=surfaces_agree"
+        }
+      ]
+    },
+    {
+      "reason": "BLOCKED_MISSING_FIXTURE",
+      "count": 4,
+      "reason_family": "FIXTURE_CAPABILITY_GAP",
+      "registry_status": "REGISTERED",
+      "recoverability": "RECOVERABLE",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "source-declared fixture setup and ownership scope"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_fa1c4e4b290b81b47471",
+          "risk_family": "isolation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_f0a5e2bd75d3f240"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21",
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            },
+            {
+              "locator": "buyer:buyer02",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "owned_resource"
+        },
+        {
+          "obligation_id": "obl_efcbb219f156f1772188",
+          "risk_family": "isolation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_f0a5e2bd75d3f240"
+          ],
+          "actor_refs": [
+            "bir_8ad96084ee2d24ba",
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "PATCH /api/cart/items/:id",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer02",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            },
+            {
+              "locator": "buyer:buyer01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "owned_resource"
+        },
+        {
+          "obligation_id": "obl_bb8bc1381e7d1bc524be",
+          "risk_family": "isolation",
+          "terminal_stage": "compile",
+          "terminal_status": "BLOCKED",
+          "operation_refs": [
+            "bir_3b3a5b5ce2e90655"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21",
+            "bir_8ad96084ee2d24ba"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/orders/:id/cancel",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/orders/:id/cancel",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "buyer",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "buyer:buyer01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            },
+            {
+              "locator": "buyer:buyer02",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "owned_resource"
+        }
+      ]
+    },
+    {
+      "reason": "CONTRACT_ORACLE_HARNESS_FAILED",
+      "count": 4,
+      "reason_family": "TARGET_SYSTEM_RESPONSE",
+      "registry_status": "REGISTERED",
+      "recoverability": "UNKNOWN",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "target health evidence and the original transport receipt"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_6f4e6f562ab6766c",
+          "risk_family": "validation",
+          "terminal_stage": "gate",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            }
+          ],
+          "reason_detail": ""
+        },
+        {
+          "obligation_id": "obl_b4fb3d6bfb0cca83",
+          "risk_family": "validation",
+          "terminal_stage": "gate",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            }
+          ],
+          "reason_detail": ""
+        },
+        {
+          "obligation_id": "obl_7ccf332d16072c52",
+          "risk_family": "validation",
+          "terminal_stage": "gate",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_3f036370c284bf21"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            }
+          ],
+          "reason_detail": ""
+        }
+      ]
+    },
+    {
+      "reason": "HARNESS_CONNECTION_FAILED",
+      "count": 2,
+      "reason_family": "TARGET_SYSTEM_RESPONSE",
+      "registry_status": "REGISTERED",
+      "recoverability": "UNKNOWN",
+      "is_blocking": true,
+      "must_remain_blocked": false,
+      "customer_materials_needed": [
+        "target health evidence and the original transport receipt"
+      ],
+      "examples": [
+        {
+          "obligation_id": "obl_55e456f6fdc4aa8a",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_8bac7412db88bf00"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "auditor",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "auditor:auditor01",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "HARNESS_CONNECTION_FAILED"
+        },
+        {
+          "obligation_id": "obl_e045db1b6d717783",
+          "risk_family": "authorization",
+          "terminal_stage": "execution",
+          "terminal_status": "HARNESS_FAILED",
+          "operation_refs": [
+            "bir_588a7915b5421e5e"
+          ],
+          "actor_refs": [
+            "bir_a5c4b5fb44a6f19a"
+          ],
+          "source_refs": [
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "src_bff5f0136de2c20e",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "POST /api/auth/login",
+              "source_id": "submitted_api_spec",
+              "kind": "api_operation"
+            },
+            {
+              "locator": "admin",
+              "source_id": "src_9145c47941017fc8",
+              "kind": "permission_matrix"
+            },
+            {
+              "locator": "admin:admin",
+              "source_id": "runtime_actors",
+              "kind": "runtime_actor"
+            }
+          ],
+          "reason_detail": "HARNESS_CONNECTION_FAILED"
+        }
+      ]
+    }
+  ],
+  "receipt_authority": "qualibug.obligation-attempt-ledger.v1"
+}

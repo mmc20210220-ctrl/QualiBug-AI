@@ -48,6 +48,13 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _source_snapshot_hash(context: dict[str, Any]) -> str:
+    manifest = context.get("source_manifest")
+    if not isinstance(manifest, dict):
+        return ""
+    return _text(manifest.get("source_hash"))
+
+
 def _campaign_id(campaign: Any) -> str:
     value = (
         campaign.get("campaign_id")
@@ -83,6 +90,7 @@ def _freeze_contract(inputs: DiscoveryMainlineInputs) -> MainlineRunContract:
         environment_id=_text(context.get("environment_id")),
         policy_version=_text(context.get("policy_version")),
         evaluation_mode=_text(context.get("evaluation_mode")),
+        source_snapshot_hash=_source_snapshot_hash(context),
     )
 
 

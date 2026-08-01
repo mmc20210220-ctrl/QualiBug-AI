@@ -16,6 +16,10 @@ from .customer_delivery_gate_v2 import (
     DeliveryGateV2Error,
     validate_customer_delivery_gate_bundle,
 )
+from .blocker_attribution import (
+    REASON_CODE_REGISTRY_SCHEMA,
+    profile_reason_code,
+)
 
 
 OBLIGATION_ATTEMPT_LEDGER_SCHEMA = "qualibug.obligation-attempt-ledger.v1"
@@ -32,6 +36,16 @@ _STAGE_STATUSES = {
     "gate": frozenset(TERMINAL_STATUSES),
 }
 _COST_COVERAGE_STATUSES = frozenset({"MEASURED", "PARTIAL", "UNKNOWN"})
+_IDENTITY_FIELDS = (
+    "run_id",
+    "campaign_id",
+    "target_id",
+    "environment_id",
+    "policy_version",
+    "evaluation_mode",
+    "source_snapshot_hash",
+    "mainline_contract_fingerprint",
+)
 
 
 class ObligationAttemptLedgerError(ValueError):
@@ -85,6 +99,105 @@ def _receipt_map(value: Any, *, field: str) -> dict[str, dict[str, Any]]:
             raise ObligationAttemptLedgerError(f"{field}_obligation_id_missing")
         normalized[obligation_id] = _object(raw_receipt, field=f"{field}:{obligation_id}")
     return normalized
+
+
+def _identity_value(field: str, *rows: dict[str, Any]) -> str:
+    """Read one identity value without deriving it from free-form detail."""
+
+    values: set[str] = set()
+    for row in rows:
+        value = _text(row.get(field))
+        if value:
+            values.add(value)
+    if len(values) > 1:
+        raise ObligationAttemptLedgerError(
+            f"identity_value_conflict:{field}"
+        )
+    return next(iter(values), "")
+
+
+def _source_snapshot_hash(*rows: dict[str, Any]) -> str:
+    direct = _identity_value("source_snapshot_hash", *rows)
+    if direct:
+        return direct
+    direct = _identity_value("source_hash", *rows)
+    if direct:
+        return direct
+    source_refs: list[dict[str, Any]] = []
+    for row in rows:
+        source_refs.extend(
+            value
+            for value in row.get("source_refs", []) or []
+            if isinstance(value, dict)
+        )
+    values = {
+        _text(ref.get("source_snapshot_hash") or ref.get("source_hash"))
+        for ref in source_refs
+        if _text(ref.get("source_snapshot_hash") or ref.get("source_hash"))
+    }
+    # Multiple source assets are not one snapshot hash.  Keep the missing
+    # field visible instead of inventing a composite identity here.
+    return next(iter(values)) if len(values) == 1 else ""
+
+
+def _run_identity(
+    run: dict[str, Any],
+    *rows: dict[str, Any],
+) -> dict[str, Any]:
+    source_snapshot_hash = _source_snapshot_hash(run, *rows)
+    identity = {
+        "run_id": _text(run.get("run_id")),
+        "campaign_id": _text(run.get("campaign_id")),
+        "target_id": _text(run.get("target_id")),
+        "environment_id": _text(run.get("environment_id")),
+        "policy_version": _text(run.get("policy_version")),
+        "evaluation_mode": _text(run.get("evaluation_mode")),
+        "source_snapshot_hash": source_snapshot_hash,
+        "mainline_contract_fingerprint": _text(
+            run.get("contract_fingerprint")
+            or run.get("mainline_contract_fingerprint")
+        ),
+    }
+    identity["missing_fields"] = [
+        field
+        for field in _IDENTITY_FIELDS
+        if not _text(identity.get(field))
+    ]
+    identity["status"] = "COMPLETE" if not identity["missing_fields"] else "INCOMPLETE"
+    return identity
+
+
+def _stage_identity(
+    *,
+    stage: str,
+    obligation_id: str,
+    receipt: dict[str, Any],
+    identity: dict[str, Any],
+) -> dict[str, Any]:
+    for field in _IDENTITY_FIELDS:
+        expected = _text(identity.get(field))
+        observed = _text(receipt.get(field))
+        if expected and observed and expected != observed:
+            raise ObligationAttemptLedgerError(
+                f"stage_identity_mismatch:{obligation_id}:{stage}:{field}"
+            )
+    result = {
+        field: _text(identity.get(field))
+        for field in _IDENTITY_FIELDS
+        if _text(identity.get(field))
+    }
+    result["obligation_id"] = obligation_id
+    for field in ("experiment_id", "execution_id", "receipt_id", "gate_receipt_id"):
+        value = _text(receipt.get(field))
+        if value:
+            result[field] = value
+    nested_identity = receipt.get("identity")
+    if isinstance(nested_identity, dict):
+        for field in ("experiment_id", "execution_id", "finding_id"):
+            value = _text(nested_identity.get(field))
+            if value:
+                result[field] = value
+    return result
 
 
 def _validated_gate_bundle(
@@ -192,7 +305,13 @@ def _validated_gate_bundle(
     return validated, evidence_bundle
 
 
-def _stage_record(stage: str, receipt: dict[str, Any]) -> dict[str, Any] | None:
+def _stage_record(
+    stage: str,
+    receipt: dict[str, Any],
+    *,
+    obligation_id: str,
+    identity: dict[str, Any],
+) -> dict[str, Any] | None:
     if not receipt:
         return None
     status = _text(receipt.get("status")).upper()
@@ -216,6 +335,12 @@ def _stage_record(stage: str, receipt: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "stage": stage,
         "status": status,
+        "identity": _stage_identity(
+            stage=stage,
+            obligation_id=obligation_id,
+            receipt=receipt,
+            identity=identity,
+        ),
         "reason_code": _text(receipt.get("reason_code")),
         "reason_detail": _reason_detail(receipt),
         "receipt_id": receipt_id,
@@ -278,12 +403,34 @@ def build_obligation_attempt_ledger(
         compile_receipt = compile_by_id.get(obligation_id, {})
         execution_receipt = execution_by_id.get(obligation_id, {})
         gate_receipt = gate_by_id.get(obligation_id, {})
+        identity = _run_identity(
+            run,
+            selected_row,
+            compile_receipt,
+            execution_receipt,
+            gate_receipt,
+        )
         stage_records = [
             record
             for record in (
-                _stage_record("compile", compile_receipt),
-                _stage_record("execution", execution_receipt),
-                _stage_record("gate", gate_receipt),
+                _stage_record(
+                    "compile",
+                    compile_receipt,
+                    obligation_id=obligation_id,
+                    identity=identity,
+                ),
+                _stage_record(
+                    "execution",
+                    execution_receipt,
+                    obligation_id=obligation_id,
+                    identity=identity,
+                ),
+                _stage_record(
+                    "gate",
+                    gate_receipt,
+                    obligation_id=obligation_id,
+                    identity=identity,
+                ),
             )
             if record is not None
         ]
@@ -366,6 +513,18 @@ def build_obligation_attempt_ledger(
             raise ObligationAttemptLedgerError(
                 f"terminal_reason_code_missing:{obligation_id}"
             )
+        reason_profile = (
+            profile_reason_code(reason_code)
+            if reason_code
+            else {
+                "registry_status": "NOT_APPLICABLE",
+                "reason_code": "",
+                "reason_family": "DELIVERABLE_OUTCOME",
+                "recoverability": "NOT_APPLICABLE",
+                "is_blocking": False,
+                "must_remain_blocked": False,
+            }
+        )
 
         cost_coverage_status = _text(
             gate_receipt.get("cost_coverage_status")
@@ -449,6 +608,7 @@ def build_obligation_attempt_ledger(
                 if _text(value)
             ],
             "obligation_id": obligation_id,
+            "identity": identity,
             "executed_obligation_id": _text(
                 execution_receipt.get("executed_obligation_id")
                 or _object(
@@ -481,6 +641,13 @@ def build_obligation_attempt_ledger(
             "terminal_status": terminal_status,
             "reason_code": reason_code,
             "reason_detail": _reason_detail(terminal_receipt),
+            "reason_family": reason_profile["reason_family"],
+            "reason_registry_status": reason_profile["registry_status"],
+            "reason_recoverability": reason_profile["recoverability"],
+            "reason_is_blocking": bool(reason_profile["is_blocking"]),
+            "reason_must_remain_blocked": bool(
+                reason_profile["must_remain_blocked"]
+            ),
             "input_fingerprint": _text(
                 selected_row.get("input_fingerprint")
                 or compile_receipt.get("input_fingerprint")
@@ -529,11 +696,32 @@ def build_obligation_attempt_ledger(
         "run_id": run_id,
         "campaign_id": campaign_id,
         "mainline_contract_fingerprint": _text(run.get("contract_fingerprint")),
+        # The campaign identity is sourced from the immutable run contract.
+        # Obligation rows may reference several source assets and therefore
+        # must not be collapsed into a fabricated campaign snapshot hash.
+        "identity": _run_identity(run),
         "selected_count": len(selected_ids),
         "terminal_count": len(attempts),
         "complete": len(attempts) == len(selected_ids),
         "terminal_status_counts": terminal_counts,
         "attempts": attempts,
+        "reason_registry": {
+            "schema_version": REASON_CODE_REGISTRY_SCHEMA,
+            "status": (
+                "FAILED_SAFE"
+                if any(
+                    _text(row.get("reason_registry_status")) == "UNREGISTERED"
+                    for row in attempts
+                )
+                else "PASS"
+            ),
+            "unregistered_reason_codes": sorted({
+                _text(row.get("reason_code"))
+                for row in attempts
+                if _text(row.get("reason_registry_status")) == "UNREGISTERED"
+                and _text(row.get("reason_code"))
+            }),
+        },
     }
     ledger["ledger_fingerprint"] = _fingerprint(ledger)
     return ledger
@@ -594,7 +782,11 @@ def validate_obligation_attempt_ledger(
         "attempts",
         "ledger_fingerprint",
     }
-    if set(value) != required_root_fields:
+    optional_root_fields = {
+        "identity",
+        "reason_registry",
+    }
+    if set(value) - required_root_fields - optional_root_fields:
         raise ObligationAttemptLedgerError(
             "obligation_attempt_ledger_fields_invalid"
         )
@@ -614,6 +806,30 @@ def validate_obligation_attempt_ledger(
         raise ObligationAttemptLedgerError(
             "obligation_attempt_ledger_fingerprint_mismatch"
         )
+    root_identity = _object(value.get("identity"), field="ledger_identity")
+    if root_identity:
+        for field in ("run_id", "campaign_id"):
+            if _text(root_identity.get(field)) != _text(value.get(field)):
+                raise ObligationAttemptLedgerError(
+                    f"ledger_identity_mismatch:{field}"
+                )
+        contract_fingerprint = _text(value.get("mainline_contract_fingerprint"))
+        identity_fingerprint = _text(
+            root_identity.get("mainline_contract_fingerprint")
+        )
+        if contract_fingerprint and identity_fingerprint != contract_fingerprint:
+            raise ObligationAttemptLedgerError(
+                "ledger_identity_mismatch:mainline_contract_fingerprint"
+            )
+    reason_registry = _object(
+        value.get("reason_registry"),
+        field="ledger_reason_registry",
+    )
+    if reason_registry:
+        if reason_registry.get("schema_version") != REASON_CODE_REGISTRY_SCHEMA:
+            raise ObligationAttemptLedgerError("reason_registry_schema_invalid")
+        if _text(reason_registry.get("status")) not in {"PASS", "FAILED_SAFE"}:
+            raise ObligationAttemptLedgerError("reason_registry_status_invalid")
     attempts = value.get("attempts")
     if not isinstance(attempts, list):
         raise ObligationAttemptLedgerError("obligation_attempts_not_list")
@@ -658,6 +874,29 @@ def validate_obligation_attempt_ledger(
         )
     for row in attempts:
         attempt = _object(row, field="obligation_attempt")
+        obligation_id = _text(attempt.get("obligation_id"))
+        attempt_identity = _object(
+            attempt.get("identity"),
+            field="obligation_attempt_identity",
+        )
+        if attempt_identity:
+            if _text(attempt_identity.get("obligation_id")) not in {"", obligation_id}:
+                raise ObligationAttemptLedgerError(
+                    f"obligation_attempt_identity_mismatch:{obligation_id}"
+                )
+            for field in ("run_id", "campaign_id"):
+                if _text(attempt_identity.get(field)) != _text(value.get(field)):
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_identity_mismatch:{obligation_id}:{field}"
+                    )
+            root_contract = _text(value.get("mainline_contract_fingerprint"))
+            attempt_contract = _text(
+                attempt_identity.get("mainline_contract_fingerprint")
+            )
+            if root_contract and attempt_contract != root_contract:
+                raise ObligationAttemptLedgerError(
+                    f"obligation_attempt_identity_mismatch:{obligation_id}:mainline_contract_fingerprint"
+                )
         terminal_status = _text(attempt.get("terminal_status")).upper()
         terminal_stage = _text(attempt.get("terminal_stage"))
         if terminal_stage not in {"compile", "execution", "gate"}:
@@ -689,6 +928,38 @@ def validate_obligation_attempt_ledger(
             raise ObligationAttemptLedgerError(
                 f"obligation_attempt_stage_chain_invalid:{_text(attempt.get('obligation_id'))}"
             )
+        for stage in stages:
+            stage_value = _object(stage, field="obligation_attempt_stage")
+            stage_identity = _object(
+                stage_value.get("identity"),
+                field="obligation_attempt_stage_identity",
+            )
+            if stage_identity:
+                if _text(stage_identity.get("obligation_id")) != obligation_id:
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_stage_identity_mismatch:{obligation_id}"
+                    )
+                for field in ("run_id", "campaign_id"):
+                    if _text(stage_identity.get(field)) and _text(
+                        stage_identity.get(field)
+                    ) != _text(value.get(field)):
+                        raise ObligationAttemptLedgerError(
+                            f"obligation_attempt_stage_identity_mismatch:{obligation_id}:{field}"
+                        )
+        reason_code = _text(attempt.get("reason_code"))
+        reason_registry_status = _text(attempt.get("reason_registry_status"))
+        if reason_code and reason_registry_status:
+            profile = profile_reason_code(reason_code)
+            if reason_registry_status != _text(profile.get("registry_status")):
+                raise ObligationAttemptLedgerError(
+                    f"obligation_attempt_reason_registry_mismatch:{obligation_id}"
+                )
+            if _text(attempt.get("reason_family")) != _text(
+                profile.get("reason_family")
+            ):
+                raise ObligationAttemptLedgerError(
+                    f"obligation_attempt_reason_family_mismatch:{obligation_id}"
+                )
         observed_attempt_fingerprint = _text(attempt.get("attempt_fingerprint"))
         expected_attempt_fingerprint = _fingerprint({
             key: item

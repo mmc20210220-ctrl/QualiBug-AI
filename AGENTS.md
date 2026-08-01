@@ -161,6 +161,11 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   terminal attempt with a reason code. Zero selected obligations and all-
   blocked runs remain visibly `BLOCKED`; empty findings from them must never be
   interpreted as a defect-free target.
+- Funnel closure projections must stay on that ledger: `discovery_funnel.py`
+  owns the receipt-only conservation check, explicit reason-code registry
+  profile, and redacted JSON/Markdown loss report. Missing identity or stage
+  receipts remain visible as `INCOMPLETE`/`FAILED_SAFE`; internal funnel counts
+  never become recall, precision, or defect-free claims.
 - Trace and weakness diagnostics consume
   `qualibug.discovery-trace-ledger.v3`, keyed by obligation attempt identity.
   V1 input requires the explicit offline migration; silent schema fallback is
