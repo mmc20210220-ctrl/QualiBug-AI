@@ -2,7 +2,7 @@ name: One-time exact table semantic identity binding
 
 on:
   pull_request_target:
-    types: [opened, reopened, edited]
+    types: [opened, reopened]
 
 permissions:
   contents: write
@@ -13,7 +13,10 @@ concurrency:
 
 jobs:
   apply-test-and-push:
-    if: github.event.pull_request.number == 81
+    if: >-
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'internal-identity-table-delivery' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
