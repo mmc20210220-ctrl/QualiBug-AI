@@ -134,10 +134,25 @@ def test_structural_review_confirmation_rebuilds_through_same_identity_builder()
         for name, line in calls
         if name == "project_identity_structural_candidates"
     )
+    admission_line = next(
+        line
+        for name, line in calls
+        if name == "govern_identity_structural_review_decision_admission"
+    )
     apply_line = next(
         line
         for name, line in calls
         if name == "apply_identity_structural_review_decisions"
+    )
+    attach_lines = sorted(
+        line
+        for name, line in calls
+        if name == "attach_identity_structural_review_admission"
+    )
+    preserve_line = next(
+        line
+        for name, line in calls
+        if name == "preserve_identity_structural_review_registry_merges"
     )
     begin_line = next(
         line
@@ -151,8 +166,11 @@ def test_structural_review_confirmation_rebuilds_through_same_identity_builder()
     )
 
     assert resolve_line < scrub_line < registry_line
-    assert candidate_line < apply_line < begin_line
+    assert candidate_line < admission_line < apply_line
+    assert len(attach_lines) == 2
+    assert apply_line < attach_lines[-1] < preserve_line < begin_line
     assert finalize_line > candidate_line
+    assert attach_lines[0] > finalize_line
     assert source.count("return build_enterprise_understanding_model(asset)") == 1
     assert "identity_structural_review_rebuild_in_progress(asset)" in source
     assert "compile_and_import_identity_annotations" not in source
