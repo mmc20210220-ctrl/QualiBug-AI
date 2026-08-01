@@ -234,6 +234,30 @@ def project_formal_event_observers(
         for row in unknowns
         if isinstance(row, dict)
     ]
+
+    # Event observation is an additive implementation surface.  When the source
+    # declares no formal Event Contract, this projector has no authority to
+    # recompute or downgrade the already-governed HTTP/UI/DB binding gate.
+    # Preserve the upstream binding truth exactly and only expose zero-valued
+    # Event metrics so downstream diagnostics remain explicit and idempotent.
+    if not contracts:
+        preserved_gate = dict(gate)
+        preserved_metrics = dict(as_dict(preserved_gate.get("metrics")))
+        preserved_metrics.update(
+            {
+                "formal_event_contract_count": 0,
+                "formal_event_observer_binding_count": 0,
+                "formal_event_contract_bound_count": 0,
+            }
+        )
+        preserved_gate["metrics"] = preserved_metrics
+        return (
+            [dict(row) for row in bindings if isinstance(row, dict)],
+            unknown_rows,
+            conflict_rows,
+            preserved_gate,
+        )
+
     projected: list[dict[str, Any]] = []
     bound_contract_ids: set[str] = set()
 

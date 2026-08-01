@@ -241,6 +241,19 @@ def apply_event_contract_validation_failures(
     validation_rows = [
         dict(row) for row in validation_unknowns if isinstance(row, dict)
     ]
+
+    # Validation is a subtractive Event-specific authority.  With no failed
+    # Event Contract there is nothing to subtract, so preserve the upstream
+    # implementation-binding gate instead of re-deriving unrelated HTTP/UI/DB
+    # readiness from an optional projection input.
+    if not validation_rows:
+        return (
+            [dict(row) for row in bindings if isinstance(row, dict)],
+            [dict(row) for row in unknowns if isinstance(row, dict)],
+            [dict(row) for row in conflicts if isinstance(row, dict)],
+            dict(gate),
+        )
+
     blocked = {
         text(row.get("implementation_binding_ref"))
         for row in validation_rows

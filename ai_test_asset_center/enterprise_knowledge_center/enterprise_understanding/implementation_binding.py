@@ -157,13 +157,66 @@ def _interface_labels(interface: dict[str, Any]) -> set[str]:
     return expanded
 
 
+def _interface_source_semantics(interface: dict[str, Any]) -> set[str]:
+    """Normalized source-declared phrases that identify one API operation.
+
+    This is deliberately not a fuzzy score.  Every phrase comes from the API
+    contract itself (operation id, summary, excerpt, tags or parser tokens).
+    """
+    values = unique_text(
+        [
+            interface.get("operation_id"),
+            interface.get("summary"),
+            interface.get("source_excerpt"),
+            *as_list(interface.get("tags")),
+            *as_list(interface.get("tokens")),
+        ]
+    )
+    return {_norm(value) for value in values if _norm(value)}
+
+
+def _operation_object_identity_match(
+    behavior: dict[str, Any], interface: dict[str, Any]
+) -> bool:
+    """Match an exact action+object phrase across two source-backed contracts.
+
+    A generic action such as ``创建`` is not an endpoint identity by itself.  It
+    becomes an exact semantic identity only when at least one governed business
+    object is also present in the same source-declared API phrase.  Ambiguity is
+    handled by the caller and never resolved by ranking or token scores.
+    """
+    operation = _norm(behavior.get("operation_ref"))
+    object_refs = {
+        _norm(value)
+        for value in as_list(behavior.get("object_refs"))
+        if _norm(value)
+    }
+    if not operation or not object_refs:
+        return False
+    phrases = _interface_source_semantics(interface)
+    return any(
+        (operation == phrase or operation in phrase)
+        and any(object_ref in phrase for object_ref in object_refs)
+        for phrase in phrases
+    )
+
+
 def _exact_operation_interfaces(
     behavior: dict[str, Any], interfaces: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     operation = _norm(behavior.get("operation_ref"))
     if not operation:
         return []
-    matches = [row for row in interfaces if operation in _interface_labels(row)]
+    direct = [
+        {**row, "_binding_derivation": "exact_operation_identity"}
+        for row in interfaces
+        if operation in _interface_labels(row)
+    ]
+    matches = direct or [
+        {**row, "_binding_derivation": "exact_operation_object_source_identity"}
+        for row in interfaces
+        if _operation_object_identity_match(behavior, row)
+    ]
     has_effect = bool(
         as_list(behavior.get("state_effects"))
         or as_list(behavior.get("data_effects"))
@@ -248,7 +301,11 @@ def _bind_action(
                 "evidence": dedupe_evidence(
                     [
                         *[_interface_evidence(row, "authoritative_relationship") for row in authoritative],
-                        _interface_evidence(exact[0], "exact_operation_identity"),
+                        _interface_evidence(
+                            exact[0],
+                            text(exact[0].get("_binding_derivation"))
+                            or "exact_operation_identity",
+                        ),
                     ]
                 ),
             }
@@ -271,7 +328,12 @@ def _bind_action(
             "status": "BOUND",
             "authoritative": True,
             "derivation": (
-                "authoritative_relationship" if text(row.get("interface_id")) in authoritative_ids else "exact_operation_identity"
+                "authoritative_relationship"
+                if text(row.get("interface_id")) in authoritative_ids
+                else (
+                    text(row.get("_binding_derivation"))
+                    or "exact_operation_identity"
+                )
             ),
             "contract_fields": sorted(_contract_fields_for_interface(row)),
             "evidence": [_interface_evidence(row, "behavior_action_binding")],
