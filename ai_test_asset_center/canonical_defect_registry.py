@@ -1,8 +1,9 @@
-"""Canonical defect identity with mandatory outcome authority.
+"""Canonical defect identity with mandatory outcome fan-out authority.
 
-The stable registry mechanics remain in the private module. This facade removes the
-historical "pick one violation" fallback for canonical Oracle receipts and includes the
-validated ``outcome_ref`` in property, observed-outcome, and proof identity dimensions.
+Each independently gated outcome occurrence receives its own synthetic attempt view before
+canonical identity derivation. The stable registry mechanics remain unchanged; grouping may
+still collapse repeated occurrences of the same defect, but never collapses distinct
+``outcome_ref`` values from one execution.
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from typing import Any
 
 from . import _canonical_defect_registry_mechanics as _core
 from ._canonical_defect_registry_mechanics import *  # noqa: F401,F403
+from .obligation_attempt_ledger import delivery_occurrence_views
 
 _original_one_violation = _core._one_violation
 _original_derive_canonical_identity_evidence = _core.derive_canonical_identity_evidence
@@ -68,9 +70,26 @@ def derive_canonical_identity_evidence(
     return governed
 
 
-# The historical derive function resolves this helper from module globals at call time.
+def _attempt_by_finding(ledger: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for raw in _list(ledger.get("attempts")):
+        parent = _dict(raw)
+        if _text(parent.get("terminal_status")).upper() != "DELIVERABLE":
+            continue
+        for attempt in delivery_occurrence_views(parent):
+            occurrence_id = _text(attempt.get("finding_id"))
+            if not occurrence_id or occurrence_id in result:
+                raise _core.CanonicalDefectRegistryError(
+                    "CANONICAL_OCCURRENCE_IDENTITY_INVALID"
+                )
+            result[occurrence_id] = attempt
+    return result
+
+
 _core._one_violation = _one_violation
+_core._attempt_by_finding = _attempt_by_finding
+_core.derive_canonical_identity_evidence = derive_canonical_identity_evidence
 
 __all__ = sorted(
-    name for name in globals() if not name.startswith("__") and name not in {"_core"}
+    name for name in globals() if not name.startswith("__") and name != "_core"
 )
