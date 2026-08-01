@@ -46,6 +46,7 @@ for (const script of [
   "test:brand-mark",
   "test:autonomous-ux",
   "test:materials-coverage",
+  "test:materials-acceptance",
 ]) {
   await run(process.execPath, [npmCli, "run", script]);
 }
