@@ -104,12 +104,27 @@ def test_generic_read_routes_project_safe_projections(monkeypatch, tmp_path):
             "enabled": True,
         },
     )
+    monkeypatch.setattr(
+        handlers,
+        "project_connector_oauth",
+        lambda project, connector, root: {
+            "connector_instance_id": connector,
+            "status": "NOT_SUPPORTED",
+            "supported": False,
+            "authorization_code_returned": False,
+            "access_token_returned": False,
+            "refresh_token_returned": False,
+            "credential_values_returned": False,
+            "remote_deletion_inferred": False,
+        },
+    )
     for tail in (
         [CONNECTOR, "resources"],
         [CONNECTOR, "coverage"],
         [CONNECTOR, "runs"],
         [CONNECTOR, "acceptance"],
         [CONNECTOR, "webhook"],
+        [CONNECTOR, "oauth"],
     ):
         result = handler._handle_knowledge_connector_get(PROJECT, list(tail), tmp_path)
         assert result["status"] == 200
@@ -149,6 +164,57 @@ def test_webhook_post_uses_event_authority_and_returns_async_projection(monkeypa
     assert captured["body"] == b'{"event":"changed"}'
     assert captured["headers"] == handler.headers
     assert result["body"]["raw_cursor_returned"] is False
+
+
+def test_oauth_handlers_delegate_to_the_authority_without_returning_credentials(
+    monkeypatch,
+    tmp_path,
+):
+    import ai_test_asset_center.private_pilot_connector_handlers as handlers
+
+    monkeypatch.setattr(
+        handlers,
+        "start_connector_oauth",
+        lambda project, connector, **kwargs: {
+            "connector_instance_id": connector,
+            "transaction_id": "oauth-1",
+            "authorization_url": "https://provider.example.test/authorize?state=opaque",
+            "credential_values_returned": False,
+            "source_content_returned": False,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "handle_connector_oauth_callback",
+        lambda project, connector, params, **kwargs: {
+            "connector_instance_id": connector,
+            "authorization_status": "AUTHORIZED",
+            "credential_values_returned": False,
+            "source_content_returned": False,
+        },
+    )
+    handler = DummyHandler()
+
+    started = handler._handle_connector_oauth_start(
+        PROJECT,
+        CONNECTOR,
+        {"additional_scopes": ["docs:metadata"]},
+        tmp_path,
+        ACTOR,
+    )
+    callback = handler._handle_connector_oauth_callback(
+        PROJECT,
+        CONNECTOR,
+        {"state": "opaque", "code": "authorization-code"},
+        tmp_path,
+        ACTOR,
+    )
+
+    assert started["status"] == 200
+    assert started["body"]["data"]["transaction_id"] == "oauth-1"
+    assert callback["status"] == 200
+    assert callback["body"]["data"]["authorization_status"] == "AUTHORIZED"
+    assert callback["body"]["data"]["credential_values_returned"] is False
 
 
 def test_pause_and_resume_use_the_existing_connector_registry(monkeypatch, tmp_path):

@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { getKnowledgeAsset, ingestKnowledge } from '../api/client';
 import {
   connectKnowledgeConnector,
+  configureKnowledgeConnector,
   listConnectorResources,
   listConnectorTypes,
   listKnowledgeConnectors,
@@ -10,6 +11,7 @@ import {
   reauthorizeKnowledgeConnector,
   refreshKnowledgeConnector,
   resumeKnowledgeConnector,
+  startKnowledgeConnectorOAuth,
   type ConfigureConnectorInput,
   type ConnectorManifest,
   type ConnectorResourceInventory,
@@ -136,6 +138,20 @@ function connectorHealthActionLabel(health?: KnowledgeConnectorHealth): string {
     case 'WAIT_FOR_AUTOMATIC_RETRY': return '系统会自动重试';
     case 'WAIT_FOR_SYNC': return '系统完成后自动显示';
     default: return '';
+  }
+}
+
+function connectorOauthLabel(oauth?: KnowledgeConnectorRecord['oauth']): string {
+  if (!oauth?.supported) return '';
+  switch (oauth.status) {
+    case 'AUTHORIZED': return 'OAuth 授权已生效';
+    case 'EXPIRING': return 'OAuth 授权即将过期';
+    case 'EXPIRED': return 'OAuth 授权已过期';
+    case 'PERMISSION_INSUFFICIENT': return 'OAuth 权限范围不足';
+    case 'REAUTHORIZATION_REQUIRED': return '需要重新授权';
+    case 'REVOKED': return '授权已被撤销';
+    case 'NOT_AUTHORIZED': return '等待完成 OAuth 授权';
+    default: return `OAuth 状态：${oauth.status || 'NOT_AVAILABLE'}`;
   }
 }
 
@@ -486,7 +502,7 @@ export function Materials() {
     setSaving(true);
     setOperation((current) => ({ ...current, [connectorId]: '正在连接在线资料并读取资源…' }));
     try {
-      const result = await connectKnowledgeConnector(project, {
+      const configuration = {
         connector_type: selectedManifest.connector_type,
         connector_instance_id: connectorId,
         display_name: selectedManifest.display_name || DEFAULT_CONNECTOR_NAME,
@@ -496,7 +512,15 @@ export function Materials() {
         webhook_policy: selectedManifest.webhook_supported
           ? { enabled: webhookEnabled }
           : undefined,
-      });
+      };
+      if (selectedManifest.oauth_schema && Object.keys(selectedManifest.oauth_schema).length > 0) {
+        await configureKnowledgeConnector(project, configuration);
+        const started = await startKnowledgeConnectorOAuth(project, connectorId);
+        if (!started.authorization_url) throw new Error('OAuth 授权地址为空。');
+        window.location.assign(started.authorization_url);
+        return;
+      }
+      const result = await connectKnowledgeConnector(project, configuration);
       setFormOpen(false);
       resetForm();
       await refresh();
@@ -534,7 +558,15 @@ export function Materials() {
     try {
       if (action === 'pause') await pauseKnowledgeConnector(project, id);
       if (action === 'resume') await resumeKnowledgeConnector(project, id);
-      if (action === 'reauthorize') await reauthorizeKnowledgeConnector(project, id);
+      if (action === 'reauthorize') {
+        if (connector.oauth?.supported) {
+          const started = await startKnowledgeConnectorOAuth(project, id);
+          if (!started.authorization_url) throw new Error('OAuth 授权地址为空。');
+          window.location.assign(started.authorization_url);
+          return;
+        }
+        await reauthorizeKnowledgeConnector(project, id);
+      }
       await refresh();
       toast.show('连接器状态已更新。', 'success');
     } catch (error: unknown) {
@@ -671,6 +703,20 @@ export function Materials() {
                         {connector.webhook.status === 'CALIBRATION_REQUIRED'
                           ? '请执行一次完整数据同步以恢复事件序列'
                           : '事件仅触发现有同步，不会直接修改资料'}
+                      </span>
+                    </div>
+                  )}
+
+                  {connector.oauth?.supported && (
+                    <div className={`materials-health-summary tone-${connector.oauth.status === 'PERMISSION_INSUFFICIENT' || connector.oauth.status === 'REAUTHORIZATION_REQUIRED' ? 'danger' : 'neutral'}`}>
+                      <div>
+                        <strong>OAuth 授权</strong>
+                        <span>{connectorOauthLabel(connector.oauth)}</span>
+                      </div>
+                      <span>
+                        {connector.oauth.required_scopes?.length
+                          ? `最小权限：${connector.oauth.required_scopes.join('、')}`
+                          : '权限由连接器 Manifest 声明'}
                       </span>
                     </div>
                   )}

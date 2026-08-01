@@ -51,6 +51,28 @@ _SECRET_FIELD_TYPES = {
     "cookie_session_reference",
 }
 _WEBHOOK_SECRET_FIELD_NAME = "webhook_secret"
+_OAUTH_SCHEMA_TYPE = "oauth2_authorization_code"
+_OAUTH_CLIENT_AUTH_METHODS = {
+    "none",
+    "client_secret_basic",
+    "client_secret_post",
+}
+_OAUTH_SCHEMA_KEYS = {
+    "type",
+    "authorization_endpoint",
+    "token_endpoint",
+    "client_id",
+    "redirect_uri",
+    "auth_mode",
+    "minimum_scopes",
+    "optional_scopes",
+    "client_auth_method",
+    "client_secret_field",
+    "access_token_field",
+    "refresh_token_field",
+    "scope_field",
+    "token_type_field",
+}
 _DEFAULT_WEBHOOK_POLICY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": "Configuration-driven HMAC webhook verification and sync triggering.",
@@ -233,6 +255,7 @@ class ConnectorManifest:
     capability_contract_version: str = ""
     schema: str = CONNECTOR_MANIFEST_SCHEMA
     webhook_policy_schema: Mapping[str, Any] = field(default_factory=dict)
+    oauth_schema: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "connector_type", _identifier(self.connector_type, "connector_type"))
@@ -303,6 +326,82 @@ class ConnectorManifest:
         if not self.webhook_supported and policy_schema:
             raise ConnectorRegistryError("webhook_policy_schema_without_support")
         object.__setattr__(self, "webhook_policy_schema", policy_schema)
+        if not isinstance(self.oauth_schema, Mapping):
+            raise ConnectorRegistryError("oauth_schema_must_be_object")
+        oauth_schema = dict(self.oauth_schema)
+        if oauth_schema:
+            unknown_oauth_keys = sorted(set(oauth_schema) - _OAUTH_SCHEMA_KEYS)
+            if unknown_oauth_keys:
+                raise ConnectorRegistryError(
+                    "oauth_schema_field_not_supported:" + unknown_oauth_keys[0]
+                )
+            oauth_type = str(oauth_schema.get("type") or "").strip()
+            if oauth_type != _OAUTH_SCHEMA_TYPE:
+                raise ConnectorRegistryError("oauth_schema_type_invalid")
+            oauth_auth_mode = str(oauth_schema.get("auth_mode") or "").strip()
+            if oauth_auth_mode not in supported_auth_modes:
+                raise ConnectorRegistryError("oauth_schema_auth_mode_not_supported")
+            for key in (
+                "authorization_endpoint",
+                "token_endpoint",
+                "client_id",
+                "redirect_uri",
+                "access_token_field",
+                "refresh_token_field",
+            ):
+                if not str(oauth_schema.get(key) or "").strip():
+                    raise ConnectorRegistryError(f"oauth_schema_{key}_missing")
+            client_auth_method = str(
+                oauth_schema.get("client_auth_method") or "none"
+            ).strip()
+            if client_auth_method not in _OAUTH_CLIENT_AUTH_METHODS:
+                raise ConnectorRegistryError("oauth_schema_client_auth_method_invalid")
+            oauth_schema["client_auth_method"] = client_auth_method
+            for key in ("minimum_scopes", "optional_scopes"):
+                raw_scopes = oauth_schema.get(key, ())
+                if isinstance(raw_scopes, str) or not isinstance(
+                    raw_scopes, (list, tuple)
+                ):
+                    raise ConnectorRegistryError(f"oauth_schema_{key}_invalid")
+                oauth_schema[key] = list(
+                    _unique_strings(raw_scopes, f"oauth_schema_{key}")
+                )
+            field_names = {field.name for field in fields}
+            for key in (
+                "access_token_field",
+                "refresh_token_field",
+                "scope_field",
+                "token_type_field",
+                "client_secret_field",
+            ):
+                field_name = str(oauth_schema.get(key) or "").strip()
+                if not field_name:
+                    continue
+                if field_name not in field_names:
+                    raise ConnectorRegistryError(
+                        f"oauth_schema_{key}_not_declared"
+                    )
+            client_secret_field = str(
+                oauth_schema.get("client_secret_field") or ""
+            ).strip()
+            if client_auth_method != "none" and not client_secret_field:
+                raise ConnectorRegistryError("oauth_schema_client_secret_field_missing")
+            oauth_schema["type"] = oauth_type
+            oauth_schema["auth_mode"] = oauth_auth_mode
+            for key in (
+                "authorization_endpoint",
+                "token_endpoint",
+                "client_id",
+                "redirect_uri",
+                "access_token_field",
+                "refresh_token_field",
+                "scope_field",
+                "token_type_field",
+                "client_secret_field",
+            ):
+                if key in oauth_schema:
+                    oauth_schema[key] = str(oauth_schema[key] or "").strip()[:2000]
+        object.__setattr__(self, "oauth_schema", oauth_schema)
         if self.schema != CONNECTOR_MANIFEST_SCHEMA:
             raise ConnectorRegistryError("manifest_schema_invalid")
 
@@ -338,6 +437,7 @@ class ConnectorManifest:
             "credential_fields": [field.as_dict() for field in self.credential_fields],
             "capability_contract_version": self.capability_contract_version,
             "webhook_policy_schema": dict(self.webhook_policy_schema),
+            "oauth_schema": dict(self.oauth_schema),
         }
 
 

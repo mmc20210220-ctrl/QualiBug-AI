@@ -43,6 +43,7 @@ export type ConnectorManifest = {
   credential_fields: ConnectorCredentialField[];
   capability_contract_version: string;
   webhook_policy_schema?: Record<string, unknown>;
+  oauth_schema?: Record<string, unknown>;
 };
 
 export type ConnectorTypeCatalog = {
@@ -83,6 +84,7 @@ export type KnowledgeConnectorHealth = {
     stale_after_seconds?: number;
   };
   webhook?: KnowledgeConnectorWebhook;
+  oauth?: KnowledgeConnectorOAuth;
   metrics: {
     last_attempt_at_utc?: string;
     discovered_resource_count: number;
@@ -130,6 +132,28 @@ export type KnowledgeConnectorWebhook = {
     last_failure_event?: Record<string, unknown> | null;
   };
   events?: Array<Record<string, unknown>>;
+  governance?: Record<string, unknown>;
+  error_code?: string;
+};
+
+export type KnowledgeConnectorOAuth = {
+  schema?: string;
+  connector_instance_id?: string;
+  connector_type?: string;
+  supported: boolean;
+  configured?: boolean;
+  status: string;
+  credential_status?: string;
+  required_scopes?: string[];
+  granted_scopes?: string[];
+  missing_scopes?: string[];
+  permission_status?: string;
+  last_authorized_at_utc?: string;
+  last_failure?: Record<string, unknown> | null;
+  pending_transaction_count?: number;
+  source_identity_preserved?: boolean;
+  checkpoint_preserved?: boolean;
+  remote_deletion_inferred?: false;
   governance?: Record<string, unknown>;
   error_code?: string;
 };
@@ -249,6 +273,7 @@ export type KnowledgeConnectorRecord = {
   coverage?: KnowledgeConnectorCoverage;
   health?: KnowledgeConnectorHealth;
   webhook?: KnowledgeConnectorWebhook;
+  oauth?: KnowledgeConnectorOAuth;
   acceptance?: KnowledgeConnectorAcceptance;
 };
 
@@ -659,6 +684,7 @@ function toConnectorHealth(value: unknown): KnowledgeConnectorHealth {
       stale_after_seconds: asNumber(freshness.stale_after_seconds),
     },
     webhook: row.webhook ? toWebhook(row.webhook) : undefined,
+    oauth: row.oauth ? toOauth(row.oauth) : undefined,
     metrics: {
       last_attempt_at_utc: asString(metrics.last_attempt_at_utc) || undefined,
       discovered_resource_count: asNumber(metrics.discovered_resource_count) || 0,
@@ -713,6 +739,42 @@ function toWebhook(value: unknown): KnowledgeConnectorWebhook {
       }
       : undefined,
     events: asArray(row.events).map(asRecord),
+    governance: row.governance ? asRecord(row.governance) : undefined,
+    error_code: asString(row.error_code) || undefined,
+  };
+}
+
+function toOauth(value: unknown): KnowledgeConnectorOAuth {
+  const row = asRecord(value);
+  assertFalseFields(
+    row,
+    [
+      'authorization_code_returned',
+      'access_token_returned',
+      'refresh_token_returned',
+      'credential_values_returned',
+      'remote_deletion_inferred',
+    ],
+    'OAuth 授权状态',
+  );
+  return {
+    schema: asString(row.schema) || undefined,
+    connector_instance_id: asString(row.connector_instance_id) || undefined,
+    connector_type: asString(row.connector_type) || undefined,
+    supported: asBoolean(row.supported),
+    configured: asBoolean(row.configured),
+    status: asString(row.status) || 'NOT_AVAILABLE',
+    credential_status: asString(row.credential_status) || undefined,
+    required_scopes: asArray(row.required_scopes).map(asString).filter(Boolean),
+    granted_scopes: asArray(row.granted_scopes).map(asString).filter(Boolean),
+    missing_scopes: asArray(row.missing_scopes).map(asString).filter(Boolean),
+    permission_status: asString(row.permission_status) || undefined,
+    last_authorized_at_utc: asString(row.last_authorized_at_utc) || undefined,
+    last_failure: row.last_failure ? asRecord(row.last_failure) : null,
+    pending_transaction_count: asNumber(row.pending_transaction_count),
+    source_identity_preserved: asBoolean(row.source_identity_preserved),
+    checkpoint_preserved: asBoolean(row.checkpoint_preserved),
+    remote_deletion_inferred: false,
     governance: row.governance ? asRecord(row.governance) : undefined,
     error_code: asString(row.error_code) || undefined,
   };
@@ -795,6 +857,7 @@ function toConnector(value: unknown): KnowledgeConnectorRecord {
     coverage: row.coverage ? toCoverage(row.coverage) : undefined,
     health: row.health ? toConnectorHealth(row.health) : undefined,
     webhook: row.webhook ? toWebhook(row.webhook) : undefined,
+    oauth: row.oauth ? toOauth(row.oauth) : undefined,
     acceptance: row.acceptance ? toAcceptance(row.acceptance) : undefined,
   };
 }
@@ -883,6 +946,9 @@ function toManifest(value: unknown): ConnectorManifest {
     capability_contract_version: asString(row.capability_contract_version),
     webhook_policy_schema: row.webhook_policy_schema
       ? asRecord(row.webhook_policy_schema)
+      : undefined,
+    oauth_schema: row.oauth_schema
+      ? asRecord(row.oauth_schema)
       : undefined,
   };
 }
@@ -1043,6 +1109,52 @@ export function reauthorizeKnowledgeConnector(
   body: JsonRecord = {},
 ): Promise<KnowledgeConnectorActionResult> {
   return connectorAction(projectId, connectorId, 'reauthorize', body);
+}
+
+export type KnowledgeConnectorOAuthStart = {
+  schema?: string;
+  connector_instance_id: string;
+  transaction_id: string;
+  authorization_url: string;
+  requested_scopes: string[];
+  expires_at_utc?: string;
+  state_returned_only_inside_authorization_url: boolean;
+  pkce_method: string;
+  state_persisted_as_hash: boolean;
+  credential_values_returned: false;
+  source_content_returned: false;
+};
+
+export async function startKnowledgeConnectorOAuth(
+  projectId: string,
+  connectorId: string,
+  additionalScopes: string[] = [],
+): Promise<KnowledgeConnectorOAuthStart> {
+  const connector = connectorId.trim();
+  if (!connector) throw new Error('connector_instance_id_required');
+  const payload = await connectorRequest(
+    projectConnectorPath(projectId, `/${encodeURIComponent(connector)}/oauth/start`),
+    {
+      method: 'POST',
+      body: JSON.stringify({ additional_scopes: additionalScopes }),
+    },
+  );
+  const row = asRecord(payload.data);
+  return {
+    schema: asString(row.schema) || undefined,
+    connector_instance_id: asString(row.connector_instance_id) || connector,
+    transaction_id: asString(row.transaction_id),
+    authorization_url: asString(row.authorization_url),
+    requested_scopes: asArray(row.requested_scopes).map(asString).filter(Boolean),
+    expires_at_utc: asString(row.expires_at_utc) || undefined,
+    state_returned_only_inside_authorization_url: asBoolean(
+      row.state_returned_only_inside_authorization_url,
+    ),
+    pkce_method: asString(row.pkce_method),
+    state_persisted_as_hash: asBoolean(row.state_persisted_as_hash),
+    credential_values_returned: false,
+    source_content_returned: false,
+  };
 }
 
 export async function listConnectorResources(
