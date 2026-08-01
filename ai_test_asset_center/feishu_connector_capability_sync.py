@@ -3,7 +3,8 @@
 The transport adapter remains responsible for read-only discovery and materialization. This
 application service classifies every discovered resource before export, isolates deterministic
 unsupported object types, preserves any previously materialized occurrence, and still fails
-closed for transport, permission, export, parsing, or unknown runtime failures.
+closed for transport, permission, export, parsing, or unknown runtime failures. Remote absence is
+reconciled separately from ingestion so one missing enumeration never becomes a false deletion.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from .connector_materialization_capability import (
     ResourceCapability,
     classify_materialization_capability,
 )
+from .connector_remote_lifecycle import reconcile_connector_remote_lifecycle
 from .connector_sync_authority import (
     ConnectorSyncError,
     connector_snapshot_observation_index,
@@ -139,7 +141,7 @@ def _unsupported_coverage_observation(
     return {
         "remote_resource_id": remote_id,
         # Source refs include resource kind. Reuse the previous kind for an existing
-        # occurrence so RETIRE_MISSING and freshness observations bind to its real identity.
+        # occurrence so freshness observations bind to its real identity.
         "resource_kind": effective_kind,
         "state": "UNSUPPORTED",
         "reason_code": capability.reason_code,
@@ -160,6 +162,8 @@ def _unsupported_coverage_observation(
             "parent_remote_id": _text(
                 descriptor.get("parent_node_token"), 1000
             ),
+            "remote_display_title": _text(descriptor.get("title"), 300),
+            "remote_space_id": _text(descriptor.get("space_id"), 160),
             "remote_materialization_fingerprint": _unsupported_fingerprint(
                 descriptor, capability
             ),
@@ -167,8 +171,36 @@ def _unsupported_coverage_observation(
             "materialization_disposition": capability.disposition.value,
             "materialization_reason_code": capability.reason_code,
             "materialization_capability_contract": capability.contract_version,
+            "remote_lifecycle_state": "PRESENT_UNSUPPORTED",
+            "remote_scope_presence": "PRESENT",
+            "remote_missing_complete_snapshot_count": 0,
+            "remote_deletion_inferred": False,
+            "permission_loss_inferred": False,
             "customer_source_modified": False,
         },
+    }
+
+
+def _lifecycle_resource(
+    descriptor: Mapping[str, Any],
+    capability: ResourceCapability,
+) -> dict[str, Any]:
+    return {
+        "remote_resource_id": _text(
+            descriptor.get("remote_resource_id"), 1000
+        ),
+        "resource_kind": _text(descriptor.get("resource_kind"), 160),
+        "display_title": _text(descriptor.get("title"), 300),
+        "parent_remote_id": _text(
+            descriptor.get("parent_node_token"), 1000
+        ),
+        "remote_space_id": _text(descriptor.get("space_id"), 160),
+        "remote_revision": _text(descriptor.get("remote_revision"), 240),
+        "materialization_state": (
+            "UNSUPPORTED"
+            if capability.observable_unsupported
+            else "MATERIALIZABLE"
+        ),
     }
 
 
@@ -183,6 +215,7 @@ def sync_feishu_connector(
     deletion_policy: str = "RETAIN",
     max_retire_count: int = 100,
     max_retire_ratio: float = 0.25,
+    retire_after_complete_snapshots: int = 2,
     max_nodes: int = _DEFAULT_MAX_NODES,
     max_export_polls: int = _DEFAULT_MAX_EXPORT_POLLS,
     export_poll_interval: float = 0.5,
@@ -191,7 +224,7 @@ def sync_feishu_connector(
     timeout: float = 15.0,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """Synchronize all supported resources while truthfully isolating known capability gaps."""
+    """Synchronize supported resources and reconcile remote lifecycle conservatively."""
     resolved_root = root or ROOT
     instance = _connector_instance(project_id, connector_instance_id, resolved_root)
     stored_cursor_hash = _text(
@@ -233,9 +266,11 @@ def sync_feishu_connector(
     coverage_observations: list[dict[str, Any]] = []
     unsupported_resources: list[dict[str, Any]] = []
     pending_materializations: list[tuple[dict[str, Any], str]] = []
+    lifecycle_resources: list[dict[str, Any]] = []
 
     for descriptor in descriptors:
         capability = classify_feishu_resource(descriptor)
+        lifecycle_resources.append(_lifecycle_resource(descriptor, capability))
         remote_id = _text(descriptor.get("remote_resource_id"), 1000)
         existing = dict(observation_index.get(remote_id) or {})
         if capability.observable_unsupported:
@@ -262,9 +297,24 @@ def sync_feishu_connector(
             )
             == fingerprint
         ):
-            supported_unchanged_observations.append(
-                _unchanged_observation(descriptor, fingerprint)
+            observation = _unchanged_observation(descriptor, fingerprint)
+            observation.setdefault("metadata", {}).update(
+                {
+                    "remote_display_title": _text(
+                        descriptor.get("title"), 300
+                    ),
+                    "remote_space_id": _text(
+                        descriptor.get("space_id"), 160
+                    ),
+                    "remote_lifecycle_state": "PRESENT",
+                    "remote_scope_presence": "PRESENT",
+                    "remote_missing_complete_snapshot_count": 0,
+                    "remote_deletion_inferred": False,
+                    "permission_loss_inferred": False,
+                    "customer_source_modified": False,
+                }
             )
+            supported_unchanged_observations.append(observation)
             continue
         pending_materializations.append((dict(descriptor), fingerprint))
 
@@ -295,6 +345,8 @@ def sync_feishu_connector(
         )
 
     try:
+        # The canonical ingestion authority always retains missing occurrences. Scope absence is
+        # reconciled only after the supported snapshot commits, through guarded lifecycle evidence.
         run = sync_connector_snapshot_batch(
             project_id,
             connector_instance_id=connector_instance_id,
@@ -306,7 +358,7 @@ def sync_feishu_connector(
             sync_mode="FULL",
             previous_cursor=previous_cursor,
             next_cursor=next_cursor,
-            deletion_policy=deletion_policy,
+            deletion_policy="RETAIN",
             snapshot_complete=True,
             max_retire_count=max_retire_count,
             max_retire_ratio=max_retire_ratio,
@@ -315,6 +367,32 @@ def sync_feishu_connector(
         raise FeishuConnectorError(f"feishu_sync_rejected:{exc}") from exc
 
     run_complete = run.get("status") == "COMPLETE"
+    lifecycle = {
+        "schema": "qualibug.connector-remote-lifecycle.v1",
+        "status": "SKIPPED_SYNC_INCOMPLETE",
+        "requested_deletion_policy": _text(deletion_policy, 40).upper()
+        or "RETAIN",
+        "effective_deletion_policy": "RETAIN",
+        "retired_count": 0,
+        "remote_deletion_inferred": False,
+        "permission_loss_inferred": False,
+        "customer_material_mutation_executed": False,
+    }
+    if run_complete:
+        lifecycle = reconcile_connector_remote_lifecycle(
+            project_id,
+            connector_instance_id=connector_instance_id,
+            present_resources=lifecycle_resources,
+            sync_epoch_id=_text(run.get("sync_epoch_id"), 160),
+            root=resolved_root,
+            actor=actor,
+            deletion_policy=deletion_policy,
+            authoritative_snapshot_complete=True,
+            retire_after_complete_snapshots=retire_after_complete_snapshots,
+            max_retire_count=max_retire_count,
+            max_retire_ratio=max_retire_ratio,
+        )
+
     coverage_ratio = covered_count / discovered_count if discovered_count else 1.0
     coverage_status = (
         "INCOMPLETE"
@@ -363,6 +441,31 @@ def sync_feishu_connector(
         "access_token_persisted": False,
         "source_content_persisted_in_adapter_receipt": False,
         "connector_parser_implemented": False,
+        "requested_deletion_policy": lifecycle.get(
+            "requested_deletion_policy"
+        ),
+        "effective_deletion_policy": lifecycle.get(
+            "effective_deletion_policy"
+        ),
+        "remote_lifecycle": lifecycle,
+        "remote_lifecycle_status": lifecycle.get("status"),
+        "remote_absent_count": lifecycle.get("absent_count", 0),
+        "remote_unconfirmed_missing_count": lifecycle.get(
+            "unconfirmed_missing_count", 0
+        ),
+        "remote_retirement_eligible_count": lifecycle.get(
+            "retirement_eligible_count", 0
+        ),
+        "retired_count": lifecycle.get("retired_count", 0),
+        "renamed_resource_count": lifecycle.get(
+            "renamed_resource_count", 0
+        ),
+        "moved_resource_count": lifecycle.get("moved_resource_count", 0),
+        "reappeared_resource_count": lifecycle.get(
+            "reappeared_resource_count", 0
+        ),
+        "remote_deletion_inferred": False,
+        "permission_loss_inferred": False,
         "customer_material_access": "NON_MUTATING_READ_ONLY",
         "customer_material_mutation_executed": False,
     }
