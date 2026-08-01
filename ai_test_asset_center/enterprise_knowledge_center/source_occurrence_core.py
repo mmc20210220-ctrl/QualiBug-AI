@@ -161,7 +161,13 @@ def _interpretation(
     )
     canonical_type = _text(canonical.get("source_type"))
     canonical_format = _format_identity(canonical.get("original_name"))
-    if requested_type != canonical_type or requested_format != canonical_format:
+    generic_types = {"collaboration_document", "other_document", "other"}
+    effective_type = (
+        canonical_type
+        if requested_type in generic_types and canonical_type not in generic_types
+        else requested_type
+    )
+    if effective_type != canonical_type or requested_format != canonical_format:
         raise SourceOccurrenceIngestionError(
             "SOURCE_INTERPRETATION_CONFLICT:"
             + repr(
@@ -169,12 +175,13 @@ def _interpretation(
                     "canonical_source_id": canonical.get("source_id"),
                     "canonical_source_type": canonical_type,
                     "requested_source_type": requested_type,
+                    "effective_source_type": effective_type,
                     "canonical_format": canonical_format,
                     "requested_format": requested_format,
                 }
             )
         )
-    return requested_type, requested_format
+    return effective_type, requested_format
 
 
 def _add_unique(row: dict[str, Any], key: str, value: str) -> None:
@@ -565,28 +572,18 @@ def _register_occurrence(
     return occurrence, True, orphan_candidates
 
 
-def _register_child_result(
+def _register_result_rows(
     *,
     project: str,
     root: Path,
     actor: dict[str, Any],
-    envelope: dict[str, Any],
-    child: dict[str, Any],
+    result_rows: list[tuple[dict[str, Any], bool, dict[str, Any]]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     registry = _load_registry(project, root)
     created_occurrences: list[dict[str, Any]] = []
     duplicate_occurrences: list[dict[str, Any]] = []
     orphan_candidates: set[str] = set()
-    result_rows = [
-        (dict(row), True)
-        for row in child.get("created") or []
-        if isinstance(row, dict)
-    ] + [
-        (dict(row), False)
-        for row in child.get("duplicates") or []
-        if isinstance(row, dict)
-    ]
-    for result_row, canonical_created in result_rows:
+    for result_row, canonical_created, envelope in result_rows:
         canonical = _canonical_for_result(registry, result_row)
         occurrence, occurrence_created, newly_orphaned = _register_occurrence(
             registry,
@@ -610,6 +607,9 @@ def _register_child_result(
             "source_occurrence_identity_authority": "SOURCE_OCCURRENCE_REGISTRY",
             "canonical_interpretations_are_provenance_neutral": True,
             "source_paths_control_only_occurrence_lifecycle": True,
+            "source_occurrence_batch_registration_authority": (
+                "source_occurrence_core"
+            ),
         }
     )
     registry.setdefault("audit_events", []).append(
@@ -617,8 +617,13 @@ def _register_child_result(
             "event": "register_source_occurrences",
             "at_utc": _now(),
             "actor": actor,
-            "created_source_occurrence_ids": [row["source_occurrence_id"] for row in created_occurrences],
-            "duplicate_source_occurrence_ids": [row["source_occurrence_id"] for row in duplicate_occurrences],
+            "created_source_occurrence_ids": [
+                row["source_occurrence_id"] for row in created_occurrences
+            ],
+            "duplicate_source_occurrence_ids": [
+                row["source_occurrence_id"] for row in duplicate_occurrences
+            ],
+            "batch_registration": len(result_rows) > 1,
         }
     )
     _save_registry(project, root, registry)
@@ -630,6 +635,31 @@ def _register_child_result(
         reason="source_occurrence_superseded",
     )
     return created_occurrences, duplicate_occurrences, list(cleanup.get("errors") or [])
+
+
+def _register_child_result(
+    *,
+    project: str,
+    root: Path,
+    actor: dict[str, Any],
+    envelope: dict[str, Any],
+    child: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    result_rows = [
+        (dict(row), True, envelope)
+        for row in child.get("created") or []
+        if isinstance(row, dict)
+    ] + [
+        (dict(row), False, envelope)
+        for row in child.get("duplicates") or []
+        if isinstance(row, dict)
+    ]
+    return _register_result_rows(
+        project=project,
+        root=root,
+        actor=actor,
+        result_rows=result_rows,
+    )
 
 
 def _reconcile_archive_occurrences(
@@ -717,6 +747,136 @@ def _merge_child(aggregate: dict[str, Any], child: dict[str, Any]) -> None:
         if target.get("warnings")
         else "COMPLETE"
     )
+
+
+def ingest_enterprise_knowledge_document_batch(
+    project_id: str,
+    documents: list[dict[str, Any]],
+    root: Path | None = None,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Ingest one ordinary-document batch through the canonical atomic authority.
+
+    The batch requires a unique stable ``external_ref`` per document and rejects archive
+    transports. It exists for connector snapshots, where thousands of ordinary remote
+    documents must share one CRUD transaction and one occurrence-registry commit.
+    """
+    resolved_root = root or ROOT
+    project = _safe_project_id(project_id)
+    clean_actor = _require_manage_actor(actor)
+    if not isinstance(documents, list) or not documents:
+        raise SourceOccurrenceIngestionError(
+            "SOURCE_OCCURRENCE_BATCH_DOCUMENTS_REQUIRED"
+        )
+    envelopes: list[dict[str, Any]] = []
+    by_ref: dict[str, dict[str, Any]] = {}
+    for index, raw in enumerate(documents):
+        if not isinstance(raw, dict):
+            raise SourceOccurrenceIngestionError(
+                f"SOURCE_OCCURRENCE_BATCH_ENVELOPE_INVALID:{index}"
+            )
+        envelope = dict(raw)
+        if _atomic._is_archive_transport(envelope):
+            raise SourceOccurrenceIngestionError(
+                f"SOURCE_OCCURRENCE_BATCH_ARCHIVE_UNSUPPORTED:{index}"
+            )
+        source_ref = _portable_ref(envelope.get("external_ref"))
+        if not source_ref:
+            raise SourceOccurrenceIngestionError(
+                f"SOURCE_OCCURRENCE_BATCH_SOURCE_REF_REQUIRED:{index}"
+            )
+        if source_ref in by_ref:
+            raise SourceOccurrenceIngestionError(
+                f"SOURCE_OCCURRENCE_BATCH_SOURCE_REF_DUPLICATE:{source_ref}"
+            )
+        by_ref[source_ref] = envelope
+        envelopes.append(envelope)
+
+    registry_before = _load_registry(project, resolved_root)
+    if _prepare_existing_canonical_identities(registry_before):
+        _save_registry(project, resolved_root, registry_before)
+
+    child = _atomic.ingest_enterprise_knowledge_documents(
+        project,
+        envelopes,
+        root=resolved_root,
+        actor=clean_actor,
+    )
+    aggregate: dict[str, Any] = {
+        "schema": SOURCE_OCCURRENCE_INGESTION_SCHEMA,
+        "ok": not child.get("errors"),
+        "phase": PHASE,
+        "project_id": project,
+        "created": [dict(row) for row in child.get("created") or [] if isinstance(row, dict)],
+        "duplicates": [dict(row) for row in child.get("duplicates") or [] if isinstance(row, dict)],
+        "errors": [dict(row) for row in child.get("errors") or [] if isinstance(row, dict)],
+        "warnings": [dict(row) for row in child.get("warnings") or [] if isinstance(row, dict)],
+        "source_occurrences": [],
+        "duplicate_source_occurrences": [],
+        "source_occurrence_reconciliations": [],
+        "rolled_back_archives": [],
+        "archive_reconciliations": [],
+        "archive_expansion": dict(child.get("archive_expansion") or {}),
+    }
+    if not aggregate["errors"]:
+        rows: list[tuple[dict[str, Any], bool, dict[str, Any]]] = []
+        for key, canonical_created in (("created", True), ("duplicates", False)):
+            for raw in child.get(key) or []:
+                if not isinstance(raw, dict):
+                    continue
+                row = dict(raw)
+                source_ref = _portable_ref(row.get("external_ref"))
+                envelope = by_ref.get(source_ref)
+                if envelope is None:
+                    raise SourceOccurrenceIngestionError(
+                        f"SOURCE_OCCURRENCE_BATCH_RESULT_REF_UNMAPPED:{source_ref or 'unknown'}"
+                    )
+                rows.append((row, canonical_created, envelope))
+        created, duplicates, registration_errors = _register_result_rows(
+            project=project,
+            root=resolved_root,
+            actor=clean_actor,
+            result_rows=rows,
+        )
+        aggregate["source_occurrences"].extend(created)
+        aggregate["duplicate_source_occurrences"].extend(duplicates)
+        aggregate["errors"].extend(registration_errors)
+
+    registry = _load_registry(project, resolved_root)
+    active_sources = [
+        row
+        for row in registry.get("sources") or []
+        if isinstance(row, dict) and row.get("status") == "active"
+    ]
+    active_occurrences = [
+        row
+        for row in registry.get("source_occurrences") or []
+        if isinstance(row, dict) and row.get("status") == "active"
+    ]
+    aggregate.update(
+        {
+            "source_count": len(active_sources),
+            "source_occurrence_count": len(active_occurrences),
+            "content_asset_count": len(_registry_rows(registry, "content_assets")),
+            "interpretation_asset_count": len(
+                _registry_rows(registry, "interpretation_assets")
+            ),
+            "ok": not aggregate["errors"],
+            "rebuild_recommended": bool(
+                aggregate["created"] or aggregate["source_occurrences"]
+            ),
+            "content_identity_separate_from_source_occurrence": True,
+            "interpretation_identity_separate_from_content_identity": True,
+            "same_interpretation_content_parsed_once": True,
+            "different_interpretation_content_reuse_fails_closed": True,
+            "canonical_interpretations_are_provenance_neutral": True,
+            "historical_source_bytes_retained": True,
+            "atomic_transport_authority": "atomic_ingestion",
+            "canonical_document_activation_authority": "_crud",
+            "batch_transport_transaction": True,
+        }
+    )
+    return aggregate
 
 
 def ingest_enterprise_knowledge_documents(
@@ -887,6 +1047,7 @@ __all__ = [
     "SOURCE_OCCURRENCE_SCHEMA",
     "SourceOccurrenceIngestionError",
     "deactivate_unreferenced_canonical_sources",
+    "ingest_enterprise_knowledge_document_batch",
     "ingest_enterprise_knowledge_documents",
     "ingest_enterprise_knowledge_files",
 ]
