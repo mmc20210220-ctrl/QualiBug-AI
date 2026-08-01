@@ -111,7 +111,8 @@ jobs:
           git config user.email 'automation@qualibug.local'
           git rm \
             .github/workflows/deliver-online-source-root-fix.yml \
-            .github/patches/online_source_ingestion_root_fix.patch.gz.b64
+            .github/patches/online_source_ingestion_root_fix.patch.gz.b64 \
+            .github/online-source-delivery.trigger
           git add \
             ai_test_asset_center/connector_source_ingestion.py \
             ai_test_asset_center/connector_sync_authority.py \
