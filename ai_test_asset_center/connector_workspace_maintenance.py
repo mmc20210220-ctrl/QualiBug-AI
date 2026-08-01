@@ -82,6 +82,15 @@ def _maintenance_roots(root: Path, project: str) -> tuple[Path, ...]:
     )
 
 
+def _is_within(base: Path, candidate: Path) -> bool:
+    try:
+        resolved_base = base.resolve()
+        resolved_candidate = candidate.resolve()
+    except (OSError, RuntimeError):
+        return False
+    return resolved_candidate == resolved_base or resolved_base in resolved_candidate.parents
+
+
 def _is_atomic_temporary_file(path: Path, *, source_dir: Path) -> bool:
     """Recognize only names created by existing atomic-write helpers.
 
@@ -122,14 +131,14 @@ def _active_connector_state(
     workspace = _knowledge_workspace(root, project)
     lock_dir = workspace / "connector_sync_locks"
     if lock_dir.is_dir() and any(
-        path.is_file() and not path.is_symlink()
+        not path.is_symlink() and path.is_file()
         for path in lock_dir.glob("*.lock")
     ):
         return {"safe": False, "reason": "SYNC_LOCK_PRESENT"}
 
     journal_dir = workspace / "connector_checkpoint_journal"
     if journal_dir.is_dir() and any(
-        path.is_file() and not path.is_symlink()
+        not path.is_symlink() and path.is_file()
         for path in journal_dir.glob("*.json")
     ):
         return {"safe": False, "reason": "CHECKPOINT_JOURNAL_PRESENT"}
@@ -179,6 +188,14 @@ def _detached_immutable_inventory(
 ) -> dict[str, Any]:
     paths = _paths(project, root)
     source_dir = paths["source_dir"].resolve()
+    if not _is_within(root.resolve(), source_dir):
+        return {
+            "detached_immutable_source_count": 0,
+            "detached_immutable_source_bytes": 0,
+            "detached_immutable_sources_deleted": False,
+            "immutable_inventory_truncated": False,
+            "immutable_inventory_path_boundary_blocked": True,
+        }
     registry = _load_registry(project, root)
     referenced = {
         _text(row.get("stored_path"), 2000).replace("\\", "/")
@@ -195,6 +212,7 @@ def _detached_immutable_inventory(
             "detached_immutable_source_bytes": 0,
             "detached_immutable_sources_deleted": False,
             "immutable_inventory_truncated": False,
+            "immutable_inventory_path_boundary_blocked": False,
         }
     for path in source_dir.rglob("*"):
         if scanned >= scan_limit:
@@ -202,7 +220,7 @@ def _detached_immutable_inventory(
             break
         scanned += 1
         try:
-            if path.is_symlink() or not path.is_file():
+            if path.is_symlink() or not _is_within(source_dir, path) or not path.is_file():
                 continue
             relative = path.resolve().relative_to(root.resolve()).as_posix()
             if relative in referenced or _is_atomic_temporary_file(
@@ -220,6 +238,7 @@ def _detached_immutable_inventory(
         "detached_immutable_source_bytes": byte_count,
         "detached_immutable_sources_deleted": False,
         "immutable_inventory_truncated": truncated,
+        "immutable_inventory_path_boundary_blocked": False,
     }
 
 
@@ -234,6 +253,19 @@ def maintain_connector_workspace(
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     clean_actor = _require_manage_actor(actor)
+    project_workspace = _project_workspace(resolved_root, project)
+    if not _is_within(resolved_root, project_workspace):
+        return {
+            "schema": CONNECTOR_WORKSPACE_MAINTENANCE_SCHEMA,
+            "status": "BLOCKED_PATH_BOUNDARY",
+            "project_id": project,
+            "temporary_files_removed": 0,
+            "temporary_bytes_removed": 0,
+            "path_boundary_enforced": True,
+            "historical_source_bytes_retained": True,
+            "checkpoint_artifacts_deleted": False,
+            "run_receipts_deleted": False,
+        }
     source_dir = _paths(project, resolved_root)["source_dir"].resolve()
     retention = _retention_seconds()
     scan_limit = _scan_limit()
@@ -266,13 +298,22 @@ def maintain_connector_workspace(
                     "reason": _text(active.get("reason"), 80),
                     "temporary_files_removed": 0,
                     "temporary_bytes_removed": 0,
+                    "path_boundary_enforced": True,
                     "historical_source_bytes_retained": True,
                     "checkpoint_artifacts_deleted": False,
                     "run_receipts_deleted": False,
                 }
 
             for maintenance_root in _maintenance_roots(resolved_root, project):
-                if not maintenance_root.is_dir():
+                try:
+                    if (
+                        maintenance_root.is_symlink()
+                        or not _is_within(project_workspace, maintenance_root)
+                        or not maintenance_root.is_dir()
+                    ):
+                        continue
+                except OSError:
+                    cleanup_errors += 1
                     continue
                 for path in maintenance_root.rglob("*"):
                     if scanned_count >= scan_limit:
@@ -280,7 +321,11 @@ def maintain_connector_workspace(
                         break
                     scanned_count += 1
                     try:
-                        if path.is_symlink() or not path.is_file():
+                        if (
+                            path.is_symlink()
+                            or not _is_within(maintenance_root, path)
+                            or not path.is_file()
+                        ):
                             continue
                         if not _is_atomic_temporary_file(
                             path,
@@ -311,6 +356,7 @@ def maintain_connector_workspace(
                         "connector_temporary_residue_cleanup_enabled": True,
                         "temporary_cleanup_uses_atomic_name_contract": True,
                         "runtime_source_registry_temporary_residue_in_scope": True,
+                        "maintenance_path_boundary_enforced": True,
                         "checkpoint_artifacts_deleted_by_maintenance": False,
                         "run_receipts_deleted_by_maintenance": False,
                         "detached_immutable_sources_deleted_by_maintenance": False,
@@ -330,6 +376,7 @@ def maintain_connector_workspace(
                         "temporary_bytes_removed": removed_bytes,
                         "cleanup_error_count": cleanup_errors,
                         "scan_truncated": scan_truncated,
+                        "path_boundary_enforced": True,
                         "detached_immutable_source_count": detached[
                             "detached_immutable_source_count"
                         ],
@@ -347,6 +394,7 @@ def maintain_connector_workspace(
             "project_id": project,
             "temporary_files_removed": 0,
             "temporary_bytes_removed": 0,
+            "path_boundary_enforced": True,
             "historical_source_bytes_retained": True,
             "checkpoint_artifacts_deleted": False,
             "run_receipts_deleted": False,
@@ -363,6 +411,7 @@ def maintain_connector_workspace(
         "scan_truncated": scan_truncated,
         "retention_seconds": retention,
         **detached,
+        "path_boundary_enforced": True,
         "historical_source_bytes_retained": True,
         "checkpoint_artifacts_deleted": False,
         "sync_locks_deleted": False,
