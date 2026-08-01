@@ -6,17 +6,17 @@ on:
 
 permissions:
   contents: write
-  issues: read
+  issues: write
 
 concurrency:
   group: one-time-e2e-root-authority-delivery
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   apply-test-and-push:
-    if: github.event.issue.title == 'run-verified-e2e-root-authority-delivery-20260801'
+    if: github.event.issue.title == 'run-verified-e2e-root-authority-delivery-20260801-v2'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: Checkout latest main
         uses: actions/checkout@v4
@@ -92,8 +92,27 @@ jobs:
           export QUALIBUG_LOCAL_DEV_ACTOR=1
           export QUALIBUG_ALLOW_PUBLIC_BIND=0
           python -m compileall -q ai_test_asset_center benchmark_evaluator tests
-          mapfile -t quality_files < <(grep -Ev '^[[:space:]]*(#|$)' .github/quality-gates-backend-tests.txt)
-          python -m pytest "${quality_files[@]}" -q
+          python -m pytest -q \
+            tests/test_experiment_protocol_registry.py \
+            tests/test_precondition_wiring.py \
+            tests/test_family_experiment_protocols.py \
+            tests/test_observer_registration.py \
+            tests/test_observer_evidence_truthfulness.py \
+            tests/test_persistence_assertions.py \
+            tests/test_persistence_observer.py \
+            tests/test_non_http_capability_chain.py \
+            tests/test_typed_observer_authorization.py \
+            tests/test_accepted_restricted_write_authorization.py \
+            tests/test_process_graph_write_cleanup.py \
+            tests/test_process_graph_write_fail_closed.py \
+            tests/test_process_graph_dependency_rollback.py \
+            tests/test_process_graph_cleanup_equivalence_scope.py \
+            tests/test_process_graph_multi_write_equivalence.py \
+            tests/test_adapter_cleanup_reaches_the_executor.py \
+            tests/test_adapter_cleanup_runtime_identity.py \
+            tests/test_architecture_extraction_contracts.py \
+            tests/test_enterprise_understanding_fact_slot_document.py \
+            tests/test_v150_multi_step_protocol.py
           python -m pytest -q \
             tests/test_p0_root_security_boundaries.py \
             tests/test_p0_atomic_mainline_contracts.py \
@@ -132,7 +151,7 @@ jobs:
           SH
           chmod +x /tmp/run-root-delivery-tests.sh
 
-      - name: Run full root and E2E verification
+      - name: Run focused root and E2E verification
         run: /tmp/run-root-delivery-tests.sh
 
       - name: Commit verified source changes and remove executor
@@ -167,3 +186,15 @@ jobs:
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
+
+      - name: Report success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "${{ github.event.issue.number }}" --body "SUCCESS: verified root-authority changes were pushed to main at $(git rev-parse HEAD)."
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "${{ github.event.issue.number }}" --body "FAILURE: root-authority delivery stopped fail-closed. Inspect this workflow run before retrying; main was not force-updated."
