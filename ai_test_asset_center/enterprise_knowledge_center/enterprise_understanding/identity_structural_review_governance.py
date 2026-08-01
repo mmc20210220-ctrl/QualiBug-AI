@@ -93,6 +93,11 @@ def govern_identity_structural_review_decision_admission(
         for row in original
         if text(row.get("decision_id")) not in blocked_decision_ids
     ]
+    admitted_current_confirmation_count = sum(
+        1
+        for decision in current_confirmations.values()
+        if text(decision.get("decision_id")) not in blocked_decision_ids
+    )
     asset["identity_structural_review_decisions"] = effective
 
     conflicts = [
@@ -118,6 +123,12 @@ def govern_identity_structural_review_decision_admission(
         }
         for entity_id, decision_ids in sorted(overlapping_entities.items())
     ]
+    if conflicts and admitted_current_confirmation_count:
+        status = "PARTIAL_BLOCKED_OVERLAPPING_CONFIRMATIONS"
+    elif conflicts:
+        status = "BLOCKED_OVERLAPPING_CONFIRMATIONS"
+    else:
+        status = "PASS"
     receipt = {
         "schema": ADMISSION_SCHEMA,
         "admission_id": stable_id(
@@ -125,20 +136,59 @@ def govern_identity_structural_review_decision_admission(
             sorted(text(row.get("decision_id")) for row in original),
             sorted(blocked_decision_ids),
         ),
-        "status": "BLOCKED_OVERLAPPING_CONFIRMATIONS" if conflicts else "PASS",
+        "status": status,
         "decision_count": len(original),
         "current_confirmation_count": len(current_confirmations),
+        "admitted_current_confirmation_count": admitted_current_confirmation_count,
         "admitted_decision_count": len(effective),
         "blocked_decision_ids": sorted(blocked_decision_ids),
         "overlapping_entity_ids": sorted(overlapping_entities),
         "conflicts": conflicts,
         "current_identity_gate_changed": False,
-        "review_application_allowed": not conflicts,
+        "review_application_allowed": (
+            admitted_current_confirmation_count > 0 or not conflicts
+        ),
+        "overlapping_confirmation_application_allowed": False,
         "automatic_conflict_winner_allowed": False,
         "uses_existing_operator_authority_ledger": True,
     }
     asset["enterprise_identity_structural_review_admission"] = deepcopy(receipt)
     model["identity_structural_review_admission"] = deepcopy(receipt)
+    return model
+
+
+def attach_identity_structural_review_admission(
+    asset: dict[str, Any], model: dict[str, Any]
+) -> dict[str, Any]:
+    """Expose admission and review results as one consumable operator surface."""
+    admission = as_dict(
+        model.get("identity_structural_review_admission")
+        or asset.get("enterprise_identity_structural_review_admission")
+    )
+    queue = dict(
+        as_dict(
+            model.get("identity_structural_review_queue")
+            or asset.get("enterprise_identity_structural_review_queue")
+        )
+    )
+    if queue:
+        queue["admission"] = deepcopy(admission)
+        queue["review_application_status"] = text(admission.get("status")) or "PASS"
+        queue["blocked_decision_ids"] = list(
+            as_list(admission.get("blocked_decision_ids"))
+        )
+        model["identity_structural_review_queue"] = queue
+        asset["enterprise_identity_structural_review_queue"] = deepcopy(queue)
+    review = dict(
+        as_dict(
+            model.get("identity_structural_review_receipt")
+            or asset.get("enterprise_identity_structural_review_receipt")
+        )
+    )
+    if review:
+        review["admission"] = deepcopy(admission)
+        model["identity_structural_review_receipt"] = review
+        asset["enterprise_identity_structural_review_receipt"] = deepcopy(review)
     return model
 
 
@@ -199,6 +249,7 @@ def preserve_identity_structural_review_registry_merges(
 
 __all__ = [
     "ADMISSION_SCHEMA",
+    "attach_identity_structural_review_admission",
     "govern_identity_structural_review_decision_admission",
     "preserve_identity_structural_review_registry_merges",
 ]
