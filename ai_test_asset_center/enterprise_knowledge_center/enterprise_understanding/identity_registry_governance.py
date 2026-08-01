@@ -56,6 +56,21 @@ def _remove_dangling_cluster_edge_refs(result: dict[str, Any]) -> int:
     return removed
 
 
+def _operator_merges(prior_registry: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [
+        dict(row)
+        for row in as_list(as_dict(prior_registry).get("operator_authorized_merges"))
+        if isinstance(row, dict) and text(row.get("decision_id"))
+    ]
+    legacy = dict(
+        as_dict(as_dict(prior_registry).get("operator_authorized_merge"))
+    )
+    if legacy and text(legacy.get("decision_id")):
+        rows.append(legacy)
+    by_decision = {text(row.get("decision_id")): row for row in rows}
+    return [by_decision[key] for key in sorted(by_decision)]
+
+
 def govern_identity_registry(
     prior_registry: dict[str, Any],
     result: dict[str, Any],
@@ -165,9 +180,11 @@ def govern_identity_registry(
         text(row.get("entity_id")) for row in clusters if text(row.get("entity_id"))
     }
     prior_ids = set(prior)
-    operator_merge = dict(as_dict(as_dict(prior_registry).get("operator_authorized_merge")))
+    operator_merges = _operator_merges(prior_registry)
     operator_retired_ids = unique_text(
-        as_list(operator_merge.get("retired_entity_ids"))
+        retired
+        for merge in operator_merges
+        for retired in as_list(merge.get("retired_entity_ids"))
     )
     registry = {
         "schema": IDENTITY_REGISTRY_SCHEMA,
@@ -187,8 +204,9 @@ def govern_identity_registry(
         "identity_is_name_independent": True,
         "automatic_similarity_merge_allowed": False,
     }
-    if operator_merge:
-        registry["operator_authorized_merge"] = operator_merge
+    if operator_merges:
+        registry["operator_authorized_merges"] = operator_merges
+        registry["operator_authorized_merge"] = operator_merges[-1]
     receipt = {
         "schema": "qualibug.enterprise-identity-registry-recompute-receipt.v1",
         "prior_entity_count": len(prior_ids),
@@ -200,7 +218,8 @@ def govern_identity_registry(
         "split_conflict_count": len(split_ids),
         "silent_split_identity_reuse_allowed": False,
         "dangling_cluster_edge_ref_removed_count": removed_dangling_edge_refs,
-        "operator_authorized_merge": operator_merge,
+        "operator_authorized_merge_count": len(operator_merges),
+        "operator_authorized_merges": operator_merges,
         "operator_authorized_retired_entity_ids": operator_retired_ids,
         "automatic_entity_merge_used": False,
     }
@@ -220,6 +239,7 @@ def govern_identity_registry(
         **as_dict(gate.get("metrics")),
         "registry_split_conflict_count": len(split_ids),
         "registry_dangling_edge_ref_removed_count": removed_dangling_edge_refs,
+        "registry_operator_authorized_merge_count": len(operator_merges),
         "registry_operator_authorized_retired_entity_count": len(operator_retired_ids),
     }
     result["gate"] = gate
