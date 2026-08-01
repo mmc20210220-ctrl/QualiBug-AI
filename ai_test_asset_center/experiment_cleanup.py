@@ -502,13 +502,38 @@ def _cleanup_recreates_deleted_resource(
     )
 
 
+def _governed_write_observed_effect(governed: dict[str, Any]) -> bool:
+    """Return whether governed evidence proves a write-side effect.
+
+    Transport acceptance is sufficient, but it is not necessary: some broken
+    systems return a rejection status after committing the mutation.  In that
+    case two successful governed observations whose business state differs are
+    the authority.  Server-managed timestamps alone do not count as an effect.
+    """
+    row = _dict(governed)
+    if row.get("accepted") is True:
+        return True
+    before = _meaningful_observation_state(row.get("before"))
+    after = _meaningful_observation_state(
+        row.get("response_bound_after") or row.get("after")
+    )
+    return bool(
+        200 <= int(before.get("status") or 0) < 300
+        and 200 <= int(after.get("status") or 0) < 300
+        and before != after
+    )
+
+
 def _cleanup_restores_governed_write(
     original: dict[str, Any],
     cleanup: dict[str, Any],
 ) -> bool:
     original_row = _dict(original)
     cleanup_row = _dict(cleanup)
-    if original_row.get("accepted") is not True or cleanup_row.get("accepted") is not True:
+    if (
+        not _governed_write_observed_effect(original_row)
+        or cleanup_row.get("accepted") is not True
+    ):
         return False
     if not _governance_audit_receipt_id(original_row) or not _governance_audit_receipt_id(cleanup_row):
         return False
@@ -611,5 +636,3 @@ def _governed_write_changed_state(attempt: dict[str, Any]) -> bool:
     return _meaningful_observation_state(before_obs) != _meaningful_observation_state(
         after_obs
     )
-
-
