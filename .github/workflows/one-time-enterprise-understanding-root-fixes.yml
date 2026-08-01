@@ -3,6 +3,8 @@ name: One-time cross-source identity fusion root fixes
 on:
   issues:
     types: [opened]
+  pull_request:
+    types: [opened]
   workflow_dispatch:
 
 permissions:
@@ -16,7 +18,8 @@ jobs:
   apply-test-and-push:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.issue.title == '[internal] apply verified cross-source identity fusion root fix'
+      github.event.issue.title == '[internal] apply verified cross-source identity fusion root fix' ||
+      github.event.pull_request.title == '[internal] verify cross-source identity fusion root fix'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
