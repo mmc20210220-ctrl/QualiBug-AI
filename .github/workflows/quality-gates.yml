@@ -38,7 +38,6 @@ jobs:
           set -euo pipefail
           git fetch origin "${PATCH_HEAD_SHA}"
           git show "${PATCH_HEAD_SHA}:.github/patches/enterprise_understanding_root_fixes.patch.gz.b64" > /tmp/fixes.patch.gz.b64
-          echo "f37fb8a8946c2f1a20fbf1702a5f514d59860724712939159872d46944600893  /tmp/fixes.patch.gz.b64" | sha256sum -c -
           base64 -d /tmp/fixes.patch.gz.b64 | gzip -d > /tmp/fixes.patch
           echo "b4d356ac229dc82b944eccb83e0fd1e14ac351b8eb9694dadefdc0d7328cacd1  /tmp/fixes.patch" | sha256sum -c -
 
