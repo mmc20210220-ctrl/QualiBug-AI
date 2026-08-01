@@ -561,6 +561,7 @@ def _consume_pending_obligation_rounds(
     campaign_id: str,
     automatic_round_limit: int,
     execute_batch,
+    exclude_obligation_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Consume ``pending_next_round`` with the same per-round budget.
 
@@ -634,7 +635,12 @@ def _consume_pending_obligation_rounds(
             and _text(row.get("block_reason")) in retry_eligible_reasons
             and _text(row.get("obligation_id"))
         ]
-        all_round_ids = list(dict.fromkeys(pending_ids + blocked_retry_ids))
+        excluded = exclude_obligation_ids or set()
+        all_round_ids = [
+            obligation_id
+            for obligation_id in dict.fromkeys(pending_ids + blocked_retry_ids)
+            if obligation_id not in excluded
+        ]
         remaining_obligations = [
             obligation_by_id[oid]
             for oid in all_round_ids

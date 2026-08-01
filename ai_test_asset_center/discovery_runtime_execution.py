@@ -297,6 +297,35 @@ def run_experiment_candidate(
     else:
         batch = _empty_execution_batch()
 
+    round_two_scheduled = [
+        dict(row)
+        for row in _list(
+            _dict(expansion.get("agent_intent_plan")).get("intents")
+        )
+        if isinstance(row, dict)
+    ]
+    if runtime_approved and round_two_scheduled:
+        round_two_batch = execute_selected_experiments(
+            round_two_scheduled,
+            experiments_by_obligation=dict(
+                _dict(expansion.get("by_obligation"))
+            ),
+            behavior_ir=_dict(expansion.get("behavior_ir")),
+            root=inputs.root,
+            project=inputs.project,
+            base_url=_text(runtime_contract.get("approved_base_url")),
+            runtime_contract=runtime_contract,
+            mainline_run=plan.mainline_run,
+            campaign_id=plan.mainline_run["campaign_id"],
+        )
+    else:
+        round_two_batch = _empty_execution_batch()
+    round_two_executed_ids = {
+        _text(row.get("obligation_id"))
+        for row in round_two_scheduled
+        if _text(row.get("obligation_id"))
+    }
+
     follow_on_batches: list[dict[str, Any]] = []
     if runtime_approved:
         # Round 1 runs at most the per-batch safety budget. Whatever it deferred
@@ -345,34 +374,12 @@ def run_experiment_candidate(
                 getattr(campaign_handle, "automatic_round_limit", 16) or 16
             ),
             execute_batch=execute_selected_experiments,
+            exclude_obligation_ids=round_two_executed_ids,
         )
         # Keep the live plan view aligned with drained pending for terminals.
         if isinstance(plan.experiments, dict):
             plan.experiments["obligation_plan"] = obligation_plan
 
-    round_two_scheduled = [
-        dict(row)
-        for row in _list(
-            _dict(expansion.get("agent_intent_plan")).get("intents")
-        )
-        if isinstance(row, dict)
-    ]
-    if runtime_approved and round_two_scheduled:
-        round_two_batch = execute_selected_experiments(
-            round_two_scheduled,
-            experiments_by_obligation=dict(
-                _dict(expansion.get("by_obligation"))
-            ),
-            behavior_ir=_dict(expansion.get("behavior_ir")),
-            root=inputs.root,
-            project=inputs.project,
-            base_url=_text(runtime_contract.get("approved_base_url")),
-            runtime_contract=runtime_contract,
-            mainline_run=plan.mainline_run,
-            campaign_id=plan.mainline_run["campaign_id"],
-        )
-    else:
-        round_two_batch = _empty_execution_batch()
     compile_results = {
         _text(key): dict(value)
         for key, value in _dict(batch.get("compile_results")).items()
