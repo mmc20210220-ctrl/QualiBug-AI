@@ -133,7 +133,7 @@ def test_project_workspace_symlink_outside_root_blocks_maintenance(
 def test_regular_file_walker_never_descends_into_directory_links(
     tmp_path: Path,
 ):
-    real = tmp_path / "real"
+    real = tmp_path.parent / f"{tmp_path.name}-outside"
     real.mkdir()
     (real / "secret.tmp").write_text("secret", encoding="utf-8")
     link = tmp_path / "escape"
