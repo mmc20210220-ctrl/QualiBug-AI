@@ -146,7 +146,7 @@ class IdentityBenchmarkHttpMixin:
                     }
                 )
             if action == "structural-review":
-                from .enterprise_knowledge_center.enterprise_understanding.identity_structural_review import (
+                from .enterprise_knowledge_center.enterprise_understanding.identity_structural_review_query import (
                     get_identity_structural_review_queue,
                 )
 
