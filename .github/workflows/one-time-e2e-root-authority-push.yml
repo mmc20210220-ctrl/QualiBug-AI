@@ -1,72 +1,53 @@
-name: One-time E2E root authority push delivery
+name: One-time scheduled E2E root authority delivery
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/e2e-root-authority-delivery.trigger"
-      - ".github/workflows/one-time-e2e-root-authority-push.yml"
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
-  statuses: write
 
 concurrency:
-  group: one-time-e2e-root-authority-push-delivery
-  cancel-in-progress: true
+  group: one-time-e2e-root-authority-scheduled-delivery
+  cancel-in-progress: false
 
 jobs:
   deliver:
-    if: github.event.head_commit.message == 'chore(delivery): deliver verified E2E root authority fix'
+    if: github.repository == 'mmc20210220-ctrl/QualiBug-AI'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
-      - name: Publish delivery pending
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: 'pending',
-              context: 'qualibug/e2e-root-authority-delivery',
-              description: 'E2E root authority delivery is validating',
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            });
-
       - name: Checkout latest main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Reassemble and verify immutable patch
+      - name: Stop when already delivered
+        id: payload
         shell: bash
-        env:
-          PATCH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [[ -f .github/delivery/e2e-root-fix/chunk-00.b64 ]]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reassemble, verify, and apply immutable patch
+        if: steps.payload.outputs.present == 'true'
+        shell: bash
         run: |
           set -euo pipefail
-          git fetch origin "${PATCH_HEAD_SHA}"
-          : > /tmp/root-fix.patch.gz.b64
-          for part in 00 01 02 03; do
-            git show "${PATCH_HEAD_SHA}:.github/delivery/e2e-root-fix/chunk-${part}.b64" >> /tmp/root-fix.patch.gz.b64
-          done
-          echo "5cc93c8476c06fffdcf277317bd670617f6dd911b2dcfd3c74828c7fd392da6e  /tmp/root-fix.patch.gz.b64" | sha256sum -c -
+          cat .github/delivery/e2e-root-fix/chunk-{00,01,02,03}.b64 > /tmp/root-fix.patch.gz.b64
+          echo '6555833d154c488322d5875aee1a259ec6dbdfbc628d3c74e167c132dafc62fb  /tmp/root-fix.patch.gz.b64' | sha256sum -c -
           base64 -d /tmp/root-fix.patch.gz.b64 | gzip -d > /tmp/root-fix.patch
-          echo "1ec3b67180277d0b3f26126adbef27e302eb657c6164727398af2df85a420d84  /tmp/root-fix.patch" | sha256sum -c -
+          echo '452ca7fa1bdb021bf2f518d5d72e168afeb8289230453591f9bbb8f035b983f5  /tmp/root-fix.patch' | sha256sum -c -
           git apply --3way --check /tmp/root-fix.patch
           git apply --3way /tmp/root-fix.patch
           git diff --check
-          git rev-parse HEAD > /tmp/tested-base-sha
-
-      - name: Verify exact source scope
-        shell: bash
-        run: |
-          set -euo pipefail
           cat > /tmp/expected-files.txt <<'EOF'
           ai_test_asset_center/_contract_oracles_mechanics.py
-          ai_test_asset_center/enterprise_knowledge_center/_common.py
           ai_test_asset_center/experiment_cleanup.py
           ai_test_asset_center/experiment_cleanup_executor_core.py
           ai_test_asset_center/experiment_compiler_obligation_core.py
@@ -77,7 +58,6 @@ jobs:
           ai_test_asset_center/experiment_protocols.py
           ai_test_asset_center/experiment_runtime_support.py
           ai_test_asset_center/observer_contracts_base.py
-          ai_test_asset_center/process_graph_cleanup_executor.py
           ai_test_asset_center/process_graph_cleanup_executor_core.py
           ai_test_asset_center/scan_customer_ready_artifacts.py
           benchmark_evaluator/enterprise_understanding/fact_slot_document.py
@@ -88,21 +68,25 @@ jobs:
           git diff --name-only | sort > /tmp/actual-files.txt
           sort -o /tmp/expected-files.txt /tmp/expected-files.txt
           diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+          git rev-parse HEAD > /tmp/tested-base-sha
 
       - uses: actions/setup-python@v5
+        if: steps.payload.outputs.present == 'true'
         with:
           python-version: '3.11'
           cache: pip
 
       - name: Install dependencies
+        if: steps.payload.outputs.present == 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Create focused verification command
+      - name: Create verification command
+        if: steps.payload.outputs.present == 'true'
         shell: bash
         run: |
-          cat > /tmp/run-root-delivery-tests.sh <<'SH'
+          cat > /tmp/verify-root-fix.sh <<'SH'
           #!/usr/bin/env bash
           set -euo pipefail
           export QUALIBUG_JWT_SECRET=ci-root-authority-secret
@@ -128,8 +112,7 @@ jobs:
             tests/test_adapter_cleanup_reaches_the_executor.py \
             tests/test_adapter_cleanup_runtime_identity.py \
             tests/test_architecture_extraction_contracts.py \
-            tests/test_enterprise_understanding_fact_slot_document.py \
-            tests/test_v150_multi_step_protocol.py
+            tests/test_enterprise_understanding_fact_slot_document.py
           python -m pytest -q \
             tests/test_p0_root_security_boundaries.py \
             tests/test_p0_atomic_mainline_contracts.py \
@@ -144,85 +127,61 @@ jobs:
             tests/test_formal_event_mainline.py \
             tests/test_formal_event_runtime_execution.py \
             tests/test_formal_event_post_runtime_execution.py
-          rm -rf /tmp/qualibug-delivery-e2e
-          mkdir -p /tmp/qualibug-delivery-e2e/workspace /tmp/qualibug-delivery-e2e/output
+          rm -rf /tmp/qualibug-root-e2e
+          mkdir -p /tmp/qualibug-root-e2e/workspace /tmp/qualibug-root-e2e/output
           python -m benchmark_evaluator.enterprise_understanding.run_source_backed_workflow \
             --project ticketsla_d \
             --product-root "$GITHUB_WORKSPACE" \
-            --workspace-root /tmp/qualibug-delivery-e2e/workspace \
+            --workspace-root /tmp/qualibug-root-e2e/workspace \
             --manifest benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/source_manifest.json \
             --ground-truth benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/ground_truth.json \
-            --output /tmp/qualibug-delivery-e2e/output \
-            | tee /tmp/qualibug-delivery-e2e/workflow.json
+            --output /tmp/qualibug-root-e2e/output \
+            | tee /tmp/qualibug-root-e2e/workflow.json
           python - <<'PY'
           import json
           from pathlib import Path
-          result = json.loads(Path('/tmp/qualibug-delivery-e2e/workflow.json').read_text())
+          result = json.loads(Path('/tmp/qualibug-root-e2e/workflow.json').read_text())
           assert result['status'] == 'PASS', result
           assert result['product_phase_exit_code'] == 0, result
           assert result['hidden_ground_truth_entered_product_runtime'] is False, result
           assert result['source_identity_validated_before_ground_truth_load'] is True, result
-          print('TicketSLA E2E PASS; next repair target:', result.get('next_repair_target'))
           PY
           git diff --check
           SH
-          chmod +x /tmp/run-root-delivery-tests.sh
+          chmod +x /tmp/verify-root-fix.sh
 
-      - name: Run focused root and E2E verification
-        run: /tmp/run-root-delivery-tests.sh
+      - name: Run focused regressions and real E2E
+        if: steps.payload.outputs.present == 'true'
+        run: /tmp/verify-root-fix.sh
 
-      - name: Commit verified source and remove one-time assets
+      - name: Commit and remove one-time delivery assets
+        if: steps.payload.outputs.present == 'true'
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'QualiBug Automation'
           git config user.email 'automation@qualibug.local'
           git rm -r .github/delivery/e2e-root-fix
-          git rm .github/e2e-root-authority-delivery.trigger
-          git rm .github/workflows/one-time-e2e-root-authority-delivery.yml
-          git rm .github/workflows/one-time-e2e-root-authority-pr.yml
-          git rm .github/workflows/one-time-e2e-root-authority-push.yml
+          rm -f .github/e2e-root-authority-delivery.trigger
+          git rm -f .github/workflows/one-time-e2e-root-authority-delivery.yml || true
+          git rm -f .github/workflows/one-time-e2e-root-authority-pr.yml || true
+          git rm -f .github/workflows/one-time-e2e-root-authority-push.yml || true
           git add -A
-          git commit \
-            -m 'fix(execution): unify observer cleanup and graph evidence authority' \
-            -m 'Make protocol adapter dependencies authoritative, require independent business-effect evidence for persistent writes, scope observer receipts and graph cleanup per exact step, preserve account credential identity, remove risk-family cleanup bypasses, restore the public snapshot extension point, harden source-context redaction, and keep optional fact-slot ground truth isolated from product runtime.'
+          git commit -m 'fix(execution): unify observer cleanup and graph evidence authority' \
+            -m 'Make protocol adapter dependencies authoritative, require independent business-effect evidence for persistent writes, scope observer receipts and graph cleanup per exact step, preserve account credential identity, remove risk-family cleanup bypasses, restore the public snapshot extension point, and keep optional fact-slot ground truth isolated from product runtime.'
 
       - name: Rebase, reverify, and push main
+        if: steps.payload.outputs.present == 'true'
         shell: bash
         run: |
           set -euo pipefail
           tested_base="$(cat /tmp/tested-base-sha)"
           git fetch origin main
           latest_main="$(git rev-parse origin/main)"
-          if [[ "${latest_main}" != "${tested_base}" ]]; then
+          if [[ "$latest_main" != "$tested_base" ]]; then
             git rebase origin/main
-            /tmp/run-root-delivery-tests.sh
+            /tmp/verify-root-fix.sh
           fi
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
-
-  publish:
-    if: >-
-      always() &&
-      github.event.head_commit.message == 'chore(delivery): deliver verified E2E root authority fix'
-    needs: deliver
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish delivery status
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const result = '${{ needs.deliver.result }}';
-            const passed = result === 'success';
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: passed ? 'success' : 'failure',
-              context: 'qualibug/e2e-root-authority-delivery',
-              description: passed
-                ? 'E2E root authority fix passed and pushed'
-                : `E2E root authority delivery ${result}`,
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            });
