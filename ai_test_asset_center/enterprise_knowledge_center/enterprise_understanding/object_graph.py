@@ -75,6 +75,29 @@ _OBJECT_GRAPH_AUTHORITATIVE_TECHNICAL_RELATIONS = {
     "foreign_key",
     "references",
 }
+_EXPLICIT_FORMAL_RELATION_STATUSES = {
+    "accepted",
+    "active",
+    "confirmed",
+    "verified",
+    "resolved",
+}
+_NON_FORMAL_RELATION_STATUSES = {
+    "candidate",
+    "proposed",
+    "unknown",
+    "unsupported",
+    "rejected",
+    "pending",
+    "conflicting",
+    "conflicted",
+    "superseded",
+    "retired",
+}
+_LEGACY_STATUSLESS_RELATION_DERIVATIONS = {
+    "declared_foreign_key",
+    "source_declared_foreign_key",
+}
 
 _ASYNC_MARKER_RE = re.compile(r"异步|消息|回调|事件驱动|队列|通知|推送|订阅|监听")
 _TIMED_WAIT_MARKER_RE = re.compile(
@@ -184,6 +207,70 @@ def _normalize_existing_endpoint(value: Any, object_names: set[str]) -> str:
     return exact[0] if len(exact) == 1 else ""
 
 
+def _relation_source_id(row: dict[str, Any]) -> str:
+    evidence = row.get("evidence")
+    return text(
+        row.get("source_id")
+        or (evidence.get("source_id") if isinstance(evidence, dict) else "")
+    )
+
+
+def _relation_authority(
+    row: dict[str, Any],
+    *,
+    derivation: str,
+) -> tuple[bool, str, str]:
+    """Admit explicit formal relations and one exact legacy FK contract only."""
+    status = text(row.get("status")).lower()
+    source_id = _relation_source_id(row)
+    if status:
+        if status in _EXPLICIT_FORMAL_RELATION_STATUSES:
+            if source_id:
+                return True, "EXPLICIT_FORMAL_STATUS", ""
+            return (
+                False,
+                "EXPLICIT_FORMAL_STATUS_SOURCE_MISSING",
+                "ENTITY_RELATION_SOURCE_AUTHORITY_MISSING",
+            )
+        if status in _NON_FORMAL_RELATION_STATUSES:
+            return False, "EXPLICIT_NON_FORMAL_STATUS", ""
+        return False, "UNKNOWN_RELATION_STATUS", "ENTITY_RELATION_STATUS_UNRECOGNIZED"
+
+    if derivation in _LEGACY_STATUSLESS_RELATION_DERIVATIONS and source_id:
+        return True, "LEGACY_SOURCE_DECLARED_FOREIGN_KEY", ""
+    return False, "STATUSLESS_RELATION_UNGOVERNED", "ENTITY_RELATION_AUTHORITY_UNRESOLVED"
+
+
+def _relation_evidence_rows(
+    row: dict[str, Any],
+    *,
+    index: int,
+    derivation: str,
+) -> list[dict[str, Any]]:
+    source_id = _relation_source_id(row)
+    if not source_id:
+        return []
+    evidence = row.get("evidence")
+    if isinstance(evidence, dict):
+        return [
+            source_evidence(
+                source_id=source_id,
+                source_locator=evidence.get("source_locator"),
+                quote=evidence.get("quote"),
+                quote_hash=evidence.get("quote_hash"),
+                asset_ref=row.get("edge_id") or row.get("relation_id") or f"entity_relations[{index}]",
+                derivation=derivation or "existing_source_backed_relation",
+            )
+        ]
+    return [
+        source_evidence(
+            source_id=source_id,
+            asset_ref=row.get("edge_id") or row.get("relation_id") or f"entity_relations[{index}]",
+            derivation=derivation or "existing_source_backed_relation",
+        )
+    ]
+
+
 def build_object_graph(
     asset: dict[str, Any],
     facts: Iterable[dict[str, Any]],
@@ -246,16 +333,21 @@ def build_object_graph(
                 "evidence": evidence,
                 "status": "ACCEPTED",
                 "derivation": "explicit_chinese_relation_statement",
+                "relation_authority": "ACCEPTED_BUSINESS_FACT",
+                "legacy_status_migrated": False,
             }
         )
 
     for index, row in enumerate(as_list(asset.get("entity_relations"))):
         if not isinstance(row, dict):
             continue
-        status = text(row.get("status") or "accepted").lower()
         derivation = text(row.get("derivation")).lower().replace("-", "_")
         evidence_gate = text(row.get("evidence_gate")).lower().replace("-", "_")
-        if status in {"candidate", "proposed", "unknown", "unsupported", "rejected"}:
+        admitted, relation_authority, authority_reason = _relation_authority(
+            row,
+            derivation=derivation,
+        )
+        if not admitted and not authority_reason:
             continue
         if (
             derivation in _NON_AUTHORITATIVE_TECHNICAL_DERIVATIONS
@@ -270,7 +362,7 @@ def build_object_graph(
             # object relations; they remain inventory diagnostic only.
             continue
         # Knowledge-center rows use from_entity/to_entity; legacy Behavior IR
-        # rows may use from/to or source/target. Accept all without inventing.
+        # rows may use from/to or source/target. Compatibility never grants authority.
         source = _normalize_existing_endpoint(
             row.get("from_entity") or row.get("from") or row.get("source"),
             known,
@@ -282,32 +374,37 @@ def build_object_graph(
         relation_type = _RELATION_ALIASES.get(raw_relation_key, raw_relation.upper() or "REFERENCES")
         raw_from = text(row.get("from_entity") or row.get("from") or row.get("source"))
         raw_to = text(row.get("to_entity") or row.get("to") or row.get("target"))
-        evidence_rows: list[dict[str, Any]] = []
-        evidence = row.get("evidence")
-        if isinstance(evidence, dict):
-            evidence_rows.append(
-                source_evidence(
-                    source_id=evidence.get("source_id") or row.get("source_id"),
-                    source_locator=evidence.get("source_locator"),
-                    quote=evidence.get("quote"),
-                    quote_hash=evidence.get("quote_hash"),
-                    asset_ref=row.get("edge_id") or row.get("relation_id") or f"entity_relations[{index}]",
-                    derivation=derivation or "existing_source_backed_relation",
+        evidence_rows = _relation_evidence_rows(
+            row,
+            index=index,
+            derivation=derivation,
+        )
+        if authority_reason:
+            unknowns.append(
+                new_unknown(
+                    authority_reason,
+                    "实体关系缺少可验证的正式状态或受支持的历史来源声明，不能进入正式业务对象图。",
+                    related_objects=unique_text([raw_from, raw_to]),
+                    evidence=evidence_rows,
+                    severity="P1",
+                    blocks_formal_understanding=False,
+                    reason_code=authority_reason,
+                    details={
+                        "entity_relation_ref": row.get("edge_id") or row.get("relation_id") or f"entity_relations[{index}]",
+                        "status": text(row.get("status")),
+                        "derivation": derivation,
+                        "source_id": _relation_source_id(row),
+                        "relation_authority": relation_authority,
+                        "legacy_status_migration_allowed": False,
+                    },
                 )
             )
-        if not evidence_rows:
-            evidence_rows.append(
-                source_evidence(
-                    source_id=row.get("source_id"),
-                    asset_ref=row.get("edge_id") or row.get("relation_id") or f"entity_relations[{index}]",
-                    derivation=derivation or "existing_source_backed_relation",
-                )
-            )
+            continue
         # Field-ownership edges (column → table) are not object-object relations.
         # Only authoritative table/entity FK-style edges emit unresolved unknowns.
         authoritative_technical = (
             raw_relation_key in _OBJECT_GRAPH_AUTHORITATIVE_TECHNICAL_RELATIONS
-            or derivation in {"declared_foreign_key", "source_declared_foreign_key"}
+            or derivation in _LEGACY_STATUSLESS_RELATION_DERIVATIONS
         )
         if not source or not target or source == target:
             if authoritative_technical and raw_from and raw_to and raw_from != raw_to:
@@ -333,13 +430,12 @@ def build_object_graph(
                             "from_entity": raw_from,
                             "to_entity": raw_to,
                             "derivation": derivation or "declared_foreign_key",
+                            "relation_authority": relation_authority,
                         },
                     )
                 )
             continue
-        quote = ""
-        if evidence_rows:
-            quote = text(evidence_rows[0].get("quote"))
+        quote = text(evidence_rows[0].get("quote")) if evidence_rows else ""
         relations.append(
             {
                 "schema": RELATION_SCHEMA,
@@ -360,6 +456,8 @@ def build_object_graph(
                 "evidence": dedupe_evidence(evidence_rows),
                 "status": "ACCEPTED",
                 "derivation": derivation or "existing_source_backed_relation",
+                "relation_authority": relation_authority,
+                "legacy_status_migrated": relation_authority == "LEGACY_SOURCE_DECLARED_FOREIGN_KEY",
             }
         )
 
