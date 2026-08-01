@@ -1,7 +1,7 @@
 """Composition facade for capability-aware Feishu synchronization.
 
 The implementation remains in ``feishu_connector_capability_sync_core``.  This facade binds its
-remote-lifecycle step to the recoverable cross-authority commit protocol without duplicating
+snapshot and remote-lifecycle steps to the recoverable commit authorities without duplicating
 discovery, capability classification, export, ingestion, or coverage logic.
 """
 from __future__ import annotations
@@ -11,8 +11,9 @@ from functools import wraps
 from typing import Any, Iterator
 
 from . import feishu_connector_capability_sync_core as _core
-from .connector_lifecycle_commit_authority import (
-    reconcile_connector_remote_lifecycle_atomic,
+from .connector_checkpoint_commit_authority import (
+    reconcile_connector_remote_lifecycle_with_checkpoint,
+    sync_connector_snapshot_batch_deferred,
 )
 
 # Preserve the existing public and test injection surface while keeping one implementation body.
@@ -20,11 +21,16 @@ for _name, _value in vars(_core).items():
     if not _name.startswith("__"):
         globals().setdefault(_name, _value)
 
-_DEFAULT_REMOTE_LIFECYCLE_AUTHORITY = reconcile_connector_remote_lifecycle_atomic
+_DEFAULT_SYNC_SNAPSHOT_AUTHORITY = sync_connector_snapshot_batch_deferred
+_DEFAULT_REMOTE_LIFECYCLE_AUTHORITY = (
+    reconcile_connector_remote_lifecycle_with_checkpoint
+)
+sync_connector_snapshot_batch = _DEFAULT_SYNC_SNAPSHOT_AUTHORITY
 reconcile_connector_remote_lifecycle = _DEFAULT_REMOTE_LIFECYCLE_AUTHORITY
 
 _FACADE_OWNED_NAMES = {
     "_core",
+    "_DEFAULT_SYNC_SNAPSHOT_AUTHORITY",
     "_DEFAULT_REMOTE_LIFECYCLE_AUTHORITY",
     "_FACADE_OWNED_NAMES",
     "_temporary_core_overrides",
@@ -47,14 +53,15 @@ def _temporary_core_overrides() -> Iterator[None]:
             if name in vars(_core):
                 saved.setdefault(name, getattr(_core, name))
                 setattr(_core, name, value)
-        saved.setdefault(
-            "reconcile_connector_remote_lifecycle",
-            getattr(_core, "reconcile_connector_remote_lifecycle"),
-        )
-        _core.reconcile_connector_remote_lifecycle = globals().get(
-            "reconcile_connector_remote_lifecycle",
-            _DEFAULT_REMOTE_LIFECYCLE_AUTHORITY,
-        )
+        for name, fallback in (
+            ("sync_connector_snapshot_batch", _DEFAULT_SYNC_SNAPSHOT_AUTHORITY),
+            (
+                "reconcile_connector_remote_lifecycle",
+                _DEFAULT_REMOTE_LIFECYCLE_AUTHORITY,
+            ),
+        ):
+            saved.setdefault(name, getattr(_core, name))
+            setattr(_core, name, globals().get(name, fallback))
         yield
     finally:
         for name, value in saved.items():
