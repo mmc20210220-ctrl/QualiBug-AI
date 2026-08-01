@@ -376,8 +376,13 @@ def execute_process_graph_wait(
     monotonic: Any = None,
 ) -> dict[str, Any]:
     """Execute state convergence or event delivery through one wait gate."""
-    step_id = _text(_dict(step).get("step_id"))
-    contract = _dict(_dict(_dict(graph).get("wait_contracts_by_target")).get(step_id))
+    step_row = deepcopy(_dict(step))
+    step_id = _text(step_row.get("step_id") or step_row.get("node_id"))
+    if step_id and not _text(step_row.get("step_id")):
+        step_row["step_id"] = step_id
+    contract = _dict(
+        _dict(_dict(graph).get("wait_contracts_by_target")).get(step_id)
+    )
     event_contract = _dict(contract.get("event_transition_contract"))
     if event_contract:
         kwargs: dict[str, Any] = {
@@ -397,7 +402,7 @@ def execute_process_graph_wait(
 
     kwargs = {
         "graph": graph,
-        "step": step,
+        "step": step_row,
         "context": context,
         "actors": actors,
         "tokens": tokens,
