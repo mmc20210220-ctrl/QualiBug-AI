@@ -80,12 +80,31 @@ def _blocked(
 def _operation_index(
     behavior_ir: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    return {
-        _text(row.get("id") or row.get("operation_id")): row
-        for row in _list(behavior_ir.get("operations"))
-        if isinstance(row, dict)
-        and _text(row.get("id") or row.get("operation_id"))
-    }
+    result: dict[str, dict[str, Any]] = {}
+    for key in ("operations_by_id", "ops_by_id"):
+        for indexed_id, raw in _dict(behavior_ir.get(key)).items():
+            if not isinstance(raw, dict):
+                continue
+            identities = (
+                raw.get("id"),
+                raw.get("operation_id"),
+                raw.get("interface_id"),
+                indexed_id,
+            )
+            for identity in identities:
+                if _text(identity):
+                    result[_text(identity)] = raw
+    for row in _list(behavior_ir.get("operations")):
+        if not isinstance(row, dict):
+            continue
+        for identity in (
+            row.get("id"),
+            row.get("operation_id"),
+            row.get("interface_id"),
+        ):
+            if _text(identity):
+                result[_text(identity)] = row
+    return result
 
 
 def _linear_graph_from_steps(
