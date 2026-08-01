@@ -8,6 +8,7 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.i
 )
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.identity_structural_review_governance import (
     ADMISSION_SCHEMA,
+    attach_identity_structural_review_admission,
     govern_identity_structural_review_decision_admission,
     preserve_identity_structural_review_registry_merges,
 )
@@ -108,9 +109,16 @@ def test_overlapping_confirmations_fail_closed_before_alias_projection() -> None
     projected = apply_identity_structural_review_decisions(
         asset, governed, _resolution()
     )
+    projected = attach_identity_structural_review_admission(asset, projected)
     receipt = projected["identity_structural_review_receipt"]
     assert receipt["applied_confirmation_count"] == 0
     assert receipt["rebuild_required"] is False
+    assert receipt["admission"]["status"] == "BLOCKED_OVERLAPPING_CONFIRMATIONS"
+    queue = projected["identity_structural_review_queue"]
+    assert queue["review_application_status"] == (
+        "BLOCKED_OVERLAPPING_CONFIRMATIONS"
+    )
+    assert queue["blocked_decision_ids"] == ["decision:ab", "decision:bc"]
     assert asset["business_fact_ledger"]["items"] == []
     assert len(asset["enterprise_identity_registry"]["entities"]) == 3
 
@@ -140,7 +148,9 @@ def test_disjoint_confirmations_preserve_every_registry_merge_receipt() -> None:
     projected = apply_identity_structural_review_decisions(
         asset, governed, _resolution()
     )
+    projected = attach_identity_structural_review_admission(asset, projected)
     receipt = projected["identity_structural_review_receipt"]
+    assert receipt["admission"]["status"] == "PASS"
     assert receipt["applied_confirmation_count"] == 2
     assert receipt["rebuild_required"] is True
     assert len(asset["business_fact_ledger"]["items"]) == 2
