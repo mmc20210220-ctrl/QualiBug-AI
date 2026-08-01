@@ -10,6 +10,10 @@ from .identity_structural_review import (
     DECISION_KIND,
     project_identity_structural_review_queue,
 )
+from .identity_structural_review_governance import (
+    attach_identity_structural_review_admission,
+    govern_identity_structural_review_decision_admission,
+)
 from .schema import as_dict, as_list, text
 
 
@@ -19,7 +23,7 @@ def get_identity_structural_review_queue(
     *,
     rebuild_if_missing: bool = True,
 ) -> dict[str, Any]:
-    """Return live candidates, or the persisted completed queue after a merge."""
+    """Return live governed candidates, or persisted completed review history."""
     project = _safe_project_id(project_id)
     resolved_root = root or ROOT
     from ..composition import (
@@ -47,7 +51,10 @@ def get_identity_structural_review_queue(
         if isinstance(row, dict) and text(row.get("candidate_id"))
     ]
     if current_candidates:
-        return project_identity_structural_review_queue(asset, model)
+        model = govern_identity_structural_review_decision_admission(asset, model)
+        project_identity_structural_review_queue(asset, model)
+        model = attach_identity_structural_review_admission(asset, model)
+        return as_dict(model.get("identity_structural_review_queue"))
 
     persisted = as_dict(
         asset.get("enterprise_identity_structural_review_queue")
@@ -59,7 +66,9 @@ def get_identity_structural_review_queue(
     )
     if persisted:
         return persisted
-    return project_identity_structural_review_queue(asset, model)
+    project_identity_structural_review_queue(asset, model)
+    model = attach_identity_structural_review_admission(asset, model)
+    return as_dict(model.get("identity_structural_review_queue"))
 
 
 __all__ = ["get_identity_structural_review_queue"]
