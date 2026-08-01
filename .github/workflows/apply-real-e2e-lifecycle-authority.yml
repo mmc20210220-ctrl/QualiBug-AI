@@ -52,7 +52,7 @@ jobs:
             | base64 --decode \
             | gzip --decompress \
             > /tmp/qualibug-real-e2e.patch
-          git apply --3way --index /tmp/qualibug-real-e2e.patch
+          git apply --ignore-space-change --ignore-whitespace --index /tmp/qualibug-real-e2e.patch
           git rm .github/qualibug-e2e-patch.part*
           git rm .github/workflows/apply-real-e2e-lifecycle-authority.yml
 
