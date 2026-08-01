@@ -112,6 +112,27 @@ def test_manifest_is_generic_read_only_and_registered_without_network() -> None:
     }
 
 
+def test_export_connector_alias_uses_the_openapi_parser_without_platform_semantics(
+    bypass_test_dns,
+) -> None:
+    calls: list[tuple[str, str, dict[str, str], bytes | None]] = []
+    adapter = openapi.OpenApiConnectorAdapter("apifox")
+
+    result = adapter.discover(
+        {
+            "resource_scope": _scope(),
+            "transport": _transport_for(_responses(), calls),
+            "sleeper": lambda _: None,
+        }
+    )
+
+    assert adapter.manifest().connector_type == "apifox"
+    assert adapter.manifest().scope_schema == openapi.openapi_connector_manifest().scope_schema
+    assert result["complete"] is True
+    assert len(result["descriptors"]) == 2
+    assert all(method == "GET" and body is None for method, _, _, body in calls)
+
+
 def test_discovery_is_read_only_and_follows_external_refs_with_exact_relationships(
     bypass_test_dns,
 ) -> None:

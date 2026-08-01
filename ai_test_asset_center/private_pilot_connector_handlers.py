@@ -31,6 +31,7 @@ from .connector_configuration_service import (
 from .connector_connection_profiles import (
     ConnectorProfileError,
     MASKED_SECRET,
+    connector_credential_expiry_status,
     list_connector_connection_profiles,
     mark_connector_reauthorization_required,
 )
@@ -506,15 +507,41 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             continue
         row = _public_connector_instance(raw)
         connector = _text(row.get("connector_instance_id"), 160)
-        row["connection_profile"] = profiles.get(
-            connector,
-            {
+        profile = profiles.get(connector)
+        if profile is None:
+            row["connection_profile"] = {
                 "connector_instance_id": connector,
                 "credentials_configured": False,
                 "checkpoint_configured": False,
                 "plaintext_returned": False,
-            },
-        )
+            }
+        elif _text(profile.get("profile_ref"), 500):
+            expiry = connector_credential_expiry_status(
+                project,
+                connector,
+                root=root,
+            )
+            row["connection_profile"] = {
+                **profile,
+                "credential_status": _text(
+                    expiry.get("status"),
+                    64,
+                )
+                or _text(profile.get("credential_status"), 64),
+                "credential_expires_at_utc": _text(
+                    expiry.get("credential_expires_at_utc"),
+                    80,
+                ),
+                "reauthorization_required": (
+                    expiry.get("reauthorization_required") is True
+                ),
+                "reauthorization_reason": _text(
+                    expiry.get("reauthorization_reason"),
+                    300,
+                ),
+            }
+        else:
+            row["connection_profile"] = dict(profile)
         row["auto_sync"] = connector_auto_sync_status(
             root,
             project,

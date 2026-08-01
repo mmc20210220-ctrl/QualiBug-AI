@@ -249,6 +249,15 @@ they are never silently deleted or executed. Each completed handoff persists an 
 only event types, source-label fingerprints, impact counts, relation counts, and stage status—not raw remote
 identities or content.
 
+## OpenAPI export reuse (OL-014)
+
+Apifox and YApi exports use the same read-only OpenAPI adapter as `openapi`. Configure
+`connector_type` as `apifox` or `yapi` with the exported JSON/YAML URL. The selected type
+only preserves the source label; it does not create a second semantic parser or change the
+SSRF checks, size limits, conditional requests, bounded `$ref` traversal, or incremental
+fingerprint rules. Platform-private catalogs and non-OpenAPI exports remain explicit coverage
+gaps until a source-backed adapter contract exists.
+
 中止操作不推进 cursor，不删除现有资料快照，只清理遗留运行状态和对应租约。
 
 ## 凭据和并发治理

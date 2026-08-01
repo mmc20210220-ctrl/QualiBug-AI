@@ -44,6 +44,7 @@ def test_connector_type_route_is_global_and_manifest_lookup_is_metadata_only():
     assert catalog["body"]["ok"] is True
     assert catalog["body"]["data"]["schema"] == "qualibug.connector-type-catalog.v1"
     assert [row["connector_type"] for row in catalog["body"]["data"]["connector_types"]] == [
+        "apifox",
         "feishu",
         "git",
         "gitee",
@@ -51,6 +52,7 @@ def test_connector_type_route_is_global_and_manifest_lookup_is_metadata_only():
         "gitlab",
         "openapi",
         "website",
+        "yapi",
     ]
     assert catalog["body"]["data"]["governance"]["network_access_performed"] is False
 
