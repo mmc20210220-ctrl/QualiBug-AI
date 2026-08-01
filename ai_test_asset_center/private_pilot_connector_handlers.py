@@ -7,6 +7,7 @@ remote-resource identities are never returned through lifecycle projections.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
@@ -59,6 +60,12 @@ from .feishu_tenant_acceptance_reports import (
     load_feishu_tenant_acceptance_report,
 )
 from .enterprise_knowledge_center import list_enterprise_knowledge_sources
+from .connector_acl_authority import (
+    ConnectorAclError,
+    filter_connector_sources_for_actor,
+    record_connector_project_share,
+)
+from .connector_semantic_refresh import project_connector_semantic_refresh_receipt
 from .local_runner_connector import (
     LocalRunnerError,
     accept_local_runner_result,
@@ -83,6 +90,7 @@ _PRIVATE_SYNC_RESPONSE_FIELDS = {
     "previous_fencing_token",
     "takeover_attempt_id",
     "next_cursor",
+    "run_receipt_path",
 }
 
 
@@ -338,6 +346,58 @@ def _empty_lifecycle(status: str) -> dict[str, Any]:
     }
 
 
+def _latest_sync_projection(run: dict[str, Any]) -> dict[str, Any]:
+    semantic = run.get("semantic_refresh_receipt")
+    semantic_diff = (
+        semantic.get("source_occurrence_diff")
+        if isinstance(semantic, dict)
+        else None
+    )
+    if not isinstance(semantic_diff, dict):
+        semantic_diff = {}
+    acl_receipt = run.get("acl_snapshot_receipt")
+    if not isinstance(acl_receipt, dict):
+        acl_receipt = {}
+    projection: dict[str, Any] = {
+        "sync_epoch_id": _text(run.get("sync_epoch_id"), 160),
+        "status": _text(run.get("status"), 80),
+        "completed_at_utc": _text(run.get("completed_at_utc"), 80),
+        "acl_propagation_status": _text(
+            run.get("acl_propagation_status"), 80
+        )
+        or "NOT_RECORDED",
+        "acl_snapshot_count": _safe_int(
+            run.get("acl_snapshot_count")
+            or acl_receipt.get("snapshot_count")
+        ),
+        "acl_incomplete_count": _safe_int(
+            run.get("acl_incomplete_count")
+            or acl_receipt.get("incomplete_count")
+        ),
+        "semantic_refresh_status": _text(
+            run.get("semantic_refresh_status"), 80
+        )
+        or "NOT_RECORDED",
+        "semantic_event_count": _safe_int(
+            run.get("semantic_event_count")
+            or semantic_diff.get("event_count")
+        ),
+        "semantic_changed_source_count": _safe_int(
+            run.get("semantic_changed_source_count")
+            or semantic_diff.get("changed_source_count")
+        ),
+        "source_content_returned": False,
+        "remote_resource_identities_returned": False,
+        "source_refs_returned": False,
+    }
+    if isinstance(semantic, dict):
+        projection["semantic_refresh"] = project_connector_semantic_refresh_receipt(
+            semantic,
+            include_events=True,
+        )
+    return projection
+
+
 def _coverage_projection(
     project: str,
     connector: str,
@@ -354,7 +414,6 @@ def _coverage_projection(
             "unsupported_count": 0,
             "coverage_ratio": 0.0,
             "unsupported_resources": [],
-            "remote_lifecycle": _empty_lifecycle("NOT_AVAILABLE"),
             "source_content_returned": False,
             "customer_material_mutation_executed": False,
         }
@@ -416,6 +475,7 @@ def _coverage_projection(
         "last_sync_epoch_id": epoch,
         "last_completed_at_utc": _text(run.get("completed_at_utc"), 80),
         "remote_lifecycle": _remote_lifecycle_projection(run),
+        "latest_sync": _latest_sync_projection(run),
         "source_content_returned": False,
         "customer_material_mutation_executed": False,
     }
@@ -618,6 +678,7 @@ def _connector_resources_projection(
     project: str,
     connector: str,
     root: Path,
+    actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     row = _connector_inventory_row(project, connector, root)
     coverage = dict(row.get("coverage") or {})
@@ -627,8 +688,17 @@ def _connector_resources_projection(
         root=root,
         include_deleted=False,
     )
+    acl_projection: dict[str, Any] = {}
+    source_rows = source_inventory.get("sources") or []
+    if actor is not None:
+        source_rows, acl_projection = filter_connector_sources_for_actor(
+            project,
+            [row for row in source_rows if isinstance(row, dict)],
+            actor={**actor, "project_id": project},
+            root=root,
+        )
     resources: list[dict[str, Any]] = []
-    for source in source_inventory.get("sources") or []:
+    for source in source_rows:
         if not isinstance(source, dict):
             continue
         if not _text(source.get("source_ref"), 2000).startswith(prefix):
@@ -683,6 +753,11 @@ def _connector_resources_projection(
         "credential_values_returned": False,
         "remote_resource_identities_returned": False,
         "source_refs_returned": False,
+        "acl_visibility_projection": {
+            key: value
+            for key, value in acl_projection.items()
+            if key != "denied_source_keys"
+        },
     }
 
 
@@ -692,12 +767,90 @@ def _sanitize_sync_response(payload: dict[str, Any]) -> dict[str, Any]:
         result.pop(field, None)
     if isinstance(result.get("remote_lifecycle"), dict):
         result["remote_lifecycle"] = _remote_lifecycle_projection(result)
+    successful_items = result.pop("successful_items", None)
+    result["successful_item_count"] = (
+        len(successful_items) if isinstance(successful_items, list) else _safe_int(result.get("success_count"))
+    )
+    result.pop("materialized_items", None)
+    coverage_rows = result.pop("coverage_observations", None)
+    if isinstance(coverage_rows, list):
+        result["coverage_observation_details"] = [
+            {
+                "resource_index": index,
+                "resource_kind": _text(row.get("resource_kind"), 160),
+                "remote_object_type": _text(row.get("remote_object_type"), 80),
+                "display_title": _text(row.get("display_title"), 300),
+                "state": _text(row.get("state"), 40),
+                "reason_code": _text(row.get("reason_code"), 160),
+                "retry_trigger": _text(row.get("retry_trigger"), 160),
+                "content_materialized": False,
+                "source_occurrence_created": False,
+                "customer_source_modified": False,
+            }
+            for index, row in enumerate(coverage_rows[:100])
+            if isinstance(row, dict)
+        ]
+        result["coverage_observation_details_truncated"] = len(coverage_rows) > 100
+    errors = result.pop("errors", None)
+    if isinstance(errors, list):
+        result["error_count"] = len(errors)
+        result["errors_returned"] = False
+    reconciliation = result.get("deletion_reconciliation")
+    if isinstance(reconciliation, dict):
+        result["deletion_reconciliation"] = {
+            "status": _text(reconciliation.get("status"), 80),
+            "missing_count": _safe_int(reconciliation.get("missing_count")),
+            "retired_count": _safe_int(reconciliation.get("retired_count")),
+            "retire_ratio": reconciliation.get("retire_ratio"),
+            "guard_reason": _text(reconciliation.get("guard_reason"), 160),
+            "previous_snapshots_retained": reconciliation.get(
+                "previous_snapshots_retained"
+            ) is True,
+            "missing_source_refs_returned": False,
+            "retired_source_occurrences_returned": False,
+            "errors_returned": False,
+            "error_count": len(reconciliation.get("errors") or [])
+            if isinstance(reconciliation.get("errors"), list)
+            else 0,
+        }
+    result["run_receipt_path_returned"] = False
+    result["remote_resource_identities_returned"] = False
+    result["source_refs_returned"] = False
+    semantic_receipt = result.get("semantic_refresh_receipt")
+    if isinstance(semantic_receipt, dict):
+        result["semantic_refresh_receipt"] = project_connector_semantic_refresh_receipt(
+            semantic_receipt,
+            include_events=True,
+        )
+    acl_receipt = result.get("acl_snapshot_receipt")
+    if isinstance(acl_receipt, dict):
+        result["acl_snapshot_receipt"] = {
+            "schema": _text(acl_receipt.get("schema"), 120),
+            "status": _text(acl_receipt.get("status"), 80),
+            "sync_epoch_id": _text(acl_receipt.get("sync_epoch_id"), 160),
+            "snapshot_count": _safe_int(acl_receipt.get("snapshot_count")),
+            "changed_count": _safe_int(acl_receipt.get("changed_count")),
+            "incomplete_count": _safe_int(acl_receipt.get("incomplete_count")),
+            "propagation_allowed_count": _safe_int(
+                acl_receipt.get("propagation_allowed_count")
+            ),
+            "permission_denied_count": _safe_int(
+                acl_receipt.get("permission_denied_count")
+            ),
+            "remote_deleted_count": _safe_int(
+                acl_receipt.get("remote_deleted_count")
+            ),
+            "raw_principals_persisted": False,
+            "raw_remote_principals_returned": False,
+            "source_identity_details_returned": False,
+        }
     result["next_cursor_returned_to_client"] = False
     result["fencing_token_returned_to_client"] = False
     result["checkpoint_storage"] = "encrypted_connection_profile"
     result["source_content_returned"] = False
     result["remote_lifecycle_remote_resource_identities_returned"] = False
     result["remote_lifecycle_source_refs_returned"] = False
+    result["acl_remote_principal_identities_returned"] = False
     return result
 
 
@@ -819,6 +972,7 @@ class KnowledgeConnectorHandlersMixin:
         project: str,
         tail: list[str],
         root: Path,
+        actor: dict[str, Any] | None = None,
     ) -> Any:
         try:
             if tail and tail[0] == "runners":
@@ -850,14 +1004,15 @@ class KnowledgeConnectorHandlersMixin:
                     raise KeyError("knowledge_connector_not_found")
                 return self._json({"ok": True, "data": row})
             if len(tail) == 2 and tail[1] == "resources":
+                resource_projection = (
+                    _connector_resources_projection(project, connector, root, actor)
+                    if actor is not None
+                    else _connector_resources_projection(project, connector, root)
+                )
                 return self._json(
                     {
                         "ok": True,
-                        "data": _connector_resources_projection(
-                            project,
-                            connector,
-                            root,
-                        ),
+                        "data": resource_projection,
                     }
                 )
             if len(tail) == 2 and tail[1] == "coverage":
@@ -1417,6 +1572,33 @@ class KnowledgeConnectorHandlersMixin:
                 },
                 200 if run.get("status") == "COMPLETE" else 409,
             )
+        if action == "share-project":
+            source_ref = _text(body.get("source_ref"), 2000)
+            if not source_ref.startswith(f"connector://{connector}/"):
+                raise ConnectorAclError("connector_acl_source_ref_connector_mismatch")
+            result = record_connector_project_share(
+                project,
+                source_ref=source_ref,
+                root=root,
+                actor=actor,
+                enabled=body.get("enabled", True) is True,
+            )
+            return self._json(
+                {
+                    "ok": True,
+                    "data": {
+                        "schema": result.get("schema"),
+                        "project_id": project,
+                        "connector_instance_id": connector,
+                        "visibility": result.get("visibility"),
+                        "enabled": result.get("enabled") is True,
+                        "source_identity_fingerprint": hashlib.sha256(
+                            source_ref.encode("utf-8")
+                        ).hexdigest()[:32],
+                        "raw_remote_principal_returned": False,
+                    },
+                }
+            )
         if action == "acceptance":
             options = {
                 "runs": _optional_bounded_int(body.get("runs"), 2, 10),
@@ -1500,7 +1682,7 @@ class KnowledgeConnectorHandlersMixin:
             )
         if not self._require_project_scope(project):
             return None
-        return self._handle_knowledge_connector_get(project, route[1], root)
+        return self._handle_knowledge_connector_get(project, route[1], root, actor)
 
     def do_PATCH(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -1604,6 +1786,7 @@ class KnowledgeConnectorHandlersMixin:
                 "pause",
                 "resume",
                 "reauthorize",
+                "share-project",
             }:
                 return self._handle_knowledge_connector_action(
                     project,
@@ -1617,6 +1800,7 @@ class KnowledgeConnectorHandlersMixin:
         except (
             ConnectorProfileError,
             ConnectorSyncError,
+            ConnectorAclError,
             LocalRunnerError,
             FeishuConnectorError,
             FeishuTenantAcceptanceJobError,

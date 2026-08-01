@@ -84,6 +84,14 @@ class RemoteResourceDescriptor(TypedDict, total=False):
     remote_updated_at: str
     declared_mime: str
     acl_fingerprint: str
+    acl: dict[str, Any]
+    acl_version: str
+    principals: list[Any]
+    visibility: str
+    inherited_from: str
+    captured_at: str
+    complete: bool
+    availability: str
     metadata: dict[str, Any]
 
 
@@ -106,6 +114,14 @@ class MaterializedSnapshot(TypedDict, total=False):
     remote_revision: str
     retrieved_at: str
     materialization_fingerprint: str
+    acl: dict[str, Any]
+    acl_version: str
+    principals: list[Any]
+    visibility: str
+    inherited_from: str
+    captured_at: str
+    complete: bool
+    availability: str
 
 
 SyncCursor = str

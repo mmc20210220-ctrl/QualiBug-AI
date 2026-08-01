@@ -116,8 +116,51 @@ export type KnowledgeConnectorCoverage = {
   last_sync_epoch_id?: string;
   last_completed_at_utc?: string;
   remote_lifecycle?: KnowledgeConnectorRemoteLifecycle;
+  latest_sync?: KnowledgeConnectorSyncImpact;
   source_content_returned?: boolean;
   customer_material_mutation_executed?: boolean;
+};
+
+export type KnowledgeConnectorSemanticEvent = {
+  event: string;
+  reason_code?: string;
+  source_label?: string;
+  source_identity_fingerprint?: string;
+};
+
+export type KnowledgeConnectorSemanticRefresh = {
+  status: string;
+  sync_epoch_id?: string;
+  event_count: number;
+  changed_source_count: number;
+  unchanged_source_count: number;
+  affected_content_blocks: number;
+  affected_facts: number;
+  affected_entities: number;
+  affected_behaviors: number;
+  affected_scenarios: number;
+  affected_regression_items: number;
+  downstream: Array<{ stage: string; status: string; executed: boolean }>;
+  events: KnowledgeConnectorSemanticEvent[];
+  unchanged_materials_reanalyzed: boolean;
+  full_project_recompute_requested: boolean;
+  incremental_executor_installed: boolean;
+};
+
+export type KnowledgeConnectorSyncImpact = {
+  sync_epoch_id?: string;
+  status: string;
+  completed_at_utc?: string;
+  acl_propagation_status: string;
+  acl_snapshot_count: number;
+  acl_incomplete_count: number;
+  semantic_refresh_status: string;
+  semantic_event_count: number;
+  semantic_changed_source_count: number;
+  semantic_refresh?: KnowledgeConnectorSemanticRefresh;
+  source_content_returned: false;
+  remote_resource_identities_returned: false;
+  source_refs_returned: false;
 };
 
 export type KnowledgeConnectorRecord = {
@@ -507,8 +550,66 @@ function toCoverage(value: unknown): KnowledgeConnectorCoverage {
     last_sync_epoch_id: asString(row.last_sync_epoch_id) || undefined,
     last_completed_at_utc: asString(row.last_completed_at_utc) || undefined,
     remote_lifecycle: row.remote_lifecycle ? toRemoteLifecycle(row.remote_lifecycle) : undefined,
+    latest_sync: row.latest_sync ? toSyncImpact(row.latest_sync) : undefined,
     source_content_returned: asBoolean(row.source_content_returned),
     customer_material_mutation_executed: asBoolean(row.customer_material_mutation_executed),
+  };
+}
+
+function toSemanticRefresh(value: unknown): KnowledgeConnectorSemanticRefresh {
+  const row = asRecord(value);
+  const events = asArray(row.events).map((event) => {
+    const item = asRecord(event);
+    return {
+      event: asString(item.event),
+      reason_code: asString(item.reason_code) || undefined,
+      source_label: asString(item.source_label) || undefined,
+      source_identity_fingerprint: asString(item.source_identity_fingerprint) || undefined,
+    };
+  });
+  return {
+    status: asString(row.status) || 'NOT_RECORDED',
+    sync_epoch_id: asString(row.sync_epoch_id) || undefined,
+    event_count: asNumber(row.event_count) || 0,
+    changed_source_count: asNumber(row.changed_source_count) || 0,
+    unchanged_source_count: asNumber(row.unchanged_source_count) || 0,
+    affected_content_blocks: asNumber(row.affected_content_blocks) || 0,
+    affected_facts: asNumber(row.affected_facts) || 0,
+    affected_entities: asNumber(row.affected_entities) || 0,
+    affected_behaviors: asNumber(row.affected_behaviors) || 0,
+    affected_scenarios: asNumber(row.affected_scenarios) || 0,
+    affected_regression_items: asNumber(row.affected_regression_items) || 0,
+    downstream: asArray(row.downstream).map((stage) => {
+      const item = asRecord(stage);
+      return {
+        stage: asString(item.stage),
+        status: asString(item.status) || 'NOT_RECORDED',
+        executed: asBoolean(item.executed),
+      };
+    }),
+    events,
+    unchanged_materials_reanalyzed: asBoolean(row.unchanged_materials_reanalyzed),
+    full_project_recompute_requested: asBoolean(row.full_project_recompute_requested),
+    incremental_executor_installed: asBoolean(row.incremental_executor_installed),
+  };
+}
+
+function toSyncImpact(value: unknown): KnowledgeConnectorSyncImpact {
+  const row = asRecord(value);
+  return {
+    sync_epoch_id: asString(row.sync_epoch_id) || undefined,
+    status: asString(row.status) || 'NOT_RECORDED',
+    completed_at_utc: asString(row.completed_at_utc) || undefined,
+    acl_propagation_status: asString(row.acl_propagation_status) || 'NOT_RECORDED',
+    acl_snapshot_count: asNumber(row.acl_snapshot_count) || 0,
+    acl_incomplete_count: asNumber(row.acl_incomplete_count) || 0,
+    semantic_refresh_status: asString(row.semantic_refresh_status) || 'NOT_RECORDED',
+    semantic_event_count: asNumber(row.semantic_event_count) || 0,
+    semantic_changed_source_count: asNumber(row.semantic_changed_source_count) || 0,
+    semantic_refresh: row.semantic_refresh ? toSemanticRefresh(row.semantic_refresh) : undefined,
+    source_content_returned: false,
+    remote_resource_identities_returned: false,
+    source_refs_returned: false,
   };
 }
 

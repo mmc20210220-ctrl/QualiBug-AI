@@ -1,6 +1,7 @@
 import type {
   KnowledgeConnectorCoverage,
   KnowledgeConnectorRemoteLifecycle,
+  KnowledgeConnectorSyncImpact,
 } from '../api/knowledge-connectors';
 import './ConnectorCoverage.css';
 
@@ -89,6 +90,60 @@ function ConnectorRemoteLifecycle({ lifecycle }: { lifecycle?: KnowledgeConnecto
   );
 }
 
+function semanticStatusLabel(value: string): string {
+  if (value === 'NO_CHANGE') return '本次没有资料变化';
+  if (value === 'PENDING_VALIDATION') return '资料变化待增量语义处理';
+  if (value === 'NOT_RECORDED') return '尚未记录';
+  return value;
+}
+
+function ConnectorSyncImpact({ impact }: { impact?: KnowledgeConnectorSyncImpact }) {
+  if (!impact) return null;
+  const semantic = impact.semantic_refresh;
+  const aclBlocked = impact.acl_propagation_status !== 'READY'
+    && impact.acl_propagation_status !== 'NOT_RECORDED';
+  const pendingExecutor = semantic?.status === 'PENDING_VALIDATION'
+    && semantic.incremental_executor_installed === false;
+  return (
+    <div className="connector-sync-impact" aria-label="本次同步影响">
+      <div className="connector-sync-impact-title">
+        <strong>本次同步影响</strong>
+        <span>{impact.sync_epoch_id || '同步回执未提供编号'}</span>
+      </div>
+      <div className="connector-sync-impact-statuses">
+        <span className={aclBlocked ? 'is-blocked' : ''}>
+          资料权限：{impact.acl_propagation_status}
+        </span>
+        <span className={pendingExecutor ? 'is-blocked' : ''}>
+          语义刷新：{semanticStatusLabel(impact.semantic_refresh_status)}
+        </span>
+      </div>
+      {semantic && (
+        <>
+          <p>
+            变化资料 {semantic.changed_source_count} 份，事件 {semantic.event_count} 个；
+            未变化资料不会重复分析。
+          </p>
+          {pendingExecutor && (
+            <p className="connector-sync-impact-warning">
+              当前已记录影响范围，但增量语义执行器尚未安装，系统不会把待处理范围显示为已刷新。
+            </p>
+          )}
+          {semantic.events.length > 0 && (
+            <ul>
+              {semantic.events.slice(0, 3).map((event, index) => (
+                <li key={`${event.event}:${event.source_identity_fingerprint || index}`}>
+                  {event.event} · {event.source_label || '已发生变化的资料'}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
   if (!coverage || coverage.status === 'NOT_AVAILABLE') return null;
 
@@ -161,6 +216,7 @@ export function ConnectorCoverage({ coverage }: ConnectorCoverageProps) {
       )}
 
       <ConnectorRemoteLifecycle lifecycle={coverage.remote_lifecycle} />
+      <ConnectorSyncImpact impact={coverage.latest_sync} />
     </section>
   );
 }

@@ -20,7 +20,14 @@ from .connector_source_ingestion import (
     build_connector_source_ref,
     ingest_connector_snapshots_batch,
 )
+from .connector_acl_authority import (
+    acl_observation_metadata,
+    normalize_connector_acl_snapshot,
+    reconcile_connector_acl_snapshots,
+)
+from .connector_semantic_refresh import build_connector_semantic_refresh_receipt
 from .enterprise_knowledge_center import (
+    load_enterprise_business_knowledge_asset,
     delete_enterprise_knowledge_source,
     list_enterprise_knowledge_sources,
 )
@@ -132,6 +139,9 @@ def _registry_default(project: str) -> dict[str, Any]:
         "connector_instances": [],
         "sync_runs": [],
         "audit_events": [],
+        "source_acl_snapshots": [],
+        "source_acl_history": [],
+        "source_acl_overrides": [],
         "governance": {
             "network_access_outside_sync_authority": True,
             "connector_credentials_persisted": False,
@@ -140,6 +150,10 @@ def _registry_default(project: str) -> dict[str, Any]:
             "source_occurrence_is_material_identity_authority": True,
             "missing_source_retirement_requires_complete_full_snapshot": True,
             "coverage_observations_create_source_occurrences": False,
+            "source_acl_snapshot_authority": "CONNECTOR_SYNC_REGISTRY",
+            "incomplete_acl_blocks_local_propagation": True,
+            "raw_remote_principals_persisted": False,
+            "semantic_refresh_receipt_authority": "CONNECTOR_SYNC_REGISTRY",
         },
     }
 
@@ -150,7 +164,14 @@ def _load_connector_registry(project_id: str, root: Path) -> dict[str, Any]:
     registry = _registry_default(project)
     if isinstance(raw, dict):
         registry.update(raw)
-    for key in ("connector_instances", "sync_runs", "audit_events"):
+    for key in (
+        "connector_instances",
+        "sync_runs",
+        "audit_events",
+        "source_acl_snapshots",
+        "source_acl_history",
+        "source_acl_overrides",
+    ):
         registry[key] = [row for row in registry.get(key) or [] if isinstance(row, dict)]
     governance = dict(registry.get("governance") or {})
     governance.update(_registry_default(project)["governance"])
@@ -414,6 +435,12 @@ def list_connector_sync_runs(
         "failure_count",
         "retired_count",
         "cursor_checkpoint_committed",
+        "acl_propagation_status",
+        "acl_snapshot_count",
+        "acl_incomplete_count",
+        "semantic_refresh_status",
+        "semantic_event_count",
+        "semantic_changed_source_count",
     }
     safe_runs: list[dict[str, Any]] = []
     for row in runs[:limit]:
@@ -503,6 +530,35 @@ def connector_snapshot_observation_index(
     return result
 
 
+_ACL_DIRECT_FIELDS = (
+    "acl_version",
+    "acl_fingerprint",
+    "principals",
+    "visibility",
+    "inherited_from",
+    "captured_at",
+    "complete",
+    "availability",
+    "remote_availability",
+)
+
+
+def _acl_evidence_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    evidence: dict[str, Any] = {}
+    if "acl" in raw:
+        evidence["acl"] = raw.get("acl")
+    elif "remote_acl" in raw:
+        evidence["remote_acl"] = raw.get("remote_acl")
+    evidence.update(
+        {
+            key: raw[key]
+            for key in _ACL_DIRECT_FIELDS
+            if key in raw
+        }
+    )
+    return evidence
+
+
 def _normalize_unchanged_observations(
     connector: str,
     observations: list[dict[str, Any]] | None,
@@ -547,6 +603,11 @@ def _normalize_unchanged_observations(
                 "resource_kind": kind,
                 "source_ref": source_ref,
                 "metadata": dict(metadata or {}),
+                "availability": _text(
+                    raw.get("availability") or raw.get("remote_availability"),
+                    60,
+                ).upper(),
+                **_acl_evidence_fields(raw),
             }
         )
     return normalized
@@ -610,6 +671,11 @@ def _normalize_coverage_observations(
                     raw.get("capability_contract_version"), 160
                 ),
                 "metadata": metadata,
+                "availability": _text(
+                    raw.get("availability") or raw.get("remote_availability"),
+                    60,
+                ).upper(),
+                **_acl_evidence_fields(raw),
                 "content_materialized": False,
                 "source_occurrence_created": False,
                 "customer_source_modified": False,
@@ -684,6 +750,26 @@ def _run_summary(registry: dict[str, Any], run: dict[str, Any], receipt_path: st
             "retired_count": run.get("retired_count", 0),
             "cursor_checkpoint_committed": bool(run.get("cursor_checkpoint_committed")),
             "run_receipt_path": receipt_path,
+            "acl_propagation_status": run.get("acl_propagation_status", ""),
+            "acl_snapshot_count": int(
+                (run.get("acl_snapshot_receipt") or {}).get("snapshot_count") or 0
+            ),
+            "acl_incomplete_count": int(
+                (run.get("acl_snapshot_receipt") or {}).get("incomplete_count") or 0
+            ),
+            "semantic_refresh_status": run.get("semantic_refresh_status", ""),
+            "semantic_event_count": int(
+                ((run.get("semantic_refresh_receipt") or {}).get(
+                    "source_occurrence_diff"
+                ) or {}).get("event_count")
+                or 0
+            ),
+            "semantic_changed_source_count": int(
+                ((run.get("semantic_refresh_receipt") or {}).get(
+                    "source_occurrence_diff"
+                ) or {}).get("changed_source_count")
+                or 0
+            ),
         }
     )
 
@@ -812,6 +898,107 @@ def _retire_missing(
     return retired, errors
 
 
+def _build_acl_observations(
+    *,
+    normalized: list[dict[str, Any]],
+    successes: list[dict[str, Any]],
+    unchanged: list[dict[str, Any]],
+    coverage: list[dict[str, Any]],
+    seen_refs: set[str],
+    before_observations: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bind ACL evidence to the exact occurrence observed by this sync."""
+    success_by_ref = {
+        _text(row.get("source_ref"), 2000): row
+        for row in successes
+        if isinstance(row, dict) and _text(row.get("source_ref"), 2000)
+    }
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(raw: dict[str, Any], *, default_availability: str) -> None:
+        source_ref = _text(raw.get("source_ref"), 2000)
+        if not source_ref or source_ref in seen:
+            return
+        if source_ref not in seen_refs and source_ref not in before_observations:
+            return
+        item = dict(raw)
+        item["source_ref"] = source_ref
+        item["availability_default"] = (
+            _text(raw.get("availability"), 60).upper() or default_availability
+        )
+        rows.append(item)
+        seen.add(source_ref)
+
+    for row in normalized:
+        source_ref = _text(row.get("_source_ref"), 2000)
+        if not source_ref or source_ref not in success_by_ref:
+            continue
+        item = dict(row)
+        item.update(success_by_ref[source_ref])
+        item["source_ref"] = source_ref
+        add(item, default_availability="AVAILABLE")
+    for row in unchanged:
+        if row.get("source_ref") in seen_refs:
+            add(dict(row), default_availability="AVAILABLE")
+    for row in coverage:
+        if row.get("source_ref") in seen_refs:
+            add(dict(row), default_availability="UNKNOWN")
+    for row in rows:
+        source_ref = _text(row.get("source_ref"), 2000)
+        occurrence = before_observations.get(
+            _text(row.get("remote_resource_id"), 1000), {}
+        )
+        row["source_occurrence_id"] = _text(
+            row.get("source_occurrence_id")
+            or occurrence.get("source_occurrence_id"),
+            300,
+        )
+        row["source_ref"] = source_ref
+    return rows
+
+
+def _record_acl_observation_metadata(
+    project: str,
+    *,
+    connector: str,
+    observations: list[dict[str, Any]],
+    captured_at: str,
+    root: Path,
+    actor: dict[str, str],
+) -> int:
+    metadata_rows: list[dict[str, Any]] = []
+    for row in observations:
+        occurrence_id = _text(row.get("source_occurrence_id"), 300)
+        if not occurrence_id:
+            continue
+        snapshot = normalize_connector_acl_snapshot(
+            project,
+            connector,
+            source_ref=_text(row.get("source_ref"), 2000),
+            raw=row,
+            availability_default=_text(row.get("availability_default"), 60)
+            or "UNKNOWN",
+            captured_at_default=captured_at,
+        )
+        metadata_rows.append(
+            {
+                "occurrence_identity": occurrence_id,
+                "source_occurrence_id": occurrence_id,
+                "metadata": acl_observation_metadata(snapshot),
+            }
+        )
+    if not metadata_rows:
+        return 0
+    receipt = record_source_occurrence_observations_batch(
+        project,
+        metadata_rows,
+        root=root,
+        actor=actor,
+    )
+    return int(receipt.get("recorded_count") or 0)
+
+
 def sync_connector_snapshot_batch(
     project_id: str,
     *,
@@ -875,6 +1062,11 @@ def sync_connector_snapshot_batch(
             raise ConnectorSyncError("connector_sync_cursor_mismatch")
         next_hash = _cursor_hash(next_cursor)
         before_refs = _active_refs(project, connector, resolved_root)
+        before_observations = connector_snapshot_observation_index(
+            project,
+            connector_instance_id=connector,
+            root=resolved_root,
+        )
         run = {
             "schema": CONNECTOR_SYNC_RUN_SCHEMA,
             "sync_epoch_id": epoch,
@@ -898,6 +1090,10 @@ def sync_connector_snapshot_batch(
             "source_content_persisted_in_run_receipt": False,
             "coverage_observations_create_source_occurrences": False,
             "customer_material_mutation_executed": False,
+            "acl_snapshot_receipt": {},
+            "acl_propagation_status": "NOT_RECORDED",
+            "semantic_refresh_receipt": {},
+            "semantic_refresh_status": "NOT_RECORDED",
         }
         _start_run(project, connector, instance, registry, run, resolved_root)
 
@@ -1166,6 +1362,106 @@ def sync_connector_snapshot_batch(
                 if coverage
                 else "COMPLETE"
             )
+            acl_observations = _build_acl_observations(
+                normalized=normalized,
+                successes=successes,
+                unchanged=unchanged,
+                coverage=coverage,
+                seen_refs=seen_refs,
+                before_observations=before_observations,
+            )
+            captured_at = _now()
+            if acl_observations:
+                acl_registry = _load_connector_registry(project, resolved_root)
+                acl_receipt = reconcile_connector_acl_snapshots(
+                    acl_registry,
+                    project_id=project,
+                    connector_instance_id=connector,
+                    observations=acl_observations,
+                    sync_epoch_id=epoch,
+                    actor=clean_actor,
+                    captured_at=captured_at,
+                )
+                _save_connector_registry(project, resolved_root, acl_registry)
+                acl_recordable = [
+                    row
+                    for row in acl_observations
+                    if _text(row.get("source_occurrence_id"), 300)
+                ]
+                recorded_acl_metadata_count = _record_acl_observation_metadata(
+                    project,
+                    connector=connector,
+                    observations=acl_recordable,
+                    captured_at=captured_at,
+                    root=resolved_root,
+                    actor=clean_actor,
+                )
+                if recorded_acl_metadata_count != len(acl_recordable):
+                    raise ConnectorSyncError(
+                        "connector_acl_observation_count_mismatch"
+                    )
+                acl_receipt["source_occurrence_metadata_recorded_count"] = (
+                    recorded_acl_metadata_count
+                )
+                acl_receipt["source_occurrence_metadata_expected_count"] = len(
+                    acl_recordable
+                )
+            else:
+                acl_receipt = {
+                    "schema": "qualibug.connector-acl-snapshot.v1",
+                    "status": "NOT_REQUESTED",
+                    "project_id": project,
+                    "connector_instance_id": connector,
+                    "sync_epoch_id": epoch,
+                    "snapshot_count": 0,
+                    "changed_count": 0,
+                    "incomplete_count": 0,
+                    "propagation_allowed_count": 0,
+                    "permission_denied_count": 0,
+                    "remote_deleted_count": 0,
+                    "changed": [],
+                }
+            semantic_materialized_refs = {
+                _text(row.get("source_ref"), 2000)
+                for row in successes
+                if isinstance(row, dict)
+            }
+            semantic_unchanged_refs = {
+                _text(row.get("source_ref"), 2000)
+                for row in unchanged
+                if isinstance(row, dict)
+            }
+            semantic_coverage_refs = {
+                _text(row.get("source_ref"), 2000)
+                for row in coverage
+                if isinstance(row, dict)
+            }
+            semantic_refresh = build_connector_semantic_refresh_receipt(
+                project,
+                connector,
+                sync_epoch_id=epoch,
+                before_observations=before_observations,
+                materialized_items=[
+                    row
+                    for row in acl_observations
+                    if _text(row.get("source_ref"), 2000) in semantic_materialized_refs
+                ],
+                unchanged_observations=[
+                    row
+                    for row in acl_observations
+                    if _text(row.get("source_ref"), 2000) in semantic_unchanged_refs
+                ],
+                coverage_observations=[
+                    row
+                    for row in acl_observations
+                    if _text(row.get("source_ref"), 2000) in semantic_coverage_refs
+                ],
+                retired_source_occurrences=retired,
+                acl_receipt=acl_receipt,
+                asset=load_enterprise_business_knowledge_asset(
+                    project, resolved_root
+                ),
+            )
             run.update(
                 {
                     "status": status,
@@ -1195,6 +1491,21 @@ def sync_connector_snapshot_batch(
                     "source_content_persisted_in_run_receipt": False,
                     "coverage_observations_create_source_occurrences": False,
                     "customer_material_mutation_executed": False,
+                    "acl_snapshot_receipt": acl_receipt,
+                    "acl_propagation_status": (
+                        "NOT_REQUESTED"
+                        if not acl_receipt.get("snapshot_count")
+                        else "BLOCKED_REMOTE_ACCESS"
+                        if int(acl_receipt.get("permission_denied_count") or 0)
+                        or int(acl_receipt.get("remote_deleted_count") or 0)
+                        else "BLOCKED_INCOMPLETE"
+                        if int(acl_receipt.get("incomplete_count") or 0)
+                        or int(acl_receipt.get("propagation_allowed_count") or 0)
+                        != int(acl_receipt.get("snapshot_count") or 0)
+                        else "READY"
+                    ),
+                    "semantic_refresh_receipt": semantic_refresh,
+                    "semantic_refresh_status": semantic_refresh.get("status"),
                 }
             )
             receipt_path = _finish_run(

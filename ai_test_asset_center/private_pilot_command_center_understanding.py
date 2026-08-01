@@ -596,6 +596,7 @@ def project_existing_understanding_command_center(
     *,
     project: str,
     root: Path,
+    actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Enrich the existing Command Center ``knowledge_summary`` in place."""
     result = dict(payload)
@@ -610,6 +611,15 @@ def project_existing_understanding_command_center(
         asset = None
     if not isinstance(asset, dict) or not asset:
         return result
+    if actor is not None:
+        from .connector_acl_authority import filter_connector_asset_for_actor
+
+        asset = filter_connector_asset_for_actor(
+            project,
+            asset,
+            actor={**actor, "project_id": project} if actor else actor,
+            root=root,
+        )
 
     existing = dict(_record(data.get("knowledge_summary")))
     data["knowledge_summary"] = {**existing, **_understanding_projection(asset)}
@@ -626,10 +636,13 @@ class UnderstandingCommandCenterProjectionMixin:
         payload = super()._build_command_center(project_id, root)
         if not isinstance(payload, dict):
             return payload
+        principal_loader = getattr(self, "_principal", None)
+        actor = principal_loader() if callable(principal_loader) else None
         return project_existing_understanding_command_center(
             payload,
             project=project_id,
             root=root,
+            actor=actor,
         )
 
 
