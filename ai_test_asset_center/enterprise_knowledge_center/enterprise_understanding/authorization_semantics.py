@@ -119,6 +119,90 @@ def _authorization_coordinate_complete(fact: dict[str, Any]) -> bool:
     )
 
 
+def resolve_fact_authorization_delegation(fact: dict[str, Any]) -> dict[str, Any]:
+    """Resolve one explicit delegation without turning both roles into direct grants.
+
+    Delegation is its own source-backed authorization semantic.  The delegatee may be
+    projected to the permission matrix only when the actor/action/resource coordinates
+    are complete and no unbound condition or temporal/quantity constraint changes the
+    grant.  The delegator is provenance, never an automatically inferred direct permit.
+    """
+    delegation = as_dict(fact.get("authorization_delegation"))
+    if not delegation:
+        return {
+            "decision": "UNSPECIFIED",
+            "semantic_kind": "NONE",
+            "authority_declared": False,
+            "resolution_status": "NOT_DECLARED",
+            "reason_code": "",
+            "automatic_inference_allowed": False,
+        }
+
+    delegator = text(delegation.get("delegator"))
+    delegatee = text(delegation.get("delegatee"))
+    source_backed = delegation.get("source_backed") is True
+    missing = [
+        name
+        for name, present in (
+            ("source_backed", source_backed),
+            ("delegator", bool(delegator)),
+            ("delegatee", bool(delegatee)),
+            ("distinct_roles", bool(delegator and delegatee and delegator != delegatee)),
+            ("action", bool(_fact_action(fact))),
+            ("resource_refs", bool(_fact_resource_refs(fact))),
+        )
+        if not present
+    ]
+    if missing:
+        return {
+            "decision": "UNKNOWN",
+            "semantic_kind": "AUTHORIZATION_DELEGATION",
+            "authority_declared": True,
+            "resolution_status": "UNRESOLVED",
+            "reason_code": "FACT_AUTHORIZATION_DELEGATION_COORDINATE_UNRESOLVED",
+            "missing_coordinate_fields": missing,
+            "delegator_role": delegator,
+            "delegatee_role": delegatee,
+            "automatic_inference_allowed": False,
+        }
+
+    frame = as_dict(fact.get("condition_frame"))
+    conditions = unique_text([
+        *as_list(fact.get("conditions")),
+        *as_list(frame.get("conditions")),
+    ])
+    quantity_constraints = [
+        dict(row) for row in as_list(fact.get("quantity_constraints"))
+        if isinstance(row, dict) and row
+    ]
+    time_window_constraints = [
+        dict(row) for row in as_list(fact.get("time_window_constraints"))
+        if isinstance(row, dict) and row
+    ]
+    conditional = bool(conditions or quantity_constraints or time_window_constraints)
+    return {
+        "decision": "ALLOW",
+        "semantic_kind": "AUTHORIZATION_DELEGATION",
+        "authority_declared": True,
+        "resolution_status": "RESOLVED",
+        "reason_code": "",
+        "derivation": "explicit_source_authorization_delegation",
+        "delegator_role": delegator,
+        "delegatee_role": delegatee,
+        "source_backed": True,
+        "condition_binding_required": conditional,
+        "execution_eligible": not conditional,
+        "condition_contract": {
+            "conditions": conditions,
+            "condition_combinator": text(fact.get("condition_combinator")),
+            "condition_frame": frame,
+            "quantity_constraints": quantity_constraints,
+            "time_window_constraints": time_window_constraints,
+        },
+        "automatic_inference_allowed": False,
+    }
+
+
 def _identity_scope_declared(scope: dict[str, Any]) -> bool:
     for raw_key, raw_value in scope.items():
         key = text(raw_key).lower()
@@ -166,6 +250,10 @@ def derive_source_authorization_semantics(
     raw = text(fact.get("raw_statement"))
     actors = _fact_actor_refs(fact)
     if not raw or not actors:
+        return {}
+    if as_dict(fact.get("authorization_delegation")):
+        # Delegation has a dedicated authority.  Matching "授权" here would grant
+        # both the delegator and delegatee as unrelated direct permissions.
         return {}
 
     if _EXPLICIT_AUTH_DENY_RE.search(raw):
@@ -226,6 +314,10 @@ def resolve_fact_authorization(fact: dict[str, Any]) -> dict[str, Any]:
     - time, quantity and process scopes never become authorization by themselves;
     - approval/confirmation are workflow governance, not Actor ALLOW/DENY contracts.
     """
+    delegation = resolve_fact_authorization_delegation(fact)
+    if delegation.get("authority_declared") is True:
+        return delegation
+
     explicit_raw = fact.get("authorization_semantics")
     explicit = as_dict(explicit_raw)
     if isinstance(explicit_raw, dict):
@@ -313,4 +405,5 @@ def resolve_fact_authorization(fact: dict[str, Any]) -> dict[str, Any]:
 __all__ = [
     "derive_source_authorization_semantics",
     "resolve_fact_authorization",
+    "resolve_fact_authorization_delegation",
 ]

@@ -104,7 +104,7 @@ def build_chinese_first_comprehension(
         authorization = resolve_fact_authorization(_dict(rule.get("semantic_contract")))
         kind = _text(authorization.get("semantic_kind"))
         declared = bool(authorization.get("authority_declared"))
-        resolved_auth = kind == "AUTHORIZATION" and declared
+        resolved_auth = kind in {"AUTHORIZATION", "AUTHORIZATION_DELEGATION"} and declared
         if not _list(_dict(rule.get("semantic_contract")).get("state_effects")):
             rule["risk_type"] = "authorization" if resolved_auth else "business_logic"
             rule["rule_type"] = "permission" if resolved_auth else "business_rule"

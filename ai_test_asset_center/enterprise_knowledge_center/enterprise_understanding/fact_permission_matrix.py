@@ -14,11 +14,17 @@ from pathlib import Path
 import re
 from typing import Any
 
-from .authorization_semantics import resolve_fact_authorization
+from .authorization_semantics import (
+    resolve_fact_authorization,
+    resolve_fact_authorization_delegation,
+)
 
 _PERMISSION_METHOD_ACTIONS: dict[str, frozenset[str]] = {
     "GET": frozenset({"get", "read", "view", "list", "search", "query", "lookup"}),
-    "POST": frozenset({"post", "create", "add", "submit", "send", "start"}),
+    "POST": frozenset({
+        "post", "create", "add", "submit", "send", "start",
+        "approve", "review", "reject", "authorize",
+    }),
     "PUT": frozenset({"put", "update", "edit", "modify", "replace"}),
     "PATCH": frozenset({"patch", "update", "edit", "modify", "change"}),
     "DELETE": frozenset({"delete", "remove", "cancel", "revoke"}),
@@ -199,9 +205,19 @@ def materialize_fact_permission_matrix(asset: dict[str, Any]) -> dict[str, Any]:
     }
     gaps: list[dict[str, Any]] = []
 
+    delegated_count = 0
     for fact in facts:
-        authorization = resolve_fact_authorization(fact)
-        if _text(authorization.get("semantic_kind")).upper() != "AUTHORIZATION":
+        delegation = resolve_fact_authorization_delegation(fact)
+        is_delegation = (
+            _text(delegation.get("semantic_kind")).upper()
+            == "AUTHORIZATION_DELEGATION"
+            and delegation.get("authority_declared") is True
+        )
+        authorization = delegation if is_delegation else resolve_fact_authorization(fact)
+        if _text(authorization.get("semantic_kind")).upper() not in {
+            "AUTHORIZATION",
+            "AUTHORIZATION_DELEGATION",
+        }:
             continue
         fact_id = _text(fact.get("fact_id"))
         source_id, source_locator = _source_identity(fact)
@@ -220,6 +236,19 @@ def materialize_fact_permission_matrix(asset: dict[str, Any]) -> dict[str, Any]:
             continue
 
         actors, action, resources = _fact_coordinates(fact)
+        if is_delegation:
+            actors = [_text(delegation.get("delegatee_role"))]
+            if delegation.get("condition_binding_required") is True:
+                gaps.append(_authorization_gap(
+                    "authorization_delegation_condition_unbound",
+                    fact_id=fact_id,
+                    source_id=source_id,
+                    source_locator=source_locator,
+                    delegator_role=_text(delegation.get("delegator_role")),
+                    delegatee_role=_text(delegation.get("delegatee_role")),
+                    condition_contract=_dict(delegation.get("condition_contract")),
+                ))
+                continue
         missing = [
             name
             for name, present in (
@@ -266,7 +295,13 @@ def materialize_fact_permission_matrix(asset: dict[str, Any]) -> dict[str, Any]:
                 method = _text(interface.get("method")).upper()
                 path = _text(interface.get("path") or interface.get("raw_path"))
                 permission_id = _stable_id(
-                    "fact_permission", fact_id, actor, method, path, decision
+                    "fact_permission",
+                    fact_id,
+                    actor,
+                    method,
+                    path,
+                    decision,
+                    _text(delegation.get("delegator_role")) if is_delegation else "",
                 )
                 if permission_id in seen:
                     continue
@@ -275,7 +310,7 @@ def materialize_fact_permission_matrix(asset: dict[str, Any]) -> dict[str, Any]:
                     "permission_id": permission_id,
                     "role": actor,
                     "resource": path,
-                    "actions": [method.lower()],
+                    "actions": sorted({method.lower(), *action_tokens}),
                     "decision": "allow" if decision == "ALLOW" else "deny",
                     "scope": _permission_scope(fact),
                     "source_id": source_id,
@@ -285,8 +320,22 @@ def materialize_fact_permission_matrix(asset: dict[str, Any]) -> dict[str, Any]:
                         interface.get("interface_id") or interface.get("operation_id")
                     ),
                     "authorization_derivation": _text(authorization.get("derivation")),
+                    **({
+                        "authorization_kind": "delegated_permission",
+                        "delegator_role": _text(delegation.get("delegator_role")),
+                        "delegatee_role": _text(delegation.get("delegatee_role")),
+                        "delegation_contract": {
+                            "source_backed": True,
+                            "fact_id": fact_id,
+                            "delegator_role": _text(delegation.get("delegator_role")),
+                            "delegatee_role": _text(delegation.get("delegatee_role")),
+                            "condition_binding_required": False,
+                        },
+                    } if is_delegation else {}),
                     "source_backed": True,
                 })
+                if is_delegation:
+                    delegated_count += 1
 
     existing_gaps = [
         dict(row) for row in _list(asset.get("coverage_gaps")) if isinstance(row, dict)
@@ -308,12 +357,16 @@ def materialize_fact_permission_matrix(asset: dict[str, Any]) -> dict[str, Any]:
         row.get("source_backed") is True for row in rows
     )
     summary["authorization_binding_gap_count"] = len(gaps)
+    summary["source_fact_delegated_permission_count"] = delegated_count
     asset["summary"] = summary
     governance = _dict(asset.get("governance"))
     governance.update({
         "source_fact_authorization_uses_permission_matrix_authority": True,
         "authorization_interface_binding_is_exact": True,
         "authorization_fuzzy_resource_binding_allowed": False,
+        "authorization_delegation_uses_distinct_authority": True,
+        "conditional_delegation_requires_runtime_binding": True,
+        "delegator_is_not_automatically_directly_permitted": True,
     })
     asset["governance"] = governance
     return asset
