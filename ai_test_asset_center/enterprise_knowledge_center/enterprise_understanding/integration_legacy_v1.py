@@ -1,6 +1,7 @@
 """Install enterprise understanding as a first-class knowledge-center stage."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import wraps
 from pathlib import Path
 from typing import Any, Iterable
@@ -11,23 +12,38 @@ from .implementation_binding_projection import project_final_scenario_planning_g
 from .schema import as_dict, as_list, text
 
 
-def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[str, Any]]:
-    """Re-read registered sources through the format-agnostic ingestion pipeline.
+def _parsed_sources_for_context(
+    asset: dict[str, Any],
+    root: Path,
+    *,
+    parsed_overrides: Mapping[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Read registered sources through the format-agnostic ingestion pipeline.
 
     Existing parsers provide a compatibility text projection. Immutable source bytes are
     routed through DocumentAdapter Registry -> Parsing Planner -> IR Merger. The merged
     IR text becomes the source presented to Chinese-first fact extraction, so OCR and
-    future supplemental adapters can contribute source-backed business facts.
+    future supplemental adapters can contribute source-backed business facts. An
+    incremental caller may pass the already parsed source row to avoid parsing the same
+    changed source twice.
     """
     from .._crud import _record_parse
     from ..document_ingestion import build_document_structure_ir
 
+    overrides = {
+        text(source_id): dict(parsed)
+        for source_id, parsed in (parsed_overrides or {}).items()
+        if text(source_id) and isinstance(parsed, dict)
+    }
     parsed_sources: list[dict[str, Any]] = []
     for source in as_list(asset.get("source_inventory")):
         if not isinstance(source, dict) or text(source.get("status")) != "active":
             continue
         stored = root / text(source.get("stored_path"))
-        parsed = _record_parse(source, root)
+        source_id = text(source.get("source_id"))
+        parsed = overrides.get(source_id)
+        if parsed is None:
+            parsed = _record_parse(source, root)
         parser_receipt = as_dict(parsed.get("parser_receipt"))
         filename = text(source.get("original_name") or stored.name)
         document_structure = as_dict(parsed.get("document_structure"))

@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from ai_test_asset_center.enterprise_knowledge_center import _crud as knowledge_crud
 from ai_test_asset_center.connector_acl_authority import (
     ConnectorAclError,
     connector_source_visibility_decision,
@@ -18,6 +19,7 @@ from ai_test_asset_center.connector_sync_authority import (
     sync_connector_snapshot_batch,
 )
 from ai_test_asset_center.enterprise_knowledge_center import (
+    load_enterprise_business_knowledge_asset,
     list_enterprise_knowledge_sources,
 )
 from ai_test_asset_center.enterprise_knowledge_center.source_occurrence_observation import (
@@ -44,14 +46,20 @@ def _acl(*, complete: bool = True, availability: str = "AVAILABLE") -> dict:
     }
 
 
-def _item(acl: dict) -> dict:
+def _item(
+    acl: dict,
+    *,
+    remote_id: str = "doc-1",
+    content: str = "source-backed content",
+    revision: str = "1",
+) -> dict:
     return {
-        "remote_resource_id": "doc-1",
+        "remote_resource_id": remote_id,
         "resource_kind": "document",
         "source_type": "prd",
-        "content": "source-backed content",
+        "content": content,
         "filename": "requirements.md",
-        "remote_revision": "1",
+        "remote_revision": revision,
         "acl": acl,
     }
 
@@ -99,7 +107,7 @@ def test_acl_snapshot_is_source_bound_and_raw_principals_never_persisted():
     assert incomplete["evidence_status"] == "INCOMPLETE"
 
 
-def test_sync_records_acl_visibility_and_semantic_pending_receipt(tmp_path):
+def test_sync_records_acl_visibility_and_executes_incremental_refresh(tmp_path):
     _register(tmp_path)
     first = sync_connector_snapshot_batch(
         PROJECT,
@@ -118,9 +126,17 @@ def test_sync_records_acl_visibility_and_semantic_pending_receipt(tmp_path):
     assert first["acl_propagation_status"] == "READY"
     assert first["acl_snapshot_receipt"]["snapshot_count"] == 1
     assert first["acl_snapshot_receipt"]["propagation_allowed_count"] == 1
-    assert first["semantic_refresh_status"] == "PENDING_VALIDATION"
+    assert first["semantic_refresh_status"] == "EXECUTED"
+    assert first["semantic_refresh_receipt"]["incremental_executor_installed"] is True
+    assert first["semantic_refresh_receipt"]["completion_reason"] == (
+        "INITIAL_ASSET_BUILD_EXECUTED"
+    )
     events = first["semantic_refresh_receipt"]["source_occurrence_diff"]["events"]
     assert [row["event"] for row in events] == ["SOURCE_CREATED"]
+    assert all(
+        row["executed"] is True
+        for row in first["semantic_refresh_receipt"]["downstream"]
+    )
 
     observations = list_source_occurrence_observations(PROJECT, root=tmp_path)
     occurrence = observations["source_occurrences"][0]
@@ -239,6 +255,189 @@ def test_unchanged_acl_does_not_emit_permission_change_or_reanalyze(tmp_path):
     assert second["semantic_refresh_receipt"]["unchanged_materials_reanalyzed"] is False
     assert second["semantic_refresh_receipt"]["source_occurrence_diff"]["event_count"] == 0
     assert first["sync_epoch_id"] != second["sync_epoch_id"]
+
+
+def test_revision_refresh_reextracts_only_changed_source(tmp_path, monkeypatch):
+    _register(tmp_path)
+    first_doc = _item(
+        _acl(), remote_id="doc-1", content="first source", revision="1"
+    )
+    first_doc["filename"] = "requirements-1.md"
+    second_doc = _item(
+        _acl(), remote_id="doc-2", content="second source", revision="1"
+    )
+    second_doc["filename"] = "requirements-2.md"
+    first = sync_connector_snapshot_batch(
+        PROJECT,
+        root=tmp_path,
+        connector_instance_id=CONNECTOR,
+        items=[first_doc, second_doc],
+        next_cursor="cursor-1",
+        actor=ACTOR,
+    )
+    parse_calls: list[str] = []
+    original_record_parse = knowledge_crud._record_parse
+
+    def tracked_record_parse(record, root):
+        parse_calls.append(str(record.get("source_id") or ""))
+        return original_record_parse(record, root)
+
+    monkeypatch.setattr(knowledge_crud, "_record_parse", tracked_record_parse)
+    second = sync_connector_snapshot_batch(
+        PROJECT,
+        root=tmp_path,
+        connector_instance_id=CONNECTOR,
+        items=[
+            _item(_acl(), remote_id="doc-1", content="updated source", revision="2"),
+        ],
+        unchanged_observations=[
+            {
+                "remote_resource_id": "doc-2",
+                "resource_kind": "document",
+                "acl": _acl(),
+                "remote_revision": "1",
+            }
+        ],
+        previous_cursor="cursor-1",
+        next_cursor="cursor-2",
+        actor=ACTOR,
+    )
+
+    assert first["semantic_refresh_status"] == "EXECUTED"
+    receipt = second["semantic_refresh_receipt"]
+    assert second["semantic_refresh_status"] == "EXECUTED"
+    assert receipt["incremental_execution_mode"] == "INCREMENTAL"
+    assert receipt["incremental_parsed_source_count"] == 1
+    assert receipt["unchanged_materials_reanalyzed"] is False
+    assert receipt["full_project_recompute_requested"] is False
+    assert len(parse_calls) == 1
+    events = receipt["source_occurrence_diff"]["events"]
+    assert [row["event"] for row in events] == ["SOURCE_REVISION_CHANGED"]
+    assert all(row["executed"] is True for row in receipt["downstream"])
+
+
+def test_retired_source_keeps_related_behavior_pending_and_records_impact(tmp_path):
+    _register(tmp_path)
+    api = (
+        '{"openapi":"3.0.0","info":{"title":"Orders","version":"1"},'
+        '"paths":{"/orders":{"get":{"operationId":"listOrders",'
+        '"responses":{"200":{"description":"ok"}}}}}}'
+    )
+    item = _item(_acl(), content=api, revision="1")
+    item["source_type"] = "openapi"
+    item["filename"] = "orders.json"
+    first = sync_connector_snapshot_batch(
+        PROJECT,
+        root=tmp_path,
+        connector_instance_id=CONNECTOR,
+        items=[item],
+        next_cursor="cursor-1",
+        actor=ACTOR,
+    )
+    second = sync_connector_snapshot_batch(
+        PROJECT,
+        root=tmp_path,
+        connector_instance_id=CONNECTOR,
+        items=[],
+        previous_cursor="cursor-1",
+        next_cursor="cursor-2",
+        sync_mode="FULL",
+        snapshot_complete=True,
+        deletion_policy="RETIRE_MISSING",
+        max_retire_ratio=1.0,
+        actor=ACTOR,
+    )
+
+    receipt = second["semantic_refresh_receipt"]
+    assert first["semantic_refresh_status"] == "EXECUTED"
+    assert second["status"] == "COMPLETE"
+    assert second["semantic_refresh_status"] == "EXECUTED"
+    assert receipt["incremental_execution_mode"] == "METADATA_ONLY"
+    assert receipt["pending_validation_count"] >= 1
+    assert receipt["affected_behaviors"] >= 1
+    assert receipt["semantic_impact_relation_count"] >= 1
+    assert receipt["unchanged_materials_reanalyzed"] is False
+
+    asset = load_enterprise_business_knowledge_asset(PROJECT, tmp_path)
+    assert asset is not None
+    assert asset["source_inventory"] == []
+    interfaces = asset["interfaces"]
+    assert interfaces
+    assert all(
+        row.get("semantic_validation_status") == "PENDING_SOURCE_VALIDATION"
+        for row in interfaces
+    )
+    assert asset["incremental_refresh_receipt"]["status"] == "EXECUTED"
+    assert asset["incremental_semantic_impact"]["affected_counts"]["behavior"] >= 1
+
+
+def test_shared_api_artifact_keeps_unchanged_source_record_on_revision(tmp_path):
+    _register(tmp_path)
+
+    def _api(description: str) -> str:
+        return (
+            '{"openapi":"3.0.0","info":{"title":"API","version":"1"},'
+            '"paths":{"/shared":{"get":{"operationId":"shared",'
+            f'"description":"{description}",'
+            '"responses":{"200":{"description":"ok"}}}}}}'
+        )
+
+    first_items = []
+    for remote_id, description in (("doc-a", "first"), ("doc-b", "second")):
+        item = _item(
+            _acl(),
+            remote_id=remote_id,
+            content=_api(description),
+            revision="1",
+        )
+        item["source_type"] = "openapi"
+        item["filename"] = f"{remote_id}.json"
+        first_items.append(item)
+    sync_connector_snapshot_batch(
+        PROJECT,
+        root=tmp_path,
+        connector_instance_id=CONNECTOR,
+        items=first_items,
+        next_cursor="cursor-1",
+        actor=ACTOR,
+    )
+
+    changed = _item(
+        _acl(),
+        remote_id="doc-a",
+        content=_api("first changed"),
+        revision="2",
+    )
+    changed["source_type"] = "openapi"
+    changed["filename"] = "doc-a.json"
+    second = sync_connector_snapshot_batch(
+        PROJECT,
+        root=tmp_path,
+        connector_instance_id=CONNECTOR,
+        items=[changed],
+        unchanged_observations=[
+            {
+                "remote_resource_id": "doc-b",
+                "resource_kind": "document",
+                "acl": _acl(),
+                "remote_revision": "1",
+            }
+        ],
+        previous_cursor="cursor-1",
+        next_cursor="cursor-2",
+        actor=ACTOR,
+    )
+
+    assert second["semantic_refresh_status"] == "EXECUTED"
+    asset = load_enterprise_business_knowledge_asset(PROJECT, tmp_path)
+    assert asset is not None
+    interface = next(row for row in asset["interfaces"] if row.get("path") == "/shared")
+    source_ids = {
+        row.get("source_id")
+        for row in interface["api_artifact_source_records"]
+    }
+    assert len(source_ids) == 2
+    assert interface["unchanged_source_records_preserved"] is True
 
 
 def test_public_sync_projection_does_not_return_acl_identity_details():

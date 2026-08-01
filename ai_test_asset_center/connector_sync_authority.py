@@ -25,7 +25,10 @@ from .connector_acl_authority import (
     normalize_connector_acl_snapshot,
     reconcile_connector_acl_snapshots,
 )
-from .connector_semantic_refresh import build_connector_semantic_refresh_receipt
+from .connector_semantic_refresh import (
+    build_connector_semantic_refresh_receipt,
+    execute_connector_semantic_refresh,
+)
 from .enterprise_knowledge_center import (
     load_enterprise_business_knowledge_asset,
     delete_enterprise_knowledge_source,
@@ -1462,6 +1465,30 @@ def sync_connector_snapshot_batch(
                     project, resolved_root
                 ),
             )
+            if status == "COMPLETE":
+                semantic_refresh = execute_connector_semantic_refresh(
+                    project,
+                    semantic_refresh,
+                    root=resolved_root,
+                )
+            else:
+                semantic_refresh = {
+                    **semantic_refresh,
+                    "status": "BLOCKED_SYNC_INCOMPLETE",
+                    "completion_reason": "SYNC_TRANSPORT_NOT_COMPLETE",
+                    "incremental_executor_installed": True,
+                    "unchanged_materials_reanalyzed": False,
+                    "full_project_recompute_requested": False,
+                    "downstream": [
+                        {
+                            **dict(row),
+                            "status": "BLOCKED_SYNC_INCOMPLETE",
+                            "executed": False,
+                        }
+                        for row in semantic_refresh.get("downstream") or []
+                        if isinstance(row, dict)
+                    ],
+                }
             run.update(
                 {
                     "status": status,
