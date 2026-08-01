@@ -4,38 +4,56 @@ on:
   push:
     branches: [main]
     paths:
+      - "ai_test_asset_center/connector_auto_sync.py"
+      - "ai_test_asset_center/connector_auto_sync_core.py"
       - "ai_test_asset_center/connector_checkpoint_commit_authority.py"
       - "ai_test_asset_center/connector_lifecycle_commit_authority.py"
+      - "ai_test_asset_center/connector_lifecycle_recovery_intent.py"
+      - "ai_test_asset_center/connector_lifecycle_recovery_supervisor.py"
       - "ai_test_asset_center/connector_remote_lifecycle.py"
       - "ai_test_asset_center/connector_sync_authority.py"
       - "ai_test_asset_center/feishu_connector_capability_sync.py"
       - "ai_test_asset_center/feishu_connector_capability_sync_core.py"
+      - "ai_test_asset_center/feishu_lifecycle_recovery_runtime.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
+      - "tests/test_connector_auto_sync_lifecycle_recovery.py"
       - "tests/test_connector_checkpoint_commit_authority.py"
       - "tests/test_connector_lifecycle_commit_authority.py"
+      - "tests/test_connector_lifecycle_recovery_intent.py"
+      - "tests/test_connector_lifecycle_recovery_supervisor.py"
       - "tests/test_connector_remote_lifecycle.py"
       - "tests/test_connector_remote_lifecycle_transaction.py"
       - "tests/test_feishu_capability_sync_facade_isolation.py"
       - "tests/test_feishu_checkpoint_error_projection.py"
+      - "tests/test_feishu_lifecycle_recovery_runtime.py"
       - "tests/test_feishu_remote_lifecycle_integration.py"
       - ".github/workflows/connector-lifecycle-atomic-commit.yml"
   pull_request:
     paths:
+      - "ai_test_asset_center/connector_auto_sync.py"
+      - "ai_test_asset_center/connector_auto_sync_core.py"
       - "ai_test_asset_center/connector_checkpoint_commit_authority.py"
       - "ai_test_asset_center/connector_lifecycle_commit_authority.py"
+      - "ai_test_asset_center/connector_lifecycle_recovery_intent.py"
+      - "ai_test_asset_center/connector_lifecycle_recovery_supervisor.py"
       - "ai_test_asset_center/connector_remote_lifecycle.py"
       - "ai_test_asset_center/connector_sync_authority.py"
       - "ai_test_asset_center/feishu_connector_capability_sync.py"
       - "ai_test_asset_center/feishu_connector_capability_sync_core.py"
+      - "ai_test_asset_center/feishu_lifecycle_recovery_runtime.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_occurrence_lifecycle.py"
+      - "tests/test_connector_auto_sync_lifecycle_recovery.py"
       - "tests/test_connector_checkpoint_commit_authority.py"
       - "tests/test_connector_lifecycle_commit_authority.py"
+      - "tests/test_connector_lifecycle_recovery_intent.py"
+      - "tests/test_connector_lifecycle_recovery_supervisor.py"
       - "tests/test_connector_remote_lifecycle.py"
       - "tests/test_connector_remote_lifecycle_transaction.py"
       - "tests/test_feishu_capability_sync_facade_isolation.py"
       - "tests/test_feishu_checkpoint_error_projection.py"
+      - "tests/test_feishu_lifecycle_recovery_runtime.py"
       - "tests/test_feishu_remote_lifecycle_integration.py"
       - ".github/workflows/connector-lifecycle-atomic-commit.yml"
   workflow_dispatch:
@@ -62,21 +80,30 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Compile atomic lifecycle authorities
+      - name: Compile connector lifecycle authorities
         run: |
+          python -m py_compile ai_test_asset_center/connector_auto_sync.py
+          python -m py_compile ai_test_asset_center/connector_auto_sync_core.py
           python -m py_compile ai_test_asset_center/connector_checkpoint_commit_authority.py
           python -m py_compile ai_test_asset_center/connector_lifecycle_commit_authority.py
+          python -m py_compile ai_test_asset_center/connector_lifecycle_recovery_intent.py
+          python -m py_compile ai_test_asset_center/connector_lifecycle_recovery_supervisor.py
           python -m py_compile ai_test_asset_center/connector_remote_lifecycle.py
           python -m py_compile ai_test_asset_center/feishu_connector_capability_sync.py
           python -m py_compile ai_test_asset_center/feishu_connector_capability_sync_core.py
+          python -m py_compile ai_test_asset_center/feishu_lifecycle_recovery_runtime.py
 
-      - name: Run atomic lifecycle regressions
+      - name: Run connector lifecycle regressions
         run: |
           python -m pytest -q \
+            tests/test_connector_auto_sync_lifecycle_recovery.py \
             tests/test_connector_checkpoint_commit_authority.py \
             tests/test_connector_lifecycle_commit_authority.py \
+            tests/test_connector_lifecycle_recovery_intent.py \
+            tests/test_connector_lifecycle_recovery_supervisor.py \
             tests/test_connector_remote_lifecycle.py \
             tests/test_connector_remote_lifecycle_transaction.py \
             tests/test_feishu_capability_sync_facade_isolation.py \
             tests/test_feishu_checkpoint_error_projection.py \
+            tests/test_feishu_lifecycle_recovery_runtime.py \
             tests/test_feishu_remote_lifecycle_integration.py
