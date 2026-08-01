@@ -4,7 +4,8 @@ import process from 'node:process';
 const root = new URL('../', import.meta.url);
 
 async function source(path) {
-  return readFile(new URL(path, root), 'utf8');
+  const content = await readFile(new URL(path, root), 'utf8');
+  return content.replace(/\r\n/g, '\n');
 }
 
 function requireText(content, expected, label) {
@@ -103,7 +104,7 @@ requireAll(campaignsPage, [
   '<details className="card mb-4">',
   '异常覆盖与安全熔断',
   '强制只读熔断：本次验证禁止任何写入',
-  'onScenarioSelectionChange={handleScenarioSelectionChange}',
+  'onScenarioStateChange={handleScenarioStateChange}',
   '个已审批 UI 场景由后台自动纳入',
 ], 'campaigns page');
 forbidAll(campaignsPage, ['测试数据策略', 'type DataStrategy', 'buildTestDataContract'], 'campaigns page');
@@ -124,9 +125,8 @@ requireAll(dashboardUnderstanding, [
   "label: 'Runtime Plan'",
   "key: 'runtime_materialization'",
   "label: '运行实例化'",
-  '运行草稿链已闭合',
-  '不可发送的请求草稿',
-  '不可执行的断言草稿',
+  '运行准备链已闭合',
+  '当前草案本身仍不可直接发送或执行。',
   '实例化草案',
   '运行实例化缺口',
   '查看缺口与原始资料回执',
@@ -206,9 +206,9 @@ requireAll(commandCenterUnderstanding, [
 forbidText(commandCenterUnderstanding, 'build_enterprise_business_knowledge_asset', 'command center understanding projection');
 
 requireAll(serviceComposition, [
-  'from .private_pilot_understanding_preflight import UnderstandingPreflightProjectionMixin',
+  'from .private_pilot_understanding_preflight import (',
   'UnderstandingPreflightProjectionMixin,\n    ScanHandlersMixin,',
-  'from .private_pilot_command_center_understanding import UnderstandingCommandCenterProjectionMixin',
+  'from .private_pilot_command_center_understanding import (',
   'UnderstandingCommandCenterProjectionMixin,\n    CommandCenterBuilderMixin,',
 ], 'private pilot composition');
 
@@ -222,9 +222,9 @@ requireAll(knowledgeApi, [
 forbidAll(knowledgeApi, ['\n      type:', 'localStorage', 'sessionStorage'], 'knowledge ingest API');
 
 requireAll(ingestHandler, [
-  'explicit_type = str(body.get("type") or body.get("doc_type") or "")',
-  'resolve_knowledge_source_type(',
-  'extracted_text = str(doc_info.get("text") or "")',
+  'explicit_type = str(\n            body.get("type") or body.get("doc_type") or ""\n        ).strip().lower()',
+  'ingest_uploaded_enterprise_material(',
+  'type_resolution = str(authority_result.get("type_resolution") or "")',
   'defer_auto_scan = body.get("defer_auto_scan") is True',
   'finalize_batch = body.get("finalize_batch") is True',
   'source_type_resolution',
@@ -236,9 +236,8 @@ forbidAll(ingestHandler, [
 
 requireAll(projectAssets, [
   'def resolve_knowledge_source_type(',
-  'from .enterprise_knowledge_center import _classify_source',
-  'return normalized, "automatic"',
-  'return normalized, "explicit_override"',
+  'from .enterprise_knowledge_center import classify_enterprise_knowledge_source',
+  'return detected, "explicit" if requested else "automatic"',
 ], 'knowledge source classifier');
 forbidText(projectAssets, 'return "prd"', 'knowledge source classifier');
 

@@ -352,11 +352,11 @@ export function EnterpriseCampaigns() {
       <section className="card mb-4">
         <span className="panel-kicker">零配置运行</span>
         <h2>开始企业系统验证</h2>
-        <p className="muted">后台自动选择目标、有效资料、登录方式、测试数据和活动审批场景；只有安全门禁或关键歧义无法解决时才会中断。</p>
+        <p className="muted">后台会自动选择目标服务、有效资料快照、登录方式、测试数据方案和可执行场景；只有安全门禁或关键歧义无法解决时才会中断。</p>
         <div className="settings-grid">
           <div><span className="muted">自动目标</span><p>{enabledServices[0] ? `${serviceDisplayName(enabledServices[0])} · ${asText(enabledServices[0].base_url)}` : (serviceError ? `读取失败：${serviceError}` : '由后台从项目上下文解析')}</p></div>
           <div><span className="muted">自动资料</span><p>{sourceError ? `读取失败：${sourceError}` : resolvedSourceId ? `${apiSources.find((source) => source.source_id === resolvedSourceId)?.filename || resolvedSourceId}` : `${sources.length} 份资料由后台自动选择`}</p></div>
-          <div><span className="muted">自动场景</span><p>{forceReadOnly ? '本次只读熔断，跳过全部上传场景' : scenarioState.loading ? '正在同步审批场景…' : scenarioState.error ? `同步失败：${scenarioState.error}` : scenarioState.refs.length > 0 ? `${scenarioState.refs.length} 个已审批 UI 场景自动纳入` : '普通接口、页面与只读验证由后台自动生成'}</p></div>
+          <div><span className="muted">自动场景</span><p>{forceReadOnly ? '本次只读熔断，跳过全部上传场景' : scenarioState.loading ? '正在同步审批场景…' : scenarioState.error ? `同步失败：${scenarioState.error}` : scenarioState.refs.length > 0 ? `${scenarioState.refs.length} 个已审批 UI 场景由后台自动纳入` : '普通接口、页面与只读验证由后台自动生成'}</p></div>
           <div><span className="muted">自动观察</span><p>{configuredDbCount > 0 ? `接口、页面及 ${configuredDbCount} 组数据库观察自动编排` : '接口与页面观察自动编排；数据库为可选增强'}</p></div>
           <div><span className="muted">安全边界</span><p>{forceReadOnly ? '强制只读已开启，后台不会发送写请求' : '环境类型、审批、before/after 与 cleanup 由后台门禁控制'}</p></div>
         </div>
