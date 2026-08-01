@@ -71,6 +71,7 @@ tests/test_identity_annotation_http_contract.py
 tests/test_identity_field_evidence.py
 tests/test_identity_structural_evidence.py
 tests/test_identity_structural_review.py
+tests/test_identity_structural_review_governance.py
 tests/test_identity_benchmark_cli.py
 tests/test_identity_benchmark_regression.py
 tests/test_identity_benchmark_repository.py
