@@ -1,0 +1,198 @@
+
++
++def test_source_declared_role_table_outranks_lexicon_role_translation() -> None:
++    roles = _roles_from_text(ROLE_TABLE + "\ncustomer tenant 客服", "source:rules")
++
++    assert [row["role"] for row in roles] == [
++        "CUSTOMER",
++        "AGENT",
++        "SUPERVISOR",
++        "ADMIN",
++    ]
++    assert roles[0]["aliases"] == ["客户"]
++    assert roles[1]["aliases"] == ["客服代理", "代理"]
++    assert roles[2]["aliases"] == ["主管"]
++    assert roles[3]["aliases"] == ["管理员"]
++    assert all(row["identity_authority"] == "SOURCE_DECLARED_ROLE_TABLE" for row in roles)
++    assert not {"buyer", "operator", "support", "tenant_user"} & {
++        row["role"] for row in roles
++    }
++
++
++def test_source_preserving_blank_lines_do_not_destroy_role_table_identity() -> None:
++    projected = "\n\n".join(line for line in ROLE_TABLE.strip().splitlines())
++
++    roles = _roles_from_text(projected, "source:projected")
++
++    assert [row["role"] for row in roles] == [
++        "CUSTOMER",
++        "AGENT",
++        "SUPERVISOR",
++        "ADMIN",
++    ]
++    assert roles[1]["aliases"] == ["客服代理", "代理"]
++
++
++def test_fact_actor_coordinate_uses_source_declared_canonical_role() -> None:
++    roles = _roles_from_text(ROLE_TABLE, "source:rules")
++    asset = {
++        "roles": roles,
++        "business_fact_ledger": {
++            "items": [_fact("只有被分配的代理可以操作", "代理")]
++        },
++    }
++
++    normalized = normalize_explicit_business_fact_semantics(asset)
++    fact = normalized["business_fact_ledger"]["items"][0]
++    behavior = _behavior_from_fact(fact)
++
++    assert fact["subject"]["actor_refs"] == ["AGENT"]
++    assert "被分配" in fact["conditions"]
++    assert behavior is not None
++    assert behavior["actor_refs"] == ["AGENT"]
++
++
++def test_actor_model_uses_role_table_as_single_identity_authority() -> None:
++    explicit = _roles_from_text(ROLE_TABLE, "source:rules")
++    asset = {
++        "roles": [
++            *explicit,
++            {
++                "role_id": "role:api:buyer",
++                "source_id": "source:api",
++                "role": "buyer",
++                "aliases": ["customer"],
++                "identity_authority": "LEXICON_FALLBACK",
++            },
++            {
++                "role_id": "role:api:admin",
++                "source_id": "source:api",
++                "role": "admin",
++                "aliases": ["管理员"],
++                "identity_authority": "LEXICON_FALLBACK",
++            },
++        ],
++        "permission_matrix": [
++            {
++                "permission_id": "permission:admin",
++                "role": "admin",
++                "resource": "SLA",
++                "actions": ["create"],
++                "decision": "allow",
++            }
++        ],
++    }
++    facts = [_fact("只有客户可以操作工单", "CUSTOMER")]
++    operations = [
++        {
++            "operation_id": "operation:create-ticket",
++            "actor_refs": ["客户"],
++            "evidence": [],
++        }
++    ]
++
++    actors, _unknowns = _build_actors(asset, facts, operations)
++    by_name = {row["name"]: row for row in actors}
++
++    assert set(by_name) == {"CUSTOMER", "AGENT", "SUPERVISOR", "ADMIN"}
++    assert by_name["CUSTOMER"]["aliases"] == ["客户"]
++    assert set(by_name["AGENT"]["aliases"]) == {"客服代理", "代理"}
++    assert set(by_name["ADMIN"]["aliases"]) == {"管理员", "admin"}
++    assert by_name["CUSTOMER"]["responsibility_operation_refs"] == [
++        "operation:create-ticket"
++    ]
++    assert by_name["ADMIN"]["authorization_decision_counts"]["ALLOW"] == 1
++diff --git a/tests/test_term_alias_identity_pipeline.py b/tests/test_term_alias_identity_pipeline.py
++new file mode 100644
++index 0000000..5b93e8f
++--- /dev/null
+++++ b/tests/test_term_alias_identity_pipeline.py
++@@ -0,0 +1,84 @@
+++from __future__ import annotations
+++
+++from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension_extractor_v1 import (
+++    analyze_chinese_business_source,
+++)
+++from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.structured_fact_compiler import (
+++    compile_structure_first_business_facts,
+++)
+++
+++
+++def _alias(fact_id: str, canonical: str, alias: str) -> dict:
+++    statement = f"实体={alias};说明={canonical}"
+++    return {
+++        "fact_id": fact_id,
+++        "kind": "TERM_ALIAS",
+++        "status": "ACCEPTED",
+++        "canonical_term": canonical,
+++        "alias": alias,
+++        "raw_statement": statement,
+++        "source_spans": [
+++            {
+++                "source_id": "business-rules",
+++                "locator": f"BUSINESS_RULES.md#alias={fact_id}",
+++                "quote": statement,
+++                "quote_hash": f"hash-{fact_id}",
+++            }
+++        ],
+++        "ambiguities": [],
+++    }
+++
+++
+++def test_markdown_table_headers_do_not_leak_into_later_tables() -> None:
+++    text = """\
+++| 实体 | 说明 |
+++| --- | --- |
+++| Ticket | 工单，核心业务实体 |
+++| Comment | 工单评论 |
+++
+++## 规则
+++
+++| 规则ID | 规则类型 | 规则描述 |
+++| --- | --- | --- |
+++| BR-001 | AUTHORIZATION | 客户只能查看自己的工单 |
+++| BR-002 | STATE_TRANSITION | 已关闭工单不能评论 |
+++"""
+++
+++    _, _, glossary = analyze_chinese_business_source(
+++        {"source_id": "business-rules", "filename": "BUSINESS_RULES.md", "text": text},
+++        asset={"business_objects": [], "roles": [], "permission_matrix": [], "data_tables": []},
+++    )
+++
+++    assert {(row["canonical_term"], row["alias"]) for row in glossary} == {
+++        ("工单", "Ticket"),
+++        ("工单评论", "Comment"),
+++    }
+++    assert not any(str(row.get("alias", "")).startswith("BR-") for row in glossary)
+++    assert not any(row.get("canonical_term") == "AUTHORIZATION" for row in glossary)
+++
+++
+++def test_structure_first_signature_preserves_every_term_alias_pair() -> None:
+++    aliases = [
+++        _alias("ticket", "工单", "Ticket"),
+++        _alias("comment", "工单评论", "Comment"),
+++        _alias("attachment", "工单附件", "Attachment"),
+++    ]
+++    asset = {
+++        "asset_id": "term-alias-pipeline",
+++        "business_fact_ledger": {
+++            "schema": "qualibug.business-fact-ledger.v1",
+++            "fact_authority": "original_chinese_source_span",
+++            "items": aliases,
+++        },
+++    }
+++
+++    result = compile_structure_first_business_facts(asset, [])
+++    rows = [
+++        row
+++        for row in result["business_fact_ledger"]["items"]
+++        if row.get("fact_type") == "TERM_ALIAS"
+++    ]
+++
+++    assert len(rows) == 3
+++    assert {(row["canonical_term"], row["alias"]) for row in rows} == {
+++        ("工单", "Ticket"),
+++        ("工单评论", "Comment"),
+++        ("工单附件", "Attachment"),
+++    }
+++    assert len({row["semantic_signature"] for row in rows}) == 3
