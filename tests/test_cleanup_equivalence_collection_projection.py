@@ -57,7 +57,11 @@ def _evaluate(
             "status_code": 200,
             "body": {"items": after_cleanup_rows},
         },
-        runtime_bindings=runtime_bindings or {"id": TARGET_ID},
+        runtime_bindings=(
+            runtime_bindings
+            if runtime_bindings is not None
+            else {"id": TARGET_ID}
+        ),
         cleanup_execution_receipt=_cleanup_receipt(),
     )
 
@@ -123,6 +127,17 @@ def test_row_missing_composite_identity_field_remains_fail_closed() -> None:
         before_rows=[],
         after_write_rows=[{"tenant_id": TENANT_ID, "id": TARGET_ID}],
         after_cleanup_rows=[{"id": TARGET_ID}],
+    )
+    assert receipt["equivalence_status"] == "NOT_EQUIVALENT"
+    assert receipt["reason_code"] == "ENTITY_STILL_PRESENT_AFTER_CLEANUP"
+
+
+def test_identity_value_type_mismatch_remains_fail_closed() -> None:
+    receipt = _evaluate(
+        runtime_bindings={"id": 1},
+        before_rows=[],
+        after_write_rows=[{"id": 1}],
+        after_cleanup_rows=[{"id": "1"}],
     )
     assert receipt["equivalence_status"] == "NOT_EQUIVALENT"
     assert receipt["reason_code"] == "ENTITY_STILL_PRESENT_AFTER_CLEANUP"
