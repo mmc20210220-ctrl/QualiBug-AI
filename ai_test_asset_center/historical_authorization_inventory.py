@@ -56,6 +56,14 @@ _PROJECT_STATUSES = (
     "CONTRADICTION",
 )
 _ARTIFACT_STATUSES = _PROJECT_STATUSES + ("INVALID_ARTIFACT",)
+_MIGRATION_STATUSES = {
+    "NOT_AVAILABLE",
+    "NOT_REQUIRED",
+    "FAILED",
+    "MIGRATED",
+    "REBUILD_BLOCKED",
+    "MISSING",
+}
 _ARTIFACT_FIELDS = {
     "artifact_path",
     "artifact_sha256",
@@ -216,6 +224,7 @@ def _artifact_snapshot(
     if (
         before.st_size != after.st_size
         or before.st_mtime_ns != after.st_mtime_ns
+        or before.st_ino != after.st_ino
     ):
         return {}, metadata, "ARTIFACT_CHANGED_DURING_READ"
     try:
@@ -433,18 +442,33 @@ def audit_historical_authorization_artifact(
 
     try:
         migrated = migrate_historical_authorization_scan_result(payload)
+    except HistoricalAuthorizationArtifactMigrationError as exc:
+        reason = _text(exc)
+        registry_rebuild_failure = reason.startswith(
+            "historical_authorization_registry_rebuild_failed"
+        )
+        return _artifact_row(
+            metadata,
+            status=(
+                "REBUILD_BLOCKED"
+                if registry_rebuild_failure
+                else "CONTRADICTION"
+            ),
+            reason=reason,
+            quarantine=quarantine,
+            migration_status="FAILED",
+            rebuild_reason=reason,
+            **common,
+        )
+    try:
         migration = validate_historical_authorization_artifact_migration_receipt(
             _dict(migrated.get("historical_authorization_artifact_migration"))
         )
     except HistoricalAuthorizationArtifactMigrationError as exc:
         reason = _text(exc)
-        contradiction = (
-            "historical_authorization_contradiction" in reason
-            or "historical_authorization_formal_scope_invalid" in reason
-        )
         return _artifact_row(
             metadata,
-            status="CONTRADICTION" if contradiction else "REBUILD_BLOCKED",
+            status="CONTRADICTION",
             reason=reason,
             quarantine=quarantine,
             migration_status="FAILED",
@@ -584,6 +608,7 @@ def _report_summary(
     *,
     missing_projects: list[str],
 ) -> dict[str, Any]:
+    del missing_projects  # Missing filters are navigation diagnostics, not evidence.
     artifacts = [
         artifact for project in projects for artifact in project["artifacts"]
     ]
@@ -682,6 +707,72 @@ def build_historical_authorization_inventory(
     return validate_historical_authorization_inventory(payload)
 
 
+def _validate_artifact_row(row: dict[str, Any]) -> None:
+    if set(row) != _ARTIFACT_FIELDS:
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_artifact_fields_invalid"
+        )
+    status = _text(row.get("status")).upper()
+    migration_status = _text(row.get("migration_status")).upper()
+    if status not in _ARTIFACT_STATUSES or migration_status not in _MIGRATION_STATUSES:
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_artifact_status_invalid"
+        )
+    if row.get("source_evidence_rewritten") is not False:
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_artifact_mutation_forbidden"
+        )
+    if (
+        not _text(row.get("artifact_path"))
+        or len(_text(row.get("artifact_sha256"))) != 64
+        or not _text(row.get("authority_scope_id"))
+    ):
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_artifact_identity_invalid"
+        )
+    finding_ids = row.get("quarantined_finding_ids")
+    if (
+        not isinstance(finding_ids, list)
+        or finding_ids
+        != sorted(set(_text(value) for value in finding_ids if _text(value)))
+        or int(row.get("quarantine_count") or 0) != len(finding_ids)
+    ):
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_artifact_quarantine_invalid"
+        )
+    queue = [_dict(value) for value in _list(row.get("rerun_queue"))]
+    if (
+        int(row.get("rerun_required_count") or 0)
+        != sum(_text(value.get("action")) == "RERUN_REQUIRED" for value in queue)
+        or int(row.get("manual_recompile_required_count") or 0)
+        != sum(
+            _text(value.get("action")) == "MANUAL_RECOMPILE_REQUIRED"
+            for value in queue
+        )
+    ):
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_artifact_rerun_count_invalid"
+        )
+    if status == "CLEAR" and (
+        int(row.get("quarantine_count") or 0) != 0
+        or migration_status != "NOT_REQUIRED"
+    ):
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_artifact_clear_semantics_invalid"
+        )
+    if status == "QUARANTINED" and migration_status != "MIGRATED":
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_artifact_migration_semantics_invalid"
+        )
+    if status == "REBUILD_BLOCKED" and migration_status not in {
+        "REBUILD_BLOCKED",
+        "FAILED",
+    }:
+        raise HistoricalAuthorizationInventoryError(
+            "historical_authorization_inventory_artifact_rebuild_semantics_invalid"
+        )
+
+
 def validate_historical_authorization_inventory(
     report: dict[str, Any],
 ) -> dict[str, Any]:
@@ -698,9 +789,13 @@ def validate_historical_authorization_inventory(
         raise HistoricalAuthorizationInventoryError(
             "historical_authorization_inventory_source_roots_invalid"
         )
-    if not _text(row.get("generated_at_utc")) or not _text(row.get("root")):
+    if (
+        row.get("status") not in {"CLEAR", "ACTION_REQUIRED", "CONTRADICTION"}
+        or not _text(row.get("generated_at_utc"))
+        or not _text(row.get("root"))
+    ):
         raise HistoricalAuthorizationInventoryError(
-            "historical_authorization_inventory_identity_missing"
+            "historical_authorization_inventory_identity_invalid"
         )
     if row.get("source_artifacts_modified") is not False:
         raise HistoricalAuthorizationInventoryError(
@@ -724,6 +819,7 @@ def validate_historical_authorization_inventory(
     if (
         any(set(value) != _PROJECT_FIELDS for value in projects)
         or project_ids != sorted(set(project_ids))
+        or any(value.get("status") not in _PROJECT_STATUSES for value in projects)
     ):
         raise HistoricalAuthorizationInventoryError(
             "historical_authorization_inventory_projects_invalid"
@@ -731,16 +827,8 @@ def validate_historical_authorization_inventory(
     canonical_projects: list[dict[str, Any]] = []
     for project in projects:
         artifacts = [_dict(value) for value in _list(project.get("artifacts"))]
-        if (
-            any(set(value) != _ARTIFACT_FIELDS for value in artifacts)
-            or any(
-                value.get("source_evidence_rewritten") is not False
-                for value in artifacts
-            )
-        ):
-            raise HistoricalAuthorizationInventoryError(
-                "historical_authorization_inventory_artifacts_invalid"
-            )
+        for artifact in artifacts:
+            _validate_artifact_row(artifact)
         expected_project = _project_inventory(project["project_id"], artifacts)
         if project != expected_project:
             raise HistoricalAuthorizationInventoryError(
