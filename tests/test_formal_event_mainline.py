@@ -90,6 +90,26 @@ def _assertion() -> dict[str, Any]:
     }
 
 
+def _observation(
+    *,
+    total: int,
+    correlated: int,
+    event_types: list[str],
+    mismatched: list[str] | None = None,
+    completed: bool = True,
+) -> dict[str, Any]:
+    return {
+        "expected_min_count": 1,
+        "expected_max_count": 1,
+        "observed_total_count": total,
+        "observed_correlated_count": correlated,
+        "observed_event_types": event_types,
+        "mismatched_event_types": list(mismatched or []),
+        "observation_window_completed": completed,
+        "coverage_complete": completed,
+    }
+
+
 def test_formal_event_surface_installs_additively() -> None:
     installed = events.install_formal_event_surface()
     from ai_test_asset_center.experiment_protocol_registry import (
@@ -105,49 +125,44 @@ def test_formal_event_surface_installs_additively() -> None:
 
 def test_event_protocol_compiles_source_grounded_contract() -> None:
     events.install_formal_event_surface()
-    from ai_test_asset_center.experiment_compiler import (
-        compile_experiment_for_obligation,
+    from ai_test_asset_center.experiment_protocol_registry import (
+        resolve_family_protocol,
+        validate_registered_protocol_result,
     )
 
-    operation_ref = "bir_op_read_event_trigger"
-    obligation = {
-        "obligation_id": "obl_event_1",
-        "risk_family": events.RISK_FAMILY,
-        "required_operations": [operation_ref],
-        "required_actors": ["actor_public"],
-        "required_observers": [events.OBSERVER_ID],
-        "property": {
+    protocol = resolve_family_protocol(
+        events.RISK_FAMILY,
+        events.PROTOCOL_TEMPLATE,
+    )
+    operation = {
+        "id": "bir_op_read_event_trigger",
+        "operation_id": "read_event_trigger",
+        "source_operation_refs": ["read_event_trigger"],
+        "method": "GET",
+        "path": "/api/event-trigger",
+        "raw_path": "/api/event-trigger",
+    }
+    compiled = protocol["compiler"]({
+        "property_spec": {
             "template": events.PROTOCOL_TEMPLATE,
             "invariant_ref": "inv_order_created_event",
-            "operation_ref": operation_ref,
+            "operation_ref": operation["id"],
             "actor_ref": "actor_public",
             "event_contract": _event_contract(),
             "formal_event_binding_identity": _binding_identity(),
         },
-        "source_refs": [_source_ref()],
-    }
-    behavior_ir = {
-        "actors": [{
-            "id": "actor_public",
-            "role": "public",
-            "status": "accepted",
-        }],
-        "operations": [{
-            "id": operation_ref,
-            "operation_id": "read_event_trigger",
-            "source_operation_refs": ["read_event_trigger"],
-            "method": "GET",
-            "path": "/api/event-trigger",
-            "raw_path": "/api/event-trigger",
-        }],
-    }
-    experiment = compile_experiment_for_obligation(
-        obligation,
-        behavior_ir=behavior_ir,
-        environment_type="test",
-        available_adapters={"http_api", events.ADAPTER},
+        "operation_ref": operation["id"],
+        "operation": operation,
+        "treatment_actor_ref": "actor_public",
+    })
+    experiment = validate_registered_protocol_result(
+        family=events.RISK_FAMILY,
+        protocol=events.PROTOCOL_TEMPLATE,
+        required_adapters=protocol["required_adapters"],
+        compiled=compiled,
     )
-    assert experiment["compile_receipt"]["status"] == "COMPILED"
+
+    assert experiment["status"] == "COMPILED"
     assert events.ADAPTER in experiment["compiled_adapters"]
     assert experiment["treatment_plan"][0]["protocol_step"] == "event_trigger"
     assert experiment["assertions"][0]["kind"] == events.ASSERTION_KIND
@@ -156,66 +171,71 @@ def test_event_protocol_compiles_source_grounded_contract() -> None:
 def test_event_oracle_detects_delivery_count_violation() -> None:
     events.install_formal_event_surface()
     from ai_test_asset_center.assertion_dsl import evaluate_assertion
+    from ai_test_asset_center.formal_event_verdict_reason_bridge import (
+        classify_event_delivery_violation,
+    )
 
+    observation = _observation(
+        total=0,
+        correlated=0,
+        event_types=[],
+    )
     verdict = evaluate_assertion(
         _assertion(),
-        observations={
-            events.EVIDENCE_KEY: {
-                "observed_total_count": 0,
-                "observed_correlated_count": 0,
-                "observed_event_types": [],
-                "mismatched_event_types": [],
-                "observation_window_completed": True,
-                "coverage_complete": True,
-            },
-        },
+        observations={events.EVIDENCE_KEY: observation},
     )
     assert verdict["passed"] is False
-    assert verdict["reason_code"] == "EVENT_DELIVERY_COUNT_BELOW_MINIMUM"
+    assert classify_event_delivery_violation(observation) == [
+        "EVENT_DELIVERY_COUNT_BELOW_MINIMUM"
+    ]
 
 
 def test_event_oracle_detects_duplicate_unique_deliveries() -> None:
     events.install_formal_event_surface()
     from ai_test_asset_center.assertion_dsl import evaluate_assertion
+    from ai_test_asset_center.formal_event_verdict_reason_bridge import (
+        classify_event_delivery_violation,
+    )
 
+    observation = _observation(
+        total=2,
+        correlated=2,
+        event_types=["OrderCreated", "OrderCreated"],
+    )
     verdict = evaluate_assertion(
         _assertion(),
-        observations={
-            events.EVIDENCE_KEY: {
-                "observed_total_count": 2,
-                "observed_correlated_count": 2,
-                "observed_unique_event_count": 2,
-                "observed_unique_correlated_count": 2,
-                "duplicate_event_count": 0,
-                "observed_event_types": ["OrderCreated", "OrderCreated"],
-                "mismatched_event_types": [],
-                "observation_window_completed": True,
-                "coverage_complete": True,
-            },
-        },
+        observations={events.EVIDENCE_KEY: observation},
     )
     assert verdict["passed"] is False
-    assert verdict["reason_code"] == "EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
+    assert classify_event_delivery_violation(observation) == [
+        "EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
+    ]
 
 
 def test_event_oracle_indeterminate_when_window_not_completed() -> None:
     events.install_formal_event_surface()
     from ai_test_asset_center.assertion_dsl import evaluate_assertion
+    from ai_test_asset_center.formal_event_verdict_reason_bridge import (
+        classify_event_delivery_violation,
+    )
 
+    observation = _observation(
+        total=1,
+        correlated=0,
+        event_types=["OrderCreated"],
+        completed=False,
+    )
     verdict = evaluate_assertion(
         _assertion(),
-        observations={
-            events.EVIDENCE_KEY: {
-                "observed_correlated_count": 0,
-                "observed_event_types": ["OrderCreated"],
-                "mismatched_event_types": [],
-                "observation_window_completed": False,
-                "coverage_complete": False,
-            },
-        },
+        observations={events.EVIDENCE_KEY: observation},
     )
     assert verdict["passed"] is None
-    assert verdict["reason_code"] == "EVENT_OBSERVATION_COVERAGE_INCOMPLETE"
+    # Coverage-incomplete observations are never promoted to a final violation;
+    # the runtime Oracle receipt owns the INDETERMINATE reason code.
+    assert classify_event_delivery_violation(observation) == [
+        "EVENT_DELIVERY_CORRELATION_MISMATCH",
+        "EVENT_DELIVERY_COUNT_BELOW_MINIMUM",
+    ]
 
 
 def test_event_observer_runs_before_cleanup_and_finalizer_reuses_receipt(
