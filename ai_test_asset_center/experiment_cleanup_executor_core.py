@@ -1093,9 +1093,12 @@ def execute_experiment_cleanup_compensation(
                 source_operation_ref = _text(
                     _dict(cleanup).get("compensates_operation_ref")
                 )
+                source_step_id = _text(_dict(cleanup).get("source_step_id"))
                 source_steps = []
                 for step in steps_out:
                     if _text(_dict(step).get("phase")) not in {"control", "treatment"}:
+                        continue
+                    if source_step_id and _text(_dict(step).get("step_id")) != source_step_id:
                         continue
                     if _text(_dict(step).get("operation_ref")) != source_operation_ref:
                         continue
@@ -1675,31 +1678,74 @@ def execute_experiment_cleanup_compensation(
         for receipt in contract_evidence_receipts
         if _text(receipt.get("kind")) == "cleanup"
     }
-    for cleanup_subject in activation_requirements["cleanup"]:
+    cleanup_plan = _list(exp.get("cleanup_plan"))
+    for cleanup_index, cleanup_subject in enumerate(
+        activation_requirements["cleanup"]
+    ):
         if cleanup_subject in recorded_cleanup_subjects:
             continue
+        cleanup_contract = (
+            _dict(cleanup_plan[cleanup_index])
+            if cleanup_index < len(cleanup_plan)
+            else {}
+        )
+        source_step_id = _text(cleanup_contract.get("source_step_id"))
+        if source_step_id:
+            scoped_write_steps = [
+                step
+                for step in steps_out
+                if _text(_dict(step).get("phase")) in {"control", "treatment"}
+                and _text(_dict(step).get("step_id")) == source_step_id
+                and _dict(step.get("governance_receipt")).get("accepted") is True
+            ]
+            scoped_accepted_writes = [
+                _dict(step.get("governance_receipt"))
+                for step in scoped_write_steps
+            ]
+            scoped_writes_requiring_cleanup = [
+                attempt
+                for attempt in scoped_accepted_writes
+                if _accepted_write_needs_cleanup(attempt)
+            ]
+        else:
+            # Legacy cleanup plans without source_step_id have no safe per-step
+            # identity. Preserve their historical whole-plan scope explicitly;
+            # source-scoped plans must never use this fallback.
+            scoped_accepted_writes = accepted_governed_writes
+            scoped_writes_requiring_cleanup = (
+                accepted_governed_writes_requiring_cleanup
+            )
         matching_steps = [
             step for step in steps_out
             if _text(_dict(step).get("cleanup_subject_id")) == cleanup_subject
         ]
+        if source_step_id:
+            source_scoped_matching_steps = [
+                step
+                for step in matching_steps
+                if not _text(_dict(step).get("compensates_step_id"))
+                or _text(_dict(step).get("compensates_step_id")) == source_step_id
+            ]
+            if source_scoped_matching_steps:
+                matching_steps = source_scoped_matching_steps
         cleanup_governance_receipts = [
             _dict(step.get("governance_receipt"))
             for step in matching_steps
             if isinstance(step.get("governance_receipt"), dict)
         ]
-        restoration_verified = bool(accepted_governed_writes_requiring_cleanup) and all(
+        restoration_verified = bool(scoped_writes_requiring_cleanup) and all(
             any(
                 _cleanup_restores_governed_write(original, cleanup)
                 for cleanup in cleanup_governance_receipts
             )
-            for original in accepted_governed_writes_requiring_cleanup
+            for original in scoped_writes_requiring_cleanup
         )
         audit_receipt_ids = sorted({
             receipt_id
             for receipt_id in (
                 _governance_audit_receipt_id(governed)
                 for governed in [
-                    *accepted_governed_writes,
+                    *scoped_accepted_writes,
                     *cleanup_governance_receipts,
                 ]
             )
@@ -1731,9 +1777,9 @@ def execute_experiment_cleanup_compensation(
                     int(_dict(step).get("status_code") or 0)
                     for step in matching_steps
                 ],
-                "accepted_write_count": len(accepted_governed_writes),
+                "accepted_write_count": len(scoped_writes_requiring_cleanup),
                 "cleanup_required_write_count": len(
-                    accepted_governed_writes_requiring_cleanup
+                    scoped_writes_requiring_cleanup
                 ),
                 "cleanup_write_count": sum(
                     1

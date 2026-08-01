@@ -344,3 +344,164 @@ def test_mismatched_operation_does_not_enter_adapter_cleanup_loop(
     assert binding["complete"] is False
     assert binding["bound_step_ids"] == []
     assert binding["missing_runtime_operation_refs"] == [_OPERATION]
+
+
+def test_http_cleanup_contracts_are_scoped_to_their_source_write(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Each source-step cleanup must prove only its own accepted write."""
+
+    def governed_write(*, step_id: str, identity: str) -> dict:
+        return {
+            "accepted": True,
+            "method": "POST",
+            "path": "/resources",
+            "audit_path": f"audit/{step_id}.jsonl",
+            "write": {
+                "status": 201,
+                "body": {"id": identity},
+            },
+            "before": {"status": 200, "body": []},
+            "after": {"status": 200, "body": [{"id": identity}]},
+        }
+
+    source_steps = [
+        {
+            "step_id": "control_1",
+            "phase": "control",
+            "operation_ref": "op-create",
+            "actor_ref": "actor-public",
+            "method": "POST",
+            "path": "/resources",
+            "status_code": 201,
+            "body": {"id": "resource-control"},
+            "governance_receipt": governed_write(
+                step_id="control_1", identity="resource-control"
+            ),
+        },
+        {
+            "step_id": "treatment_1",
+            "phase": "treatment",
+            "operation_ref": "op-create",
+            "actor_ref": "actor-public",
+            "method": "POST",
+            "path": "/resources",
+            "status_code": 201,
+            "body": {"id": "resource-treatment"},
+            "governance_receipt": governed_write(
+                step_id="treatment_1", identity="resource-treatment"
+            ),
+        },
+    ]
+
+    cleanup_plan = [
+        {
+            "action": "source_declared_compensation",
+            "compensates_operation_ref": "op-create",
+            "operation_ref": "op-delete",
+            "method": "DELETE",
+            "path": "/resources/{id}",
+            "source_step_id": "treatment_1",
+        },
+        {
+            "action": "source_declared_compensation",
+            "compensates_operation_ref": "op-create",
+            "operation_ref": "op-delete",
+            "method": "DELETE",
+            "path": "/resources/{id}",
+            "source_step_id": "control_1",
+        },
+    ]
+
+    cleanup_paths: list[str] = []
+
+    def fake_cleanup_write(**kwargs) -> dict:
+        path = kwargs["path"]
+        cleanup_paths.append(path)
+        identity = path.rsplit("/", 1)[-1]
+        return {
+            "accepted": True,
+            "method": "DELETE",
+            "path": path,
+            "audit_path": f"audit/cleanup-{identity}.jsonl",
+            "audit_record": {"phase": "cleanup", "path": path},
+            "before": {"status": 200, "body": [{"id": identity}]},
+            "write": {"status": 204, "body": {}},
+            "after": {"status": 200, "body": []},
+        }
+
+    monkeypatch.setattr(cleanup_core, "execute_governed_control_write", fake_cleanup_write)
+    monkeypatch.setattr(cleanup_core, "sandbox_write_allowed", lambda **_: (True, "approved"))
+    monkeypatch.setattr(cleanup, "execute_governed_control_write", fake_cleanup_write)
+    monkeypatch.setattr(cleanup, "sandbox_write_allowed", lambda **_: (True, "approved"))
+    monkeypatch.setattr(cleanup_core, "_declared_observation_path", lambda *_, **__: "/resources")
+    monkeypatch.setattr(cleanup_core, "seal_after_cleanup_observation", lambda **_: {})
+
+    result = cleanup.execute_experiment_cleanup_compensation(
+        exp={
+            "safety_contract": {"governed_write": True},
+            "cleanup_plan": cleanup_plan,
+            "behavior_ir": {"entities": []},
+            "write_reversibility_proof": {
+                "proof_id": "proof-http-two-writes",
+                "cleanup_authority": {
+                    "mode": "identity_delete",
+                    "cleanup_operation_ref": "op-delete",
+                },
+            },
+        },
+        steps_out=source_steps,
+        observations={},
+        contract_evidence_receipts=[],
+        activation_requirements={
+            "cleanup": ["cleanup-treatment", "cleanup-control"]
+        },
+        pre_transport_block_reasons=[],
+        request_bodies_for_cleanup={},
+        runtime_bindings={},
+        pending_fixture_cleanups=[],
+        cleanup_failures=0,
+        ops={
+            "op-create": {"id": "op-create", "method": "POST", "path": "/resources"},
+            "op-delete": {"id": "op-delete", "method": "DELETE", "path": "/resources/{id}"},
+        },
+        actors={"actor-public": {"id": "actor-public", "role": "public"}},
+        tokens={},
+        eid="experiment-http-two-writes",
+        oid="obligation-http-two-writes",
+        resolved_campaign_id="campaign-http-two-writes",
+        resolved_execution_id="execution-http-two-writes",
+        campaign_id="campaign-http-two-writes",
+        root=tmp_path,
+        project="runtime-cleanup",
+        base_url="https://sut.example.test",
+        runtime_contract={
+            "status": "approved",
+            "environment_type": "test",
+            "execution_mode": "approved_sandbox_write",
+        },
+    )
+
+    cleanup_receipts = [
+        receipt
+        for receipt in result["contract_evidence_receipts"]
+        if receipt.get("kind") == "cleanup"
+    ]
+    assert [receipt["status"] for receipt in cleanup_receipts] == [
+        "COMPLETED",
+        "COMPLETED",
+    ]
+    assert [
+        receipt["evidence"]["accepted_write_count"]
+        for receipt in cleanup_receipts
+    ] == [1, 1]
+    assert [
+        receipt["evidence"]["cleanup_write_count"]
+        for receipt in cleanup_receipts
+    ] == [1, 1]
+    assert cleanup_paths == [
+        "/resources/resource-treatment",
+        "/resources/resource-control",
+    ]
+    assert result["cleanup_failures"] == 0
