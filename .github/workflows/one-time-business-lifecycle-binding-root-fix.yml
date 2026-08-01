@@ -1,7 +1,7 @@
 name: One-time verified business lifecycle binding delivery
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
     paths:
@@ -28,13 +28,14 @@ jobs:
           git init .
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git fetch --depth=300 origin main
-          git checkout -B main FETCH_HEAD
+          git fetch origin "${GITHUB_HEAD_REF}:refs/remotes/origin/${GITHUB_HEAD_REF}"
+          git checkout -B delivery origin/main
 
       - name: Verify and apply exact lifecycle patch
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           import base64, gzip, hashlib
           source = Path('.github/patches/business_lifecycle_binding_root_fix.patch.gz.b64')
@@ -61,18 +62,15 @@ jobs:
           diff -u /tmp/expected-files.txt /tmp/actual-files.txt
           git diff --cached --check
 
-      - name: Install focused dependencies
+      - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
           python3 -m pip install -r requirements.txt pytest
 
-      - name: Create verification authority
+      - name: Compile, regress and measure
         shell: bash
         run: |
-          set -euo pipefail
-          cat > /tmp/verify-lifecycle-binding.sh <<'VERIFY'
-          #!/usr/bin/env bash
           set -euo pipefail
           python3 -m py_compile \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py \
@@ -112,11 +110,8 @@ jobs:
           assert any('users/addresses' in value for value in targets), targets
           print({'confirmed': len(behaviors), 'scenario_ready': metrics.get('scenario_ready_binding_count'), 'bound_outcomes': metrics.get('bound_mandatory_outcome_count'), 'lifecycle_observers': len(rows), 'unknowns': len(unknowns)})
           PY
-          VERIFY
-          chmod +x /tmp/verify-lifecycle-binding.sh
-          /tmp/verify-lifecycle-binding.sh
 
-      - name: Commit verified source
+      - name: Commit verified files to delivery branch
         shell: bash
         run: |
           set -euo pipefail
@@ -134,20 +129,5 @@ jobs:
           git config user.name "mmc20210220-ctrl"
           git config user.email "mmc20210220@gmail.com"
           git commit -m "fix(binding): close entity lifecycle outcome observers" -m "Bind source-declared creation and deletion outcomes to exact collection observers, carry one ObserverBinding identity through Scenario, Execution Contract, Runtime Plan and materialization, and keep HTTP status or collection count alone ineligible as lifecycle proof."
-
-      - name: Rebase, reverify and push main
-        shell: bash
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4 5 6 7 8; do
-            git fetch origin main
-            if ! git merge-base --is-ancestor origin/main HEAD; then
-              git rebase origin/main
-              /tmp/verify-lifecycle-binding.sh
-              git diff --check
-            fi
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-          done
-          exit 1
+          expected="$(git rev-parse "origin/${GITHUB_HEAD_REF}")"
+          git push --force-with-lease="refs/heads/${GITHUB_HEAD_REF}:${expected}" origin "HEAD:${GITHUB_HEAD_REF}"
