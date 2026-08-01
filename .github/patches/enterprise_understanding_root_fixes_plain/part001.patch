@@ -1,0 +1,307 @@
++                    "conflict_lifecycle": lifecycle,
+                 }
+             )
++            quality = _dict(fact.get("resolution_quality"))
++            if quality:
++                quality["status"] = "CONFLICTING"
++                fact["resolution_quality"] = quality
++        elif _clear_stale_managed_conflict(fact):
++            stale_conflicting_fact_ids_cleared.append(fact_id)
+     ledger.update(
+         {
+             "items": facts,
+@@ -454,6 +543,10 @@ def reconcile_chinese_business_fact_conflicts(
+     else:
+         gate["unresolved_business_fact_conflicts"] = []
+         gate["removed_conflicting_rule_ids"] = []
++        gate.pop("required_operator_action", None)
++        if _text(gate.get("status")) == "BLOCKED_BUSINESS_COMPREHENSION_CONFLICTING_FACTS":
++            gate["status"] = "PASS"
++            gate["entry_allowed"] = True
+     asset["enterprise_comprehension_gate"] = gate
+ 
+     gaps = [
+@@ -485,6 +578,12 @@ def reconcile_chinese_business_fact_conflicts(
+             ),
+             "chinese_business_conflicting_fact_count": len(conflicting_ids),
+             "chinese_business_conflicting_rules_removed": len(removed_rule_ids),
++            "stale_chinese_business_conflicting_fact_count_cleared": len(
++                stale_conflicting_fact_ids_cleared
++            ),
++            "stale_chinese_business_conflicting_fact_ids_cleared": sorted(
++                stale_conflicting_fact_ids_cleared
++            ),
+             "technical_cross_source_conflict_count": len(prior_technical)
+             + len(
+                 [
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/_parsing.py b/ai_test_asset_center/enterprise_knowledge_center/_parsing.py
+index 4f84634..58864a9 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/_parsing.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/_parsing.py
+@@ -904,16 +904,35 @@ def _uiux_specs_from_text(text: str, source_id: str, source_type: str, filename:
+ 
+ 
+ def _markdown_table_rows(text: str) -> list[dict[str, str]]:
+-    """Parse ordinary Markdown tables without assuming a document language."""
++    """Parse Markdown tables across source-preserving blank-line projection.
++
++    Document IR projects every formal block onto its own line and may insert a
++    blank line between adjacent table rows.  Blank lines therefore do not end a
++    table when the next non-blank line is another pipe row.  A heading, prose
++    line, or any other non-pipe block still terminates the table, so unrelated
++    tables can never inherit one another's headers.
++    """
+     lines = [line.strip() for line in str(text or "").splitlines()]
+     rows: list[dict[str, str]] = []
++
++    def next_nonblank(position: int) -> int:
++        while position < len(lines) and not lines[position]:
++            position += 1
++        return position
++
+     index = 0
+-    while index + 1 < len(lines):
++    while index < len(lines):
++        index = next_nonblank(index)
++        if index >= len(lines):
++            break
+         header_line = lines[index]
+-        separator_line = lines[index + 1]
+-        if "|" not in header_line or "|" not in separator_line:
++        if "|" not in header_line:
+             index += 1
+             continue
++        separator_index = next_nonblank(index + 1)
++        if separator_index >= len(lines):
++            break
++        separator_line = lines[separator_index]
+         headers = [cell.strip() for cell in header_line.strip("|").split("|")]
+         separators = [cell.strip() for cell in separator_line.strip("|").split("|")]
+         if (
+@@ -923,12 +942,17 @@ def _markdown_table_rows(text: str) -> list[dict[str, str]]:
+         ):
+             index += 1
+             continue
+-        index += 2
+-        while index < len(lines) and "|" in lines[index]:
+-            values = [cell.strip() for cell in lines[index].strip("|").split("|")]
++
++        cursor = separator_index + 1
++        while True:
++            cursor = next_nonblank(cursor)
++            if cursor >= len(lines) or "|" not in lines[cursor]:
++                break
++            values = [cell.strip() for cell in lines[cursor].strip("|").split("|")]
+             if len(values) == len(headers) and any(values):
+                 rows.append(dict(zip(headers, values)))
+-            index += 1
++            cursor += 1
++        index = max(cursor, separator_index + 1)
+     return rows
+ 
+ 
+@@ -1691,14 +1715,102 @@ def _rules_from_text(
+     return rules[:180]
+ 
+ 
++_ROLE_TABLE_HEADERS = {"role", "actor", "principal", "角色", "业务角色", "用户角色"}
++_ROLE_DESCRIPTION_HEADERS = {
++    "description", "role_description", "permission", "permissions",
++    "permission_description", "职责", "说明", "角色说明", "权限", "权限说明",
++}
++
++
++def _role_alias_from_description(value: Any) -> str:
++    """Return only the source-declared human role name from a role description.
++
++    Role tables commonly use a stable code in the role column and begin the
++    description with its display name, for example ``CUSTOMER | 客户，可创建…``.
++    The text after the first capability marker describes permissions, not identity.
++    """
++    raw = str(value or "").strip()
++    if not raw:
++        return ""
++    head = re.split(r"[,，;；。]", raw, maxsplit=1)[0].strip()
++    head = re.split(r"(?:可以|可|能够|能|负责|拥有|允许|禁止|不得)", head, maxsplit=1)[0].strip()
++    head = head.strip(" ：:、，,；;。\"'“”‘’[]【】")
++    if not head or len(head) > 64:
++        return ""
++    if re.search(
++        r"(管理员|操作员|审批人|审核人|负责人|经办人|创建人|主管|客户|代理|成员|专员|用户|员工)$",
++        head,
++    ):
++        return head
++    if re.search(r"(?:权限|操作|创建|查看|处理|管理|更新|删除|分配|转移|升级)", head):
++        return ""
++    return head
++
++
++def _explicit_roles_from_tables(text: str, source_id: str) -> list[dict[str, Any]]:
++    """Parse source-declared role identities before any lexical fallback.
++
++    A structured role table is an identity authority.  Its role code and display
++    name must remain one actor; translating either side through a generic lexicon
++    creates parallel actors and destroys behavior ``actor_refs``.
++    """
++    result: list[dict[str, Any]] = []
++    seen: set[str] = set()
++    for index, item in enumerate(_markdown_table_rows(text)):
++        role = str(_permission_field(item, _ROLE_TABLE_HEADERS) or "").strip()
++        if not role:
++            continue
++        description = _permission_field(item, _ROLE_DESCRIPTION_HEADERS)
++        alias = _role_alias_from_description(description)
++        normalized = _norm(role)
++        if not normalized or normalized in seen:
++            continue
++        seen.add(normalized)
++        aliases = []
++        if alias and _norm(alias) != normalized:
++            aliases.append(alias)
++            short_match = re.search(
++                r"(管理员|操作员|审批人|审核人|负责人|经办人|创建人|主管|客户|代理|成员|专员|用户|员工)$",
++                alias,
++            )
++            short_alias = short_match.group(1) if short_match else ""
++            if short_alias and _norm(short_alias) not in {normalized, _norm(alias)}:
++                aliases.append(short_alias)
++        result.append({
++            "role_id": f"role:{source_id}:{normalized}",
++            "source_id": source_id,
++            "role": role,
++            "name": role,
++            "canonical_name": role,
++            "aliases": aliases,
++            "evidence": str(description or role).strip(),
++            "source_locator": f"role_table_row:{index + 1}",
++            "identity_authority": "SOURCE_DECLARED_ROLE_TABLE",
++        })
++    return result
++
++
+ def _roles_from_text(text: str, source_id: str) -> list[dict[str, Any]]:
++    explicit = _explicit_roles_from_tables(text, source_id)
++    if explicit:
++        return explicit
++
+     out: list[dict[str, Any]] = []
+     lower = _norm(text)
+     role_words = _lexicon_dict("role_words") or ROLE_WORDS
+     for role, words in role_words.items():
+         evidence = next((word for word in words if _norm(word) in lower), "")
+         if evidence:
+-            out.append({"role_id": f"role:{source_id}:{role}", "source_id": source_id, "role": role, "evidence": evidence})
++            out.append({
++                "role_id": f"role:{source_id}:{role}",
++                "source_id": source_id,
++                "role": role,
++                "name": role,
++                "canonical_name": role,
++                "aliases": [evidence] if _norm(evidence) != _norm(role) else [],
++                "evidence": evidence,
++                "identity_authority": "LEXICON_FALLBACK",
++            })
+     return out
+ 
+ 
+ diff --git a/ai_test_asset_center/enterprise_knowledge_center/composition.py b/ai_test_asset_center/enterprise_knowledge_center/composition.py
+index 3afea8b..651ba9e 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/composition.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/composition.py
+@@ -64,6 +64,9 @@ from .enterprise_understanding.interface_runtime_contracts import (
+ from .enterprise_understanding.post_compile_fact_governance import (
+     govern_compiled_business_facts,
+ )
++from .enterprise_understanding.explicit_fact_semantic_normalization import (
++    normalize_explicit_business_fact_semantics,
++)
+ from .enterprise_understanding.probe_policy import (
+     build_gated_probes,
+     probe_generation_block_reason,
+@@ -337,6 +340,13 @@ def build_enterprise_business_knowledge_asset(
+         asset, parsed_sources=parsed_sources
+     )
+ 
++    # Normalize source-declared actor/action/object coordinates before semantic
++    # deduplication. Otherwise two rules with the same generic verb/object but
++    # different actors collapse irreversibly and later governance cannot split them.
++    # The post-compile call remains the same authority and is idempotent for newly
++    # discovered typed facts.
++    asset = normalize_explicit_business_fact_semantics(asset)
++
+     # Compile the same source-backed facts through Document Structure IR addresses,
+     # atomize multi-predicate statements, add typed non-modal facts, and upgrade the
+     # single existing ledger. This is not a second product path.
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/authorization_semantics.py b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/authorization_semantics.py
+index 1288ec7..de428f7 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/authorization_semantics.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/authorization_semantics.py
+@@ -63,6 +63,10 @@ _EXPLICIT_AUTH_ALLOW_RE = re.compile(
+     r"(?:有权|拥有权限|授予权限|授权(?:给|由|可)?|允许|准许|permit|authori[sz]ed|has\s+permission)",
+     re.I,
+ )
++_EXCLUSIVE_ACTOR_ALLOW_RE = re.compile(
++    r"(?:只有|仅)(?:[^，,；;。|｜\n]{1,48}?)(?:才)?(?:可以|允许|有权)",
++    re.I,
++)
+ _EXPLICIT_AUTH_DENY_RE = re.compile(
+     r"(?:无权|没有权限|无权限|未授权|未经授权|不允许|禁止访问|拒绝访问|"
+     r"not\s+authori[sz]ed|no\s+permission|permission\s+denied)",
+@@ -194,11 +198,15 @@ def resolve_fact_authorization(fact: dict[str, Any]) -> dict[str, Any]:
+             derivation="explicit_authorization_deny_text",
+             authority_declared=True,
+         )
+-    if _EXPLICIT_AUTH_ALLOW_RE.search(raw):
++    if _EXPLICIT_AUTH_ALLOW_RE.search(raw) or _EXCLUSIVE_ACTOR_ALLOW_RE.search(raw):
+         return _resolved(
+             "ALLOW",
+             semantic_kind="AUTHORIZATION",
+-            derivation="explicit_authorization_allow_text",
++            derivation=(
++                "exclusive_actor_authorization_allow_text"
++                if _EXCLUSIVE_ACTOR_ALLOW_RE.search(raw)
++                else "explicit_authorization_allow_text"
++            ),
+             authority_declared=True,
+         )
+ 
+diff --git a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir.py b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir.py
+index 1f4b7f7..5c4f867 100644
+--- a/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir.py
++++ b/ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir.py
+@@ -12,6 +12,7 @@ from collections import defaultdict
+ from typing import Any, Iterable
+ 
+ from .authorization_semantics import resolve_fact_authorization
++from .implementation_binding import exact_interface_operation_identities
+ from .schema import (
+     as_dict,
+     as_list,
+@@ -470,6 +471,19 @@ def _fact_permission(fact: dict[str, Any]) -> str:
+ 
+ 
+ def _fact_conditions(fact: dict[str, Any]) -> list[dict[str, Any]]:
++    typed = [
++        dict(row)
++        for row in as_list(fact.get("condition_slots"))
++        if isinstance(row, dict)
++        and text(row.get("field_candidate"))
++        and text(row.get("operator_candidate"))
++        and as_dict(row.get("value_candidate"))
++    ]
++    if typed:
++        # Fact semantic normalization is the authority for source-backed typed
++        # predicates. Re-parsing its compatibility text would discard exact field,
++        # operator, enum, and identity coordinates.
++        return typed
+     result: list[dict[str, Any]] = []
+     for index, raw in enumerate(as_list(fact.get("conditions"))):
+         value = text(raw.get("statement") if isinstance(raw, dict) else raw)
+@@ -496,15 +510,25 @@ def _fact_conditions(fact: dict[str, Any]) -> list[dict[str, Any]]:
+     return result
+ 
+ 
+-def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
++def _behavior_from_fact(
++    fact: dict[str, Any],
++    operation_identity: dict[str, Any] | None = None,
