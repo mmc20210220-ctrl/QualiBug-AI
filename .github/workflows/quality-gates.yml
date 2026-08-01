@@ -17,7 +17,7 @@ jobs:
   # BEGIN CHINESE_EXPLICIT_FACT_GENERALIZATION
   chinese-explicit-fact-generalization-direct:
     if: github.head_ref == 'one-shot/chinese-explicit-fact-generalization'
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - name: Checkout latest main
@@ -37,6 +37,7 @@ jobs:
           python -m pip install -e '.[dev]'
 
       - name: Apply, verify, test and push Chinese explicit fact generalization
+        shell: bash
         run: bash .github/delivery/chinese-explicit-fact-generalization/apply-verified-root-fix.sh
   # END CHINESE_EXPLICIT_FACT_GENERALIZATION
 
