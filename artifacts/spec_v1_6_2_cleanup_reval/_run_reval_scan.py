@@ -1,4 +1,4 @@
-﻿"""Detached formal reval runner — keeps client alive outside Cursor tool timeout."""
+"""Detached formal reval runner — keeps client alive outside Cursor tool timeout."""
 from __future__ import annotations
 
 import runpy
