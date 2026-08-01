@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: one-time-business-lifecycle-binding-root-fix
+  group: one-time-business-lifecycle-binding-root-fix-fast-20260801
   cancel-in-progress: false
 
 jobs:
