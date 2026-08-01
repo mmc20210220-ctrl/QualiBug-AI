@@ -9,6 +9,7 @@ import {
   type KnowledgeConnectorActionResult,
   type KnowledgeConnectorRecord,
 } from '../api/knowledge-connectors';
+import { ConnectorAcceptancePanel } from '../components/ConnectorAcceptancePanel';
 import { ConnectorCoverage } from '../components/ConnectorCoverage';
 import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
@@ -403,6 +404,12 @@ export function Materials() {
                   </div>
 
                   <ConnectorCoverage coverage={connector.coverage} />
+
+                  <ConnectorAcceptancePanel
+                    projectId={project}
+                    connectorId={connector.connector_instance_id}
+                    disabled={busy || running || needsHelp || connector.status !== 'ACTIVE'}
+                  />
 
                   {(operation[connector.connector_instance_id] || running || connector.auto_sync?.state === 'retrying') && (
                     <div className="materials-operation-note">
