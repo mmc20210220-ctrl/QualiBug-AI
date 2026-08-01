@@ -31,9 +31,9 @@ jobs:
           test "$(git hash-object ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py)" = "15a2157e71f0dd9c81eee16eb378f32db7e59475"
           test "$(git hash-object ai_test_asset_center/enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py)" = "fa9bbd906aa5b94abf9ffdd29979fb1d27d1a16c"
           PAYLOAD=.github/patches/chinese_explicit_fact_generalization_payload.tar.gz.b64
-          echo "755ad711e761973d9767070797211c611d43d55e153eafb15fdb99242bc4f437  ${PAYLOAD}" | sha256sum -c -
+          echo "83af9c0f6f23dd06fde6f82d33f51fb62204e28dc4568a93d9dbd9513566ff0a  ${PAYLOAD}" | sha256sum -c -
           base64 -d "${PAYLOAD}" > /tmp/chinese-generalization.tar.gz
-          echo "29a82c029f1e3156e2b8fc58577853cdf0bbe68556904ca4002e6c4aae1d1c21  /tmp/chinese-generalization.tar.gz" | sha256sum -c -
+          echo "8520879e0f2b2bf6ba6918725d6ded8f25b40ff675565aab7d0c8e0ebf1cd451  /tmp/chinese-generalization.tar.gz" | sha256sum -c -
           mkdir -p /tmp/chinese-generalization
           tar -xzf /tmp/chinese-generalization.tar.gz -C /tmp/chinese-generalization
 
@@ -148,9 +148,11 @@ jobs:
             .github/chinese-fact-mutation-probe-v2-trigger \
             .github/chinese_fact_mutation_probe.py \
             .github/chinese-fact-mutation-run-id \
-            .github/chinese-fact-mutation-report.json
+            .github/chinese-fact-mutation-report.json \
+            .github/noop-tree-probe \
+            .github/noop-tree-probe-2
           git config user.name "mmc20210220-ctrl"
-          git config user.email "mmc20220@gmail.com"
+          git config user.email "mmc20210220@gmail.com"
           git add -A
           git diff --cached --check
           git commit -m "fix(understanding): generalize Chinese explicit fact semantics"
