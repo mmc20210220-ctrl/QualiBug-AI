@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ai_test_asset_center.experiment_cleanup import (
+    _governed_write_observed_effect,
+)
 from ai_test_asset_center.process_graph_cleanup_executor import (
     execute_process_graph_cleanup,
+)
+from ai_test_asset_center.process_graph_rollback_contract import (
+    freeze_process_graph_rollback_contract,
 )
 
 
@@ -44,6 +50,29 @@ def test_rejected_but_effectful_write_is_compensated(tmp_path: Path) -> None:
             ],
         },
     }
+    graph = {
+        "schema_version": "qualibug.process-execution-graph.v1",
+        "execution_graph_id": "graph-effectful-rejection",
+        "process_id": "effectful-rejection",
+        "nodes": [
+            {
+                "node_id": "create-order",
+                "step_id": "create-order",
+                "operation_ref": "op-create-order",
+            }
+        ],
+        "edges": [],
+        "topological_order": ["create-order"],
+    }
+    exp["execution_graph"] = graph
+    exp["process_graph_rollback_contract"] = (
+        freeze_process_graph_rollback_contract(
+            graph,
+            exp["process_graph_write_contract"],
+        )
+    )
+    assert exp["process_graph_rollback_contract"]["status"] == "FROZEN"
+
     source = {
         "phase": "treatment",
         "step_id": "create-order",
@@ -115,3 +144,17 @@ def test_rejected_but_effectful_write_is_compensated(tmp_path: Path) -> None:
     assert receipt["status"] == "COMPLETED"
     assert receipt["evidence"]["source_status_code"] == 409
     assert receipt["evidence"]["effectful_write_count"] == 1
+
+
+def test_rejected_timestamp_only_change_is_not_an_observed_effect() -> None:
+    assert _governed_write_observed_effect({
+        "accepted": False,
+        "before": {
+            "status": 200,
+            "body": [{"id": "ORD-1", "updated_at": "2026-01-01T00:00:00Z"}],
+        },
+        "after": {
+            "status": 200,
+            "body": [{"id": "ORD-1", "updated_at": "2026-01-01T00:00:01Z"}],
+        },
+    }) is False
