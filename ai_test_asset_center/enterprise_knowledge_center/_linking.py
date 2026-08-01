@@ -18,6 +18,44 @@ from ._linking_impl import *  # noqa: F401,F403
 __all__ = list(_impl.__all__)
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_AUTHORITATIVE_RELATION_STATUSES = frozenset(
+    {"accepted", "active", "confirmed", "verified", "resolved"}
+)
+_NON_AUTHORITATIVE_RELATION_DERIVATIONS = frozenset(
+    {
+        "token_overlap",
+        "path_segment_heuristic",
+        "token_overlap_only_requires_explicit_source_relation",
+    }
+)
+
+
+def _relationship_is_authoritative(edge: dict[str, Any]) -> bool:
+    """Admit only explicit formal relationships with structured evidence."""
+    if not isinstance(edge, dict):
+        return False
+    status = str(edge.get("status") or "").strip().lower()
+    if status not in _AUTHORITATIVE_RELATION_STATUSES:
+        return False
+    derivation = str(edge.get("derivation") or "").strip().lower().replace("-", "_")
+    evidence_gate = str(edge.get("evidence_gate") or "").strip().lower().replace("-", "_")
+    if (
+        derivation in _NON_AUTHORITATIVE_RELATION_DERIVATIONS
+        or evidence_gate in _NON_AUTHORITATIVE_RELATION_DERIVATIONS
+    ):
+        return False
+    evidence = edge.get("evidence")
+    if not isinstance(evidence, dict) or not evidence:
+        return False
+    if set(evidence) <= {"token_overlap"}:
+        return False
+    return True
+
+
+# One shared authority function for legacy linker internals and all facade consumers.
+_impl._relationship_is_authoritative = _relationship_is_authoritative
+if "_relationship_is_authoritative" not in __all__:
+    __all__.append("_relationship_is_authoritative")
 
 
 def _dict(value: Any) -> dict[str, Any]:
