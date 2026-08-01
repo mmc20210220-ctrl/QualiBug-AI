@@ -23,8 +23,7 @@ jobs:
        && github.event.issue.title == 'APPLY_PROCESS_EVENT_IDEMPOTENCY_AUTHORITY_20260801'
        && github.event.issue.user.login == github.repository_owner)
       ||
-      (github.event_name == 'push'
-       && github.actor == github.repository_owner)
+      github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
