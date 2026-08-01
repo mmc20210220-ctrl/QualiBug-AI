@@ -125,9 +125,17 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const passed =
-              '${{ needs.backend-contracts.result }}' === 'success' &&
-              '${{ needs.frontend-quality.result }}' === 'success';
+            const backend = '${{ needs.backend-contracts.result }}';
+            const frontend = '${{ needs.frontend-quality.result }}';
+            const results = [backend, frontend];
+            const failed = results.some((value) => value === 'failure');
+            const passed = results.every((value) => value === 'success');
+            if (!passed && !failed) {
+              core.notice(
+                `Quality gates not terminally classifiable: backend=${backend}, frontend=${frontend}; no pass/fail status published`
+              );
+              return;
+            }
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
