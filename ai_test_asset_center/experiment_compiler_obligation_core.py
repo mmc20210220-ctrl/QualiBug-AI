@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 from .behavior_ir import source_identity_fields_for_operation
 from .experiment_protocols import compile_family_protocol
 from .observer_contracts_base import compile_observer_requirements
-from .real_id_resolver import collection_path, normalize_path_placeholders
+from .real_id_resolver import (
+    collection_path,
+    infer_path_params,
+    normalize_path_placeholders,
+)
 
 # Risk-family labels are not assertion kinds. Map only when the protocol did not
 # already emit a concrete DSL kind.
@@ -224,15 +228,37 @@ def _rescue_binding_for_response_only_family(
     source-declared GET resolver or POST create fixture exists on the same
     entity collection. Returns True if at least one binding was rescued.
     """
-    resolvers = _find_collection_get_resolvers(primary_op, behavior_ir)
+    resolvers = [
+        row
+        for row in _find_collection_get_resolvers(primary_op, behavior_ir)
+        if isinstance(row, dict)
+        and "{" not in _text(row.get("path"))
+        and ":" not in _text(row.get("path"))
+    ]
     fixture = {} if resolvers else _find_collection_create_fixture(primary_op, behavior_ir)
     if not resolvers and not fixture:
         return False
+    _primary_path = normalize_path_placeholders(
+        _text(primary_op.get("path") or primary_op.get("raw_path"))
+    )
+    _primary_params = set(infer_path_params(_primary_path))
     rescued = False
     for entry in binding_plan:
         if not isinstance(entry, dict):
             continue
         if _text(entry.get("status")) != "blocked":
+            continue
+        _entry_target = _text(entry.get("target"))
+        # Body field placeholders (e.g. an order body's addressId) belong to
+        # the field's own entity, never to the write operation's collection.
+        # Binding them from GET /api/orders would cross-bind a cart/address id
+        # into an order context. Leave them blocked; the observation-driven
+        # expansion round recompiles them against the expanded IR.
+        if (
+            _list(entry.get("body_template_paths"))
+            or _text(entry.get("source_priority")) == "body_placeholder_unresolvable"
+            or _entry_target not in _primary_params
+        ):
             continue
         entry["status"] = "runtime_resolvable"
         entry.pop("blocked_reason", None)

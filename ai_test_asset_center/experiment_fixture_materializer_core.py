@@ -23,7 +23,11 @@ from .experiment_runtime_support import (
     _select_runtime_binding,
     _text,
 )
-from .real_id_resolver import normalize_path_placeholders, path_has_placeholders
+from .real_id_resolver import (
+    bind_entity_fields,
+    normalize_path_placeholders,
+    path_has_placeholders,
+)
 from .runtime_binding_materializer import (
     materialize_body_template as _materialize_body_template,
     runtime_setup_value_from_response as _runtime_setup_value_from_response,
@@ -312,9 +316,69 @@ def materialize_experiment_fixtures(
                     collection_path=_collection_path,
                 )
                 _proved = False
+                _proof_source = ""
                 if not _identity_operations:
-                    # No path context → cannot safely accept a global {id}.
-                    _proved = False
+                    _candidate_tokens: list[str] = []
+                    for _candidate in (
+                        resolver_token,
+                        *[
+                            _text(row)
+                            for row in _dict(tokens).values()
+                            if _text(row)
+                        ],
+                    ):
+                        if _candidate and _candidate not in _candidate_tokens:
+                            _candidate_tokens.append(_candidate)
+                    for _resolver in _list(binding.get("resolver_operations")):
+                        if not isinstance(_resolver, dict):
+                            continue
+                        _read_method = _text(_resolver.get("method")).upper()
+                        _read_path = _text(_resolver.get("path"))
+                        if (
+                            _read_method not in {"GET", "HEAD"}
+                            or not _read_path.startswith("/")
+                            or path_has_placeholders(_read_path)
+                        ):
+                            continue
+                        for _token_index, _candidate_token in enumerate(
+                            _candidate_tokens[:8]
+                        ):
+                            _read_obs = _run_http_step(
+                                base_url=base_url,
+                                method=_read_method,
+                                path=_read_path,
+                                token=_candidate_token,
+                            )
+                            _read_obs.update({
+                                "phase": "binding_identity_proof",
+                                "step_id": (
+                                    f"bind-proof:{target}:list{_token_index}"
+                                ),
+                                "actor_ref": resolver_actor_ref,
+                                "operation_ref": _text(
+                                    _resolver.get("operation_ref")
+                                ),
+                            })
+                            steps_out.append(_read_obs)
+                            if not (
+                                200
+                                <= int(_read_obs.get("status_code") or 0)
+                                < 300
+                            ):
+                                continue
+                            _observed = bind_entity_fields(
+                                _read_obs.get("body"),
+                                _target_path,
+                            )
+                            _observed_value = _text(
+                                _observed.get(target) or _observed.get("id")
+                            )
+                            if _observed_value and _observed_value == _pre_val:
+                                _proved = True
+                                _proof_source = _read_path
+                                break
+                        if _proved:
+                            break
                 else:
                     for _identity_operation in _identity_operations[:3]:
                         _proof_path = materialize_declared_identity_read(
@@ -338,6 +402,7 @@ def materialize_experiment_fixtures(
                         steps_out.append(_proof_obs)
                         if 200 <= int(_proof_obs.get("status_code") or 0) < 300:
                             _proved = True
+                            _proof_source = _proof_path
                             break
                 if _proved:
                     runtime_bindings[target] = _pre_val
@@ -351,6 +416,7 @@ def materialize_experiment_fixtures(
                             _pre_val.encode("utf-8")
                         ).hexdigest()[:12],
                         "source": "pre_resolved_binding",
+                        "proof_source": _proof_source,
                         "collection_segment": collection_segment_for_placeholder(
                             _target_path, target
                         ),
