@@ -137,6 +137,7 @@ def project_connector_health(
     coverage: Mapping[str, Any] | None = None,
     latest_sync: Mapping[str, Any] | None = None,
     webhook: Mapping[str, Any] | None = None,
+    oauth: Mapping[str, Any] | None = None,
     now_utc: Any = None,
 ) -> dict[str, Any]:
     """Project bounded health state from already persisted connector evidence."""
@@ -146,6 +147,11 @@ def project_connector_health(
     coverage_row = _mapping(coverage)
     sync = _mapping(latest_sync)
     webhook_row = _mapping(webhook)
+    oauth_row = _mapping(oauth)
+    oauth_status = _text(oauth_row.get("status"), 80).upper()
+    oauth_permission_status = _text(
+        oauth_row.get("permission_status"), 80
+    ).upper()
     webhook_state = _mapping(webhook_row.get("state"))
     webhook_calibration_required = (
         webhook_row.get("status") == "CALIBRATION_REQUIRED"
@@ -181,15 +187,17 @@ def project_connector_health(
     latest_sync_status = _text(sync.get("status"), 40).upper()
 
     attention: list[str] = []
-    if reauthorization_required or credential_status in {
+    if oauth_status == "PERMISSION_INSUFFICIENT" or (
+        credential_status == "PERMISSION_INSUFFICIENT"
+    ) or oauth_permission_status == "PERMISSION_INSUFFICIENT":
+        attention.append("PERMISSION_INSUFFICIENT")
+    elif reauthorization_required or credential_status in {
         "EXPIRED",
         "REVOKED",
         "REAUTHORIZATION_REQUIRED",
     }:
         attention.append("AUTHORIZATION_EXPIRED")
-    elif credential_status == "PERMISSION_INSUFFICIENT":
-        attention.append("PERMISSION_INSUFFICIENT")
-    elif credential_status == "EXPIRING":
+    elif credential_status == "EXPIRING" or oauth_status == "EXPIRING":
         attention.append("AUTHORIZATION_EXPIRING")
     if auto_state == "retrying":
         attention.append("SYNC_RETRYING")
@@ -282,6 +290,21 @@ def project_connector_health(
                 ),
                 80,
             ),
+        },
+        "oauth": {
+            "supported": oauth_row.get("supported") is True,
+            "configured": oauth_row.get("configured") is True,
+            "status": oauth_status or "NOT_AVAILABLE",
+            "permission_status": oauth_permission_status or "NOT_MEASURED",
+            "required_scopes": list(oauth_row.get("required_scopes") or [])[:100],
+            "granted_scopes": list(oauth_row.get("granted_scopes") or [])[:100],
+            "source_identity_preserved": oauth_row.get("source_identity_preserved") is True,
+            "checkpoint_preserved": oauth_row.get("checkpoint_preserved") is True,
+            "remote_deletion_inferred": False,
+            "authorization_code_returned": False,
+            "access_token_returned": False,
+            "refresh_token_returned": False,
+            "credential_values_returned": False,
         },
         "metrics": {
             "last_attempt_at_utc": _text(auto.get("last_attempt_at_utc"), 80),

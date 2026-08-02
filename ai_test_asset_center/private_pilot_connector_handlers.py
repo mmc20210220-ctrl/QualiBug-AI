@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
-from urllib.parse import quote, unquote, urlparse
+from typing import Any, Mapping
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .connector_auto_sync import (
     connector_auto_sync_status,
@@ -72,6 +72,12 @@ from .connector_webhook_events import (
     ConnectorWebhookError,
     project_connector_webhook,
     receive_connector_webhook,
+)
+from .connector_oauth_authority import (
+    ConnectorOAuthError,
+    handle_connector_oauth_callback,
+    project_connector_oauth,
+    start_connector_oauth,
 )
 from .local_runner_connector import (
     LocalRunnerError,
@@ -579,6 +585,35 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
                     "source_content_mutated_by_webhook": False,
                 },
             }
+        try:
+            row["oauth"] = project_connector_oauth(
+                project,
+                connector,
+                root=root,
+            )
+        except ConnectorOAuthError as exc:
+            row["oauth"] = {
+                "schema": "qualibug.connector-oauth-authority.v1",
+                "connector_instance_id": connector,
+                "supported": False,
+                    "status": "NOT_AVAILABLE",
+                    "error_code": str(exc).split(":", 1)[0],
+                    "authorization_code_returned": False,
+                    "access_token_returned": False,
+                    "refresh_token_returned": False,
+                    "credential_values_returned": False,
+                    "source_identity_preserved": True,
+                "checkpoint_preserved": True,
+                "remote_deletion_inferred": False,
+                "governance": {
+                    "state_plaintext_persisted": False,
+                    "authorization_code_persisted": False,
+                    "access_token_returned": False,
+                    "refresh_token_returned": False,
+                    "source_content_mutated": False,
+                    "oauth_failure_never_infers_remote_deletion": True,
+                },
+            }
         row["health"] = project_connector_health(
             connector_instance=raw,
             connection_profile=row["connection_profile"],
@@ -586,6 +621,7 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             coverage=row["coverage"],
             latest_sync=row["coverage"].get("latest_sync"),
             webhook=row["webhook"],
+            oauth=row["oauth"],
         )
         acceptance_summary = (
             latest_connector_tenant_acceptance_summary(
@@ -937,6 +973,37 @@ def _sanitize_sync_response(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _error_status(exc: Exception) -> int:
     message = str(exc or "")
+    if isinstance(exc, ConnectorOAuthError):
+        if any(
+            token in message
+            for token in (
+                "state_invalid",
+                "state_required",
+                "state_replayed",
+                "state_actor_mismatch",
+                "provider_denied",
+            )
+        ):
+            return 401
+        if any(
+            token in message
+            for token in (
+                "transaction_busy",
+                "transaction_not_found",
+                "redirect_uri_mismatch",
+                "permission_insufficient",
+                "profile_binding_changed",
+                "ttl_invalid",
+                "capacity_exhausted",
+            )
+        ):
+            return 409
+        if any(
+            token in message
+            for token in ("transport_failed", "http_failed")
+        ):
+            return 502
+        return 400
     if isinstance(exc, ConnectorWebhookError):
         if any(
             token in message
@@ -1011,6 +1078,8 @@ class KnowledgeConnectorHandlersMixin:
             if isinstance(exc, FeishuTenantAcceptanceReportError)
             else "LOCAL_RUNNER_ERROR"
             if isinstance(exc, LocalRunnerError)
+            else "KNOWLEDGE_CONNECTOR_OAUTH_ERROR"
+            if isinstance(exc, ConnectorOAuthError)
             else "KNOWLEDGE_CONNECTOR_WEBHOOK_ERROR"
             if isinstance(exc, ConnectorWebhookError)
             else "KNOWLEDGE_CONNECTOR_ERROR"
@@ -1072,6 +1141,55 @@ class KnowledgeConnectorHandlersMixin:
                 "credential_values_returned": False,
             },
             202 if result.get("accepted") is True else 200,
+        )
+
+    def _handle_connector_oauth_start(
+        self,
+        project: str,
+        connector: str,
+        body: dict[str, Any],
+        root: Path,
+        actor: dict[str, Any],
+    ) -> Any:
+        result = start_connector_oauth(
+            project,
+            connector,
+            root=root,
+            actor=actor,
+            additional_scopes=body.get("additional_scopes"),
+            transaction_ttl_seconds=body.get("transaction_ttl_seconds", 600),
+        )
+        return self._json(
+            {
+                "ok": True,
+                "data": result,
+                "credential_values_returned": False,
+                "source_content_returned": False,
+            }
+        )
+
+    def _handle_connector_oauth_callback(
+        self,
+        project: str,
+        connector: str,
+        params: Mapping[str, Any],
+        root: Path,
+        actor: dict[str, Any],
+    ) -> Any:
+        result = handle_connector_oauth_callback(
+            project,
+            connector,
+            params,
+            root=root,
+            actor=actor,
+        )
+        return self._json(
+            {
+                "ok": True,
+                "data": result,
+                "credential_values_returned": False,
+                "source_content_returned": False,
+            }
         )
 
     def _handle_connector_type_get(self, tail: list[str]) -> Any:
@@ -1185,6 +1303,17 @@ class KnowledgeConnectorHandlersMixin:
                         ),
                     }
                 )
+            if len(tail) == 2 and tail[1] == "oauth":
+                return self._json(
+                    {
+                        "ok": True,
+                        "data": project_connector_oauth(
+                            project,
+                            connector,
+                            root=root,
+                        ),
+                    }
+                )
             if len(tail) == 2 and tail[1] == "acceptance":
                 row = _connector_inventory_row(project, connector, root)
                 return self._json(
@@ -1286,6 +1415,7 @@ class KnowledgeConnectorHandlersMixin:
             FeishuTenantAcceptanceJobError,
             FeishuTenantAcceptanceReportError,
             ConnectorWebhookError,
+            ConnectorOAuthError,
             KeyError,
         ) as exc:
             return self._knowledge_connector_error(exc)
@@ -1831,6 +1961,31 @@ class KnowledgeConnectorHandlersMixin:
             )
         if not self._require_project_scope(project):
             return None
+        if (
+            len(route[1]) == 3
+            and route[1][1] == "oauth"
+            and route[1][2] == "callback"
+        ):
+            if not self._require_connector_manager(
+                actor, "knowledge connector OAuth callback"
+            ):
+                return None
+            try:
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                params: dict[str, str] = {}
+                for key, values in query.items():
+                    if len(values) != 1:
+                        raise ConnectorOAuthError("oauth_callback_parameter_duplicate")
+                    params[_text(key, 80)] = _text(values[0], 4000)
+                return self._handle_connector_oauth_callback(
+                    project,
+                    _text(route[1][0], 160),
+                    params,
+                    root,
+                    actor,
+                )
+            except ConnectorOAuthError as exc:
+                return self._knowledge_connector_error(exc)
         return self._handle_knowledge_connector_get(project, route[1], root, actor)
 
     def do_PATCH(self) -> None:  # noqa: N802
@@ -1935,6 +2090,14 @@ class KnowledgeConnectorHandlersMixin:
                     root,
                     actor,
                 )
+            if len(tail) == 3 and tail[1] == "oauth" and tail[2] == "start":
+                return self._handle_connector_oauth_start(
+                    project,
+                    _text(tail[0], 160),
+                    body,
+                    root,
+                    actor,
+                )
             if not tail:
                 return self._handle_knowledge_connector_configure(
                     project,
@@ -1964,6 +2127,7 @@ class KnowledgeConnectorHandlersMixin:
             ConnectorProfileError,
             ConnectorSyncError,
             ConnectorAclError,
+            ConnectorOAuthError,
             LocalRunnerError,
             FeishuConnectorError,
             FeishuTenantAcceptanceJobError,

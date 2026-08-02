@@ -248,6 +248,38 @@ failed managed sync. A connector with no source-backed event contract remains
 `webhook_supported=false`; it must not claim webhook readiness merely because the generic
 HTTP route exists.
 
+## Generic OAuth authorization and reauthorization (OL-019)
+
+OAuth is an optional Manifest capability. A connector declares one `oauth_schema` with the
+provider authorization endpoint, token endpoint, exact registered redirect URI, public client
+id, minimum scopes, and the existing encrypted profile field names for the access token, refresh
+token, and optional client secret. No provider endpoint, scope, or credential field is inferred
+from a connector type.
+
+The operator starts the flow through the existing authenticated project routes:
+
+```http
+POST /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/oauth/start
+GET  /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/oauth/callback?code=...&state=...
+GET  /api/v1/projects/{project_id}/knowledge-connectors/{connector_id}/oauth
+```
+
+The start response contains only a provider authorization URL, transaction identity, requested
+scopes, expiry, and PKCE/state safety flags. State is stored only as a hash; the PKCE verifier is
+encrypted at rest and single-use. The callback binds the exact transaction, actor, profile
+reference, Manifest version, redirect URI, and `S256` challenge before exchanging the code.
+Authorization codes, access tokens, refresh tokens, and client secrets never appear in the OAuth
+ledger, API projection, logs, or sync receipt. Token values are written only through the existing
+encrypted Connection Profile authority.
+
+The callback preserves the existing connector instance, source identity, and encrypted sync
+checkpoint. A granted scope that does not contain every Manifest minimum scope is exposed as
+`PERMISSION_INSUFFICIENT` and requires reauthorization; it is not treated as a successful sync.
+OAuth failure or revocation never triggers source deletion, absence retirement, or cursor loss.
+The projection exposes `AUTHORIZED`, `EXPIRING`, `EXPIRED`, `REAUTHORIZATION_REQUIRED`,
+`PERMISSION_INSUFFICIENT`, `REVOKED`, `NOT_AUTHORIZED`, or `NOT_SUPPORTED`, together with
+required/granted scopes and a bounded failure reason.
+
 ## Generic connector acceptance (OL-012)
 
 All registered connector types use the same acceptance contract and the same managed sync

@@ -117,6 +117,27 @@ def test_permission_insufficient_is_not_hidden_as_a_healthy_sync() -> None:
     assert "PERMISSION_INSUFFICIENT" in health["attention_reasons"]
 
 
+def test_oauth_permission_change_is_visible_without_inferring_remote_deletion() -> None:
+    payload = _base()
+    payload["oauth"] = {
+        "supported": True,
+        "configured": True,
+        "status": "PERMISSION_INSUFFICIENT",
+        "permission_status": "PERMISSION_INSUFFICIENT",
+        "required_scopes": ["docs:read"],
+        "granted_scopes": [],
+        "source_identity_preserved": True,
+        "checkpoint_preserved": True,
+    }
+
+    health = project_connector_health(**payload)
+
+    assert health["status"] == "PERMISSION_INSUFFICIENT"
+    assert health["recommended_action"] == "REAUTHORIZE_CONNECTOR"
+    assert health["oauth"]["status"] == "PERMISSION_INSUFFICIENT"
+    assert health["oauth"]["remote_deletion_inferred"] is False
+
+
 def test_no_successful_sync_stays_explicitly_unmeasured() -> None:
     payload = _base()
     payload["connector_instance"] = {
