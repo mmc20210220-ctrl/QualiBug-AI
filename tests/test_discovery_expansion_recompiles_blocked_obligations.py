@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from ai_test_asset_center.discovery_runtime_execution import (
     _compiled_round0_obligation_ids,
+    _runtime_recompile_round0_obligation_ids,
 )
 from ai_test_asset_center.experiment_compiler import (
     compile_experiment_for_obligation,
@@ -190,6 +191,43 @@ def test_compiled_round0_ids_exclude_blocked_and_collapse_variants() -> None:
     compiled = _compiled_round0_obligation_ids(experiments)
     assert compiled == {"obl_a"}
     assert "obl_blocked" not in compiled
+
+
+def test_runtime_recompile_selection_is_limited_to_source_bound_body_blockers() -> None:
+    obligations = [
+        {"obligation_id": "obl_body"},
+        {"obligation_id": "obl_cleanup"},
+        {"obligation_id": "obl_observer"},
+        {"obligation_id": "obl_compiled"},
+    ]
+    experiments = {
+        "obl_body": {
+            "compile_receipt": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": "unresolvable_path_placeholders:BODY_PARAMETER_NOT_SOURCE_BOUND",
+            }
+        },
+        "obl_cleanup": {
+            "compile_receipt": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_NON_REVERSIBLE_WRITE",
+                "detail": "cleanup_unresolved",
+            }
+        },
+        "obl_observer": {
+            "compile_receipt": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_OBSERVER",
+                "detail": "write_observer",
+            }
+        },
+        "obl_compiled": {"compile_receipt": {"status": "COMPILED"}},
+    }
+
+    assert _runtime_recompile_round0_obligation_ids(obligations, experiments) == {
+        "obl_body"
+    }
 
 
 def test_body_placeholder_resolver_uses_entity_route_not_operation_collection() -> None:

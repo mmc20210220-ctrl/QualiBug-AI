@@ -517,8 +517,20 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            role = _text(row.get("role") or row.get("name") or row.get("id"))
-            account_ref = _text(row.get("account_ref") or row.get("name") or row.get("id") or row.get("email"))
+            role = _text(
+                row.get("authenticated_role")
+                or row.get("role")
+                or row.get("name")
+                or row.get("id")
+            )
+            account_ref = _text(
+                row.get("account_ref")
+                or row.get("profile")
+                or row.get("name")
+                or row.get("id")
+                or row.get("email")
+                or row.get("username")
+            )
             token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
             if not role or not token:
                 continue
@@ -527,10 +539,30 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                 # between "no credential" and "a credential the target will reject".
                 expired_roles.append(role)
                 continue
-            status = _text(row.get("status") or row.get("account_status") or row.get("state") or "active").upper()
-            if account_ref:
-                tokens[account_ref] = token
-                tokens[f"secret_ref:test_accounts:{account_ref}"] = token
+            status = _text(
+                row.get("authenticated_status")
+                or row.get("status")
+                or row.get("account_status")
+                or row.get("state")
+                or "active"
+            ).upper()
+            aliases = [
+                row.get("account_ref"),
+                row.get("profile"),
+                row.get("name"),
+                row.get("id"),
+                row.get("email"),
+                row.get("username"),
+                account_ref,
+            ]
+            email = _text(row.get("email"))
+            if email.count("@") == 1:
+                aliases.append(email.split("@", 1)[0])
+            for alias in dict.fromkeys(_text(value) for value in aliases):
+                if not alias:
+                    continue
+                tokens[alias] = token
+                tokens[f"secret_ref:test_accounts:{alias}"] = token
             if status not in {"DISABLED", "LOCKED"}:
                 tokens.setdefault(role, token)
                 tokens.setdefault(f"secret_ref:test_accounts:{role}", token)

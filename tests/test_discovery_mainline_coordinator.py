@@ -165,6 +165,71 @@ def test_runtime_actor_uses_declared_enterprise_credential_identity(
     ]
 
 
+def test_runtime_actor_uses_source_accounts_when_credential_config_cannot_decrypt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_test_asset_center import discovery_runtime_planning as planning
+    from ai_test_asset_center.credential_crypto import CredentialDecryptionError
+    from ai_test_asset_center.discovery_runtime import _runtime_actors
+
+    project = "PROJECT-1"
+
+    def raise_decryption_error(root: Path, project_id: str) -> list[dict[str, str]]:
+        raise CredentialDecryptionError("stale_project_credential_key")
+
+    monkeypatch.setattr(planning, "configured_runtime_accounts", raise_decryption_error)
+    monkeypatch.setattr(
+        planning,
+        "_parse_test_accounts_md",
+        lambda root, project_id: [
+            {
+                "role": "buyer",
+                "email": "buyer@example.com",
+                "password": "source-only-secret",
+            }
+        ],
+    )
+    context: dict[str, object] = {}
+
+    actors = _runtime_actors(tmp_path, project, context)
+
+    assert actors == [
+        {
+            "role": "buyer",
+            "account_ref": "buyer@example.com",
+            "tenant": None,
+            "secret_ref": "secret_ref:test_accounts:buyer@example.com",
+            "status": "active",
+        }
+    ]
+    assert context["runtime_credential_resolution"] == {
+        "status": "source_backed_fallback",
+        "configured_status": "decryption_failed",
+        "source": "registered_test_data_or_TEST_ACCOUNTS.md",
+        "error_type": "CredentialDecryptionError",
+        "account_count": 1,
+    }
+
+
+def test_runtime_actor_does_not_hide_credential_decryption_without_source_accounts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_test_asset_center import discovery_runtime_planning as planning
+    from ai_test_asset_center.credential_crypto import CredentialDecryptionError
+    from ai_test_asset_center.discovery_runtime import _runtime_actors
+
+    def raise_decryption_error(root: Path, project_id: str) -> list[dict[str, str]]:
+        raise CredentialDecryptionError("stale_project_credential_key")
+
+    monkeypatch.setattr(planning, "configured_runtime_accounts", raise_decryption_error)
+    monkeypatch.setattr(planning, "_parse_test_accounts_md", lambda root, project_id: [])
+
+    with pytest.raises(CredentialDecryptionError, match="stale_project_credential_key"):
+        _runtime_actors(tmp_path, "PROJECT-1", {})
+
+
 def test_registered_test_data_source_supplies_exact_account_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

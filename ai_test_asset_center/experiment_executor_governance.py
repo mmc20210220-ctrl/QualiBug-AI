@@ -147,9 +147,15 @@ def _test_account_rows(root: Path, project: str) -> list[dict[str, Any]]:
 def _ambiguous_roles(root: Path, project: str) -> set[str]:
     counts: dict[str, int] = {}
     for row in _test_account_rows(root, project):
-        role = _text(row.get("role") or row.get("name") or row.get("id"))
+        role = _text(
+            row.get("authenticated_role")
+            or row.get("role")
+            or row.get("name")
+            or row.get("id")
+        )
         status = _text(
-            row.get("status")
+            row.get("authenticated_status")
+            or row.get("status")
             or row.get("account_status")
             or row.get("state")
             or "active"

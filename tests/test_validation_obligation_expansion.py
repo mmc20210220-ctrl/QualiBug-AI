@@ -187,6 +187,7 @@ def test_compile_experiments_emits_one_mutation_per_constraint() -> None:
         assert assertion["kind"] == "validation_rejection"
         assert assertion["expected_class"] == 4
         assert assertion["expected_effect_count"] == 0
+        assert assertion["expected_control_effect_min"] == 1
 
     assert "name" not in experiments[
         ("name", "required")
@@ -358,6 +359,21 @@ def test_validation_rejection_requires_zero_business_effect() -> None:
         missing_effect["reason_code"]
         == "VALIDATION_BUSINESS_EFFECT_MISSING"
     )
+
+    session_scope = evaluate_assertion(
+        {
+            **assertion,
+            "business_effect_requirement": "NOT_APPLICABLE",
+        },
+        observations={
+            "status_code": 422,
+            "business_effect_not_applicable": True,
+            "business_effect_not_applicable_basis": "source_path_semantics",
+        },
+    )
+    assert session_scope["status"] == "PASS"
+    assert session_scope["actual"]["business_effect_status"] == "NOT_APPLICABLE"
+    assert session_scope["actual"]["treatment_effect_count"] is None
 
 
 def test_exclusive_numeric_and_array_boundaries_are_mutated() -> None:

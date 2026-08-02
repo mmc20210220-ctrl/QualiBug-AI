@@ -64,6 +64,25 @@ def test_general_resource_prefix_collision_is_not_planned() -> None:
     assert plan["general_resource_shadowed_count"] >= 1
 
 
+def test_nested_collection_candidates_are_reachable_within_the_existing_budget() -> None:
+    from ai_test_asset_center.runtime_interface_discovery import (
+        plan_runtime_interface_candidates,
+    )
+
+    plan = plan_runtime_interface_candidates(
+        _documented_operations(),
+        action_markers=["health"],
+        max_candidates=800,
+    )
+
+    paths = [row["path"] for row in plan["candidates"]]
+    assert "/api/users/addresses" in paths
+    address_row = plan["candidates"][paths.index("/api/users/addresses")]
+    assert address_row["method"] == "GET"
+    assert address_row["derivation"] == "nested_resource_collection_lattice"
+    assert address_row["source_refs"]
+
+
 def test_runtime_interface_observation_requires_real_request_receipt() -> None:
     from ai_test_asset_center.runtime_interface_discovery import (
         build_runtime_interface_observation_receipt,

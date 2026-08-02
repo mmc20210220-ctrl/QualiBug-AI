@@ -220,6 +220,7 @@ _WRITE_EFFECT_DECLARATIONS = frozenset({
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _ENDPOINT_ACTION_MARKERS: frozenset[str] | None = None
 _SEMANTIC_MARKER_CACHE: dict[str, frozenset[str]] = {}
+_SEMANTIC_PATH_SUFFIX_CACHE: dict[str, frozenset[str]] = {}
 
 
 def _semantic_marker_set(key: str) -> frozenset[str]:
@@ -243,6 +244,33 @@ def _semantic_marker_set(key: str) -> frozenset[str]:
         raise BehaviorIRError(f"semantic_lexicon_{key}_empty")
     _SEMANTIC_MARKER_CACHE[key] = markers
     return markers
+
+
+def _semantic_path_suffix_set(key: str) -> frozenset[str]:
+    cached = _SEMANTIC_PATH_SUFFIX_CACHE.get(key)
+    if cached is not None:
+        return cached
+    path = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BehaviorIRError(f"semantic_lexicon_unreadable:{type(exc).__name__}") from exc
+    raw_suffixes = payload.get(key) if isinstance(payload, dict) else None
+    if not isinstance(raw_suffixes, list) or not raw_suffixes:
+        raise BehaviorIRError(f"semantic_lexicon_{key}_missing")
+    suffixes = frozenset(
+        "/" + "/".join(
+            _normalize_action(segment)
+            for segment in _text(value).strip("/").split("/")
+            if _normalize_action(segment)
+        )
+        for value in raw_suffixes
+        if _text(value).strip("/")
+    )
+    if not suffixes:
+        raise BehaviorIRError(f"semantic_lexicon_{key}_empty")
+    _SEMANTIC_PATH_SUFFIX_CACHE[key] = suffixes
+    return suffixes
 
 
 def _semantic_lexicon_groups(key: str) -> list[list[str]]:
@@ -317,6 +345,32 @@ def _operation_has_semantic_marker(operation: dict[str, Any], markers: frozenset
         if marker in semantic_text:
             return True
     return False
+
+
+def _is_ephemeral_session_path(path: str) -> bool:
+    """Return whether a source path represents a non-durable session exchange."""
+
+    raw_path = _text(path).split("?", 1)[0].strip().rstrip("/")
+    if not raw_path.startswith("/"):
+        return False
+    segments = [segment for segment in raw_path.split("/") if segment]
+    if not segments or any(
+        segment.startswith(":")
+        or (segment.startswith("{") and segment.endswith("}"))
+        or segment == "*"
+        for segment in segments
+    ):
+        return False
+    normalized_segments = [_normalize_action(segment) for segment in segments]
+    if normalized_segments[-1] in _semantic_marker_set(
+        "ephemeral_session_terminal_markers"
+    ):
+        return True
+    normalized_path = "/" + "/".join(normalized_segments)
+    return any(
+        normalized_path.endswith(suffix)
+        for suffix in _semantic_path_suffix_set("ephemeral_session_path_suffixes")
+    )
 
 
 def _declared_operation_effect(value: Any) -> str:
@@ -698,7 +752,6 @@ def _schema_from_example(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return {
             "type": "object",
-            "required": sorted(str(key) for key in value),
             "properties": {
                 str(key): _schema_from_example(child)
                 for key, child in sorted(value.items(), key=lambda item: str(item[0]))
@@ -1340,218 +1393,6 @@ def _derive_permission_relations(
                     derivation="explicit",
                     status="conflicting",
                 ))
-    return relations
-
-
-def _derive_permit_relations_from_rule_links(
-    model: dict[str, Any],
-    data: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Derive permits relations from positive rule-to-interface evidence.
-
-    When a source rule mentions a role AND is explicitly linked to an interface
-    via a rule_to_interface relationship edge, that is positive evidence the role
-    can access that operation. If the role has no explicit deny on that operation,
-    emit a permits relation so the obligation compiler can pair permit+deny for
-    authorization testing.
-
-    Source-grounded: evidence = rule mentions role + edge links rule to interface.
-    """
-    # Build deny set: (role_key, operation_id) pairs that are explicitly denied
-    denied_pairs: set[tuple[str, str]] = set()
-    for rel in _list(model.get("relations")):
-        if not isinstance(rel, dict):
-            continue
-        if _text(rel.get("relation_type")) == "denies":
-            actor_ref = _text(rel.get("actor_ref") or rel.get("from_ref"))
-            op_ref = _text(rel.get("operation_ref"))
-            # Resolve actor_ref to role_key
-            for actor in _list(model.get("actors")):
-                if _text(actor.get("id")) == actor_ref:
-                    role_key = _text(actor.get("role_key") or actor.get("role")).lower()
-                    if role_key and op_ref:
-                        denied_pairs.add((role_key, op_ref))
-                    break
-
-    # Build operation lookup by source interface ID
-    ops_by_interface_id: dict[str, dict[str, Any]] = {}
-    for op in _list(model.get("operations")):
-        if not isinstance(op, dict):
-            continue
-        op_id = _text(op.get("id"))
-        # Match by source_operation_refs (interface_id from knowledge asset)
-        for ref in _list(op.get("source_operation_refs")):
-            ref_text = _text(ref)
-            if ref_text:
-                ops_by_interface_id[ref_text] = op
-        # Also match by operation_id field
-        operation_id = _text(op.get("operation_id"))
-        if operation_id:
-            ops_by_interface_id[operation_id] = op
-        # Match by method+path pattern (markdown_api:POST:/api/...)
-        method = _text(op.get("method"))
-        path = _text(op.get("path"))
-        if method and path:
-            ops_by_interface_id[f"markdown_api:{method}:{path}"] = op
-
-    # Build role lookup from actors
-    actors_by_role: dict[str, list[dict[str, Any]]] = {}
-    for actor in _list(model.get("actors")):
-        if not isinstance(actor, dict):
-            continue
-        role_key = _text(actor.get("role_key") or actor.get("role")).lower()
-        if role_key:
-            actors_by_role.setdefault(role_key, []).append(actor)
-
-    # Build rule lookup from rule_library
-    rules_by_id: dict[str, dict[str, Any]] = {}
-    for rule in _list(data.get("rule_library")):
-        if not isinstance(rule, dict):
-            continue
-        rule_id = _text(rule.get("rule_id") or rule.get("id"))
-        if rule_id:
-            rules_by_id[rule_id] = rule
-
-    # Known role keys for matching
-    known_roles = set(actors_by_role.keys())
-
-    # Build role synonym map from permission_matrix evidence and roles data.
-    # This enables matching Chinese role mentions in rule tokens to English role keys.
-    # Generic: derives synonyms from the knowledge asset's own evidence strings.
-    role_synonyms: dict[str, set[str]] = {rk: {rk} for rk in known_roles}
-    for perm_row in _list(data.get("permission_matrix") or data.get("permissions")):
-        if not isinstance(perm_row, dict):
-            continue
-        role_key = _text(perm_row.get("role") or perm_row.get("actor") or perm_row.get("principal")).lower()
-        if role_key not in known_roles:
-            continue
-        # Add the role name itself and resource as context terms
-        role_synonyms.setdefault(role_key, set()).add(role_key)
-        resource = _text(perm_row.get("resource")).lower()
-        if resource:
-            role_synonyms[role_key].add(resource)
-    for role_entry in _list(data.get("roles")):
-        if not isinstance(role_entry, dict):
-            continue
-        role_key = _text(role_entry.get("role") or role_entry.get("name") or role_entry.get("id")).lower()
-        if role_key not in known_roles:
-            continue
-        evidence = _text(role_entry.get("evidence")).lower()
-        if evidence:
-            role_synonyms.setdefault(role_key, set()).add(evidence)
-
-    # Build resource-to-roles map: which roles are associated with which resources
-    # from permission_matrix (both deny and permit rows)
-    resource_roles: dict[str, set[str]] = {}
-    for perm_row in _list(data.get("permission_matrix") or data.get("permissions")):
-        if not isinstance(perm_row, dict):
-            continue
-        role_key = _text(perm_row.get("role") or perm_row.get("actor") or perm_row.get("principal")).lower()
-        resource = _text(perm_row.get("resource")).lower()
-        if role_key in known_roles and resource:
-            resource_roles.setdefault(resource, set()).add(role_key)
-        for alias in _list(perm_row.get("resource_aliases")):
-            alias_text = _text(alias).lower()
-            if alias_text and role_key in known_roles:
-                resource_roles.setdefault(alias_text, set()).add(role_key)
-
-    relations: list[dict[str, Any]] = []
-    emitted_pairs: set[tuple[str, str]] = set()  # (role_key, op_id) dedupe
-
-    for edge in _list(data.get("relationships")):
-        if not isinstance(edge, dict):
-            continue
-        rel_type = _text(edge.get("relation") or edge.get("relation_type")).lower()
-        if rel_type != "rule_to_interface":
-            continue
-
-        source_rule_ref = _text(edge.get("from") or edge.get("from_ref"))
-        target_interface_ref = _text(edge.get("to") or edge.get("to_ref"))
-        if not source_rule_ref or not target_interface_ref:
-            continue
-
-        # Find target operation
-        operation = ops_by_interface_id.get(target_interface_ref)
-        if not operation:
-            continue
-        op_id = _text(operation.get("id"))
-        if not op_id:
-            continue
-
-        # Find source rule and extract role mentions
-        rule = rules_by_id.get(source_rule_ref)
-        if not rule:
-            continue
-
-        # Extract role mentions from rule tokens and statement using synonym map
-        rule_tokens = [_text(t).lower() for t in _list(rule.get("tokens")) if _text(t)]
-        rule_statement = _text(rule.get("statement")).lower()
-        rule_text = " ".join(rule_tokens) + " " + rule_statement
-        mentioned_roles: set[str] = set()
-        for role_key in known_roles:
-            synonyms = role_synonyms.get(role_key, {role_key})
-            for syn in synonyms:
-                if syn in rule_tokens or syn in rule_statement:
-                    mentioned_roles.add(role_key)
-                    break
-            else:
-                # Check role name parts (e.g., warehouse_operator -> warehouse)
-                role_parts = role_key.split("_")
-                if len(role_parts) > 1 and role_parts[0] in rule_tokens:
-                    mentioned_roles.add(role_key)
-
-        # If no direct role mention, try resource-based inference:
-        # If the operation's path/resource matches a resource that roles are
-        # associated with in the permission matrix, those roles are candidates.
-        if not mentioned_roles:
-            op_path = _text(operation.get("path")).lower()
-            op_tags = [_text(t).lower() for t in _list(operation.get("tags"))]
-            for resource, roles in resource_roles.items():
-                if resource and (resource in op_path or resource in op_tags):
-                    mentioned_roles.update(roles)
-                    break
-
-        if not mentioned_roles:
-            continue
-
-        edge_source_ref = _source_ref(
-            _text(edge.get("source_id")) or "knowledge_relationships",
-            locator=f"{source_rule_ref}->{target_interface_ref}",
-            kind="rule_to_interface_permit",
-        )
-        rule_source_refs = _list(rule.get("source_refs")) or [
-            _source_ref(_text(rule.get("source_id")) or "rule_library", locator=source_rule_ref, kind="rule")
-        ]
-
-        for role_key in mentioned_roles:
-            # Skip if explicitly denied
-            if (role_key, op_id) in denied_pairs:
-                continue
-            # Skip if already emitted
-            if (role_key, op_id) in emitted_pairs:
-                continue
-            emitted_pairs.add((role_key, op_id))
-
-            # Generate permits relation for each actor with this role
-            for actor in actors_by_role.get(role_key, []):
-                actor_ref = _text(actor.get("id"))
-                if not actor_ref:
-                    continue
-                relations.append(_relation_node(
-                    relation_type="permits",
-                    from_ref=actor_ref,
-                    to_ref=op_id,
-                    operation_ref=op_id,
-                    actor_ref=actor_ref,
-                    preconditions=[],
-                    effects=[],
-                    source_refs=[edge_source_ref] + rule_source_refs[:3],
-                    confidence=0.72,
-                    derivation="schema-derived",
-                    status="accepted",
-                    permission_decision="PERMIT",
-                ))
-
     return relations
 
 
@@ -4077,8 +3918,6 @@ def build_behavior_ir_from_knowledge_asset(
         permission_rows,
         closed_world=permission_matrix_complete,
     ))
-    # Derive permits from positive rule-to-interface evidence (source-grounded)
-    model["relations"].extend(_derive_permit_relations_from_rule_links(model, data))
     model["relations"].extend(_derive_source_role_restriction_relations(model))
     model["relations"].extend(_derive_operation_entity_relations(model))
     model["relations"].extend(_derive_state_transition_relations(model, data))

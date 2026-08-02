@@ -14,7 +14,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from .behavior_ir import source_identity_fields_for_operation
-from .behavior_ir_core import _infer_operation_effect
+from .behavior_ir_core import _infer_operation_effect, _is_ephemeral_session_path
 from .experiment_protocols import compile_family_protocol
 from .observer_contracts_base import compile_observer_requirements
 from .real_id_resolver import (
@@ -325,18 +325,6 @@ def _unique_collection_create_ref(
     return create_refs[0] if len(create_refs) == 1 else ""
 
 
-_EPHEMERAL_SESSION_SEGMENTS = frozenset({
-    "login",
-    "logout",
-    "token",
-    "refresh",
-    "session",
-    "otp",
-    "captcha",
-    "webhook",
-    "callback",
-})
-
 # Action-verb terminal segments: POST endpoints ending in these are semantically
 # read-only operations (validation, computation, query) that do not create a
 # durable entity requiring effect-read observation.
@@ -368,28 +356,6 @@ def _is_action_verb_path(path: str) -> bool:
     if not segments:
         return False
     return segments[-1] in _ACTION_VERB_SEGMENTS
-
-
-def _is_ephemeral_session_path(path: str) -> bool:
-    """True only for session/token style posts with no identity binding."""
-
-    normalized = normalize_path_placeholders(_text(path)).lower().rstrip("/")
-    if not normalized.startswith("/") or "{" in normalized:
-        return False
-    segments = [seg for seg in normalized.split("/") if seg]
-    if not segments:
-        return False
-    if segments[-1] in _EPHEMERAL_SESSION_SEGMENTS:
-        return True
-    # Password reset / forgot flows send a token mail; they do not create a
-    # durable collection row that needs governed DELETE compensation.
-    if (
-        len(segments) >= 2
-        and segments[-2] == "password"
-        and segments[-1] in {"reset", "forgot", "recover"}
-    ):
-        return True
-    return False
 
 
 def _resolve_fallback_cleanup_tier(
@@ -732,14 +698,24 @@ def compile_experiment_for_obligation(
             compile_receipt={"status": "DEFERRED", "reason_code": "MISSING_PRIMARY_OPERATION", "detail": primary_op_id or "none"},
         )
     primary_op = ops[primary_op_id]
-    # Determine write status from the source-declared semantic effect first.
+    primary_path_early = normalize_path_placeholders(
+        _text(primary_op.get("path") or primary_op.get("raw_path"))
+    )
+    is_ephemeral_session = _is_ephemeral_session_path(primary_path_early)
+    # Determine governed-write status from the source-declared semantic effect
+    # first. Session/token exchanges may use POST and even be declared as
+    # write-like at the HTTP layer, but they do not create a durable resource
+    # that can carry a reversible cleanup proof.
     # A POST is not inherently a mutation: source contracts can explicitly
     # declare read-only action endpoints such as validation/preview routes.
     # The shared helper falls back to the HTTP method only when the source did
     # not declare an effect, keeping ordinary undeclared POSTs governed as
     # writes while avoiding a false cleanup requirement for declared reads.
     _op_method_upper = _text(primary_op.get("method")).upper()
-    is_write = _infer_operation_effect(primary_op, _op_method_upper) == "write"
+    is_write = (
+        _infer_operation_effect(primary_op, _op_method_upper) == "write"
+        and not is_ephemeral_session
+    )
     if (
         is_write
         and _op_method_upper in {"PUT", "PATCH"}
@@ -799,9 +775,6 @@ def compile_experiment_for_obligation(
     _WRITE_ONLY_OBSERVERS = frozenset({
         "entity_state", "before_state", "after_state", "final_state", "business_effect",
     })
-    primary_path_early = normalize_path_placeholders(
-        _text(primary_op.get("path") or primary_op.get("raw_path"))
-    )
     if not is_write:
         required_observers = [
             obs for obs in required_observers
@@ -1060,7 +1033,7 @@ def compile_experiment_for_obligation(
     else:
         cleanup_req = _dict(raw_cleanup_req)
     cleanup_plan: list[dict[str, Any]] = []
-    cleanup_explicitly_not_required = False
+    cleanup_explicitly_not_required = is_ephemeral_session
     if is_write:
         primary_path_for_cleanup = normalize_path_placeholders(
             _text(primary_op.get("path") or primary_op.get("raw_path"))
@@ -2195,6 +2168,18 @@ def compile_experiment_for_obligation(
             "non_production_required": True,
             "governed_write": is_write,
             "cleanup_not_required": cleanup_explicitly_not_required,
+            # The path classifier is source-derived and is the only authority for
+            # treating session/token exchanges as non-durable. Preserve that
+            # boundary for the runtime assertion gate instead of asking it to
+            # invent a business-effect receipt for a session response.
+            "business_effect_requirement": (
+                "NOT_APPLICABLE" if is_ephemeral_session else "REQUIRED"
+            ),
+            "business_effect_requirement_basis": (
+                "source_path_semantics"
+                if is_ephemeral_session
+                else "source_operation_effect"
+            ),
         },
         source_refs=list(obl.get("source_refs") or [])[:5] or [
             {"id": oid, "type": "obligation", "locator": primary_op_id or ""}
@@ -2333,7 +2318,7 @@ def compile_experiment_for_obligation(
     cleanup_exemption = _dict(obl.get("cleanup_exemption_contract"))
     if cleanup_exemption:
         experiment["cleanup_exemption_contract"] = cleanup_exemption
-    elif cleanup_explicitly_not_required and is_write:
+    elif cleanup_explicitly_not_required:
         # Compiler-detected ephemeral session: auto-generate exemption contract
         # so the compile-time validator can verify the waiver.
         experiment["cleanup_exemption_contract"] = {

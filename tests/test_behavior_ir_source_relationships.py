@@ -77,6 +77,58 @@ def test_rule_to_interface_relationship_becomes_exact_ir_relation() -> None:
     )
 
 
+def test_rule_to_interface_does_not_infer_permission_from_role_text() -> None:
+    asset = {
+        "rule_library": [{
+            "rule_id": "rule-refund-approval",
+            "statement": "Only finance may approve a refund.",
+            "kind": "authorization",
+            "source_id": "prd-source",
+        }],
+        "interfaces": [{
+            "interface_id": "api:POST:/refunds/:id/approve",
+            "operation_id": "approve_refund",
+            "method": "POST",
+            "path": "/refunds/:id/approve",
+            "source_id": "api-source",
+            "source_excerpt": "Only finance may approve a refund.",
+        }],
+        "relationships": [{
+            "edge_id": "edge-refund-approval",
+            "from": "rule-refund-approval",
+            "to": "api:POST:/refunds/:id/approve",
+            "relation": "rule_to_interface",
+            "status": "accepted",
+            "derivation": "exact_source_section",
+            "evidence_gate": "exact_source_section",
+            "evidence": {
+                "operation_locator": "POST /refunds/:id/approve",
+                "statement_hash": "source-backed",
+            },
+        }],
+    }
+
+    ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id="project",
+        runtime_actors=[{
+            "role": "finance",
+            "account_ref": "finance_a",
+            "secret_ref": "secret_ref:test_accounts:finance_a",
+        }],
+    )
+
+    assert not any(
+        relation.get("relation_type") == "permits"
+        and any(
+            isinstance(source_ref, dict)
+            and source_ref.get("kind") == "rule_to_interface_permit"
+            for source_ref in relation.get("source_refs") or []
+        )
+        for relation in ir["relations"]
+    )
+
+
 def test_source_grounded_business_semantic_frame_survives_into_invariant() -> None:
     frame = {
         "schema_version": "qualibug.business-semantic-frame.v1",

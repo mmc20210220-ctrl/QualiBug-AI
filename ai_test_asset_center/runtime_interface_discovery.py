@@ -401,10 +401,21 @@ def plan_runtime_interface_candidates(
         planned.append(_candidate(path, derivation=derivation, source_refs=refs))
         return True
 
+    # Reserve part of the existing discovery budget for undocumented nested
+    # collection roots.  Without this reservation, a large action policy can
+    # exhaust the entire round in the documented resource/action lattice before
+    # a resolver-critical collection is ever probed.
+    collection_reservation = max(1, int(max_candidates) // 4)
+    route_lattice_budget = max(0, int(max_candidates) - collection_reservation)
+
     # Tier 1: documented resource x action (source-anchored on the operation
     # that declared the resource).
     for action in actions:
+        if len(planned) >= route_lattice_budget:
+            break
         for resource in resources:
+            if len(planned) >= route_lattice_budget:
+                break
             add(
                 f"{prefix_path}/{resource}/{action}",
                 "resource_action_lattice",
@@ -415,8 +426,14 @@ def plan_runtime_interface_candidates(
     # child resource are both source evidence, so this outranks the broad
     # deployment vocabulary below and cannot be starved by a large policy.
     for action in actions:
+        if len(planned) >= route_lattice_budget:
+            break
         for namespace in namespaces:
+            if len(planned) >= route_lattice_budget:
+                break
             for resource in resources:
+                if len(planned) >= route_lattice_budget:
+                    break
                 if resource == namespace:
                     continue
                 add(
@@ -425,7 +442,35 @@ def plan_runtime_interface_candidates(
                     [namespace, resource],
                 )
 
-    # Tier 3: general resource vocabulary x action, reaching undocumented
+    # Tier 3: nested collection roots.  A collection endpoint is a valid
+    # read-only surface in its own right; requiring an action suffix here skips
+    # routes such as ``/users/addresses`` and prevents later body bindings from
+    # resolving an exact source-backed resource.  The parent and child tokens
+    # both come from the deployment-owned policy asset (or the documented
+    # route vocabulary), so this does not invent an enterprise path.
+    nested_collection_pool = list(dict.fromkeys([*resources, *general_resources]))
+    nested_collection_subresources = sorted(set(subresources))
+    nested_collection_cap = min(
+        int(max_candidates),
+        len(planned) + collection_reservation,
+    )
+    if nested_collection_pool and nested_collection_subresources:
+        for subresource in nested_collection_subresources:
+            if len(planned) >= nested_collection_cap:
+                break
+            for resource in nested_collection_pool:
+                if len(planned) >= nested_collection_cap:
+                    break
+                if subresource == resource:
+                    continue
+                add(
+                    f"{prefix_path}/{resource}/{subresource}",
+                    "nested_resource_collection_lattice",
+                    [resource] if resource in refs_by_token else [],
+                    extra_refs=() if resource in refs_by_token else [general_ref],
+                )
+
+    # Tier 4: general resource vocabulary x action, reaching undocumented
     # service namespaces mounted under the declared transport prefix.  Iterated
     # resource-major and capped to a budget share so every general resource is
     # probed with the most diagnostic actions first (breadth before depth),
@@ -444,7 +489,7 @@ def plan_runtime_interface_candidates(
                 extra_refs=[general_ref],
             )
 
-    # Tier 4: nested resource/subresource/action lattice (reaches deeper
+    # Tier 5: nested resource/subresource/action lattice (reaches deeper
     # undocumented paths such as a resource's child collections).  Distributed
     # evenly across (subresource, action) pairs so no single pair monopolises the
     # budget.  Placed before the admin shape because nested child paths are a
@@ -475,7 +520,7 @@ def plan_runtime_interface_candidates(
                 ):
                     emitted += 1
 
-    # Tier 5: admin shape lattice (observed admin convention or general admin
+    # Tier 6: admin shape lattice (observed admin convention or general admin
     # vocabulary) across documented and general resources.
     if admin_shape_observed or "admin" in subresources or "admin" in general_resources:
         admin_pool = sorted(set(resources) | set(general_resources))

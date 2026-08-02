@@ -12,6 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from ._common import SOURCE_CODE_SUFFIXES
 from ._parsing import _parse_source, _risk_type_from_text
 from .document_ingestion import build_document_structure_ir
 from .document_ir_api_semantics import enrich_parsed_api_artifact_semantics
@@ -72,7 +73,7 @@ _TEXT_NATIVE_SUFFIXES = frozenset(
         ".bpmn",
         ".mmd",
     }
-)
+) | SOURCE_CODE_SUFFIXES
 _EXACT_ADDRESS_KINDS = frozenset(
     {
         "PAGE_BBOX",
@@ -138,6 +139,29 @@ def _escape_markdown_cell(value: Any) -> str:
     return text.replace("|", r"\|").strip()
 
 
+_COMPOSED_SOURCE_MARKER_RE = re.compile(
+    r"<!--\s*qualibug:source\b.*?-->",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _source_marker_before_order(
+    document_ir: dict[str, Any],
+    order: int,
+) -> str:
+    """Return the source marker governing a table at its original order."""
+
+    marker = ""
+    for block in _ordered_blocks(document_ir):
+        block_order = int(block.get("order") or 0)
+        if block_order > order:
+            break
+        candidate = _COMPOSED_SOURCE_MARKER_RE.search(_text(block.get("text")))
+        if candidate:
+            marker = candidate.group(0)
+    return marker
+
+
 def _candidate_markdown_tables(
     document_ir: dict[str, Any],
 ) -> tuple[list[str], list[dict[str, Any]]]:
@@ -186,7 +210,12 @@ def _candidate_markdown_tables(
             lines.append(
                 "| " + " | ".join(_escape_markdown_cell(value) for value in values) + " |"
             )
-        projections.append("\n".join(lines))
+        table_order = min(int(cell.get("order") or 0) for cell in coordinate_cells)
+        source_marker = _source_marker_before_order(document_ir, table_order)
+        projection = "\n".join(lines)
+        if source_marker:
+            projection = f"{source_marker}\n{projection}"
+        projections.append(projection)
         receipts.append(
             {
                 "table_key": table_key,
@@ -197,6 +226,7 @@ def _candidate_markdown_tables(
                 "header_semantics_confirmed": False,
                 "projection_method": "coordinate_preserving_candidate_header_projection",
                 "source_locators": sorted(set(locators))[:200],
+                "source_marker": source_marker,
                 "business_semantics_added": False,
             }
         )

@@ -601,6 +601,7 @@ def evaluate_completed_scan(
     evaluator_policy_identity: dict[str, Any] | None = None,
     process_boundary: dict[str, Any] | None = None,
     execution_attestation: dict[str, Any] | None = None,
+    additional_request_attempts: list[dict[str, Any]] | None = None,
     receipt_signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Evaluate one completed scan without exposing hidden answers to runtime."""
@@ -735,6 +736,7 @@ def evaluate_completed_scan(
                 policy_identity=validated_policy_identity,
                 fixture_governance=dict(fixture_governance or {}),
                 process_boundary=dict(process_boundary),
+                additional_request_attempts=additional_request_attempts,
                 signing_key=receipt_signing_key,
             )
         except ExecutionAttestationError as exc:

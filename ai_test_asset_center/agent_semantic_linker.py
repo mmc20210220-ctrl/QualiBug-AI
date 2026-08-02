@@ -100,6 +100,13 @@ def _default_client() -> AgentJsonClient:
     config = ReasoningConfig.from_env()
     if not config.enabled:
         raise AgentSemanticLinkerError("agent_provider_not_configured")
+    # This client maps immutable source identities for an audit receipt.  A
+    # non-zero sampling temperature makes the same source batch occasionally
+    # change from NO_EXECUTABLE_INTERFACE to malformed LINKED output, which
+    # either aborts the mainline or changes the compiled obligation set.  Keep
+    # provider sampling deterministic here; creative temperature belongs to
+    # advisory reasoning, never to source-to-interface authority.
+    config.temperature = 0.0
     config.timeout_seconds = max(int(config.timeout_seconds or 0), 300)
     config.max_tokens = max(int(config.max_tokens or 0), 32768)
     return ReasoningClient(config=config)

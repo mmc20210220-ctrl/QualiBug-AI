@@ -90,6 +90,7 @@ def _classify_source_multi(name: str, text: str, explicit: str | None = None) ->
 
     rules: list[tuple[bool, str]] = [
         # (condition, source_type)
+        (suffix in SOURCE_CODE_SUFFIXES, "source_code"),
         (suffix == ".har" or (suffix == ".json" and isinstance(data, dict) and "log" in data), "har"),
         (suffix == ".log" or (suffix == ".txt" and _has("log", "日志", "access", "error")), "application_log"),
         (suffix == ".svg" or "<svg" in str(text or "").lower(), "uiux_svg"),
@@ -769,6 +770,193 @@ def _merge_table_identities(tables: list[dict[str, Any]]) -> list[dict[str, Any]
     return [merged[table_id] for table_id in order]
 
 
+_SOURCE_CODE_HTTP_METHODS = frozenset(
+    {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+)
+_SOURCE_CODE_METHOD_CALL_RE = re.compile(
+    r"(?ix)\b(?:app|router|server|api|blueprint|bp|routes?)\s*\.\s*"
+    r"(?P<method>get|post|put|patch|delete|head|options)\s*\(\s*"
+    r"['\"](?P<path>/[^'\"\r\n]+)['\"]"
+)
+_SOURCE_CODE_ROUTE_DECORATOR_RE = re.compile(
+    r"(?ix)\b(?:app|router|blueprint|bp)\s*\.\s*"
+    r"(?P<decorator>route|api_route)\s*\(\s*"
+    r"['\"](?P<path>/[^'\"\r\n]+)['\"](?P<tail>[^)\r\n]*)\)"
+)
+_SOURCE_CODE_MAPPING_RE = re.compile(
+    r"(?ix)(?:@|\[)\s*(?P<annotation>"
+    r"getmapping|postmapping|putmapping|patchmapping|deletemapping|"
+    r"requestmapping|httpget|httppost|httpput|httppatch|httpdelete)"
+    r"\s*(?:\((?P<args>[^)\r\n]*)\))?\s*\]?"
+)
+_SOURCE_CODE_ROUTE_OBJECT_RE = re.compile(
+    r"(?ix)\b(?:app|router|server|api|fastify)\s*\.\s*route\s*\(\s*\{"
+    r"(?P<body>[^}\r\n]*)\}\s*\)"
+)
+_SOURCE_CODE_QUOTED_PATH_RE = re.compile(r"['\"](?P<path>/[^'\"\r\n]+)['\"]")
+_SOURCE_CODE_METHOD_LITERAL_RE = re.compile(
+    r"['\"](?P<method>GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)['\"]",
+    flags=re.IGNORECASE,
+)
+_SOURCE_CODE_ROUTE_SIGNAL_RE = re.compile(
+    r"(?ix)(?:\.\s*(?:get|post|put|patch|delete|head|options|route|api_route)\s*\(|"
+    r"@\s*(?:getmapping|postmapping|putmapping|patchmapping|deletemapping|requestmapping)\b|"
+    r"\[\s*http(?:get|post|put|patch|delete)\b)"
+)
+
+
+def _source_code_path_parameters(path: str) -> list[str]:
+    parameters: list[str] = []
+    for match in re.finditer(
+        r":(?P<colon>[A-Za-z_][A-Za-z0-9_]*)|"
+        r"\{(?P<brace>[^{}]+)\}|"
+        r"<(?P<angle>[A-Za-z_][A-Za-z0-9_]*)>",
+        path,
+    ):
+        value = next(
+            (
+                match.group(name)
+                for name in ("colon", "brace", "angle")
+                if match.group(name)
+            ),
+            "",
+        )
+        value = value.strip()
+        if value and value not in parameters:
+            parameters.append(value)
+    return parameters
+
+
+def _source_code_operations(
+    text: str,
+    source_id: str = "",
+    filename: str = "",
+) -> list[dict[str, Any]]:
+    """Extract only literal server-route declarations from implementation sources.
+
+    This is a source-evidence adapter, not a code execution engine. It records an
+    exact method/path and locator, while deliberately leaving request bodies,
+    response schemas, middleware effects, and computed paths unresolved.
+    """
+
+    candidates: list[tuple[str, str, int, str]] = []
+    for line_number, line in enumerate(str(text or "").splitlines(), start=1):
+        if str(line).lstrip().startswith(("//", "#", "/*", "*", "<!--")):
+            continue
+        for match in _SOURCE_CODE_METHOD_CALL_RE.finditer(line):
+            candidates.append(
+                (
+                    str(match.group("method") or "").upper(),
+                    str(match.group("path") or ""),
+                    line_number,
+                    line,
+                )
+            )
+        for match in _SOURCE_CODE_ROUTE_DECORATOR_RE.finditer(line):
+            methods = [
+                str(row.group("method") or "").upper()
+                for row in _SOURCE_CODE_METHOD_LITERAL_RE.finditer(
+                    str(match.group("tail") or "")
+                )
+            ]
+            for method in methods:
+                candidates.append(
+                    (method, str(match.group("path") or ""), line_number, line)
+                )
+        for match in _SOURCE_CODE_MAPPING_RE.finditer(line):
+            annotation = str(match.group("annotation") or "").lower()
+            args = str(match.group("args") or "")
+            path_match = _SOURCE_CODE_QUOTED_PATH_RE.search(args)
+            if not path_match:
+                continue
+            path = str(path_match.group("path") or "")
+            if annotation == "requestmapping":
+                methods = []
+                methods.extend(
+                    str(row.group("method") or "").upper()
+                    for row in re.finditer(
+                        r"(?ix)RequestMethod\s*\.\s*"
+                        r"(?P<method>GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)",
+                        args,
+                    )
+                )
+                methods.extend(
+                    str(row.group("method") or "").upper()
+                    for row in _SOURCE_CODE_METHOD_LITERAL_RE.finditer(args)
+                )
+            else:
+                methods = [
+                    {
+                        "getmapping": "GET",
+                        "postmapping": "POST",
+                        "putmapping": "PUT",
+                        "patchmapping": "PATCH",
+                        "deletemapping": "DELETE",
+                        "httpget": "GET",
+                        "httppost": "POST",
+                        "httpput": "PUT",
+                        "httppatch": "PATCH",
+                        "httpdelete": "DELETE",
+                    }.get(annotation, "")
+                ]
+            for method in methods:
+                candidates.append((method, path, line_number, line))
+        for match in _SOURCE_CODE_ROUTE_OBJECT_RE.finditer(line):
+            body = str(match.group("body") or "")
+            path_match = re.search(
+                r"(?ix)(?:url|path)\s*:\s*['\"](?P<path>/[^'\"\r\n]+)['\"]",
+                body,
+            )
+            if not path_match:
+                continue
+            methods = [
+                str(row.group("method") or "").upper()
+                for row in _SOURCE_CODE_METHOD_LITERAL_RE.finditer(body)
+            ]
+            for method in methods:
+                candidates.append(
+                    (method, str(path_match.group("path") or ""), line_number, line)
+                )
+
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, int]] = set()
+    for method, path, line_number, line in candidates:
+        method = str(method or "").upper().strip()
+        path = str(path or "").strip()
+        if method not in _SOURCE_CODE_HTTP_METHODS or not path.startswith("/"):
+            continue
+        identity = (method, path, line_number)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        locator = f"{source_id}:line:{line_number}"
+        parameters = _source_code_path_parameters(path)
+        rows.append(
+            {
+                "interface_id": (
+                    f"source_code:{method}:{path}:"
+                    f"{_short_hash({'source_id': source_id, 'line': line_number})}"
+                ),
+                "source_id": source_id,
+                "source_kind": "source_code",
+                "method": method,
+                "path": path,
+                "operation_id": _safe_slug(
+                    f"{method.lower()}_{path.strip('/').replace('/', '_') or 'root'}",
+                    64,
+                ),
+                "summary": f"Source-declared {method} {path}",
+                "parameters": parameters,
+                "source_locator": locator,
+                "source_file": str(filename or ""),
+                "source_excerpt": _redact_text(str(line).strip(), 900),
+                "derivation": "source_code_http_declaration",
+                "tokens": sorted(_tokens(f"{method} {path} {' '.join(parameters)}")),
+            }
+        )
+    return rows
+
+
 def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, Any]]:
     matches = list(MARKDOWN_API_ENDPOINT_RE.finditer(text or ""))
     rows: list[dict[str, Any]] = []
@@ -1186,9 +1374,49 @@ def _permission_evidence_excerpt(
     return _redact_text("; ".join(bits), 280)
 
 
-def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[str, Any]]:
+_NON_PERMISSION_SOURCE_TYPES = frozenset({
+    "test_data",
+    "test_accounts",
+    "credential_catalog",
+    "credentials",
+})
+_COMPOSED_SOURCE_MARKER_RE = re.compile(
+    r"<!--\s*qualibug:source\b(?P<attributes>.*?)-->",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _permission_source_line_types(text: str, default_source_type: str) -> list[str]:
+    """Return the declared source type for each line in a composed document."""
+
+    current = str(default_source_type or "").strip().lower()
+    types: list[str] = []
+    for line in str(text or "").splitlines():
+        marker = _COMPOSED_SOURCE_MARKER_RE.search(line)
+        if marker:
+            source_type_match = re.search(
+                r"(?:^|\s)source_type=(?P<value>[^\s>]+)",
+                str(marker.group("attributes") or ""),
+                flags=re.IGNORECASE,
+            )
+            if source_type_match:
+                current = str(source_type_match.group("value") or "").strip().lower()
+        types.append(current)
+    return types
+
+
+def _permission_entries(
+    text: str,
+    payload: Any,
+    source_id: str,
+    source_type: str = "",
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
+    normalized_source_type = str(source_type or "").strip().lower()
+    if normalized_source_type in _NON_PERMISSION_SOURCE_TYPES:
+        return []
+    source_line_types = _permission_source_line_types(text, normalized_source_type)
     if isinstance(payload, dict):
         for key in ("permissions", "matrix", "roles", "items", "data"):
             value = payload.get(key)
@@ -1281,6 +1509,11 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                 })
     role_words = _lexicon_dict("role_words") or ROLE_WORDS
     for line_index, line in enumerate(text.splitlines()):
+        if (
+            line_index < len(source_line_types)
+            and source_line_types[line_index] in _NON_PERMISSION_SOURCE_TYPES
+        ):
+            continue
         if _permission_decision({}, line) != "deny":
             continue
         line_norm = _norm(line)
@@ -1341,6 +1574,11 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
     if rows:
         return _dedupe_by_id(rows, "permission_id")
     for idx, line in enumerate(text.splitlines()):
+        if (
+            idx < len(source_line_types)
+            and source_line_types[idx] in _NON_PERMISSION_SOURCE_TYPES
+        ):
+            continue
         normalized = _norm(line)
         if not normalized or not any(marker in normalized for marker in ("权限", "permission", "role", "访问", "只能", "tenant")):
             continue
@@ -1909,6 +2147,18 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
     openapi = payload if source_type == "openapi" and isinstance(payload, dict) else {}
     postman = payload if source_type == "postman" and isinstance(payload, dict) else {}
     operations = _openapi_operations(openapi, source_id) + _postman_operations(postman, source_id)
+    if source_type == "source_code":
+        operations.extend(_source_code_operations(text, source_id, filename))
+        if not operations and _SOURCE_CODE_ROUTE_SIGNAL_RE.search(text or ""):
+            parse_errors.append({
+                "stage": "extraction",
+                "code": "SOURCE_CODE_HTTP_OPERATIONS_EMPTY",
+                "identity": source_id,
+                "retryability": "after_parser_enhancement_or_source_fix",
+                "operator_action": "inspect source-code route declaration shape and parser coverage",
+                "detail": "route-like source syntax was present but no literal HTTP operation was extracted",
+                "gap_type": "source_code_http_operation_extraction_empty",
+            })
     # HAR: parse JSON and extract operations
     har_errors: list[dict[str, Any]] = []
     if source_type == "har":
@@ -2045,7 +2295,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
     tables = _apply_constraint_list_identities(_merge_table_identities(tables), text)
     ui_specs = _uiux_specs_from_text(text, source_id, source_type, filename)
     permissions = _dedupe_by_id(
-        [*_permission_entries(text, payload, source_id),
+        [*_permission_entries(text, payload, source_id, source_type),
          *_permission_crosstab_entries(text, source_id)],
         "permission_id",
     )

@@ -8,7 +8,7 @@ from typing import Any
 
 from . import experiment_protocols_base as _base
 from .experiment_protocols_base import *  # noqa: F401,F403
-from .behavior_ir_core import _infer_operation_effect
+from .behavior_ir_core import _infer_operation_effect, _is_ephemeral_session_path
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -581,16 +581,27 @@ def compile_family_protocol(
         operation,
         _text(operation.get("method")).upper(),
     )
+    is_ephemeral_session = _is_ephemeral_session_path(
+        _text(operation.get("path") or operation.get("raw_path"))
+    )
     if operation_effect == "write":
         assertion.update({
             "kind": "validation_rejection",
             "expected_class": 4,
             "expected_effect_count": 0,
-            "expected_control_effect_min": 1,
             "compare_field": "status_code",
             "effect_field": "treatment_effect_count",
             "control_effect_field": "control_effect_count",
         })
+        if is_ephemeral_session:
+            # A session/token exchange is a source-declared validation target, but
+            # it has no durable entity effect that a control can prove. Keep the
+            # strict rejection and zero-side-effect contract while making that
+            # evidence boundary explicit; the finalizer projects this same
+            # source-derived scope into runtime observations.
+            assertion["business_effect_requirement"] = "NOT_APPLICABLE"
+        else:
+            assertion["expected_control_effect_min"] = 1
     else:
         # A source-declared read-only POST can still enforce input validation,
         # but it has no business mutation whose zero-effect receipt can be

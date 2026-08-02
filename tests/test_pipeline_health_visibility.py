@@ -140,6 +140,25 @@ def test_product_health_degrades_completed_run_when_preflight_failed() -> None:
     assert health["execution_reason"] == "preflight_health_failed"
 
 
+def test_product_health_preserves_warning_only_preflight_on_completed_run() -> None:
+    health = reconcile_product_pipeline_health(
+        {"status": "OK", "empty_findings_means_no_bugs": True},
+        execution_status="completed",
+        preflight_diagnostics={
+            "ready": True,
+            "all_checks_passed": False,
+            "errors": 0,
+            "warnings": 1,
+        },
+    )
+
+    assert health["status"] == "OK"
+    assert health["empty_findings_means_no_bugs"] is True
+    assert health["preflight"]["all_checks_passed"] is False
+    assert health["preflight"]["warnings"] == 1
+    assert "execution_reason" not in health
+
+
 def test_attempt_receipts_override_conflicting_legacy_execution_counters() -> None:
     result = {
         **_attempt_result([

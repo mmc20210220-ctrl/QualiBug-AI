@@ -67,7 +67,7 @@ __all__ = [
     "infer_multi_industry_business_model",
     "logger",
     "PHASE", "PARSER_RECEIPT_SCHEMA", "SOURCE_TYPES",
-    "TEXT_SUFFIXES", "MAX_SOURCE_BYTES", "SAFE_METHODS", "WRITE_METHODS",
+    "TEXT_SUFFIXES", "SOURCE_CODE_SUFFIXES", "MAX_SOURCE_BYTES", "SAFE_METHODS", "WRITE_METHODS",
     "MARKDOWN_API_ENDPOINT_RE", "SVG_TEXT_RE", "SVG_TAG_ATTR_RE",
     "SVG_TITLE_RE", "SVG_DESC_RE", "ROLE_WORDS", "RISK_TERMS",
     "SECRET_PATTERNS", "SEMANTIC_LEXICON_PATH", "_SEMANTIC_LEXICON_CACHE",
@@ -77,6 +77,7 @@ PHASE = "phase58_enterprise_knowledge_unified_ingestion"
 PARSER_RECEIPT_SCHEMA = "qualibug.parser-receipt.v1"
 SOURCE_TYPES = {
     "prd", "mrd", "openapi", "markdown_api", "postman", "har",
+    "source_code",
     "application_log", "database_schema", "db_field_dictionary",
     "permission_matrix", "historical_bug", "ticket",
     "test_case", "test_plan", "test_report",
@@ -87,6 +88,14 @@ SOURCE_TYPES = {
     "collaboration_document", "other_document", "other",
 }
 TEXT_SUFFIXES = {".md", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".csv", ".sql", ".json", ".xml", ".svg", ".har", ".log", ".xlsx", ".xls"}
+SOURCE_CODE_SUFFIXES = {
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
+    ".cs", ".dart", ".ex", ".exs", ".fs", ".fsx", ".go",
+    ".groovy", ".java", ".js", ".jsx", ".kt", ".kts", ".m",
+    ".mm", ".php", ".pl", ".pm", ".ps1", ".py", ".rb", ".rs",
+    ".scala", ".sc", ".sh", ".swift", ".ts", ".tsx", ".vb", ".vue",
+    ".svelte",
+}
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}

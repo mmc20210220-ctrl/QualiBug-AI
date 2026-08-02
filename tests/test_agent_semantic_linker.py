@@ -6,10 +6,11 @@ import pytest
 
 from ai_test_asset_center.agent_semantic_linker import (
     AgentSemanticLinkerError,
+    _default_client,
     enrich_knowledge_asset_with_agent_relationships,
 )
 from ai_test_asset_center.behavior_ir import build_behavior_ir_from_knowledge_asset
-from ai_test_asset_center.llm_reasoning import ReasoningClientError
+from ai_test_asset_center.llm_reasoning import ReasoningClientError, ReasoningConfig
 from ai_test_asset_center.obligation_compiler import compile_obligations_from_behavior_ir
 
 
@@ -209,6 +210,28 @@ def test_agent_semantic_linker_does_not_retry_non_transient_provider_failure() -
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("expected provider failure")
     assert client.calls == 1
+
+
+def test_agent_semantic_linker_uses_deterministic_provider_sampling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = ReasoningConfig(
+        base_url="https://example.invalid/v1",
+        api_key="test-key",
+        model="test-model",
+        temperature=0.7,
+    )
+    monkeypatch.setattr(
+        ReasoningConfig,
+        "from_env",
+        classmethod(lambda cls: config),
+    )
+
+    client = _default_client()
+
+    assert client.config.temperature == 0.0
+    assert client.config.timeout_seconds >= 300
+    assert client.config.max_tokens >= 32768
 
 
 def test_agent_semantic_linker_sends_expert_context_without_credentials() -> None:
