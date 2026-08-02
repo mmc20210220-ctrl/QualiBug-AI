@@ -25,7 +25,6 @@ from .connector_registry import (
 )
 from .connector_configuration_service import (
     configure_managed_connector,
-    configure_managed_feishu_connector,
     set_managed_connector_status,
 )
 from .connector_connection_profiles import (
@@ -1462,7 +1461,9 @@ class KnowledgeConnectorHandlersMixin:
         actor: dict[str, Any],
     ) -> Any:
         connector = _text(body.get("connector_instance_id"), 160)
-        connector_type = _text(body.get("connector_type"), 160) or "feishu"
+        connector_type = _text(body.get("connector_type"), 160)
+        if not connector_type:
+            raise ConnectorProfileError("connector_type_required")
         profile = body.get("connection_profile")
         if not isinstance(profile, dict):
             manifest = build_default_connector_registry().manifest(connector_type)
@@ -1488,17 +1489,11 @@ class KnowledgeConnectorHandlersMixin:
             "sync_policy": body.get("sync_policy"),
             "webhook_policy": body.get("webhook_policy"),
         }
-        if _text(body.get("connector_type"), 160):
-            result = configure_managed_connector(
-                project,
-                connector_type=connector_type,
-                **configuration_kwargs,
-            )
-        else:
-            result = configure_managed_feishu_connector(
-                project,
-                **configuration_kwargs,
-            )
+        result = configure_managed_connector(
+            project,
+            connector_type=connector_type,
+            **configuration_kwargs,
+        )
         public_result = {
             "ok": bool(result.get("ok")),
             "created": bool(result.get("created")),

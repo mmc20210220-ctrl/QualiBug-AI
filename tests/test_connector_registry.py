@@ -93,6 +93,18 @@ def test_manifest_rejects_quick_connect_scope_without_required_url_field() -> No
         )
 
 
+def test_manifest_rejects_invalid_host_suffix_evidence() -> None:
+    with pytest.raises(ConnectorRegistryError, match="host_suffix_invalid"):
+        ConnectorManifest(
+            connector_type="host-evidence",
+            display_name="host-evidence",
+            category="website",
+            version="1",
+            entrypoint_evidence={"host_suffixes": ["https://github.com/path"]},
+            capability_contract_version="test-v1",
+        )
+
+
 def test_registry_rejects_duplicate_connector_types_and_sorts_catalog() -> None:
     registry = ConnectorRegistry([_Adapter("zeta"), _Adapter("alpha")])
 
@@ -210,7 +222,7 @@ def test_default_registry_exposes_manifest_driven_openapi_adapter_without_networ
     assert registry.catalog()["governance"]["network_access_performed"] is False
 
 
-def test_generic_git_quick_connect_uses_url_scope_without_provider_guessing_in_ui() -> None:
+def test_git_provider_manifests_declare_url_scope_and_evidence() -> None:
     registry = build_default_connector_registry()
 
     assert registry.manifest("git").quick_connect_schema == {
@@ -221,7 +233,14 @@ def test_generic_git_quick_connect_uses_url_scope_without_provider_guessing_in_u
     assert registry.manifest("git").entrypoint_evidence == {
         "path_suffixes": [".git"],
     }
-    assert registry.manifest("github").quick_connect_schema == {}
+    assert registry.manifest("github").quick_connect_schema == {
+        "input_type": "url",
+        "scope_field": "repository_url",
+        "priority": 20,
+    }
+    assert registry.manifest("github").entrypoint_evidence == {
+        "host_suffixes": ["github.com"],
+    }
 
 
 def test_openapi_export_connectors_reuse_the_same_manifest_driven_adapter() -> None:

@@ -81,6 +81,7 @@ _QUICK_CONNECT_SCHEMA_KEYS = {
 _ENTRYPOINT_EVIDENCE_KEYS = {
     "content_types",
     "document_shapes",
+    "host_suffixes",
     "path_suffixes",
 }
 _ENTRYPOINT_EVIDENCE_MAX_ITEMS = 32
@@ -382,6 +383,19 @@ class ConnectorManifest:
                     if not value.startswith(".") or "/" in value or "\\" in value:
                         raise ConnectorRegistryError(
                             "entrypoint_evidence_path_suffix_invalid"
+                        )
+                elif key == "host_suffixes":
+                    value = value.lower().rstrip(".")
+                    labels = value.split(".") if value else []
+                    if any(
+                        not re.fullmatch(
+                            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+                            label,
+                        )
+                        for label in labels
+                    ):
+                        raise ConnectorRegistryError(
+                            "entrypoint_evidence_host_suffix_invalid"
                         )
                 if value in seen:
                     raise ConnectorRegistryError(

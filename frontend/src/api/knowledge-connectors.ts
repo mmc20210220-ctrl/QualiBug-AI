@@ -43,6 +43,7 @@ export type ConnectorManifest = {
   entrypoint_evidence?: {
     content_types?: string[];
     document_shapes?: string[];
+    host_suffixes?: string[];
     path_suffixes?: string[];
   };
   supported_resource_types: string[];
@@ -1050,6 +1051,9 @@ function toManifest(value: unknown): ConnectorManifest {
           .map(asString)
           .filter(Boolean),
         document_shapes: asArray(asRecord(row.entrypoint_evidence).document_shapes)
+          .map(asString)
+          .filter(Boolean),
+        host_suffixes: asArray(asRecord(row.entrypoint_evidence).host_suffixes)
           .map(asString)
           .filter(Boolean),
         path_suffixes: asArray(asRecord(row.entrypoint_evidence).path_suffixes)

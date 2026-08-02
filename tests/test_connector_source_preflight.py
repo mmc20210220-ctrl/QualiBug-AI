@@ -74,6 +74,25 @@ def test_html_entrypoint_recommends_website_without_returning_body(monkeypatch):
     assert result["governance"]["response_body_persisted"] is False
 
 
+def test_manifest_declared_host_evidence_recommends_provider_git_connector(monkeypatch):
+    monkeypatch.setattr(preflight, "validate_url", lambda url, **_kwargs: url)
+    result = preflight.preflight_source_entry(
+        "https://github.com/acme/orders",
+        transport=lambda *_args: _response(
+            b"repository entrypoint",
+            content_type="text/plain",
+            final_url="https://github.com/acme/orders",
+        ),
+    )
+
+    assert result["status"] == "READY"
+    assert result["recommended_connector_type"] == "github"
+    github = next(
+        row for row in result["candidates"] if row["connector_type"] == "github"
+    )
+    assert github["evidence"] == ["host_suffix:github.com"]
+
+
 def test_authorized_entrypoint_remains_explicitly_unresolved(monkeypatch):
     monkeypatch.setattr(preflight, "validate_url", lambda url, **_kwargs: url)
     result = preflight.preflight_source_entry(

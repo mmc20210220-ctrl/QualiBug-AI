@@ -249,7 +249,7 @@ def test_handler_uses_managed_configuration_and_hides_takeover_details(
 ):
     monkeypatch.setattr(
         handlers,
-        "configure_managed_feishu_connector",
+        "configure_managed_connector",
         lambda *a, **k: {
             **_configured(False),
             "configuration_write_fencing": "MONOTONIC_REGISTRY_TOKEN",
@@ -261,6 +261,7 @@ def test_handler_uses_managed_configuration_and_hides_takeover_details(
         PROJECT,
         {
             "connector_instance_id": CONNECTOR,
+            "connector_type": "feishu",
             "display_name": "飞书企业资料",
             "resource_scope": "wiki-all-accessible",
             "connection_profile": {
@@ -321,11 +322,44 @@ def test_generic_connector_type_uses_manifest_driven_configuration_service(
     assert observed["profile"]["auth_mode"] == "api_key"
 
 
+def test_handler_rejects_missing_connector_type_instead_of_selecting_feishu(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(
+        handlers,
+        "configure_managed_connector",
+        lambda *args, **kwargs: pytest.fail(
+            "missing connector type reached configuration"
+        ),
+    )
+
+    with pytest.raises(
+        handlers.ConnectorProfileError,
+        match="connector_type_required",
+    ):
+        DummyHandler()._handle_knowledge_connector_configure(
+            PROJECT,
+            {
+                "connector_instance_id": CONNECTOR,
+                "display_name": "资料源",
+                "resource_scope": "docs-root",
+                "connection_profile": {
+                    "auth_mode": "api_key",
+                    "api_key": "secret",
+                },
+            },
+            tmp_path,
+            ACTOR,
+        )
+
+
 def test_handler_imports_managed_configuration_not_low_level_authority():
     source = (
         Path(__file__).resolve().parents[1]
         / "ai_test_asset_center"
         / "private_pilot_connector_handlers.py"
     ).read_text(encoding="utf-8")
-    assert "configure_managed_feishu_connector" in source
+    assert "configure_managed_connector" in source
+    assert "configure_managed_feishu_connector" not in source
     assert "configure_feishu_connector" not in source

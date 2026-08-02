@@ -59,14 +59,17 @@ Adapter 不解析业务语义，不创建独立知识库，不写回远端资料
 
 `scope_field` 必须是 `scope_schema` 中声明且必填的字符串或数组字段。Materials 页面只把用户粘贴的 HTTP(S) 入口写入这个字段，并保留 Manifest 默认范围；连接器类型、提供商、凭据、业务规则和 SSRF 放行范围不会由 URL 猜测。保存后仍复用既有配置、连接测试和 managed sync 主链，失败会返回明确原因，不会伪造连接成功或资料。
 
+通用配置接口要求请求显式提交已注册的 `connector_type`。缺失类型会直接返回 `connector_type_required`，不会把请求静默降级为 Feishu；所有注册类型都经由同一 `configure_managed_connector` 主链。Feishu 专用配置 facade 只保留给已有兼容调用方，不能成为通用 HTTP 入口的隐式默认值。
+
 ### 陌生入口预检
 
-为降低“先判断连接器类型”的用户成本，URL 入口还可以由 Manifest 声明 `entrypoint_evidence`：
+为降低“先判断连接器类型”的用户成本，URL 入口还可以由 Manifest 声明 `entrypoint_evidence`。除响应内容类型、结构形状和路径后缀外，连接器可以声明受限的 `host_suffixes`；它只作为候选证据，不会绕过用户确认、SSRF 校验或真实连接测试：
 
 ```json
 {
   "content_types": ["text/html", "application/json"],
   "document_shapes": ["openapi_document"],
+  "host_suffixes": ["github.com"],
   "path_suffixes": [".json"]
 }
 ```

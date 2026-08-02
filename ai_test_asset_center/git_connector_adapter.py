@@ -1932,15 +1932,15 @@ def git_connector_manifest(connector_type: str = "git") -> ConnectorManifest:
             {
                 "input_type": "url",
                 "scope_field": "repository_url",
-                "priority": 30,
+                "priority": 20 if kind != "git" else 30,
             }
-            if kind == "git"
+            if kind in GIT_CONNECTOR_TYPES
             else {}
         ),
         entrypoint_evidence=(
-            {"path_suffixes": [".git"]}
-            if kind == "git"
-            else {}
+            {"host_suffixes": [f"{kind}.com"]}
+            if kind in {"gitee", "gitlab", "github"}
+            else {"path_suffixes": [".git"]}
         ),
         supported_resource_types=tuple(sorted({"file", "submodule", "lfs_pointer", "issue", "wiki_page", "release", "commit"})),
         sync_modes=("FULL", "INCREMENTAL"),

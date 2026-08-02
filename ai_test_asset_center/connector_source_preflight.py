@@ -193,6 +193,7 @@ def _document_shapes(response: SourcePreflightHttpResponse, mime: str) -> set[st
 def _manifest_candidates(
     manifests: list[ConnectorManifest],
     *,
+    host: str,
     mime: str,
     shapes: set[str],
     suffix: str,
@@ -223,10 +224,18 @@ def _manifest_candidates(
             not shape_is_required_for_match or shape_evidence
         ):
             evidence.append("path_suffix")
+        declared_hosts = set(evidence_declaration.get("host_suffixes", ()))
+        host_evidence = [
+            f"host_suffix:{declared_host}"
+            for declared_host in sorted(declared_hosts)
+            if host == declared_host or host.endswith("." + declared_host)
+        ]
+        evidence.extend(host_evidence)
         score = (
             300 * len([item for item in evidence if item.startswith("document_shape:")])
             + 200 * int("content_type" in evidence)
             + 150 * int("path_suffix" in evidence)
+            + 600 * len(host_evidence)
         )
         priority = quick.get("priority", 100)
         if not isinstance(priority, int):
@@ -325,6 +334,7 @@ def preflight_source_entry(
     registry_value = registry or build_default_connector_registry()
     candidates = _manifest_candidates(
         registry_value.manifests(),
+        host=(urlsplit(url).hostname or "").lower().rstrip("."),
         mime=mime,
         shapes=shapes,
         suffix=suffix,
