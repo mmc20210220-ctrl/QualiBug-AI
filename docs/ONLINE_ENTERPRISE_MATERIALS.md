@@ -272,6 +272,14 @@ Authorization codes, access tokens, refresh tokens, and client secrets never app
 ledger, API projection, logs, or sync receipt. Token values are written only through the existing
 encrypted Connection Profile authority.
 
+Before a managed sync or connection test uses an `EXPIRING` or `EXPIRED` access token,
+the same mainline attempts a generic `grant_type=refresh_token` exchange when the Manifest
+declares a refresh-token field. A rotated access token is encrypted through the existing
+profile authority; a provider-returned refresh token replaces the old ciphertext, while an
+omitted refresh token is retained. Refresh success and failure are projected without token
+values, and token rejection or scope loss becomes visible reauthorization state instead of
+silently retrying a broken credential.
+
 The callback preserves the existing connector instance, source identity, and encrypted sync
 checkpoint. A granted scope that does not contain every Manifest minimum scope is exposed as
 `PERMISSION_INSUFFICIENT` and requires reauthorization; it is not treated as a successful sync.

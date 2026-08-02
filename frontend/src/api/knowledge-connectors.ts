@@ -61,6 +61,19 @@ export type KnowledgeConnectorAutoSync = {
   next_attempt_at_utc?: string;
   failure_count: number;
   attention?: string;
+  last_oauth_refresh?: {
+    supported: boolean;
+    attempted: boolean;
+    refreshed: boolean;
+    refresh_status: string;
+    credential_status?: string;
+    credential_expires_at_utc?: string;
+    permission_status?: string;
+    credential_values_returned: false;
+    source_identity_preserved: boolean;
+    checkpoint_preserved: boolean;
+    remote_deletion_inferred: false;
+  };
   refresh_interval_seconds?: number;
   maintenance_required_by_user: boolean;
   checkpoint_recovery_is_automatic?: boolean;
@@ -148,6 +161,10 @@ export type KnowledgeConnectorOAuth = {
   granted_scopes?: string[];
   missing_scopes?: string[];
   permission_status?: string;
+  automatic_refresh_supported?: boolean;
+  automatic_refresh_status?: string;
+  last_refresh_at_utc?: string;
+  last_refresh_failure?: Record<string, unknown> | null;
   last_authorized_at_utc?: string;
   last_failure?: Record<string, unknown> | null;
   pending_transaction_count?: number;
@@ -549,6 +566,21 @@ function toAutoSync(value: unknown): KnowledgeConnectorAutoSync {
     next_attempt_at_utc: asString(row.next_attempt_at_utc) || undefined,
     failure_count: asNumber(row.failure_count) || 0,
     attention: asString(row.attention) || undefined,
+    last_oauth_refresh: row.last_oauth_refresh
+      ? {
+        supported: asBoolean(asRecord(row.last_oauth_refresh).supported),
+        attempted: asBoolean(asRecord(row.last_oauth_refresh).attempted),
+        refreshed: asBoolean(asRecord(row.last_oauth_refresh).refreshed),
+        refresh_status: asString(asRecord(row.last_oauth_refresh).refresh_status),
+        credential_status: asString(asRecord(row.last_oauth_refresh).credential_status) || undefined,
+        credential_expires_at_utc: asString(asRecord(row.last_oauth_refresh).credential_expires_at_utc) || undefined,
+        permission_status: asString(asRecord(row.last_oauth_refresh).permission_status) || undefined,
+        credential_values_returned: false,
+        source_identity_preserved: asBoolean(asRecord(row.last_oauth_refresh).source_identity_preserved),
+        checkpoint_preserved: asBoolean(asRecord(row.last_oauth_refresh).checkpoint_preserved),
+        remote_deletion_inferred: false,
+      }
+      : undefined,
     refresh_interval_seconds: asNumber(row.refresh_interval_seconds),
     maintenance_required_by_user: asBoolean(row.maintenance_required_by_user),
     checkpoint_recovery_is_automatic: asBoolean(row.checkpoint_recovery_is_automatic),
@@ -769,6 +801,12 @@ function toOauth(value: unknown): KnowledgeConnectorOAuth {
     granted_scopes: asArray(row.granted_scopes).map(asString).filter(Boolean),
     missing_scopes: asArray(row.missing_scopes).map(asString).filter(Boolean),
     permission_status: asString(row.permission_status) || undefined,
+    automatic_refresh_supported: asBoolean(row.automatic_refresh_supported),
+    automatic_refresh_status: asString(row.automatic_refresh_status) || undefined,
+    last_refresh_at_utc: asString(row.last_refresh_at_utc) || undefined,
+    last_refresh_failure: row.last_refresh_failure
+      ? asRecord(row.last_refresh_failure)
+      : null,
     last_authorized_at_utc: asString(row.last_authorized_at_utc) || undefined,
     last_failure: row.last_failure ? asRecord(row.last_failure) : null,
     pending_transaction_count: asNumber(row.pending_transaction_count),

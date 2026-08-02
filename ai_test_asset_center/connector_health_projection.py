@@ -152,6 +152,13 @@ def project_connector_health(
     oauth_permission_status = _text(
         oauth_row.get("permission_status"), 80
     ).upper()
+    oauth_refresh_status = _text(
+        oauth_row.get("automatic_refresh_status"), 40
+    ).upper() or "NOT_MEASURED"
+    oauth_refresh_failure = _mapping(oauth_row.get("last_refresh_failure"))
+    oauth_refresh_failure_permission = _text(
+        oauth_refresh_failure.get("permission_status"), 80
+    ).upper()
     webhook_state = _mapping(webhook_row.get("state"))
     webhook_calibration_required = (
         webhook_row.get("status") == "CALIBRATION_REQUIRED"
@@ -185,12 +192,20 @@ def project_connector_health(
     auto_state = _text(auto.get("state"), 32) or "UNKNOWN"
     instance_status = _text(instance.get("status"), 32).upper() or "UNKNOWN"
     latest_sync_status = _text(sync.get("status"), 40).upper()
+    oauth_refresh_retrying = (
+        oauth_refresh_status == "FAILED"
+        and credential_status in {"EXPIRING", "EXPIRED"}
+        and oauth_refresh_failure_permission
+        not in {"REAUTHORIZATION_REQUIRED", "PERMISSION_INSUFFICIENT"}
+    )
 
     attention: list[str] = []
     if oauth_status == "PERMISSION_INSUFFICIENT" or (
         credential_status == "PERMISSION_INSUFFICIENT"
     ) or oauth_permission_status == "PERMISSION_INSUFFICIENT":
         attention.append("PERMISSION_INSUFFICIENT")
+    elif oauth_refresh_retrying:
+        attention.append("AUTHORIZATION_REFRESH_RETRYING")
     elif reauthorization_required or credential_status in {
         "EXPIRED",
         "REVOKED",
@@ -216,7 +231,10 @@ def project_connector_health(
     if webhook_calibration_required:
         attention.append("WEBHOOK_CALIBRATION_REQUIRED")
 
-    if attention and attention[0] == "AUTHORIZATION_EXPIRED":
+    if attention and attention[0] == "AUTHORIZATION_REFRESH_RETRYING":
+        status = "RETRYING"
+        recommended_action = "WAIT_FOR_AUTOMATIC_RETRY"
+    elif attention and attention[0] == "AUTHORIZATION_EXPIRED":
         status = "REAUTHORIZATION_REQUIRED"
         recommended_action = "REAUTHORIZE_CONNECTOR"
     elif attention and attention[0] == "PERMISSION_INSUFFICIENT":
@@ -296,6 +314,18 @@ def project_connector_health(
             "configured": oauth_row.get("configured") is True,
             "status": oauth_status or "NOT_AVAILABLE",
             "permission_status": oauth_permission_status or "NOT_MEASURED",
+            "automatic_refresh_supported": oauth_row.get(
+                "automatic_refresh_supported"
+            ) is True,
+            "automatic_refresh_status": oauth_refresh_status,
+            "last_refresh_at_utc": _text(
+                oauth_row.get("last_refresh_at_utc"), 80
+            ),
+            "last_refresh_failure": (
+                dict(oauth_row.get("last_refresh_failure"))
+                if isinstance(oauth_row.get("last_refresh_failure"), Mapping)
+                else None
+            ),
             "required_scopes": list(oauth_row.get("required_scopes") or [])[:100],
             "granted_scopes": list(oauth_row.get("granted_scopes") or [])[:100],
             "source_identity_preserved": oauth_row.get("source_identity_preserved") is True,

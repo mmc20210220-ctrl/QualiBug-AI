@@ -17,6 +17,7 @@ from ai_test_asset_center.connector_oauth_authority import (
     ConnectorOAuthError,
     handle_connector_oauth_callback,
     project_connector_oauth,
+    refresh_connector_oauth,
     start_connector_oauth,
 )
 from ai_test_asset_center.connector_registry import (
@@ -379,3 +380,134 @@ def test_callback_rejects_redirect_mismatch_and_optional_scope_invention(
                 "refresh_token": "unused",
             },
         )
+
+
+def _authorize_for_refresh(tmp_path, oauth_registry, connector: str, expires_in: int) -> None:
+    _configure(tmp_path, oauth_registry, connector)
+    started = start_connector_oauth(
+        PROJECT,
+        connector,
+        root=tmp_path,
+        actor=ACTOR,
+    )
+    query = parse_qs(urlparse(started["authorization_url"]).query)
+    handle_connector_oauth_callback(
+        PROJECT,
+        connector,
+        {"state": query["state"][0], "code": "authorization-code-value"},
+        root=tmp_path,
+        actor=ACTOR,
+        token_requester=lambda *args: {
+            "access_token": "initial-access-token",
+            "refresh_token": "initial-refresh-token",
+            "expires_in": expires_in,
+            "scope": "docs:read",
+        },
+    )
+
+
+def test_refresh_rotates_access_token_and_preserves_refresh_token_source_and_checkpoint(
+    tmp_path,
+    oauth_registry,
+):
+    connector = "oauth-refresh"
+    configured = _configure(tmp_path, oauth_registry, connector)
+    commit_connector_sync_checkpoint(
+        PROJECT,
+        connector,
+        "cursor-before-refresh",
+        sync_epoch_id="sync-before-refresh",
+        root=tmp_path,
+        actor=ACTOR,
+    )
+    _authorize_for_refresh(tmp_path, oauth_registry, connector, expires_in=1)
+    observed: dict[str, object] = {}
+
+    def requester(endpoint, body, headers, timeout):
+        observed.update({"endpoint": endpoint, "body": dict(body)})
+        assert body["grant_type"] == "refresh_token"
+        assert body["refresh_token"] == "initial-refresh-token"
+        return {
+            "access_token": "refreshed-access-token",
+            "expires_in": 3600,
+            "scope": "docs:read",
+        }
+
+    result = refresh_connector_oauth(
+        PROJECT,
+        connector,
+        root=tmp_path,
+        actor=ACTOR,
+        token_requester=requester,
+    )
+    assert result["refresh_status"] == "SUCCEEDED"
+    assert result["refreshed"] is True
+    assert observed["endpoint"] == "https://provider.example.test/token"
+    resolved = resolve_connector_profile(
+        PROJECT,
+        configured["connection_profile"]["profile_ref"],
+        root=tmp_path,
+    )
+    assert resolved["oauth_access_token"] == "refreshed-access-token"
+    assert resolved["oauth_refresh_token"] == "initial-refresh-token"
+    assert load_connector_sync_checkpoint(PROJECT, connector, root=tmp_path) == (
+        "cursor-before-refresh"
+    )
+    projection = project_connector_oauth(PROJECT, connector, root=tmp_path)
+    assert projection["automatic_refresh_status"] == "SUCCEEDED"
+    assert projection["last_refresh_success"]["status"] == "SUCCEEDED"
+    persisted_profile = (
+        tmp_path
+        / "platform_workspace"
+        / PROJECT
+        / "enterprise_knowledge_center"
+        / "connector_connection_profiles.json"
+    ).read_text(encoding="utf-8")
+    assert "initial-refresh-token" not in persisted_profile
+    assert "refreshed-access-token" not in persisted_profile
+
+
+def test_refresh_rejection_requires_reauthorization_without_mutating_source_or_token(
+    tmp_path,
+    oauth_registry,
+):
+    connector = "oauth-refresh-rejected"
+    _authorize_for_refresh(tmp_path, oauth_registry, connector, expires_in=1)
+    with pytest.raises(ConnectorOAuthError, match="oauth_refresh_token_rejected"):
+        refresh_connector_oauth(
+            PROJECT,
+            connector,
+            root=tmp_path,
+            actor=ACTOR,
+            token_requester=lambda *args: {"error": "invalid_grant"},
+        )
+    resolved = resolve_connector_profile(
+        PROJECT,
+        f"vault-ref://connectors/{connector}",
+        root=tmp_path,
+    )
+    assert resolved["oauth_access_token"] == "initial-access-token"
+    projection = project_connector_oauth(PROJECT, connector, root=tmp_path)
+    assert projection["status"] == "REAUTHORIZATION_REQUIRED"
+    assert projection["automatic_refresh_status"] == "FAILED"
+    assert projection["last_refresh_failure"]["failure_reason"] == (
+        "oauth_refresh_token_rejected"
+    )
+
+
+def test_refresh_skips_active_token_without_transport(
+    tmp_path,
+    oauth_registry,
+):
+    connector = "oauth-refresh-not-due"
+    _authorize_for_refresh(tmp_path, oauth_registry, connector, expires_in=3600)
+    result = refresh_connector_oauth(
+        PROJECT,
+        connector,
+        root=tmp_path,
+        actor=ACTOR,
+        expiring_within_seconds=0,
+        token_requester=lambda *args: pytest.fail("active token must not refresh"),
+    )
+    assert result["attempted"] is False
+    assert result["refresh_status"] == "NOT_DUE"

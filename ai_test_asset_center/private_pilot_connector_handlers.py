@@ -995,12 +995,19 @@ def _error_status(exc: Exception) -> int:
                 "profile_binding_changed",
                 "ttl_invalid",
                 "capacity_exhausted",
+                "refresh_token_missing",
+                "refresh_token_rejected",
+                "client_secret_missing",
             )
         ):
             return 409
         if any(
             token in message
-            for token in ("transport_failed", "http_failed")
+            for token in (
+                "transport_failed",
+                "http_failed",
+                "refresh_transport_failed",
+            )
         ):
             return 502
         return 400

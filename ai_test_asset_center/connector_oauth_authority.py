@@ -284,6 +284,8 @@ def _default_ledger(project: str, connector: str) -> dict[str, Any]:
         "transactions": [],
         "last_success": {},
         "last_failure": {},
+        "last_refresh_success": {},
+        "last_refresh_failure": {},
         "governance": {
             "state_plaintext_persisted": False,
             "authorization_code_persisted": False,
@@ -339,6 +341,16 @@ def _load_ledger(project: str, connector: str, root: Path) -> dict[str, Any]:
     ledger["last_failure"] = (
         dict(ledger.get("last_failure"))
         if isinstance(ledger.get("last_failure"), dict)
+        else {}
+    )
+    ledger["last_refresh_success"] = (
+        dict(ledger.get("last_refresh_success"))
+        if isinstance(ledger.get("last_refresh_success"), dict)
+        else {}
+    )
+    ledger["last_refresh_failure"] = (
+        dict(ledger.get("last_refresh_failure"))
+        if isinstance(ledger.get("last_refresh_failure"), dict)
         else {}
     )
     governance = dict(ledger.get("governance") or {})
@@ -658,6 +670,16 @@ def _default_token_requester(
     except (OSError, SsrfBlockedError) as exc:
         raise ConnectorOAuthError("oauth_token_exchange_transport_failed") from exc
     if status < 200 or status >= 300:
+        try:
+            error_payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise ConnectorOAuthError("oauth_token_exchange_http_failed")
+        if isinstance(error_payload, dict) and isinstance(
+            error_payload.get("error"), str
+        ) and error_payload["error"].strip():
+            if body.get("grant_type") == "refresh_token":
+                raise ConnectorOAuthError("oauth_refresh_token_rejected")
+            raise ConnectorOAuthError("oauth_token_response_error")
         raise ConnectorOAuthError("oauth_token_exchange_http_failed")
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -666,6 +688,32 @@ def _default_token_requester(
     if not isinstance(payload, dict):
         raise ConnectorOAuthError("oauth_token_response_must_be_object")
     return payload
+
+
+def _apply_client_auth(
+    config: Mapping[str, Any],
+    *,
+    body: dict[str, str],
+    headers: dict[str, str],
+    current_profile: Mapping[str, Any],
+) -> None:
+    method = config["client_auth_method"]
+    client_id = config["client_id"]
+    if method == "none":
+        body["client_id"] = client_id
+        return
+    secret_field = config["client_secret_field"]
+    client_secret = _text(current_profile.get(secret_field), 4000)
+    if not client_secret:
+        raise ConnectorOAuthError("oauth_client_secret_missing")
+    if method == "client_secret_post":
+        body["client_id"] = client_id
+        body["client_secret"] = client_secret
+        return
+    basic = base64.b64encode(
+        f"{client_id}:{client_secret}".encode("utf-8")
+    ).decode("ascii")
+    headers["Authorization"] = f"Basic {basic}"
 
 
 def _token_request_body(
@@ -686,23 +734,35 @@ def _token_request_body(
         "Accept": "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
     }
-    method = config["client_auth_method"]
-    client_id = config["client_id"]
-    if method == "none":
-        body["client_id"] = client_id
-    else:
-        secret_field = config["client_secret_field"]
-        client_secret = _text(current_profile.get(secret_field), 4000)
-        if not client_secret:
-            raise ConnectorOAuthError("oauth_client_secret_missing")
-        if method == "client_secret_post":
-            body["client_id"] = client_id
-            body["client_secret"] = client_secret
-        else:
-            basic = base64.b64encode(
-                f"{client_id}:{client_secret}".encode("utf-8")
-            ).decode("ascii")
-            headers["Authorization"] = f"Basic {basic}"
+    _apply_client_auth(
+        config,
+        body=body,
+        headers=headers,
+        current_profile=current_profile,
+    )
+    return body, headers
+
+
+def _refresh_token_request_body(
+    config: Mapping[str, Any],
+    *,
+    refresh_token: str,
+    current_profile: Mapping[str, Any],
+) -> tuple[dict[str, str], dict[str, str]]:
+    body = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    }
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    _apply_client_auth(
+        config,
+        body=body,
+        headers=headers,
+        current_profile=current_profile,
+    )
     return body, headers
 
 
@@ -998,6 +1058,7 @@ def handle_connector_oauth_callback(
             root=resolved_root,
             actor=clean_actor,
             credential_expires_at_utc=_token_expiry(payload),
+            preserve_credential_expiry=False,
         )
     except ConnectorOAuthError as exc:
         _terminalize(
@@ -1062,6 +1123,305 @@ def handle_connector_oauth_callback(
     }
 
 
+def _safe_refresh_result(value: Any) -> dict[str, Any]:
+    raw = dict(value) if isinstance(value, dict) else {}
+    return {
+        "status": _text(raw.get("status"), 32),
+        "permission_status": _text(raw.get("permission_status"), 80),
+        "failure_reason": _text(raw.get("failure_reason"), 160),
+        "granted_scopes": _scope_values(
+            raw.get("granted_scopes", []), "granted_scopes"
+        ),
+        "required_scopes": _scope_values(
+            raw.get("required_scopes", []), "required_scopes"
+        ),
+        "missing_scopes": _scope_values(
+            raw.get("missing_scopes", []), "missing_scopes"
+        ),
+        "completed_at_utc": _text(raw.get("completed_at_utc"), 80),
+    }
+
+
+def _record_refresh_outcome(
+    project: str,
+    connector: str,
+    *,
+    success: bool,
+    result: Mapping[str, Any],
+    root: Path,
+    actor: dict[str, Any],
+) -> dict[str, Any]:
+    safe_result = _safe_refresh_result(
+        {
+            **dict(result),
+            "status": "SUCCEEDED" if success else "FAILED",
+            "completed_at_utc": _text(result.get("completed_at_utc"), 80)
+            or _now(),
+        }
+    )
+    with _oauth_transaction(
+        root,
+        project,
+        operation="connector_oauth_refresh_finalize",
+        actor=actor,
+    ):
+        ledger = _load_ledger(project, connector, root)
+        key = "last_refresh_success" if success else "last_refresh_failure"
+        ledger[key] = safe_result
+        _save_ledger(project, connector, root, ledger)
+    return safe_result
+
+
+def _refresh_requires_reauthorization(reason: str) -> bool:
+    return reason in {
+        "oauth_refresh_token_missing",
+        "oauth_refresh_token_rejected",
+        "oauth_client_secret_missing",
+        "oauth_permission_insufficient",
+    }
+
+
+def _request_refresh_token(
+    requester: TokenRequester,
+    endpoint: str,
+    body: Mapping[str, str],
+    headers: Mapping[str, str],
+    timeout: float,
+) -> Mapping[str, Any]:
+    try:
+        payload = requester(endpoint, body, headers, timeout)
+    except ConnectorOAuthError:
+        raise
+    except (OSError, SsrfBlockedError) as exc:
+        raise ConnectorOAuthError("oauth_refresh_transport_failed") from exc
+    if not isinstance(payload, Mapping):
+        raise ConnectorOAuthError("oauth_token_response_must_be_object")
+    if _token_text(payload, "error", 160):
+        raise ConnectorOAuthError("oauth_refresh_token_rejected")
+    return payload
+
+
+def refresh_connector_oauth(
+    project_id: str,
+    connector_instance_id: str,
+    *,
+    root: Path | None = None,
+    actor: dict[str, Any] | None = None,
+    token_requester: TokenRequester | None = None,
+    timeout: float = 30.0,
+    expiring_within_seconds: int = 86_400,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Refresh an expiring OAuth access token without changing source or cursor state."""
+    resolved_root = (root or ROOT).resolve()
+    project = _safe_project_id(project_id)
+    connector = _identifier(connector_instance_id, "connector_instance_id")
+    clean_actor = _require_manage_actor(actor)
+    if not isinstance(expiring_within_seconds, int) or expiring_within_seconds < 0:
+        raise ConnectorOAuthError("oauth_refresh_expiry_window_invalid")
+    if not isinstance(force, bool):
+        raise ConnectorOAuthError("oauth_refresh_force_invalid")
+    instance, _manifest, config = _manifest_and_instance(
+        project,
+        connector,
+        resolved_root,
+    )
+    if not config:
+        return {
+            "schema": CONNECTOR_OAUTH_SCHEMA,
+            "connector_instance_id": connector,
+            "supported": False,
+            "attempted": False,
+            "refreshed": False,
+            "refresh_status": "NOT_SUPPORTED",
+            "credential_values_returned": False,
+            "source_identity_preserved": True,
+            "checkpoint_preserved": True,
+            "remote_deletion_inferred": False,
+        }
+    profile_ref = _text(instance.get("connection_profile_ref"), 500)
+    if not profile_ref:
+        raise ConnectorOAuthError("oauth_connection_profile_required")
+    expiry = connector_credential_expiry_status(
+        project,
+        connector,
+        root=resolved_root,
+        expiring_within_seconds=expiring_within_seconds,
+    )
+    expiry_status = _text(expiry.get("status"), 64) or "UNKNOWN"
+    if not force and expiry_status not in {"EXPIRING", "EXPIRED"}:
+        return {
+            "schema": CONNECTOR_OAUTH_SCHEMA,
+            "connector_instance_id": connector,
+            "supported": True,
+            "attempted": False,
+            "refreshed": False,
+            "refresh_status": "NOT_DUE",
+            "credential_status": expiry_status,
+            "credential_expires_at_utc": _text(
+                expiry.get("credential_expires_at_utc"), 80
+            ),
+            "credential_values_returned": False,
+            "source_identity_preserved": True,
+            "checkpoint_preserved": True,
+            "remote_deletion_inferred": False,
+        }
+    current_profile = resolve_connector_profile(
+        project,
+        profile_ref,
+        root=resolved_root,
+    )
+    if _text(current_profile.get("auth_mode"), 80) != config["auth_mode"]:
+        raise ConnectorOAuthError("oauth_auth_mode_mismatch")
+    refresh_token = _text(current_profile.get(config["refresh_token_field"]), 4000)
+    required_scopes = list(config["minimum_scopes"])
+    ledger = _load_ledger(project, connector, resolved_root)
+    prior_success = dict(ledger.get("last_success") or {})
+    prior_refresh_success = dict(ledger.get("last_refresh_success") or {})
+    prior_scopes = _scope_values(
+        prior_refresh_success.get("granted_scopes")
+        or prior_success.get("granted_scopes")
+        or required_scopes,
+        "granted_scopes",
+    )
+    granted_scopes = list(prior_scopes)
+    missing_scopes: list[str] = []
+    requester = token_requester or _default_token_requester
+    try:
+        if not refresh_token:
+            raise ConnectorOAuthError("oauth_refresh_token_missing")
+        body, headers = _refresh_token_request_body(
+            config,
+            refresh_token=refresh_token,
+            current_profile=current_profile,
+        )
+        payload = _request_refresh_token(
+            requester,
+            config["token_endpoint"],
+            body,
+            headers,
+            float(timeout),
+        )
+        access_token = _token_text(payload, "access_token")
+        if not access_token:
+            raise ConnectorOAuthError("oauth_access_token_missing")
+        rotated_refresh_token = _token_text(payload, "refresh_token") or refresh_token
+        granted_scopes, permission_status = _granted_scopes(
+            payload,
+            prior_scopes,
+        )
+        missing_scopes = [
+            scope for scope in required_scopes if scope not in set(granted_scopes)
+        ]
+        if missing_scopes:
+            raise ConnectorOAuthError("oauth_permission_insufficient")
+        profile = dict(current_profile)
+        profile[config["access_token_field"]] = access_token
+        profile[config["refresh_token_field"]] = rotated_refresh_token
+        if config["scope_field"] and isinstance(payload.get("scope"), str):
+            profile[config["scope_field"]] = _text(payload.get("scope"), 4000)
+        if config["token_type_field"] and _token_text(payload, "token_type", 80):
+            profile[config["token_type_field"]] = _token_text(
+                payload,
+                "token_type",
+                80,
+            )
+        rotated = rotate_connector_credentials(
+            project,
+            connector_instance_id=connector,
+            profile=profile,
+            root=resolved_root,
+            actor=clean_actor,
+            credential_expires_at_utc=_token_expiry(payload),
+            preserve_credential_expiry=False,
+        )
+        result = {
+            "permission_status": permission_status,
+            "granted_scopes": granted_scopes,
+            "required_scopes": required_scopes,
+            "missing_scopes": [],
+        }
+        _record_refresh_outcome(
+            project,
+            connector,
+            success=True,
+            result=result,
+            root=resolved_root,
+            actor=clean_actor,
+        )
+        return {
+            "schema": CONNECTOR_OAUTH_SCHEMA,
+            "connector_instance_id": connector,
+            "supported": True,
+            "attempted": True,
+            "refreshed": True,
+            "refresh_status": "SUCCEEDED",
+            "credential_status": "ACTIVE",
+            "credential_expires_at_utc": _text(
+                (rotated.get("connection_profile") or {}).get(
+                    "credential_expires_at_utc"
+                ),
+                80,
+            ),
+            "permission_status": permission_status,
+            "granted_scopes": granted_scopes,
+            "required_scopes": required_scopes,
+            "credential_values_returned": False,
+            "source_identity_preserved": True,
+            "checkpoint_preserved": True,
+            "remote_deletion_inferred": False,
+        }
+    except ConnectorOAuthError as exc:
+        reason = str(exc)
+        if _refresh_requires_reauthorization(reason):
+            mark_connector_reauthorization_required(
+                project,
+                connector,
+                required=True,
+                reason=reason,
+                root=resolved_root,
+                actor=clean_actor,
+            )
+        _record_refresh_outcome(
+            project,
+            connector,
+            success=False,
+            result={
+                "permission_status": (
+                    "PERMISSION_INSUFFICIENT"
+                    if reason == "oauth_permission_insufficient"
+                    else "REAUTHORIZATION_REQUIRED"
+                    if _refresh_requires_reauthorization(reason)
+                    else "NOT_MEASURED"
+                ),
+                "failure_reason": reason,
+                "granted_scopes": granted_scopes,
+                "required_scopes": required_scopes,
+                "missing_scopes": missing_scopes,
+            },
+            root=resolved_root,
+            actor=clean_actor,
+        )
+        raise
+    except ConnectorProfileError as exc:
+        reason = "oauth_profile_rotation_failed"
+        _record_refresh_outcome(
+            project,
+            connector,
+            success=False,
+            result={
+                "permission_status": "NOT_MEASURED",
+                "failure_reason": reason,
+                "granted_scopes": granted_scopes,
+                "required_scopes": required_scopes,
+                "missing_scopes": missing_scopes,
+            },
+            root=resolved_root,
+            actor=clean_actor,
+        )
+        raise ConnectorOAuthError(reason) from exc
+
+
 def _safe_failure(value: Any) -> dict[str, Any]:
     raw = dict(value) if isinstance(value, dict) else {}
     return {
@@ -1099,6 +1459,10 @@ def project_connector_oauth(
             "permission_status": "NOT_APPLICABLE",
             "last_authorized_at_utc": "",
             "last_failure": None,
+            "automatic_refresh_supported": False,
+            "automatic_refresh_status": "NOT_SUPPORTED",
+            "last_refresh_success": None,
+            "last_refresh_failure": None,
             "pending_transaction_count": 0,
             "authorization_code_returned": False,
             "access_token_returned": False,
@@ -1137,6 +1501,8 @@ def project_connector_oauth(
             profile_status = "NOT_CONFIGURED"
     success = dict(ledger.get("last_success") or {})
     failure = _safe_failure(ledger.get("last_failure"))
+    refresh_success = _safe_refresh_result(ledger.get("last_refresh_success"))
+    refresh_failure = _safe_refresh_result(ledger.get("last_refresh_failure"))
     if profile_status == "REAUTHORIZATION_REQUIRED":
         status = "REAUTHORIZATION_REQUIRED"
     elif profile_status in {"EXPIRED", "EXPIRING"}:
@@ -1158,6 +1524,31 @@ def project_connector_oauth(
         == "PERMISSION_INSUFFICIENT"
     ):
         status = "PERMISSION_INSUFFICIENT"
+    refresh_permission_status = _text(
+        refresh_success.get("permission_status"), 80
+    ) or _text(refresh_failure.get("permission_status"), 80)
+    refresh_success_at = _text(refresh_success.get("completed_at_utc"), 80)
+    refresh_failure_at = _text(refresh_failure.get("completed_at_utc"), 80)
+    refresh_failure_is_latest = bool(
+        refresh_failure_at and refresh_failure_at >= refresh_success_at
+    )
+    refresh_status = (
+        _text(
+            refresh_failure.get("status") if refresh_failure_is_latest else refresh_success.get("status"),
+            32,
+        )
+        or "NOT_MEASURED"
+    )
+    granted_scopes = _scope_values(
+        refresh_success.get("granted_scopes")
+        or success.get("granted_scopes", []),
+        "granted_scopes",
+    )
+    missing_scopes = _scope_values(
+        refresh_failure.get("missing_scopes")
+        or failure.get("missing_scopes", []),
+        "missing_scopes",
+    )
     return {
         "schema": CONNECTOR_OAUTH_SCHEMA,
         "connector_instance_id": connector,
@@ -1167,17 +1558,30 @@ def project_connector_oauth(
         "status": status,
         "credential_status": profile_status,
         "required_scopes": list(config["minimum_scopes"]),
-        "granted_scopes": _scope_values(
-            success.get("granted_scopes", []), "granted_scopes"
-        ),
-        "missing_scopes": _scope_values(
-            failure.get("missing_scopes", []), "missing_scopes"
-        ),
+        "granted_scopes": granted_scopes,
+        "missing_scopes": missing_scopes,
         "permission_status": _text(
             success.get("permission_status"), 80
-        ) or _text(failure.get("permission_status"), 80) or "NOT_MEASURED",
+        )
+        or _text(failure.get("permission_status"), 80)
+        or refresh_permission_status
+        or "NOT_MEASURED",
         "last_authorized_at_utc": _text(success.get("completed_at_utc"), 80),
         "last_failure": failure if failure.get("transaction_id") else None,
+        "automatic_refresh_supported": bool(config.get("refresh_token_field")),
+        "automatic_refresh_status": refresh_status,
+        "last_refresh_at_utc": _text(
+            refresh_failure.get("completed_at_utc")
+            if refresh_failure_is_latest
+            else refresh_success.get("completed_at_utc"),
+            80,
+        ),
+        "last_refresh_success": (
+            refresh_success if refresh_success.get("completed_at_utc") else None
+        ),
+        "last_refresh_failure": (
+            refresh_failure if refresh_failure.get("completed_at_utc") else None
+        ),
         "pending_transaction_count": sum(
             _text(row.get("status"), 32) in {"PENDING", "PROCESSING"}
             for row in ledger["transactions"]
@@ -1200,5 +1604,6 @@ __all__ = [
     "TokenRequester",
     "handle_connector_oauth_callback",
     "project_connector_oauth",
+    "refresh_connector_oauth",
     "start_connector_oauth",
 ]
