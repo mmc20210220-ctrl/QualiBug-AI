@@ -1152,11 +1152,21 @@ def compile_obligations_from_behavior_ir(
             if _op_ids_from_inv:
                 for oid in _op_ids_from_inv:
                     joined_relations.append({"operation_ref": oid, "relation_type": "observes"})
-            if not joined_relations:
+            if not joined_relations and family != "state":
                 # ── Phase 1: entity-co-reference fallback ──
                 # When no explicit relation or operation_refs exist, try to
                 # bind the invariant to operations that reference the same
                 # entity declared in the invariant's expression operands.
+                #
+                # DELIBERATELY EXCLUDED for the state family: a state-machine
+                # invariant (CANCELLED -> PAID forbidden) must be tested through
+                # the operation that performs that transition, never through the
+                # entity's create endpoint. Binding it to POST /orders compiled
+                # 36 state obligations against the create operation, executed
+                # them, and then failed every one at cleanup with a misleading
+                # CLEANUP_RECEIPT_FAILED. Without a declared transition
+                # operation the obligation stays BLOCKED_MISSING_OPERATION —
+                # visible and countable, not executed against the wrong write.
                 _inv_entity_refs: set[str] = set()
                 for _operand in _list(expr.get("operands")):
                     _ent = _text(_dict(_operand).get("entity_ref"))
@@ -1228,6 +1238,15 @@ def compile_obligations_from_behavior_ir(
                         relation_types=relation_types,
                     ))
                     continue
+            elif not joined_relations:
+                # State family without any declared transition operation: stay
+                # BLOCKED_MISSING_OPERATION (visible gap) instead of falling
+                # through with an empty relation set.
+                coverage_gaps.append(_compile_gap(
+                    subject_ref=invariant_ref,
+                    relation_types={"transitions"},
+                ))
+                continue
         relations_by_operation: dict[str, list[dict[str, Any]]] = {}
         for relation in joined_relations:
             relations_by_operation.setdefault(_text(relation.get("operation_ref")), []).append(relation)
