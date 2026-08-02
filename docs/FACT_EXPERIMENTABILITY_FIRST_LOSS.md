@@ -656,6 +656,24 @@ Next MEASURED blocker is a fresh observed diagnostic validating HF→0
 (or only the residual restoration HF if still present). One-target
 diagnostic is still not commercial promotion evidence.
 
+**20260802T143948Z** (`fact-to-experiment-observed-20260802T143948Z`) —
+post zero-transport / CEI / fixture-duplicate fix validation:
+
+| Field | Value |
+|---|---|
+| Output | `_funnel_runs/20260802_fact_to_experiment_observed_20260802T143948Z/` |
+| Extract | `.../evaluation_score_extract.json` |
+| Formal evaluate | `NOT_MEASURED` / `obligation_campaign_degraded` |
+| HF count | **1** (was 14 on T140342Z) |
+| `CONTRACT_ORACLE_HARNESS_FAILED` / CEI / connection | **1 / 0 / 0** |
+| Formal deliverables | 5 |
+| Residual HF | 1× `CLEANUP_RECEIPT_FAILED:fixture_cleanup:id` + `CLEANUP_RESTORATION_NOT_PROVEN:cleanup:treatment_1` |
+
+Zero-transport COHF (8), CEI (4), and fixture-cleanup identity duplicate
+(1) closed as predicted. Remaining MEASURED blocker is the single
+restoration-not-proven fixture cleanup HF. One-target diagnostic is still
+not commercial promotion evidence.
+
 ## Rollback
 
 Disable by removing the `project_fact_experimentability` call from

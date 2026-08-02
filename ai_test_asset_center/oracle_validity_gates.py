@@ -277,69 +277,6 @@ def _gate_contrast(
     if not differing_dimensions:
         reasons.append("VACUOUS_CONTRAST")
 
-    # region agent log
-    try:
-        import json as _json
-        import time as _time
-        from pathlib import Path as _Path
-
-        _log_path = (
-            _Path(__file__).resolve().parents[1] / ".cursor" / "debug-0de9ac.log"
-        )
-        _payload = {
-            "sessionId": "0de9ac",
-            "runId": "h27-vacuous-contrast",
-            "hypothesisId": "H27c",
-            "location": "oracle_validity_gates.py:_gate_contrast",
-            "message": "contrast_gate_dimensions",
-            "data": {
-                "risk": risk,
-                "plan_differing": _differing_contrast_dimensions(
-                    control_sigs, treatment_sigs
-                ),
-                "observed_differing": observed_differing,
-                "merged_differing": list(differing_dimensions),
-                "vacuous": "VACUOUS_CONTRAST" in reasons,
-                "obs_control_body_fps": sorted(
-                    {
-                        row.get("body_fingerprint")
-                        for row in obs_control_sigs
-                        if row.get("body_fingerprint")
-                    }
-                ),
-                "obs_treatment_body_fps": sorted(
-                    {
-                        row.get("body_fingerprint")
-                        for row in obs_treatment_sigs
-                        if row.get("body_fingerprint")
-                    }
-                ),
-                "experiment_id": _text(
-                    experiment.get("experiment_id") or result.get("experiment_id")
-                ),
-            },
-            "timestamp": int(_time.time() * 1000),
-        }
-        with _log_path.open("a", encoding="utf-8") as _fh:
-            _fh.write(_json.dumps(_payload, ensure_ascii=False) + "\n")
-        try:
-            import urllib.request as _urlreq
-
-            _req = _urlreq.Request(
-                "http://127.0.0.1:7369/ingest/150ffea9-b73d-4706-a6b2-26c8a08966e8",
-                data=_json.dumps(_payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Debug-Session-Id": "0de9ac",
-                },
-                method="POST",
-            )
-            _urlreq.urlopen(_req, timeout=1)
-        except Exception:
-            pass
-    except Exception:
-        pass
-    # endregion
 
     if risk in _AUTH_FAMILIES:
         control_actors = {row.get("actor_ref") for row in control_sigs if row.get("actor_ref")}
