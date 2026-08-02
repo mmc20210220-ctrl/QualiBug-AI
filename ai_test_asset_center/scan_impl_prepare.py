@@ -19,6 +19,10 @@ from .product_scan_mainline import (
     _safe_project,
     _scan_campaign_context_defaults,
 )
+from .enterprise_pilot_runtime import (
+    _bind_preflight_test_credentials,
+    _has_login_material,
+)
 from .scan_execution_outcome import _blocked_result
 from .scan_source_runtime import (
     _load_project_prd_text,
@@ -32,59 +36,6 @@ from .scan_source_runtime import (
 
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _has_login_material(row: Any) -> bool:
-    if not isinstance(row, dict):
-        return False
-    identity = str(
-        row.get("email")
-        or row.get("username")
-        or row.get("account")
-        or row.get("mobile")
-        or row.get("phone")
-        or ""
-    ).strip()
-    password = str(row.get("password") or row.get("pass") or "").strip()
-    return bool(identity and password)
-
-
-def _bind_preflight_test_credentials(
-    project: str,
-    root: Path,
-    diagnostics_config: dict[str, Any],
-) -> str:
-    """Bind preflight to the same project credential catalog as runtime.
-
-    ``connector_registry.test_profile`` is the explicit authority when it has a
-    usable login.  Otherwise the existing project credential loader is the
-    source of truth for credentials declared in enterprise materials and input
-    catalogs.  The rows stay in process memory and only a non-secret source
-    marker is returned to the persisted diagnostics.
-    """
-
-    from .enterprise_pilot_runtime import (
-        load_project_test_credentials,
-        ordered_test_credentials,
-    )
-
-    configured = ordered_test_credentials({"test_profile": diagnostics_config})
-    if any(_has_login_material(row) for row in configured):
-        return "connector_registry.test_profile"
-
-    loaded = load_project_test_credentials(project, root)
-    usable = [dict(row) for row in loaded if _has_login_material(row)]
-    if not usable:
-        return "none"
-
-    diagnostics_config["test_credentials"] = usable
-    _LOGGER.info(
-        "preflight_test_credentials_bound project=%s source=%s count=%d",
-        project,
-        "project_test_credential_catalog",
-        len(usable),
-    )
-    return "project_test_credential_catalog"
 
 
 def prepare_scan_before_pipeline(

@@ -1915,6 +1915,39 @@ def _derive_source_relationship_relations(
         source_rule_ref = _text(edge.get("from") or edge.get("from_ref"))
         source_operation_ref = _text(edge.get("to") or edge.get("to_ref"))
         invariant_matches = invariants_by_source_ref.get(source_rule_ref, [])
+        derived_invariant_matches = [
+            invariant
+            for invariant in invariant_matches
+            if source_rule_ref in {
+                _text(value)
+                for value in _list(invariant.get("derived_from_rule_refs"))
+                if _text(value)
+            }
+        ]
+        derived_invariant_ids = {
+            _text(invariant.get("id"))
+            for invariant in derived_invariant_matches
+            if _text(invariant.get("id"))
+        }
+        direct_invariant_matches = [
+            invariant
+            for invariant in invariant_matches
+            if _text(invariant.get("id")) not in derived_invariant_ids
+        ]
+        if len(invariant_matches) == 1:
+            executable_invariant_matches = list(invariant_matches)
+        elif len(direct_invariant_matches) == 1:
+            # Causal/postcondition expansion retains the parent source rule for
+            # lineage.  One exact source rule may therefore have one direct
+            # invariant plus several derived invariants.  The source edge binds
+            # the direct invariant and its explicit derivatives together; it
+            # must not be treated as an ambiguous join.
+            executable_invariant_matches = [
+                *direct_invariant_matches,
+                *derived_invariant_matches,
+            ]
+        else:
+            executable_invariant_matches = []
         operation_matches = operations_by_source_ref.get(source_operation_ref, [])
         edge_source_ref = _source_ref(
             _text(edge.get("source_id")) or "knowledge_relationships",
@@ -1942,7 +1975,7 @@ def _derive_source_relationship_relations(
                 status="unsupported",
             ))
             continue
-        if len(invariant_matches) != 1 or len(operation_matches) != 1:
+        if not executable_invariant_matches or len(operation_matches) != 1:
             model["coverage_gaps"].append(_fact_node(
                 node_id=_stable_id("gap", "source_relationship_unresolved", relationship_id),
                 typed_fields={
@@ -1953,6 +1986,8 @@ def _derive_source_relationship_relations(
                     "source_rule_ref": source_rule_ref,
                     "source_operation_ref": source_operation_ref,
                     "invariant_match_count": len(invariant_matches),
+                    "direct_invariant_match_count": len(direct_invariant_matches),
+                    "derived_invariant_match_count": len(derived_invariant_matches),
                     "operation_match_count": len(operation_matches),
                 },
                 source_refs=[edge_source_ref],
@@ -1962,30 +1997,64 @@ def _derive_source_relationship_relations(
             ))
             continue
 
-        invariant = invariant_matches[0]
         operation = operation_matches[0]
-        # V1.4.0: umbrella rules must not generate executable relations
-        if _text(invariant.get("binding_status")) == "umbrella_rule_excluded":
+        primary_invariant = executable_invariant_matches[0]
+        # V1.4.0: umbrella rules must not generate executable relations.  Keep
+        # the exclusion visible so an accepted semantic edge cannot disappear
+        # without a typed explanation.
+        if _text(primary_invariant.get("binding_status")) == "umbrella_rule_excluded":
+            model["coverage_gaps"].append(_fact_node(
+                node_id=_stable_id(
+                    "gap",
+                    "source_relationship_umbrella_rule_excluded",
+                    relationship_id,
+                ),
+                typed_fields={
+                    "gap_type": "source_relationship_umbrella_rule_excluded",
+                    "reason_code": "SOURCE_RELATIONSHIP_UMBRELLA_RULE_EXCLUDED",
+                    "description": "An exact source relationship targets an umbrella rule that is not concrete enough to compile",
+                    "relationship_id": relationship_id,
+                    "source_rule_ref": source_rule_ref,
+                    "source_operation_ref": source_operation_ref,
+                },
+                source_refs=[edge_source_ref],
+                confidence=1.0,
+                derivation="explicit",
+                status="unsupported",
+            ))
             continue
         operation_ref = _text(operation.get("id"))
-        relations.append(_relation_node(
-            relation_type=_invariant_relation_type(invariant),
-            from_ref=operation_ref,
-            to_ref=_text(invariant.get("id")),
-            operation_ref=operation_ref,
-            source_refs=(
-                [edge_source_ref]
-                + list(operation.get("source_refs") or [])
-                + list(invariant.get("source_refs") or [])
-            )[:5],
-            confidence=min(
-                float(edge.get("confidence") or 0.7),
-                float(operation.get("confidence") or 0.7),
-                float(invariant.get("confidence") or 0.7),
-            ),
-            derivation="schema-derived",
-            source_relationship_ref=relationship_id,
-        ))
+        for invariant in executable_invariant_matches:
+            if _text(invariant.get("binding_status")) == "umbrella_rule_excluded":
+                continue
+            invariant_operation_refs = [
+                _text(value)
+                for value in _list(invariant.get("operation_refs"))
+                if _text(value)
+            ]
+            if operation_ref and operation_ref not in invariant_operation_refs:
+                invariant["operation_refs"] = [
+                    *invariant_operation_refs,
+                    operation_ref,
+                ]
+            relations.append(_relation_node(
+                relation_type=_invariant_relation_type(invariant),
+                from_ref=operation_ref,
+                to_ref=_text(invariant.get("id")),
+                operation_ref=operation_ref,
+                source_refs=(
+                    [edge_source_ref]
+                    + list(operation.get("source_refs") or [])
+                    + list(invariant.get("source_refs") or [])
+                )[:5],
+                confidence=min(
+                    float(edge.get("confidence") or 0.7),
+                    float(operation.get("confidence") or 0.7),
+                    float(invariant.get("confidence") or 0.7),
+                ),
+                derivation="schema-derived",
+                source_relationship_ref=relationship_id,
+            ))
     return relations
 
 
@@ -3819,6 +3888,12 @@ def build_behavior_ir_from_knowledge_asset(
                             for value in (rule.get("rule_id"), rule.get("id"))
                             if _text(value)
                         )),
+                        "derived_from_rule_refs": list(dict.fromkeys(
+                            _text(value)
+                            for value in (rule.get("rule_id"), rule.get("id"))
+                            if _text(value)
+                        )),
+                        "derived_invariant_kind": "causal_delta",
                     },
                     source_refs=[_source_ref(_text(rule.get("source_id")) or "rule_library", quote=statement[:200])],
                     confidence=float(rule.get("confidence") or 0.65),
@@ -3840,27 +3915,56 @@ def build_behavior_ir_from_knowledge_asset(
         trigger = _text(causal.get("trigger_action"))
         rule_id = _text(rule.get("rule_id") or rule.get("id"))
         source_id = _text(rule.get("source_id")) or "rule_library"
-        # Try to bind trigger to an existing operation
+        # Only an explicit source operation identity may bind a causal trigger.
+        # The human-readable trigger is descriptive text, not an executable join.
+        # Matching it against path/summary tokens made a rule such as "订单" bind
+        # to an arbitrary order GET and silently changed the experiment surface.
         trigger_op_refs: list[str] = []
-        if trigger:
-            trigger_lower = trigger.lower()
-            # Tokenize trigger for fuzzy matching (e.g. "cancel order" → ["cancel", "order"])
-            trigger_tokens = [t for t in re.split(r"[\s_\-/]+", trigger_lower) if len(t) >= 3]
-            for op in model["operations"]:
-                op_summary = _text(op.get("summary")).lower()
-                op_path = _text(op.get("path")).lower()
-                op_id = _text(op.get("id")).lower()
-                # Full phrase match
-                if trigger_lower in op_summary or trigger_lower in op_path or trigger_lower in op_id:
-                    trigger_op_refs.append(_text(op.get("id")))
-                    break
-                # Token overlap match: at least half of trigger tokens appear in op
-                if trigger_tokens:
-                    op_text = f"{op_summary} {op_path} {op_id}"
-                    hits = sum(1 for t in trigger_tokens if t in op_text)
-                    if hits >= max(1, len(trigger_tokens) // 2):
-                        trigger_op_refs.append(_text(op.get("id")))
-                        break
+        declared_trigger_refs: list[str] = []
+        for container in (rule, causal):
+            for key in (
+                "operation_refs",
+                "operation_ref",
+                "operation_id",
+                "trigger_operation_refs",
+                "trigger_operation_ref",
+                "trigger_operation_id",
+            ):
+                raw_value = container.get(key)
+                values = raw_value if isinstance(raw_value, list) else [raw_value]
+                declared_trigger_refs.extend(
+                    _text(value) for value in values if _text(value)
+                )
+        for operation_ref in dict.fromkeys(declared_trigger_refs):
+            operation = _resolve_operation(
+                [row for row in _list(model.get("operations")) if isinstance(row, dict)],
+                {"operation_ref": operation_ref},
+            )
+            if operation is None:
+                model["coverage_gaps"].append(_fact_node(
+                    node_id=_stable_id(
+                        "gap",
+                        "causal_trigger_operation_unresolved",
+                        rule_id,
+                        operation_ref,
+                    ),
+                    typed_fields={
+                        "gap_type": "causal_trigger_operation_unresolved",
+                        "reason_code": "CAUSAL_TRIGGER_OPERATION_NOT_EXACTLY_SOURCE_BOUND",
+                        "description": "A causal trigger declared an operation identity that did not resolve to exactly one Behavior IR operation",
+                        "source_rule_ref": rule_id,
+                        "operation_ref": operation_ref,
+                        "trigger": trigger,
+                    },
+                    source_refs=[_source_ref(source_id, kind="causal_postcondition")],
+                    confidence=1.0,
+                    derivation="explicit",
+                    status="unsupported",
+                ))
+                continue
+            resolved_operation_ref = _text(operation.get("id"))
+            if resolved_operation_ref:
+                trigger_op_refs.append(resolved_operation_ref)
         for pc_idx, pc in enumerate(postconditions):
             if not isinstance(pc, dict):
                 continue
@@ -3896,6 +4000,8 @@ def build_behavior_ir_from_knowledge_asset(
                     },
                     "operation_refs": trigger_op_refs,
                     "source_rule_refs": [rule_id] if rule_id else [],
+                    "derived_from_rule_refs": [rule_id] if rule_id else [],
+                    "derived_invariant_kind": "causal_postcondition",
                     "causal_trigger": trigger,
                     "preconditions": _list(causal.get("preconditions")),
                 },
