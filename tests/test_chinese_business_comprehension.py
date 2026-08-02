@@ -493,6 +493,29 @@ def test_trigger_effect_fills_condition_postcondition_and_compensation() -> None
     assert cancel["compensations"] == cancel["compensation"]
 
 
+def test_inventory_restore_rule_preserves_field_data_effects() -> None:
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "inventory-restore-1",
+            "filename": "inventory-rules.md",
+            "text": "订单取消时，应减少 locked_qty 并恢复 available_qty",
+        },
+        asset={
+            **_asset(),
+            "business_objects": [{"object": "订单"}],
+        },
+    )
+
+    rule = next(fact for fact in facts if fact.get("kind") == "RULE")
+    effects = {
+        (effect.get("action"), effect.get("entity"))
+        for effect in rule.get("data_effects") or []
+    }
+    assert ("减少", "locked_qty") in effects
+    assert ("恢复", "available_qty") in effects
+    assert rule["postconditions"]
+
+
 def test_only_if_permission_is_allow_not_unspecified() -> None:
     from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.behavior_ir import (
         _behavior_from_fact,
