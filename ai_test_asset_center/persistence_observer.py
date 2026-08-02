@@ -139,6 +139,22 @@ def resolve_declared_data_sources(root: Path, project: str) -> list[dict[str, st
                 )
             port = _text(block.get("port")) or "5432"
             password = _text(block.get("password"))
+            # Credentials are stored at-rest encrypted (enc$v1$...) like every
+            # other credential in this product. Feed the DSN the DECRYPTED value
+            # — an encrypted envelope in a DSN corrupts libpq's URL parsing
+            # (an enc$ string lands in the port option) and would fail with a
+            # misleading error even when the database is healthy.
+            if password.startswith("enc$v1$"):
+                from .credential_crypto import decrypt as _decrypt_cred
+
+                try:
+                    password = _decrypt_cred(password)
+                except Exception as exc:  # noqa: BLE001 - surfaced, never guessed
+                    raise PersistenceObserverError(
+                        "declared_db_password_decrypt_failed:"
+                        f"{_text(_dict(service).get('name')) or 'unnamed_service'}:"
+                        f"{type(exc).__name__}"
+                    ) from exc
             sources.append({
                 "service": _text(_dict(service).get("name")),
                 "module": _text(_dict(service).get("name")) or "default",
