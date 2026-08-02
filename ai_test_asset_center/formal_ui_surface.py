@@ -13,15 +13,10 @@ produce a formal finding.
 from __future__ import annotations
 
 import copy
-import functools
 import hashlib
 import json
 from pathlib import Path
 from typing import Any
-
-from .registered_observer_evidence_bridge import (
-    install_registered_observer_evidence_bridge,
-)
 
 OBSERVER_ID = "ui_source_expectation_reader"
 EVIDENCE_KEY = "ui_source_expectation"
@@ -368,37 +363,14 @@ def _evaluate_ui_expectation(envelope: dict[str, Any]) -> dict[str, Any]:
 
 
 def _install_runtime_context_bridge() -> None:
-    from . import experiment_executor as _executor
-
-    install_marker = "_qualibug_ui_runtime_context_installed"
-    original_marker = "_qualibug_original_execute_one_experiment_for_ui"
-    if getattr(_executor, install_marker, False):
-        return
-    original = getattr(_executor, original_marker, _executor.execute_one_experiment)
-    setattr(_executor, original_marker, original)
-
-    @functools.wraps(original)
-    def execute_with_ui_runtime_context(
-        experiment: dict[str, Any],
-        *args: Any,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        exp = dict(_dict(experiment))
-        exp["_observer_runtime_context"] = {
-            "root": str(kwargs.get("root") or ""),
-            "project": _text(kwargs.get("project")),
-            "runtime_contract": copy.deepcopy(_dict(kwargs.get("runtime_contract"))),
-        }
-        return original(exp, *args, **kwargs)
-
-    _executor.execute_one_experiment = execute_with_ui_runtime_context
-    setattr(_executor, install_marker, True)
+    """Retired: runtime context injection is first-class inside
+    ``experiment_executor.execute_one_experiment``. Kept only as a no-op so a
+    stale caller cannot re-introduce the method replacement."""
+    return None
 
 
 def install_formal_ui_surface() -> dict[str, str]:
     """Install the observer, assertion, protocol and risk-family links idempotently."""
-
-    install_registered_observer_evidence_bridge()
 
     # ``ui_browser`` is target-facing and is therefore never a baseline capability.  It is
     # accepted only when the runtime contract explicitly lists it in declared_adapters.
@@ -466,7 +438,6 @@ def install_formal_ui_surface() -> dict[str, str]:
             )
         installed[f"protocol:{family}"] = protocol_id
 
-    _install_runtime_context_bridge()
     return installed
 
 

@@ -2454,7 +2454,63 @@ def observe_experiment_requirements(
                 execution_id=resolved_execution_id,
             )
         receipts.append(receipt)
+    # First-class evidence merge for runtime-registered observers. The finalizer
+    # historically copied evidence into observations only for a hardcoded list of
+    # built-in HTTP observers; a registered observer executed and returned a valid
+    # receipt while its registered assertion kind saw no input. Done here, in the
+    # dispatch authority itself, so no wrapper around this function is needed.
+    if isinstance(observations, dict):
+        _merge_registered_observer_evidence(observations, receipts)
     return receipts
+
+
+def _merge_registered_observer_evidence(
+    observations: dict[str, Any],
+    receipts: list[dict[str, Any]],
+) -> None:
+    """Copy OBSERVED evidence from runtime-registered observers into observations.
+
+    Only evidence from an OBSERVED typed receipt is copied. Conflicting keys are
+    removed and recorded rather than overwritten, so two observers cannot silently
+    race to define one Oracle fact. The sealed receipt itself is never mutated.
+    """
+    conflicts = [
+        dict(row)
+        for row in _list(observations.get("registered_observer_evidence_conflicts"))
+        if isinstance(row, dict)
+    ]
+    for receipt in receipts:
+        row = _dict(receipt)
+        observer_id = _text(row.get("observer_id"))
+        contract = _dict(OBSERVER_REGISTRY.get(observer_id))
+        if not observer_id or contract.get("registered_at_runtime") is not True:
+            continue
+        if _text(row.get("status")).upper() != "OBSERVED":
+            continue
+        evidence = _dict(row.get("evidence"))
+        observations[observer_id + "_observer_receipt"] = copy.deepcopy(row)
+        for key, value in evidence.items():
+            evidence_key = _text(key)
+            if not evidence_key:
+                continue
+            if (
+                evidence_key not in observations
+                or observations.get(evidence_key) in (None, {}, [], "")
+            ):
+                observations[evidence_key] = copy.deepcopy(value)
+                continue
+            if _fingerprint(observations.get(evidence_key)) == _fingerprint(value):
+                continue
+            existing = observations.pop(evidence_key, None)
+            conflicts.append({
+                "observer_id": observer_id,
+                "evidence_key": evidence_key,
+                "existing_fingerprint": _fingerprint(existing),
+                "incoming_fingerprint": _fingerprint(value),
+                "reason_code": "REGISTERED_OBSERVER_EVIDENCE_CONFLICT",
+            })
+    if conflicts:
+        observations["registered_observer_evidence_conflicts"] = conflicts
 
 
 # ── Authorization override (merged from observer_contracts.py) ──────────

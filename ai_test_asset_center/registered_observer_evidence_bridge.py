@@ -92,35 +92,15 @@ def _merge_registered_receipt_evidence(
 
 
 def install_registered_observer_evidence_bridge() -> None:
-    """Install the bridge on the Finalizer's imported observer dispatcher."""
+    """No-op since the registered-observer evidence merge became first-class.
 
-    if getattr(_finalizer, _INSTALL_MARKER, False):
-        return
-    original = getattr(
-        _finalizer,
-        _ORIGINAL_MARKER,
-        _finalizer.observe_experiment_requirements,
-    )
-    setattr(_finalizer, _ORIGINAL_MARKER, original)
-
-    def observe_with_registered_evidence(
-        experiment: dict[str, Any],
-        *,
-        observations: dict[str, Any],
-        campaign_id: str = "",
-        execution_id: str = "",
-    ) -> list[dict[str, Any]]:
-        receipts = original(
-            experiment,
-            observations=observations,
-            campaign_id=campaign_id,
-            execution_id=execution_id,
-        )
-        _merge_registered_receipt_evidence(observations, receipts)
-        return receipts
-
-    _finalizer.observe_experiment_requirements = observe_with_registered_evidence
-    setattr(_finalizer, _INSTALL_MARKER, True)
+    ``observer_contracts_base.observe_experiment_requirements`` now merges OBSERVED
+    evidence from runtime-registered observers into the observations dict inside the
+    dispatch authority itself. This installer previously replaced the finalizer's
+    imported dispatcher; that method replacement is retired. Kept as an idempotent
+    no-op so a stale caller cannot re-introduce the wrapper.
+    """
+    return None
 
 
 __all__ = [

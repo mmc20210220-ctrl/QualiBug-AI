@@ -19,17 +19,12 @@ Formal properties:
 from __future__ import annotations
 
 import copy
-import functools
 import hashlib
 import json
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
-
-from .registered_observer_evidence_bridge import (
-    install_registered_observer_evidence_bridge,
-)
 
 OBSERVER_ID = "source_event_delivery_reader"
 EVIDENCE_KEY = "source_event_delivery_observation"
@@ -480,37 +475,14 @@ def _evaluate_event_delivery(envelope: dict[str, Any]) -> dict[str, Any]:
 
 
 def _install_runtime_context_bridge() -> None:
-    from . import experiment_executor as _executor
-
-    install_marker = "_qualibug_event_runtime_context_installed"
-    original_marker = "_qualibug_original_execute_one_experiment_for_event"
-    if getattr(_executor, install_marker, False):
-        return
-    original = getattr(_executor, original_marker, _executor.execute_one_experiment)
-    setattr(_executor, original_marker, original)
-
-    @functools.wraps(original)
-    def execute_with_event_runtime_context(
-        experiment: dict[str, Any],
-        *args: Any,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        exp = dict(_dict(experiment))
-        exp["_observer_runtime_context"] = {
-            **_dict(exp.get("_observer_runtime_context")),
-            "root": str(kwargs.get("root") or ""),
-            "project": _text(kwargs.get("project")),
-            "runtime_contract": copy.deepcopy(_dict(kwargs.get("runtime_contract"))),
-        }
-        return original(exp, *args, **kwargs)
-
-    _executor.execute_one_experiment = execute_with_event_runtime_context
-    setattr(_executor, install_marker, True)
+    """Retired: runtime context injection is first-class inside
+    ``experiment_executor.execute_one_experiment``. Kept only as a no-op so a
+    stale caller cannot re-introduce the method replacement."""
+    return None
 
 
 def install_formal_event_surface() -> dict[str, str]:
     """Install event adapter, observer, assertion, risk family and protocol idempotently."""
-    install_registered_observer_evidence_bridge()
 
     from . import adapter_capability as capabilities
 
@@ -571,7 +543,6 @@ def install_formal_event_surface() -> dict[str, str]:
             per_step_evidence=False,
         )
     installed["protocol"] = protocol_id
-    _install_runtime_context_bridge()
     return installed
 
 

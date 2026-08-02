@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -215,8 +216,19 @@ def execute_one_experiment(
 ) -> dict[str, Any]:
     """Execute through governance, causal validation, then delivery packaging."""
     _sync_governance_hooks()
+    # First-class runtime context for registered observers (event/UI surfaces).
+    # A compiled experiment never carries workspace identity; observers that need
+    # root / project / runtime_contract receive it here, in the mainline, instead
+    # of via a wrapper around this function. The copy keeps the compiled
+    # experiment immutable; the private key is excluded from product artifacts.
+    exp = dict(experiment)
+    exp["_observer_runtime_context"] = {
+        "root": str(root),
+        "project": _text(project),
+        "runtime_contract": deepcopy(_dict(runtime_contract)),
+    }
     result = _execute_one_governed(
-        experiment,
+        exp,
         behavior_ir=behavior_ir,
         root=root,
         project=project,
@@ -227,15 +239,15 @@ def execute_one_experiment(
         actor_tokens=actor_tokens,
     )
     try:
-        targets = _authorization_binding_targets(experiment)
+        targets = _authorization_binding_targets(exp)
         prepared = (
             seal_binding_materialization_receipts(result)
-            if _dict(experiment.get("authorization_comparison_contract"))
+            if _dict(exp.get("authorization_comparison_contract"))
             else result
         )
         governed = enforce_authorization_oracle_causality(
             result=prepared,
-            experiment=experiment,
+            experiment=exp,
             behavior_ir=behavior_ir,
             account_rows=_governance._test_account_rows(root, project),
         )
@@ -244,7 +256,7 @@ def execute_one_experiment(
         # evidence are incomplete. Never upgrades a verdict.
         governed = enforce_oracle_validity_gates(
             result=governed,
-            experiment=experiment,
+            experiment=exp,
         )
         causal_passed = (
             _text(
@@ -269,10 +281,10 @@ def execute_one_experiment(
                     _list(governed.get("binding_materialization_receipts")),
                     targets,
                 )
-        _verify_authorization_compile_identity(governed, experiment)
+        _verify_authorization_compile_identity(governed, exp)
         packaged = attach_authorization_delivery_evidence(
             governed,
-            experiment=experiment,
+            experiment=exp,
         )
         return _seal_authorization_finding_lineage(packaged)
     except (

@@ -18,10 +18,6 @@ import math
 from collections import Counter
 from typing import Any
 
-from .registered_observer_evidence_bridge import (
-    install_registered_observer_evidence_bridge,
-)
-
 OBSERVER_ID = "source_http_latency_series_reader"
 EVIDENCE_KEY = "source_http_latency_series"
 ASSERTION_KIND = "source_latency_budget"
@@ -359,7 +355,6 @@ def _evaluate_latency_budget(envelope: dict[str, Any]) -> dict[str, Any]:
 
 def install_formal_performance_surface() -> dict[str, str]:
     """Install observer, assertion, risk family and protocol idempotently."""
-    install_registered_observer_evidence_bridge()
 
     from .assertion_dsl_base import register_assertion_kind, registered_assertion_kinds
     from .observer_contracts_base import OBSERVER_REGISTRY, register_observer
