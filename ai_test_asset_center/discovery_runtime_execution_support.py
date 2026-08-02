@@ -10,6 +10,11 @@ import re
 from typing import Any
 
 from .discovery_mainline import DiscoveryPlanningBundle
+from .discovery_funnel import (
+    _build_knowledge_source_flow_receipt,
+    _execution_ir_with_discovered_operations,
+    _formal_obligation_rows_and_identity_receipt,
+)
 from .discovery_mainline_contract import MainlineContractError, MainlineRunContract
 from .discovery_runtime_planning import (
     _campaign_object,
@@ -30,6 +35,90 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _execution_status_and_count(
+    *,
+    runtime_contract: dict[str, Any],
+    ledger: dict[str, Any],
+    selected_count: int,
+    batch: dict[str, Any],
+    business_follow_on_batches: list[dict[str, Any]],
+    round_two_batch: dict[str, Any],
+) -> tuple[str, int]:
+    """Return honest execution status and transport count from terminal receipts."""
+    blocked_obligations = sum(
+        1
+        for row in _list(ledger.get("attempts"))
+        if _text(_dict(row).get("terminal_status")).upper()
+        in {"BLOCKED", "DEFERRED"}
+    )
+    executed_count = (
+        int(batch.get("executed_count") or 0)
+        + sum(
+            int(follow_on.get("executed_count") or 0)
+            for follow_on in business_follow_on_batches
+        )
+        + int(round_two_batch.get("executed_count") or 0)
+    )
+    if _text(runtime_contract.get("status")) == "plan_only":
+        execution_status_value = "plan_only"
+    elif blocked_obligations > 0 or selected_count == 0:
+        execution_status_value = "blocked"
+    elif executed_count >= selected_count and bool(ledger.get("complete")):
+        execution_status_value = "completed"
+    elif executed_count > 0:
+        execution_status_value = "partial"
+    else:
+        execution_status_value = "blocked"
+    return execution_status_value, executed_count
+
+
+def _prepare_execution_ir(
+    *,
+    plan: DiscoveryPlanningBundle,
+    expansion: dict[str, Any],
+) -> tuple[
+    list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any],
+]:
+    """Prepare the formal identity and execution-time Behavior IR view."""
+    formal_rows, identity_receipt = (
+        _formal_obligation_rows_and_identity_receipt(plan, expansion)
+    )
+    execution_behavior_ir = _dict(expansion.get("behavior_ir"))
+    source_flow_receipt = _build_knowledge_source_flow_receipt(
+        plan=plan,
+        behavior_ir=execution_behavior_ir,
+        formal_obligation_rows=formal_rows,
+    )
+    initial_keys = {
+        (
+            _text(row.get("method")).upper(),
+            _text(row.get("path") or row.get("raw_path")),
+        )
+        for row in _list(plan.behavior_ir.get("operations"))
+        if isinstance(row, dict)
+    }
+    expanded_operations = [
+        dict(row)
+        for row in _list(_dict(expansion.get("behavior_ir")).get("operations"))
+        if isinstance(row, dict)
+        and (
+            _text(row.get("method")).upper(),
+            _text(row.get("path") or row.get("raw_path")),
+        ) not in initial_keys
+    ]
+    execution_ir = _execution_ir_with_discovered_operations(
+        plan.behavior_ir,
+        expanded_operations,
+    )
+    return (
+        formal_rows,
+        identity_receipt,
+        execution_behavior_ir,
+        source_flow_receipt,
+        execution_ir,
+    )
 
 
 def _pending_with_budget_deferred(

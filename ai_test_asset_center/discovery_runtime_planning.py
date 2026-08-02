@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -95,75 +94,15 @@ def _api_operations(
     *,
     submitted_source_text: str = "",
 ) -> list[dict[str, Any]]:
-    text = _text(api_spec_text)
-    if not text:
-        raise MainlineContractError("api_spec_text_missing")
-    from .universal_api_parser import parse_to_openapi
+    from .universal_api_parser import build_api_operations_from_text
 
-    operations: list[dict[str, Any]] = []
-    source_documents = [("api_spec", text)]
-    submitted = _text(submitted_source_text)
-    if submitted and submitted != text:
-        source_documents.append(("submitted_api_spec", submitted))
-
-    for source_id, source_text in source_documents:
-        spec = parse_to_openapi(source_text)
-        if not isinstance(spec, dict):
-            raise MainlineContractError(
-                f"api_spec_parse_result_invalid:{source_id}"
-            )
-        paths = spec.get("paths")
-        if not isinstance(paths, dict):
-            raise MainlineContractError(f"api_spec_paths_missing:{source_id}")
-        for path, methods in paths.items():
-            if not isinstance(methods, dict):
-                continue
-            for method, raw_operation in methods.items():
-                normalized_method = _text(method).upper()
-                if normalized_method not in {
-                    "GET",
-                    "POST",
-                    "PUT",
-                    "PATCH",
-                    "DELETE",
-                }:
-                    continue
-                operation = _dict(raw_operation)
-                operations.append({
-                    "method": normalized_method,
-                    "path": _text(path),
-                    "operation_id": _text(operation.get("operationId"))
-                    or f"{normalized_method.lower()}:{_text(path)}",
-                    "source_id": source_id,
-                    "summary": _text(operation.get("summary")),
-                    "description": _text(operation.get("description")),
-                    "tags": list(operation.get("tags") or []),
-                    "parameters": list(operation.get("parameters") or []),
-                    "request_schema": _dict(operation.get("requestBody")),
-                    "response_schema": _dict(operation.get("responses")),
-                })
-    if not operations:
-        for match in re.finditer(
-            r"(?im)^(?:\s*#{1,6}\s*)?(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)",
-            submitted or text,
-        ):
-            method = match.group(1).upper()
-            path = match.group(2).strip().rstrip("`").rstrip(",").rstrip(")")
-            operations.append({
-                "method": method,
-                "path": path,
-                "operation_id": f"{method.lower()}:{path}",
-                "source_id": "api_spec",
-                "summary": "",
-                "description": "",
-                "tags": [],
-                "parameters": [],
-                "request_schema": {},
-                "response_schema": {},
-            })
-    if not operations:
-        raise MainlineContractError("api_spec_operations_missing")
-    return operations
+    try:
+        return build_api_operations_from_text(
+            api_spec_text,
+            submitted_source_text=submitted_source_text,
+        )
+    except ValueError as exc:
+        raise MainlineContractError(str(exc)) from exc
 
 
 def _runtime_actors(root: Path, project: str, context: dict[str, Any]) -> list[dict[str, Any]]:

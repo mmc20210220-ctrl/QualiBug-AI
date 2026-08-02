@@ -146,6 +146,91 @@ def parse_to_openapi(text_or_path: str | Path) -> dict[str, Any]:
         return _empty_spec()
 
 
+def build_api_operations_from_text(
+    api_spec_text: str,
+    *,
+    submitted_source_text: str = "",
+) -> list[dict[str, Any]]:
+    """Normalize source API material into the planner's operation records."""
+
+    text = str(api_spec_text or "").strip()
+    if not text:
+        raise ValueError("api_spec_text_missing")
+    operations: list[dict[str, Any]] = []
+    source_documents = [("api_spec", text)]
+    submitted = str(submitted_source_text or "").strip()
+    if submitted and submitted != text:
+        source_documents.append(("submitted_api_spec", submitted))
+
+    for source_id, source_text in source_documents:
+        spec = parse_to_openapi(source_text)
+        if not isinstance(spec, dict):
+            raise ValueError(f"api_spec_parse_result_invalid:{source_id}")
+        paths = spec.get("paths")
+        if not isinstance(paths, dict):
+            raise ValueError(f"api_spec_paths_missing:{source_id}")
+        for path, methods in paths.items():
+            if not isinstance(methods, dict):
+                continue
+            for method, raw_operation in methods.items():
+                normalized_method = str(method or "").strip().upper()
+                if normalized_method not in {
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE",
+                }:
+                    continue
+                operation = raw_operation if isinstance(raw_operation, dict) else {}
+                operations.append({
+                    "method": normalized_method,
+                    "path": str(path or "").strip(),
+                    "operation_id": str(
+                        operation.get("operationId") or ""
+                    ).strip() or (
+                        f"{normalized_method.lower()}:{str(path or '').strip()}"
+                    ),
+                    "source_id": source_id,
+                    "summary": str(operation.get("summary") or "").strip(),
+                    "description": str(operation.get("description") or "").strip(),
+                    "tags": list(operation.get("tags") or []),
+                    "parameters": list(operation.get("parameters") or []),
+                    "request_schema": (
+                        operation.get("requestBody")
+                        if isinstance(operation.get("requestBody"), dict)
+                        else {}
+                    ),
+                    "response_schema": (
+                        operation.get("responses")
+                        if isinstance(operation.get("responses"), dict)
+                        else {}
+                    ),
+                })
+    if not operations:
+        for match in re.finditer(
+            r"(?im)^(?:\s*#{1,6}\s*)?(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)",
+            submitted or text,
+        ):
+            method = match.group(1).upper()
+            path = match.group(2).strip().rstrip("`").rstrip(",").rstrip(")")
+            operations.append({
+                "method": method,
+                "path": path,
+                "operation_id": f"{method.lower()}:{path}",
+                "source_id": "api_spec",
+                "summary": "",
+                "description": "",
+                "tags": [],
+                "parameters": [],
+                "request_schema": {},
+                "response_schema": {},
+            })
+    if not operations:
+        raise ValueError("api_spec_operations_missing")
+    return operations
+
+
 def _convert_markdown_api(text: str) -> dict[str, Any]:
     """Convert Markdown API doc (heading or table format) to OpenAPI 3.x compatible dict."""
     import re as _re
