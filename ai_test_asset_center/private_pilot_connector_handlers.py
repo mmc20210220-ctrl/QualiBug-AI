@@ -79,6 +79,10 @@ from .connector_oauth_authority import (
     project_connector_oauth,
     start_connector_oauth,
 )
+from .connector_source_preflight import (
+    SourcePreflightError,
+    preflight_source_entry,
+)
 from .local_runner_connector import (
     LocalRunnerError,
     accept_local_runner_result,
@@ -1064,6 +1068,7 @@ def _error_status(exc: Exception) -> int:
             "download_failed",
             "export_poll_exhausted",
             "connection_profile_resolution_failed",
+            "source_preflight_transport_failed",
         )
     ):
         return 502
@@ -1089,6 +1094,8 @@ class KnowledgeConnectorHandlersMixin:
             if isinstance(exc, ConnectorOAuthError)
             else "KNOWLEDGE_CONNECTOR_WEBHOOK_ERROR"
             if isinstance(exc, ConnectorWebhookError)
+            else "KNOWLEDGE_CONNECTOR_PREFLIGHT_ERROR"
+            if isinstance(exc, SourcePreflightError)
             else "KNOWLEDGE_CONNECTOR_ERROR"
         )
         return self._json(
@@ -1858,6 +1865,7 @@ class KnowledgeConnectorHandlersMixin:
                 },
                 200 if run.get("status") == "COMPLETE" else 409,
             )
+
         if action == "share-project":
             source_ref = _text(body.get("source_ref"), 2000)
             if not source_ref.startswith(f"connector://{connector}/"):
@@ -1941,6 +1949,38 @@ class KnowledgeConnectorHandlersMixin:
                 202,
             )
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
+
+    def _handle_connector_source_preflight(
+        self,
+        project: str,
+        body: dict[str, Any],
+        root: Path,
+        actor: dict[str, Any],
+    ) -> Any:
+        del root, actor
+        allowed = {"url", "timeout", "max_bytes"}
+        unknown = sorted(set(body) - allowed)
+        if unknown:
+            raise SourcePreflightError(
+                f"source_preflight_field_not_supported:{unknown[0]}"
+            )
+        result = preflight_source_entry(
+            body.get("url"),
+            timeout=_bounded_float(body.get("timeout"), 5.0, 1.0, 15.0),
+            max_bytes=_bounded_int(
+                body.get("max_bytes"),
+                64 * 1024,
+                4 * 1024,
+                128 * 1024,
+            ),
+        )
+        result["project_id"] = project
+        return self._json(
+            {
+                "ok": True,
+                "data": result,
+            }
+        )
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -2075,6 +2115,13 @@ class KnowledgeConnectorHandlersMixin:
         try:
             body = self._body()
             tail = route[1]
+            if tail == ["source-preflight"]:
+                return self._handle_connector_source_preflight(
+                    project,
+                    body,
+                    root,
+                    actor,
+                )
             if tail == ["runners", "register"]:
                 return self._handle_local_runner_register(
                     project,
@@ -2135,6 +2182,7 @@ class KnowledgeConnectorHandlersMixin:
             ConnectorSyncError,
             ConnectorAclError,
             ConnectorOAuthError,
+            SourcePreflightError,
             LocalRunnerError,
             FeishuConnectorError,
             FeishuTenantAcceptanceJobError,

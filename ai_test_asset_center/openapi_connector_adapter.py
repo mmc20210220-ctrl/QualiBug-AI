@@ -1539,6 +1539,25 @@ def openapi_connector_manifest(
             if normalized_type == OPENAPI_CONNECTOR_TYPE
             else {}
         ),
+        entrypoint_evidence=(
+            {
+                "content_types": [
+                    "application/json",
+                    "application/yaml",
+                    "application/x-yaml",
+                    "text/json",
+                    "text/yaml",
+                ],
+                "document_shapes": [
+                    "openapi_document",
+                    "postman_collection",
+                    "openapi_reference",
+                ],
+                "path_suffixes": [".json", ".yaml", ".yml"],
+            }
+            if normalized_type == OPENAPI_CONNECTOR_TYPE
+            else {}
+        ),
         supported_resource_types=tuple(sorted(_SUPPORTED_OBJECT_TYPES)),
         sync_modes=("FULL", "INCREMENTAL"),
         read_only=True,

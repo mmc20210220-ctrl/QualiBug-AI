@@ -161,6 +161,10 @@ def test_default_registry_exposes_manifest_driven_website_adapter_without_networ
         "scope_field": "seed_urls",
         "priority": 10,
     }
+    assert manifest.entrypoint_evidence == {
+        "content_types": ["text/html", "application/xhtml+xml"],
+        "document_shapes": ["html_page"],
+    }
     assert manifest.credential_fields_for_auth_mode("cookie_session")[0].display_name == "登录会话 Cookie"
     assert {
         field.name
@@ -192,6 +196,11 @@ def test_default_registry_exposes_manifest_driven_openapi_adapter_without_networ
         "scope_field": "document_urls",
         "priority": 20,
     }
+    assert set(manifest.entrypoint_evidence["document_shapes"]) == {
+        "openapi_document",
+        "postman_collection",
+        "openapi_reference",
+    }
     assert set(manifest.auth_modes) == {
         "anonymous",
         "bearer_token",
@@ -208,6 +217,9 @@ def test_generic_git_quick_connect_uses_url_scope_without_provider_guessing_in_u
         "input_type": "url",
         "scope_field": "repository_url",
         "priority": 30,
+    }
+    assert registry.manifest("git").entrypoint_evidence == {
+        "path_suffixes": [".git"],
     }
     assert registry.manifest("github").quick_connect_schema == {}
 

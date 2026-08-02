@@ -7,6 +7,7 @@ import {
   listConnectorResources,
   listConnectorTypes,
   listKnowledgeConnectors,
+  preflightConnectorSource,
   pauseKnowledgeConnector,
   reauthorizeKnowledgeConnector,
   refreshKnowledgeConnector,
@@ -15,6 +16,7 @@ import {
   type ConfigureConnectorInput,
   type ConnectorManifest,
   type ConnectorResourceInventory,
+  type ConnectorSourcePreflight,
   type KnowledgeConnectorActionResult,
   type KnowledgeConnectorHealth,
   type KnowledgeConnectorRecord,
@@ -417,6 +419,8 @@ export function Materials() {
   const [quickConnectType, setQuickConnectType] = useState('');
   const [quickConnectUrl, setQuickConnectUrl] = useState('');
   const [quickConnectApplied, setQuickConnectApplied] = useState(false);
+  const [sourcePreflight, setSourcePreflight] = useState<ConnectorSourcePreflight | null>(null);
+  const [preflighting, setPreflighting] = useState(false);
   const [authMode, setAuthMode] = useState('');
   const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
   const [webhookEnabled, setWebhookEnabled] = useState(false);
@@ -503,6 +507,7 @@ export function Materials() {
     setQuickConnectType(firstManifest?.connector_type || '');
     setQuickConnectUrl('');
     setQuickConnectApplied(false);
+    setSourcePreflight(null);
     setResourceScope(scopePresets(firstManifest)[0] || '');
     setScopeValues(defaultScopeValues(firstManifest));
     setScopeParseError('');
@@ -527,6 +532,7 @@ export function Materials() {
     setQuickConnectType('');
     setQuickConnectUrl('');
     setQuickConnectApplied(false);
+    setSourcePreflight(null);
     const mode = connector.connection_profile?.auth_mode
       || manifests.find((manifest) => manifest.connector_type === connector.connector_type)?.auth_modes[0]
       || '';
@@ -536,9 +542,7 @@ export function Materials() {
     setFormOpen(true);
   };
 
-  const useQuickConnectUrl = () => {
-    const manifest = quickConnectOptions.find((item) => item.connector_type === quickConnectType)
-      || quickConnectOptions[0];
+  const applyQuickConnectManifest = (manifest: ConnectorManifest, message: string) => {
     if (!manifest) {
       toast.show('褰撳墠娌℃湁 Manifest 澹版槑 URL 鍏ュ彛鐨勮繛鎺ュ櫒', 'warning');
       return;
@@ -554,10 +558,65 @@ export function Materials() {
       setCredentialValues({});
       setWebhookEnabled(false);
       setQuickConnectApplied(true);
-      toast.show('已根据入口 URL 填写安全默认范围；首次读取前仍会执行连接与边界检查', 'success');
+      toast.show(message, 'success');
     } catch (error: unknown) {
       toast.show(error instanceof Error ? error.message : '入口 URL 未能用于快速接入', 'warning');
     }
+  };
+
+  const useQuickConnectUrl = () => {
+    const manifest = quickConnectOptions.find((item) => item.connector_type === quickConnectType)
+      || quickConnectOptions[0];
+    if (!manifest) {
+      toast.show('褰撳墠娌℃湁 Manifest 澹版槑 URL 鍏ュ彛鐨勮繛鎺ュ櫒', 'warning');
+      return;
+    }
+    applyQuickConnectManifest(
+      manifest,
+      '已根据入口 URL 填写安全默认范围；首次读取前仍会执行连接与边界检查',
+    );
+  };
+
+  const preflightSourceUrl = async () => {
+    if (!project) return;
+    setPreflighting(true);
+    setSourcePreflight(null);
+    try {
+      const result = await preflightConnectorSource(project, quickConnectUrl);
+      setSourcePreflight(result);
+      const recommended = quickConnectOptions.find(
+        (manifest) => manifest.connector_type === result.recommended_connector_type,
+      );
+      if (recommended) {
+        applyQuickConnectManifest(
+          recommended,
+          `已根据在线入口识别为${recommended.display_name}；请确认授权后开始读取`,
+        );
+      } else if (result.status === 'AUTHORIZATION_REQUIRED') {
+        toast.show('入口需要授权才能识别类型；请从下方候选能力继续并填写授权。', 'warning');
+      } else if (result.candidates.length > 0) {
+        toast.show('入口可以接入，但需要你确认使用哪一种资料能力。', 'warning');
+      } else {
+        toast.show('当前没有可用的 URL 连接器 Manifest，请改用已声明的接入方式。', 'warning');
+      }
+    } catch (error: unknown) {
+      toast.show(error instanceof Error ? error.message : '入口预检未完成，请检查 URL 后重试。', 'danger');
+    } finally {
+      setPreflighting(false);
+    }
+  };
+
+  const choosePreflightCandidate = (connectorTypeValue: string) => {
+    const manifest = quickConnectOptions.find((item) => item.connector_type === connectorTypeValue);
+    if (!manifest) {
+      toast.show('候选连接器 Manifest 已不可用，请刷新页面后重试。', 'warning');
+      return;
+    }
+    setQuickConnectType(manifest.connector_type);
+    applyQuickConnectManifest(
+      manifest,
+      `已选择${manifest.display_name}并填写入口范围；首次读取前仍会执行连接与边界检查`,
+    );
   };
 
   const profilePayload = (): ConfigureConnectorInput['connection_profile'] => {
@@ -905,23 +964,9 @@ export function Materials() {
               <div>
                 <span className="settings-hero-kicker">来源优先</span>
                 <h3>粘贴一个在线资料入口</h3>
-                <p>系统会按连接器 Manifest 把入口 URL 写入必需范围，并保留只读、SSRF 和权限边界；无需手工编写范围 JSON。</p>
+                <p>系统先用一次受边界约束的只读预检识别可用资料能力，再按 Manifest 填写范围；无需先理解连接器类型或手工编写范围 JSON。</p>
               </div>
               <div className="materials-quick-connect-row">
-                <label className="form-group">
-                  <span className="form-label">资料来源能力</span>
-                  <select
-                    className="form-input"
-                    value={quickConnectType}
-                    onChange={(event) => setQuickConnectType(event.target.value)}
-                  >
-                    {quickConnectOptions.map((manifest) => (
-                      <option key={manifest.connector_type} value={manifest.connector_type}>
-                        {manifest.display_name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
                 <label className="form-group materials-quick-connect-url">
                   <span className="form-label">入口 URL</span>
                   <input
@@ -933,10 +978,85 @@ export function Materials() {
                     autoComplete="url"
                   />
                 </label>
-                <button className="btn btn-secondary" type="button" onClick={useQuickConnectUrl}>
-                  用此入口填写范围
+                <button className="btn btn-secondary" type="button" onClick={() => void preflightSourceUrl()} disabled={preflighting}>
+                  {preflighting ? '正在识别入口…' : '识别并填写范围'}
                 </button>
               </div>
+              <details className="materials-advanced materials-quick-connect-manual">
+                <summary>我已知道资料类型，直接选择</summary>
+                <div className="materials-advanced-field">
+                  <label className="form-group">
+                    <span className="form-label">资料来源能力</span>
+                    <select
+                      className="form-input"
+                      value={quickConnectType}
+                      onChange={(event) => setQuickConnectType(event.target.value)}
+                    >
+                      {quickConnectOptions.map((manifest) => (
+                        <option key={manifest.connector_type} value={manifest.connector_type}>
+                          {manifest.display_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="btn btn-secondary" type="button" onClick={useQuickConnectUrl}>
+                    按所选能力填写范围
+                  </button>
+                </div>
+              </details>
+              {sourcePreflight && (
+                <div className="materials-preflight-result" aria-label="在线入口识别结果">
+                  <div className="materials-preflight-heading">
+                    <strong>
+                      {sourcePreflight.status === 'READY'
+                        ? '已找到明确的资料能力'
+                        : sourcePreflight.status === 'AUTHORIZATION_REQUIRED'
+                          ? '入口需要授权后才能确认'
+                          : sourcePreflight.status === 'REMOTE_ERROR'
+                            ? '入口暂时无法读取'
+                          : sourcePreflight.status === 'NO_QUICK_CONNECTOR'
+                            ? '没有可用的 URL 连接器'
+                            : '请确认要使用的资料能力'}
+                    </strong>
+                    <span>
+                      只读预检 · HTTP {sourcePreflight.observation.http_status}
+                      {sourcePreflight.observation.content_type
+                        ? ` · ${sourcePreflight.observation.content_type}`
+                        : ''}
+                    </span>
+                  </div>
+                  <small>预检只返回结构证据和指纹，不返回资料正文、凭据或写入结果。</small>
+                  {sourcePreflight.candidates.length > 0 && (
+                    <div className="materials-preflight-candidates">
+                      {sourcePreflight.candidates.map((candidate) => {
+                        const manifest = quickConnectOptions.find(
+                          (item) => item.connector_type === candidate.connector_type,
+                        );
+                        return (
+                          <div className="materials-preflight-candidate" key={candidate.connector_type}>
+                            <div>
+                              <strong>{candidate.display_name || candidate.connector_type}</strong>
+                              <span>
+                                {candidate.match_status === 'MATCHED' ? '已获得来源证据' : '可按此能力继续'}
+                                {candidate.evidence.length > 0 ? ` · ${candidate.evidence.join('、')}` : ''}
+                              </span>
+                            </div>
+                            {manifest && (
+                              <button
+                                className="btn btn-secondary"
+                                type="button"
+                                onClick={() => choosePreflightCandidate(candidate.connector_type)}
+                              >
+                                使用此能力
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
               {quickConnectApplied && (
                 <div className="materials-quick-connect-applied">
                   已使用入口 URL；其余范围保持 Manifest 默认值。保存后会直接进入连接测试和首次只读同步。
@@ -964,6 +1084,7 @@ export function Materials() {
                   const next = event.target.value;
                   const manifest = manifests.find((item) => item.connector_type === next);
                   setConnectorType(next);
+                  setSourcePreflight(null);
                   setQuickConnectType(
                     quickConnectOptions.some((item) => item.connector_type === next) ? next : '',
                   );

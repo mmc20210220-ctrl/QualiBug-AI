@@ -59,6 +59,20 @@ Adapter 不解析业务语义，不创建独立知识库，不写回远端资料
 
 `scope_field` 必须是 `scope_schema` 中声明且必填的字符串或数组字段。Materials 页面只把用户粘贴的 HTTP(S) 入口写入这个字段，并保留 Manifest 默认范围；连接器类型、提供商、凭据、业务规则和 SSRF 放行范围不会由 URL 猜测。保存后仍复用既有配置、连接测试和 managed sync 主链，失败会返回明确原因，不会伪造连接成功或资料。
 
+### 陌生入口预检
+
+为降低“先判断连接器类型”的用户成本，URL 入口还可以由 Manifest 声明 `entrypoint_evidence`：
+
+```json
+{
+  "content_types": ["text/html", "application/json"],
+  "document_shapes": ["openapi_document"],
+  "path_suffixes": [".json"]
+}
+```
+
+Materials 页面会先调用项目范围接口 `POST /api/v1/projects/{project_id}/knowledge-connectors/source-preflight`，服务端仅执行一次受 SSRF 保护、无凭据、无请求体的有界只读 `GET`。它只返回 HTTP 状态、内容类型、结构形状和响应指纹，以及由已安装 Manifest 声明证据排序的候选连接器；不返回正文、凭据、游标，不创建连接器，也不触发同步。只有唯一的已声明证据匹配才会给出推荐；多个候选、需要授权、没有证据或远端失败都保持“需要确认/失败”并在界面可见，绝不把猜测当成连接成功。
+
 凭据字段也属于 Manifest 元数据：适配器可以声明 `display_name`，前端展示用户可理解的名称；未声明时只对字段名做通用格式化，不改变实际存储键。凭据值、掩码值和原始远端错误仍不会展示给用户。
 
 当前通用 URL 入口能力覆盖网站/帮助中心、在线 OpenAPI 文档和通用 Git 仓库。它只降低配置步骤，不替代真实连接测试、首次同步收据、覆盖率与权限证据；没有真实同步证据时，健康状态仍为 `NOT_SYNCED`/`UNKNOWN`。

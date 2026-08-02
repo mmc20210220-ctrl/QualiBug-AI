@@ -78,6 +78,12 @@ _QUICK_CONNECT_SCHEMA_KEYS = {
     "scope_field",
     "priority",
 }
+_ENTRYPOINT_EVIDENCE_KEYS = {
+    "content_types",
+    "document_shapes",
+    "path_suffixes",
+}
+_ENTRYPOINT_EVIDENCE_MAX_ITEMS = 32
 _QUICK_CONNECT_INPUT_TYPES = {"url"}
 _DEFAULT_WEBHOOK_POLICY_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -259,6 +265,7 @@ class ConnectorManifest:
     auth_modes: tuple[str, ...] = ()
     scope_schema: Mapping[str, Any] = field(default_factory=dict)
     quick_connect_schema: Mapping[str, Any] = field(default_factory=dict)
+    entrypoint_evidence: Mapping[str, Any] = field(default_factory=dict)
     supported_resource_types: tuple[str, ...] = ()
     sync_modes: tuple[str, ...] = ("FULL",)
     webhook_supported: bool = False
@@ -334,6 +341,57 @@ class ConnectorManifest:
                 "priority": priority,
             }
         object.__setattr__(self, "quick_connect_schema", quick_connect_schema)
+        if not isinstance(self.entrypoint_evidence, Mapping):
+            raise ConnectorRegistryError("entrypoint_evidence_must_be_object")
+        entrypoint_evidence = dict(self.entrypoint_evidence)
+        unknown_entrypoint_evidence_keys = sorted(
+            set(entrypoint_evidence) - _ENTRYPOINT_EVIDENCE_KEYS
+        )
+        if unknown_entrypoint_evidence_keys:
+            raise ConnectorRegistryError(
+                "entrypoint_evidence_field_not_supported:"
+                + unknown_entrypoint_evidence_keys[0]
+            )
+        normalized_entrypoint_evidence: dict[str, list[str]] = {}
+        for key in sorted(_ENTRYPOINT_EVIDENCE_KEYS):
+            raw_values = entrypoint_evidence.get(key, ())
+            if isinstance(raw_values, str) or not isinstance(raw_values, (list, tuple)):
+                raise ConnectorRegistryError(
+                    f"entrypoint_evidence_{key}_must_be_list"
+                )
+            if len(raw_values) > _ENTRYPOINT_EVIDENCE_MAX_ITEMS:
+                raise ConnectorRegistryError(
+                    f"entrypoint_evidence_{key}_limit_exceeded"
+                )
+            values: list[str] = []
+            seen: set[str] = set()
+            for raw_value in raw_values:
+                value = str(raw_value or "").strip()
+                if not value or len(value) > 160:
+                    raise ConnectorRegistryError(
+                        f"entrypoint_evidence_{key}_contains_invalid_value"
+                    )
+                if key == "content_types":
+                    value = value.lower().split(";", 1)[0].strip()
+                    if "/" not in value:
+                        raise ConnectorRegistryError(
+                            "entrypoint_evidence_content_type_invalid"
+                        )
+                elif key == "path_suffixes":
+                    value = value.lower()
+                    if not value.startswith(".") or "/" in value or "\\" in value:
+                        raise ConnectorRegistryError(
+                            "entrypoint_evidence_path_suffix_invalid"
+                        )
+                if value in seen:
+                    raise ConnectorRegistryError(
+                        f"entrypoint_evidence_{key}_contains_duplicate:{value}"
+                    )
+                seen.add(value)
+                values.append(value)
+            if values:
+                normalized_entrypoint_evidence[key] = values
+        object.__setattr__(self, "entrypoint_evidence", normalized_entrypoint_evidence)
         object.__setattr__(
             self,
             "supported_resource_types",
@@ -483,6 +541,10 @@ class ConnectorManifest:
             "auth_modes": list(self.auth_modes),
             "scope_schema": dict(self.scope_schema),
             "quick_connect_schema": dict(self.quick_connect_schema),
+            "entrypoint_evidence": {
+                key: list(values)
+                for key, values in self.entrypoint_evidence.items()
+            },
             "supported_resource_types": list(self.supported_resource_types),
             "sync_modes": list(self.sync_modes),
             "webhook_supported": self.webhook_supported,

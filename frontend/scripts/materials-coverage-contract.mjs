@@ -34,6 +34,7 @@ for (const field of [
 }
 
 requireText(page, '<ConnectorCoverage coverage={connector.coverage} />', 'materials page');
+requireText(api, 'source-preflight', 'source entry preflight API');
 requireText(page, '已读取 ${connector.coverage.covered_count}/${connector.coverage.discovered_count}', 'connector status');
 requireText(page, '资料类型暂不支持', 'sync completion message');
 requireText(page, 'materials-health-summary', 'connector health projection');
@@ -45,7 +46,10 @@ for (const marker of [
   'quickConnectManifests(',
   'applyQuickConnectUrl(',
   'quick_connect_schema',
-  '用此入口填写范围',
+  'preflightConnectorSource(',
+  'preflightSourceUrl',
+  '识别并填写范围',
+  'materials-preflight-result',
   'materials-scope-editor-details',
   '调整同步范围（可选）',
   'credentialFieldLabel(',

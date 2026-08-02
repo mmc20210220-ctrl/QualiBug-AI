@@ -1528,6 +1528,10 @@ def website_connector_manifest() -> ConnectorManifest:
             "scope_field": "seed_urls",
             "priority": 10,
         },
+        entrypoint_evidence={
+            "content_types": ["text/html", "application/xhtml+xml"],
+            "document_shapes": ["html_page"],
+        },
         supported_resource_types=("html_page", "attachment"),
         sync_modes=("FULL", "INCREMENTAL"),
         webhook_supported=False,

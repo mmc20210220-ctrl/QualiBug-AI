@@ -1937,6 +1937,11 @@ def git_connector_manifest(connector_type: str = "git") -> ConnectorManifest:
             if kind == "git"
             else {}
         ),
+        entrypoint_evidence=(
+            {"path_suffixes": [".git"]}
+            if kind == "git"
+            else {}
+        ),
         supported_resource_types=tuple(sorted({"file", "submodule", "lfs_pointer", "issue", "wiki_page", "release", "commit"})),
         sync_modes=("FULL", "INCREMENTAL"),
         webhook_supported=True,
