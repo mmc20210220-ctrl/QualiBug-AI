@@ -155,6 +155,16 @@ function connectorOauthLabel(oauth?: KnowledgeConnectorRecord['oauth']): string 
   }
 }
 
+function connectorOauthRefreshLabel(oauth?: KnowledgeConnectorRecord['oauth']): string {
+  if (!oauth?.automatic_refresh_supported) return '自动续期：连接器未声明 Refresh Token';
+  switch (oauth.automatic_refresh_status) {
+    case 'SUCCEEDED': return '自动续期：最近一次已成功';
+    case 'FAILED': return '自动续期：最近一次失败，系统将继续重试';
+    case 'NOT_DUE': return '自动续期：已启用，当前无需续期';
+    default: return '自动续期：已启用';
+  }
+}
+
 function connectorTone(connector: KnowledgeConnectorRecord): string {
   const healthStatus = connector.health?.status;
   if (healthStatus === 'REAUTHORIZATION_REQUIRED' || healthStatus === 'PERMISSION_INSUFFICIENT' || healthStatus === 'AUTHORIZATION_EXPIRING' || healthStatus === 'DOWNSTREAM_DEGRADED' || healthStatus === 'CALIBRATION_REQUIRED' || healthStatus === 'DEGRADED') return 'danger';
@@ -712,6 +722,7 @@ export function Materials() {
                       <div>
                         <strong>OAuth 授权</strong>
                         <span>{connectorOauthLabel(connector.oauth)}</span>
+                        <span>{connectorOauthRefreshLabel(connector.oauth)}</span>
                       </div>
                       <span>
                         {connector.oauth.required_scopes?.length

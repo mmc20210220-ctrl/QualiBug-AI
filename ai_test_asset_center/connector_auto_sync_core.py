@@ -30,6 +30,7 @@ from .connector_connection_profiles import (
     load_connector_sync_checkpoint,
     resolve_connector_connection_profile,
 )
+from .connector_oauth_authority import refresh_connector_oauth
 from .connector_registry import (
     ConnectorRegistryError,
     build_default_connector_registry,
@@ -401,6 +402,7 @@ def test_managed_connector_connection(
     timeout: float = 15.0,
     transport: Any = None,
     sleeper: Callable[[float], None] = time.sleep,
+    oauth_token_requester: Callable[..., Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
@@ -412,6 +414,20 @@ def test_managed_connector_connection(
         resolved_root,
         instance=instance,
     )
+    oauth_refresh: dict[str, Any] = {}
+    manifest_getter = getattr(adapter, "manifest", None)
+    if not callable(manifest_getter):
+        raise ConnectorSyncError("connector_manifest_not_supported")
+    manifest = manifest_getter()
+    if getattr(manifest, "oauth_schema", None):
+        oauth_refresh = refresh_connector_oauth(
+            project,
+            connector,
+            root=resolved_root,
+            actor=_AUTO_SYNC_ACTOR,
+            token_requester=oauth_token_requester,
+            timeout=float(timeout),
+        )
     context = _managed_context(
         project,
         connector,
@@ -429,7 +445,10 @@ def test_managed_connector_connection(
     result = tester(context)
     if not isinstance(result, Mapping):
         raise ConnectorSyncError("connector_test_connection_result_invalid")
-    return dict(result)
+    projected = dict(result)
+    if oauth_refresh:
+        projected["oauth_refresh"] = oauth_refresh
+    return projected
 
 
 def _clear_intent_if_registry_did_not_advance(
@@ -473,6 +492,7 @@ def run_managed_connector_sync(
     timeout: float | None = None,
     transport: Any = None,
     sleeper: Callable[[float], None] = time.sleep,
+    oauth_token_requester: Callable[..., Mapping[str, Any]] | None = None,
     sync_policy: Mapping[str, Any] | None = None,
     sync_runner: Callable[..., Mapping[str, Any]] | None = None,
     recovery_runner: Callable[..., Mapping[str, Any]] | None = None,
@@ -495,6 +515,28 @@ def run_managed_connector_sync(
         root=resolved_root,
         actor=clean_actor,
     ) as fence:
+        oauth_refresh: dict[str, Any] = {}
+        if sync_runner is None:
+            instance_for_refresh = _instance(project, connector, resolved_root)
+            adapter_for_refresh = _managed_adapter(
+                project,
+                connector,
+                resolved_root,
+                instance=instance_for_refresh,
+            )
+            manifest_getter = getattr(adapter_for_refresh, "manifest", None)
+            if not callable(manifest_getter):
+                raise ConnectorSyncError("connector_manifest_not_supported")
+            manifest_for_refresh = manifest_getter()
+            if getattr(manifest_for_refresh, "oauth_schema", None):
+                oauth_refresh = refresh_connector_oauth(
+                    project,
+                    connector,
+                    root=resolved_root,
+                    actor=clean_actor,
+                    token_requester=oauth_token_requester,
+                    timeout=timeout_value,
+                )
         recovery = (recovery_runner or recover_managed_connector_checkpoint)(
             project,
             connector,
@@ -598,6 +640,8 @@ def run_managed_connector_sync(
                         raise ConnectorSyncError(
                             "connector_discovered_resource_count_invalid"
                         ) from exc
+            if oauth_refresh:
+                run["oauth_refresh"] = oauth_refresh
             if run.get("status") != "COMPLETE":
                 clear_connector_checkpoint_journal(
                     project,
@@ -783,10 +827,17 @@ def _due(
 
 def _failure_category(exc: Exception) -> str:
     message = str(exc or "").lower()
-    if "credential" in message or "profile" in message or "token" in message:
-        return "AUTHORIZATION_REQUIRED"
+    if (
+        "transport" in message
+        or "api_failed" in message
+        or "http_failed" in message
+        or "remote_unavailable" in message
+    ):
+        return "REMOTE_UNAVAILABLE"
     if "permission" in message or "forbidden" in message:
         return "PERMISSION_REQUIRED"
+    if "credential" in message or "profile" in message or "token" in message:
+        return "AUTHORIZATION_REQUIRED"
     if (
         "already_running" in message
         or "lock_held" in message
@@ -795,9 +846,27 @@ def _failure_category(exc: Exception) -> str:
         return "BUSY"
     if "checkpoint" in message or "cursor" in message or "fence" in message:
         return "AUTO_RECOVERY"
-    if "transport" in message or "api_failed" in message:
-        return "REMOTE_UNAVAILABLE"
     return "RETRYING"
+
+
+def _oauth_refresh_projection(value: Any) -> dict[str, Any]:
+    raw = dict(value) if isinstance(value, Mapping) else {}
+    return {
+        "supported": raw.get("supported") is True,
+        "attempted": raw.get("attempted") is True,
+        "refreshed": raw.get("refreshed") is True,
+        "refresh_status": _text(raw.get("refresh_status"), 40)
+        or "NOT_MEASURED",
+        "credential_status": _text(raw.get("credential_status"), 64),
+        "credential_expires_at_utc": _text(
+            raw.get("credential_expires_at_utc"), 80
+        ),
+        "permission_status": _text(raw.get("permission_status"), 80),
+        "credential_values_returned": False,
+        "source_identity_preserved": raw.get("source_identity_preserved") is True,
+        "checkpoint_preserved": raw.get("checkpoint_preserved") is True,
+        "remote_deletion_inferred": False,
+    }
 
 
 def _record_success(
@@ -817,6 +886,9 @@ def _record_success(
             "next_attempt_at_utc": "",
             "last_error_category": "",
             "raw_error_persisted": False,
+            "last_oauth_refresh": _oauth_refresh_projection(
+                run.get("oauth_refresh")
+            ),
             "attempt_timestamps": list(previous.get("attempt_timestamps") or []),
         }
 
@@ -846,6 +918,9 @@ def _record_failure(
             "last_error_category": _failure_category(exc),
             "last_error_type": type(exc).__name__,
             "raw_error_persisted": False,
+            "last_oauth_refresh": _oauth_refresh_projection(
+                previous.get("last_oauth_refresh")
+            ),
             "attempt_timestamps": list(previous.get("attempt_timestamps") or []),
         }
 
@@ -1093,6 +1168,9 @@ def connector_auto_sync_status(
         "rate_limit_per_minute": policy["rate_limit_per_minute"],
         "max_resources": policy["max_resources"],
         "max_export_polls": policy["max_export_polls"],
+        "last_oauth_refresh": _oauth_refresh_projection(
+            state.get("last_oauth_refresh")
+        ),
         "maintenance_required_by_user": status == "retrying"
         and attention in {"AUTHORIZATION_REQUIRED", "PERMISSION_REQUIRED"},
         "checkpoint_recovery_is_automatic": True,

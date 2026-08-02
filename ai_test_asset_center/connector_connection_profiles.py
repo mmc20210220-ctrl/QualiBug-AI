@@ -489,6 +489,7 @@ def _configure_connector_profile(
     operation: str,
     event_name: str = "",
     credential_expires_at_utc: Any = "",
+    preserve_credential_expiry: bool = True,
     instance_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist a Manifest-validated encrypted profile and bind its opaque ref."""
@@ -500,6 +501,8 @@ def _configure_connector_profile(
     clean_actor = _require_manage_actor(actor)
     if not isinstance(profile, dict):
         raise ConnectorProfileError("connector_profile_must_be_object")
+    if not isinstance(preserve_credential_expiry, bool):
+        raise ConnectorProfileError("connector_profile_expiry_policy_invalid")
     if (
         isinstance(instance_metadata, Mapping)
         and "webhook_policy_json" in instance_metadata
@@ -552,7 +555,11 @@ def _configure_connector_profile(
         record["updated_by"] = clean_actor
         record["plaintext_credentials_persisted"] = False
         record["credential_status"] = "ACTIVE"
-        record["credential_expires_at_utc"] = normalized_expiry or previous_expiry
+        record["credential_expires_at_utc"] = (
+            normalized_expiry
+            if normalized_expiry or not preserve_credential_expiry
+            else previous_expiry
+        )
         record["reauthorization_required"] = False
         record["reauthorization_reason"] = ""
         store["audit_events"].append(
@@ -726,6 +733,7 @@ def rotate_connector_credentials(
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
     credential_expires_at_utc: Any = "",
+    preserve_credential_expiry: bool = True,
 ) -> dict[str, Any]:
     """Replace encrypted credentials without changing scope or source identity."""
     resolved_root = root or ROOT
@@ -745,6 +753,7 @@ def rotate_connector_credentials(
         operation="rotate_connector_credentials",
         event_name="rotate_connector_credentials",
         credential_expires_at_utc=credential_expires_at_utc,
+        preserve_credential_expiry=preserve_credential_expiry,
     )
 
 

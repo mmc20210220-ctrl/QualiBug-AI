@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from ai_test_asset_center import connector_auto_sync as auto
 from ai_test_asset_center.connector_registry import (
+    ConnectorCredentialField,
     ConnectorManifest,
     ConnectorRegistry,
 )
@@ -15,7 +16,33 @@ PROJECT = "enterprise-project"
 
 
 class _GenericAdapter:
-    def __init__(self, connector_type: str = "alpha") -> None:
+    def __init__(self, connector_type: str = "alpha", *, oauth: bool = False) -> None:
+        auth_modes = ("oauth2",) if oauth else ()
+        credential_fields = (
+            ConnectorCredentialField(
+                name="oauth_access_token",
+                field_type="token",
+                secret=True,
+                auth_modes=("oauth2",),
+            ),
+            ConnectorCredentialField(
+                name="oauth_refresh_token",
+                field_type="token",
+                secret=True,
+                auth_modes=("oauth2",),
+            ),
+        ) if oauth else ()
+        oauth_schema = {
+            "type": "oauth2_authorization_code",
+            "authorization_endpoint": "https://provider.example.test/authorize",
+            "token_endpoint": "https://provider.example.test/token",
+            "client_id": "client",
+            "redirect_uri": "https://app.example.test/callback",
+            "auth_mode": "oauth2",
+            "access_token_field": "oauth_access_token",
+            "refresh_token_field": "oauth_refresh_token",
+            "minimum_scopes": ["read"],
+        } if oauth else {}
         self._manifest = ConnectorManifest(
             connector_type=connector_type,
             display_name="Generic connector",
@@ -23,6 +50,9 @@ class _GenericAdapter:
             version="1",
             supported_resource_types=("document",),
             sync_modes=("FULL", "INCREMENTAL"),
+            auth_modes=auth_modes,
+            credential_fields=credential_fields,
+            oauth_schema=oauth_schema,
             capability_contract_version="test-v1",
         )
         self.sync_context: dict[str, Any] = {}
@@ -125,6 +155,37 @@ def test_generic_dispatcher_selects_adapter_by_manifest_type(
     assert result["checkpoint_commit_protocol"] == "RECOVERABLE_TWO_STAGE"
     assert adapter.sync_context["connector_type"] == "alpha"
     assert adapter.sync_context["connector_instance_id"] == "alpha-main"
+
+
+def test_generic_dispatcher_refreshes_declared_oauth_before_recovery(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    adapter = _GenericAdapter(oauth=True)
+    _patch_checkpoint_path(monkeypatch, tmp_path, adapter)
+    observed: dict[str, object] = {}
+
+    def refresh(project, connector, **kwargs):
+        observed["call"] = (project, connector, kwargs)
+        return {
+            "supported": True,
+            "attempted": True,
+            "refreshed": True,
+            "refresh_status": "SUCCEEDED",
+            "credential_values_returned": False,
+            "source_identity_preserved": True,
+            "checkpoint_preserved": True,
+        }
+
+    monkeypatch.setattr(auto, "refresh_connector_oauth", refresh)
+    result = auto.run_managed_connector_sync(
+        PROJECT,
+        "alpha-main",
+        root=tmp_path,
+    )
+
+    assert observed["call"][0:2] == (PROJECT, "alpha-main")
+    assert result["oauth_refresh"]["refresh_status"] == "SUCCEEDED"
 
 
 def test_generic_connection_test_uses_the_same_registry_dispatcher(
