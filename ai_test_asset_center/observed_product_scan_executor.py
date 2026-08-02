@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,154 @@ from .observed_product_scan_protocol import (
 
 PRODUCT_SCAN_INPUT_SCHEMA = "qualibug.discovery-evaluation-input.v1"
 PRODUCT_SCAN_CONTEXT_SCHEMA = "qualibug.discovery-evaluation-context.v1"
+
+
+_CREDENTIAL_VALUE_KEYS = frozenset({
+    "access_token",
+    "api_key",
+    "apikey",
+    "client_secret",
+    "id_token",
+    "jwt",
+    "password",
+    "private_key",
+    "refresh_token",
+    "secret",
+    "token",
+})
+_ACCOUNT_IDENTITY_KEYS = (
+    "account_ref",
+    "account_id",
+    "principal_ref",
+    "principal_id",
+    "email",
+    "username",
+    "id",
+)
+_ACCOUNT_COLLECTION_KEYS = ("accounts", "actors", "users")
+
+
+def _normalized_account_identity(value: Any) -> str:
+    return str(value or "").strip().casefold()
+
+
+def _account_identity_values(
+    row: dict[str, Any], *, source_key: str = ""
+) -> set[str]:
+    values = {
+        _normalized_account_identity(row.get(key))
+        for key in _ACCOUNT_IDENTITY_KEYS
+    }
+    if source_key:
+        values.add(_normalized_account_identity(source_key))
+    return {value for value in values if value}
+
+
+def _account_rows(payload: Any) -> list[tuple[dict[str, Any], str]]:
+    if isinstance(payload, list):
+        return [
+            (dict(row), "")
+            for row in payload
+            if isinstance(row, dict)
+        ]
+    if not isinstance(payload, dict):
+        return []
+    for collection_key in _ACCOUNT_COLLECTION_KEYS:
+        collection = payload.get(collection_key)
+        if isinstance(collection, list):
+            return [
+                (dict(row), "")
+                for row in collection
+                if isinstance(row, dict)
+            ]
+    return [
+        (dict(value), str(key))
+        for key, value in payload.items()
+        if isinstance(value, dict)
+        and str(key) not in {"schema", "schema_version", "meta"}
+    ]
+
+
+def _is_credential_value_key(key: Any) -> bool:
+    normalized = re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])",
+        "_",
+        str(key or "").strip(),
+    ).lower().replace("-", "_")
+    if normalized in {"secret_ref", "credential_ref", "credential_secret_ref"}:
+        return False
+    return normalized in _CREDENTIAL_VALUE_KEYS or normalized.endswith(
+        ("_token", "_password", "_secret", "_api_key", "_private_key")
+    )
+
+
+def _merge_context_test_accounts_with_existing_credentials(
+    accounts_path: Path,
+    context_accounts: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep fresh fixture credentials when context carries a stale snapshot.
+
+    The evaluator fixture refreshes the product workspace account file immediately
+    before the scan.  A context artifact may also carry an older token snapshot
+    for identity binding.  Replacing the refreshed file with that snapshot makes
+    every account appear unresolved after the runtime drops expired tokens.  Join
+    rows only on explicit account coordinates and copy credential values from the
+    existing product file; role/name similarity is intentionally not a join key.
+    """
+    if not isinstance(context_accounts, dict):
+        raise PolicyEvaluationRunnerError(
+            "product scan context test_accounts must be an object"
+        )
+    if not accounts_path.is_file():
+        return dict(context_accounts)
+    try:
+        existing = json.loads(accounts_path.read_text(encoding="utf-8") or "{}")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PolicyEvaluationRunnerError(
+            f"existing runtime test account file is invalid: {accounts_path}"
+        ) from exc
+    existing_rows = _account_rows(existing)
+    if not existing_rows:
+        return dict(context_accounts)
+
+    by_identity: dict[str, list[dict[str, Any]]] = {}
+    for row, source_key in existing_rows:
+        for identity in _account_identity_values(row, source_key=source_key):
+            by_identity.setdefault(identity, []).append(row)
+
+    def merge_row(row: dict[str, Any], source_key: str = "") -> dict[str, Any]:
+        candidates: dict[int, dict[str, Any]] = {}
+        for identity in _account_identity_values(row, source_key=source_key):
+            for candidate in by_identity.get(identity, []):
+                candidates[id(candidate)] = candidate
+        if len(candidates) > 1:
+            raise PolicyEvaluationRunnerError(
+                "runtime test account credential identity is ambiguous"
+            )
+        if not candidates:
+            return dict(row)
+        merged = dict(row)
+        current = next(iter(candidates.values()))
+        for key, value in current.items():
+            if _is_credential_value_key(key) and value not in (None, ""):
+                merged[key] = value
+        return merged
+
+    merged_payload = dict(context_accounts)
+    for collection_key in _ACCOUNT_COLLECTION_KEYS:
+        collection = context_accounts.get(collection_key)
+        if isinstance(collection, list):
+            merged_payload[collection_key] = [
+                merge_row(row)
+                if isinstance(row, dict)
+                else row
+                for row in collection
+            ]
+            return merged_payload
+    for key, value in context_accounts.items():
+        if isinstance(value, dict):
+            merged_payload[key] = merge_row(value, str(key))
+    return merged_payload
 
 
 def _sanitized_worker_environment(
@@ -348,6 +497,10 @@ class ObservedProductScanExecutor:
             accounts_path.parent.mkdir(parents=True, exist_ok=True)
             accounts_existed = accounts_path.is_file()
             previous_accounts = accounts_path.read_bytes() if accounts_existed else None
+            test_accounts = _merge_context_test_accounts_with_existing_credentials(
+                accounts_path,
+                test_accounts,
+            )
             temporary = accounts_path.with_suffix(accounts_path.suffix + f".{os.getpid()}.tmp")
             temporary.write_text(json.dumps(test_accounts, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(temporary, accounts_path)
@@ -458,6 +611,20 @@ class ObservedProductScanExecutor:
         )
         if not isinstance(findings, list):
             raise PolicyEvaluationRunnerError("product scan findings must be a list")
+        runtime_interface_discovery = scan_result.get(
+            "runtime_interface_discovery"
+        )
+        if not isinstance(runtime_interface_discovery, dict):
+            runtime_interface_discovery = v12.get("runtime_interface_discovery")
+        if not isinstance(runtime_interface_discovery, dict):
+            runtime_interface_discovery = {}
+        if (
+            context.get("runtime_interface_discovery_enabled") is True
+            and not runtime_interface_discovery
+        ):
+            raise PolicyEvaluationRunnerError(
+                "product scan omitted runtime interface discovery execution"
+            )
         resolved_run_id = str(mainline.get("run_id") or "").strip()
         if not resolved_run_id:
             raise PolicyEvaluationRunnerError("product scan mainline run_id is missing")
@@ -492,6 +659,7 @@ class ObservedProductScanExecutor:
             ),
             "findings": [dict(row) for row in findings if isinstance(row, dict)],
             "candidates": list(scan_result.get("candidate_findings") or []),
+            "runtime_interface_discovery": runtime_interface_discovery,
             "pipeline_health": pipeline_health,
             "operational_metrics": operational,
         }

@@ -255,6 +255,56 @@ def evaluate_assertion(
                 ),
             )
 
+    # Session/token exchanges can be validation targets without producing a
+    # durable entity effect. Only accept this scope when both the compiled
+    # assertion and the runtime projection declare it; an observation-only flag
+    # must never bypass the ordinary business-effect evidence gate.
+    if (
+        _text(spec.get("business_effect_requirement")).upper()
+        == "NOT_APPLICABLE"
+        and obs.get("business_effect_not_applicable") is True
+    ):
+        if effect_receipt:
+            return _validation_receipt(
+                status_probe=probe,
+                status="INDETERMINATE",
+                reason_code="VALIDATION_BUSINESS_EFFECT_SCOPE_CONFLICT",
+                expected={
+                    **expected,
+                    "business_effect_status": "NOT_APPLICABLE",
+                },
+                actual={
+                    **actual,
+                    "business_effect_status": "OBSERVED_RECEIPT_PRESENT",
+                },
+                effect_receipt_id=effect_receipt_id,
+                harness_error=True,
+            )
+        if expected_effect_count != 0:
+            return _validation_receipt(
+                status_probe=probe,
+                status="INDETERMINATE",
+                reason_code="VALIDATION_BUSINESS_EFFECT_REQUIRED",
+                expected=expected,
+                actual=actual,
+            )
+        return _validation_receipt(
+            status_probe=probe,
+            status="PASS",
+            reason_code="",
+            expected={
+                **expected,
+                "business_effect_status": "NOT_APPLICABLE",
+            },
+            actual={
+                **actual,
+                "business_effect_status": "NOT_APPLICABLE",
+                "business_effect_requirement_basis": _text(
+                    obs.get("business_effect_not_applicable_basis")
+                ),
+            },
+        )
+
     if obs.get("business_effect_observed") is not True or effect_count is None:
         return _validation_receipt(
             status_probe=probe,

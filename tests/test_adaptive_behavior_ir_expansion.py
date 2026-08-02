@@ -118,6 +118,103 @@ def test_runtime_observation_creates_a_traceable_second_planning_round(
     assert result["round_receipt"]["receipt_fingerprint"]
 
 
+def test_compile_blocked_obligation_is_recompiled_after_runtime_expansion(
+    monkeypatch,
+) -> None:
+    import ai_test_asset_center.adaptive_behavior_ir_expansion as expansion
+
+    initial_ir = {"model_id": "model-round-1", "operations": [{"id": "op-1"}]}
+    rebuilt_ir = {
+        "model_id": "model-round-2",
+        "operations": [
+            {"id": "op-1", "source_refs": [{"source_id": "api_spec"}]},
+            {"id": "op-runtime", "source_refs": [{"source_id": "request-200"}]},
+        ],
+    }
+    blocked_obligation = {
+        "obligation_id": "obl-blocked",
+        "risk_family": "authorization",
+        "compile_status": "BLOCKED",
+        "required_operations": ["op-runtime"],
+        "required_actors": [],
+        "relation_refs": [],
+        "source_refs": [{"source_id": "api_spec"}],
+    }
+    delta_obligation = {
+        "obligation_id": "obl-runtime",
+        "risk_family": "authorization",
+        "compile_status": "COMPILED",
+        "required_operations": ["op-runtime"],
+        "required_actors": [],
+        "relation_refs": [],
+        "source_refs": [{"source_id": "request-200"}],
+    }
+
+    monkeypatch.setattr(
+        expansion,
+        "build_behavior_ir_from_knowledge_asset",
+        lambda *args, **kwargs: rebuilt_ir,
+    )
+    monkeypatch.setattr(
+        expansion,
+        "compile_obligations_from_behavior_ir",
+        lambda behavior_ir: {
+            "obligations": [blocked_obligation, delta_obligation],
+        },
+    )
+
+    def fake_compile(obligations, **kwargs):
+        experiments = [
+            {
+                "obligation_id": row["obligation_id"],
+                "experiment_id": f"exp-{row['obligation_id']}",
+                "compile_receipt": {"status": "COMPILED"},
+                "observers": [
+                    {"observer_id": "observer-runtime", "adapter": "http_api"}
+                ],
+                "source_refs": list(row.get("source_refs") or []),
+            }
+            for row in obligations
+        ]
+        return {"experiments": experiments, "blocked_experiments": []}
+
+    monkeypatch.setattr(expansion, "compile_experiments", fake_compile)
+    monkeypatch.setattr(
+        expansion,
+        "attach_fixture_dag_to_experiments",
+        lambda pack, **kwargs: pack,
+    )
+
+    result = expansion.expand_behavior_ir_from_runtime_observations(
+        initial_behavior_ir=initial_ir,
+        existing_obligation_ids={"obl-blocked"},
+        recompile_obligation_ids={"obl-blocked"},
+        knowledge_asset={"asset_id": "asset-1"},
+        documented_operations=_operations(),
+        observation_receipts=[_observation(200)],
+        project_id="project",
+        source_snapshot_hash="source-hash",
+        runtime_actors=[],
+        environment_type="test",
+        policy_version="policy-1",
+        budget=10,
+        planning_round=2,
+    )
+
+    assert result["status"] == "EXPANDED"
+    assert [row["obligation_id"] for row in result["recompile_obligations"]] == [
+        "obl-blocked"
+    ]
+    assert [row["obligation_id"] for row in result["delta_obligations"]] == [
+        "obl-runtime"
+    ]
+    assert set(result["by_obligation"]) == {"obl-blocked", "obl-runtime"}
+    assert result["round_receipt"]["recompiled_obligation_count"] == 1
+    assert result["round_receipt"]["recompiled_obligation_ids"] == [
+        "obl-blocked"
+    ]
+
+
 def test_indeterminate_observation_stagnates_without_recompiling(monkeypatch) -> None:
     import ai_test_asset_center.adaptive_behavior_ir_expansion as expansion
 

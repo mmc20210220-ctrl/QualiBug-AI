@@ -34,6 +34,59 @@ from .scan_source_runtime import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _has_login_material(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    identity = str(
+        row.get("email")
+        or row.get("username")
+        or row.get("account")
+        or row.get("mobile")
+        or row.get("phone")
+        or ""
+    ).strip()
+    password = str(row.get("password") or row.get("pass") or "").strip()
+    return bool(identity and password)
+
+
+def _bind_preflight_test_credentials(
+    project: str,
+    root: Path,
+    diagnostics_config: dict[str, Any],
+) -> str:
+    """Bind preflight to the same project credential catalog as runtime.
+
+    ``connector_registry.test_profile`` is the explicit authority when it has a
+    usable login.  Otherwise the existing project credential loader is the
+    source of truth for credentials declared in enterprise materials and input
+    catalogs.  The rows stay in process memory and only a non-secret source
+    marker is returned to the persisted diagnostics.
+    """
+
+    from .enterprise_pilot_runtime import (
+        load_project_test_credentials,
+        ordered_test_credentials,
+    )
+
+    configured = ordered_test_credentials({"test_profile": diagnostics_config})
+    if any(_has_login_material(row) for row in configured):
+        return "connector_registry.test_profile"
+
+    loaded = load_project_test_credentials(project, root)
+    usable = [dict(row) for row in loaded if _has_login_material(row)]
+    if not usable:
+        return "none"
+
+    diagnostics_config["test_credentials"] = usable
+    _LOGGER.info(
+        "preflight_test_credentials_bound project=%s source=%s count=%d",
+        project,
+        "project_test_credential_catalog",
+        len(usable),
+    )
+    return "project_test_credential_catalog"
+
+
 def prepare_scan_before_pipeline(
     project: str,
     root: Optional[Path] = None,
@@ -276,6 +329,7 @@ def prepare_scan_before_pipeline(
             exc_info=True,
         )
         diagnostics_config = {}
+    credential_source = "not_resolved"
     try:
         from .scan_diagnostics import run_preflight
 
@@ -297,12 +351,26 @@ def prepare_scan_before_pipeline(
         diagnostics_config.setdefault(
             "execution_mode", str(context.get("execution_mode") or "")
         )
-        diagnostics = run_preflight(diagnostics_config, api_doc_text)
+        credential_source = _bind_preflight_test_credentials(
+            project,
+            root,
+            diagnostics_config,
+        )
+        diagnostics_config["credential_source"] = credential_source
+        diagnostics = dict(run_preflight(diagnostics_config, api_doc_text))
+        diagnostics["credential_source"] = credential_source
     except Exception as exc:
+        _LOGGER.warning(
+            "preflight_failed project=%s error_type=%s",
+            project,
+            type(exc).__name__,
+            exc_info=True,
+        )
         diagnostics = {
             "ready": False,
             "checks": [],
             "summary": f"preflight_unavailable:{type(exc).__name__}",
+            "credential_source": credential_source,
         }
 
     context = _bind_discovery_mainline_identity(

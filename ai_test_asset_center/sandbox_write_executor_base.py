@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .enterprise_project_config import match_production_data_exclusion
+from .behavior_ir_core import _is_ephemeral_session_path
 from .real_id_resolver import collection_path as documented_collection_path
 from .real_id_resolver import (
     normalize_path_placeholders,
@@ -989,6 +990,12 @@ def _looks_like_protected_identity_mutation(method: str, path: str, body: Any) -
         return False
     normalized_path = normalize_path_placeholders(_text(path)).lower()
     if not normalized_path.startswith("/"):
+        return False
+    # Authentication/session exchanges may use POST and carry identity-shaped
+    # fields, but they do not mutate the protected account. Keep them inside
+    # the ordinary governed HTTP receipt path; durable password/status/role
+    # mutations remain subject to the fixture guard below.
+    if _is_ephemeral_session_path(normalized_path):
         return False
     if _IDENTITY_CREATION_RE.search(normalized_path):
         return False

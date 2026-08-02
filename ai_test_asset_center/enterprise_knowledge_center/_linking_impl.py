@@ -880,7 +880,7 @@ def _evidence_bundle(asset: dict[str, Any], probes: list[dict[str, Any]]) -> dic
 
 def _declared_project_source_files(project: str, root: Path) -> list[Path]:
     """Discover project-scoped source material while excluding credential/data files."""
-    supported_suffixes = set(TEXT_SUFFIXES) | {".docx", ".pdf"}
+    supported_suffixes = set(TEXT_SUFFIXES) | set(SOURCE_CODE_SUFFIXES) | {".docx", ".pdf"}
     control_plane_filenames = {
         "real_project_config.json",
         "multi_service_config.json",

@@ -642,6 +642,17 @@ def finalize_experiment_execution(
     started: float,
 ) -> dict[str, Any]:
     """Evaluate declared observers and package the terminal execution outcome."""
+    safety = _dict(exp.get("safety_contract"))
+    if _text(safety.get("business_effect_requirement")).upper() == "NOT_APPLICABLE":
+        # This marker is a projection of the compiled, source-derived contract. It
+        # does not claim that a business effect was observed; it tells the
+        # validation oracle that this session/token exchange has no durable effect
+        # to observe. Ordinary entity writes remain subject to the strict effect
+        # receipt gate.
+        observations["business_effect_not_applicable"] = True
+        observations["business_effect_not_applicable_basis"] = _text(
+            safety.get("business_effect_requirement_basis")
+        ) or "compiled_source_contract"
     # A declared observer is satisfied only by an OBSERVED typed receipt.
     observations["execution_steps"] = steps_out
     observations["campaign_id"] = resolved_campaign_id
@@ -964,7 +975,6 @@ def finalize_experiment_execution(
     # ── SPEC v1.1 §15: Cleanup Equivalence Evaluation ──
     # For governed writes, evaluate whether cleanup restored business state.
     cleanup_equivalence_receipt: dict[str, Any] | None = None
-    safety = _dict(exp.get("safety_contract"))
     is_governed_write = _requires_cleanup_equivalence(
         safety_contract=safety,
         steps_out=steps_out,

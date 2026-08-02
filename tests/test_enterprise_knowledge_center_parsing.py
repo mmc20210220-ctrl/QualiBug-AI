@@ -42,6 +42,23 @@ Query order detail.
 """
 
 
+SOURCE_CODE_API_DOC = """
+const express = require('express');
+const app = express();
+app.get('/api/orders', listOrders);
+app.post('/api/orders', createOrder);
+router.patch('/api/orders/:id', patchOrder);
+// app.delete('/api/orders/:id', deleteOrder);
+
+@app.route('/api/users/addresses', methods=['GET', 'POST'])
+def addresses():
+    pass
+
+@GetMapping('/api/orders/{id}')
+public Order getOrder() { return null; }
+"""
+
+
 FIELD_DICTIONARY_DOC = """# Table: orders
 
 | Field | Type | Description | Required |
@@ -74,6 +91,30 @@ def test_classify_source_distinguishes_new_document_types() -> None:
     assert _classify_source("API_DOCS.md", MARKDOWN_API_DOC) == "markdown_api"
     assert _classify_source("db_field_dictionary.csv", "table,field,type,description\norders,amount,decimal,payable amount\n") == "db_field_dictionary"
     assert _classify_source("checkout_flow.svg", SVG_DOC) == "uiux_svg"
+
+
+def test_classify_and_parse_source_code_preserves_declared_http_routes() -> None:
+    source_type = _classify_source("order_controller.js", SOURCE_CODE_API_DOC)
+    parsed = _parse_source(
+        SOURCE_CODE_API_DOC.encode("utf-8"),
+        "order_controller.js",
+        source_type,
+        "src_order_controller",
+    )
+
+    assert source_type == "source_code"
+    routes = {(row["method"], row["path"]) for row in parsed["operations"]}
+    assert routes == {
+        ("GET", "/api/orders"),
+        ("POST", "/api/orders"),
+        ("PATCH", "/api/orders/:id"),
+        ("GET", "/api/users/addresses"),
+        ("POST", "/api/users/addresses"),
+        ("GET", "/api/orders/{id}"),
+    }
+    assert all(row["source_kind"] == "source_code" for row in parsed["operations"])
+    assert all(":line:" in row["source_locator"] for row in parsed["operations"])
+    assert all("request_body" not in row for row in parsed["operations"])
 
 
 def test_parse_source_extracts_markdown_api_field_dictionary_and_svg() -> None:
@@ -373,6 +414,60 @@ def test_rule_extraction_keeps_semantics_and_drops_tabular_credentials() -> None
     assert rule["semantic_frame"]["behavior"] == "sign in or submit"
 
 
+def test_test_data_notes_are_not_permission_authority() -> None:
+    doc = """# Test accounts
+
+| Role | Email | Password | Notes |
+| --- | --- | --- | --- |
+| Disabled buyer | buyer@example.com | Test@123456 | status is DISABLED, cannot sign in or submit |
+"""
+    parsed = _parse_source(
+        doc.encode("utf-8"),
+        "TEST_ACCOUNTS.md",
+        "test_data",
+        "src_test_accounts",
+    )
+
+    assert parsed["permissions"] == []
+    assert any(
+        "status is DISABLED" in row["statement"] for row in parsed["rules"]
+    )
+
+
+def test_composed_test_data_block_cannot_create_permission_denial() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.source_ingestion import (
+        parse_enterprise_source,
+    )
+
+    doc = """<!-- qualibug:source source_id=permissions source_type=permission_matrix -->
+# Role permissions
+
+| Role | Permissions |
+| --- | --- |
+| buyer | create orders |
+
+<!-- qualibug:source source_id=accounts source_type=test_data -->
+# Test accounts
+
+| Role | Email | Password | Notes |
+| --- | --- | --- | --- |
+| Disabled buyer | buyer@example.com | Test@123456 | status is DISABLED, cannot sign in or submit |
+"""
+    parsed = parse_enterprise_source(
+        doc.encode("utf-8"),
+        "composed.md",
+        "markdown_api",
+        "src_composed",
+    )
+
+    assert any(
+        row.get("role") == "buyer"
+        and row.get("decision") == "allow"
+        for row in parsed["permissions"]
+    )
+    assert not any(row.get("decision") == "deny" for row in parsed["permissions"])
+
+
 def test_permission_table_rows_are_explicit_grants_and_keep_narrative_denials() -> None:
     doc = """# Role permissions
 
@@ -517,6 +612,18 @@ def test_declared_source_sync_ignores_runtime_config_and_empty_legacy_placeholde
     discovered = _declared_project_source_files(project_id, tmp_path)
 
     assert [path.name for path in discovered] == ["customer_notes.md"]
+
+
+def test_declared_source_sync_includes_implementation_sources(tmp_path: Path) -> None:
+    project_id = "declared_implementation_source_case"
+    input_dir = tmp_path / "platform_inputs" / project_id
+    input_dir.mkdir(parents=True)
+    implementation = input_dir / "orders.js"
+    implementation.write_text("app.get('/orders', handler);\n", encoding="utf-8")
+
+    discovered = _declared_project_source_files(project_id, tmp_path)
+
+    assert discovered == [implementation]
 
 
 def test_token_overlap_relationships_are_candidate_only() -> None:

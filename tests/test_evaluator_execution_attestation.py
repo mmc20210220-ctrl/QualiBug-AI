@@ -111,6 +111,54 @@ def test_attestation_binds_independent_gateway_to_every_request_attempt() -> Non
     assert validated["trust_boundary"] == "evaluator_owned_io_gateway"
 
 
+def test_attestation_binds_runtime_surface_attempts_outside_business_ledger() -> None:
+    inputs = _inputs()
+    surface_attempts = [{
+        "obligation_id": "surfobl-1",
+        "execution_id": "surfexec-1",
+        "terminal_stage": "surface_discovery",
+        "terminal_status": "EXECUTED",
+        "operational_receipt": {
+            "http_request_attempt_count": 1,
+            "write_request_attempt_count": 0,
+            "production_http_request_count": 0,
+        },
+    }]
+    inputs["trusted_observations"].append({
+        "obligation_id": "surfobl-1",
+        "execution_id": "surfexec-1",
+        "source_kind": "evaluator_http_proxy",
+        "source_receipt_id": "surface-proxy-receipt-1",
+        "source_fingerprint": "e" * 64,
+        "target_request_count": 1,
+        "write_count": 0,
+        "production_request_count": 0,
+        "audit_receipt_ids": [],
+    })
+
+    attestation = build_execution_attestation(
+        **inputs,
+        additional_request_attempts=surface_attempts,
+        signing_key=SIGNING_KEY,
+    )
+
+    validated = validate_execution_attestation(
+        attestation,
+        **{
+            key: value
+            for key, value in inputs.items()
+            if key != "trusted_observations"
+        },
+        additional_request_attempts=surface_attempts,
+        signing_key=SIGNING_KEY,
+    )
+
+    assert validated["observed_attempt_count"] == 2
+    assert validated["target_request_count"] == (
+        inputs["trusted_observations"][0]["target_request_count"] + 1
+    )
+
+
 def test_runtime_receipts_without_independent_observation_cannot_be_attested() -> None:
     inputs = _inputs()
     inputs["trusted_observations"] = []

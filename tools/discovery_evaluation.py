@@ -35,6 +35,7 @@ from ai_test_asset_center.discovery_evaluation_contract import (
     persist_evaluation_report,
 )
 from ai_test_asset_center.evaluator_receipt_auth import (
+    resolve_evaluator_hmac_key,
     resolve_evaluator_hmac_keyring,
 )
 
@@ -58,6 +59,21 @@ def _load_receipts(paths: list[Path]) -> list[dict[str, Any]]:
     return receipts
 
 
+def _resolve_signing_key(args: argparse.Namespace) -> bytes | None:
+    """Resolve evaluator trust without copying secrets into product state."""
+
+    key_file = getattr(args, "hmac_key_file", None)
+    if key_file is None:
+        resolve_evaluator_hmac_keyring()
+        return None
+    path = Path(key_file).resolve()
+    if path == REPOSITORY_ROOT or REPOSITORY_ROOT in path.parents:
+        raise ValueError("evaluator HMAC key file must be outside product workspace")
+    if not path.is_file():
+        raise FileNotFoundError(f"evaluator HMAC key file not found: {path}")
+    return resolve_evaluator_hmac_key(path.read_bytes())
+
+
 def _command_inspect(args: argparse.Namespace) -> dict[str, Any]:
     manifest = load_evaluation_manifest(args.manifest)
     return {
@@ -70,8 +86,7 @@ def _command_inspect(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _command_evaluate(args: argparse.Namespace) -> dict[str, Any]:
-    resolve_evaluator_hmac_keyring()
-    signing_key = None
+    signing_key = _resolve_signing_key(args)
     manifest = load_evaluation_manifest(args.manifest)
     envelope = _load_object(Path(args.run_envelope), "run envelope")
     if envelope.get("schema_version") != EVALUATION_RUN_ENVELOPE_SCHEMA:
@@ -214,8 +229,7 @@ def _command_evaluate(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _command_aggregate(args: argparse.Namespace) -> dict[str, Any]:
-    resolve_evaluator_hmac_keyring()
-    signing_key = None
+    signing_key = _resolve_signing_key(args)
     manifest = load_evaluation_manifest(args.manifest)
     receipt_paths = [Path(item) for item in (args.receipt or [])]
     if args.receipt_dir:
@@ -239,7 +253,7 @@ def _command_goal_status(args: argparse.Namespace) -> dict[str, Any]:
     report = None
     signing_key = None
     if args.report:
-        resolve_evaluator_hmac_keyring()
+        signing_key = _resolve_signing_key(args)
         report = _load_object(Path(args.report), "evaluation report")
         if report.get("schema_version") != REPORT_SCHEMA:
             raise ValueError(f"not an evaluation report: {args.report}")
@@ -297,6 +311,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     evaluate_parser.add_argument("--output-root", required=True, type=Path)
+    evaluate_parser.add_argument(
+        "--hmac-key-file",
+        type=Path,
+        help="evaluator-owned binary HMAC key file outside the product workspace",
+    )
     evaluate_parser.set_defaults(handler=_command_evaluate)
 
     aggregate_parser = subparsers.add_parser("aggregate", help="aggregate one policy/mode receipt set")
@@ -304,6 +323,11 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate_parser.add_argument("--receipt", action="append", type=Path)
     aggregate_parser.add_argument("--receipt-dir", type=Path)
     aggregate_parser.add_argument("--output", required=True, type=Path)
+    aggregate_parser.add_argument(
+        "--hmac-key-file",
+        type=Path,
+        help="evaluator-owned binary HMAC key file outside the product workspace",
+    )
     aggregate_parser.set_defaults(handler=_command_aggregate)
 
     goal_parser = subparsers.add_parser(
@@ -326,6 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="count of consecutive frozen non-regressive evaluation windows for GA",
+    )
+    goal_parser.add_argument(
+        "--hmac-key-file",
+        type=Path,
+        help="evaluator-owned binary HMAC key file outside the product workspace",
     )
     goal_parser.add_argument("--output", type=Path, help="optional path to persist the goal-status JSON")
     goal_parser.set_defaults(handler=_command_goal_status)

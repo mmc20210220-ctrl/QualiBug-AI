@@ -121,9 +121,15 @@ def _round_receipt(
     observation_receipts: list[dict[str, Any]],
     discovered_operations: list[dict[str, Any]],
     new_obligation_count: int,
+    recompiled_obligation_ids: list[str] | None = None,
     selected_count: int,
     stop_reason: str,
 ) -> dict[str, Any]:
+    recompiled_ids = sorted(
+        _text(value)
+        for value in (recompiled_obligation_ids or [])
+        if _text(value)
+    )
     receipt = {
         "schema_version": ROUND_RECEIPT_SCHEMA,
         "planning_round": planning_round,
@@ -140,6 +146,13 @@ def _round_receipt(
         ],
         "discovered_operation_count": len(discovered_operations),
         "new_obligation_count": new_obligation_count,
+        "recompiled_obligation_count": len(recompiled_ids),
+        "recompiled_obligation_ids": recompiled_ids,
+        "recompile_authority": (
+            "blocked_round0_without_target_request"
+            if recompiled_ids
+            else "none"
+        ),
         "selected_count": selected_count,
         "stop_reason": stop_reason,
     }
@@ -151,6 +164,7 @@ def expand_behavior_ir_from_runtime_observations(
     *,
     initial_behavior_ir: dict[str, Any],
     existing_obligation_ids: set[str],
+    recompile_obligation_ids: set[str] | None = None,
     knowledge_asset: dict[str, Any],
     documented_operations: list[dict[str, Any]],
     observation_receipts: list[dict[str, Any]],
@@ -172,6 +186,11 @@ def expand_behavior_ir_from_runtime_observations(
     if not initial_id:
         raise ValueError("behavior_ir_expansion_input_model_id_missing")
 
+    recompile_ids = {
+        _text(value)
+        for value in (recompile_obligation_ids or set())
+        if _text(value)
+    }
     merged_operations = merge_runtime_discovered_operations(
         documented_operations,
         observation_receipts,
@@ -194,6 +213,7 @@ def expand_behavior_ir_from_runtime_observations(
             observation_receipts=observation_receipts,
             discovered_operations=[],
             new_obligation_count=0,
+            recompiled_obligation_ids=[],
             selected_count=0,
             stop_reason="no_new_runtime_operations",
         )
@@ -218,14 +238,44 @@ def expand_behavior_ir_from_runtime_observations(
         runtime_actors=runtime_actors,
     )
     obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
-    delta_obligations = [
+    all_obligations = [
         dict(row)
         for row in _list(obligation_pack.get("obligations"))
         if isinstance(row, dict)
-        and _text(row.get("obligation_id")) not in existing_obligation_ids
+        and _text(row.get("obligation_id"))
     ]
+    available_ids = {
+        _text(row.get("obligation_id")) for row in all_obligations
+    }
+    recompile_ids &= available_ids & {
+        _text(value) for value in existing_obligation_ids if _text(value)
+    }
+    recompile_obligations = []
+    for row in all_obligations:
+        obligation_id = _text(row.get("obligation_id"))
+        if obligation_id not in recompile_ids:
+            continue
+        retry = dict(row)
+        # Compilation must observe the expanded IR, not carry the round-0
+        # compiler status forward as if it were a new result.
+        for key in (
+            "compile_status",
+            "block_reason",
+            "expanded_experiment_count",
+            "compiled_experiment_count",
+            "blocked_experiment_count",
+        ):
+            retry.pop(key, None)
+        retry["recompile_from_obligation_id"] = obligation_id
+        recompile_obligations.append(retry)
+    delta_obligations = [
+        row
+        for row in all_obligations
+        if _text(row.get("obligation_id")) not in existing_obligation_ids
+    ]
+    round_obligations = [*recompile_obligations, *delta_obligations]
     experiment_pack = compile_experiments(
-        delta_obligations,
+        round_obligations,
         behavior_ir=behavior_ir,
         environment_type=environment_type,
         policy_version=policy_version,
@@ -236,22 +286,32 @@ def expand_behavior_ir_from_runtime_observations(
     )
     all_experiments, by_obligation = _experiments_by_obligation(experiment_pack)
     obligation_plan = plan_obligation_round(
-        delta_obligations,
+        round_obligations,
         experiments_by_obligation=by_obligation,
         budget=budget,
     )
     agent_intent_plan = build_agent_intent_plan(
         obligation_plan,
-        obligations=delta_obligations,
+        obligations=round_obligations,
         experiments_by_obligation=by_obligation,
         behavior_ir=behavior_ir,
     )
-    selected_rows = _selected_rows(
-        delta_obligations,
+    all_selected_rows = _selected_rows(
+        round_obligations,
         experiments_by_obligation=by_obligation,
         agent_intent_plan=agent_intent_plan,
         planning_round=planning_round,
     )
+    selected_rows = [
+        row
+        for row in all_selected_rows
+        if _text(row.get("obligation_id")) not in recompile_ids
+    ]
+    recompile_selected_rows = [
+        row
+        for row in all_selected_rows
+        if _text(row.get("obligation_id")) in recompile_ids
+    ]
     stop_reason = (
         "round_ready"
         if delta_obligations
@@ -264,6 +324,7 @@ def expand_behavior_ir_from_runtime_observations(
         observation_receipts=observation_receipts,
         discovered_operations=discovered_operations,
         new_obligation_count=len(delta_obligations),
+        recompiled_obligation_ids=sorted(recompile_ids),
         selected_count=int(obligation_plan.get("selected_count") or 0),
         stop_reason=stop_reason,
     )
@@ -271,11 +332,14 @@ def expand_behavior_ir_from_runtime_observations(
         "status": "EXPANDED",
         "behavior_ir": behavior_ir,
         "delta_obligations": delta_obligations,
+        "recompile_obligations": recompile_obligations,
+        "round_obligations": round_obligations,
         "experiment_pack": experiment_pack,
         "all_experiments": all_experiments,
         "by_obligation": by_obligation,
         "obligation_plan": obligation_plan,
         "agent_intent_plan": agent_intent_plan,
         "selected_rows": selected_rows,
+        "recompile_selected_rows": recompile_selected_rows,
         "round_receipt": receipt,
     }

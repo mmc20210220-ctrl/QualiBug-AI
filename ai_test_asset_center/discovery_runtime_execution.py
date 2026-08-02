@@ -75,6 +75,41 @@ def _compiled_round0_obligation_ids(all_experiments: Any) -> set[str]:
     return compiled
 
 
+def _runtime_recompile_round0_obligation_ids(
+    obligations: Any,
+    experiments_by_obligation: Any,
+) -> set[str]:
+    """Select only compile-blocked body bindings that runtime discovery can resolve.
+
+    A runtime interface observation may reopen a round-0 compile terminal only
+    when no target request was possible.  Other blockers (cleanup authority,
+    missing fixtures, observers, or source request bodies) need their own
+    source evidence and must remain blocked instead of being retried blindly.
+    """
+
+    experiments = _dict(experiments_by_obligation)
+    retry_ids: set[str] = set()
+    for obligation in _list(obligations):
+        if not isinstance(obligation, dict):
+            continue
+        obligation_id = _text(obligation.get("obligation_id"))
+        if not obligation_id:
+            continue
+        experiment = _dict(experiments.get(obligation_id))
+        compile_receipt = _dict(experiment.get("compile_receipt"))
+        if _text(compile_receipt.get("status")).upper() != "BLOCKED":
+            continue
+        if _text(compile_receipt.get("reason_code")) != "BLOCKED_MISSING_BINDING":
+            continue
+        detail = _text(
+            compile_receipt.get("detail")
+            or compile_receipt.get("reason_detail")
+        )
+        if "BODY_PARAMETER_NOT_SOURCE_BOUND" in detail:
+            retry_ids.add(obligation_id)
+    return retry_ids
+
+
 def _formal_obligation_rows_and_identity_receipt(
     plan: DiscoveryPlanningBundle,
     expansion: dict[str, Any],
@@ -662,15 +697,19 @@ def run_experiment_candidate(
     if runtime_approved and surface_plan:
         expansion = expand_behavior_ir_from_runtime_observations(
             initial_behavior_ir=plan.behavior_ir,
-            # Runtime expansion is planning round 2. Its obligation identity
-            # namespace must be disjoint from the immutable round-0 plan,
-            # including compile-blocked obligations; retrying one under the
-            # same identity would create two formal rows for one obligation.
+            # Runtime expansion may reopen only source-bound compile blockers
+            # that had no target request. The same formal identity is retained
+            # for that retry; the expansion receipt is the audit event and the
+            # immutable round-0 compiled experiments are never downgraded.
             existing_obligation_ids={
                 _text(row.get("obligation_id"))
                 for row in _list(plan.obligations.get("obligations"))
                 if isinstance(row, dict) and _text(row.get("obligation_id"))
             },
+            recompile_obligation_ids=_runtime_recompile_round0_obligation_ids(
+                plan.obligations.get("obligations"),
+                plan.experiments.get("by_obligation"),
+            ),
             knowledge_asset=_dict(plan.experiments.get("_knowledge_asset")),
             documented_operations=[
                 dict(row)
@@ -888,7 +927,10 @@ def run_experiment_candidate(
                 obligation_plan=expansion_obligation_plan,
                 obligations=[
                     dict(row)
-                    for row in _list(expansion.get("delta_obligations"))
+                    for row in _list(
+                        expansion.get("round_obligations")
+                        or expansion.get("delta_obligations")
+                    )
                     if isinstance(row, dict)
                 ],
                 experiments_by_obligation=dict(

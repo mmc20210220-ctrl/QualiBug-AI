@@ -31,6 +31,7 @@ from .agent_semantic_linker import (
     enrich_knowledge_asset_with_agent_relationships,
 )
 from .behavior_ir import build_behavior_ir_from_knowledge_asset
+from .credential_crypto import CredentialDecryptionError
 from .discovery_mainline import (
     DiscoveryMainlineInputs,
     DiscoveryPlanningBundle,
@@ -199,7 +200,46 @@ def _runtime_actors(root: Path, project: str, context: dict[str, Any]) -> list[d
         # authoritative role-to-login binding when no legacy JSON catalog is
         # present. This keeps the account identity exact and avoids translating
         # display labels from TEST_ACCOUNTS.md into source role identities.
-        rows = configured_runtime_accounts(root, project)
+        try:
+            rows = configured_runtime_accounts(root, project)
+        except CredentialDecryptionError as exc:
+            # A project may carry an encrypted credential snapshot produced by a
+            # different control-plane key.  Do not turn a usable, source-declared
+            # TEST_ACCOUNTS corpus into an anonymous run, but also do not hide a
+            # credential failure: the fallback is allowed only when it has an
+            # exact role, login identity, and password from the source corpus.
+            _planning_logger.error(
+                "runtime_credential_config_decryption_failed project=%s "
+                "source_fallback=registered_test_data_or_TEST_ACCOUNTS.md "
+                "error_type=%s",
+                project,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            source_rows = _parse_test_accounts_md(root, project)
+            rows = [
+                row
+                for row in source_rows
+                if isinstance(row, dict)
+                and _text(row.get("role") or row.get("name") or row.get("id"))
+                and _text(
+                    row.get("email")
+                    or row.get("username")
+                    or row.get("account")
+                    or row.get("mobile")
+                    or row.get("phone")
+                )
+                and _text(row.get("password") or row.get("pass"))
+            ]
+            if not rows:
+                raise
+            context["runtime_credential_resolution"] = {
+                "status": "source_backed_fallback",
+                "configured_status": "decryption_failed",
+                "source": "registered_test_data_or_TEST_ACCOUNTS.md",
+                "error_type": type(exc).__name__,
+                "account_count": len(rows),
+            }
     if not rows:
         # Keep the existing Markdown parser as a source-backed fallback for
         # projects that have not configured a service credential manager. A

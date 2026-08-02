@@ -15,6 +15,7 @@ from ai_test_asset_center.behavior_ir import (
     migrate_behavior_ir_v1_to_v2,
     validate_behavior_ir,
 )
+from ai_test_asset_center.behavior_ir_core import _request_schema_for_operation
 from ai_test_asset_center.contract_oracles import (
     demote_heuristic_business_oracle_finding,
     evaluate_contract_oracle,
@@ -47,6 +48,24 @@ NEW_MODULES = [
     ROOT / "ai_test_asset_center" / "adaptive_discovery_planner.py",
     ROOT / "ai_test_asset_center" / "execution_adapter.py",
 ]
+
+
+def test_request_example_does_not_become_required_request_schema() -> None:
+    schema = _request_schema_for_operation(
+        {
+            "request_example": {
+                "documented_example_only": "value",
+                "another_example_only": 1,
+            }
+        }
+    )
+
+    body_schema = schema["content"]["application/json"]["schema"]
+    assert set(body_schema["properties"]) == {
+        "documented_example_only",
+        "another_example_only",
+    }
+    assert "required" not in body_schema
 
 
 def test_request_body_placeholder_uses_source_declared_runtime_read_binding() -> None:

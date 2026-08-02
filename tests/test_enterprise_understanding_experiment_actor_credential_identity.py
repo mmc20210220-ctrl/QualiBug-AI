@@ -86,6 +86,41 @@ def test_disabled_second_account_does_not_make_role_ambiguous(tmp_path: Path) ->
     assert "secret_ref:test_accounts:warehouse-disabled" in tokens
 
 
+def test_authenticated_role_and_email_local_part_preserve_exact_actor_identity(
+    tmp_path: Path,
+) -> None:
+    _write_accounts(
+        tmp_path,
+        "demo",
+        [
+            {
+                "account_ref": "buyer01@example.com",
+                "email": "buyer01@example.com",
+                "role": "普通买家",
+                "authenticated_role": "buyer",
+                "authenticated_status": "ACTIVE",
+                "token": "token-a",
+            },
+            {
+                "account_ref": "buyer02@example.com",
+                "email": "buyer02@example.com",
+                "role": "普通买家",
+                "authenticated_role": "buyer",
+                "authenticated_status": "ACTIVE",
+                "token": "token-b",
+            },
+        ],
+    )
+
+    tokens = governance._identity_safe_load_actor_tokens(tmp_path, "demo")
+
+    assert tokens["secret_ref:test_accounts:buyer01@example.com"] == "token-a"
+    assert tokens["secret_ref:test_accounts:buyer01"] == "token-a"
+    assert tokens["secret_ref:test_accounts:buyer02@example.com"] == "token-b"
+    assert tokens["secret_ref:test_accounts:buyer02"] == "token-b"
+    assert "secret_ref:actor:buyer" not in tokens
+
+
 def test_account_qualified_actor_never_falls_back_to_role_token() -> None:
     actor = {
         "actor_id": "actor:warehouse-a",

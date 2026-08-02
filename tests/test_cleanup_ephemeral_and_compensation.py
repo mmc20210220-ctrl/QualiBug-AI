@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
+from ai_test_asset_center.sandbox_write_executor_base import (
+    _protected_runtime_identity_write_block_reason,
+)
 
 
 def _actor() -> dict:
@@ -20,6 +23,7 @@ def test_ephemeral_login_compiles_even_when_cleanup_marked_required() -> None:
             "property": {
                 "operation_ref": "op-login",
                 "actor_ref": "actor-buyer",
+                "field": "email",
             },
             "required_actors": ["actor-buyer"],
             "required_operations": ["op-login"],
@@ -45,7 +49,38 @@ def test_ephemeral_login_compiles_even_when_cleanup_marked_required() -> None:
         "compile_receipt"
     ]
     assert experiment["cleanup_plan"] == []
+    assert experiment["safety_contract"]["governed_write"] is False
     assert experiment["safety_contract"]["cleanup_not_required"] is True
+    assert experiment["safety_contract"]["business_effect_requirement"] == (
+        "NOT_APPLICABLE"
+    )
+    validation_assertion = experiment["assertions"][0]
+    assert validation_assertion["business_effect_requirement"] == "NOT_APPLICABLE"
+    assert "expected_control_effect_min" not in validation_assertion
+
+
+def test_session_exchange_is_not_mistaken_for_protected_identity_mutation(
+    tmp_path,
+) -> None:
+    assert _protected_runtime_identity_write_block_reason(
+        root=tmp_path,
+        project="project",
+        scenario=None,
+        method="POST",
+        path="/api/auth/login",
+        body={"email": "declared@example.test", "password": "<REDACTED>"},
+    ) == ""
+
+
+def test_password_reset_remains_protected_identity_mutation(tmp_path) -> None:
+    assert _protected_runtime_identity_write_block_reason(
+        root=tmp_path,
+        project="project",
+        scenario=None,
+        method="POST",
+        path="/api/auth/password/reset",
+        body={"email": "declared@example.test", "newPassword": "<REDACTED>"},
+    ) == "identity_mutation_requires_disposable_fixture"
 
 
 def test_collection_create_uses_unique_cancel_compensation() -> None:

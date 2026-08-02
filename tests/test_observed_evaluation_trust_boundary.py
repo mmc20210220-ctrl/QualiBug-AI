@@ -21,6 +21,7 @@ from ai_test_asset_center.evaluator_receipt_auth import seal_evaluator_artifact
 from ai_test_asset_center.observed_product_scan_executor import (
     ObservedProductScanExecutor,
     _run_isolated_product_worker,
+    _merge_context_test_accounts_with_existing_credentials,
     _sanitized_worker_environment,
 )
 from ai_test_asset_center.policy_registry import PolicyRecord, StrategyBundle
@@ -116,6 +117,42 @@ def test_worker_environment_removes_every_evaluator_secret() -> None:
     assert "BENCHMARK_GROUND_TRUTH_PATH" not in sanitized
 
 
+def test_context_account_snapshot_cannot_replace_fresh_fixture_credentials(
+    tmp_path: Path,
+) -> None:
+    accounts_path = tmp_path / "platform_inputs" / "project" / "test_accounts.json"
+    accounts_path.parent.mkdir(parents=True)
+    accounts_path.write_text(
+        json.dumps({
+            "account-a@example.test": {
+                "account_ref": "account-a",
+                "email": "account-a@example.test",
+                "token": "fresh-token",
+                "password": "fresh-password",
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    merged = _merge_context_test_accounts_with_existing_credentials(
+        accounts_path,
+        {
+            "accounts": [{
+                "account_ref": "account-a",
+                "email": "account-a@example.test",
+                "role": "operator",
+                "token": "stale-context-token",
+                "password": "stale-context-password",
+            }],
+        },
+    )
+
+    row = merged["accounts"][0]
+    assert row["role"] == "operator"
+    assert row["token"] == "fresh-token"
+    assert row["password"] == "fresh-password"
+
+
 def test_isolated_worker_emits_a_fingerprinted_process_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -192,7 +229,9 @@ def test_product_worker_preserves_the_full_formal_evaluation_authority(
     context_path.write_text(
         json.dumps({
             "schema_version": "qualibug.discovery-evaluation-context.v1",
-            "campaign_context": {},
+            "campaign_context": {
+                "runtime_interface_discovery_enabled": True,
+            },
         }),
         encoding="utf-8",
     )
@@ -223,7 +262,26 @@ def test_product_worker_preserves_the_full_formal_evaluation_authority(
             "formal_count_projection": {"schema_version": "projection"},
             "defect_identity_consistency": {"schema_version": "consistency"},
             "delivery_occurrences": [{"finding_id": "FINDING-1"}],
-            "v12": {"evaluator_canonical_findings": [canonical]},
+            "v12": {
+                "evaluator_canonical_findings": [canonical],
+                "runtime_interface_discovery": {
+                    "status": "EXECUTED",
+                    "execution": {
+                        "selected_count": 1,
+                        "execution_results": {
+                            "surfobl-1": {
+                                "execution_id": "surfexec-1",
+                                "status": "EXECUTED",
+                                "operational_receipt": {
+                                    "http_request_attempt_count": 1,
+                                    "write_request_attempt_count": 0,
+                                    "production_http_request_count": 0,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
         }
 
     from ai_test_asset_center import __main__ as scan_module
@@ -259,6 +317,8 @@ def test_product_worker_preserves_the_full_formal_evaluation_authority(
 
     assert output["run_id"] == "RUN-FORMAL"
     assert output["findings"] == [canonical]
+    assert output["runtime_interface_discovery"]["status"] == "EXECUTED"
+    assert output["runtime_interface_discovery"]["execution"]["selected_count"] == 1
     for field in (
         "mainline_run",
         "obligation_attempt_ledger",

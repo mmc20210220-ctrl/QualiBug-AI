@@ -210,6 +210,56 @@ def _required_text(value: Any, field: str) -> str:
     return text
 
 
+def _runtime_interface_request_attempts(
+    scan_output: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Project read-only surface probes into evaluator attestation inputs.
+
+    Runtime interface discovery intentionally stays outside the business
+    obligation ledger and budget, but its governed GET requests still cross
+    the evaluator gateway. Attestation must therefore bind those requests in
+    a separate, explicit attempt collection rather than silently dropping
+    them from expected request coverage.
+    """
+
+    runtime_discovery = scan_output.get("runtime_interface_discovery")
+    if not isinstance(runtime_discovery, dict):
+        return []
+    execution = runtime_discovery.get("execution")
+    if not isinstance(execution, dict):
+        return []
+    selected_count = int(execution.get("selected_count") or 0)
+    if selected_count == 0:
+        return []
+    execution_results = execution.get("execution_results")
+    if not isinstance(execution_results, dict):
+        raise PolicyEvaluationRunnerError(
+            "runtime interface discovery execution results missing"
+        )
+    if len(execution_results) != selected_count:
+        raise PolicyEvaluationRunnerError(
+            "runtime interface discovery execution coverage mismatch"
+        )
+    attempts: list[dict[str, Any]] = []
+    for obligation_id, raw in sorted(execution_results.items()):
+        if not isinstance(raw, dict):
+            raise PolicyEvaluationRunnerError(
+                "runtime interface discovery execution result invalid"
+            )
+        attempts.append({
+            "obligation_id": str(obligation_id or "").strip(),
+            "execution_id": str(raw.get("execution_id") or "").strip(),
+            "terminal_stage": "surface_discovery",
+            "terminal_status": str(raw.get("status") or "").strip(),
+            "operational_receipt": (
+                dict(raw.get("operational_receipt"))
+                if isinstance(raw.get("operational_receipt"), dict)
+                else {}
+            ),
+        })
+    return attempts
+
+
 def _require_non_negative_number(value: Any, field: str) -> float:
     if isinstance(value, bool):
         raise PolicyEvaluationRunnerError(f"{field} must be numeric")
@@ -597,6 +647,9 @@ class DiscoveryPolicyEvaluationRunner:
                 "policy_version": policy.policy_version,
                 "strategy_fingerprint": strategy_fingerprint(policy.strategy),
             }
+            additional_request_attempts = _runtime_interface_request_attempts(
+                scan_output
+            )
             process_boundary = scan_output.get("process_boundary")
             if not isinstance(process_boundary, dict):
                 raise PolicyEvaluationRunnerError(
@@ -618,6 +671,7 @@ class DiscoveryPolicyEvaluationRunner:
                 fixture_governance=governance,
                 process_boundary=process_boundary,
                 trusted_observations=trusted_observations,
+                additional_request_attempts=additional_request_attempts,
                 signing_key=self.receipt_signing_key,
             )
             receipt = evaluate_completed_scan(
@@ -656,6 +710,7 @@ class DiscoveryPolicyEvaluationRunner:
                 evaluator_policy_identity=execution_policy_identity,
                 process_boundary=process_boundary,
                 execution_attestation=execution_attestation,
+                additional_request_attempts=additional_request_attempts,
                 receipt_signing_key=self.receipt_signing_key,
             )
             persist_evaluation_receipt(

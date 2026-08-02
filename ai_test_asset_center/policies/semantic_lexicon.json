@@ -995,6 +995,22 @@
     "模拟",
     "报价"
   ],
+  "ephemeral_session_terminal_markers": [
+    "login",
+    "logout",
+    "token",
+    "refresh",
+    "session",
+    "otp",
+    "captcha",
+    "webhook",
+    "callback"
+  ],
+  "ephemeral_session_path_suffixes": [
+    "oauth/token",
+    "oauth/refresh",
+    "session/refresh"
+  ],
   "mutating_action_markers": [
     "write",
     "mutate",

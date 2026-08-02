@@ -128,9 +128,23 @@ def _validated_policy_identity(value: dict[str, Any]) -> dict[str, str]:
     return normalized
 
 
-def _expected_request_attempts(ledger: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _expected_request_attempts(
+    ledger: dict[str, Any],
+    *,
+    additional_request_attempts: list[dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
     expected: dict[str, dict[str, Any]] = {}
-    for raw in _list(ledger.get("attempts")):
+    attempts = [
+        raw
+        for raw in _list(ledger.get("attempts"))
+        if isinstance(raw, dict)
+    ]
+    attempts.extend(
+        raw
+        for raw in (additional_request_attempts or [])
+        if isinstance(raw, dict)
+    )
+    for raw in attempts:
         attempt = _dict(raw)
         operational = _dict(attempt.get("operational_receipt"))
         selected_attempt_id = _text(attempt.get("obligation_id"))
@@ -178,8 +192,12 @@ def _validated_observations(
     values: list[dict[str, Any]],
     *,
     ledger: dict[str, Any],
+    additional_request_attempts: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    expected = _expected_request_attempts(ledger)
+    expected = _expected_request_attempts(
+        ledger,
+        additional_request_attempts=additional_request_attempts,
+    )
     observed: dict[str, dict[str, Any]] = {}
     fields = {
         "obligation_id",
@@ -271,6 +289,7 @@ def _validated_inputs(
     fixture_governance: dict[str, Any],
     process_boundary: dict[str, Any],
     trusted_observations: list[dict[str, Any]],
+    additional_request_attempts: list[dict[str, Any]] | None = None,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -305,6 +324,7 @@ def _validated_inputs(
     observations = _validated_observations(
         trusted_observations,
         ledger=ledger,
+        additional_request_attempts=additional_request_attempts,
     )
     return mainline, ledger, policy, governance, boundary, observations
 
@@ -317,6 +337,7 @@ def build_execution_attestation(
     fixture_governance: dict[str, Any],
     process_boundary: dict[str, Any],
     trusted_observations: list[dict[str, Any]],
+    additional_request_attempts: list[dict[str, Any]] | None = None,
     signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Seal independently observed I/O after scan and cleanup complete."""
@@ -329,6 +350,7 @@ def build_execution_attestation(
             fixture_governance=fixture_governance,
             process_boundary=process_boundary,
             trusted_observations=trusted_observations,
+            additional_request_attempts=additional_request_attempts,
         )
     )
     payload = {
@@ -375,6 +397,7 @@ def validate_execution_attestation(
     policy_identity: dict[str, Any],
     fixture_governance: dict[str, Any],
     process_boundary: dict[str, Any],
+    additional_request_attempts: list[dict[str, Any]] | None = None,
     signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Verify HMAC, trusted-source coverage, and every bound authority."""
@@ -403,6 +426,7 @@ def validate_execution_attestation(
                 for row in _list(verified.get("observations"))
                 if isinstance(row, dict)
             ],
+            additional_request_attempts=additional_request_attempts,
         )
     )
     expected = {
