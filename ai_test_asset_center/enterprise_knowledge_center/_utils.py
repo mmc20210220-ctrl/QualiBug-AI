@@ -284,6 +284,11 @@ def _normalize_state_token(value: Any) -> str:
     if not token or len(token) > 24 or any(ch.isspace() for ch in token):
         return ""
     low = token.lower()
+    # Wildcards in a state machine ("CLOSED -> 任意状态" = may not reach ANY
+    # state) are NOT states; keeping them pollutes the state set and every
+    # downstream enumeration.
+    if token in {"任意状态", "任何状态", "任意"} or low in {"any_state", "any", "anywhere"}:
+        return ""
     if any(marker in low for marker in ("http", "www", ".com", "/", "\\", "px", "rem", "em", "%")):
         return ""
     if re.fullmatch(r"\d+(?:\.\d+)?", low):
@@ -294,7 +299,12 @@ def _normalize_state_token(value: Any) -> str:
         return token
     state_tokens = {item.lower() for item in _lexicon_list("state_tokens")} or ENGLISH_STATE_TOKENS
     if re.fullmatch(r"[a-z][a-z0-9_]{1,23}", low):
-        return token if low in state_tokens else ""
+        # Normalize English state names to UPPER_SNAKE so created/CREATED and
+        # paid/PAID collapse into one canonical state instead of polluting the
+        # state set with case-duplicates that break enumeration and cleanup.
+        if low in state_tokens:
+            return low.upper()
+        return ""
     if re.fullmatch(r"[\u4e00-\u9fff]{2,12}", token):
         state_hints = _lexicon_list("state_hints") or list(CHINESE_STATE_HINTS)
         return token if any(marker in token for marker in state_hints) else ""

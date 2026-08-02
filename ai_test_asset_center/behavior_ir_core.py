@@ -3870,6 +3870,34 @@ def build_behavior_ir_from_knowledge_asset(
             states_by_id[node_id] = state_node
             model["states"].append(state_node)
 
+        # ── State machine → entity state-field enumeration ──
+        # The source-declared state set is the legal value set for this
+        # machine's entity state field. Writing it as enum_values lets the
+        # persistence surface check stored rows against the declared machine:
+        # a stored value outside the machine is a defect (e.g. an order
+        # persisted in a state the machine never declares). This is
+        # source-declared, never inferred from data.
+        _legal_states = list(dict.fromkeys(
+            _text(n) for n in state_names if _text(n)
+        ))
+        if _legal_states:
+            for _ent in _list(model.get("entities")):
+                if _text(_ent.get("name")).lower() != _text(entity).lower():
+                    continue
+                for _f in _list(_ent.get("fields")):
+                    if not isinstance(_f, dict):
+                        continue
+                    _fname = _text(_f.get("name")).lower()
+                    _is_state_field = (
+                        _text(_f.get("semantic_type")) == "STATE"
+                        or _fname in {"status", "state", "stage", "phase", "lifecycle_state"}
+                        or _fname.endswith("_status")
+                        or _fname.endswith("_state")
+                    )
+                    if _is_state_field:
+                        _f["enum_values"] = _legal_states
+                        break
+
     # Forbidden transitions are source constraints, never allowed transition
     # relations. Preserve them as typed invariants and bind an operation only
     # when the transition contains an exact source operation hint.

@@ -2133,6 +2133,14 @@ def _state_machines_from_text(text: str, source_id: str) -> list[dict[str, Any]]
                         pair = (src, dst)
                         if pair not in target:
                             target.append(pair)
+                    elif src and not dst:
+                        # A wildcard target ("CLOSED -> 任意状态") means the
+                        # source is a real state with NO legal outgoing
+                        # transition. Record the source state alone so the
+                        # terminal state stays in the state set.
+                        pair = (src, "")
+                        if pair not in target:
+                            target.append(pair)
         return allowed, forbidden
 
     heading_markers = _lexicon_list("state_machine_heading_markers")
@@ -2199,9 +2207,9 @@ def _state_machines_from_text(text: str, source_id: str) -> list[dict[str, Any]]
     for index, (object_name, transitions, forbidden_transitions) in enumerate(scoped, start=1):
         states: list[str] = []
         for src, dst in [*transitions, *forbidden_transitions]:
-            if src not in states:
+            if src and src not in states:
                 states.append(src)
-            if dst not in states:
+            if dst and dst not in states:
                 states.append(dst)
         out.append({
             "state_machine_id": f"state:{source_id}:{index}",
