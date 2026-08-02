@@ -1105,14 +1105,22 @@ def _incremental_run_semantic_extraction(
 
     # SPEC §12/§13: four-mode rule extraction. Default shadow — candidates are
     # validated and recorded but never touch formal Canonical Rule output.
+    # Augment activates only when the operator explicitly confirms the SPEC §19
+    # promotion gates (governance_policy), never by default.
     rule_mode_receipt = resolve_semantic_rule_extraction_mode(
         requested_mode=_incremental_text(
             options.get("semantic_rule_extraction_mode") or "shadow"
         ),
         provider_status_value=provider_status(),
+        governance_policy={
+            "promotion_gates_met": (
+                options.get("rule_promotion_gates_met") is True
+            )
+        },
     )
     should_run_llm = requested or rule_mode_receipt["effective_mode"] in {
         "shadow",
+        "augment",
         "required",
     }
     availability = semantic_extraction_availability(requested=should_run_llm)
@@ -1436,10 +1444,17 @@ def refresh_enterprise_business_knowledge_asset_incremental(
     # ── Unified rule candidate ledger (SPEC §9/§10, P0-4) ──
     # Observation layer: regex rule facts and validated LLM rule candidates are
     # merged per source into ONE ledger (evidence de-dup + semantic-signature
-    # merge, conflicts preserved with mutual refs). The ledger never rewrites
-    # rule_library in this phase — formal output stays untouched.
+    # merge, conflicts preserved with mutual refs). Promotion statistics are
+    # always computed (they feed the SPEC §19 gates); promoted rows enter
+    # rule_library ONLY when the mode receipt resolved to augment (P0-6).
     rule_ledgers: list[dict[str, Any]] = []
-    from ._semantic_extraction import build_rule_candidate_ledger
+    promotion_receipts: list[dict[str, Any]] = []
+    promoted_rows_all: list[dict[str, Any]] = []
+    from ._semantic_extraction import (
+        build_rule_candidate_ledger,
+        promote_rule_candidates_to_rules,
+        rule_promotion_gates_met,
+    )
 
     for parsed in parsed_rows:
         parsed_source_id = _incremental_text(parsed.get("source_id"), 300)
@@ -1461,16 +1476,65 @@ def refresh_enterprise_business_knowledge_asset_incremental(
             if isinstance(row, dict)
             and _incremental_text(row.get("kind"), 30).lower() == "rule"
         ]
-        if regex_rules or llm_rules:
-            rule_ledgers.append(
-                build_rule_candidate_ledger(
-                    regex_rules,
-                    llm_rules,
-                    source_id=parsed_source_id,
-                    source_text=parsed_text,
-                )
-            )
+        if not regex_rules and not llm_rules:
+            continue
+        ledger = build_rule_candidate_ledger(
+            regex_rules,
+            llm_rules,
+            source_id=parsed_source_id,
+            source_text=parsed_text,
+        )
+        rule_ledgers.append(ledger)
+        promoted, promotion_receipt = promote_rule_candidates_to_rules(
+            ledger.get("entries", []),
+            source_id=parsed_source_id,
+        )
+        promotion_receipts.append(promotion_receipt)
+        promoted_rows_all.extend(promoted)
+
     asset["rule_candidate_ledger"] = rule_ledgers
+    # Promotion gates (SPEC §19) are recorded as data and feed the mode
+    # resolution of the NEXT build — augment stays shadow until gates pass.
+    asset["rule_promotion_receipts"] = promotion_receipts
+    asset["rule_promotion_gates"] = rule_promotion_gates_met(
+        promotion_receipts,
+        ledger_stats={
+            "regex_entry_count": sum(
+                int(row.get("regex_entry_count") or 0) for row in rule_ledgers
+            )
+        },
+    )
+    # Augment merge gate: promoted rows enter rule_library ONLY when the mode
+    # receipt resolved to augment (SPEC §12.3). Shadow records candidates and
+    # gates but never touches formal output.
+    _augment_active = any(
+        isinstance(row, dict)
+        and row.get("schema_version") == "qualibug.semantic-rule-extraction-mode.v1"
+        and row.get("effective_mode") == "augment"
+        for row in semantic_receipts
+    )
+    if _augment_active and promoted_rows_all:
+        existing_rule_ids = {
+            _incremental_text(row.get("rule_id"), 300)
+            for row in _list(asset.get("rule_library"))
+            if isinstance(row, dict)
+        }
+        asset["rule_library"] = [
+            *[
+                dict(row)
+                for row in _list(asset.get("rule_library"))
+                if isinstance(row, dict)
+            ],
+            *[
+                dict(row)
+                for row in promoted_rows_all
+                if _incremental_text(row.get("rule_id"), 300)
+                not in existing_rule_ids
+            ],
+        ]
+        asset["rule_promotion_applied"] = True
+    else:
+        asset["rule_promotion_applied"] = False
 
     asset["source_inventory"] = copy.deepcopy(active_sources)
     if content_sources:

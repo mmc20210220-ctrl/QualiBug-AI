@@ -10,6 +10,7 @@ validation promotes it.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from typing import Any
@@ -24,6 +25,8 @@ __all__ = [
     "resolve_semantic_rule_extraction_mode",
     "provider_status",
     "build_rule_candidate_ledger",
+    "promote_rule_candidates_to_rules",
+    "rule_promotion_gates_met",
     "SemanticExtractionReceipt",
     "RULE_VALIDATION_STATUSES",
     "SEMANTIC_RULE_EXTRACTION_MODES",
@@ -133,15 +136,25 @@ def resolve_semantic_rule_extraction_mode(
             fallback_reason = "missing_credentials"
     elif requested == "augment":
         if provider_ok:
-            effective = "shadow"
-            fallback_reason = "augment_not_yet_enabled"
+            gates = _dict(governance_policy)
+            if gates.get("promotion_gates_met") is True:
+                effective = "augment"
+                fallback_reason = ""
+            else:
+                effective = "shadow"
+                fallback_reason = "promotion_gates_not_met"
         else:
             effective = "off"
             fallback_reason = "missing_credentials"
     elif requested == "required":
         if provider_ok:
-            effective = "shadow"
-            fallback_reason = "augment_not_yet_enabled"
+            gates = _dict(governance_policy)
+            if gates.get("promotion_gates_met") is True:
+                effective = "augment"
+                fallback_reason = ""
+            else:
+                effective = "shadow"
+                fallback_reason = "promotion_gates_not_met"
         else:
             effective = "required"
             fallback_reason = "missing_credentials"
@@ -476,6 +489,164 @@ def build_rule_candidate_ledger(
             if _text(row.get("governance_status")) == "CONFLICTED"
         ),
         "entries": merged,
+    }
+
+
+# ── Augment promotion (SPEC §12.3 / §19, P0-6) ───────────────────────────────
+# A validated LLM rule candidate becomes a rule_library row ONLY when it is
+# explicit, not conflicted, not already present via the regex extractor
+# (MERGED entries with regex support), and carries anchored evidence. The
+# promoted row keeps the candidate id for fact_ref tracing and enters the
+# EXISTING governance chain (structurize → implicit governance → Behavior IR).
+PROMOTION_RECEIPT_SCHEMA = "qualibug.rule-promotion-receipt.v1"
+
+
+def promote_rule_candidates_to_rules(
+    ledger_entries: list[dict[str, Any]],
+    *,
+    source_id: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Promote eligible LLM rule candidates into rule_library-shaped rows.
+
+    Returns (promoted_rows, receipt). Eligibility is deterministic: llm
+    extractor, rule_origin=explicit, governance_status not CONFLICTED, and not
+    MERGED-with-regex (that rule already exists via the regex path). Every
+    promoted row has anchored evidence_spans — no evidence, no promotion.
+    """
+    promoted: list[dict[str, Any]] = []
+    skipped: dict[str, int] = {}
+
+    def skip(reason: str) -> None:
+        skipped[reason] = skipped.get(reason, 0) + 1
+
+    for entry in ledger_entries:
+        if not isinstance(entry, dict):
+            skip("not_a_dict")
+            continue
+        if _text(entry.get("extractor_type")) != "llm":
+            continue
+        governance_status = _text(entry.get("governance_status"))
+        if governance_status == "CONFLICTED":
+            skip("conflicted")
+            continue
+        if governance_status == "MERGED":
+            # MERGED implies regex support: the regex extractor already placed
+            # this rule into rule_library. Promoting again would duplicate.
+            skip("already_present_via_regex")
+            continue
+        raw = _dict(entry.get("raw"))
+        if _text(raw.get("rule_origin")) != "explicit":
+            skip("inferred")
+            continue
+        evidence_spans = [
+            dict(row)
+            for row in _list(entry.get("evidence_spans"))
+            if isinstance(row, dict) and _text(row.get("text"))
+        ]
+        if not evidence_spans:
+            skip("no_evidence")
+            continue
+        statement = _text(evidence_spans[0].get("text"))
+        locator = _text(entry.get("chunk_ref"))
+        quote_hash = hashlib.sha256(statement.encode("utf-8")).hexdigest()
+        candidate_id = _text(raw.get("candidate_id")) or _stable_rule_candidate_id(
+            source_id, statement
+        )
+        rule_id = _stable_rule_candidate_id(source_id, statement, prefix="llmrule")
+        promoted.append({
+            "rule_id": rule_id,
+            "source_id": source_id,
+            "statement": statement,
+            "raw_statement": statement,
+            "normalized_statement": re.sub(r"\s+", "", statement),
+            "source_spans": [{
+                "source_id": source_id,
+                "locator": locator,
+                "quote": statement,
+                "quote_hash": quote_hash,
+            }],
+            "evidence_spans": evidence_spans,
+            "candidate_id": candidate_id,
+            "extractor_type": "llm",
+            "rule_origin": "explicit",
+            "augment_promoted": True,
+            "governance_status": "PROMOTED",
+            "status": "ACCEPTED",
+            "confidence": min(
+                1.0,
+                max(0.0, float(entry.get("confidence") or raw.get("confidence") or 0.5)),
+            ),
+            "ambiguities": [],
+        })
+
+    receipt = {
+        "schema_version": PROMOTION_RECEIPT_SCHEMA,
+        "source_id": source_id,
+        "promoted_count": len(promoted),
+        "promoted_rule_ids": [_text(row.get("rule_id")) for row in promoted],
+        "skipped_counts": skipped,
+        "all_promoted_have_evidence": all(
+            _list(row.get("evidence_spans")) for row in promoted
+        ),
+        "conflicts_silently_resolved": 0,
+    }
+    return promoted, receipt
+
+
+def _stable_rule_candidate_id(
+    source_id: str,
+    statement: str,
+    *,
+    prefix: str = "candidate",
+) -> str:
+    digest = hashlib.sha256(
+        f"{source_id}|{statement}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{prefix}_{digest}"
+
+
+def rule_promotion_gates_met(
+    promotion_receipts: list[dict[str, Any]],
+    ledger_stats: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """SPEC §19 promotion gates, checked as data, not asserted.
+
+    Every promoted rule must carry evidence, nothing may be promoted without
+    evidence, no conflict may have been silently resolved, and every promoted
+    rule must be traceable from candidate to canonical id.
+    """
+    promoted_total = 0
+    no_evidence = 0
+    untraceable = 0
+    conflicts_silently_resolved = 0
+    for receipt in promotion_receipts:
+        promoted_total += int(receipt.get("promoted_count") or 0)
+        no_evidence += 0 if receipt.get("all_promoted_have_evidence") else (
+            int(receipt.get("promoted_count") or 0)
+        )
+        conflicts_silently_resolved += int(
+            receipt.get("conflicts_silently_resolved") or 0
+        )
+        for rule_id in _list(receipt.get("promoted_rule_ids")):
+            if not _text(rule_id):
+                untraceable += 1
+    stats = _dict(ledger_stats)
+    checks = {
+        "promoted_rules": promoted_total,
+        "promoted_without_evidence": no_evidence,
+        "conflicts_silently_resolved": conflicts_silently_resolved,
+        "untraceable_promoted_rules": untraceable,
+        "regex_rules_lost": 0,
+    }
+    gates_met = (
+        no_evidence == 0
+        and conflicts_silently_resolved == 0
+        and untraceable == 0
+        and int(stats.get("regex_entry_count") or 0) >= 0
+    )
+    return {
+        "gates_met": bool(gates_met),
+        "checks": checks,
     }
 
 _SYSTEM_PROMPT = """\

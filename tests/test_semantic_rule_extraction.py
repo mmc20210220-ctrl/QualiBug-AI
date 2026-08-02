@@ -381,12 +381,12 @@ def test_mode_shadow_degrades_visibly_without_provider() -> None:
     assert receipt["fallback_mode"] == "regex_only"
 
 
-def test_mode_augment_not_yet_enabled_resolves_to_shadow() -> None:
+def test_mode_augment_without_gates_resolves_to_shadow() -> None:
     receipt = semantic.resolve_semantic_rule_extraction_mode(
         requested_mode="augment", provider_status_value="configured"
     )
     assert receipt["effective_mode"] == "shadow"
-    assert receipt["fallback_reason"] == "augment_not_yet_enabled"
+    assert receipt["fallback_reason"] == "promotion_gates_not_met"
 
 
 def test_mode_required_fails_visibly_without_provider() -> None:
@@ -673,3 +673,146 @@ def test_ledger_evidence_dedup_requires_overlap() -> None:
     )
     assert ledger["entry_count"] == 2
     assert ledger["merged_count"] == 0
+
+
+# ── P0-6：Augment 晋升（SPEC §12.3 / §19）───────────────────────────────────
+
+def _ledger_entry(
+    *,
+    extractor_type: str = "llm",
+    governance_status: str = "VALIDATED",
+    rule_origin: str = "explicit",
+    statement: str = "逾期订单不得发货。",
+    evidence: bool = True,
+) -> dict:
+    raw = _rule_candidate(
+        rule_origin=rule_origin,
+        evidence_spans=[{"text": statement, "start": 0}],
+    )
+    return {
+        "kind": "rule",
+        "source_ref": "prd-1",
+        "chunk_ref": "chars=0-100",
+        "extractor_type": extractor_type,
+        "evidence_spans": (
+            [{"text": statement, "start": 0, "end": len(statement)}] if evidence else []
+        ),
+        "validation_status": "VALIDATED",
+        "governance_status": governance_status,
+        "canonical_rule_ref": "",
+        "rejection_reason": "",
+        "conflict_refs": [],
+        "semantic_signature": {"operator_family": "forbid", "action": "发货"},
+        "raw": raw,
+    }
+
+
+def test_promote_llm_only_explicit_candidate_into_rule_row() -> None:
+    entries = [_ledger_entry()]
+    promoted, receipt = semantic.promote_rule_candidates_to_rules(
+        entries, source_id="prd-1"
+    )
+    assert len(promoted) == 1
+    row = promoted[0]
+    assert row["statement"] == "逾期订单不得发货。"
+    assert row["source_id"] == "prd-1"
+    assert row["rule_origin"] == "explicit"
+    assert row["augment_promoted"] is True
+    assert row["governance_status"] == "PROMOTED"
+    assert row["source_spans"][0]["quote"] == "逾期订单不得发货。"
+    assert row["rule_id"].startswith("llmrule_")
+    assert row["candidate_id"].startswith("candidate_")
+    assert receipt["promoted_count"] == 1
+    assert receipt["all_promoted_have_evidence"] is True
+
+
+def test_promote_skips_merged_conflicted_inferred_and_evidenceless() -> None:
+    entries = [
+        _ledger_entry(governance_status="MERGED"),          # 正则已有 → 跳过
+        _ledger_entry(governance_status="CONFLICTED"),      # 冲突 → 跳过
+        _ledger_entry(rule_origin="inferred"),              # 推断 → 跳过
+        _ledger_entry(evidence=False),                      # 无证据 → 跳过
+        _ledger_entry(extractor_type="regex"),              # 正则侧 → 跳过
+    ]
+    promoted, receipt = semantic.promote_rule_candidates_to_rules(
+        entries, source_id="prd-1"
+    )
+    assert promoted == []
+    assert receipt["promoted_count"] == 0
+    assert receipt["skipped_counts"]["already_present_via_regex"] == 1
+    assert receipt["skipped_counts"]["conflicted"] == 1
+    assert receipt["skipped_counts"]["inferred"] == 1
+    assert receipt["skipped_counts"]["no_evidence"] == 1
+
+
+def test_promotion_gates_require_evidence_and_traceability() -> None:
+    good = semantic.rule_promotion_gates_met(
+        [{
+            "promoted_count": 2,
+            "all_promoted_have_evidence": True,
+            "conflicts_silently_resolved": 0,
+            "promoted_rule_ids": ["llmrule_a", "llmrule_b"],
+        }]
+    )
+    assert good["gates_met"] is True
+
+    bad = semantic.rule_promotion_gates_met(
+        [{
+            "promoted_count": 1,
+            "all_promoted_have_evidence": False,
+            "conflicts_silently_resolved": 0,
+            "promoted_rule_ids": ["llmrule_a"],
+        }]
+    )
+    assert bad["gates_met"] is False
+    assert bad["checks"]["promoted_without_evidence"] == 1
+
+
+def test_augment_mode_requires_gates_met() -> None:
+    gated = semantic.resolve_semantic_rule_extraction_mode(
+        requested_mode="augment",
+        provider_status_value="configured",
+        governance_policy={"promotion_gates_met": True},
+    )
+    assert gated["effective_mode"] == "augment"
+    assert gated["fallback_reason"] == ""
+
+    ungated = semantic.resolve_semantic_rule_extraction_mode(
+        requested_mode="augment",
+        provider_status_value="configured",
+        governance_policy={"promotion_gates_met": False},
+    )
+    assert ungated["effective_mode"] == "shadow"
+    assert ungated["fallback_reason"] == "promotion_gates_not_met"
+
+
+def test_integration_augment_merges_promoted_rules_into_rule_library(
+    monkeypatch,
+) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.composition import (
+        _incremental_run_semantic_extraction,
+    )
+
+    def responder(prompt):
+        return {"candidates": [_rule_candidate()]}
+
+    _install_client(monkeypatch, responder)
+    # augment + gates 确认 → LLM 被调用、规则候选产出
+    candidates, receipts, status = _incremental_run_semantic_extraction(
+        [_parsed_row()],
+        options={
+            "semantic_rule_extraction_mode": "augment",
+            "rule_promotion_gates_met": True,
+        },
+    )
+    assert status == "AVAILABLE"
+    mode_receipts = [
+        row for row in receipts
+        if row.get("schema_version") == "qualibug.semantic-rule-extraction-mode.v1"
+    ]
+    assert mode_receipts and mode_receipts[0]["effective_mode"] == "augment"
+    rules = [
+        row for row in candidates
+        if isinstance(row, dict) and row.get("kind") == "rule"
+    ]
+    assert len(rules) == 1
