@@ -528,6 +528,54 @@ def execute_one_experiment(
                 f"{_text(_dict(_fr).get('target'))}:{_fr_status}"
             )
     if _provenance_violations:
+        # Fixture/binding materialization may have performed governed reads or
+        # setup writes before the provenance gate rejects a runtime value.  The
+        # old early return dropped those steps (and pending fixture cleanups),
+        # so the operational receipt falsely reported zero target requests and
+        # the evaluator attestation could not reconcile the real network trace.
+        # Reuse the normal cleanup authority before returning the blocked result;
+        # never discard an already-observed step just because the later gate
+        # failed.
+        provenance_cleanup = execute_experiment_cleanup_compensation(
+            exp=exp,
+            steps_out=steps_out,
+            observations=observations,
+            contract_evidence_receipts=contract_evidence_receipts,
+            activation_requirements=activation_requirements,
+            pre_transport_block_reasons=[
+                "BLOCKED_BINDING_GRAPH_INVALID",
+                *_provenance_violations[:5],
+            ],
+            request_bodies_for_cleanup=request_bodies_for_cleanup,
+            runtime_bindings=runtime_bindings,
+            pending_fixture_cleanups=pending_fixture_cleanups,
+            cleanup_failures=cleanup_failures,
+            ops=ops,
+            actors=actors,
+            tokens=tokens,
+            eid=eid,
+            oid=oid,
+            resolved_campaign_id=resolved_campaign_id,
+            resolved_execution_id=resolved_execution_id,
+            campaign_id=resolved_campaign_id,
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+        )
+        provenance_steps = list(
+            provenance_cleanup.get("steps_out") or steps_out
+        )
+        provenance_observations = dict(
+            provenance_cleanup.get("observations") or observations
+        )
+        provenance_contracts = list(
+            provenance_cleanup.get("contract_evidence_receipts")
+            or contract_evidence_receipts
+        )
+        provenance_cleanup_failures = int(
+            provenance_cleanup.get("cleanup_failures") or 0
+        )
         return _terminal(
             {
                 "schema_version": "qualibug.experiment-execution.v1",
@@ -537,11 +585,18 @@ def execute_one_experiment(
                 "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
                 "detail": ";".join(_provenance_violations[:5]),
                 "elapsed_ms": int((time.time() - started) * 1000),
+                "steps": provenance_steps,
+                "observations": provenance_observations,
+                "fixture_receipts": fixture_receipts,
+                "binding_materialization_receipts": binding_materialization_receipts,
+                "contract_evidence_receipts": provenance_contracts,
+                "cleanup_failures": provenance_cleanup_failures,
                 "finding": None,
                 "execution_receipt": {
                     "status": "BLOCKED",
                     "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
                     "detail": "runtime_binding_provenance_invalid",
+                    "cleanup_failures": provenance_cleanup_failures,
                 },
                 "runtime_binding_provenance": {
                     "status": "INVALID",
