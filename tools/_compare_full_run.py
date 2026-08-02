@@ -68,13 +68,17 @@ def main() -> None:
         result = scan(
             PROJECT,
             root=ROOT,
+            base_url="http://localhost:8080",
             campaign_context={
                 "semantic_rule_extraction_mode": mode,
                 "rule_promotion_gates_met": gates,
                 "enable_semantic_extraction": True,
                 "target_id": "benchmark_mall_local_scope",
+                "scope_id": "benchmark_mall_local_scope",
                 "environment_id": "benchmark_mall_test",
+                "environment_ref": "benchmark_mall_test",
                 "environment_type": "test",
+                "approved_base_url": "http://localhost:8080",
                 "policy_version": "v1.0.0-baseline",
             },
         )
