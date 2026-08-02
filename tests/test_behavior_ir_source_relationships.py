@@ -807,3 +807,92 @@ def test_unscoped_permission_allow_and_deny_still_fail_closed() -> None:
         and conflict.get("operation_ref") == operation_ref
         for conflict in ir["conflicts"]
     )
+
+
+def test_causal_postcondition_keeps_parent_source_binding_unambiguous() -> None:
+    asset = {
+        "rule_library": [{
+            "rule_id": "rule-order-state",
+            "statement": "order_status must be PENDING_PAYMENT",
+            "kind": "state_transition",
+            "causal_chain": {
+                "trigger_action": "订单",
+                "postconditions": [{
+                    "entity": "order",
+                    "field": "status",
+                    "must_become": "PAID",
+                }],
+            },
+        }],
+        "interfaces": [{
+            "interface_id": "api:POST:/orders",
+            "operation_id": "submit_order",
+            "method": "POST",
+            "path": "/orders",
+        }],
+        "relationships": [{
+            "edge_id": "edge-order-state",
+            "from": "rule-order-state",
+            "to": "api:POST:/orders",
+            "relation": "rule_to_interface",
+            "status": "accepted",
+            "derivation": "exact_source_section",
+            "evidence_gate": "exact_source_section",
+        }],
+    }
+
+    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="causal-binding")
+    operation_ref = _operation_ref(ir, "submit_order")
+    linked_invariants = [
+        invariant
+        for invariant in ir["invariants"]
+        if "rule-order-state" in (invariant.get("source_rule_refs") or [])
+    ]
+    assert len(linked_invariants) == 2
+    assert all(operation_ref in (row.get("operation_refs") or []) for row in linked_invariants)
+    assert len([
+        relation
+        for relation in ir["relations"]
+        if relation.get("source_relationship_ref") == "edge-order-state"
+    ]) == 2
+    assert not any(
+        gap.get("gap_type") == "source_relationship_unresolved"
+        and gap.get("relationship_id") == "edge-order-state"
+        for gap in ir["coverage_gaps"]
+    )
+
+
+def test_causal_trigger_text_does_not_bind_an_operation() -> None:
+    asset = {
+        "rule_library": [{
+            "rule_id": "rule-order-state",
+            "statement": "order_status must be PENDING_PAYMENT",
+            "kind": "state_transition",
+            "causal_chain": {
+                "trigger_action": "订单",
+                "postconditions": [{
+                    "entity": "order",
+                    "field": "status",
+                    "must_become": "PAID",
+                }],
+            },
+        }],
+        "interfaces": [{
+            "interface_id": "api:POST:/orders",
+            "operation_id": "submit_order",
+            "method": "POST",
+            "path": "/orders",
+        }],
+    }
+
+    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="causal-no-text-join")
+    operation_ref = _operation_ref(ir, "submit_order")
+    assert not any(
+        operation_ref in (invariant.get("operation_refs") or [])
+        for invariant in ir["invariants"]
+    )
+    assert not any(
+        relation.get("operation_ref") == operation_ref
+        and relation.get("relation_type") in {"transitions", "conserves", "observes"}
+        for relation in ir["relations"]
+    )
