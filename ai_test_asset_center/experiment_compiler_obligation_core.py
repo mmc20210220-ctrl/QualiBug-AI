@@ -519,24 +519,26 @@ def _project_entity_for_cleanup(entity: dict[str, Any]) -> dict[str, Any]:
         best.get("name") or _dict(best.get("typed_fields")).get("name")
     )
     resolved["identity_fields"] = list(best_identity)
-    table_names = [
+    # The entity's declared storage table is the cleanup authority. Field-level
+    # database_bindings are consulted only when they AGREE on one table; a mixed
+    # set (request-DTO fields bound beside real columns) must never vote a
+    # wrong table into the DELETE plan.
+    storage_table = entity_storage_table(resolved) or _text(
+        best.get("table") or _dict(best.get("typed_fields")).get("table")
+    )
+    binding_tables = sorted({
         _text(_dict(binding).get("table"))
         for field in _list(best.get("fields"))
         if isinstance(field, dict)
         for binding in _list(field.get("database_bindings"))
         if _text(_dict(binding).get("table"))
-    ]
-    if table_names:
-        # Prefer the source DB table when bindings agree; cleanup deletes rows by
-        # table name, not business-object vocabulary.
-        resolved["name"] = Counter(table_names).most_common(1)[0][0]
-        resolved["table"] = Counter(table_names).most_common(1)[0][0]
-    else:
-        # Preserve schema-derived physical table (data_tables) over a logical
-        # business-object name that may have won the entity merge.
-        storage = entity_storage_table(resolved)
-        if storage:
-            resolved["table"] = storage
+    })
+    if storage_table:
+        resolved["table"] = storage_table
+        resolved["name"] = storage_table
+    elif len(binding_tables) == 1:
+        resolved["table"] = binding_tables[0]
+        resolved["name"] = binding_tables[0]
     return resolved
 
 

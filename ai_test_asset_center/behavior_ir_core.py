@@ -3510,10 +3510,18 @@ def build_behavior_ir_from_knowledge_asset(
                 singular = ent_name.rstrip("s") if ent_name.endswith("s") else ent_name + "s"
                 db_col_info = _table_db_columns.get(singular, {}).get(fname)
             if db_col_info:
-                db_bindings.append({
-                    "table": _text(db_col_info.get("table") or entity.get("name")),
-                    "column": _text(db_col_info.get("field") or field.get("name")),
-                })
+                # A DB binding may only name a table the source actually
+                # declared. Operation-schema supplements carry no table key —
+                # falling back to the entity name GUESSES a table for what may
+                # be a request-DTO field (addressId/items/…), polluting
+                # cleanup's table selection with a name that does not exist in
+                # the database. No declared table → no DB binding.
+                declared_table = _text(db_col_info.get("table"))
+                if declared_table:
+                    db_bindings.append({
+                        "table": declared_table,
+                        "column": _text(db_col_info.get("field") or field.get("name")),
+                    })
             # Determine binding status
             total_bindings = len(api_req_bindings) + len(api_resp_bindings) + len(db_bindings)
             if total_bindings >= 2:
