@@ -1433,6 +1433,45 @@ def refresh_enterprise_business_knowledge_asset_incremental(
             == _incremental_text(parsed.get("source_id"), 300)
         ]
 
+    # ── Unified rule candidate ledger (SPEC §9/§10, P0-4) ──
+    # Observation layer: regex rule facts and validated LLM rule candidates are
+    # merged per source into ONE ledger (evidence de-dup + semantic-signature
+    # merge, conflicts preserved with mutual refs). The ledger never rewrites
+    # rule_library in this phase — formal output stays untouched.
+    rule_ledgers: list[dict[str, Any]] = []
+    from ._semantic_extraction import build_rule_candidate_ledger
+
+    for parsed in parsed_rows:
+        parsed_source_id = _incremental_text(parsed.get("source_id"), 300)
+        parsed_text = _incremental_text(parsed.get("text"), 2_000_000)
+        regex_rules = [
+            dict(row)
+            for row in _list(asset.get("rule_library"))
+            if isinstance(row, dict)
+            and any(
+                isinstance(span, dict)
+                and _incremental_text(span.get("source_id"), 300)
+                == parsed_source_id
+                for span in _list(row.get("source_spans"))
+            )
+        ]
+        llm_rules = [
+            dict(row)
+            for row in _list(parsed.get("semantic_candidates"))
+            if isinstance(row, dict)
+            and _incremental_text(row.get("kind"), 30).lower() == "rule"
+        ]
+        if regex_rules or llm_rules:
+            rule_ledgers.append(
+                build_rule_candidate_ledger(
+                    regex_rules,
+                    llm_rules,
+                    source_id=parsed_source_id,
+                    source_text=parsed_text,
+                )
+            )
+    asset["rule_candidate_ledger"] = rule_ledgers
+
     asset["source_inventory"] = copy.deepcopy(active_sources)
     if content_sources:
         preserved_interface_ids = _incremental_preserve_shared_api_artifacts(

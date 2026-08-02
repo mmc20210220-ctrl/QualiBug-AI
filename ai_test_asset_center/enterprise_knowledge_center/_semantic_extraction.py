@@ -23,6 +23,7 @@ __all__ = [
     "validate_rule_candidates",
     "resolve_semantic_rule_extraction_mode",
     "provider_status",
+    "build_rule_candidate_ledger",
     "SemanticExtractionReceipt",
     "RULE_VALIDATION_STATUSES",
     "SEMANTIC_RULE_EXTRACTION_MODES",
@@ -157,6 +158,324 @@ def resolve_semantic_rule_extraction_mode(
         "fallback_reason": fallback_reason,
         "governance_policy_applied": bool(policy),
         "canonical_rule_output_affected": False,
+    }
+
+
+# ── Unified rule candidate ledger (SPEC §9/§10, P0-4) ────────────────────────
+# Both extractors feed ONE ledger. Regex facts are adapted to the same entry
+# shape as LLM rule candidates; evidence de-dup and semantic-signature merge
+# decide MERGED vs CONFLICTED. Nothing is overwritten by confidence. The
+# ledger is an observation layer in this phase: formal rule_library output is
+# untouched.
+LEDGER_SCHEMA = "qualibug.rule-candidate-ledger.v1"
+GOVERNANCE_STATUSES = frozenset({
+    "CANDIDATE", "VALIDATED", "REJECTED", "CONFLICTED",
+    "MERGED", "PROMOTED", "SUPERSEDED",
+})
+
+# Regex modality → operator family, mirroring the LLM normalized_suggestion.
+_MODALITY_TO_FAMILY = {
+    "MUST_NOT": "forbid",
+    "FORBIDDEN": "forbid",
+    "ONLY_IF": "permit",
+    "MAY": "permit",
+    "CAN": "permit",
+    "MUST": "require",
+    "SHOULD": "require",
+    "ASSERTS": "assert",
+}
+
+
+def _normalize_signature_token(value: Any) -> str:
+    return re.sub(r"\s+", "", _text(value)).lower()
+
+
+def _regex_threshold_tokens(fact: dict[str, Any]) -> list[str]:
+    """Normalized comparison tokens from regex constraints (e.g. '>5000')."""
+    tokens: list[str] = []
+    for row in _list(fact.get("quantity_constraints")):
+        if isinstance(row, dict):
+            comparator = _text(row.get("comparator") or row.get("operator"))
+            value = row.get("value")
+            if comparator and value is not None:
+                tokens.append(_normalize_signature_token(f"{comparator}{value}"))
+    for row in _list(fact.get("formula_constraints")):
+        if isinstance(row, dict):
+            expr = _text(row.get("expression") or row.get("formula"))
+            if expr:
+                tokens.append(_normalize_signature_token(expr))
+    return tokens
+
+
+def _regex_fact_to_ledger_entry(
+    fact: dict[str, Any],
+    *,
+    source_id: str,
+    source_text: str,
+) -> dict[str, Any] | None:
+    """Adapt one regex rule fact into the unified ledger entry shape."""
+    raw = _text(fact.get("raw_statement"))
+    if not raw:
+        return None
+    position = source_text.find(raw)
+    evidence_spans: list[dict[str, Any]] = []
+    if position >= 0:
+        evidence_spans.append({
+            "text": raw,
+            "start": position,
+            "end": position + len(raw),
+        })
+    modality = _text(fact.get("modality")).upper()
+    action = _text(_dict(fact.get("action")).get("verb") or _text(fact.get("action")))
+    subject = _dict(fact.get("subject"))
+    actor_refs = [_text(row) for row in _list(subject.get("actor_refs")) if _text(row)]
+    entity_refs = [_text(row) for row in _list(subject.get("entity_refs")) if _text(row)]
+    thresholds = _regex_threshold_tokens(fact)
+    entry = {
+        "kind": "rule",
+        "source_ref": source_id,
+        "chunk_ref": _text(_list(fact.get("source_spans"))[0].get("locator"))
+        if _list(fact.get("source_spans")) and isinstance(_list(fact.get("source_spans"))[0], dict)
+        else "",
+        "extractor_type": "regex",
+        "evidence_spans": evidence_spans,
+        "validation_status": "VALIDATED",
+        "governance_status": (
+            "PROMOTED" if _text(fact.get("status")).upper() == "ACCEPTED"
+            else "CANDIDATE"
+        ),
+        "canonical_rule_ref": _text(fact.get("fact_id")),
+        "rejection_reason": "",
+        "conflict_refs": [],
+        "semantic_signature": {
+            "operator_family": _MODALITY_TO_FAMILY.get(modality, ""),
+            "action": _normalize_signature_token(action),
+            "actor": _normalize_signature_token(",".join(actor_refs)),
+            "object": _normalize_signature_token(",".join(entity_refs)),
+            "threshold": ",".join(thresholds),
+            "condition": _normalize_signature_token(
+                ",".join(_list(fact.get("conditions")))
+            ),
+            "exception": _normalize_signature_token(
+                ",".join(_list(fact.get("exceptions")))
+            ),
+            "temporal": _normalize_signature_token(
+                ",".join(_list(fact.get("temporal_constraints")))
+            ),
+        },
+        "raw": dict(fact),
+    }
+    return entry
+
+
+def _llm_candidate_to_ledger_entry(
+    candidate: dict[str, Any],
+    *,
+    source_id: str,
+) -> dict[str, Any]:
+    suggestion = _dict(candidate.get("normalized_suggestion"))
+    effect = _dict(suggestion.get("effect"))
+    condition = _dict(suggestion.get("condition"))
+    semantic_spans = _dict(candidate.get("semantic_spans"))
+
+    def span_terms(role: str) -> str:
+        # Signature uses SOURCE-ANCHORED terms (semantic_spans were containment-
+        # validated against the evidence), so regex and LLM sides compare like
+        # for like — never a standardized translation on one side only.
+        return ",".join(
+            _text(row.get("text"))
+            for row in _list(semantic_spans.get(role))
+            if isinstance(row, dict) and _text(row.get("text"))
+        )
+
+    threshold_terms = span_terms("threshold")
+    return {
+        "kind": "rule",
+        "source_ref": source_id,
+        "chunk_ref": _text(candidate.get("source_locator")),
+        "extractor_type": "llm",
+        "evidence_spans": [
+            dict(row)
+            for row in _list(candidate.get("evidence_spans"))
+            if isinstance(row, dict)
+        ],
+        "validation_status": _text(candidate.get("candidate_status"))
+        or "VALIDATED",
+        "governance_status": "CANDIDATE",
+        "canonical_rule_ref": "",
+        "rejection_reason": "",
+        "conflict_refs": [],
+        "semantic_signature": {
+            "operator_family": _normalize_signature_token(
+                effect.get("operator_family")
+            ),
+            "action": _normalize_signature_token(
+                span_terms("action") or effect.get("action")
+            ),
+            "actor": _normalize_signature_token(
+                span_terms("actor") or suggestion.get("actor")
+            ),
+            "object": _normalize_signature_token(
+                span_terms("object") or suggestion.get("object")
+            ),
+            "threshold": _normalize_signature_token(
+                threshold_terms or suggestion.get("threshold")
+            ),
+            "condition": _normalize_signature_token(
+                span_terms("condition") or condition.get("state")
+            ),
+            "exception": _normalize_signature_token(
+                span_terms("exception") or suggestion.get("exception")
+            ),
+            "temporal": _normalize_signature_token(
+                span_terms("temporal") or suggestion.get("temporal")
+            ),
+        },
+        "raw": dict(candidate),
+    }
+
+
+def _spans_overlap(
+    left: list[dict[str, Any]],
+    right: list[dict[str, Any]],
+) -> bool:
+    def bounds(span: dict[str, Any]) -> tuple[int, int]:
+        start = span.get("start")
+        if not isinstance(start, int):
+            return 0, 0
+        end = span.get("end")
+        if not isinstance(end, int):
+            end = start + len(_text(span.get("text")))
+        return start, end
+
+    for a in left:
+        for b in right:
+            if not isinstance(a, dict) or not isinstance(b, dict):
+                continue
+            a_start, a_end = bounds(a)
+            b_start, b_end = bounds(b)
+            if a_start < b_end and b_start < a_end:
+                return True
+    return False
+
+
+def build_rule_candidate_ledger(
+    regex_facts: list[dict[str, Any]],
+    llm_candidates: list[dict[str, Any]],
+    *,
+    source_id: str,
+    source_text: str,
+) -> dict[str, Any]:
+    """Merge regex and LLM rule candidates into one ledger (SPEC §10).
+
+    Layer 1: evidence de-dup — same source + overlapping spans are the same
+    occurrence. Layer 2: semantic-signature merge — identical signatures
+    collapse to one entry with extractor_support [regex, llm]; conflicting
+    operator/action/threshold keep both entries CONFLICTED with mutual
+    conflict_refs. Confidence never decides an overwrite.
+    """
+    entries: list[dict[str, Any]] = []
+    for fact in regex_facts:
+        entry = _regex_fact_to_ledger_entry(
+            fact, source_id=source_id, source_text=source_text
+        )
+        if entry is not None:
+            entries.append(entry)
+    for candidate in llm_candidates:
+        entries.append(
+            _llm_candidate_to_ledger_entry(candidate, source_id=source_id)
+        )
+
+    merged: list[dict[str, Any]] = []
+    consumed: set[int] = set()
+    for index, entry in enumerate(entries):
+        if index in consumed:
+            continue
+        # Layer 1: evidence de-dup — same occurrence position.
+        group_indices = [
+            other_index
+            for other_index, other in enumerate(entries)
+            if other_index != index
+            and other_index not in consumed
+            and _spans_overlap(
+                _list(entry.get("evidence_spans")),
+                _list(other.get("evidence_spans")),
+            )
+        ]
+        group = [entry] + [entries[pidx] for pidx in group_indices]
+        for pidx in group_indices:
+            consumed.add(pidx)
+        if len(group) == 1:
+            merged.append(entry)
+            continue
+
+        # Layer 2: semantic comparison within the occurrence group. Key
+        # attributes are operator_family / action / threshold; a divergence
+        # there is a conflict (SPEC §10.4: amount > 5000 vs >= 5000) and both
+        # sides stay, cross-referenced — confidence never resolves it.
+        signatures = [_dict(row.get("semantic_signature")) for row in group]
+        key_attrs = [
+            (
+                _normalize_signature_token(sig.get("operator_family")),
+                _normalize_signature_token(sig.get("action")),
+                _normalize_signature_token(sig.get("threshold")),
+            )
+            for sig in signatures
+        ]
+        extractors = sorted({
+            _text(row.get("extractor_type")) for row in group
+        })
+        if len(set(key_attrs)) == 1:
+            merged_entry = dict(entry)
+            merged_entry["extractor_support"] = extractors
+            merged_entry["governance_status"] = "MERGED"
+            merged_entry["evidence_spans"] = [
+                dict(span)
+                for row in group
+                for span in _list(row.get("evidence_spans"))
+            ]
+            merged_entry["merged_from"] = [
+                _text(row.get("canonical_rule_ref"))
+                or _text(_dict(row.get("raw")).get("candidate_id"))
+                or f"entry_{idx}"
+                for idx, row in enumerate(group)
+            ]
+            merged.append(merged_entry)
+        else:
+            conflict_ids: list[str] = []
+            for row in group:
+                conflict_ids.append(
+                    _text(row.get("canonical_rule_ref"))
+                    or _text(_dict(row.get("raw")).get("candidate_id"))
+                    or f"entry_{len(merged)}_{len(conflict_ids)}"
+                )
+            for row, conflict_id in zip(group, conflict_ids):
+                row["governance_status"] = "CONFLICTED"
+                row["rejection_reason"] = "RULE_SIGNATURE_CONFLICT"
+                row["conflict_refs"] = [
+                    cid for cid in conflict_ids if cid != conflict_id
+                ]
+                merged.append(row)
+
+    return {
+        "schema_version": LEDGER_SCHEMA,
+        "source_id": source_id,
+        "entry_count": len(merged),
+        "regex_entry_count": sum(
+            1 for row in merged if _text(row.get("extractor_type")) == "regex"
+        ),
+        "llm_entry_count": sum(
+            1 for row in merged if _text(row.get("extractor_type")) == "llm"
+        ),
+        "merged_count": sum(
+            1 for row in merged if _text(row.get("governance_status")) == "MERGED"
+        ),
+        "conflicted_count": sum(
+            1
+            for row in merged
+            if _text(row.get("governance_status")) == "CONFLICTED"
+        ),
+        "entries": merged,
     }
 
 _SYSTEM_PROMPT = """\

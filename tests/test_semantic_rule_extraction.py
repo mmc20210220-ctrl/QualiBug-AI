@@ -7,6 +7,7 @@ ever becomes a formal Canonical Rule in this phase.
 """
 from __future__ import annotations
 
+import re
 import sys
 from types import SimpleNamespace
 from pathlib import Path
@@ -518,3 +519,157 @@ def test_integration_shadow_without_provider_degrades_visibly(monkeypatch) -> No
     assert mode_receipts
     assert mode_receipts[0]["effective_mode"] == "off"
     assert mode_receipts[0]["fallback_reason"] == "missing_credentials"
+
+
+# ── P0-4：统一候选账本与合并（SPEC §9/§10）──────────────────────────────────
+
+def _regex_fact(
+    raw: str,
+    *,
+    modality: str = "MUST_NOT",
+    action: str = "ship",
+    quantity: tuple[str, str] | None = None,
+    status: str = "ACCEPTED",
+    entity: str = "订单",
+) -> dict:
+    fact = {
+        "fact_id": f"fact_{abs(hash(raw)) % 100000}",
+        "kind": "RULE",
+        "raw_statement": raw,
+        "normalized_statement": re.sub(r"\s+", "", raw),
+        "source_spans": [{"source_id": "prd-1", "locator": "L1", "quote": raw}],
+        "modality": modality,
+        "action": {"verb": action},
+        "subject": {"actor_refs": [], "entity_refs": [entity]},
+        "conditions": [],
+        "exceptions": [],
+        "quantity_constraints": (
+            [{"comparator": quantity[0], "value": quantity[1]}] if quantity else []
+        ),
+        "formula_constraints": [],
+        "temporal_constraints": [],
+        "status": status,
+        "confidence": 0.8,
+        "ambiguities": [],
+    }
+    return fact
+
+
+def _llm_validated_rule(
+    raw: str,
+    *,
+    operator_family: str = "forbid",
+    action: str = "ship",
+    threshold: str | None = None,
+    evidence_start: int = 0,
+    object_term: str = "订单",
+) -> dict:
+    candidate = _rule_candidate(
+        evidence_spans=[{"text": raw, "start": evidence_start}],
+        semantic_spans={
+            "object": [{"text": object_term}] if object_term in raw else [],
+            "action": [{"text": action}],
+            "modality": [{"text": "不得" if operator_family == "forbid" else "需要"}],
+            "threshold": [{"text": threshold}] if threshold else [],
+        },
+        normalized_suggestion={
+            "actor": None,
+            "object": object_term,
+            "condition": {"state": None},
+            "effect": {"operator_family": operator_family, "action": action},
+            "threshold": threshold,
+            "exception": None,
+            "temporal": None,
+        },
+        derivations=[
+            {"normalized_path": "effect.operator_family",
+             "normalized_value": operator_family,
+             "derived_from_text": "不得", "normalization_method": "verbatim_mapping"},
+            {"normalized_path": "effect.action", "normalized_value": action,
+             "derived_from_text": action, "normalization_method": "verbatim_mapping"},
+        ],
+        candidate_status="VALIDATED",
+        source_locator="chars=0-100",
+    )
+    return candidate
+
+
+def test_ledger_merges_consistent_regex_and_llm_candidates() -> None:
+    source = "逾期订单不得发货。"
+    regex_fact = _regex_fact("逾期订单不得发货。", action="发货")
+    llm = _llm_validated_rule(
+        "逾期订单不得发货。", action="发货", evidence_start=0
+    )
+    ledger = semantic.build_rule_candidate_ledger(
+        [regex_fact], [llm], source_id="prd-1", source_text=source
+    )
+    assert ledger["entry_count"] == 1
+    assert ledger["merged_count"] == 1
+    entry = ledger["entries"][0]
+    assert entry["governance_status"] == "MERGED"
+    assert entry["extractor_support"] == ["llm", "regex"]
+    assert entry["evidence_spans"][0]["start"] == 0
+
+
+def test_ledger_keeps_threshold_conflict_without_overwrite() -> None:
+    source = "金额超过 5000 元需要审批。"
+    regex_fact = _regex_fact(
+        "金额超过 5000 元需要审批。",
+        modality="MUST",
+        action="审批",
+        quantity=(">", "5000"),
+        entity="金额",
+    )
+    # LLM 侧阈值不同（>=5000）→ 同签名但 key 属性冲突
+    llm = _llm_validated_rule(
+        "金额超过 5000 元需要审批。",
+        operator_family="require",
+        action="审批",
+        threshold="5000",
+        object_term="金额",
+    )
+    # 强制签名冲突：regex threshold '>5000' vs llm threshold '5000'
+    ledger = semantic.build_rule_candidate_ledger(
+        [regex_fact], [llm], source_id="prd-1", source_text=source
+    )
+    conflicted = [
+        row for row in ledger["entries"]
+        if row.get("governance_status") == "CONFLICTED"
+    ]
+    assert ledger["conflicted_count"] == 2
+    assert len(conflicted) == 2
+    # 双方保留证据，conflict_refs 互指
+    assert conflicted[0]["conflict_refs"]
+    assert conflicted[0]["rejection_reason"] == "RULE_SIGNATURE_CONFLICT"
+    assert conflicted[0]["evidence_spans"]
+
+
+def test_ledger_keeps_distinct_signatures_separate() -> None:
+    source = "逾期订单不得发货。\n库存低于 10 件需要补货。"
+    regex_ship = _regex_fact("逾期订单不得发货。", action="发货")
+    llm_replenish = _llm_validated_rule(
+        "库存低于 10 件需要补货。",
+        operator_family="require",
+        action="补货",
+        evidence_start=len("逾期订单不得发货。\n"),
+    )
+    ledger = semantic.build_rule_candidate_ledger(
+        [regex_ship], [llm_replenish], source_id="prd-1", source_text=source
+    )
+    assert ledger["entry_count"] == 2
+    assert ledger["merged_count"] == 0
+    assert ledger["conflicted_count"] == 0
+
+
+def test_ledger_evidence_dedup_requires_overlap() -> None:
+    """同签名但证据不重叠 → 不合并（不同出现位置是不同规则实例）。"""
+    source = "逾期订单不得发货。\n逾期订单不得发货。"
+    regex_fact = _regex_fact("逾期订单不得发货。", action="发货")
+    llm = _llm_validated_rule(
+        "逾期订单不得发货。", action="发货", evidence_start=len("逾期订单不得发货。\n")
+    )
+    ledger = semantic.build_rule_candidate_ledger(
+        [regex_fact], [llm], source_id="prd-1", source_text=source
+    )
+    assert ledger["entry_count"] == 2
+    assert ledger["merged_count"] == 0
