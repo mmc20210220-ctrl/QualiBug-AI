@@ -38,8 +38,9 @@ def install_source_ui_family_vector_compat() -> None:
         behavior_ir: dict[str, Any],
         *,
         base_compile: Any,
+        **kwargs: Any,
     ) -> dict[str, Any]:
-        result = dict(original(behavior_ir, base_compile=base_compile))
+        result = dict(original(behavior_ir, base_compile=base_compile, **kwargs))
         obligations = [
             row
             for row in _list(result.get("obligations"))

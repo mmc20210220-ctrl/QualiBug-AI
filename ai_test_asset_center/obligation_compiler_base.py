@@ -1506,6 +1506,18 @@ def compile_obligations_from_behavior_ir(
                     for row in canonical_field_rows
                     if _text(row.get("name")) and _list(row.get("enum_values"))
                 ]
+                # Source-declared numeric bounds (OpenAPI minimum/maximum or field
+                # dictionary min/max). A bound with no declaration never compiles:
+                # the evaluator refuses PERSISTED_BOUND_NOT_DECLARED.
+                bounded_fields = [
+                    row
+                    for row in canonical_field_rows
+                    if _text(row.get("name"))
+                    and (
+                        row.get("min_value") is not None
+                        or row.get("max_value") is not None
+                    )
+                ]
                 declared_field_names = [
                     _text(row.get("name"))
                     for row in canonical_field_rows
@@ -1515,10 +1527,10 @@ def compile_obligations_from_behavior_ir(
                     for name in raw_field_rows
                     if _text(name)
                 ]
-                if not enum_fields or not declared_field_names:
+                if (not enum_fields and not bounded_fields) or not declared_field_names:
                     coverage_gaps.append(_compile_gap(
                         subject_ref=entity_ref,
-                        relation_types={"enum_values"},
+                        relation_types={"enum_values", "field_bounds"},
                     ))
                     continue
                 for relation in persistence_relations:
@@ -1547,6 +1559,49 @@ def compile_obligations_from_behavior_ir(
                                 "operation_ref": operation_ref,
                                 "operation_path_prefix": _operation_path_prefix(op),
                             },
+                            required_operations=[operation_ref] if operation_ref else [],
+                            required_observers=["http_response", PERSISTENCE_OBSERVER_ID],
+                            cleanup_requirement={
+                                "required": False,
+                                "mode": "read_only_persistence_observation",
+                            },
+                            source_refs=_combined_source_refs(
+                                ent,
+                                op,
+                                relation,
+                                field_row,
+                            ),
+                            relation_refs=[_text(relation.get("id"))]
+                            if _text(relation.get("id"))
+                            else [],
+                            confidence=min(
+                                float(ent.get("confidence") or 0.6),
+                                float(op.get("confidence") or 0.7),
+                                float(field_row.get("confidence") or 0.6),
+                            ),
+                        ))
+                    for field_row in bounded_fields:
+                        field_name = _text(field_row.get("name"))
+                        if not field_name:
+                            continue
+                        bound_property: dict[str, Any] = {
+                            "template": "persistence_field_bound",
+                            "persistence_root": _text(root),
+                            "project": _text(project),
+                            "persistence_table": entity_table,
+                            "persistence_fields": declared_field_names,
+                            "persistence_bounded_field": field_name,
+                            "operation_ref": operation_ref,
+                            "operation_path_prefix": _operation_path_prefix(op),
+                        }
+                        if field_row.get("min_value") is not None:
+                            bound_property["persistence_min"] = field_row["min_value"]
+                        if field_row.get("max_value") is not None:
+                            bound_property["persistence_max"] = field_row["max_value"]
+                        obligations.append(make_obligation(
+                            risk_family="persistence_integrity",
+                            subject_refs=[entity_ref, operation_ref, field_name],
+                            property_spec=bound_property,
                             required_operations=[operation_ref] if operation_ref else [],
                             required_observers=["http_response", PERSISTENCE_OBSERVER_ID],
                             cleanup_requirement={

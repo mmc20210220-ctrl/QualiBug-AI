@@ -1287,8 +1287,8 @@ _MATRIX_OBSERVERS_BY_FAMILY: dict[str, list[str]] = {
     "invariant": ["http_response", "entity_state", "typed_assertion", "source_invariant"],
 }
 
-# Assertion kinds the invariant compile gate accepts (keep aligned with
-# experiment_compiler_obligation_core._INVARIANT_ASSERTION_KINDS).
+# Assertion kinds the invariant compile gate accepts (keep aligned with the
+# invariant-kind registry in the obligation compiler's core module).
 _EXECUTABLE_INVARIANT_ASSERTION_KINDS = frozenset({
     "conservation",
     "cross_entity_consistency",

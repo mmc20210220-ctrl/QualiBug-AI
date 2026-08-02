@@ -1757,19 +1757,17 @@ def _derive_source_role_restriction_relations(model: dict[str, Any]) -> list[dic
 
 
 # Path-terminal verbs that source APIs use as identity-bound reverse actions.
-# Forward lifecycle verbs (ship/confirm/approve/…) are intentionally excluded;
-# ambiguous multi-candidate sets stay fail-closed with no derived relation.
+# Only verbs whose semantics ARE a reversal of creation stay here: a lifecycle
+# verb (cancel/abort/revoke/release/withdraw/…) mutates an existing resource
+# and never proves it compensates a create — inferring one would authorize an
+# uncompensated write. Forward lifecycle verbs (ship/confirm/approve/…) are
+# intentionally excluded; ambiguous multi-candidate sets stay fail-closed with
+# no derived relation.
 _COMPENSATION_ACTION_PATH_VERBS = frozenset({
-    "cancel",
-    "abort",
-    "revoke",
     "undo",
     "void",
     "rollback",
     "reverse",
-    "release",
-    "unreserve",
-    "withdraw",
     "compensate",
     "unbook",
     "rescind",
@@ -2829,6 +2827,20 @@ def _build_canonical_fields(
             for value in _list(fd_info.get("enum")) or _list(db_info.get("enum"))
             if _text(value)
         ))
+        # Source-declared numeric bounds, accepted from either the field
+        # dictionary (explicit enterprise-material declaration) or an OpenAPI
+        # schema minimum/maximum. Never inferred from storage precision or
+        # scale: a numeric_precision is a storage fact, not a business bound.
+        def _declared_bound(*keys: str) -> Any:
+            for source in (fd_info, db_info):
+                for key in keys:
+                    value = source.get(key)
+                    if value is not None and not isinstance(value, bool):
+                        return value
+            return None
+
+        min_value = _declared_bound("min", "minimum", "min_value")
+        max_value = _declared_bound("max", "maximum", "max_value")
         nullable = db_info.get("nullable", fd_info.get("nullable"))
         description = _text(fd_info.get("description") or db_info.get("description"))
 
@@ -2875,6 +2887,10 @@ def _build_canonical_fields(
             field_node["description"] = description
         if enum_values:
             field_node["enum_values"] = enum_values
+        if min_value is not None:
+            field_node["min_value"] = min_value
+        if max_value is not None:
+            field_node["max_value"] = max_value
         if field_src_refs:
             field_node["source_refs"] = field_src_refs
         result.append(field_node)
@@ -3264,15 +3280,33 @@ def build_behavior_ir_from_knowledge_asset(
         if not _ent_name:
             continue
         _op_schema_fields: list[str] = []
+        # Per-field schema constraints (OpenAPI minimum/maximum) from the same
+        # property definitions that name the fields. A bound is a source-declared
+        # business fact; storage precision is never a substitute.
+        _field_constraints: dict[str, dict[str, Any]] = {}
+
+        def _absorb_schema_props(props: dict[str, Any]) -> None:
+            for _pf_name, _pf_spec in props.items():
+                if not isinstance(_pf_spec, dict):
+                    continue
+                _bound: dict[str, Any] = {}
+                for _bk in ("minimum", "maximum"):
+                    if _pf_spec.get(_bk) is not None and not isinstance(_pf_spec.get(_bk), bool):
+                        _bound[_bk] = _pf_spec[_bk]
+                if _bound:
+                    _field_constraints.setdefault(_text(_pf_name).lower(), {}).update(_bound)
+
         # Request schema properties
         _req_schema = _dict(_op.get("request_schema") or _op.get("requestBody"))
         _content = _dict(_req_schema.get("content"))
         _json_media = _dict(_content.get("application/json"))
         _schema_props = _dict(_dict(_json_media.get("schema")).get("properties"))
         _op_schema_fields.extend(_schema_props.keys())
+        _absorb_schema_props(_schema_props)
         # Also direct properties (non-nested)
         _direct_props = _dict(_req_schema.get("properties"))
         _op_schema_fields.extend(_direct_props.keys())
+        _absorb_schema_props(_direct_props)
         # Request example keys
         _example = _dict(_json_media.get("example") or _op.get("request_example"))
         _op_schema_fields.extend(k for k in _example.keys() if k)
@@ -3280,12 +3314,14 @@ def build_behavior_ir_from_knowledge_asset(
         _resp_schema = _dict(_op.get("response_schema") or _op.get("responseSchema"))
         _resp_props = _dict(_resp_schema.get("properties"))
         _op_schema_fields.extend(_resp_props.keys())
+        _absorb_schema_props(_resp_props)
         # Nested data/records wrapper
         for _wrapper in ("data", "records", "items", "result"):
             _w = _dict(_resp_props.get(_wrapper))
             _w_items = _dict(_w.get("items"))
             _w_props = _dict(_w_items.get("properties") or _w.get("properties"))
             _op_schema_fields.extend(_w_props.keys())
+            _absorb_schema_props(_w_props)
         # field_dictionary on operation
         for _ofd in _list(_op.get("field_dictionary")):
             if isinstance(_ofd, dict):
@@ -3298,7 +3334,11 @@ def build_behavior_ir_from_knowledge_asset(
         _added = 0
         for _sf in _unique_fields:
             if _sf.lower() not in existing_cols:
-                existing_cols[_sf.lower()] = {"field": _sf, "source": "operation_schema"}
+                _entry: dict[str, Any] = {"field": _sf, "source": "operation_schema"}
+                _constraints = _field_constraints.get(_sf.lower())
+                if _constraints:
+                    _entry.update(_constraints)
+                existing_cols[_sf.lower()] = _entry
                 _added += 1
         _agent_field_supp_rows.append({
             "path": _text(_op.get("path") or _op.get("raw_path")),

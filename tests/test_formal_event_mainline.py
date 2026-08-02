@@ -156,16 +156,14 @@ def test_event_protocol_compiles_source_grounded_contract() -> None:
         "treatment_actor_ref": "actor_public",
     })
     experiment = validate_registered_protocol_result(
-        family=events.RISK_FAMILY,
-        protocol=events.PROTOCOL_TEMPLATE,
-        required_adapters=protocol["required_adapters"],
-        compiled=compiled,
+        compiled,
+        registration=protocol,
     )
 
     assert experiment["status"] == "COMPILED"
-    assert events.ADAPTER in experiment["compiled_adapters"]
+    assert experiment["observers"][0]["observer_id"] == events.OBSERVER_ID
     assert experiment["treatment_plan"][0]["protocol_step"] == "event_trigger"
-    assert experiment["assertions"][0]["kind"] == events.ASSERTION_KIND
+    assert experiment["assertion"]["kind"] == events.ASSERTION_KIND
 
 
 def test_event_oracle_detects_delivery_count_violation() -> None:

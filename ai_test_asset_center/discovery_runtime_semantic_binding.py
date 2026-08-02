@@ -128,6 +128,10 @@ from .source_performance_contract_binding import bind_source_performance_contrac
 from .source_performance_obligation_binding import (
     install_source_performance_obligation_binding,
 )
+from .source_stability_contract_binding import bind_source_stability_contracts
+from .source_stability_obligation_binding import (
+    install_source_stability_obligation_binding,
+)
 from .source_ui_contract_binding import bind_source_ui_contracts
 from .source_ui_contract_source_guard import install_source_ui_contract_source_guard
 from .source_ui_obligation_binding import install_source_ui_obligation_binding
@@ -191,6 +195,7 @@ install_source_ui_obligation_binding()
 install_source_ui_family_vector_compat()
 install_source_event_obligation_binding()
 install_source_performance_obligation_binding()
+install_source_stability_obligation_binding()
 register_job_async_protocol()
 install_source_job_obligation_binding()
 
@@ -277,8 +282,12 @@ def build_behavior_ir_with_semantic_operation_bindings(
         event_ir,
         effective_asset,
     )
-    job_ir, _job_receipt = bind_source_job_contracts(
+    stability_ir, _stability_receipt = bind_source_stability_contracts(
         performance_ir,
+        effective_asset,
+    )
+    job_ir, _job_receipt = bind_source_job_contracts(
+        stability_ir,
         effective_asset,
     )
     job_ir["scan_ui_contract_overlay_receipt"] = dict(scan_ui_receipt)

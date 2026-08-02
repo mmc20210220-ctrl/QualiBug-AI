@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 from typing import Any
 
 from . import discovery_runtime_planning as _planning
@@ -202,6 +203,11 @@ def install_source_stability_obligation_binding() -> None:
     original = getattr(_planning, _ORIGINAL_MARKER, _planning.compile_obligations_from_behavior_ir)
     setattr(_planning, _ORIGINAL_MARKER, original)
 
+    # functools.wraps copies the wrapped callable's __dict__, which carries the
+    # install markers of any outer wrapper (e.g. the job binding). Without it a
+    # later installer sees a marker-less compile function and wraps the chain a
+    # second time, nesting itself twice and recursing through itself.
+    @functools.wraps(original)
     def compile_with_stability(behavior_ir: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return compile_obligations_with_source_stability(
             behavior_ir, base_compile=original, **kwargs

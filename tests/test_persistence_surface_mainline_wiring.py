@@ -50,7 +50,7 @@ def persistence_ir() -> dict:
             {
                 "name": "order",
                 "table": "orders",
-                "fields": ["status"],
+                "fields": ["status", "quantity", "openapi_quantity"],
                 "identity_fields": ["id"],
             },
         ],
@@ -62,6 +62,12 @@ def persistence_ir() -> dict:
                         "field": "status",
                         "type": "string",
                         "enum": ["pending", "approved", "rejected"],
+                    },
+                    {
+                        "field": "quantity",
+                        "type": "integer",
+                        "min": 1,
+                        "max": 1000,
                     },
                 ],
             },
@@ -83,6 +89,11 @@ def persistence_ir() -> dict:
                     "locator": "POST /orders",
                 }
             ],
+            "request_schema": {
+                "properties": {
+                    "openapi_quantity": {"type": "integer", "minimum": 0, "maximum": 500},
+                }
+            },
         },
     ]
     yield build_behavior_ir_from_knowledge_asset(
@@ -136,6 +147,54 @@ def test_ir_retains_source_declared_enum_values(persistence_ir: dict) -> None:
     )
     assert status_field is not None
     assert status_field.get("enum_values") == ["pending", "approved", "rejected"]
+
+
+def test_ir_retains_source_declared_bounds(persistence_ir: dict) -> None:
+    """Both declaration paths survive into the IR: field dictionary min/max and
+    OpenAPI schema minimum/maximum."""
+    entity = next(
+        row for row in persistence_ir["entities"] if row.get("name") == "order"
+    )
+    fields = {
+        row.get("name"): row
+        for row in entity.get("fields", [])
+        if isinstance(row, dict) and row.get("name")
+    }
+    quantity = fields.get("quantity")
+    assert quantity is not None
+    assert quantity.get("min_value") == 1
+    assert quantity.get("max_value") == 1000
+    openapi_quantity = fields.get("openapi_quantity")
+    assert openapi_quantity is not None
+    assert openapi_quantity.get("min_value") == 0
+    assert openapi_quantity.get("max_value") == 500
+
+
+def test_persistence_bound_obligation_generated(persistence_ir: dict) -> None:
+    pack = compile_obligations_from_behavior_ir(
+        persistence_ir,
+        root=str(ROOT),
+        project="persistence-wiring-test",
+    )
+    bound_obligations = [
+        row
+        for row in pack["obligations"]
+        if row.get("risk_family") == RISK_FAMILY
+        and row.get("property", {}).get("template") == "persistence_field_bound"
+    ]
+    assert bound_obligations, "no persisted_field_bound obligation compiled"
+    by_field = {
+        row["property"]["persistence_bounded_field"]: row["property"]
+        for row in bound_obligations
+    }
+    quantity_prop = by_field.get("quantity")
+    assert quantity_prop is not None
+    assert quantity_prop.get("persistence_min") == 1
+    assert quantity_prop.get("persistence_max") == 1000
+    openapi_prop = by_field.get("openapi_quantity")
+    assert openapi_prop is not None
+    assert openapi_prop.get("persistence_min") == 0
+    assert openapi_prop.get("persistence_max") == 500
 
 
 def test_persistence_obligation_generated_with_workspace_identity(

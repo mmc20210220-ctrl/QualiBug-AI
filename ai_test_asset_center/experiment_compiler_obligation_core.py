@@ -1354,13 +1354,15 @@ def compile_experiment_for_obligation(
             if len(relation_compensators) == 1:
                 cleanup_op = next(iter(relation_compensators))
                 # Determine mode from cleanup operation method:
-                # DELETE → reverse_order; POST/PUT/PATCH → compensator
+                # DELETE → reverse_order; POST/PUT/PATCH → compensating_transition
+                # (the mode name cleanup_plan_validator._SEMANTIC_COMPENSATION_MODES
+                # accepts; "compensator" was an older spelling no validator knows).
                 _cleanup_op_method = _text(
                     _dict(ops.get(cleanup_op)).get("method")
                 ).upper()
                 _relation_mode = (
                     "reverse_order" if _cleanup_op_method == "DELETE"
-                    else "compensator"
+                    else "compensating_transition"
                 )
                 cleanup_req = {
                     **cleanup_req,
@@ -1573,7 +1575,7 @@ def compile_experiment_for_obligation(
             if explicit_compensator:
                 cleanup_plan = [{
                     "action": "source_declared_compensation",
-                    "mode": "compensator",
+                    "mode": "compensating_transition",
                     "operation_ref": _text(explicit_compensator.get("id")),
                     "compensates_operation_ref": primary_op_id,
                     "path": _text(explicit_compensator.get("path") or explicit_compensator.get("raw_path")),

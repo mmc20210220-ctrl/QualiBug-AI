@@ -303,7 +303,7 @@ def test_existing_compiler_dispatches_job_protocol_to_job_treatment_step() -> No
         available_adapters={"http_api"},
     )
 
-    assert compiled["count"] == 1
+    assert compiled["compiled_count"] == 1
     experiment = compiled["experiments"][0]
     assert experiment["compile_receipt"]["status"] == "COMPILED"
     assert experiment["risk_family"] == "process"
