@@ -222,8 +222,12 @@ def read_declared_entity_state(
     try:
         schema = _dict(source.schema)
         table_name = _validated_identifier(table, set(schema))
+        # Introspection rows carry the column name under ``column_name``
+        # (PostgreSQL information_schema) or ``name`` (other adapters).
+        # Reading only one key silently empties the set and every declared
+        # field fails as identifier_not_in_introspected_schema.
         columns = {
-            _text(_dict(column).get("name"))
+            _text(_dict(column).get("column_name") or _dict(column).get("name"))
             for column in _list(schema.get(table_name))
         }
         selected = [_validated_identifier(field, columns) for field in fields if _text(field)]

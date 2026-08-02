@@ -1541,6 +1541,11 @@ def compile_obligations_from_behavior_ir(
                     _text(row.get("name"))
                     for row in canonical_field_rows
                     if _text(row.get("name"))
+                    and _list(row.get("database_bindings"))
+                ] or [
+                    _text(row.get("name"))
+                    for row in canonical_field_rows
+                    if _text(row.get("name"))
                 ] or [
                     _text(name)
                     for name in raw_field_rows
