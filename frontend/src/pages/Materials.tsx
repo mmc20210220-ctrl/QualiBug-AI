@@ -200,6 +200,19 @@ function manifestFields(manifest: ConnectorManifest | undefined, authMode: strin
   ));
 }
 
+function credentialFieldLabel(field: ConnectorManifest['credential_fields'][number]): string {
+  if (field.display_name) return field.display_name;
+  return field.name
+    .replace(/[_:-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function authModeLabel(mode: string): string {
+  return mode
+    .replace(/[_:-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function scopePresets(manifest: ConnectorManifest | undefined): string[] {
   const presets = manifest?.scope_schema?.presets;
   return Array.isArray(presets)
@@ -982,7 +995,7 @@ export function Materials() {
                   setAuthMode(event.target.value);
                   setCredentialValues({});
                 }}>
-                  {selectedManifest.auth_modes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+                  {selectedManifest.auth_modes.map((mode) => <option key={mode} value={mode}>{authModeLabel(mode)}</option>)}
                 </select>
               </div>
             </details>
@@ -991,7 +1004,7 @@ export function Materials() {
           <div className="materials-form-grid">
             {selectedCredentialFields.map((field) => (
               <label className="form-group" key={field.name}>
-                <span className="form-label">{field.name}{field.required ? ' *' : ''}</span>
+                <span className="form-label">{credentialFieldLabel(field)}{field.required ? ' *' : ''}</span>
                 <input
                   className="form-input"
                   type={field.secret || field.field_type.includes('token') || field.field_type.includes('password') ? 'password' : 'text'}
@@ -1049,6 +1062,13 @@ export function Materials() {
           )}
 
           {isObjectScope(selectedManifest) && (
+            <details
+              className="materials-advanced materials-scope-editor-details"
+              open={!quickConnectApplied}
+            >
+              <summary>{quickConnectApplied ? '调整同步范围（可选）' : '配置同步范围'}</summary>
+              <div className="materials-advanced-field">
+                {selectedManifest && (
             <div className="materials-form-grid materials-scope-editor">
               {scopeProperties(selectedManifest).map(([name, property]) => {
                 const required = asArray(asRecord(selectedManifest?.scope_schema).required)
@@ -1109,6 +1129,9 @@ export function Materials() {
                 );
               })}
             </div>
+                )}
+              </div>
+            </details>
           )}
 
           {isObjectScope(selectedManifest) && (

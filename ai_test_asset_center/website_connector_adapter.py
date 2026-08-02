@@ -1540,6 +1540,7 @@ def website_connector_manifest() -> ConnectorManifest:
                 field_type="cookie_session_reference",
                 required=True,
                 secret=True,
+                display_name="登录会话 Cookie",
                 description="私有在线资料的会话 Cookie；仅在内存中用于只读 GET",
                 auth_modes=("cookie_session",),
             ),

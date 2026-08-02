@@ -19,6 +19,7 @@ export type KnowledgeConnectorProfile = {
 
 export type ConnectorCredentialField = {
   name: string;
+  display_name?: string;
   field_type: string;
   required: boolean;
   secret: boolean;
@@ -986,6 +987,7 @@ function toManifest(value: unknown): ConnectorManifest {
       const item = asRecord(field);
       return {
         name: asString(item.name),
+        display_name: asString(item.display_name) || undefined,
         field_type: asString(item.field_type),
         required: asBoolean(item.required),
         secret: asBoolean(item.secret),

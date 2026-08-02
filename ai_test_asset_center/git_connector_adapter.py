@@ -1949,6 +1949,7 @@ def git_connector_manifest(connector_type: str = "git") -> ConnectorManifest:
                 field_type="personal_access_token",
                 required=True,
                 secret=True,
+                display_name="代码仓库访问令牌",
                 description="Provider token used only for read-only repository API GET requests.",
                 auth_modes=("personal_access_token",),
             ),

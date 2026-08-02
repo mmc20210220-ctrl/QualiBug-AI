@@ -212,6 +212,7 @@ class ConnectorCredentialField:
     secret: bool = False
     description: str = ""
     auth_modes: tuple[str, ...] = ()
+    display_name: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _identifier(self.name, "credential_field_name"))
@@ -229,6 +230,11 @@ class ConnectorCredentialField:
             "auth_modes",
             _unique_strings(self.auth_modes, "credential_field_auth_modes"),
         )
+        object.__setattr__(
+            self,
+            "display_name",
+            str(self.display_name or "").strip()[:160],
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -238,6 +244,7 @@ class ConnectorCredentialField:
             "secret": self.secret,
             "description": self.description,
             "auth_modes": list(self.auth_modes),
+            "display_name": self.display_name,
         }
 
 

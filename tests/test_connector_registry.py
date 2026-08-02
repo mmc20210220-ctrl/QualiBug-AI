@@ -58,6 +58,18 @@ def test_manifest_rejects_secret_field_declared_as_non_secret() -> None:
         )
 
 
+def test_credential_field_display_name_is_public_capability_metadata() -> None:
+    field = ConnectorCredentialField(
+        name="token",
+        field_type="token",
+        required=True,
+        secret=True,
+        display_name="访问令牌",
+    )
+
+    assert field.as_dict()["display_name"] == "访问令牌"
+
+
 def test_manifest_rejects_quick_connect_scope_without_required_url_field() -> None:
     with pytest.raises(ConnectorRegistryError, match="scope_field_not_required"):
         ConnectorManifest(
@@ -149,6 +161,7 @@ def test_default_registry_exposes_manifest_driven_website_adapter_without_networ
         "scope_field": "seed_urls",
         "priority": 10,
     }
+    assert manifest.credential_fields_for_auth_mode("cookie_session")[0].display_name == "登录会话 Cookie"
     assert {
         field.name
         for field in manifest.credential_fields_for_auth_mode("cookie_session")
