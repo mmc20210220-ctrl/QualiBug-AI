@@ -285,6 +285,64 @@ def test_registered_database_schema_source_reaches_scan_preparation(
     assert "orders.id" in schema_text
 
 
+def test_platform_inputs_sql_ddl_reaches_schema_load_despite_weak_md(
+    tmp_path: Path,
+) -> None:
+    """CREATE TABLE DDL in platform_inputs must reach db_schema_text.
+
+    Weak DB_SCHEMA.md inventory alone previously left runtime overlay without
+    columns; SQL materials must win through for entity field projection.
+    """
+    from ai_test_asset_center.scan_source_runtime import _load_schema_assets
+
+    project = "PROJECT-DDL"
+    inputs = tmp_path / "platform_inputs" / project
+    inputs.mkdir(parents=True)
+    (inputs / "DB_SCHEMA.md").write_text(
+        "# Schema\n\n| table | note |\n|---|---|\n| accounts | roles |\n\n- `accounts.role`: role\n",
+        encoding="utf-8",
+    )
+    (inputs / "schema.sql").write_text(
+        "CREATE TABLE accounts (\n"
+        "  id UUID PRIMARY KEY,\n"
+        "  email TEXT UNIQUE NOT NULL,\n"
+        "  name TEXT NOT NULL,\n"
+        "  phone TEXT,\n"
+        "  role TEXT NOT NULL\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    # Seed dumps must not be treated as schema authority.
+    (inputs / "seed.sql").write_text(
+        "INSERT INTO accounts(email) VALUES ('seed@example.com');\n",
+        encoding="utf-8",
+    )
+
+    schema_text = _load_schema_assets(tmp_path, project)
+    assert "CREATE TABLE accounts" in schema_text
+    assert "email" in schema_text
+    assert "seed@example.com" not in schema_text
+
+
+def test_misclassified_registered_create_table_reaches_schema_load(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.enterprise_source_registry import register_source_asset
+    from ai_test_asset_center.scan_source_runtime import _load_schema_assets
+
+    register_source_asset(
+        "PROJECT-2",
+        "legacy-ddl.md",
+        "Notes\n\nCREATE TABLE widgets (id TEXT PRIMARY KEY, sku TEXT NOT NULL);\n",
+        source_type="collaboration_document",
+        root=tmp_path,
+    )
+
+    schema_text = _load_schema_assets(tmp_path, "PROJECT-2")
+    assert "CREATE TABLE widgets" in schema_text
+    assert "sku" in schema_text
+
+
 def test_api_operation_extraction_does_not_invent_post_write_side_effect() -> None:
     from ai_test_asset_center.behavior_ir import build_behavior_ir_from_knowledge_asset
     from ai_test_asset_center.discovery_runtime import _api_operations
@@ -631,7 +689,7 @@ def test_candidate_accounts_for_compiled_obligation_when_runtime_is_plan_only(
 
     attempts = result["obligation_attempt_ledger"]["attempts"]
     assert attempts
-    assert all(row["terminal_status"] == "BLOCKED" for row in attempts)
+    assert all(row["terminal_status"] in {"BLOCKED", "DEFERRED"} for row in attempts)
     # Plan-only runs block all experiments. Core obligations from the main
     # compiler fail at the runtime-target gate, while coverage-driven
     # obligations may fail earlier (missing fixture, missing actor, etc.)
@@ -640,9 +698,20 @@ def test_candidate_accounts_for_compiled_obligation_when_runtime_is_plan_only(
     assert "BLOCKED_RUNTIME_TARGET" in reason_codes, (
         f"Expected at least one BLOCKED_RUNTIME_TARGET, got {reason_codes}"
     )
-    # All reason codes must be BLOCKED_* (no silent success)
-    for code in reason_codes:
-        assert code.startswith("BLOCKED_"), f"Unexpected reason code: {code}"
+    # Non-selected formal obligations remain explicitly deferred and are not
+    # misreported as runtime blocks or successful execution.
+    deferred = [
+        row for row in attempts
+        if row["selection_status"] == "DEFERRED_NOT_SELECTED"
+    ]
+    assert deferred
+    assert all(row["terminal_status"] == "DEFERRED" for row in deferred)
+    assert all(row["reason_code"] == "OBLIGATION_NOT_IN_PLAN" for row in deferred)
+    assert all(
+        row["reason_code"].startswith("BLOCKED_")
+        for row in attempts
+        if row["selection_status"] == "SELECTED"
+    )
     assert result["discovery_funnel"]["pipeline_health"]["status"] == "BLOCKED"
 
 
@@ -998,8 +1067,13 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
         for row in attempts
     )
     terminal_statuses = {row["terminal_status"] for row in attempts}
-    assert terminal_statuses.issubset({"REJECTED", "BLOCKED"}), (
+    assert terminal_statuses.issubset({"REJECTED", "BLOCKED", "DEFERRED"}), (
         f"Unexpected terminal statuses: {terminal_statuses}"
+    )
+    assert all(
+        row["reason_code"] == "OBLIGATION_NOT_IN_PLAN"
+        for row in attempts
+        if row["terminal_status"] == "DEFERRED"
     )
     assert result["phases"]["execution"]["observed_http_request_count"] >= 3
     assert result["phases"]["execution"]["production_http_requests"] == 0

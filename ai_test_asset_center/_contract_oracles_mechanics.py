@@ -36,6 +36,12 @@ CONTRACT_ORACLE_POST_HOC_FIELDS = frozenset({
     "pre_causality_oracle_verdict",
     "authorization_delivery_gate",
     "authorization_delivery_reason",
+    "oracle_validity_gate",
+    "oracle_validity_reason_codes",
+    "oracle_validity_receipt_id",
+    "pre_validity_oracle_verdict",
+    "effect_observation_graph_receipt_id",
+    "effect_observation_graph_status",
 })
 _CONTRACT_EVIDENCE_KINDS = frozenset({
     "actor",
@@ -171,8 +177,19 @@ def _plan_subjects(experiment: dict[str, Any], key: str, prefix: str) -> list[st
         step = _dict(raw)
         subject = _text(step.get("step_id") or step.get("id"))
         if not subject:
-            operation = _text(step.get("operation_ref")) or "operation"
-            subject = f"{prefix}:{operation}:{index + 1}"
+            # Multi-write cleanup expansion stamps source_step_id (control_1 /
+            # treatment_1). Prefer that over a generic operation index so each
+            # cleanup subject stays 1:1 with the write it compensates.
+            source_step = _text(step.get("source_step_id"))
+            if source_step:
+                subject = f"{prefix}:{source_step}"
+            else:
+                operation = (
+                    _text(step.get("operation_ref"))
+                    or _text(step.get("compensates_operation_ref"))
+                    or "operation"
+                )
+                subject = f"{prefix}:{operation}:{index + 1}"
         subjects.append(subject)
     return list(dict.fromkeys(subjects))
 
@@ -398,9 +415,23 @@ def build_contract_oracle_activation_receipt(
         contract_by_key[key] = validated
         status = _text(validated.get("status")).upper()
         if status == "FAILED":
-            harness_failures.append(
-                f"{key[0].upper()}_RECEIPT_FAILED:{key[1]}"
+            evidence_row = _dict(validated.get("evidence"))
+            # Explicit zero-transport marks are binding/governance gaps, not
+            # harness infrastructure failures. Keep FAILED→HF for transport-
+            # reached requests that still could not produce a usable receipt.
+            zero_transport_block = (
+                key[0] in {"control", "treatment", "cleanup"}
+                and int(evidence_row.get("status_code") or 0) <= 0
+                and evidence_row.get("write_reached_transport") is False
             )
+            if zero_transport_block:
+                blockers.append(
+                    f"{key[0].upper()}_RECEIPT_BLOCKED:{key[1]}"
+                )
+            else:
+                harness_failures.append(
+                    f"{key[0].upper()}_RECEIPT_FAILED:{key[1]}"
+                )
         elif status == "BLOCKED":
             blockers.append(f"{key[0].upper()}_RECEIPT_BLOCKED:{key[1]}")
 
@@ -534,9 +565,20 @@ def build_contract_oracle_activation_receipt(
         observer_by_id.setdefault(observer_id, []).append(observer)
         observer_status = _text(observer.get("status")).upper()
         if observer_status in {"FAILED", "UNSUPPORTED"}:
-            harness_failures.append(
-                f"OBSERVER_RECEIPT_{observer_status}:{observer_id}"
-            )
+            observer_evidence = _dict(observer.get("evidence"))
+            # Step-scoped http_response FAILED with an explicit zero-transport
+            # mark is missing observation, not harness infrastructure failure.
+            if (
+                observer_id == "http_response"
+                and observer_status == "FAILED"
+                and int(observer_evidence.get("status_code") or 0) <= 0
+                and observer_evidence.get("write_reached_transport") is False
+            ):
+                blockers.append(f"OBSERVER_RECEIPT_INDETERMINATE:{observer_id}")
+            else:
+                harness_failures.append(
+                    f"OBSERVER_RECEIPT_{observer_status}:{observer_id}"
+                )
     for observer_id in required["observer"]:
         observer_rows = observer_by_id.get(observer_id) or []
         if not observer_rows:
@@ -960,9 +1002,12 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         # oracle verdict (VIOLATION → INDETERMINATE) when causal proof is
         # insufficient. When pre_causality_oracle_verdict is present, validate
         # the ORIGINAL verdict against assertions and accept the override.
-        # The authorization delivery gate also overrides verdicts post-hoc.
+        # The authorization delivery gate and SPEC oracle validity gates also
+        # override verdicts post-hoc (demote only).
         _pre_causality = row.get("pre_causality_oracle_verdict")
+        _pre_validity = row.get("pre_validity_oracle_verdict")
         _delivery_gate_override = bool(row.get("authorization_delivery_gate"))
+        _validity_gate_override = bool(row.get("oracle_validity_gate"))
         if isinstance(_pre_causality, dict) and _pre_causality:
             _pre_ok = (
                 _text(_pre_causality.get("status")) == expected_status
@@ -970,8 +1015,15 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
             )
             if not _pre_ok:
                 raise ValueError("contract_oracle_semantics_invalid")
-        elif _delivery_gate_override:
-            pass  # delivery gate legitimately overrides verdict
+        elif isinstance(_pre_validity, dict) and _pre_validity:
+            _pre_ok = (
+                _text(_pre_validity.get("status")) == expected_status
+                and _text(_pre_validity.get("verdict")) == expected_verdict
+            )
+            if not _pre_ok:
+                raise ValueError("contract_oracle_semantics_invalid")
+        elif _delivery_gate_override or _validity_gate_override:
+            pass  # post-hoc demotion gates legitimately override verdict
         else:
             raise ValueError("contract_oracle_semantics_invalid")
     # V1.7: The authorization causality gate (PASSED path) appends enrichment

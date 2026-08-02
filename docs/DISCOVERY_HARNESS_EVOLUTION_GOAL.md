@@ -354,6 +354,8 @@ python tools/discovery_evaluation.py goal-status --report <immutable-report.json
 
 The evaluator output deliberately omits the ground-truth source path. When the Trace Ledger is present, `metrics.stage_loss_diagnostics` reports every hidden Bug's first loss stage across hypothesis generation, endpoint binding, selection, execution, Oracle evaluation/resolution, and formal delivery. These diagnostics never change TP/FP/FN scoring.
 
+Product-side Fact→Experiment Phase 1 adds GT-free `qualibug.fact-experimentability-ledger.v1` and `qualibug.fact-first-loss-ledger.v1` (see `docs/FACT_EXPERIMENTABILITY_FIRST_LOSS.md`). Authenticated evaluation may also attach `metrics.fact_first_loss_diagnostics` (`qualibug.evaluator-fact-first-loss-ledger.v1`) by mapping stage-loss rows onto the SPEC first-loss enum; that join remains diagnostic-only and never changes TP/FP/FN.
+
 ## North-star metrics (priority order)
 
 Only formal customer-deliverable findings may enter commercial scores. Internal

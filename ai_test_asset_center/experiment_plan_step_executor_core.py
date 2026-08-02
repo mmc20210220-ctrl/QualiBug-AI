@@ -27,6 +27,9 @@ from .experiment_runtime_support import (
     _text,
     _unresolved_body_placeholders,
     _unresolved_path_placeholders,
+    _missing_required_body_fields,
+    _foreign_key_violations,
+    _unauthorized_actor_role,
 )
 from .real_id_resolver import (
     infer_path_params,
@@ -362,6 +365,76 @@ def execute_non_barrier_plans(
                 })
                 pre_transport_block_reasons.append(f"unresolved_body_placeholders:{','.join(unresolved_body_tokens[:6])}")
                 continue
+            if method in _WRITE_METHODS:
+                # ── P1: fail fast on missing required body fields ──
+                # The materialized body must satisfy the operation's declared
+                # request schema. If a required field is absent/empty (e.g. the
+                # target 500s on a not-null constraint like `sku`), block here
+                # with a visible reason instead of letting the target error.
+                missing_required = _missing_required_body_fields(request_body, op)
+                if missing_required:
+                    results.append({
+                        "phase": phase,
+                        "subject_id": subject_id,
+                        "method": method,
+                        "path": path,
+                        "status_code": 0,
+                        "skipped_reason": f"BLOCKED_MISSING_REQUIRED_BODY_FIELDS:{','.join(missing_required[:6])}",
+                        "request": {"body": request_body} if request_body else {},
+                        "response": {"status_code": 0, "body": {}},
+                    })
+                    pre_transport_block_reasons.append(
+                        f"missing_required_body_fields:{','.join(missing_required[:6])}"
+                    )
+                    continue
+            if method in _WRITE_METHODS:
+                # ── P1: fail fast on fabricated/placeholder foreign keys ──
+                # A bound user_id/order_id/coupon_code that resolves to a
+                # placeholder, sentinel, or default (e.g. "1") cannot reference
+                # a real entity and will 500/404 at the target. Block before
+                # transport with a visible reason (§8.5.3: avoid fabricated IDs).
+                fk_violations = _foreign_key_violations(request_body, op)
+                if fk_violations:
+                    results.append({
+                        "phase": phase,
+                        "subject_id": subject_id,
+                        "method": method,
+                        "path": path,
+                        "status_code": 0,
+                        "skipped_reason": f"BLOCKED_FABRICATED_FOREIGN_KEY:{','.join(fk_violations[:6])}",
+                        "request": {"body": request_body} if request_body else {},
+                        "response": {"status_code": 0, "body": {}},
+                    })
+                    pre_transport_block_reasons.append(
+                        f"fabricated_foreign_key:{','.join(fk_violations[:6])}"
+                    )
+                    continue
+            # ── P2: pre-transport actor permission check (§8.5.4) ──
+            # 54 envelope-observed 403s (e.g. PATCH /api/users/admin/.../balance,
+            # POST /api/products/admin) come from an actor whose role is not
+            # permitted on the target operation. The contract declares the
+            # required roles; block before transport instead of letting the
+            # target return 403 (which the funnel would misread as a finding).
+            unauth_role = _unauthorized_actor_role(op, actor)
+            if unauth_role is not None:
+                required_roles = [
+                    str(r).lower()
+                    for r in _list(op.get("required_roles") or op.get("allowed_roles"))
+                ]
+                results.append({
+                    "phase": phase,
+                    "subject_id": subject_id,
+                    "method": method,
+                    "path": path,
+                    "status_code": 0,
+                    "skipped_reason": f"BLOCKED_UNAUTHORIZED_ACTOR:{unauth_role}->{'|'.join(required_roles[:6])}",
+                    "request": {"body": request_body} if (method in _WRITE_METHODS and request_body) else {},
+                    "response": {"status_code": 0, "body": {}},
+                })
+                pre_transport_block_reasons.append(
+                    f"unauthorized_actor:{unauth_role}->{'|'.join(required_roles[:6])}"
+                )
+                continue
             runtime_body_plan = deepcopy(_dict(step.get("runtime_body_plan")))
             if runtime_body_plan:
                 identity_fields = infer_path_params(path_template)
@@ -591,6 +664,29 @@ def execute_non_barrier_plans(
                         source_observed_control_bodies[op_ref] = deepcopy(request_body)
                 request_bodies_for_cleanup[subject_id] = request_body
                 write_receipt = _dict(governed.get("write"))
+                # Zero-transport governance blocks after a real before-GET are
+                # identity/mutation gaps, not connection failures. The write step
+                # keeps status_code=0, which previously fell through finalize's
+                # HARNESS_CONNECTION_FAILED fallback even when the observation
+                # gateway had already counted the before request.
+                _write_attempts = int(
+                    governed.get("write_request_attempt_count") or 0
+                )
+                _before_obs = _dict(governed.get("before"))
+                _before_status = int(_before_obs.get("status") or 0)
+                _gov_reason = _text(
+                    governed.get("reason") or write_receipt.get("error")
+                )
+                # Empty reason still means the write never left the harness after
+                # a real before-GET — seal as pre-transport BLOCKED, not COHF.
+                if (
+                    _write_attempts == 0
+                    and _before_status > 0
+                    and "connection" not in _gov_reason.lower()
+                ):
+                    _block_reason = _gov_reason or "governed_write_not_attempted"
+                    if _block_reason not in pre_transport_block_reasons:
+                        pre_transport_block_reasons.append(_block_reason)
                 if 200 <= int(write_receipt.get("status") or 0) < 300:
                     response_bound_path = _response_bound_observation_path(
                         op,
@@ -689,13 +785,26 @@ def execute_non_barrier_plans(
                         "status_code": int(after_state.get("status") or 0),
                     },
                 ])
+            _gov_for_status = _dict(obs.get("governance_receipt"))
+            _write_reached = (
+                int(_gov_for_status.get("write_request_attempt_count") or 0) > 0
+            )
+            # Governed writes blocked before transport (status_code=0,
+            # write_request_attempt_count=0) are plan/binding gaps — BLOCKED.
+            # FAILED is reserved for transport-reached requests that still
+            # produced no usable response (connection drop after send, etc.).
+            # Stamping FAILED here previously activated CONTRACT_ORACLE_HARNESS_FAILED
+            # for 8× authorization/validation arms on T140342Z.
+            _zero_transport_governed_block = (
+                observed_status <= 0
+                and bool(_gov_for_status)
+                and not _write_reached
+            )
             contract_status = (
                 "BLOCKED"
-                if runtime_body_blocked
+                if runtime_body_blocked or _zero_transport_governed_block
                 else "OBSERVED"
-                if phase == "control" and observed_status > 0
-                else "OBSERVED"
-                if phase == "treatment" and observed_status > 0
+                if observed_status > 0
                 else "FAILED"
             )
             contract_evidence_receipts.append(build_contract_evidence_receipt(
@@ -720,6 +829,10 @@ def execute_non_barrier_plans(
                     "mutation_selector": mutation_selector,
                     "mutation_operator": mutation_operator,
                     "response_observed": observed_status > 0,
+                    "write_reached_transport": _write_reached,
+                    "request_reached_transport": (
+                        observed_status > 0 or _write_reached
+                    ),
                     "control_succeeded": (
                         200 <= observed_status < 300
                         if phase == "control"

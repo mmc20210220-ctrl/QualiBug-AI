@@ -44,6 +44,12 @@ export function DiscoveryFunnelPanel({ funnel, report }: Props) {
   };
   const selectedCount = receiptCount('selected_count', 'selected_count');
   const totalCount = receiptCount('generated_count', 'generated_count');
+  const accountedCount = receiptCount('accounted_count', 'accounted_count');
+  const terminalCount = receiptCount('terminal_count', 'terminal_count');
+  const unaccountedCount = receiptCount('unaccounted_count', 'unaccounted_count');
+  const deferredNotSelectedCount = receiptCount('not_selected_count', 'not_selected_count');
+  const compileBlockedNotSelectedCount = receiptCount('compile_blocked_not_selected_count', 'compile_blocked_not_selected_count');
+  const planBlockedCount = receiptCount('plan_blocked_count', 'plan_blocked_count');
   const compiledCount = receiptCount('compile_success_count', 'compiled_count');
   const executedCount = receiptCount('execution_count', 'executed_count');
   const executionBlockedCount = receiptCount('execution_blocked_count', 'execution_blocked_count');
@@ -53,7 +59,13 @@ export function DiscoveryFunnelPanel({ funnel, report }: Props) {
   const oracleViolationCount = receiptCount('oracle_violation_count', 'oracle_violation_count');
   const deliverableCount = receiptCount('customer_deliverable_finding_count', 'formal_delivery_count');
   const counts = useMemo(() => ([
-    ['Total obligations', totalCount],
+    ['Formal obligations', totalCount],
+    ['Accounted terminal outcomes', accountedCount],
+    ['Unaccounted obligations', unaccountedCount],
+    ['Deferred, not selected', deferredNotSelectedCount],
+    ['Compile blocked, not selected', compileBlockedNotSelectedCount],
+    ['Plan blocked', planBlockedCount],
+    ['Terminal', terminalCount],
     ['Compiled', compiledCount],
     ['Compile blocked', compileBlockedCount],
     ['Compile deferred', compileDeferredCount],
@@ -63,7 +75,7 @@ export function DiscoveryFunnelPanel({ funnel, report }: Props) {
     ['Oracle resolved', oracleResolvedCount],
     ['Oracle violations', oracleViolationCount],
     ['Deliverable findings', deliverableCount],
-  ]), [compileBlockedCount, compileDeferredCount, compiledCount, deliverableCount, executedCount, executionBlockedCount, oracleResolvedCount, oracleViolationCount, selectedCount, totalCount]);
+  ]), [accountedCount, compileBlockedCount, compileBlockedNotSelectedCount, compileDeferredCount, compiledCount, deferredNotSelectedCount, deliverableCount, executedCount, executionBlockedCount, oracleResolvedCount, oracleViolationCount, planBlockedCount, selectedCount, terminalCount, totalCount, unaccountedCount]);
   const healthStatus = asText(health.status) || 'UNKNOWN';
   const qualityStatus = asText(asRecord(reportValue.quality).status) || asText(asRecord(value.quality).status) || 'NOT_MEASURED';
   const reportStatus = asText(reportValue.report_status) || 'NOT_AVAILABLE';

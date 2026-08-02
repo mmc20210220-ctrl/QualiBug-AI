@@ -28,9 +28,26 @@ from ai_test_asset_center.observer_contracts_base import OBSERVER_REGISTRY
 from ai_test_asset_center.persistence_assertions import (
     KIND_FIELD_BOUND,
     KIND_STATE_ENUMERATION,
+    RISK_FAMILY,
     install_persistence_surface,
 )
 from ai_test_asset_center.persistence_observer import EVIDENCE_KEY, OBSERVER_ID
+
+
+def _unregister_persistence_risk_family() -> None:
+    """Undo register_risk_family's descriptor writes so teardown restores the
+    pre-install registry state. Without this the family survives in the by-family
+    maps while its observer is popped, and any later registry check sees a family
+    declaring an unusable observer."""
+    from ai_test_asset_center import experiment_compiler_obligation as _eco
+    from ai_test_asset_center import obligation_source_adapter as _osa
+    from ai_test_asset_center.test_obligation import _RUNTIME_CANONICAL_FAMILIES
+
+    _RUNTIME_CANONICAL_FAMILIES.pop(RISK_FAMILY, None)
+    _osa._RELATION_TYPES_BY_FAMILY.pop(RISK_FAMILY, None)
+    _osa._TEMPLATE_BY_FAMILY.pop(RISK_FAMILY, None)
+    _osa._OBSERVERS_BY_FAMILY.pop(RISK_FAMILY, None)
+    _eco._FAMILY_ASSERTION_KIND.pop(RISK_FAMILY, None)
 
 
 @pytest.fixture()
@@ -43,6 +60,7 @@ def persistence_surface() -> Iterator[dict[str, str]]:
         SUPPORTED_KINDS.discard(kind)
     OBSERVER_REGISTRY.pop(OBSERVER_ID, None)
     ocb._REGISTERED_OBSERVER_HANDLERS.pop(OBSERVER_ID, None)
+    _unregister_persistence_risk_family()
 
 
 def _observations(

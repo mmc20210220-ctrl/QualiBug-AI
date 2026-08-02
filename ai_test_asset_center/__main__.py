@@ -847,6 +847,22 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             output,
             funnel=_as_dict(result.get("discovery_funnel")),
         )
+        try:
+            from .fact_first_loss_ledger import write_fact_tracking_report_files
+
+            result["fact_tracking_report_paths"] = write_fact_tracking_report_files(
+                result,
+                output,
+            )
+            result["fact_first_loss_ledger"] = result.get("fact_first_loss_ledger")
+            result["fact_experimentability_report"] = result.get(
+                "fact_experimentability_report"
+            )
+        except Exception as exc:
+            _LOGGER.exception("fact_tracking_report_write_failed")
+            result.setdefault("stage_failures", []).append(
+                f"FACT_TRACKING_REPORT_FAILED:{type(exc).__name__}"
+            )
     output_root = root / "platform_outputs" / _safe_project(project)
     _write_json(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")

@@ -31,6 +31,7 @@ from .experiment_compiler_support import (  # noqa: F401
     _state_match_token,
     _state_semantic_value,
 )
+from .abstract_experiment import is_capability_gap_reason
 from .experiment_compiler_obligation import (  # noqa: F401
     BLOCK_REASONS,
     SCHEMA_VERSION,
@@ -158,6 +159,7 @@ def compile_experiments(
     compiler = compile_one or compile_experiment_for_obligation
     compiled: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    abstract: list[dict[str, Any]] = []
     operations = _index_by_id(_list(_dict(behavior_ir).get("operations")))
     for obl in obligations:
         if not isinstance(obl, dict):
@@ -206,6 +208,7 @@ def compile_experiments(
         )
         variant_compiled = 0
         variant_blocked = 0
+        variant_abstract = 0
         for variant in variants:
             experiment = compiler(
                 variant,
@@ -221,30 +224,54 @@ def compile_experiments(
                 behavior_ir=behavior_ir,
             )
             receipt = _dict(experiment.get("compile_receipt"))
-            if _text(receipt.get("status")) == "COMPILED":
+            status = _text(receipt.get("status")).upper()
+            reason = _text(receipt.get("reason_code"))
+            if status == "COMPILED":
                 compiled.append(experiment)
                 variant["compile_status"] = "COMPILED"
                 variant_compiled += 1
+            elif status == "ABSTRACT" or (
+                status == "BLOCKED" and is_capability_gap_reason(reason)
+            ):
+                if status != "ABSTRACT":
+                    from .abstract_experiment import promote_blocked_to_abstract
+
+                    experiment = promote_blocked_to_abstract(experiment, variant)
+                abstract.append(experiment)
+                variant["compile_status"] = "ABSTRACT"
+                variant["block_reason"] = reason
+                variant_abstract += 1
             else:
                 blocked.append(experiment)
                 variant["compile_status"] = "BLOCKED"
                 variant["block_reason"] = receipt.get("reason_code")
                 variant_blocked += 1
-        obl["compile_status"] = "COMPILED" if variant_compiled else "BLOCKED"
+        if variant_compiled:
+            obl["compile_status"] = "COMPILED"
+        elif variant_abstract:
+            obl["compile_status"] = "ABSTRACT"
+        else:
+            obl["compile_status"] = "BLOCKED"
         obl["expanded_experiment_count"] = len(variants)
         obl["compiled_experiment_count"] = variant_compiled
         obl["blocked_experiment_count"] = variant_blocked
-        if not variant_compiled and blocked:
-            obl["block_reason"] = _dict(blocked[-1].get("compile_receipt")).get(
+        obl["abstract_experiment_count"] = variant_abstract
+        if not variant_compiled:
+            source = abstract[-1] if variant_abstract and abstract else (
+                blocked[-1] if blocked else {}
+            )
+            obl["block_reason"] = _dict(source.get("compile_receipt")).get(
                 "reason_code"
             )
     return {
         "schema_version": "qualibug.experiment-compile.v1",
         "compiled_count": len(compiled),
         "blocked_count": len(blocked),
+        "abstract_count": len(abstract),
         "experiments": compiled,
         "blocked_experiments": blocked,
-        "block_reason_counts": _count_reasons(blocked),
+        "abstract_experiments": abstract,
+        "block_reason_counts": _count_reasons(blocked + abstract),
     }
 
 

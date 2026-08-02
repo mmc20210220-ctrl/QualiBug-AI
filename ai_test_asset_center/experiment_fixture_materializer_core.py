@@ -25,6 +25,7 @@ from .experiment_runtime_support import (
 )
 from .real_id_resolver import (
     bind_entity_fields,
+    collection_path,
     normalize_path_placeholders,
     path_has_placeholders,
 )
@@ -104,6 +105,61 @@ def _validate_fixture_preconditions(
             })
 
     return failures
+
+
+def _source_backed_dependency_fixture_setup(
+    *,
+    dependency_leaf: str,
+    resolver_operations: list[Any],
+    ops: dict[str, dict[str, Any]],
+    actors: dict[str, dict[str, Any]],
+    behavior_ir: dict[str, Any] | None,
+    binding_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a validated disposable-create setup for one create-body FK.
+
+    Used when a parent fixture's body dependency list-read returns empty.
+    Only source-declared POST + request_example + identity-bound cleanup may
+    produce a setup — never invents identifiers or undeclared cleanup.
+    """
+    from .runtime_binding_graph import _declared_fixture_setup
+
+    resolver_path = ""
+    for resolver in resolver_operations:
+        if isinstance(resolver, dict) and _text(resolver.get("path")).startswith("/"):
+            resolver_path = _text(resolver.get("path"))
+            break
+    synthetic_op = {
+        "id": f"dependency_read:{dependency_leaf}",
+        "method": "GET",
+        "path": resolver_path or f"/{{{dependency_leaf}}}",
+    }
+    declared = _declared_fixture_setup(
+        synthetic_op,
+        target=dependency_leaf,
+        behavior_ir=_dict(behavior_ir) or {"operations": list(ops.values())},
+    )
+    binding: dict[str, Any] = {
+        "target": dependency_leaf,
+        "target_path": f"/{{{dependency_leaf}}}",
+        "resolver_operations": [
+            dict(row) for row in resolver_operations if isinstance(row, dict)
+        ],
+    }
+    if declared:
+        binding["fixture_setup"] = declared
+    else:
+        auto_create = _auto_fixture_create_for_binding_target(
+            dependency_leaf,
+            binding,
+            ops,
+            binding_plan,
+            actors=actors,
+            behavior_ir=behavior_ir,
+        )
+        if auto_create:
+            binding = {**binding, **auto_create}
+    return _validated_fixture_setup(binding, ops, actors)
 
 
 def _auto_fixture_create_for_binding_target(
@@ -562,9 +618,55 @@ def materialize_experiment_fixtures(
                 if auto_create:
                     binding = {**binding, **auto_create}
                 fixture_setup = _validated_fixture_setup(binding, ops, actors)
+                _fs_blocked = ""
+                if not fixture_setup:
+                    # Distinguish missing cleanup / example from a blank gap so
+                    # funnel diagnosis does not collapse every empty-collection
+                    # miss into opaque fixture_setup_not_generated.
+                    _declared = _dict(binding.get("fixture_setup"))
+                    _create_path_hint = _text(
+                        _declared.get("path")
+                        or binding.get("create_path")
+                        or (
+                            (_list(binding.get("resolver_operations")) or [{}])[0].get(
+                                "path"
+                            )
+                            if _list(binding.get("resolver_operations"))
+                            else ""
+                        )
+                    )
+                    _has_post_create = any(
+                        isinstance(_op, dict)
+                        and _text(_op.get("method")).upper() == "POST"
+                        and normalize_path_placeholders(
+                            _text(_op.get("path") or _op.get("raw_path"))
+                        )
+                        == normalize_path_placeholders(
+                            collection_path(_create_path_hint)
+                            if _create_path_hint
+                            else ""
+                        )
+                        for _op in ops.values()
+                    )
+                    if _has_post_create and not _list(_declared.get("cleanup_operations")):
+                        from .runtime_binding_graph import _declared_cleanup_operations
+
+                        _cleanup = _declared_cleanup_operations(
+                            normalize_path_placeholders(
+                                collection_path(_create_path_hint)
+                                if _create_path_hint
+                                else _create_path_hint
+                            ),
+                            behavior_ir=_dict(behavior_ir)
+                            or {"operations": list(ops.values())},
+                        )
+                        if not _cleanup:
+                            _fs_blocked = "fixture_setup_missing_cleanup"
+                    if not _fs_blocked:
+                        _fs_blocked = "fixture_setup_not_generated"
                 _fs_diag = {
                     "generated": bool(fixture_setup),
-                    "blocked_reason": "" if fixture_setup else "fixture_setup_not_generated",
+                    "blocked_reason": "" if fixture_setup else _fs_blocked,
                     "create_path": "",
                     "create_status": 0,
                     "dependency": "",
@@ -581,15 +683,46 @@ def materialize_experiment_fixtures(
                     _fs_diag["blocked_reason"] = "fixture_setup_no_actor"
                 token_values: dict[str, Any] = {}
                 dependency_blocked = False
-                _dependency_actor: list[tuple[str, str]] = [
-                    (fixture_actor_ref, fixture_token)
-                ]
+                # Prefer the fixture actor, then other authenticated actors that
+                # may already own dependency rows (buyer addresses vs admin).
+                _dependency_actor: list[tuple[str, str]] = []
+                _seen_dep_actors: set[str] = set()
+                for _cand_ref, _cand_tok in (
+                    [(fixture_actor_ref, fixture_token)]
+                    + [
+                        (_ref, _resolve_token(_act, tokens))
+                        for _ref, _act in actors.items()
+                        if isinstance(_act, dict)
+                    ]
+                ):
+                    if not _cand_ref or _cand_ref in _seen_dep_actors:
+                        continue
+                    if not _cand_tok and _cand_ref != fixture_actor_ref:
+                        continue
+                    _seen_dep_actors.add(_cand_ref)
+                    _dependency_actor.append((_cand_ref, _cand_tok))
+                if not _dependency_actor and fixture_actor_ref:
+                    _dependency_actor = [(fixture_actor_ref, fixture_token)]
                 for dependency in _list(fixture_setup.get("body_bindings")):
                     dependency_target = _text(_dict(dependency).get("target"))
                     dependency_token = _text(_dict(dependency).get("template_token"))
                     dependency_value: Any = None
                     dependency_leaf = dependency_target.split(".")[-1].split("[")[0]
+                    # Reuse a value already bound earlier in this experiment
+                    # (e.g. address_id materialization before order create).
+                    for _prior_key in (
+                        dependency_token,
+                        dependency_leaf,
+                        dependency_target,
+                    ):
+                        _prior_val = runtime_bindings.get(_prior_key)
+                        if _prior_val not in (None, "", [], {}):
+                            dependency_value = _prior_val
+                            token_values[dependency_token] = dependency_value
+                            break
                     for index, resolver in enumerate(_list(_dict(dependency).get("resolver_operations"))):
+                        if dependency_value not in (None, "", [], {}):
+                            break
                         if not isinstance(resolver, dict):
                             continue
                         for _dep_idx, (_dep_actor, _dep_token) in enumerate(
@@ -634,12 +767,137 @@ def materialize_experiment_fixtures(
                             break
                         if dependency_value not in (None, "", [], {}):
                             break
-                    # When a fixture dependency cannot be resolved from observed
-                    # data, the fixture setup is blocked — never fabricate IDs
-                    # or auto-create resources via hidden writes.
+                    # Empty list-read: attempt one source-backed disposable
+                    # create for the dependency (POST+example+cleanup only).
+                    # Never invent IDs or skip the cleanup authority gate.
+                    if dependency_value in (None, "", [], {}):
+                        dep_setup = _source_backed_dependency_fixture_setup(
+                            dependency_leaf=dependency_leaf,
+                            resolver_operations=_list(
+                                _dict(dependency).get("resolver_operations")
+                            ),
+                            ops=ops,
+                            actors=actors,
+                            behavior_ir=behavior_ir,
+                            binding_plan=binding_plan,
+                        )
+                        dep_actor_ref, dep_actor, dep_token = _select_fixture_actor(
+                            dep_setup,
+                            control_plan=_list(exp.get("control_plan")),
+                            treatment_plan=_list(exp.get("treatment_plan")),
+                            actors=actors,
+                            tokens=tokens,
+                        )
+                        if dep_setup and dep_actor_ref and not _list(
+                            dep_setup.get("body_bindings")
+                        ):
+                            # Prefer the dependency's own collection list-read
+                            # as the governed observation path when declared.
+                            dep_observation = _text(dep_setup.get("path"))
+                            for _dep_res in _list(
+                                _dict(dependency).get("resolver_operations")
+                            ):
+                                if isinstance(_dep_res, dict) and _text(
+                                    _dep_res.get("path")
+                                ).startswith("/"):
+                                    dep_observation = _text(_dep_res.get("path"))
+                                    break
+                            dep_governed = execute_governed_control_write(
+                                root=root,
+                                project=project,
+                                base_url=base_url,
+                                runtime_contract=runtime_contract,
+                                campaign_id=campaign_id,
+                                operation_phase="experiment_fixture_setup",
+                                actor_identity=_text(
+                                    dep_actor.get("role") or dep_actor_ref
+                                ),
+                                actor_token=dep_token,
+                                method=_text(dep_setup.get("method")).upper(),
+                                path=_text(dep_setup.get("path")),
+                                body=_materialize_body_template(
+                                    dep_setup.get("body_template"),
+                                    {},
+                                ),
+                                observation_path=dep_observation
+                                or _text(dep_setup.get("path")),
+                            )
+                            dep_write = _dict(dep_governed.get("write"))
+                            dep_status = int(dep_write.get("status") or 0)
+                            steps_out.append({
+                                "phase": "fixture_setup_dependency",
+                                "method": _text(dep_setup.get("method")).upper(),
+                                "path": _text(dep_setup.get("path")),
+                                "status_code": dep_status,
+                                "operation_ref": _text(dep_setup.get("operation_ref")),
+                                "dependency_leaf": dependency_leaf,
+                                "governance_receipt": dep_governed,
+                            })
+                            if 200 <= dep_status < 300:
+                                dependency_value = _runtime_setup_value_from_response(
+                                    dep_write.get("body"),
+                                    dependency_leaf,
+                                )
+                            if dependency_value not in (None, "", [], {}):
+                                token_values[dependency_token] = dependency_value
+                                runtime_bindings[dependency_leaf] = dependency_value
+                                if dependency_token:
+                                    runtime_bindings[dependency_token] = dependency_value
+                                if dep_actor_ref and dep_actor_ref != fixture_actor_ref:
+                                    fixture_actor_ref = dep_actor_ref
+                                    fixture_actor = dep_actor
+                                    fixture_token = dep_token
+                                _dep_cleanup_ops = _list(
+                                    dep_setup.get("cleanup_operations")
+                                )
+                                _dep_first_cleanup = (
+                                    _dep_cleanup_ops[0]
+                                    if _dep_cleanup_ops
+                                    else {}
+                                )
+                                pending_fixture_cleanups.append({
+                                    "target": dependency_leaf,
+                                    "value": dependency_value,
+                                    "observation_path": dep_observation
+                                    or _text(dep_setup.get("path")),
+                                    "cleanup": dict(_dep_first_cleanup)
+                                    if isinstance(_dep_first_cleanup, dict)
+                                    else {},
+                                    "receipt": {
+                                        "status": "BOUND",
+                                        "source_priority": "experiment_setup_response",
+                                        "resolver_path": _text(dep_setup.get("path")),
+                                    },
+                                    "actor_ref": dep_actor_ref,
+                                    "actor_identity": _text(
+                                        dep_actor.get("role") or dep_actor_ref
+                                    ),
+                                    "actor_token": dep_token,
+                                    "governed_setup": dep_governed,
+                                })
+                            else:
+                                _fs_diag["blocked_reason"] = (
+                                    f"dependency_fixture_create_failed:{dependency_leaf}"
+                                )
+                        elif dependency_value in (None, "", [], {}):
+                            if dep_setup and _list(dep_setup.get("body_bindings")):
+                                _fs_diag["blocked_reason"] = (
+                                    f"dependency_fixture_nested_unsupported:"
+                                    f"{dependency_leaf}"
+                                )
+                            elif not dep_setup:
+                                _fs_diag["blocked_reason"] = (
+                                    f"dependency_fixture_setup_not_generated:"
+                                    f"{dependency_leaf}"
+                                )
                     if dependency_value in (None, "", [], {}):
                         dependency_blocked = True
-                        _fs_diag["blocked_reason"] = f"dependency_unresolved:{dependency_leaf}"
+                        if not _text(_fs_diag.get("blocked_reason")).startswith(
+                            "dependency_"
+                        ):
+                            _fs_diag["blocked_reason"] = (
+                                f"dependency_unresolved:{dependency_leaf}"
+                            )
                         _fs_diag["dependency"] = dependency_leaf
                 if fixture_setup and not dependency_blocked:
                     setup_body = _materialize_body_template(

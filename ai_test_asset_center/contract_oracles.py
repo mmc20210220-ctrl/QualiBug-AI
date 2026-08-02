@@ -316,7 +316,15 @@ def _validate_canonical_projection(
 
 def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     row = _dict(receipt)
-    if row.get("pre_causality_oracle_verdict") or row.get("authorization_delivery_gate"):
+    # Post-hoc demotion gates (authorization causality, delivery, SPEC oracle
+    # validity) mutate status/verdict after the sealed receipt_id was computed.
+    # Accept those annotated receipts when the gate provenance fields are present.
+    if (
+        row.get("pre_causality_oracle_verdict")
+        or row.get("authorization_delivery_gate")
+        or row.get("pre_validity_oracle_verdict")
+        or row.get("oracle_validity_gate")
+    ):
         if not _text(row.get("receipt_id")):
             raise ValueError("contract_oracle_receipt_fingerprint_invalid")
         if _text(row.get("status")) not in {

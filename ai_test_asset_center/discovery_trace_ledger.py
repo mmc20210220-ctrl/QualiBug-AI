@@ -11,11 +11,71 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_redactor import redact_and_validate
+from .blocker_attribution import profile_reason_code
 from .obligation_attempt_ledger import validate_obligation_attempt_ledger
 
 
 TRACE_LEDGER_SCHEMA = "qualibug.discovery-trace-ledger.v3"
 TRACE_LEDGER_V1_SCHEMA = "qualibug.discovery-trace-ledger.v1"
+
+_BINDING_REASON_CODES = frozenset({
+    "BLOCKED_MISSING_BINDING",
+    "PARAMETER_BINDING_BLOCKED",
+    "BLOCKED_BINDING_CYCLE",
+    "BLOCKED_BINDING_GRAPH_INVALID",
+    "BLOCKED_BINDING_LOCATION_NOT_MATERIALIZABLE",
+    "BLOCKED_FORBIDDEN_BINDING_SOURCE",
+})
+_OPERATION_REASON_CODES = frozenset({
+    "BLOCKED_MISSING_OPERATION",
+    "MISSING_PRIMARY_OPERATION",
+})
+_ACTOR_REASON_CODES = frozenset({
+    "BLOCKED_MISSING_ACTOR",
+    "BLOCKED_MISSING_ACTOR_SECRET",
+    "MISSING_ACTOR",
+    "MISSING_CREDENTIAL",
+})
+_PRECONDITION_REASON_CODES = frozenset({
+    "BLOCKED_MISSING_FIXTURE",
+    "BLOCKED_PRECONDITION_UNREACHABLE",
+    "DATABASE_STATE_PRECONDITION_NOT_MET",
+    "STATE_PRECONDITION_NOT_MET",
+    "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+})
+_OBSERVER_REASON_CODES = frozenset({
+    "BLOCKED_MISSING_OBSERVER",
+    "BLOCKED_OBSERVER_CONTRACT_DRIFT",
+    "BLOCKED_OBSERVER_RESOLUTION_FAILED",
+    "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE",
+    "MISSING_OBSERVER",
+    "ORACLE_NOT_READY",
+})
+_CLEANUP_FAILED_REASON_CODES = frozenset({
+    "ADAPTER_CLEANUP_RECEIPT_MISSING",
+    "CLEANUP_ACTIVATION_REFERENCE_MISMATCH",
+    "CLEANUP_COMPENSATION_FAILED",
+    "CLEANUP_EVIDENCE_INCOMPLETE",
+    "CLEANUP_EXECUTION_RECEIPT_MISSING",
+    "CLEANUP_GOVERNANCE_AUDIT_RECEIPT_MISSING",
+    "CLEANUP_WRITE_COVERAGE_MISMATCH",
+    "HARNESS_CLEANUP_EQUIVALENCE_FAILED",
+})
+_CLEANUP_NOT_REVERSIBLE_REASON_CODES = frozenset({
+    "BLOCKED_NON_REVERSIBLE",
+    "BLOCKED_NON_REVERSIBLE_WRITE",
+    "NON_REVERSIBLE_WRITE",
+})
+_CLEANUP_RECEIPT_REASON_CODES = frozenset({
+    "ADAPTER_CLEANUP_RECEIPT_MISSING",
+    "CLEANUP_EXECUTION_RECEIPT_MISSING",
+    "CLEANUP_GOVERNANCE_AUDIT_RECEIPT_MISSING",
+    "CLEANUP_RECEIPT_MISSING",
+})
+_REPLAY_EVIDENCE_REASON_CODES = frozenset({
+    "MISSING_CUSTOMER_FACING_HARD_EVIDENCE",
+    "MISSING_REAL_REPLAY_ASSET",
+})
 
 
 class DiscoveryTraceError(ValueError):
@@ -119,23 +179,29 @@ def _failure_signatures(attempt: dict[str, Any]) -> list[str]:
     if terminal == "HARNESS_FAILED":
         signatures.add("EXECUTION_ERROR")
     for reason in reasons:
-        if "BINDING" in reason or "PLACEHOLDER" in reason:
+        reason_profile = profile_reason_code(reason)
+        reason_family = _text(reason_profile.get("reason_family")).upper()
+        if reason in _BINDING_REASON_CODES or reason_family == "BINDING_GRAPH_GAP":
             signatures.add("OBLIGATION_BINDING_MISSING")
-        if "MISSING_OPERATION" in reason:
+        if reason in _OPERATION_REASON_CODES:
             signatures.add("ENDPOINT_BINDING_MISSING")
-        if "MISSING_ACTOR" in reason:
+        if reason in _ACTOR_REASON_CODES:
             signatures.add("SOURCE_GROUNDING_MISSING")
-        if "MISSING_FIXTURE" in reason or "PRECONDITION" in reason:
-            signatures.add("PRECONDITION_NOT_MET")
-        if "MISSING_OBSERVER" in reason or "ORACLE_NOT_READY" in reason:
-            signatures.add("CONTRACT_ORACLE_ACTIVATION_MISSING")
-        if "CLEANUP" in reason and (
-            "FAIL" in reason or "INCOMPLETE" in reason or "COMPENSATION" in reason
+        if (
+            reason in _PRECONDITION_REASON_CODES
+            or reason_family == "FIXTURE_CAPABILITY_GAP"
         ):
+            signatures.add("PRECONDITION_NOT_MET")
+        if (
+            reason in _OBSERVER_REASON_CODES
+            or reason_family == "OBSERVER_CAPABILITY_GAP"
+        ):
+            signatures.add("CONTRACT_ORACLE_ACTIVATION_MISSING")
+        if reason in _CLEANUP_FAILED_REASON_CODES:
             signatures.add("CLEANUP_FAILED")
-        if "NOT_REVERSIBLE" in reason or "NON_REVERSIBLE" in reason:
+        if reason in _CLEANUP_NOT_REVERSIBLE_REASON_CODES:
             signatures.add("CLEANUP_NOT_REVERSIBLE")
-        if "CLEANUP_RECEIPT" in reason:
+        if reason in _CLEANUP_RECEIPT_REASON_CODES:
             signatures.add("CLEANUP_RECEIPT_MISSING")
         if reason == "MULTI_WRITE_AUDIT_INCOMPLETE":
             signatures.add(reason)
@@ -153,7 +219,7 @@ def _failure_signatures(attempt: dict[str, Any]) -> list[str]:
                     "BUSINESS_EVIDENCE_NOT_VALIDATED",
                 }
                 else "REPLAY_EVIDENCE_MISSING"
-                if reason.startswith("MISSING_")
+                if reason in _REPLAY_EVIDENCE_REASON_CODES
                 else reason
             )
     return sorted(signatures)
@@ -345,9 +411,12 @@ def build_discovery_trace_ledger_v2(
     outcome_counts = Counter(row["outcome"] for row in attempts)
     terminal_counts = Counter(row["terminal_status"] for row in attempts)
     harness_failed = int(terminal_counts.get("HARNESS_FAILED", 0))
-    complete = bool(attempt_ledger.get("complete")) and len(attempts) == int(
-        attempt_ledger.get("selected_count") or 0
+    accounted_count = int(
+        attempt_ledger.get("accounted_count")
+        if attempt_ledger.get("accounted_count") is not None
+        else len(attempts)
     )
+    complete = bool(attempt_ledger.get("complete")) and len(attempts) == accounted_count
     payload: dict[str, Any] = {
         "schema_version": TRACE_LEDGER_SCHEMA,
         "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -374,6 +443,7 @@ def build_discovery_trace_ledger_v2(
             "execution_status": "completed" if complete else "partial",
             "selected_obligation_count": int(attempt_ledger.get("selected_count") or 0),
             "terminal_obligation_count": len(attempts),
+            "accounted_obligation_count": accounted_count,
             "harness_failure_count": harness_failed,
         },
         "aggregate_stage_events": {

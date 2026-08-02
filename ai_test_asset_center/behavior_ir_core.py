@@ -36,6 +36,51 @@ ALLOWED_RELATION_TYPES = frozenset({
 _DERIVATIONS = {"explicit", "schema-derived", "runtime-observed", "model-inferred"}
 _STATUSES = {"accepted", "conflicting", "unsupported", "unknown"}
 
+# Product-owned identity/annotation bookkeeping may legally live on the knowledge
+# asset (honesty denials such as is_ground_truth=false). Those tokens must never
+# be scraped into rule statements and promoted into Behavior IR invariants —
+# validate_behavior_ir treats any ground_truth vocabulary in IR nodes as
+# forbidden answer-authority leakage.
+_PRODUCT_BOOKKEEPING_RULE_MARKERS = (
+    "is_ground_truth",
+    "ground_truth_loaded",
+    "ground_truth_fingerprint",
+    "ground_truth_generated_from_product_output",
+    "blind_ground_truth_workflow_used",
+    "product_candidates_enter_ground_truth",
+    "enterprise_identity_annotation_manifest",
+    "enterprise_identity_structural_review",
+    "required_annotation_output_schema",
+    "closed_world_identity_mentions",
+    "private_ground_truth",
+    "ground_truth_bugs",
+    "ground_truth_ref",
+)
+
+
+def _rule_carries_product_bookkeeping_vocabulary(text: str) -> bool:
+    """Return True when a rule statement is product bookkeeping, not business fact."""
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    return any(marker in lowered for marker in _PRODUCT_BOOKKEEPING_RULE_MARKERS)
+
+
+def _redact_product_bookkeeping_payload(value: Any) -> Any:
+    """Strip product bookkeeping/GT-denial vocabulary from values entering IR nodes."""
+    if isinstance(value, str):
+        if _rule_carries_product_bookkeeping_vocabulary(value):
+            return "[redacted:product_bookkeeping_vocabulary]"
+        return value
+    if isinstance(value, list):
+        return [_redact_product_bookkeeping_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _redact_product_bookkeeping_payload(item)
+            for key, item in value.items()
+        }
+    return value
+
 
 class BehaviorIRError(ValueError):
     """Behavior IR is not valid for authoritative runtime compilation."""
@@ -986,10 +1031,12 @@ def _operation_structural_entity(
         ]
         if not positions:
             continue
+        # Prefer longer entity matches, then deeper path positions so nested
+        # resources (/users/addresses) bind to the child entity, not the parent.
         ranked.append((
             len(entity_parts),
             len(canonical),
-            -min(positions),
+            max(positions),
             entity,
         ))
     if not ranked:
@@ -997,6 +1044,137 @@ def _operation_structural_entity(
     best_score = max(row[:3] for row in ranked)
     matches = [row[3] for row in ranked if row[:3] == best_score]
     return matches[0] if len(matches) == 1 else None
+
+
+_SECRET_REQUEST_FIELD_NAMES = frozenset({
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "authorization",
+})
+
+
+def _operation_request_field_names(operation: dict[str, Any]) -> set[str]:
+    """Source-declared request field names from schema / example / dictionary."""
+    op = _dict(operation)
+    names: set[str] = set()
+    request_schema = _dict(op.get("request_schema") or op.get("requestBody"))
+    properties = _dict(request_schema.get("properties"))
+    if not properties:
+        content = _dict(request_schema.get("content"))
+        json_media = _dict(content.get("application/json"))
+        properties = _dict(_dict(json_media.get("schema")).get("properties"))
+        example = _dict(json_media.get("example") or op.get("request_example"))
+    else:
+        example = _dict(op.get("request_example"))
+    names.update(_text(key).lower() for key in properties if _text(key))
+    names.update(_text(key).lower() for key in example if _text(key))
+    for value in _list(op.get("affected_fields")) + _list(op.get("parameters")):
+        if isinstance(value, dict):
+            name = _text(value.get("name") or value.get("field")).lower()
+        else:
+            name = _text(value).lower()
+        if name:
+            names.add(name)
+    for value in _list(op.get("field_dictionary")):
+        if isinstance(value, dict):
+            name = _text(value.get("name") or value.get("field")).lower()
+        else:
+            name = _text(value).lower()
+        if name:
+            names.add(name)
+    return {name for name in names if name and name not in _SECRET_REQUEST_FIELD_NAMES}
+
+
+def _entity_field_column_names(entity: dict[str, Any]) -> set[str]:
+    columns: set[str] = set()
+    for field in _list(entity.get("fields")):
+        if isinstance(field, dict):
+            name = _text(field.get("name") or field.get("field")).lower()
+            if name:
+                columns.add(name)
+            for binding in _list(field.get("database_bindings")):
+                column = _text(_dict(binding).get("column")).lower()
+                if column:
+                    columns.add(column)
+        elif _text(field):
+            columns.add(_text(field).lower())
+    for name in _list(entity.get("identity_fields")):
+        if _text(name):
+            columns.add(_text(name).lower())
+    return columns
+
+
+def _entity_from_request_field_overlap(
+    operation: dict[str, Any],
+    entities: list[dict[str, Any]],
+    *,
+    min_overlap: int = 2,
+) -> dict[str, Any] | None:
+    """Unique entity whose source columns overlap request fields (≥ min_overlap).
+
+    Industry-neutral bridge for creates whose path carries no entity vocabulary
+    (e.g. auth/register). Never invents columns; requires source entity fields.
+    """
+    request_fields = _operation_request_field_names(operation)
+    if len(request_fields) < min_overlap:
+        return None
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        overlap = request_fields & _entity_field_column_names(entity)
+        if len(overlap) >= min_overlap:
+            scored.append((len(overlap), entity))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0], reverse=True)
+    best = scored[0][0]
+    winners = [entity for score, entity in scored if score == best]
+    return winners[0] if len(winners) == 1 else None
+
+
+def _resolve_projection_entity_for_operation(
+    operation: dict[str, Any],
+    entities: list[dict[str, Any]],
+    *,
+    allow_field_overlap: bool = True,
+) -> dict[str, Any] | None:
+    """Entity an operation projects onto for field/relation hygiene.
+
+    Order: explicit entity_refs → unique structural path match → unique
+    request-field/column overlap (optional). First path segment alone is never
+    used — that leaked nested-resource fields onto parent entities.
+    """
+    by_id = {_text(row.get("id")): row for row in entities if _text(row.get("id"))}
+    by_name = {
+        _canonical_entity_name(row.get("name")): row
+        for row in entities
+        if _text(row.get("name"))
+    }
+    by_name.update(
+        {
+            _text(row.get("name")).lower(): row
+            for row in entities
+            if _text(row.get("name"))
+        }
+    )
+    resolved: list[dict[str, Any]] = []
+    for hint in _list(_dict(operation).get("entity_refs")):
+        entity = by_id.get(_text(hint)) or by_name.get(_canonical_entity_name(hint))
+        if entity is not None and entity not in resolved:
+            resolved.append(entity)
+    if len(resolved) == 1:
+        return resolved[0]
+    if len(resolved) > 1:
+        return None
+    structural = _operation_structural_entity(operation, entities)
+    if structural is not None:
+        return structural
+    if not allow_field_overlap:
+        return None
+    return _entity_from_request_field_overlap(operation, entities)
 
 
 def _resource_matches_operation(resource: Any, operation: dict[str, Any]) -> bool:
@@ -1578,6 +1756,61 @@ def _derive_source_role_restriction_relations(model: dict[str, Any]) -> list[dic
     return derived
 
 
+# Path-terminal verbs that source APIs use as identity-bound reverse actions.
+# Forward lifecycle verbs (ship/confirm/approve/…) are intentionally excluded;
+# ambiguous multi-candidate sets stay fail-closed with no derived relation.
+_COMPENSATION_ACTION_PATH_VERBS = frozenset({
+    "cancel",
+    "abort",
+    "revoke",
+    "undo",
+    "void",
+    "rollback",
+    "reverse",
+    "release",
+    "unreserve",
+    "withdraw",
+    "compensate",
+    "unbook",
+    "rescind",
+})
+
+
+def _is_identity_bound_compensation_action(
+    *,
+    create_shape: str,
+    compensation_shape: str,
+) -> bool:
+    """Return True for ``{collection}/{id}/{reverse-verb}`` or ``{collection}/{reverse-verb}/{id}``."""
+    create = create_shape.rstrip("/")
+    compensation = compensation_shape.rstrip("/")
+    if not create or not compensation or not compensation.startswith(create + "/"):
+        return False
+    remainder = compensation[len(create):].strip("/")
+    segments = [part for part in remainder.split("/") if part]
+    if len(segments) != 2:
+        return False
+    first, second = segments[0], segments[1]
+    return (
+        (first == "{}" and second in _COMPENSATION_ACTION_PATH_VERBS)
+        or (first in _COMPENSATION_ACTION_PATH_VERBS and second == "{}")
+    )
+
+
+def _dedupe_compensation_candidates(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_shape: dict[str, dict[str, Any]] = {}
+    for cand in candidates:
+        shape = _path_shape(cand.get("path")).rstrip("/")
+        existing = by_shape.get(shape)
+        if existing is None or float(cand.get("confidence") or 0) > float(
+            existing.get("confidence") or 0
+        ):
+            by_shape[shape] = cand
+    return list(by_shape.values())
+
+
 def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
     operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
     relations: list[dict[str, Any]] = []
@@ -1592,16 +1825,31 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
         if not create_ref or not compensation_ref or pair in seen_pairs:
             return
         seen_pairs.add(pair)
+        source_refs = (
+            list(compensation.get("source_refs") or [])
+            + list(create_operation.get("source_refs") or [])
+        )[:5]
+        # Path-shape derivation is itself source-grounded (OpenAPI/route facts).
+        # Stamp a derivation receipt so downstream compensator lookups that
+        # require source_refs still see an explicit provenance row.
+        if not source_refs:
+            source_refs = [{
+                "kind": "schema_derived_compensation",
+                "locator": (
+                    f"{_text(compensation.get('method')).upper()} "
+                    f"{_text(compensation.get('path'))}"
+                    f" compensates "
+                    f"{_text(create_operation.get('method')).upper()} "
+                    f"{_text(create_operation.get('path'))}"
+                ),
+            }]
         relations.append(_relation_node(
             relation_type="compensates",
             from_ref=compensation_ref,
             to_ref=create_ref,
             operation_ref=compensation_ref,
             effects=[{"cleanup_target_operation_ref": create_ref}],
-            source_refs=(
-                list(compensation.get("source_refs") or [])
-                + list(create_operation.get("source_refs") or [])
-            )[:5],
+            source_refs=source_refs,
             confidence=min(
                 float(compensation.get("confidence") or 0.7),
                 float(create_operation.get("confidence") or 0.7),
@@ -1618,49 +1866,61 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
             continue
         if _debug_comp:
             logger.debug("[COMP-DEBUG] CREATE %s: POST %s shape=%s", _text(create_operation.get('id')), create_operation.get('path'), create_shape)
-        candidates: list[dict[str, Any]] = []
+        delete_candidates: list[dict[str, Any]] = []
+        action_candidates: list[dict[str, Any]] = []
         for candidate in operations:
             candidate_method = _text(candidate.get("method")).upper()
-            if candidate_method != "DELETE":
-                continue
             compensation_shape = _path_shape(candidate.get("path")).rstrip("/")
-            segments = compensation_shape.split("/")
-            if not segments or segments[-1] != "{}":
+            if candidate_method == "DELETE":
+                segments = compensation_shape.split("/")
+                if not segments or segments[-1] != "{}":
+                    continue
+                collection_shape = "/".join(segments[:-1]).rstrip("/")
+                if collection_shape == create_shape:
+                    if _debug_comp:
+                        logger.debug(
+                            "[COMP-DEBUG]   MATCH DELETE %s: %s collection=%s",
+                            _text(candidate.get("id")),
+                            candidate.get("path"),
+                            collection_shape,
+                        )
+                    delete_candidates.append(candidate)
                 continue
-            collection_shape = "/".join(segments[:-1]).rstrip("/")
-            if collection_shape == create_shape:
+            if candidate_method not in {"POST", "PUT", "PATCH"}:
+                continue
+            if _is_identity_bound_compensation_action(
+                create_shape=create_shape,
+                compensation_shape=compensation_shape,
+            ):
                 if _debug_comp:
-                    logger.debug("[COMP-DEBUG]   MATCH DELETE %s: %s collection=%s", _text(candidate.get('id')), candidate.get('path'), collection_shape)
-                candidates.append(candidate)
-        # Deduplicate candidates. DELETE operations are preferred over action-based
-        # compensation (POST /resource/:id/cancel). Multiple DELETE ops with the same
-        # shape (e.g. /api/orders/:id and /api/orders/qb_test_*) are semantically
-        # identical; pick the highest-confidence one.
-        if len(candidates) > 1:
-            delete_cands = [c for c in candidates if _text(c.get("method")).upper() == "DELETE"]
-            action_cands = [c for c in candidates if _text(c.get("method")).upper() != "DELETE"]
-            if _debug_comp:
-                logger.debug("[COMP-DEBUG]   SPLIT %d candidates: %d DELETE, %d action", len(candidates), len(delete_cands), len(action_cands))
-            # Prefer DELETE candidates; only use action candidates if no DELETE exists
-            pool = delete_cands if delete_cands else action_cands
-            by_shape: dict[str, dict[str, Any]] = {}
-            for cand in pool:
-                shape = _path_shape(cand.get("path")).rstrip("/")
-                if _debug_comp:
-                    logger.debug("[COMP-DEBUG]   CAND %s: method=%s path=%s shape=%s", _text(cand.get('id')), cand.get('method'), cand.get('path'), shape)
-                existing = by_shape.get(shape)
-                if existing is None or float(cand.get("confidence") or 0) > float(existing.get("confidence") or 0):
-                    by_shape[shape] = cand
-            deduped = list(by_shape.values())
-            if _debug_comp:
-                logger.debug("[COMP-DEBUG]   DEDUPE %d -> %d unique shapes", len(pool), len(deduped))
-            candidates = deduped
-        if len(candidates) == 1:
+                    logger.debug(
+                        "[COMP-DEBUG]   MATCH ACTION %s: %s %s",
+                        _text(candidate.get("id")),
+                        candidate_method,
+                        candidate.get("path"),
+                    )
+                action_candidates.append(candidate)
+        # Prefer DELETE over action-based compensation (POST …/cancel).
+        # Multiple ops of the same shape collapse to highest confidence; distinct
+        # shapes remain ambiguous and emit no relation.
+        pool = (
+            _dedupe_compensation_candidates(delete_candidates)
+            if delete_candidates
+            else _dedupe_compensation_candidates(action_candidates)
+        )
+        if _debug_comp:
+            logger.debug(
+                "[COMP-DEBUG]   POOL delete=%d action=%d chosen=%d",
+                len(delete_candidates),
+                len(action_candidates),
+                len(pool),
+            )
+        if len(pool) == 1:
             if _debug_comp:
                 logger.debug("[COMP-DEBUG]   => CREATE compensates relation")
-            _append_compensation(create_operation, candidates[0])
-        elif _debug_comp and len(candidates) > 1:
-            logger.debug("[COMP-DEBUG]   => AMBIGUOUS %d candidates (different shapes)", len(candidates))
+            _append_compensation(create_operation, pool[0])
+        elif _debug_comp and len(pool) > 1:
+            logger.debug("[COMP-DEBUG]   => AMBIGUOUS %d candidates (different shapes)", len(pool))
 
     return relations
 
@@ -1712,13 +1972,28 @@ def _derive_operation_entity_relations(model: dict[str, Any]) -> list[dict[str, 
             structural = _operation_structural_entity(operation, entities)
             if structural is not None:
                 resolved_entities.append((structural, "schema-derived"))
+        if not resolved_entities:
+            # Path vocabulary absent (auth/register): unique request↔column
+            # overlap against source entity fields is schema-derived evidence.
+            overlap_entity = _entity_from_request_field_overlap(operation, entities)
+            if overlap_entity is not None:
+                resolved_entities.append((overlap_entity, "schema-derived"))
+        method = _text(operation.get("method")).upper()
+        path = _text(operation.get("path") or operation.get("raw_path"))
+        # Identity-bound action POSTs (…/{id}/cancel|ship|confirm) mutate an
+        # existing resource; collection POSTs without placeholders create one.
+        # Collapsing both to "produces" forced adapter cleanup onto row_delete
+        # and blocked cancel/ship as NON_REVERSIBLE after compensator inversion
+        # was removed.
+        relation_type = relation_type_by_method.get(method, "observes")
+        if method == "POST" and (
+            "/{" in path or "/:" in path or path.rstrip("/").endswith("}")
+        ):
+            relation_type = "transitions"
         for entity, derivation in resolved_entities:
             operation_ref = _text(operation.get("id"))
             relations.append(_relation_node(
-                relation_type=relation_type_by_method.get(
-                    _text(operation.get("method")).upper(),
-                    "observes",
-                ),
+                relation_type=relation_type,
                 from_ref=operation_ref,
                 to_ref=_text(entity.get("id")),
                 operation_ref=operation_ref,
@@ -2545,6 +2820,15 @@ def _build_canonical_fields(
         is_pk = name_lower in id_fields or bool(db_info.get("primary_key"))
         is_fk = bool(fd_info.get("foreign_key") or db_info.get("foreign_key"))
         has_enum = bool(_list(fd_info.get("enum")) or _list(db_info.get("enum")))
+        # Source-declared enumeration values. Kept verbatim (deduplicated, order
+        # preserved) so a persistence assertion can judge observed rows against what
+        # the enterprise material actually declared -- a bare boolean loses the
+        # values, which silently made every persistence check unjudgeable.
+        enum_values = list(dict.fromkeys(
+            _text(value)
+            for value in _list(fd_info.get("enum")) or _list(db_info.get("enum"))
+            if _text(value)
+        ))
         nullable = db_info.get("nullable", fd_info.get("nullable"))
         description = _text(fd_info.get("description") or db_info.get("description"))
 
@@ -2589,6 +2873,8 @@ def _build_canonical_fields(
         }
         if description:
             field_node["description"] = description
+        if enum_values:
+            field_node["enum_values"] = enum_values
         if field_src_refs:
             field_node["source_refs"] = field_src_refs
         result.append(field_node)
@@ -2811,11 +3097,13 @@ def build_behavior_ir_from_knowledge_asset(
     # explicit compilation gaps; sibling endpoints are not source evidence.
     # shorter objects/entities/tables aliases; merge them instead of choosing
     # only the first non-empty collection.
-    entity_rows: list[Any] = []
+    entity_rows: list[tuple[str, Any]] = []
     for key in ("objects", "entities", "tables", "business_objects", "data_tables"):
-        entity_rows.extend(_list(data.get(key)))
+        for row in _list(data.get(key)):
+            entity_rows.append((key, row))
     entities_by_canonical_name: dict[str, dict[str, Any]] = {}
-    for ent in entity_rows:
+    for source_key, ent in entity_rows:
+        from_storage = source_key in {"tables", "data_tables"}
         if isinstance(ent, str):
             name = _text(ent)
             canonical_name = _canonical_entity_name(name)
@@ -2827,15 +3115,20 @@ def build_behavior_ir_from_knowledge_asset(
                     _list(existing.get("source_entity_names")),
                     [name],
                 )
+                if from_storage and not _text(existing.get("table")):
+                    existing["table"] = name
                 continue
+            typed_fields = {
+                "name": name,
+                "kind": "resource",
+                "entity_kinds": ["resource"],
+                "source_entity_names": [name],
+            }
+            if from_storage:
+                typed_fields["table"] = name
             entity = _fact_node(
                 node_id=_stable_id("ent", name),
-                typed_fields={
-                    "name": name,
-                    "kind": "resource",
-                    "entity_kinds": ["resource"],
-                    "source_entity_names": [name],
-                },
+                typed_fields=typed_fields,
                 confidence=0.6,
                 derivation="schema-derived",
             )
@@ -2850,6 +3143,12 @@ def build_behavior_ir_from_knowledge_asset(
             continue
         kind = _text(ent.get("kind") or "resource")
         source_refs = [_source_ref(_text(ent.get("source_id")), locator=name)]
+        storage_table = _text(
+            ent.get("table")
+            or ent.get("storage_table")
+            or ent.get("db_table")
+            or (name if from_storage else "")
+        )
         existing = entities_by_canonical_name.get(canonical_name)
         if existing is not None:
             existing["source_entity_names"] = merge_unique(
@@ -2872,23 +3171,28 @@ def build_behavior_ir_from_knowledge_asset(
                 _list(existing.get("source_refs")),
                 source_refs,
             )
+            if storage_table and not _text(existing.get("table")):
+                existing["table"] = storage_table
             existing["confidence"] = max(
                 float(existing.get("confidence") or 0.0),
                 float(ent.get("confidence") or 0.7),
             )
             continue
+        typed_fields = {
+            "name": name,
+            "kind": kind,
+            "entity_kinds": [kind],
+            "source_entity_names": [name],
+            "fields": _list(ent.get("fields") or ent.get("columns")),
+            # Columns the source declares as primary or unique keys. Empty
+            # when the source never said which field identifies a row.
+            "identity_fields": _list(ent.get("identity_fields")),
+        }
+        if storage_table:
+            typed_fields["table"] = storage_table
         entity = _fact_node(
             node_id=_text(ent.get("entity_id") or ent.get("id")) or _stable_id("ent", name),
-            typed_fields={
-                "name": name,
-                "kind": kind,
-                "entity_kinds": [kind],
-                "source_entity_names": [name],
-                "fields": _list(ent.get("fields") or ent.get("columns")),
-                # Columns the source declares as primary or unique keys. Empty
-                # when the source never said which field identifies a row.
-                "identity_fields": _list(ent.get("identity_fields")),
-            },
+            typed_fields=typed_fields,
             source_refs=source_refs,
             confidence=float(ent.get("confidence") or 0.7),
             derivation="explicit",
@@ -2929,22 +3233,35 @@ def build_behavior_ir_from_knowledge_asset(
         if _fd_fname:
             _table_db_columns.setdefault(_fd_table, {})[_fd_fname] = _fd_top
 
-    # Supplement from operations' request/response schemas (path-based entity inference)
-    _NON_ENTITY_SEGMENTS = {"api", "rest", "v1", "v2", "v3", "admin", "public", "internal", "auth"}
+    # Supplement from operations' request/response schemas only when the
+    # operation uniquely resolves to a source entity (entity_refs / structural
+    # path / field-overlap). First path-segment inference is forbidden: nested
+    # routes like /api/users/addresses must not dump child fields onto users.
+    _entities_for_projection = [
+        row for row in _list(model.get("entities")) if isinstance(row, dict)
+    ]
+    _agent_field_supp_rows = []
     for _op in _list(model.get("operations")):
         if not isinstance(_op, dict):
             continue
-        # Infer entity from path: /api/orders/{id} -> "orders"
-        _op_path = _text(_op.get("path") or _op.get("raw_path"))
-        _op_ents = [_text(e).lower() for e in _list(_op.get("entity_refs")) if _text(e)]
-        if not _op_ents and _op_path:
-            _segments = [s for s in _op_path.strip("/").split("/") if s and not s.startswith(":") and not s.startswith("{")]
-            for _seg in _segments:
-                _seg_lower = _seg.lower()
-                if _seg_lower not in _NON_ENTITY_SEGMENTS and len(_seg_lower) > 2:
-                    _op_ents = [_seg_lower]
-                    break
-        if not _op_ents:
+        _resolved_entity = _resolve_projection_entity_for_operation(
+            _op,
+            _entities_for_projection,
+            # Overlap needs upgraded entity columns; apply after field upgrade.
+            allow_field_overlap=False,
+        )
+        if _resolved_entity is None:
+            _agent_field_supp_rows.append({
+                "path": _text(_op.get("path") or _op.get("raw_path")),
+                "method": _text(_op.get("method")).upper(),
+                "resolved": None,
+                "skipped": True,
+            })
+            continue
+        _ent_name = _text(
+            _resolved_entity.get("name") or _resolved_entity.get("id")
+        ).lower()
+        if not _ent_name:
             continue
         _op_schema_fields: list[str] = []
         # Request schema properties
@@ -2975,13 +3292,23 @@ def build_behavior_ir_from_knowledge_asset(
                 _op_schema_fields.append(_text(_ofd.get("name") or _ofd.get("field")))
             elif isinstance(_ofd, str):
                 _op_schema_fields.append(_ofd)
-        # Dedupe and add to each referenced entity
+        # Dedupe and add only to the uniquely resolved entity
         _unique_fields = list(dict.fromkeys(f for f in _op_schema_fields if f))
-        for _ent_name in _op_ents:
-            existing_cols = _table_db_columns.setdefault(_ent_name, {})
-            for _sf in _unique_fields:
-                if _sf.lower() not in existing_cols:
-                    existing_cols[_sf.lower()] = {"field": _sf, "source": "operation_schema"}
+        existing_cols = _table_db_columns.setdefault(_ent_name, {})
+        _added = 0
+        for _sf in _unique_fields:
+            if _sf.lower() not in existing_cols:
+                existing_cols[_sf.lower()] = {"field": _sf, "source": "operation_schema"}
+                _added += 1
+        _agent_field_supp_rows.append({
+            "path": _text(_op.get("path") or _op.get("raw_path")),
+            "method": _text(_op.get("method")).upper(),
+            "resolved": _ent_name,
+            "added_fields": _unique_fields[:12],
+            "added_count": _added,
+            "skipped": False,
+        })
+
 
     for entity in _list(model.get("entities")):
         if not isinstance(entity, dict):
@@ -3018,21 +3345,53 @@ def build_behavior_ir_from_knowledge_asset(
         if canonical:
             entity["fields"] = canonical
 
+    # Backfill operation.entity_refs from unique request↔column overlap when the
+    # path carries no entity vocabulary. Enables produces/consumes derivation
+    # without hardcoding route→table maps. Already-declared refs are preserved.
+    _entities_after_fields = [
+        row for row in _list(model.get("entities")) if isinstance(row, dict)
+    ]
+    _agent_entity_ref_backfill = []
+    for _op in _list(model.get("operations")):
+        if not isinstance(_op, dict):
+            continue
+        if any(_text(ref) for ref in _list(_op.get("entity_refs"))):
+            continue
+        _overlap_entity = _entity_from_request_field_overlap(
+            _op, _entities_after_fields
+        )
+        if _overlap_entity is None:
+            continue
+        _ref = _text(_overlap_entity.get("name") or _overlap_entity.get("id"))
+        if not _ref:
+            continue
+        _op["entity_refs"] = [_ref]
+        _agent_entity_ref_backfill.append({
+            "path": _text(_op.get("path") or _op.get("raw_path")),
+            "method": _text(_op.get("method")).upper(),
+            "entity_ref": _ref,
+            "overlap_fields": sorted(
+                _operation_request_field_names(_op)
+                & _entity_field_column_names(_overlap_entity)
+            )[:12],
+        })
+
     # ── V1.4.0: Field Binding — connect canonical fields to API/DB layers ──
     # Build operation index: entity_name -> list of operations
     _ops_by_entity: dict[str, list[dict[str, Any]]] = {}
     for _op in _list(model.get("operations")):
         if not isinstance(_op, dict):
             continue
-        _op_path = _text(_op.get("path") or _op.get("raw_path"))
-        if not _op_path:
+        _resolved_entity = _resolve_projection_entity_for_operation(
+            _op, _entities_after_fields, allow_field_overlap=True
+        )
+        if _resolved_entity is None:
             continue
-        _segments = [s for s in _op_path.strip("/").split("/") if s and not s.startswith(":") and not s.startswith("{")]
-        for _seg in _segments:
-            _seg_lower = _seg.lower()
-            if _seg_lower not in _NON_ENTITY_SEGMENTS and len(_seg_lower) > 2:
-                _ops_by_entity.setdefault(_seg_lower, []).append(_op)
-                break
+        _seg_lower = _text(
+            _resolved_entity.get("name") or _resolved_entity.get("id")
+        ).lower()
+        if _seg_lower:
+            _ops_by_entity.setdefault(_seg_lower, []).append(_op)
 
     def _extract_op_field_names(op: dict[str, Any], direction: str) -> set[str]:
         """Extract field names from an operation's request or response schema."""
@@ -3689,7 +4048,11 @@ def build_behavior_ir_from_knowledge_asset(
         ):
             if value and value.casefold() not in statement_folded:
                 raise BehaviorIRError(
-                    f"business_semantic_frame_{field_name}_not_in_source"
+                    "business_semantic_frame_"
+                    f"{field_name}_not_in_source:"
+                    f"rule_id={_text(rule.get('rule_id') or rule.get('id')) or _stable_id('inv', statement)}:"
+                    f"source_id={_text(rule.get('source_id'))}:"
+                    f"source_locator={_text(rule.get('source_locator'))}"
                 )
         anchors = _list(raw.get("source_anchors"))
         if any(not isinstance(anchor, str) or not anchor.strip() for anchor in anchors):
@@ -3716,6 +4079,34 @@ def build_behavior_ir_from_knowledge_asset(
         if not statement:
             continue
         rid = _text(rule.get("rule_id") or rule.get("id")) or _stable_id("inv", statement)
+        if _rule_carries_product_bookkeeping_vocabulary(statement):
+            # Keep the gap visible: product EKC/identity receipts scraped into
+            # rule_library must not become business invariants. Do not echo the
+            # contaminated statement into IR nodes — validate_behavior_ir rejects
+            # any ground_truth vocabulary in node JSON.
+            model["coverage_gaps"].append(_fact_node(
+                node_id=_stable_id("gap", "product_bookkeeping_rule_excluded", rid),
+                typed_fields={
+                    "gap_type": "product_bookkeeping_rule_excluded",
+                    "reason_code": "PRODUCT_BOOKKEEPING_RULE_NOT_BUSINESS_INVARIANT",
+                    "description": (
+                        "Rule statement carries product identity/annotation "
+                        "bookkeeping vocabulary and was excluded from Behavior "
+                        "IR invariants"
+                    ),
+                    "source_rule_ref": rid,
+                },
+                source_refs=[
+                    _source_ref(
+                        _text(rule.get("source_id")) or "rule_library",
+                        kind="product_bookkeeping_exclusion",
+                    )
+                ],
+                confidence=1.0,
+                derivation="explicit",
+                status="unsupported",
+            ))
+            continue
         _semantic_frame = _validated_semantic_frame(rule, statement)
 
         # V1.4.0: Detect Umbrella Rules — broad statements without concrete
@@ -3746,6 +4137,10 @@ def build_behavior_ir_from_knowledge_asset(
             _has_explicit_operation_ref = bool(
                 _text(rule.get("operation_ref") or rule.get("operation_id"))
                 or any(_text(value) for value in _list(rule.get("operation_refs")))
+                or any(
+                    _text(value)
+                    for value in _list(rule.get("authoritative_operation_refs"))
+                )
             )
             _has_authoritative_operation_link = _has_explicit_operation_ref or any(
                 isinstance(edge, dict)
@@ -3822,15 +4217,23 @@ def build_behavior_ir_from_knowledge_asset(
         _inv_typed: dict[str, Any] = {
             "description": statement,
             "expression": _expression,
-            "operation_refs": [
-                _text(value)
-                for value in _list(
-                    rule.get("operation_refs")
-                    or ([rule.get("operation_ref") or rule.get("operation_id")]
-                        if rule.get("operation_ref") or rule.get("operation_id") else [])
+            "operation_refs": list(
+                dict.fromkeys(
+                    [
+                        _text(value)
+                        for value in [
+                            *_list(rule.get("operation_refs")),
+                            *_list(rule.get("authoritative_operation_refs")),
+                            *(
+                                [rule.get("operation_ref") or rule.get("operation_id")]
+                                if rule.get("operation_ref") or rule.get("operation_id")
+                                else []
+                            ),
+                        ]
+                        if _text(value)
+                    ]
                 )
-                if _text(value)
-            ],
+            ),
             "source_rule_refs": list(dict.fromkeys(
                 _text(value)
                 for value in (rule.get("rule_id"), rule.get("id"))
@@ -3951,6 +4354,39 @@ def build_behavior_ir_from_knowledge_asset(
         trigger = _text(causal.get("trigger_action"))
         rule_id = _text(rule.get("rule_id") or rule.get("id"))
         source_id = _text(rule.get("source_id")) or "rule_library"
+        _rule_statement = _text(
+            rule.get("statement") or rule.get("expression") or rule.get("title")
+        )
+        _pc_blob = " ".join(
+            _text(pc.get("description"))
+            for pc in postconditions
+            if isinstance(pc, dict)
+        )
+        if _rule_carries_product_bookkeeping_vocabulary(_rule_statement) or (
+            _rule_carries_product_bookkeeping_vocabulary(_pc_blob)
+        ):
+            model["coverage_gaps"].append(_fact_node(
+                node_id=_stable_id(
+                    "gap",
+                    "product_bookkeeping_causal_rule_excluded",
+                    rule_id or source_id,
+                ),
+                typed_fields={
+                    "gap_type": "product_bookkeeping_rule_excluded",
+                    "reason_code": "PRODUCT_BOOKKEEPING_CAUSAL_RULE_NOT_BUSINESS_INVARIANT",
+                    "description": (
+                        "Causal rule/postconditions carry product identity/"
+                        "annotation bookkeeping vocabulary and were excluded "
+                        "from Behavior IR invariants"
+                    ),
+                    "source_rule_ref": rule_id,
+                },
+                source_refs=[_source_ref(source_id, kind="product_bookkeeping_exclusion")],
+                confidence=1.0,
+                derivation="explicit",
+                status="unsupported",
+            ))
+            continue
         # Only an explicit source operation identity may bind a causal trigger.
         # The human-readable trigger is descriptive text, not an executable join.
         # Matching it against path/summary tokens made a rule such as "订单" bind
@@ -4190,6 +4626,11 @@ def build_behavior_ir_from_knowledge_asset(
             or "source_coverage_gap"
         ).lower()
         source_id = _text(source_gap.get("source_id"))
+        # Asset-stage gaps may embed scraped product bookkeeping statements
+        # (e.g. identity annotation receipts). Redact before IR materialization.
+        sanitized_gap = _redact_product_bookkeeping_payload(dict(source_gap))
+        if not isinstance(sanitized_gap, dict):
+            continue
         model["coverage_gaps"].append(_fact_node(
             node_id=_stable_id(
                 "gap",
@@ -4198,9 +4639,9 @@ def build_behavior_ir_from_knowledge_asset(
                 source_gap.get("parser_receipt_id"),
             ),
             typed_fields={
-                **dict(source_gap),
+                **sanitized_gap,
                 "gap_type": gap_type,
-                "description": _text(source_gap.get("description"))
+                "description": _text(sanitized_gap.get("description"))
                 or "A source-stage coverage gap remains unresolved",
             },
             source_refs=(

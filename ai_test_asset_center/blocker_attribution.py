@@ -62,6 +62,13 @@ RECOVERABILITY_VALUES = frozenset({
 _REASON_ATTRIBUTION: dict[str, tuple[str, str, bool]] = {
     # reason_code: (attribution, recoverability, must_remain_blocked)
     "BLOCKED_MISSING_OBSERVER": ("OBSERVER_CAPABILITY_GAP", "RECOVERABLE", False),
+    # The control arm was dispatched but its success was never proven, so the
+    # oracle could not activate.  Attributing this to an observer gap sent
+    # operators to declare read endpoints that were never the problem.
+    "BLOCKED_CONTROL_ARM_NOT_PROVEN": ("ORACLE_INPUT_GAP", "RECOVERABLE", False),
+    # An observer exists and ran, but its receipt was indeterminate.  Still an
+    # observer-family gap, yet a different repair than a missing observer.
+    "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE": ("OBSERVER_CAPABILITY_GAP", "RECOVERABLE", False),
     "BLOCKED_MISSING_BINDING": ("BINDING_GRAPH_GAP", "RECOVERABLE", False),
     "BLOCKED_MISSING_FIXTURE": ("FIXTURE_CAPABILITY_GAP", "RECOVERABLE", False),
     "BLOCKED_MISSING_ACTOR": ("SOURCE_GAP", "SOURCE_DEPENDENT", False),
@@ -143,6 +150,12 @@ REASON_CODE_REGISTRY.update({
     "CLEANUP_COMPENSATION_FAILED": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),
     "CLEANUP_EVIDENCE_INCOMPLETE": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),
     "CLEANUP_WRITE_COVERAGE_MISMATCH": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),
+    "CLEANUP_ACTIVATION_REFERENCE_MISMATCH": _reason_definition(
+        "CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "CLEANUP_PROOF_DEFERRED_FIELD_ORACLE": _reason_definition(
+        "CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
     "LEGACY_EXECUTION_ERROR": _reason_definition("TARGET_SYSTEM_RESPONSE"),
     "ORACLE_EXCEPTION": _reason_definition("ORACLE_INPUT_GAP", recoverability="RECOVERABLE"),
     "POST_REQUEST_PRECONDITION_FAILED": _reason_definition("TARGET_SYSTEM_RESPONSE"),
@@ -164,6 +177,15 @@ REASON_CODE_REGISTRY.update({
     "BLOCKED_FIXTURE_DAG_DRIFT": _reason_definition("FIXTURE_CAPABILITY_GAP", recoverability="RECOVERABLE"),
     "BLOCKED_FORBIDDEN_BINDING_SOURCE": _reason_definition("BINDING_GRAPH_GAP", recoverability="SOURCE_DEPENDENT"),
     "BLOCKED_OBSERVER_CONTRACT_DRIFT": _reason_definition("OBSERVER_CAPABILITY_GAP", recoverability="RECOVERABLE"),
+    "BLOCKED_OBSERVER_RESOLUTION_FAILED": _reason_definition("OBSERVER_CAPABILITY_GAP", recoverability="RECOVERABLE"),
+    "BLOCKED_FIXTURE_CONTRACT_FAILED": _reason_definition("FIXTURE_CAPABILITY_GAP", recoverability="RECOVERABLE"),
+    "ASSERTION_INDETERMINATE": _reason_definition("ORACLE_INPUT_GAP", recoverability="RECOVERABLE"),
+    "BLOCKED_DATABASE_NUMERIC_HTTP_FALLBACK_OBSERVER_MISSING": _reason_definition(
+        "OBSERVER_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_CLEANUP_TRANSPORT_FAILED": _reason_definition(
+        "CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
     "BLOCKED_PLAN_STEP_IDENTITY_INVALID": _reason_definition("COMPILER_GAP", recoverability="RECOVERABLE"),
     "BLOCKED_PRECONDITION_UNREACHABLE": _reason_definition("COMPILER_GAP", recoverability="RECOVERABLE"),
     "BLOCKED_REGISTERED_PROTOCOL_INVALID": _reason_definition("ADAPTER_CAPABILITY_GAP", recoverability="RECOVERABLE"),
@@ -173,6 +195,9 @@ REASON_CODE_REGISTRY.update({
     "DB_DEPENDENCY_GRAPH_INCOMPLETE": _reason_definition("BINDING_GRAPH_GAP", recoverability="RECOVERABLE"),
     "DB_PREIMAGE_NOT_CAPTURED": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="SOURCE_DEPENDENT"),
     "DB_ROW_IDENTITY_NOT_BOUND": _reason_definition("BINDING_GRAPH_GAP", recoverability="RECOVERABLE"),
+    "BLOCKED_MISSING_REQUIRED_BODY_FIELDS": _reason_definition("BINDING_GRAPH_GAP", recoverability="RECOVERABLE"),
+    "BLOCKED_FABRICATED_FOREIGN_KEY": _reason_definition("BINDING_GRAPH_GAP", recoverability="RECOVERABLE"),
+    "BLOCKED_UNAUTHORIZED_ACTOR": _reason_definition("PERMISSION_GAP", recoverability="RECOVERABLE"),
 })
 
 

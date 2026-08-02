@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from ai_test_asset_center.blocker_attribution import profile_reason_code
 from ai_test_asset_center.discovery_funnel import (
+    _accounting_rows_for_parts,
+    _ensure_accounting_terminal_receipts,
     _reason_details,
     build_funnel,
     build_funnel_comparison_report,
@@ -148,6 +150,237 @@ def test_funnel_conservation_uses_stage_receipts() -> None:
     assert conservation["execution_count"] == 1
     assert conservation["execution_unresolved_count"] == 0
     assert all(check["status"] == "PASS" for check in conservation["checks"])
+
+
+def test_nonselected_formal_obligation_stays_in_terminal_accounting() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_run(),
+        selected=[
+            {"obligation_id": "obl-selected", "selection_status": "SELECTED"},
+            {
+                "obligation_id": "obl-deferred",
+                "selection_status": "DEFERRED_NOT_SELECTED",
+            },
+        ],
+        compile_results={
+            "obl-selected": {
+                "status": "COMPILED",
+                "experiment_id": "exp-selected",
+                **_stage_identity_fields("obl-selected", True),
+            },
+            "obl-deferred": {
+                "status": "DEFERRED",
+                "reason_code": "OBLIGATION_NOT_IN_PLAN",
+                **_stage_identity_fields("obl-deferred", True),
+            },
+        },
+        execution_results={
+            "obl-selected": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_RUNTIME_TARGET",
+                "experiment_id": "exp-selected",
+                **_stage_identity_fields("obl-selected", True),
+            },
+        },
+        gate_results={},
+    )
+    result = {
+        "obligation_attempt_ledger": ledger,
+        "test_obligations": {
+            "obligations": [
+                {"obligation_id": "obl-selected"},
+                {"obligation_id": "obl-deferred"},
+            ]
+        },
+        "formal_count_projection": {
+            "schema_version": "qualibug.discovery-quality-projection.v2",
+            "formal_customer_deliverable_count": 0,
+            "canonical_defect_ids": [],
+            "delivery_occurrence_count": 0,
+            "delivery_occurrence_finding_ids": [],
+        },
+    }
+
+    conservation = build_funnel_conservation(result)
+
+    assert ledger["selected_count"] == 1
+    assert ledger["accounted_count"] == 2
+    assert conservation["status"] == "PASS"
+    assert conservation["selected_count"] == 1
+    assert conservation["terminal_count"] == 2
+    assert conservation["not_selected_count"] == 1
+    assert next(
+        check
+        for check in conservation["checks"]
+        if check["name"] == "formal_terminal_accounting_conservation"
+    )["status"] == "PASS"
+
+
+def test_accounting_terminal_preparation_preserves_compiled_plan_identity() -> None:
+    rows = _accounting_rows_for_parts(
+        obligations=[{"obligation_id": "obl-compiled"}],
+        experiments={
+            "obl-compiled": {
+                "compile_receipt": {
+                    "status": "COMPILED",
+                    "experiment_id": "exp-compiled",
+                }
+            }
+        },
+        agent_intent_plan={"intents": [{"obligation_id": "obl-compiled"}]},
+        obligation_plan={"selected": [{"obligation_id": "obl-compiled"}]},
+        planning_round=1,
+    )
+    compile_results: dict[str, dict] = {}
+    execution_results: dict[str, dict] = {}
+
+    _ensure_accounting_terminal_receipts(
+        accounting_rows=rows,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        runtime_contract={},
+    )
+
+    assert compile_results["obl-compiled"]["status"] == "COMPILED"
+    assert compile_results["obl-compiled"]["experiment_id"] == "exp-compiled"
+    assert execution_results["obl-compiled"]["reason_code"] == (
+        "BLOCKED_RUNTIME_TARGET"
+    )
+
+
+def test_accounting_terminal_preparation_marks_unselected_compiled_work_deferred() -> None:
+    rows = _accounting_rows_for_parts(
+        obligations=[{"obligation_id": "obl-deferred"}],
+        experiments={
+            "obl-deferred": {
+                "compile_receipt": {
+                    "status": "COMPILED",
+                    "experiment_id": "exp-deferred",
+                }
+            }
+        },
+        agent_intent_plan={"intents": []},
+        obligation_plan={"selected": [], "pending_next_round": []},
+        planning_round=1,
+    )
+    compile_results: dict[str, dict] = {}
+    execution_results: dict[str, dict] = {}
+
+    _ensure_accounting_terminal_receipts(
+        accounting_rows=rows,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        runtime_contract={},
+    )
+
+    assert rows[0]["selection_status"] == "DEFERRED_NOT_SELECTED"
+    assert execution_results["obl-deferred"]["status"] == "DEFERRED"
+    assert execution_results["obl-deferred"]["reason_code"] == (
+        "OBLIGATION_NOT_IN_PLAN"
+    )
+
+
+def test_accounting_terminal_filler_blocks_missing_execution_not_harness_failed() -> None:
+    rows = _accounting_rows_for_parts(
+        obligations=[{"obligation_id": "obl-missing-exec"}],
+        experiments={
+            "obl-missing-exec": {
+                "compile_receipt": {
+                    "status": "COMPILED",
+                    "experiment_id": "exp-missing-exec",
+                }
+            }
+        },
+        agent_intent_plan={"intents": [{"obligation_id": "obl-missing-exec"}]},
+        obligation_plan={"selected": [{"obligation_id": "obl-missing-exec"}]},
+        planning_round=1,
+    )
+    compile_results: dict[str, dict] = {}
+    execution_results: dict[str, dict] = {}
+
+    _ensure_accounting_terminal_receipts(
+        accounting_rows=rows,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        runtime_contract={
+            "status": "approved",
+            "approved_base_url": "http://localhost:8080",
+        },
+    )
+
+    assert execution_results["obl-missing-exec"]["status"] == "BLOCKED"
+    assert execution_results["obl-missing-exec"]["reason_code"] == "BLOCKED_EXECUTION"
+    assert execution_results["obl-missing-exec"]["detail"] == (
+        "compiled_obligation_has_no_execution_receipt"
+    )
+
+
+def test_manual_terminal_defers_compiled_pending_at_execution() -> None:
+    from ai_test_asset_center.discovery_runtime_execution_support import (
+        _manual_terminal_receipts,
+    )
+
+    compile_results: dict[str, dict] = {}
+    execution_results: dict[str, dict] = {}
+    _manual_terminal_receipts(
+        selected_rows=[
+            {
+                "obligation_id": "obl-budget",
+                "selection_status": "SELECTED",
+            }
+        ],
+        experiments_by_obligation={
+            "obl-budget": {
+                "experiment_id": "exp-budget",
+                "compile_receipt": {
+                    "status": "COMPILED",
+                    "experiment_id": "exp-budget",
+                },
+            }
+        },
+        obligation_plan={
+            "selected": [{"obligation_id": "obl-budget"}],
+            "pending_next_round": [
+                {
+                    "obligation_id": "obl-budget",
+                    "not_in_plan_reason": "BUDGET_EXHAUSTED",
+                }
+            ],
+        },
+        runtime_contract={
+            "status": "approved",
+            "approved_base_url": "http://localhost:8080",
+        },
+        compile_results=compile_results,
+        execution_results=execution_results,
+    )
+
+    assert compile_results["obl-budget"]["status"] == "COMPILED"
+    assert execution_results["obl-budget"]["status"] == "DEFERRED"
+    assert execution_results["obl-budget"]["reason_code"] == (
+        "OBLIGATION_BUDGET_REACHED"
+    )
+
+    _ensure_accounting_terminal_receipts(
+        accounting_rows=[
+            {
+                "obligation_id": "obl-budget",
+                "selection_status": "SELECTED",
+                "compile_status": "COMPILED",
+                "experiment_id": "exp-budget",
+            }
+        ],
+        compile_results=compile_results,
+        execution_results=execution_results,
+        runtime_contract={
+            "status": "approved",
+            "approved_base_url": "http://localhost:8080",
+        },
+    )
+    assert execution_results["obl-budget"]["status"] == "DEFERRED"
+    assert execution_results["obl-budget"]["reason_code"] == (
+        "OBLIGATION_BUDGET_REACHED"
+    )
 
 
 def test_funnel_conservation_counts_only_receipted_oracle_violations() -> None:
@@ -472,6 +705,22 @@ def test_cleanup_gate_reason_codes_are_registered() -> None:
 
         assert profile["registry_status"] == "REGISTERED"
         assert profile["reason_family"] == "CLEANUP_CAPABILITY_GAP"
+        assert profile["is_blocking"] is True
+
+
+def test_runtime_terminal_reason_codes_are_registered() -> None:
+    expected = {
+        "ASSERTION_INDETERMINATE": "ORACLE_INPUT_GAP",
+        "BLOCKED_DATABASE_NUMERIC_HTTP_FALLBACK_OBSERVER_MISSING": (
+            "OBSERVER_CAPABILITY_GAP"
+        ),
+    }
+
+    for reason_code, reason_family in expected.items():
+        profile = profile_reason_code(reason_code)
+
+        assert profile["registry_status"] == "REGISTERED"
+        assert profile["reason_family"] == reason_family
         assert profile["is_blocking"] is True
 
 

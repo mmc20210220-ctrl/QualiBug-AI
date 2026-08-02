@@ -656,11 +656,10 @@ def build_agent_intent_plan(
             _text(value.get("adapter")) for value in observers
             if _text(value.get("adapter"))
         })
-        # ── Fallback: inject default http_response observer when missing ──
         if not observer_refs or not adapters:
-            observer_refs = ["http_response"]
-            adapters = ["http_api"]
-            observers = [{"observer_id": "http_response", "adapter": "http_api"}]
+            raise AgentIntentError(
+                f"observer_contract_missing:{obligation_id}"
+            )
         source_refs = _source_refs(
             obligation.get("source_refs"),
             experiment.get("source_refs"),

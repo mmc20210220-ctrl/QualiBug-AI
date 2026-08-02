@@ -589,6 +589,8 @@ def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[d
         required = _pick_first(item, ("required", "nullable", "必填", "is_required"))
         constraint = _pick_first(item, tuple(sorted(_IDENTITY_CONSTRAINT_HEADERS)))
         required_value = _doc_bool(required)
+        foreign_key_raw = _pick_first(item, ("foreign_key", "foreignKey", "fk", "外键", "外键约束"))
+        foreign_key_value = _doc_bool(foreign_key_raw)
         evidence_bits: list[str] = []
         if table_name:
             evidence_bits.append(f"table={table_name}")
@@ -596,6 +598,10 @@ def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[d
         if required is not None and str(required).strip() != "":
             evidence_bits.append(
                 f"required={'true' if required_value else 'false'}"
+            )
+        if foreign_key_raw is not None and str(foreign_key_raw).strip() != "":
+            evidence_bits.append(
+                f"foreign_key={'true' if foreign_key_value else 'false'}"
             )
         if field_type:
             evidence_bits.append(f"type={field_type}")
@@ -609,6 +615,7 @@ def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[d
             "field_path": field_name,
             "type": field_type,
             "required": required_value,
+            "foreign_key": foreign_key_value,
             "constraint": _redact_text(constraint, 160),
             "identity": _declares_identity(constraint) or _doc_bool(
                 _pick_first(item, ("primary_key", "primaryKey", "unique", "is_unique", "主键", "唯一"))
@@ -957,6 +964,55 @@ def _source_code_operations(
     return rows
 
 
+_MARKDOWN_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Foreign-key field-name heuristic for markdown contract detection. Matches
+# snake_case (*_id), camelCase (*Id), and coupon reference codes. Used only to
+# *declare* x-foreign-key on request_schema.properties; an explicit `外键=是`
+# table column overrides via the parsed field_dictionary entry.
+_FK_NAME_RE = re.compile(r"(?i)(_id$|Id$|coupon_?code$|^code$)")
+
+# Declared role terms used to detect contract-stated actor permission
+# requirements in markdown specs (e.g. "seller/admin 可用" or
+# "**所需角色**：seller, admin"). An operation declaring one of these for an
+# actor is a 403 candidate when the actor's role is absent from the list.
+_ROLE_TERMS = frozenset({
+    "buyer", "seller", "admin", "manager", "guest", "owner",
+    "operator", "user", "tenant", "member",
+})
+# Matches an explicit "所需角色：seller, admin" / "required_roles: admin" line.
+# Allows optional Markdown emphasis markers (e.g. "**所需角色**：admin") between
+# the label and the colon, which is how the benchmark_mall contract is written.
+_ROLE_DECL_RE = re.compile(r"(?:所需角色|required_roles|roles?)\s*\*{0,2}\s*[:：]\s*([^\n*]+)", re.IGNORECASE)
+# Matches the informal "seller/admin 可用" (dual, slash-separated) or
+# "admin 可用" (single role) phrasings common in benchmark_mall.
+_ROLE_PHRASE_RE = re.compile(r"([a-z]+)\s*(?:/\s*([a-z]+))?\s*可用", re.IGNORECASE)
+
+
+def _markdown_required_roles(section: str) -> list[str]:
+    """Extract actor roles required to invoke an operation from its markdown section.
+
+    Returns roles declared via an explicit ``所需角色`` / ``required_roles`` line,
+    or via the informal ``X/Y 可用`` phrasing. Empty when the contract states no
+    role restriction (the permission guard is then a no-op and never blocks).
+    """
+    text = section or ""
+    roles: set[str] = set()
+    for m in _ROLE_DECL_RE.finditer(text):
+        for tok in re.split(r"[,\uFF0C\u3001/\s]+", m.group(1)):
+            t = tok.strip().lower()
+            if t in _ROLE_TERMS:
+                roles.add(t)
+    for m in _ROLE_PHRASE_RE.finditer(text):
+        for g in (m.group(1), m.group(2)):
+            if not g:
+                continue
+            t = g.strip().lower()
+            if t in _ROLE_TERMS:
+                roles.add(t)
+    return sorted(roles)
+
+
 def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, Any]]:
     matches = list(MARKDOWN_API_ENDPOINT_RE.finditer(text or ""))
     rows: list[dict[str, Any]] = []
@@ -969,13 +1025,31 @@ def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, A
         methods = [part.strip().upper() for part in re.split(r"\s*/\s*", match.group("methods")) if part.strip()]
         json_examples = _json_blocks(section)
         example_fields = sorted({name for sample in json_examples[:2] for name in _flatten_json_field_names(sample)})
-        table_fields = [str(row.get("field") or "") for row in _field_dictionary_entries(section, None, source_id)]
+        entries = _field_dictionary_entries(section, None, source_id)
+        table_fields = [str(row.get("field") or "") for row in entries]
+        required_fields = [
+            str(row.get("field"))
+            for row in entries
+            if row.get("required") is True and row.get("field")
+        ]
+        foreign_key_fields = [
+            str(row.get("field"))
+            for row in entries
+            if row.get("field") and (
+                row.get("foreign_key") is True
+                or _FK_NAME_RE.search(str(row.get("field") or ""))
+            )
+        ]
+        # Contract-declared actor permission requirement (e.g. "seller/admin 可用"
+        # or an explicit "所需角色" line). Drives the pre-transport actor
+        # permission guard (§8.5.4). Empty => guard is a no-op.
+        required_roles = _markdown_required_roles(section)
         all_fields = sorted({field for field in [*example_fields, *table_fields] if field})
         summary_line = next((line.strip(" #-*") for line in section.splitlines() if line.strip() and not line.strip().startswith("|")), "")
         tag_candidates = re.findall(r"`([A-Za-z0-9_\-]{2,40})`", section[:600])
         for method in methods:
             path = str(match.group("path") or "/")
-            rows.append({
+            operation: dict[str, Any] = {
                 "interface_id": f"markdown_api:{method}:{path}",
                 "source_id": source_id,
                 "source_kind": "markdown_api",
@@ -988,8 +1062,89 @@ def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, A
                 "field_dictionary": all_fields[:40],
                 "source_excerpt": _redact_text((match.group(0) + "\n" + section[:900]).strip(), 900),
                 "tokens": sorted(_tokens(f"{path} {summary_line} {' '.join(all_fields)} {' '.join(tag_candidates[:8])}")),
-            })
+            }
+            # Surface contract-declared required request fields as request_schema so the
+            # required-body-field pre-transport guard (_missing_required_body_fields) can block
+            # malformed payloads (e.g. benchmark_mall POST /api/products/admin missing `sku`)
+            # before any HTTP call. Only for write methods: GET query params must not be
+            # mistaken for required body fields.
+            if method in _MARKDOWN_WRITE_METHODS:
+                request_props: dict[str, Any] = {}
+                for row in entries:
+                    fname = row.get("field")
+                    if not fname:
+                        continue
+                    if fname not in required_fields and fname not in foreign_key_fields:
+                        continue
+                    prop: dict[str, Any] = {
+                        "type": str(row.get("type") or "string") or "string",
+                        "description": _redact_text(str(row.get("description") or ""), 200),
+                    }
+                    if fname in foreign_key_fields:
+                        prop["x-foreign-key"] = True
+                    request_props[str(fname)] = prop
+                # Attach the contract's request example (template tokens like
+                # "<order_id>" / "<address_id>" kept intact) as
+                # request_schema.content so the binding graph can detect body
+                # placeholders and either resolve them (e.g. order_id via
+                # GET /api/orders) or fail-fast with BLOCKED_MISSING_BINDING
+                # instead of leaking literal tokens to the target. Without this,
+                # build_binding_plan sees zero placeholders and silently lets
+                # the operation proceed to an HTTP call with unresolved tokens.
+                # Many write endpoints (POST /api/orders, /payments/pay,
+                # /refunds, /inventory/*, /coupons/use) declare their request
+                # body only via a "请求" json example and have no field table,
+                # so this must run for every write method, not only those with
+                # a required/foreign-key field dictionary.
+                request_content: dict[str, Any] = {}
+                if json_examples:
+                    request_content["application/json"] = {"example": json_examples[0]}
+                if request_props or request_content:
+                    operation["request_schema"] = {
+                        "type": "object",
+                        "required": required_fields,
+                        "properties": request_props,
+                        **({"content": request_content} if request_content else {}),
+                    }
+            # Declared role restriction applies to every method (403s also hit
+            # admin read/management endpoints), so attach it unconditionally.
+            if required_roles:
+                operation["required_roles"] = required_roles
+            rows.append(operation)
     return rows
+
+
+def _sql_table_body_declarations(body: str) -> list[str]:
+    """Split a CREATE TABLE body into top-level column/constraint declarations.
+
+    Newline-oriented parsing misses single-line DDL where columns are comma-
+    separated inside one ``(...)`` group. Split on commas that are outside
+    nested parentheses so ``CHECK (role IN (...))`` stays intact. Newlines are
+    treated as whitespace so both compact and pretty-printed DDL share one path.
+    """
+    declarations: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in str(body or ""):
+        if char == "(":
+            depth += 1
+            current.append(char)
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            current.append(char)
+            continue
+        if char == "," and depth == 0:
+            piece = "".join(current).strip()
+            if piece:
+                declarations.append(piece)
+            current = []
+            continue
+        current.append(char)
+    piece = "".join(current).strip()
+    if piece:
+        declarations.append(piece)
+    return declarations
 
 
 def _sql_tables(text: str, source_id: str = "") -> list[dict[str, Any]]:
@@ -999,15 +1154,15 @@ def _sql_tables(text: str, source_id: str = "") -> list[dict[str, Any]]:
         columns: list[str] = []
         foreign_keys: list[str] = []
         identity_fields: list[str] = []
-        for line in body.splitlines():
-            clean = line.strip().strip(",")
+        for declaration in _sql_table_body_declarations(body):
+            clean = declaration.strip().strip(",")
             if not clean:
                 continue
             ref = re.search(r"(?i)references\s+[`\"\[]?([a-zA-Z0-9_]+)", clean)
             if ref:
                 foreign_keys.append(ref.group(1))
             col = re.match(r"[`\"\[]?([a-zA-Z_][a-zA-Z0-9_]*)[`\"\]]?\s+", clean)
-            if col and col.group(1).lower() not in {"primary", "foreign", "constraint", "unique", "key", "index"}:
+            if col and col.group(1).lower() not in {"primary", "foreign", "constraint", "unique", "key", "index", "check"}:
                 columns.append(col.group(1))
                 # Inline form: "sku TEXT UNIQUE" / "id SERIAL PRIMARY KEY".
                 if _declares_identity(clean[col.end():]):
@@ -1022,6 +1177,7 @@ def _sql_tables(text: str, source_id: str = "") -> list[dict[str, Any]]:
             "columns": sorted(set(columns)),
             "identity_fields": sorted(set(identity_fields)),
             "foreign_keys": sorted(set(foreign_keys)),
+            "derivation": "sql_ddl",
             "tokens": sorted(_tokens(f"{name} {' '.join(columns)} {' '.join(foreign_keys)}")),
         })
     return tables
@@ -1895,17 +2051,23 @@ def _rules_from_text(
                 )
             )
     for idx, (line_number, line) in enumerate(lines):
-        norm = _norm(line)
+        # All downstream rule fields must derive from the same redacted source
+        # representation. Building the semantic frame from the raw line while
+        # storing a redacted statement makes the frame unverifiable (for example
+        # a bearer token or URL query is present in the frame but absent from the
+        # source statement), which correctly blocks Behavior IR later but too late
+        # to identify the parser's provenance mismatch.
+        statement = _redact_text(line, 720)
+        norm = _norm(statement)
         if len(norm) < 8:
             continue
-        semantic_frame = _semantic_rule_frame(line)
-        rule_type = _rule_type_from_text(line)
+        semantic_frame = _semantic_rule_frame(statement)
+        rule_type = _rule_type_from_text(statement)
         if not semantic_frame and not (
             allow_relaxed_async_rules
             and rule_type in {"idempotency", "async_event"}
         ):
             continue
-        statement = _redact_text(line, 720)
         if seen_statements is not None:
             key = _norm(statement)
             if key in seen_statements:
@@ -1918,13 +2080,13 @@ def _rules_from_text(
             "source_locator": f"line:{line_number}",
             "statement": statement,
             "rule_type": rule_type,
-            "risk_type": _risk_type_from_text(line),
+            "risk_type": _risk_type_from_text(statement),
             "severity": "P0" if rule_type in {"conservation", "permission"} and any(x in norm for x in ("资金", "余额", "账本", "payment", "balance", "tenant", "租户", "病历")) else "P1" if rule_type in {"conservation", "permission", "reconciliation"} else "P2",
-            "tokens": sorted(_tokens(line)),
+            "tokens": sorted(_tokens(statement)),
         }
         if semantic_frame:
             rule["semantic_frame"] = semantic_frame
-        rule.update(_typed_validation_constraint(line))
+        rule.update(_typed_validation_constraint(statement))
         rules.append(rule)
     return rules[:180]
 

@@ -380,7 +380,6 @@ def _predicted_campaign_binding(project: str, root: Path, body: dict[str, Any]) 
             "source_hash": source_hash,
         },
     )
-    # #endregion
     return {
         "campaign_id": campaign.campaign_id,
         "scope_id": scope_id,

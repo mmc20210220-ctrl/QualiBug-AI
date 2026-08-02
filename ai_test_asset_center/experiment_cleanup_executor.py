@@ -162,6 +162,39 @@ def _adapter_cleanup_contracts(
     return by_operation
 
 
+def _contracts_for_runtime_step(
+    contracts_by_operation: dict[str, list[dict[str, Any]]],
+    *,
+    operation_ref: str,
+    step_id: str,
+) -> list[dict[str, Any]]:
+    """Select cleanup contracts that compensate this exact runtime write step.
+
+    Multi-write expansion stamps ``source_step_id`` on each cleanup template
+    copy. Matching must prefer that stamp; otherwise control+treatment writes
+    that share one operation_ref look like an ambiguous contract set and every
+    adapter cleanup stays unbound with an empty identity.
+    """
+    matching = [
+        dict(row)
+        for row in _list(contracts_by_operation.get(operation_ref))
+        if isinstance(row, dict)
+    ]
+    if not matching:
+        return []
+    if step_id:
+        step_scoped = [
+            row
+            for row in matching
+            if _text(row.get("source_step_id")) == step_id
+        ]
+        if step_scoped:
+            return step_scoped
+    # Templates without source_step_id remain operation-scoped (single-write).
+    unscoped = [row for row in matching if not _text(row.get("source_step_id"))]
+    return unscoped
+
+
 def _project_adapter_cleanup_requirements(
     *,
     experiment: dict[str, Any],
@@ -186,11 +219,16 @@ def _project_adapter_cleanup_requirements(
         step = dict(raw)
         phase = _text(step.get("phase"))
         operation_ref = _text(step.get("operation_ref"))
+        step_id = _text(step.get("step_id"))
         if phase in measured_phases and operation_ref:
             observed_operation_refs.add(operation_ref)
-        matching = contracts.get(operation_ref, [])
+        matching = _contracts_for_runtime_step(
+            contracts,
+            operation_ref=operation_ref,
+            step_id=step_id,
+        )
         audit_row: dict[str, Any] = {
-            "step_id": _text(step.get("step_id")),
+            "step_id": step_id,
             "phase": phase,
             "operation_ref": operation_ref,
             "cleanup_contract_count": len(matching),
@@ -406,9 +444,17 @@ def _adapter_cleanup_identity_exact(
     runtime_bindings: dict[str, Any],
     steps_out: list[dict[str, Any]],
 ) -> str:
-    """Resolve adapter identity only from the operation being compensated."""
-    operation_ref = _text(_dict(cleanup).get("compensates_operation_ref"))
-    if not operation_ref:
+    """Resolve adapter identity only from the write step being compensated.
+
+    When compile expands one cleanup template across control+treatment, each
+    copy carries ``source_step_id``. That stamp is the authority for which
+    accepted write supplies the row identity. Without it, two distinct created
+    identities for the same operation_ref correctly remain unbound.
+    """
+    cleanup_row = _dict(cleanup)
+    operation_ref = _text(cleanup_row.get("compensates_operation_ref"))
+    source_step_id = _text(cleanup_row.get("source_step_id"))
+    if not operation_ref and not source_step_id:
         return _ORIGINAL_ADAPTER_CLEANUP_IDENTITY(
             cleanup,
             runtime_bindings=runtime_bindings,
@@ -418,16 +464,17 @@ def _adapter_cleanup_identity_exact(
     identities: list[str] = []
     for raw in _list(steps_out):
         step = _dict(raw)
-        if (
-            _text(step.get("phase")) not in {"control", "treatment"}
-            or _text(step.get("operation_ref")) != operation_ref
-        ):
+        if _text(step.get("phase")) not in {"control", "treatment"}:
+            continue
+        if source_step_id and _text(step.get("step_id")) != source_step_id:
+            continue
+        if operation_ref and _text(step.get("operation_ref")) != operation_ref:
             continue
         governed = _dict(step.get("governance_receipt"))
         if governed.get("accepted") is not True:
             continue
         identity = _identity_from_governed_write(
-            _dict(cleanup),
+            cleanup_row,
             governed,
             step_body=step.get("body"),
         )

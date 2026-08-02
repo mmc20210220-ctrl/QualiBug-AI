@@ -148,7 +148,25 @@ def _field_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", _text(value).lower())
 
 
-def _source_request_example(operation: dict[str, Any]) -> dict[str, Any]:
+def _collection_path_for_member_operation(path: str) -> str:
+    """Strip a trailing identity segment: ``/api/cart/items/{id}`` → ``/api/cart/items``."""
+    normalized = normalize_path_placeholders(_text(path)).rstrip("/")
+    if not normalized:
+        return ""
+    segments = [part for part in normalized.strip("/").split("/") if part]
+    if not segments:
+        return ""
+    last = segments[-1]
+    if (last.startswith("{") and last.endswith("}")) or last.startswith(":"):
+        return "/" + "/".join(segments[:-1])
+    return normalized
+
+
+def _source_request_example(
+    operation: dict[str, Any],
+    *,
+    sibling_operations: list[Any] | None = None,
+) -> dict[str, Any]:
     direct = _dict(operation).get("request_example")
     if isinstance(direct, dict) and direct:
         return dict(direct)
@@ -165,28 +183,36 @@ def _source_request_example(operation: dict[str, Any]) -> dict[str, Any]:
             value = _dict(row).get("value")
             if isinstance(value, dict) and value:
                 return dict(value)
-    # Fallback: inherit request example from sibling operations sharing the
-    # same path prefix. Many endpoints omit body schemas in documentation
-    # but accept the same fields as sibling POST endpoints.
-    op_path = normalize_path_placeholders(
+    # Fallback: unique sibling POST on the same collection that already carries
+    # a source-attested example. PATCH/PUT docs often omit JSON while the
+    # collection create POST documents fields. Ambiguous siblings stay empty.
+    siblings = list(sibling_operations or [])
+    if not siblings:
+        siblings = list(_list(operation.get("_ir_operations")))
+    method = _text(operation.get("method")).upper()
+    if method not in {"PUT", "PATCH"} or not siblings:
+        return {}
+    op_collection = _collection_path_for_member_operation(
         _text(operation.get("path") or operation.get("raw_path"))
-    ).rstrip("/")
-    op_prefix = op_path.rsplit("/", 1)[0] if "/" in op_path else ""
-    op_prefix_parts = [part for part in op_prefix.strip("/").split("/") if part]
-    if len(op_prefix_parts) >= 2:
-        for candidate in _list(operation.get("_ir_operations") or []):
-            if not isinstance(candidate, dict):
-                continue
-            c_path = normalize_path_placeholders(
-                _text(candidate.get("path") or candidate.get("raw_path"))
-            ).rstrip("/")
-            if c_path == op_path:
-                continue
-            c_prefix = c_path.rsplit("/", 1)[0] if "/" in c_path else ""
-            if c_prefix == op_prefix:
-                c_example = _dict(candidate.get("request_example"))
-                if c_example:
-                    return dict(c_example)
+    )
+    if not op_collection:
+        return {}
+    matches: list[dict[str, Any]] = []
+    for candidate in siblings:
+        if not isinstance(candidate, dict):
+            continue
+        if _text(candidate.get("method")).upper() != "POST":
+            continue
+        c_path = normalize_path_placeholders(
+            _text(candidate.get("path") or candidate.get("raw_path"))
+        ).rstrip("/")
+        if c_path != op_collection:
+            continue
+        c_example = _dict(candidate.get("request_example"))
+        if c_example:
+            matches.append(dict(c_example))
+    if len(matches) == 1:
+        return matches[0]
     return {}
 
 

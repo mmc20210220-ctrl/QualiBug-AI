@@ -196,6 +196,7 @@ def test_compiled_round0_ids_exclude_blocked_and_collapse_variants() -> None:
 def test_runtime_recompile_selection_is_limited_to_source_bound_body_blockers() -> None:
     obligations = [
         {"obligation_id": "obl_body"},
+        {"obligation_id": "obl_body_abstract"},
         {"obligation_id": "obl_cleanup"},
         {"obligation_id": "obl_observer"},
         {"obligation_id": "obl_compiled"},
@@ -206,6 +207,14 @@ def test_runtime_recompile_selection_is_limited_to_source_bound_body_blockers() 
                 "status": "BLOCKED",
                 "reason_code": "BLOCKED_MISSING_BINDING",
                 "detail": "unresolvable_path_placeholders:BODY_PARAMETER_NOT_SOURCE_BOUND",
+            }
+        },
+        "obl_body_abstract": {
+            "compile_receipt": {
+                "status": "ABSTRACT",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": "unresolvable_path_placeholders:BODY_PARAMETER_NOT_SOURCE_BOUND",
+                "abstract_retained": True,
             }
         },
         "obl_cleanup": {
@@ -226,7 +235,8 @@ def test_runtime_recompile_selection_is_limited_to_source_bound_body_blockers() 
     }
 
     assert _runtime_recompile_round0_obligation_ids(obligations, experiments) == {
-        "obl_body"
+        "obl_body",
+        "obl_body_abstract",
     }
 
 

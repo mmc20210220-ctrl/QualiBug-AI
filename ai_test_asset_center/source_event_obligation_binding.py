@@ -66,8 +66,9 @@ def compile_obligations_with_source_event(
     behavior_ir: dict[str, Any],
     *,
     base_compile: Any,
+    **kwargs: Any,
 ) -> dict[str, Any]:
-    baseline = dict(base_compile(behavior_ir))
+    baseline = dict(base_compile(behavior_ir, **kwargs))
     invariants = _event_invariants(behavior_ir)
     identity_receipt = _dict(
         _dict(behavior_ir).get("formal_event_binding_identity_receipt")
@@ -315,10 +316,11 @@ def install_source_event_obligation_binding() -> None:
     )
     setattr(_planning, _ORIGINAL_MARKER, original)
 
-    def compile_with_event(behavior_ir: dict[str, Any]) -> dict[str, Any]:
+    def compile_with_event(behavior_ir: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return compile_obligations_with_source_event(
             behavior_ir,
             base_compile=original,
+            **kwargs,
         )
 
     _planning.compile_obligations_from_behavior_ir = compile_with_event

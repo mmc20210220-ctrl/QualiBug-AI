@@ -22,6 +22,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -79,6 +80,7 @@ def test_a_db_step_produces_a_receipt_and_deletes(monkeypatch) -> None:
         project="",
         runtime_contract=None,
         policy_decision=None,
+        **_kwargs,
     ):
         executed.append({"step": dict(step), "identity_value": identity_value, "dsn": dsn})
         return {
@@ -397,11 +399,19 @@ def test_row_delete_surfaces_rollback_failure() -> None:
 
 
 def test_a_failed_adapter_cleanup_counts_as_a_cleanup_failure() -> None:
-    """Pinned in source: the branch must increment cleanup_failures, not continue quietly."""
+    """Pinned in source: a db_sql cleanup that RUNS but is not CLEANED must increment
+    cleanup_failures (not continue quietly).
+
+    The earlier ``if _scoped_n == 0`` guard is a separate NOT_REQUIRED path: when no
+    governed write was accepted there is nothing to roll back, so it is intentionally
+    not a failure. Anchor on the adapter-run failure path, not that guard's ``continue``.
+    """
     source = inspect.getsource(cleanup_core.execute_experiment_cleanup_compensation)
-    start = source.index('adapter")) == "db_sql"')
-    # The branch ends at its `continue`; take everything up to and including it.
-    end = source.index("continue", start) + len("continue")
+    start = source.index('_adapter_cleaned = _text(_adapter_receipt.get("status")) == "CLEANED"')
+    end = (
+        source.index('observations["cleanup_status"] = "failed"', start)
+        + len('observations["cleanup_status"] = "failed"')
+    )
     block = source[start:end]
     assert "cleanup_failures += 1" in block
     assert 'observations["cleanup_status"] = "failed"' in block
@@ -507,6 +517,133 @@ def test_mutation_restore_fields_rejects_cross_entity_before_snapshot() -> None:
     assert fields == {}
 
 
+def test_mutation_attestation_binds_same_step_as_restore_fields() -> None:
+    """Control/treatment arms of the same identity must not cross-wire restore."""
+    steps = [
+        {
+            "phase": "control",
+            "governance_receipt": {
+                "accepted": True,
+                "audit_path": "audit-control",
+                "before": {"body": {"id": "ord-1", "status": "SHIPPED", "qty": 1}},
+                "after": {"body": {"id": "ord-1", "status": "SHIPPED", "qty": 2}},
+            },
+        },
+        {
+            "phase": "treatment",
+            "governance_receipt": {
+                "accepted": True,
+                "audit_path": "audit-treatment",
+                "before": {"body": {"id": "ord-1", "status": "SHIPPED", "qty": 1}},
+                "after": {"body": {"id": "ord-1", "status": "COMPLETED", "qty": 1}},
+            },
+        },
+    ]
+    restore = cleanup_mod._mutation_restore_fields_from_steps(
+        steps, identity_value="ord-1", identity_column="id"
+    )
+    # Newest arm first: treatment mutated status, not qty.
+    assert restore == {"status": "SHIPPED"}
+    attestation = cleanup_mod._mutation_attestation_from_steps(
+        steps,
+        identity_value="ord-1",
+        identity_column="id",
+        restore_fields=restore,
+    )
+    assert attestation["write_receipt_ref"] == "audit-treatment"
+    assert attestation["before_body"]["status"] == "SHIPPED"
+    assert attestation["after_body"]["status"] == "COMPLETED"
+    assert attestation["restore_fields"] == restore
+
+
+def test_mutation_restore_fields_require_nonempty_identity() -> None:
+    """Unscoped diffs must not invent a field-restore map.
+
+    Empty identity + scalar diffs used to enter field-restore while attestation
+    refused, yielding false CLEANUP_MUTATION_NOT_ATTESTED and blocking DELETE.
+    """
+    fields = cleanup_mod._mutation_restore_fields_from_steps(
+        [
+            {
+                "phase": "treatment",
+                "governance_receipt": {
+                    "accepted": True,
+                    "before": {"body": {"id": "ord-1", "status": "SHIPPED"}},
+                    "after": {"body": {"id": "ord-1", "status": "COMPLETED"}},
+                },
+            }
+        ],
+        identity_value="",
+        identity_column="id",
+    )
+    assert fields == {}
+
+
+def test_adapter_cleanup_without_identity_does_not_false_mutation_refuse(
+    monkeypatch,
+) -> None:
+    """Missing cleanup identity must not dead-end as MUTATION_NOT_ATTESTED."""
+    monkeypatch.setattr(
+        cleanup_mod, "_project_database_dsn", lambda root, project: ("postgresql://x/y", "")
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.cleanup_adapter_ladder.execute_declared_adapter_field_restore",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not field-restore")),
+    )
+    deleted: list[dict] = []
+
+    def _fake_delete(step, *, identity_value, **kwargs):
+        deleted.append({"identity_value": identity_value, "table": step.get("table")})
+        return {
+            "schema_version": "qualibug.cleanup-adapter-execution.v1",
+            "adapter": "db_sql",
+            "table": step.get("table"),
+            "identity_value": identity_value,
+            "status": "REFUSED",
+            "reason_code": "CLEANUP_ROW_IDENTITY_NOT_RESOLVABLE",
+            "rows_deleted": 0,
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.cleanup_adapter_ladder.execute_declared_adapter_cleanup",
+        _fake_delete,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.cleanup_adapter_ladder.build_ordered_delete_plan",
+        lambda **kwargs: [
+            {
+                "adapter": "db_sql",
+                "table": kwargs.get("table") or "orders",
+                "identity_column": kwargs.get("identity_column") or "id",
+            }
+        ],
+    )
+
+    receipt = cleanup_mod._execute_adapter_cleanup_step(
+        {"adapter": "db_sql", "table": "orders", "identity_column": "id"},
+        root=Path("."),
+        project="proj",
+        runtime_bindings={},
+        steps_out=[
+            {
+                "phase": "treatment",
+                "governance_receipt": {
+                    "accepted": True,
+                    # Scalar diffs without a resolvable primary identity — the
+                    # pre-fix path built an unscoped restore map and then
+                    # refused attestation as CLEANUP_MUTATION_NOT_ATTESTED.
+                    "before": {"body": {"status": "SHIPPED"}},
+                    "after": {"body": {"status": "COMPLETED"}},
+                },
+            }
+        ],
+        runtime_contract={"status": "approved", "approved_base_url": "http://localhost:8080"},
+    )
+
+    assert receipt["reason_code"] != "CLEANUP_MUTATION_NOT_ATTESTED"
+    assert deleted, "expected owned-row DELETE path after empty restore map"
+
+
 def test_adapter_prefers_field_restore_over_row_delete_for_mutations(monkeypatch) -> None:
     """Existing-entity mutations must not attempt run-owned row delete."""
     restored: list[dict] = []
@@ -559,6 +696,7 @@ def test_adapter_prefers_field_restore_over_row_delete_for_mutations(monkeypatch
                 "body": {"id": "ord-1", "status": "COMPLETED"},
                 "governance_receipt": {
                     "accepted": True,
+                    "audit_path": "audit-ord-1-treatment",
                     "before": {"body": {"id": "ord-1", "status": "SHIPPED"}},
                     "after": {"body": {"id": "ord-1", "status": "COMPLETED"}},
                 },

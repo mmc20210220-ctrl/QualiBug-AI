@@ -91,6 +91,24 @@ def test_authoritative_source_section_closes_rule_to_probe_chain() -> None:
     assert asset["enterprise_comprehension_gate"]["downstream"]["status"] == "PASS"
 
 
+def test_short_cjk_statement_exact_source_section_binds() -> None:
+    """CJK rules shorter than the old ASCII 8-char floor must still bind exactly."""
+    statement = "取消订单"
+    asset, _probes = refresh_chinese_business_downstream(
+        _asset(
+            statement,
+            f"### POST /api/orders/:id/cancel\n\n{statement}。buyer 可用。",
+        ),
+        max_probe_count=20,
+    )
+
+    rule = asset["rule_library"][0]
+    assert rule["downstream_binding_status"] == "READY_AUTHORITATIVE_OPERATION_BOUND"
+    assert rule["authoritative_operation_refs"] == ["interface:GET:/orders"]
+    assert "interface:GET:/orders" in rule["operation_refs"]
+    assert asset["chinese_rule_downstream_gate"]["behavior_ir_bound_rule_count"] == 1
+
+
 def test_unbound_chinese_rule_never_falls_back_to_first_endpoint() -> None:
     statement = "管理员可以查看订单"
     asset, probes = refresh_chinese_business_downstream(

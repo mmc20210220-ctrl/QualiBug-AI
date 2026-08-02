@@ -55,8 +55,9 @@ def compile_obligations_with_source_stability(
     behavior_ir: dict[str, Any],
     *,
     base_compile: Any,
+    **kwargs: Any,
 ) -> dict[str, Any]:
-    baseline = dict(base_compile(behavior_ir))
+    baseline = dict(base_compile(behavior_ir, **kwargs))
     invariants = _invariants(behavior_ir)
     if not invariants:
         by_family = dict(baseline.get("by_family") or {})
@@ -201,8 +202,10 @@ def install_source_stability_obligation_binding() -> None:
     original = getattr(_planning, _ORIGINAL_MARKER, _planning.compile_obligations_from_behavior_ir)
     setattr(_planning, _ORIGINAL_MARKER, original)
 
-    def compile_with_stability(behavior_ir: dict[str, Any]) -> dict[str, Any]:
-        return compile_obligations_with_source_stability(behavior_ir, base_compile=original)
+    def compile_with_stability(behavior_ir: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return compile_obligations_with_source_stability(
+            behavior_ir, base_compile=original, **kwargs
+        )
 
     _planning.compile_obligations_from_behavior_ir = compile_with_stability
     _compiler.compile_obligations_from_behavior_ir = compile_with_stability

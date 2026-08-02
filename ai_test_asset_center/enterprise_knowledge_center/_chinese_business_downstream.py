@@ -133,23 +133,29 @@ def refresh_chinese_business_downstream(
         [*existing_relationships, *authoritative_edges],
         "edge_id",
     )
-    accepted_operation_edges = {
-        _text(edge.get("from")): sorted(
+    promoted_rule_ids = {
+        _text(row.get("rule_id")) for row in promoted if _text(row.get("rule_id"))
+    }
+    # Consume every authoritative rule→interface edge for promoted Chinese rules,
+    # including edges that already lived on the asset before this refresh.
+    accepted_operation_edges: dict[str, list[str]] = {}
+    for rule_id in promoted_rule_ids:
+        operation_ids = sorted(
             {
                 _text(candidate.get("to"))
                 for candidate in relationships
                 if isinstance(candidate, dict)
-                and _text(candidate.get("from")) == _text(edge.get("from"))
+                and _text(candidate.get("from")) == rule_id
                 and _text(candidate.get("relation")) == "rule_to_interface"
                 and _api._relationship_is_authoritative(candidate)
                 and _text(candidate.get("to"))
             }
         )
-        for edge in authoritative_edges
-        if _text(edge.get("from"))
-    }
+        if operation_ids:
+            accepted_operation_edges[rule_id] = operation_ids
 
     ready_rule_ids: set[str] = set()
+    bound_for_behavior_ir_rule_ids: set[str] = set()
     blocked_rules: list[dict[str, Any]] = []
     for rule in rules:
         if _text(rule.get("derivation")) != "chinese_first_business_comprehension":
@@ -158,8 +164,19 @@ def refresh_chinese_business_downstream(
         operation_ids = accepted_operation_edges.get(rule_id, [])
         if operation_ids:
             ready_rule_ids.add(rule_id)
+            bound_for_behavior_ir_rule_ids.add(rule_id)
             rule["downstream_binding_status"] = _READY
             rule["authoritative_operation_refs"] = operation_ids
+            # Behavior IR reads operation_refs; keep the authoritative bind visible
+            # even when scenario/probe mainline later re-blocks ready_rule_ids.
+            existing_op_refs = [
+                _text(value)
+                for value in _list(rule.get("operation_refs"))
+                if _text(value)
+            ]
+            rule["operation_refs"] = list(
+                dict.fromkeys([*existing_op_refs, *operation_ids])
+            )
         else:
             rule["downstream_binding_status"] = _BLOCKED
             rule["authoritative_operation_refs"] = []
@@ -194,6 +211,8 @@ def refresh_chinese_business_downstream(
                 continue
             ready_rule_ids.discard(rule_id)
             rule["downstream_binding_status"] = blocking_status
+            # Preserve authoritative_operation_refs / operation_refs for Behavior IR.
+            # Scenario/probe generation remains gated by ready_rule_ids only.
             blocked_rules.append(
                 {
                     "rule_id": rule_id,
@@ -203,6 +222,9 @@ def refresh_chinese_business_downstream(
                     "reason": blocking_status,
                     "scenario_planning_status": base_scenario_gate.get("status"),
                     "implementation_binding_status": implementation_gate_status,
+                    "behavior_ir_operation_refs_preserved": bool(
+                        _list(rule.get("authoritative_operation_refs"))
+                    ),
                 }
             )
 
@@ -378,6 +400,7 @@ def refresh_chinese_business_downstream(
         "execution_allowed": False,
         "accepted_chinese_rule_count": len(promoted),
         "authoritatively_bound_rule_count": len(ready_rule_ids),
+        "behavior_ir_bound_rule_count": len(bound_for_behavior_ir_rule_ids),
         "blocked_rule_count": len(blocked_rules),
         "blocked_rules": blocked_rules,
         "implementation_binding_required": implementation_required,

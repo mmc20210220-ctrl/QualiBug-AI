@@ -214,6 +214,44 @@ def test_cleanup_receipt_must_cover_every_accepted_write() -> None:
     )
 
 
+def test_state_unchanged_cleanup_subjects_must_not_double_count_coverage() -> None:
+    """Control+treatment NOT_REQUIRED receipts must not each stamp full write N.
+
+    Live observed runs hit CLEANUP_WRITE_COVERAGE_MISMATCH when both subjects
+    carried accepted_write_count=2 against accepted_non_cleanup=2 (covered=4).
+    """
+    decision = _cleanup_gate_decision(
+        execution=_execution(
+            accepted_writes=2,
+            cleanup_status="NOT_REQUIRED",
+            attempted=0,
+            completed=0,
+        ),
+        contracts=[
+            _cleanup_contract(accepted_write_count=2, status="NOT_REQUIRED"),
+            _cleanup_contract(accepted_write_count=0, status="NOT_REQUIRED"),
+        ],
+    )
+
+    assert decision == ("DELIVERABLE", [], "NOT_REQUIRED")
+
+    # Same cardinality once + fixture cleanup covering the remaining write.
+    mixed = _cleanup_gate_decision(
+        execution=_execution(
+            accepted_writes=3,
+            cleanup_status="COMPLETED",
+            attempted=1,
+            completed=1,
+        ),
+        contracts=[
+            _cleanup_contract(accepted_write_count=2, status="NOT_REQUIRED"),
+            _cleanup_contract(accepted_write_count=0, status="NOT_REQUIRED"),
+            _cleanup_contract(accepted_write_count=1, status="COMPLETED"),
+        ],
+    )
+    assert mixed == ("DELIVERABLE", [], "COMPLETED")
+
+
 def test_cleanup_receipt_is_required_after_an_accepted_write() -> None:
     decision = _cleanup_gate_decision(
         execution=_execution(

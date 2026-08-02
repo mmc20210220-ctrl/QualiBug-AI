@@ -704,3 +704,83 @@ def test_adapter_runtime_step_accepts_lowercase_cleaned_status() -> None:
     )
     assert steps[0]["governance_receipt"]["accepted"] is True
     assert steps[0]["status_code"] == 200
+
+
+def test_post_cleanup_readback_http_is_counted_in_runtime_step(
+    monkeypatch,
+) -> None:
+    """Gateway-correlated after-cleanup GET must enter operational receipts."""
+    from ai_test_asset_center import sandbox_write_executor_base as sandbox
+    from ai_test_asset_center.experiment_cleanup_executor import (
+        seal_after_cleanup_observation,
+    )
+    from ai_test_asset_center.operational_receipts import (
+        build_execution_operational_receipt,
+    )
+
+    monkeypatch.setattr(
+        sandbox,
+        "_http_request",
+        lambda method, url, token="", body=None: {
+            "status": 404,
+            "body": {"error": "not_found"},
+            "headers": {},
+        },
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor_core.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+
+    steps: list[dict] = [
+        {
+            "phase": "treatment",
+            "method": "POST",
+            "path": "/orders",
+            "observation_path": "/orders/1",
+            "actor_ref": "buyer",
+            "governance_receipt": {
+                "accepted": True,
+                "method": "POST",
+                "path": "/orders",
+                "observation_path": "/orders/1",
+                "http_attempt_count": 3,
+                "write_request_attempt_count": 1,
+                "production_http_requests": 0,
+                "before": {"status": 404},
+                "write": {"status": 201, "body": {"id": "1"}},
+                "after": {"status": 200, "body": {"id": "1"}},
+            },
+        }
+    ]
+    observations: dict = {}
+    sealed = seal_after_cleanup_observation(
+        steps_out=steps,
+        observations=observations,
+        actors={"buyer": {"role": "buyer"}},
+        tokens={"buyer": "token"},
+        base_url="http://localhost:8080",
+        root=__import__("pathlib").Path("."),
+        project="test_project",
+        runtime_contract={"approved_base_url": "http://localhost:8080"},
+    )
+    assert observations.get("after_cleanup_observation_seal") in (None, {})
+    assert sealed.get("source") == "post_cleanup_readback"
+    readback_steps = [
+        step
+        for step in steps
+        if step.get("phase") == "cleanup"
+        and (step.get("governance_receipt") or {}).get("reason")
+        == "post_cleanup_readback"
+    ]
+    assert len(readback_steps) == 1
+    assert readback_steps[0]["governance_receipt"]["http_attempt_count"] == 1
+
+    receipt = build_execution_operational_receipt(
+        receipt_id="operational_test_readback",
+        execution_status="EXECUTED",
+        steps=steps,
+        cleanup_failures=0,
+    )
+    assert receipt["http_request_attempt_count"] == 4
+    assert receipt["write_request_attempt_count"] == 1

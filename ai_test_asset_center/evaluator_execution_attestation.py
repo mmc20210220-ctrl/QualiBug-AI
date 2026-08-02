@@ -153,9 +153,11 @@ def _expected_request_attempts(
             or selected_attempt_id
         )
         execution_id = _text(attempt.get("execution_id"))
-        terminal_stage = _text(attempt.get("terminal_stage")).lower()
         if not operational:
-            if not execution_id and terminal_stage == "compile":
+            # No execution_id means transport never bound to an executed attempt
+            # (compile blocks, pre-transport execution blocks, deferred plan rows).
+            # Only executed attempts can be request-bearing.
+            if not execution_id:
                 continue
             raise ExecutionAttestationError(
                 f"operational_receipt_missing:{selected_attempt_id or 'MISSING'}"

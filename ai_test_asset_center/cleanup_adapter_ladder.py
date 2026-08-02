@@ -60,6 +60,13 @@ REASON_NOT_APPROVED = "CLEANUP_TARGET_NOT_APPROVED_FOR_WRITE"
 # must never be hard-coded here — callers supply the declared identity_column.
 _GENERIC_PRIMARY_KEY_ALIASES: tuple[str, ...] = ("id", "uuid", "guid", "key")
 
+# Common response envelopes. Same vocabulary as sandbox write identity
+# extraction — never domain entity names.
+_RESPONSE_ENTITY_ENVELOPES: tuple[str, ...] = ("data", "result", "item", "resource")
+
+# SQL identifiers must be bare names — never interpolated free text.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 def identity_body_keys(identity_column: str) -> tuple[str, ...]:
     """Keys allowed when reading an identity from a body or binding map.
@@ -77,8 +84,8 @@ def identity_body_keys(identity_column: str) -> tuple[str, ...]:
     return tuple(keys)
 
 
-def identity_value_from_body(body: Any, identity_column: str) -> str:
-    """Extract a scalar identity from a body using only declared/generic keys."""
+def _identity_value_from_flat_body(body: Any, identity_column: str) -> str:
+    """One-level identity extract; no envelope descent."""
     row = _dict(body)
     allowed_keys = identity_body_keys(identity_column)
     generic = (_text(identity_column) or "id").lower() in _GENERIC_PRIMARY_KEY_ALIASES
@@ -99,6 +106,134 @@ def identity_value_from_body(body: Any, identity_column: str) -> str:
             matches.append(value)
     unique = list(dict.fromkeys(matches))
     return unique[0] if len(unique) == 1 else ""
+
+
+def identity_value_from_body(body: Any, identity_column: str) -> str:
+    """Extract a scalar identity from a body using only declared/generic keys.
+
+    Prefer top-level keys. When those are absent, accept exactly one match
+    under a generic response envelope (``data`` / ``result`` / ``item`` /
+    ``resource``). Conflicting nested identities remain unbound.
+    """
+    row = _dict(body)
+    direct = _identity_value_from_flat_body(row, identity_column)
+    if direct:
+        return direct
+    nested_matches: list[str] = []
+    for envelope in _RESPONSE_ENTITY_ENVELOPES:
+        nested = row.get(envelope)
+        if isinstance(nested, dict):
+            value = _identity_value_from_flat_body(nested, identity_column)
+            if value:
+                nested_matches.append(value)
+    unique = list(dict.fromkeys(nested_matches))
+    return unique[0] if len(unique) == 1 else ""
+
+
+def entity_storage_table(entity: Any) -> str:
+    """Source-declared physical table for an entity, if any.
+
+    Prefers an explicit table/storage field. Falls back to the entity name.
+    Never invents a plural form — schema-derived aliases stay in
+    ``source_entity_names`` for runtime catalog resolution.
+    """
+    row = _dict(entity)
+    return _text(
+        row.get("table")
+        or row.get("storage_table")
+        or row.get("db_table")
+        or row.get("name")
+    )
+
+
+def storage_table_candidates(
+    declared_table: Any,
+    *,
+    entities: Any = None,
+) -> list[str]:
+    """Ordered storage-table candidates from the plan and source entity aliases."""
+    declared = _text(declared_table)
+    candidates: list[str] = []
+    if declared:
+        candidates.append(declared)
+    for raw in _list(entities):
+        row = _dict(raw)
+        names = {
+            _text(row.get("name")).lower(),
+            *{_text(alias).lower() for alias in _list(row.get("source_entity_names"))},
+            _text(row.get("table")).lower(),
+        }
+        names.discard("")
+        if declared and declared.lower() not in names:
+            continue
+        for value in (
+            entity_storage_table(row),
+            *[_text(alias) for alias in _list(row.get("source_entity_names"))],
+            _text(row.get("name")),
+        ):
+            if value and value not in candidates and _IDENTIFIER_RE.match(value):
+                candidates.append(value)
+    return candidates
+
+
+def resolve_storage_table_against_catalog(
+    declared_table: Any,
+    *,
+    entities: Any = None,
+    connection: Any = None,
+) -> tuple[str, str]:
+    """Bind a cleanup table to one catalog-present, source-declared name.
+
+    Returns ``(table, reason_code)``. ``reason_code`` is empty on success.
+    Uses only plan/entity aliases — never invents plural spellings. When a
+    live connection is available, information_schema is the authority for
+    which candidate exists.
+    """
+    candidates = storage_table_candidates(declared_table, entities=entities)
+    if not candidates:
+        return "", REASON_NO_TABLE
+    if connection is None:
+        # Compile/plan time: prefer explicit entity.table via candidates order.
+        return candidates[0], ""
+
+    existing: set[str] = set()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = current_schema()
+              AND table_type = 'BASE TABLE'
+              AND lower(table_name) = ANY(%s)
+            """,
+            ([name.lower() for name in candidates],),
+        )
+        for row in cursor.fetchall() or []:
+            if row and row[0]:
+                existing.add(str(row[0]))
+    except Exception as exc:
+        return "", f"CLEANUP_DB_TABLE_CATALOG_FAILED:{type(exc).__name__}:{exc}"[:180]
+
+    # Preserve candidate order; keep catalog's exact spelling when case differs.
+    existing_lower = {name.lower(): name for name in existing}
+    matched = [
+        existing_lower[name.lower()]
+        for name in candidates
+        if name.lower() in existing_lower
+    ]
+    unique = list(dict.fromkeys(matched))
+    if len(unique) == 1:
+        return unique[0], ""
+    if not unique:
+        return "", (
+            "CLEANUP_TABLE_NOT_IN_SCHEMA:"
+            + ",".join(candidates[:6])
+        )
+    return "", (
+        "CLEANUP_TABLE_AMBIGUOUS_IN_SCHEMA:"
+        + ",".join(unique[:6])
+    )
 
 
 def mutation_attested_for_identity(
@@ -278,7 +413,7 @@ def resolve_cleanup_adapter(
         return result
 
     entity_row = _dict(entity)
-    table = _text(entity_row.get("name"))
+    table = entity_storage_table(entity_row)
     identity_fields = [_text(f) for f in _list(entity_row.get("identity_fields")) if _text(f)]
     if not table or not identity_fields:
         result["reason_code"] = REASON_NO_TABLE
@@ -378,8 +513,6 @@ def prefer_constructed_data(
 
 # ── execution ───────────────────────────────────────────────────────────────
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
 EXECUTION_SCHEMA = "qualibug.cleanup-adapter-execution.v1"
 
 # Reason codes for the target-policy gate, mirroring the HTTP governed-write gate
@@ -437,6 +570,7 @@ def execute_declared_adapter_field_restore(
     runtime_contract: dict[str, Any] | None = None,
     policy_decision: dict[str, Any] | None = None,
     mutation_attestation: dict[str, Any] | None = None,
+    entities: Any = None,
 ) -> dict[str, Any]:
     """Restore source-observed scalar fields on an existing row this run mutated.
 
@@ -540,6 +674,24 @@ def execute_declared_adapter_field_restore(
         receipt["detail"] = str(exc)[:200]
         return receipt
 
+    if _list(entities):
+        resolved_table, table_reason = resolve_storage_table_against_catalog(
+            table,
+            entities=entities,
+            connection=connection,
+        )
+        if table_reason:
+            try:
+                connection.close()
+            except Exception:
+                pass
+            receipt["reason_code"] = table_reason
+            receipt["detail"] = f"declared_table={table}"
+            return receipt
+        if resolved_table:
+            table = resolved_table
+            receipt["table"] = table
+
     assignments = ", ".join(f'"{field}" = %s' for field in safe_fields)
     values = list(safe_fields.values()) + [_text(identity_value)]
     try:
@@ -611,6 +763,7 @@ def execute_declared_adapter_cleanup(
     project: str = "",
     runtime_contract: dict[str, Any] | None = None,
     policy_decision: dict[str, Any] | None = None,
+    entities: Any = None,
 ) -> dict[str, Any]:
     """Run one data-layer cleanup step, refusing anything this run did not create.
 
@@ -626,6 +779,9 @@ def execute_declared_adapter_cleanup(
     (a precomputed/injected ``TargetPolicyDecision``) or ``root``/``project`` (plus
     optionally ``runtime_contract``) so the gate can compute one. Missing both fails
     closed -- an unevaluated target is never assumed safe.
+
+    When ``entities`` carries source table aliases, the declared logical table is
+    rebound to the single catalog-present alias before DELETE.
     """
     plan = _dict(step)
     receipt: dict[str, Any] = {
@@ -655,20 +811,8 @@ def execute_declared_adapter_cleanup(
         receipt["reason_code"] = policy_reason_code
         return receipt
 
-    # The ownership proof is the whole safety argument and is checked before anything
-    # else touches the database.
-    if plan.get("requires_ownership_proof") is not False:
-        owned, basis = row_was_created_by_this_run(
-            identity_value,
-            creation_receipts=creation_receipts,
-            table=_text(plan.get("table")),
-        )
-        receipt["ownership_basis"] = basis
-        if not owned:
-            receipt["reason_code"] = REASON_NOT_RUN_OWNED
-            return receipt
-
     table = _text(plan.get("table"))
+    declared_table = table
     column = _text(plan.get("identity_column"))
     if not _IDENTIFIER_RE.match(table) or not _IDENTIFIER_RE.match(column):
         # Identifiers cannot be parameterised, so they are whitelisted by shape rather
@@ -678,6 +822,24 @@ def execute_declared_adapter_cleanup(
     if not _text(identity_value):
         receipt["reason_code"] = REASON_NO_IDENTITY
         return receipt
+
+    # Ownership before any connection. Accept receipts stamped with any
+    # source-declared alias of the logical table (payment vs payments).
+    if plan.get("requires_ownership_proof") is not False:
+        owned = False
+        basis = "no_ownership_evidence"
+        for candidate in storage_table_candidates(table, entities=entities) or [table]:
+            owned, basis = row_was_created_by_this_run(
+                identity_value,
+                creation_receipts=creation_receipts,
+                table=candidate,
+            )
+            if owned:
+                break
+        receipt["ownership_basis"] = basis
+        if not owned:
+            receipt["reason_code"] = REASON_NOT_RUN_OWNED
+            return receipt
 
     opener = connect
     if opener is None:
@@ -697,6 +859,26 @@ def execute_declared_adapter_cleanup(
         receipt["reason_code"] = f"CLEANUP_DB_CONNECT_FAILED:{type(exc).__name__}"
         receipt["detail"] = str(exc)[:200]
         return receipt
+
+    # Logical entity names (payment) often diverge from schema tables (payments).
+    # Rebind using source entity aliases + information_schema — never invent names.
+    if _list(entities):
+        resolved_table, table_reason = resolve_storage_table_against_catalog(
+            declared_table,
+            entities=entities,
+            connection=connection,
+        )
+        if table_reason:
+            try:
+                connection.close()
+            except Exception:
+                pass
+            receipt["reason_code"] = table_reason
+            receipt["detail"] = f"declared_table={declared_table}"
+            return receipt
+        if resolved_table:
+            table = resolved_table
+            receipt["table"] = table
 
     try:
         cursor = connection.cursor()
@@ -1259,7 +1441,7 @@ def build_database_cleanup_contract(
 
     # Identify target entity
     target_entity = _entity_for_operation(write_operation, entity_list)
-    table_name = _text(target_entity.get("name"))
+    table_name = entity_storage_table(target_entity)
     identity_fields = _list(target_entity.get("identity_fields"))
     if not identity_fields:
         identity_fields = ["id"]

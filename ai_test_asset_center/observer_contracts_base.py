@@ -1179,10 +1179,33 @@ def _observe_http_response(
     rows = [row for row in (control, treatment) if row]
     statuses = [_response_status(row) for row in rows]
     if not rows or any(status <= 0 for status in statuses):
+        # Governed writes blocked before transport leave status_code=0 with
+        # write_request_attempt_count=0. That is missing observation, not a
+        # harness HTTP failure — keep FAILED only when transport was attempted.
+        missing_rows = [
+            row
+            for row, status in zip(rows, statuses)
+            if isinstance(row, dict) and status <= 0
+        ]
+        zero_transport_only = bool(missing_rows) and all(
+            isinstance(row.get("governance_receipt"), dict)
+            and int(
+                _dict(row.get("governance_receipt")).get(
+                    "write_request_attempt_count"
+                )
+                or 0
+            )
+            == 0
+            for row in missing_rows
+        )
         return _receipt(
             observer_id="http_response",
-            status="FAILED",
-            reason_code="HTTP_RESPONSE_MISSING",
+            status="INDETERMINATE" if zero_transport_only else "FAILED",
+            reason_code=(
+                "HTTP_RESPONSE_NOT_ATTEMPTED"
+                if zero_transport_only
+                else "HTTP_RESPONSE_MISSING"
+            ),
             evidence={"statuses": statuses},
         )
     outcomes = [

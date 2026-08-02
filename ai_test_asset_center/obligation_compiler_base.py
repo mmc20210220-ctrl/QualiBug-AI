@@ -676,11 +676,22 @@ def _append_gap_once(coverage_gaps: list[dict[str, Any]], gap: dict[str, Any]) -
     coverage_gaps.append(gap)
 
 
-def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[str, Any]:
+def compile_obligations_from_behavior_ir(
+    behavior_ir: dict[str, Any],
+    *,
+    root: str = "",
+    project: str = "",
+) -> dict[str, Any]:
     """Produce obligations from IR facts using generic property templates.
 
     Templates bind to IR role/operation/entity IDs only — never name strings
     that encode a specific industry or benchmark answer.
+
+    ``root`` / ``project`` name the customer workspace so the persistence
+    observer can resolve the customer-declared database DSN. They are only
+    forwarded when the persistence surface is installed (adapter ``db_sql``
+    declared); without them the persistence branch emits a visible coverage gap
+    instead of an obligation that could never observe.
     """
     ir = _dict(behavior_ir)
     if _text(ir.get("schema_version")) != BEHAVIOR_IR_SCHEMA:
@@ -1443,6 +1454,120 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                     float(actor.get("confidence") or 0.7),
                 ),
             ))
+
+    # ── Persistence integrity: source-declared table + enumeration → DB observation ──
+    #
+    # Link 1 of the four-link chain for database-level defect classes. An entity that
+    # carries a source-declared storage table, a canonical field whose enumeration the
+    # source declared, and a produces/observes relation to a real operation compiles
+    # into a read-only persistence observation judged against that enumeration. Nothing
+    # is inferred: no table name, no field name and no allowed value enter this
+    # obligation except what the enterprise material declared into the IR.
+    #
+    # The surface must be installed (adapter ``db_sql`` customer-declared) and root /
+    # project provided, otherwise the branch records a visible coverage gap rather than
+    # compiling an obligation whose observer could never fire.
+    if root and project:
+        from .test_obligation import canonical_risk_families
+
+        if "persistence_integrity" in canonical_risk_families():
+            from .persistence_observer import OBSERVER_ID as PERSISTENCE_OBSERVER_ID
+
+            persistence_relation_types = {"produces", "observes"}
+            for ent in entities:
+                entity_ref = _text(ent.get("id"))
+                entity_table = _text(ent.get("table"))
+                if not entity_ref or not entity_table:
+                    continue
+                persistence_relations = [
+                    relation
+                    for relation in relations
+                    if _text(relation.get("relation_type")) in persistence_relation_types
+                    and entity_ref in {
+                        _text(relation.get("from_ref")),
+                        _text(relation.get("to_ref")),
+                    }
+                    and _text(relation.get("operation_ref")) in operations_by_id
+                ]
+                if not persistence_relations:
+                    coverage_gaps.append(_compile_gap(
+                        subject_ref=entity_ref,
+                        relation_types=persistence_relation_types,
+                    ))
+                    continue
+                raw_field_rows = _list(ent.get("fields"))
+                canonical_field_rows = [
+                    row
+                    for row in raw_field_rows
+                    if isinstance(row, dict)
+                ]
+                enum_fields = [
+                    row
+                    for row in canonical_field_rows
+                    if _text(row.get("name")) and _list(row.get("enum_values"))
+                ]
+                declared_field_names = [
+                    _text(row.get("name"))
+                    for row in canonical_field_rows
+                    if _text(row.get("name"))
+                ] or [
+                    _text(name)
+                    for name in raw_field_rows
+                    if _text(name)
+                ]
+                if not enum_fields or not declared_field_names:
+                    coverage_gaps.append(_compile_gap(
+                        subject_ref=entity_ref,
+                        relation_types={"enum_values"},
+                    ))
+                    continue
+                for relation in persistence_relations:
+                    operation_ref = _text(relation.get("operation_ref"))
+                    op = operations_by_id.get(operation_ref) or {}
+                    for field_row in enum_fields:
+                        field_name = _text(field_row.get("name"))
+                        enum_values = [
+                            _text(value)
+                            for value in _list(field_row.get("enum_values"))
+                            if _text(value)
+                        ]
+                        if not field_name or not enum_values:
+                            continue
+                        obligations.append(make_obligation(
+                            risk_family="persistence_integrity",
+                            subject_refs=[entity_ref, operation_ref, field_name],
+                            property_spec={
+                                "template": "persistence_state_enumeration",
+                                "persistence_root": _text(root),
+                                "project": _text(project),
+                                "persistence_table": entity_table,
+                                "persistence_fields": declared_field_names,
+                                "persistence_state_field": field_name,
+                                "persistence_allowed_states": enum_values,
+                                "operation_ref": operation_ref,
+                                "operation_path_prefix": _operation_path_prefix(op),
+                            },
+                            required_operations=[operation_ref] if operation_ref else [],
+                            required_observers=["http_response", PERSISTENCE_OBSERVER_ID],
+                            cleanup_requirement={
+                                "required": False,
+                                "mode": "read_only_persistence_observation",
+                            },
+                            source_refs=_combined_source_refs(
+                                ent,
+                                op,
+                                relation,
+                                field_row,
+                            ),
+                            relation_refs=[_text(relation.get("id"))]
+                            if _text(relation.get("id"))
+                            else [],
+                            confidence=min(
+                                float(ent.get("confidence") or 0.6),
+                                float(op.get("confidence") or 0.7),
+                                float(field_row.get("confidence") or 0.6),
+                            ),
+                        ))
 
     deduped = dedupe_obligations(obligations)
     return {

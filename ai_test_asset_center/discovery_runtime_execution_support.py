@@ -50,6 +50,8 @@ def _execution_status_and_count(
     blocked_obligations = sum(
         1
         for row in _list(ledger.get("attempts"))
+        if _text(_dict(row).get("selection_status")).upper()
+        in {"", "SELECTED"}
         if _text(_dict(row).get("terminal_status")).upper()
         in {"BLOCKED", "DEFERRED"}
     )
@@ -364,48 +366,6 @@ def _legacy_experiment_execution_batch(
     }
 
 
-def _selected_rows(plan: DiscoveryPlanningBundle) -> list[dict[str, Any]]:
-    experiments = _dict(plan.experiments.get("by_obligation"))
-    intents = {
-        _text(_dict(row).get("obligation_id")): dict(row)
-        for row in _list(
-            _dict(plan.experiments.get("agent_intent_plan")).get("intents")
-        )
-        if isinstance(row, dict) and _text(row.get("obligation_id"))
-    }
-    rows: list[dict[str, Any]] = []
-    for obligation in _list(plan.obligations.get("obligations")):
-        if not isinstance(obligation, dict):
-            continue
-        obligation_id = _text(obligation.get("obligation_id"))
-        experiment = _dict(experiments.get(obligation_id))
-        intent = _dict(intents.get(obligation_id))
-        adapters = [
-            _text(value)
-            for value in _list(intent.get("execution_adapters"))
-            if _text(value)
-        ]
-        rows.append({
-            **obligation,
-            "candidate_id": _text(obligation.get("candidate_id")) or obligation_id,
-            "experiment_id": _text(experiment.get("experiment_id")),
-            "adapter": (
-                adapters[0]
-                if len(adapters) == 1
-                else "multi_surface"
-                if adapters
-                else "unavailable"
-            ),
-            "execution_adapters": adapters,
-            "agent_intent_id": _text(intent.get("intent_id")),
-            "planning_round": 1,
-            "operation_refs": list(obligation.get("required_operations") or []),
-            "actor_refs": list(obligation.get("required_actors") or []),
-            "behavior_ir_refs": list(obligation.get("relation_refs") or []),
-        })
-    return rows
-
-
 def _manual_terminal_receipts(
     *,
     selected_rows: list[dict[str, Any]],
@@ -439,7 +399,7 @@ def _manual_terminal_receipts(
     )
     for row in selected_rows:
         obligation_id = _text(row.get("obligation_id"))
-        if obligation_id in compile_results or obligation_id in execution_results:
+        if not obligation_id or obligation_id in execution_results:
             continue
         # Check variant obligation_ids and map them to the original
         _variant_result = None
@@ -447,25 +407,44 @@ def _manual_terminal_receipts(
             if _vid.startswith(obligation_id + "__v_"):
                 _variant_result = _vresult
                 break
-        if _variant_result is not None:
+        if _variant_result is not None and obligation_id not in compile_results:
             compile_results[obligation_id] = dict(_variant_result)
+            if obligation_id in execution_results:
+                continue
+        existing_compile = _dict(compile_results.get(obligation_id))
+        existing_compile_status = _text(existing_compile.get("status")).upper()
+        # COMPILED without an execution receipt still needs a terminal — especially
+        # budget-deferred rows that remain in pending_next_round. Non-COMPILED
+        # compile terminals already close the attempt.
+        if existing_compile and existing_compile_status != "COMPILED":
             continue
         experiment = _dict(experiments.get(obligation_id))
         compile_receipt = _dict(experiment.get("compile_receipt"))
-        compile_status = _text(compile_receipt.get("status")).upper()
-        if compile_status == "BLOCKED":
+        compile_status = existing_compile_status or _text(
+            compile_receipt.get("status")
+        ).upper()
+        experiment_id = _text(
+            existing_compile.get("experiment_id")
+            or experiment.get("experiment_id")
+            or compile_receipt.get("experiment_id")
+        )
+        if not existing_compile and compile_status in {"BLOCKED", "HARNESS_FAILED"}:
             compile_results[obligation_id] = {
-                "status": "BLOCKED",
+                "status": compile_status,
                 "reason_code": _text(compile_receipt.get("reason_code"))
                 or "BLOCKED_COMPILE",
                 "detail": _text(
                     compile_receipt.get("detail")
                     or compile_receipt.get("reason_detail")
                 ),
-                "experiment_id": _text(experiment.get("experiment_id")),
+                "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
-        elif compile_status == "DEFERRED" and _text(compile_receipt.get("reason_code")):
+        elif (
+            not existing_compile
+            and compile_status == "DEFERRED"
+            and _text(compile_receipt.get("reason_code"))
+        ):
             # The compiler already said WHY it deferred -- e.g.
             # MISSING_PRIMARY_OPERATION for an obligation with no operation to
             # call. Falling through to the branches below discarded that reason and
@@ -480,29 +459,77 @@ def _manual_terminal_receipts(
                     compile_receipt.get("detail")
                     or compile_receipt.get("reason_detail")
                 ),
-                "experiment_id": _text(experiment.get("experiment_id")),
+                "experiment_id": experiment_id,
+                "cost_coverage_status": "UNKNOWN",
+            }
+        elif (
+            not existing_compile
+            and _text(row.get("selection_status")).upper() == "COMPILE_BLOCKED"
+        ):
+            compile_results[obligation_id] = {
+                "status": "HARNESS_FAILED",
+                "reason_code": (
+                    "COMPILE_RECEIPT_MISSING"
+                    if not compile_status
+                    else "BLOCKED_COMPILE"
+                ),
+                "detail": (
+                    "compile_receipt_missing"
+                    if not compile_status
+                    else "compile_deferred_reason_missing"
+                ),
+                "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
         elif obligation_id in pending_ids:
-            compile_results[obligation_id] = {
-                "status": "DEFERRED",
-                "reason_code": "OBLIGATION_BUDGET_REACHED",
-                "not_in_plan_reason": pending_reasons.get(obligation_id, "BUDGET_EXHAUSTED"),
-                "experiment_id": _text(experiment.get("experiment_id")),
-                "cost_coverage_status": "UNKNOWN",
-            }
+            # Preserve a real COMPILED compile receipt; defer at execution so
+            # budget exhaustion is not misread as a compile failure.
+            if compile_status == "COMPILED":
+                if obligation_id not in compile_results:
+                    compile_results[obligation_id] = {
+                        "status": "COMPILED",
+                        "experiment_id": experiment_id,
+                        "cost_coverage_status": "UNKNOWN",
+                    }
+                execution_results[obligation_id] = {
+                    "status": "DEFERRED",
+                    "reason_code": "OBLIGATION_BUDGET_REACHED",
+                    "not_in_plan_reason": pending_reasons.get(
+                        obligation_id, "BUDGET_EXHAUSTED"
+                    ),
+                    "detail": "compiled_obligation_deferred_by_execution_budget",
+                    "experiment_id": experiment_id,
+                    "cost_coverage_status": "UNKNOWN",
+                }
+            else:
+                compile_results[obligation_id] = {
+                    "status": "DEFERRED",
+                    "reason_code": "OBLIGATION_BUDGET_REACHED",
+                    "not_in_plan_reason": pending_reasons.get(
+                        obligation_id, "BUDGET_EXHAUSTED"
+                    ),
+                    "experiment_id": experiment_id,
+                    "cost_coverage_status": "UNKNOWN",
+                }
         elif obligation_id in scheduled_ids and not runtime_approved:
-            compile_results[obligation_id] = {
-                "status": "COMPILED",
-                "experiment_id": _text(experiment.get("experiment_id")),
-                "cost_coverage_status": "UNKNOWN",
-            }
+            if obligation_id not in compile_results:
+                compile_results[obligation_id] = {
+                    "status": "COMPILED" if compile_status == "COMPILED" else compile_status or "COMPILED",
+                    "experiment_id": experiment_id,
+                    "cost_coverage_status": "UNKNOWN",
+                }
             execution_results[obligation_id] = {
                 "status": "BLOCKED",
                 "reason_code": "BLOCKED_RUNTIME_TARGET",
-                "experiment_id": _text(experiment.get("experiment_id")),
+                "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
+        elif existing_compile_status == "COMPILED":
+            # Already compiled in a batch/filler, but never executed and not
+            # pending — leave the execution gap for
+            # ``_ensure_accounting_terminal_receipts`` so status/reason stay
+            # aligned (BLOCKED / BLOCKED_EXECUTION), not HARNESS_FAILED.
+            continue
         else:
             # Fallback: obligation compiled but not selected/blocked/deferred.
             # Treat as DEFERRED rather than failing the entire run. Do NOT default
@@ -516,7 +543,7 @@ def _manual_terminal_receipts(
                     obligation_id, "NOT_IN_PLAN_REASON_UNATTRIBUTED"
                 ),
                 "detail": _text(compile_receipt.get("detail") or ""),
-                "experiment_id": _text(experiment.get("experiment_id")),
+                "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
 
@@ -698,6 +725,11 @@ def _consume_pending_obligation_rounds(
         "BLOCKED_MISSING_BINDING",
         "HARNESS_FAILED",
         "BLOCKED_MISSING_OBSERVER",
+        # Split out of BLOCKED_MISSING_OBSERVER.  Kept retry-eligible so the
+        # reason-code refinement does not silently strip retry attempts from
+        # obligations that previously received them.
+        "BLOCKED_CONTROL_ARM_NOT_PROVEN",
+        "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE",
     }
     # ── P0-6: Early stop policy tracking ──
     _NO_PROGRESS_LIMIT = 3   # consecutive rounds with zero new executions

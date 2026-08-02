@@ -220,6 +220,16 @@ X_BLOCKED_MISSING_OBSERVER = _register(
     "缺少观测器，无法验证执行结果",
     "检查API文档中是否声明了GET查询接口用于验证",
 )
+X_BLOCKED_CONTROL_ARM_NOT_PROVEN = _register(
+    "QB-X008", "P2",
+    "对照组请求已发出，但未能证明其执行成功",
+    "检查对照组返回的状态码与响应是否被完整采集，确认对照账号权限配置正确",
+)
+X_BLOCKED_OBSERVER_RECEIPT_INDETERMINATE = _register(
+    "QB-X009", "P2",
+    "观测器已执行，但回执无法判定结果",
+    "检查观测接口返回的字段是否包含可用于判定的状态信息",
+)
 X_SSL_ERROR = _register(
     "QB-X006", "P1",
     "目标系统SSL证书验证失败",
@@ -340,6 +350,8 @@ class ErrorCode:
     BLOCKED_MISSING_ACTOR = X_BLOCKED_MISSING_ACTOR
     BLOCKED_MISSING_BINDING = X_BLOCKED_MISSING_BINDING
     BLOCKED_MISSING_OBSERVER = X_BLOCKED_MISSING_OBSERVER
+    BLOCKED_CONTROL_ARM_NOT_PROVEN = X_BLOCKED_CONTROL_ARM_NOT_PROVEN
+    BLOCKED_OBSERVER_RECEIPT_INDETERMINATE = X_BLOCKED_OBSERVER_RECEIPT_INDETERMINATE
     SSL_ERROR = X_SSL_ERROR
     DNS_FAILED_TARGET = X_DNS_FAILED
     # Oracle

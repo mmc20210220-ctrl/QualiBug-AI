@@ -714,6 +714,26 @@ def _validate_identity_delete(
     }
 
 
+def _relation_endpoint_refs(rel: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """Return (left/from refs, right/to refs) covering IR field aliases."""
+    left = {
+        _text(rel.get("source")),
+        _text(rel.get("from")),
+        _text(rel.get("from_ref")),
+        _text(rel.get("source_operation_ref")),
+        _text(rel.get("operation_ref")),
+    }
+    right = {
+        _text(rel.get("target")),
+        _text(rel.get("to")),
+        _text(rel.get("to_ref")),
+        _text(rel.get("target_operation_ref")),
+    }
+    left.discard("")
+    right.discard("")
+    return left, right
+
+
 def _validate_explicit_compensator(
     *,
     primary_operation_ref: str,
@@ -725,20 +745,40 @@ def _validate_explicit_compensator(
     ops: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     """SPEC §7.2: explicit_compensator requires source-declared relation."""
-    # Must have explicit compensates relation in Behavior IR
-    has_relation = any(
-        isinstance(r, dict)
-        and _text(r.get("kind") or r.get("relation_type")) in {"compensates", "inverse", "compensation"}
-        and (
-            (_text(r.get("source") or r.get("from")) == cleanup_op_ref and _text(r.get("target") or r.get("to")) == primary_operation_ref)
-            or (_text(r.get("source") or r.get("from")) == primary_operation_ref and _text(r.get("target") or r.get("to")) == cleanup_op_ref)
-            or (_text(r.get("source_operation_ref")) == cleanup_op_ref and _text(r.get("target_operation_ref")) == primary_operation_ref)
-            or (_text(r.get("source_operation_ref")) == primary_operation_ref and _text(r.get("target_operation_ref")) == cleanup_op_ref)
-            or (_text(r.get("operation_ref")) == cleanup_op_ref and _text(r.get("to_ref")) == primary_operation_ref)
-            or (_text(r.get("operation_ref")) == cleanup_op_ref and _text(r.get("to")) == primary_operation_ref)
+    # Must have explicit compensates relation in Behavior IR.
+    # Canonical derivation stamps from_ref=compensator, to_ref=primary, but
+    # historical rows also use from/to/source/target aliases — accept both
+    # directions when the pair matches cleanup↔primary.
+    has_relation = False
+    for rel in relations:
+        if not isinstance(rel, dict):
+            continue
+        if _text(rel.get("kind") or rel.get("relation_type")) not in {
+            "compensates",
+            "inverse",
+            "compensation",
+        }:
+            continue
+        left, right = _relation_endpoint_refs(rel)
+        pair_ok = (
+            (cleanup_op_ref in left and primary_operation_ref in right)
+            or (primary_operation_ref in left and cleanup_op_ref in right)
         )
-        for r in relations
-    )
+        if not pair_ok:
+            # effects[].cleanup_target_operation_ref names the compensated primary
+            for effect in _list(rel.get("effects")):
+                if not isinstance(effect, dict):
+                    continue
+                target = _text(effect.get("cleanup_target_operation_ref"))
+                if target == primary_operation_ref and cleanup_op_ref in left:
+                    pair_ok = True
+                    break
+                if target == cleanup_op_ref and primary_operation_ref in left:
+                    pair_ok = True
+                    break
+        if pair_ok:
+            has_relation = True
+            break
     if not has_relation:
         return {"kind": "none", "detail": "explicit_compensator_no_source_relation"}
 
@@ -769,6 +809,74 @@ def _validate_explicit_compensator(
     }
 
 
+def _source_declared_writable_fields(
+    primary_op: dict[str, Any],
+    *,
+    ops: dict[str, dict[str, Any]] | None = None,
+) -> list[str]:
+    """Writable field names declared on the operation (never entity-schema inference).
+
+    PATCH/PUT docs often omit a body while the unique collection POST documents
+    the same resource fields — reuse that source example, matching compile-time
+    ``_source_request_example`` sibling resolution.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def _add(field: Any) -> None:
+        text = _text(field)
+        key = text.lower()
+        if not text or key in seen or key in SERVER_MANAGED_FIELDS:
+            return
+        seen.add(key)
+        names.append(text)
+
+    direct = primary_op.get("request_example")
+    if isinstance(direct, dict):
+        for key in direct:
+            _add(key)
+
+    # Nested OpenAPI request_schema.content.*.schema.properties
+    request_schema = _dict(primary_op.get("request_schema"))
+    properties = _dict(request_schema.get("properties"))
+    if not properties:
+        for media in _dict(request_schema.get("content")).values():
+            if not isinstance(media, dict):
+                continue
+            properties = _dict(_dict(media.get("schema")).get("properties"))
+            if properties:
+                break
+    for key in properties:
+        _add(key)
+
+    for key in (
+        list(_list(primary_op.get("parameters")))
+        + list(_list(primary_op.get("affected_fields")))
+        + list(_list(primary_op.get("field_dictionary")))
+    ):
+        if isinstance(key, dict):
+            _add(key.get("name") or key.get("field") or key.get("in"))
+        else:
+            _add(key)
+
+    if names:
+        return names
+
+    # Sibling collection POST example (sku/qty on cart create → cart PATCH)
+    try:
+        from .experiment_compiler_support import _source_request_example
+    except Exception:
+        return names
+    sibling_example = _source_request_example(
+        primary_op,
+        sibling_operations=list(_dict(ops).values()) if ops else None,
+    )
+    if isinstance(sibling_example, dict):
+        for key in sibling_example:
+            _add(key)
+    return names
+
+
 def _validate_field_snapshot_restore(
     *,
     primary_method: str,
@@ -785,8 +893,8 @@ def _validate_field_snapshot_restore(
     """SPEC §7.3: field_snapshot_restore semantic validation."""
     # Empty body action POST cannot be snapshot_restore
     primary_op = _dict(ops.get(primary_operation_ref))
-    request_example = primary_op.get("request_example")
-    body_is_empty = not request_example or request_example == {}
+    restore_fields = _source_declared_writable_fields(primary_op, ops=ops)
+    body_is_empty = not restore_fields
 
     if primary_method == "POST" and "{" in primary_path and body_is_empty:
         return {"kind": "none", "detail": "empty_body_action_without_explicit_inverse"}
@@ -798,11 +906,6 @@ def _validate_field_snapshot_restore(
     # Method must be PUT/PATCH or POST with field body
     if primary_method not in {"PUT", "PATCH", "POST"}:
         return {"kind": "none", "detail": "field_snapshot_restore_method_invalid"}
-
-    # Extract writable fields from request schema
-    writable_fields = list(request_example.keys()) if isinstance(request_example, dict) else []
-    # Strip server-managed fields
-    restore_fields = [f for f in writable_fields if f.lower() not in SERVER_MANAGED_FIELDS]
 
     if not restore_fields:
         return {"kind": "none", "detail": "field_snapshot_restore_no_writable_fields"}
@@ -897,9 +1000,18 @@ def _validate_exact_recreate(
     if primary_method != "DELETE":
         return {"kind": "none", "detail": "exact_recreate_primary_not_delete"}
 
-    # Must have explicit source declaration allowing recreate
+    # Must have explicit source declaration allowing recreate. Compiler sets
+    # business_equivalence_allows_new_identity when DELETE binds a unique
+    # source-declared collection create with a request body. Also admit when
+    # the recreate operation itself carries a source request example/schema —
+    # identity may change; business fields are restored from that body.
     safety = _dict(experiment.get("safety_contract"))
-    if not safety.get("business_equivalence_allows_new_identity"):
+    recreate_op = _dict(cleanup_op) or _dict(ops.get(cleanup_op_ref))
+    recreate_body = _source_declared_writable_fields(recreate_op, ops=ops)
+    allows_new_identity = bool(
+        safety.get("business_equivalence_allows_new_identity") or recreate_body
+    )
+    if not allows_new_identity:
         # Default: identity changed → invalid
         return {"kind": "none", "detail": "exact_recreate_identity_not_preserved"}
 

@@ -75,6 +75,19 @@ def test_generic_identity_aliases_are_case_insensitive_but_conflicts_refuse() ->
     assert identity_value_from_body({"id": "ord-1", "ID": "ord-2"}, "id") == ""
 
 
+def test_identity_value_accepts_single_response_envelope() -> None:
+    assert identity_value_from_body({"data": {"id": "pay-1"}}, "id") == "pay-1"
+    assert identity_value_from_body({"result": {"uuid": "pay-2"}}, "id") == "pay-2"
+    # Conflicting nested envelopes stay unbound.
+    assert (
+        identity_value_from_body(
+            {"data": {"id": "pay-a"}, "result": {"id": "pay-b"}},
+            "id",
+        )
+        == ""
+    )
+
+
 def test_mutation_attestation_requires_governed_write_receipt_reference() -> None:
     ok, reason = mutation_attested_for_identity(
         identity_value="ord-1",
@@ -123,14 +136,18 @@ def test_restore_fields_require_positive_primary_identity_match() -> None:
 
 
 def test_adapter_completed_evidence_emits_restoration_verified() -> None:
+    """A CLEANED db_sql step must emit restoration_verified/state_unchanged derived from
+    the real adapter result (``bool(_adapter_cleaned)``), never a hardcoded ``True``.
+
+    The earlier ``_scoped_n == 0`` NOT_REQUIRED guard legitimately emits a hardcoded
+    ``restoration_verified: True`` (nothing was written, state unchanged); the contract
+    here pins the adapter-run completion emission instead.
+    """
     source = inspect.getsource(cleanup_mod._core.execute_experiment_cleanup_compensation)
-    start = source.index('adapter")) == "db_sql"')
-    end = source.index("continue", start) + len("continue")
-    block = source[start:end]
-    assert '"restoration_verified": bool(_adapter_cleaned)' in block
-    assert '"state_unchanged": bool(_adapter_cleaned)' in block
-    assert "audit_receipt_ids" in block
-    assert "False if _adapter_cleaned" not in block
+    assert '"restoration_verified": bool(_adapter_cleaned)' in source
+    assert '"state_unchanged": bool(_adapter_cleaned)' in source
+    assert "audit_receipt_ids" in source
+    assert "False if _adapter_cleaned" not in source
 
 
 def test_short_id_blocks_unobservable_identity_path() -> None:

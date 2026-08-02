@@ -232,6 +232,8 @@ def _run_isolated_product_worker(
     with tempfile.TemporaryDirectory(prefix="qualibug-observed-scan-") as directory:
         request_path = Path(directory) / "request.json"
         output_path = Path(directory) / "result.json"
+        stdout_path = Path(directory) / "worker.stdout.log"
+        stderr_path = Path(directory) / "worker.stderr.log"
         request_path.write_text(
             json.dumps(request, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -245,17 +247,32 @@ def _run_isolated_product_worker(
             "--output",
             str(output_path),
         ]
-        completed = subprocess.run(
-            command,
-            cwd=str(root),
-            env=_sanitized_worker_environment(),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        # Redirect to files instead of capture_output=True. Long discovery scans
+        # can emit large stdout/stderr; buffering them in the parent process has
+        # OOM-killed observed diagnostics after ~10–16 minutes on Windows.
+        with stdout_path.open("w", encoding="utf-8") as stdout_fh, stderr_path.open(
+            "w", encoding="utf-8"
+        ) as stderr_fh:
+            completed = subprocess.run(
+                command,
+                cwd=str(root),
+                env=_sanitized_worker_environment(),
+                stdout=stdout_fh,
+                stderr=stderr_fh,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
         if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "").strip()[-2000:]
+            detail_parts: list[str] = []
+            for path in (stderr_path, stdout_path):
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace").strip()
+                except OSError:
+                    text = ""
+                if text:
+                    detail_parts.append(text[-2000:])
+            detail = "\n".join(detail_parts)
             raise PolicyEvaluationRunnerError(
                 f"isolated product scan worker failed with exit code "
                 f"{completed.returncode}: {detail}"
@@ -304,7 +321,8 @@ def _load_json(path_value: Any, field: str) -> tuple[Path, dict[str, Any]]:
     if not path.is_file():
         raise PolicyEvaluationRunnerError(f"{field} not found: {path}")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig tolerates evaluator-exported bundles that carry a BOM.
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PolicyEvaluationRunnerError(f"{field} is invalid JSON: {path}: {exc}") from exc
     if not isinstance(payload, dict):

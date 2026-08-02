@@ -342,11 +342,20 @@ def execute_barrier_plans(
         }
         observed_status = int(obs.get("status_code") or 0)
         obs["response_observed"] = observed_status > 0
+        _gov_for_status = _dict(obs.get("governance_receipt"))
+        _write_reached = (
+            int(_gov_for_status.get("write_request_attempt_count") or 0) > 0
+        )
+        _zero_transport_governed_block = (
+            observed_status <= 0
+            and bool(_gov_for_status)
+            and not _write_reached
+        )
         contract_status = (
-            "OBSERVED"
-            if phase == "control" and observed_status > 0
+            "BLOCKED"
+            if _zero_transport_governed_block
             else "OBSERVED"
-            if phase == "treatment" and observed_status > 0
+            if observed_status > 0
             else "FAILED"
         )
         return {
@@ -372,6 +381,10 @@ def execute_barrier_plans(
                     "mutation_selector": mutation_selector,
                     "mutation_operator": mutation_operator,
                     "response_observed": observed_status > 0,
+                    "write_reached_transport": _write_reached,
+                    "request_reached_transport": (
+                        observed_status > 0 or _write_reached
+                    ),
                     "control_succeeded": (
                         200 <= observed_status < 300
                         if phase == "control"

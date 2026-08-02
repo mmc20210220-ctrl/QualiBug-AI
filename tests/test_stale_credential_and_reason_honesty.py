@@ -171,6 +171,101 @@ def test_executors_thread_the_approved_base_url() -> None:
         assert "load_actor_tokens(root, project, base_url=base_url)" in source, module
 
 
+def test_password_login_preferred_over_unexpired_stored_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unexpired JWT can still be orphaned after a target DB reset.
+
+    Read probes may return empty 200 with the orphan id, while writes fail with a
+    user-identity foreign key. When the catalog still declares a password and the
+    caller supplies an approved base_url, login must win over the snapshot.
+    """
+    from ai_test_asset_center import experiment_runtime_support as runtime_support
+
+    orphan = _jwt(+3600)
+    path = tmp_path / "platform_inputs" / "p-refresh" / "test_accounts.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "buyer01@example.com": {
+                    "role": "buyer",
+                    "email": "buyer01@example.com",
+                    "password": "Test@123456",
+                    "token": orphan,
+                    "authenticated_role": "buyer",
+                    "authenticated_status": "ACTIVE",
+                    "status": "ACTIVE",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    live = _jwt(+7200)
+
+    def fake_login(*, base_url, login_path, email, password):
+        assert base_url == "http://target.example"
+        assert email == "buyer01@example.com"
+        assert password == "Test@123456"
+        assert login_path.endswith("/api/auth/login")
+        return live, 200
+
+    monkeypatch.setattr(runtime_support, "_login_declared_account", fake_login)
+    tokens = load_actor_tokens(
+        tmp_path,
+        "p-refresh",
+        base_url="http://target.example",
+    )
+    assert tokens.get("buyer") == live
+    assert tokens.get("buyer01@example.com") == live
+    assert orphan not in tokens.values()
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["buyer01@example.com"]["token"] == live
+
+
+def test_password_login_failure_does_not_return_orphan_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_test_asset_center import experiment_runtime_support as runtime_support
+
+    orphan = _jwt(+3600)
+    path = tmp_path / "platform_inputs" / "p-orphan" / "test_accounts.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "name": "buyer01",
+                        "role": "buyer",
+                        "email": "buyer01@example.com",
+                        "password": "Test@123456",
+                        "token": orphan,
+                        "status": "ACTIVE",
+                        "account_ref": "buyer01",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        runtime_support,
+        "_login_declared_account",
+        lambda **_kwargs: ("", 401),
+    )
+    tokens = load_actor_tokens(
+        tmp_path,
+        "p-orphan",
+        base_url="http://target.example",
+    )
+    assert tokens == {}
+    assert orphan not in tokens.values()
+
+
 # ── the credential catalog reads the shape the product writes ───────────────
 
 def test_accounts_container_shape_is_unwrapped(tmp_path: Path) -> None:

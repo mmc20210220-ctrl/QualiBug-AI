@@ -126,6 +126,26 @@ def _links_by_overlap(left: Iterable[dict[str, Any]], right: Iterable[dict[str, 
     return _dedupe_by_id(edges, "edge_id")
 
 
+_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _statement_eligible_for_exact_source_section(statement: str) -> bool:
+    """ASCII prose keeps the historical 8-char floor; short CJK rules stay eligible.
+
+    Runtime evidence on held-in materials showed exact excerpt hits for statements
+    such as ``后台创建商品`` / ``取消订单`` that were dropped solely by ``len < 8``.
+    Require at least two CJK characters so single-glyph noise cannot bind.
+    """
+
+    text = str(statement or "").strip()
+    if not text:
+        return False
+    cjk_count = len(_CJK_CHAR_RE.findall(text))
+    if cjk_count >= 2:
+        return True
+    return len(text) >= 8
+
+
 def _links_by_exact_source_section(
     rules: Iterable[dict[str, Any]],
     interfaces: Iterable[dict[str, Any]],
@@ -144,7 +164,7 @@ def _links_by_exact_source_section(
             continue
         statement = str(rule.get("statement") or "").strip()
         rule_id = str(rule.get("rule_id") or "").strip()
-        if not statement or not rule_id or len(statement) < 8:
+        if not statement or not rule_id or not _statement_eligible_for_exact_source_section(statement):
             continue
         for interface in interface_rows:
             excerpt = str(interface.get("source_excerpt") or "")
@@ -884,6 +904,20 @@ def _declared_project_source_files(project: str, root: Path) -> list[Path]:
     control_plane_filenames = {
         "real_project_config.json",
         "multi_service_config.json",
+        # Product-built knowledge assets / ledgers nest under input trees when
+        # operators copy platform_outputs into platform_inputs. Re-ingesting
+        # them as customer sources collides logical keys (e.g. permission_matrix)
+        # and is never valid enterprise evidence.
+        "enterprise_business_knowledge_asset.json",
+        "enterprise_knowledge_registry.json",
+        "enterprise_source_registry.json",
+    }
+    # Nested product output trees under an input root are not customer materials.
+    product_output_path_segments = {
+        "platform_outputs",
+        "platform_workspace",
+        "enterprise_knowledge_center",
+        "defect_discovery",
     }
     secret_name_tokens = {
         "credential", "credentials", "secret", "secrets", "password", "passwords",
@@ -902,6 +936,9 @@ def _declared_project_source_files(project: str, root: Path) -> list[Path]:
             continue
         for candidate in sorted(input_root.rglob("*")):
             if not candidate.is_file() or candidate.suffix.lower() not in supported_suffixes:
+                continue
+            relative_parts = {part.lower() for part in candidate.relative_to(input_root).parts[:-1]}
+            if relative_parts.intersection(product_output_path_segments):
                 continue
             # These files are runtime control-plane state, not customer evidence.
             # They live beside legacy inputs for compatibility but must not be
@@ -929,19 +966,47 @@ def _declared_project_source_files(project: str, root: Path) -> list[Path]:
 
 
 def _sync_declared_project_sources(project: str, root: Path, registry: dict[str, Any]) -> dict[str, Any]:
-    from ._crud import ingest_enterprise_knowledge_files
+    from ._crud import ingest_enterprise_knowledge_files, _logical_key
     active_hashes = {
         str(row.get("content_hash") or "")
         for row in registry.get("sources") or []
         if isinstance(row, dict) and row.get("status") == "active"
     }
     pending: list[Path] = []
+    pending_hashes: set[str] = set()
+    # Same stem+type under platform_inputs and projects/<id>/input must not
+    # enter one ingest batch with conflicting bytes. Identical content is
+    # skipped via hash; divergent content fails closed with both paths named.
+    pending_logical_keys: dict[str, Path] = {}
     for candidate in _declared_project_source_files(project, root):
         blob = candidate.read_bytes()
         if len(blob) > MAX_SOURCE_BYTES:
             raise ValueError(f"declared source exceeds {MAX_SOURCE_BYTES // (1024 * 1024)}MB limit: {candidate}")
-        if _hash_bytes(blob) not in active_hashes:
-            pending.append(candidate)
+        content_hash = _hash_bytes(blob)
+        # The same customer material may appear under platform_inputs and
+        # projects/<id>/input. Duplicate paths in one batch collide logical keys.
+        if content_hash in active_hashes or content_hash in pending_hashes:
+            continue
+        raw_text = blob.decode("utf-8", errors="replace")
+        source_type = _classify_source(candidate.name, raw_text, "")
+        logical_key = _logical_key(candidate.name, source_type)
+        prior_path = pending_logical_keys.get(logical_key)
+        if prior_path is not None:
+            raise RuntimeError(
+                "declared enterprise source logical-key conflict: "
+                + json.dumps(
+                    {
+                        "code": "DECLARED_SOURCE_LOGICAL_KEY_CONFLICT",
+                        "logical_key": logical_key,
+                        "paths": [str(prior_path), str(candidate)],
+                        "blocks_formal_understanding": True,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        pending_logical_keys[logical_key] = candidate
+        pending_hashes.add(content_hash)
+        pending.append(candidate)
     if not pending:
         return registry
     result = ingest_enterprise_knowledge_files(

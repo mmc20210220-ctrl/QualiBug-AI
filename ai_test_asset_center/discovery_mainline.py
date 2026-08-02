@@ -117,6 +117,48 @@ def _selected_rows_from_plan(plan: Any) -> list[dict[str, Any]]:
     return [dict(row) for row in selected if isinstance(row, dict)]
 
 
+def _accounting_rows_from_plan(plan: Any) -> list[dict[str, Any]]:
+    """Return formal accounting rows when the planning bundle exposes them.
+
+    Exception auditing also supports the narrow compatibility plan used by older
+    callers.  That plan has no formal-obligation bundle, so the selected rows are
+    the only identities it can prove and no unobserved rows are invented.
+    """
+
+    obligations = _plan_value(plan, "obligations")
+    experiments = _plan_value(plan, "experiments")
+    if not isinstance(obligations, dict) or not isinstance(experiments, dict):
+        return _selected_rows_from_plan(plan)
+    raw_obligations = obligations.get("obligations")
+    if not isinstance(raw_obligations, list):
+        return _selected_rows_from_plan(plan)
+    obligation_rows = [
+        dict(row)
+        for row in raw_obligations
+        if isinstance(row, dict)
+    ]
+    if not obligation_rows:
+        return _selected_rows_from_plan(plan)
+    from .discovery_funnel import _accounting_rows_for_parts
+
+    by_obligation = experiments.get("by_obligation")
+    agent_intent_plan = experiments.get("agent_intent_plan")
+    obligation_plan = experiments.get("obligation_plan")
+    if not isinstance(by_obligation, dict):
+        by_obligation = {}
+    if not isinstance(agent_intent_plan, dict):
+        agent_intent_plan = {}
+    if not isinstance(obligation_plan, dict):
+        obligation_plan = {}
+    return _accounting_rows_for_parts(
+        obligations=obligation_rows,
+        experiments=by_obligation,
+        agent_intent_plan=agent_intent_plan,
+        obligation_plan=obligation_plan,
+        planning_round=1,
+    )
+
+
 def _build_runner_exception_ledger(
     plan: Any,
     exc: BaseException,
@@ -132,7 +174,7 @@ def _build_runner_exception_ledger(
     from .obligation_attempt_ledger import build_obligation_attempt_ledger
 
     contract = validate_mainline_run_contract(_plan_contract(plan))
-    selected = _selected_rows_from_plan(plan)
+    selected = _accounting_rows_from_plan(plan)
     experiments = _plan_value(plan, "experiments")
     by_obligation = (
         experiments.get("by_obligation")
@@ -156,6 +198,51 @@ def _build_runner_exception_ledger(
             or source_compile.get("experiment_id")
             or row.get("experiment_id")
         )
+        selection_status = _text(row.get("selection_status")).upper() or "SELECTED"
+        if selection_status != "SELECTED":
+            if compile_status in {"BLOCKED", "DEFERRED", "HARNESS_FAILED"}:
+                compile_results[obligation_id] = {
+                    "status": compile_status,
+                    "reason_code": _text(source_compile.get("reason_code"))
+                    or _text(row.get("selection_reason_code"))
+                    or (
+                        "BLOCKED_COMPILE"
+                        if compile_status == "BLOCKED"
+                        else "DEFERRED"
+                        if compile_status == "DEFERRED"
+                        else "MAINLINE_RUNTIME_EXCEPTION"
+                    ),
+                    "reason_detail": _text(
+                        source_compile.get("detail")
+                        or source_compile.get("reason_detail")
+                        or row.get("selection_reason_code")
+                    ),
+                    "experiment_id": experiment_id,
+                    **identity,
+                }
+            elif compile_status == "COMPILED":
+                compile_results[obligation_id] = {
+                    "status": "COMPILED",
+                    "reason_code": "",
+                    "experiment_id": experiment_id,
+                    **identity,
+                }
+                execution_results[obligation_id] = {
+                    "status": "DEFERRED",
+                    "reason_code": "OBLIGATION_NOT_IN_PLAN",
+                    "reason_detail": "formal_obligation_not_selected",
+                    "experiment_id": experiment_id,
+                    **identity,
+                }
+            else:
+                compile_results[obligation_id] = {
+                    "status": "DEFERRED",
+                    "reason_code": "OBLIGATION_NOT_IN_PLAN",
+                    "reason_detail": "formal_obligation_not_selected",
+                    "experiment_id": experiment_id,
+                    **identity,
+                }
+            continue
         if compile_status in {"BLOCKED", "DEFERRED", "HARNESS_FAILED"}:
             compile_receipt = {
                 "status": compile_status,
@@ -406,5 +493,15 @@ def run_discovery_mainline(
             obligation_attempt_ledger=result.get("obligation_attempt_ledger"),
         )
     )
+    # Promote fact experimentability ledger for GT-free first-loss reporting.
+    experiments_pack = _plan_value(plan, "experiments")
+    if isinstance(experiments_pack, dict):
+        fact_ledger = experiments_pack.get("fact_experimentability_ledger")
+        if isinstance(fact_ledger, dict) and fact_ledger:
+            result["fact_experimentability_ledger"] = fact_ledger
+        result.setdefault("experiments", experiments_pack)
+    obligations_pack = _plan_value(plan, "obligations")
+    if isinstance(obligations_pack, dict) and obligations_pack:
+        result.setdefault("obligations", obligations_pack)
     result["mainline_runner_receipt"] = receipt
     return result

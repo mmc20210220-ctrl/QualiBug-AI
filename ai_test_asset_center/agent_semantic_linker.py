@@ -404,11 +404,18 @@ def _prompt(
         "must contain the exact rule_id, interface_id, and any supporting fact_ids "
         "you relied on. Use NO_EXECUTABLE_INTERFACE when the source has no callable "
         "surface. Use AMBIGUOUS when several interpretations remain plausible. "
+        "The disposition and relationships fields are one atomic contract: "
+        "LINKED requires at least one relationship; NO_EXECUTABLE_INTERFACE and "
+        "AMBIGUOUS require relationships to be exactly an empty array. Never put "
+        "a candidate interface in relationships for an unlinked disposition. "
         f"Omit links below confidence {MIN_CONFIDENCE}. Return exactly one assessment "
         "for every supplied rule and JSON only, with this exact shape:\n"
         + json.dumps(response_contract, ensure_ascii=False, separators=(",", ":"))
         + "\n\nINPUT:\n"
         + json.dumps(safe_packet, ensure_ascii=False, separators=(",", ":"))
+        + "\n\nFINAL CONTRACT CHECK: for every assessment, if disposition is not "
+        "LINKED, emit `relationships: []`; if relationships is non-empty, "
+        "emit `disposition: LINKED`."
     )
     return prompt, valid_refs, len(facts), omitted_fact_count
 

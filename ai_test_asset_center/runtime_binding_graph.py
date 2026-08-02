@@ -681,6 +681,7 @@ def _declared_fixture_setup(
         if primary.startswith("/") and not path_has_placeholders(primary):
             collection_candidates = [primary]
     operations = _list(_dict(behavior_ir).get("operations"))
+    _h25_reject: list[dict[str, Any]] = []
     for collection in collection_candidates:
         create = next((
             candidate
@@ -694,12 +695,15 @@ def _declared_fixture_setup(
             and _text(candidate.get("id"))
         ), None)
         if not isinstance(create, dict):
+            _h25_reject.append({"collection": collection, "reason": "no_post_create"})
             continue
         body_template = _request_example(create, sibling_ops=operations)
         if not body_template:
+            _h25_reject.append({"collection": collection, "reason": "missing_request_example"})
             continue
         body_bindings: list[dict[str, Any]] = []
         unresolved_body = False
+        unresolved_field = ""
         for row in _body_placeholder_rows(body_template):
             field = _text(row.get("target")).split(".")[-1].split("[")[0]
             token = _text(row.get("template_token"))
@@ -710,6 +714,7 @@ def _declared_fixture_setup(
             )
             if not resolvers:
                 unresolved_body = True
+                unresolved_field = field or token
                 break
             body_bindings.append({
                 "target": _text(row.get("target")),
@@ -717,6 +722,10 @@ def _declared_fixture_setup(
                 "resolver_operations": resolvers,
             })
         if unresolved_body:
+            _h25_reject.append({
+                "collection": collection,
+                "reason": f"unresolved_body_dependency:{unresolved_field}",
+            })
             continue
         cleanup_operations = _declared_cleanup_operations(
             normalize_path_placeholders(collection),
@@ -724,6 +733,15 @@ def _declared_fixture_setup(
         )
         actor_refs = _declared_fixture_actor_refs(create, behavior_ir=behavior_ir)
         if not cleanup_operations or not actor_refs:
+            _h25_reject.append({
+                "collection": collection,
+                "reason": (
+                    "missing_cleanup"
+                    if not cleanup_operations
+                    else "missing_fixture_actor"
+                ),
+                "create_ref": _text(create.get("id")),
+            })
             continue
         return {
             "operation_ref": _text(create.get("id")),

@@ -20,12 +20,15 @@ from .canonical_defect_registry import (
     canonical_representative_findings,
 )
 from .discovery_funnel import (
+    _accounting_rows_for_execution,
+    _ensure_accounting_terminal_receipts,
     _build_knowledge_source_flow_receipt,
     _compiled_round0_obligation_ids,
     _execution_ir_with_discovered_operations,
     _formal_obligation_rows_and_identity_receipt,
     _is_discovery_task,
     _runtime_recompile_round0_obligation_ids,
+    _selected_rows,
     build_business_discovery_separation,
     build_funnel,
 )
@@ -52,7 +55,6 @@ from .discovery_runtime_execution_support import (  # noqa: F401
     _merge_experiment_execution_results,
     _operational_summary_from_attempt_ledger,
     _project_gate_results_for_authority,
-    _selected_rows,
     _sum_batch_int,
     _text,
 )
@@ -67,6 +69,12 @@ from .obligation_attempt_ledger import (
     build_obligation_attempt_ledger,
 )
 from .operational_receipts import aggregate_execution_operational_receipts
+from .runtime_fact_candidate import (
+    build_runtime_feedback_receipt,
+    project_runtime_fact_candidates,
+    related_blocked_obligation_ids,
+    reproject_experimentability_with_candidates,
+)
 from .runtime_interface_discovery import (
     execute_runtime_interface_discovery,
     load_runtime_interface_confirmation_tokens,
@@ -114,13 +122,15 @@ def run_experiment_candidate(
         "findings": [],
     }
     if runtime_approved and surface_plan:
+        approved_base_url = _text(runtime_contract.get("approved_base_url"))
         actor_tokens = load_runtime_interface_confirmation_tokens(
             inputs.root,
             inputs.project,
+            base_url=approved_base_url,
         )
         surface_execution = execute_runtime_interface_discovery(
             surface_plan,
-            base_url=_text(runtime_contract.get("approved_base_url")),
+            base_url=approved_base_url,
             mainline_run=plan.mainline_run,
             confirmation_tokens=actor_tokens,
         )
@@ -134,7 +144,36 @@ def run_experiment_candidate(
         "selected_rows": [],
         "round_receipt": {},
     }
+    runtime_feedback: dict[str, Any] = {
+        "status": "NOT_REQUESTED",
+        "candidate_ledger": {},
+        "feedback_receipt": {},
+        "expansion": {},
+    }
+    expansion_planning_context = {
+        "root": inputs.root,
+        "project": inputs.project,
+        "base_url": _text(runtime_contract.get("approved_base_url")),
+        "campaign_id": _text(plan.mainline_run.get("campaign_id")),
+        "environment_type": _text(plan.experiments.get("_environment_type")),
+        "runtime_contract": runtime_contract,
+    }
     if runtime_approved and surface_plan:
+        surface_candidate_ledger = project_runtime_fact_candidates(
+            observation_receipts=[
+                dict(row)
+                for row in _list(surface_execution.get("observation_receipts"))
+                if isinstance(row, dict)
+            ],
+            campaign_id=_text(plan.mainline_run.get("campaign_id")),
+        )
+        knowledge_asset, graded_surface_ledger = (
+            reproject_experimentability_with_candidates(
+                _dict(plan.experiments.get("_knowledge_asset")),
+                surface_candidate_ledger,
+            )
+        )
+        runtime_feedback["candidate_ledger"] = graded_surface_ledger
         expansion = expand_behavior_ir_from_runtime_observations(
             initial_behavior_ir=plan.behavior_ir,
             # Runtime expansion may reopen only source-bound compile blockers
@@ -150,7 +189,7 @@ def run_experiment_candidate(
                 plan.obligations.get("obligations"),
                 plan.experiments.get("by_obligation"),
             ),
-            knowledge_asset=_dict(plan.experiments.get("_knowledge_asset")),
+            knowledge_asset=knowledge_asset,
             documented_operations=[
                 dict(row)
                 for row in _list(plan.experiments.get("_documented_operations"))
@@ -178,7 +217,20 @@ def run_experiment_candidate(
             policy_version=_text(inputs.campaign_context.get("policy_version")),
             budget=int(plan.experiments.get("_planning_budget") or 0),
             planning_round=2,
+            planning_context=expansion_planning_context,
         )
+        runtime_feedback["feedback_receipt"] = build_runtime_feedback_receipt(
+            candidate_ledger=graded_surface_ledger,
+            recompile_obligation_ids=_list(
+                _dict(expansion.get("round_receipt")).get(
+                    "recompiled_obligation_ids"
+                )
+            ),
+            expansion_status=_text(expansion.get("status")),
+            planning_round=2,
+            campaign_id=_text(plan.mainline_run.get("campaign_id")),
+        )
+        runtime_feedback["status"] = _text(expansion.get("status")) or "APPLIED"
 
     (
         formal_obligation_rows,
@@ -227,6 +279,175 @@ def run_experiment_candidate(
         )
     else:
         round_two_batch = _empty_execution_batch()
+
+    # SPEC §7.8 — Runtime Feedback after governed execution: emit low-authority
+    # Runtime Fact Candidates, re-project experimentability, and reopen related
+    # BLOCKED/ABSTRACT obligations on the existing expansion authority. Never
+    # promote candidates to ACCEPTED business facts.
+    feedback_batch = _empty_execution_batch()
+    if runtime_approved:
+        interim_execution_results = {
+            **{
+                _text(key): dict(value)
+                for key, value in _dict(batch.get("execution_results")).items()
+                if _text(key) and isinstance(value, dict)
+            },
+            **{
+                _text(key): dict(value)
+                for key, value in _dict(
+                    round_two_batch.get("execution_results")
+                ).items()
+                if _text(key) and isinstance(value, dict)
+            },
+        }
+        feedback_ledger = project_runtime_fact_candidates(
+            observation_receipts=[
+                dict(row)
+                for row in _list(surface_execution.get("observation_receipts"))
+                if isinstance(row, dict)
+            ],
+            execution_results=interim_execution_results,
+            campaign_id=_text(plan.mainline_run.get("campaign_id")),
+        )
+        feedback_asset, graded_feedback_ledger = (
+            reproject_experimentability_with_candidates(
+                _dict(plan.experiments.get("_knowledge_asset")),
+                feedback_ledger,
+            )
+        )
+        already_executed_ids = {
+            _text(key) for key in interim_execution_results if _text(key)
+        }
+        feedback_recompile_ids = related_blocked_obligation_ids(
+            obligations=plan.obligations.get("obligations"),
+            experiments_by_obligation=plan.experiments.get("by_obligation"),
+            ledger=graded_feedback_ledger,
+        ) - already_executed_ids
+        # Prefer still-blocked rows from the prior expansion pack when present.
+        feedback_recompile_ids |= related_blocked_obligation_ids(
+            obligations=(
+                _list(expansion.get("recompile_obligations"))
+                or _list(expansion.get("round_obligations"))
+                or plan.obligations.get("obligations")
+            ),
+            experiments_by_obligation={
+                **_dict(plan.experiments.get("by_obligation")),
+                **_dict(expansion.get("by_obligation")),
+            },
+            ledger=graded_feedback_ledger,
+        ) - already_executed_ids
+        runtime_feedback["candidate_ledger"] = graded_feedback_ledger
+        if feedback_recompile_ids or _list(graded_feedback_ledger.get("candidates")):
+            # Expansion merge accepts only fingerprint-valid
+            # qualibug.runtime-interface-observation.v1 DISCOVERED receipts.
+            # Runtime Fact Candidates remain a separate low-authority ledger and
+            # drive recompile_obligation_ids / experimentability re-projection —
+            # they must not be coerced into interface-observation receipts.
+            feedback_observations = [
+                dict(row)
+                for row in _list(surface_execution.get("observation_receipts"))
+                if isinstance(row, dict)
+            ]
+            feedback_expansion = expand_behavior_ir_from_runtime_observations(
+                initial_behavior_ir=_dict(expansion.get("behavior_ir"))
+                or plan.behavior_ir,
+                existing_obligation_ids={
+                    _text(row.get("obligation_id"))
+                    for row in _list(plan.obligations.get("obligations"))
+                    if isinstance(row, dict) and _text(row.get("obligation_id"))
+                },
+                recompile_obligation_ids=feedback_recompile_ids,
+                knowledge_asset=feedback_asset,
+                documented_operations=[
+                    dict(row)
+                    for row in _list(plan.experiments.get("_documented_operations"))
+                    if isinstance(row, dict)
+                ],
+                observation_receipts=feedback_observations,
+                project_id=inputs.project,
+                source_snapshot_hash=_text(
+                    _dict(inputs.campaign_context.get("source_manifest")).get(
+                        "source_hash"
+                    )
+                ),
+                runtime_actors=[
+                    dict(row)
+                    for row in _list(plan.experiments.get("_runtime_actors"))
+                    if isinstance(row, dict)
+                ],
+                environment_type=_text(plan.experiments.get("_environment_type")),
+                policy_version=_text(inputs.campaign_context.get("policy_version")),
+                budget=int(plan.experiments.get("_planning_budget") or 0),
+                planning_round=3,
+                planning_context=expansion_planning_context,
+            )
+            runtime_feedback["expansion"] = {
+                "status": _text(feedback_expansion.get("status")),
+                "round_receipt": dict(
+                    _dict(feedback_expansion.get("round_receipt"))
+                ),
+                "recompile_obligation_ids": sorted(feedback_recompile_ids),
+            }
+            runtime_feedback["feedback_receipt"] = build_runtime_feedback_receipt(
+                candidate_ledger=graded_feedback_ledger,
+                recompile_obligation_ids=feedback_recompile_ids,
+                expansion_status=_text(feedback_expansion.get("status")),
+                planning_round=3,
+                campaign_id=_text(plan.mainline_run.get("campaign_id")),
+            )
+            runtime_feedback["status"] = _text(feedback_expansion.get("status")) or (
+                "CANDIDATES_ONLY"
+            )
+            feedback_intents = [
+                dict(row)
+                for row in _list(
+                    _dict(feedback_expansion.get("agent_intent_plan")).get(
+                        "intents"
+                    )
+                )
+                if isinstance(row, dict)
+                and _text(row.get("obligation_id")) in feedback_recompile_ids
+                and _text(row.get("obligation_id")) not in already_executed_ids
+            ]
+            # Also admit newly compiled recompile_selected_rows.
+            for row in _list(feedback_expansion.get("recompile_selected_rows")):
+                oid = _text(_dict(row).get("obligation_id"))
+                if (
+                    oid
+                    and oid in feedback_recompile_ids
+                    and oid not in already_executed_ids
+                    and not any(
+                        _text(item.get("obligation_id")) == oid
+                        for item in feedback_intents
+                    )
+                ):
+                    feedback_intents.append(dict(row))
+            if feedback_intents:
+                feedback_batch = execute_selected_experiments(
+                    feedback_intents,
+                    experiments_by_obligation=dict(
+                        _dict(feedback_expansion.get("by_obligation"))
+                    ),
+                    behavior_ir=_dict(feedback_expansion.get("behavior_ir")),
+                    root=inputs.root,
+                    project=inputs.project,
+                    base_url=_text(runtime_contract.get("approved_base_url")),
+                    runtime_contract=runtime_contract,
+                    mainline_run=plan.mainline_run,
+                    campaign_id=plan.mainline_run["campaign_id"],
+                )
+                # Merge feedback compile views into expansion so terminals and
+                # accounting see the recompiled experiments.
+                merged_by_obligation = {
+                    **_dict(expansion.get("by_obligation")),
+                    **_dict(feedback_expansion.get("by_obligation")),
+                }
+                expansion = {
+                    **expansion,
+                    "by_obligation": merged_by_obligation,
+                    "feedback_expansion": feedback_expansion,
+                }
+
     # ``round_two_scheduled`` is the full intent queue, while the executor can
     # defer its tail behind the per-batch safety budget.  Only obligations that
     # actually reached this batch may be excluded from continuation; excluding
@@ -363,6 +584,10 @@ def run_experiment_candidate(
         *follow_on_batches,
         *expansion_follow_on_batches,
     ]
+    if _dict(feedback_batch.get("execution_results")) or _dict(
+        feedback_batch.get("compile_results")
+    ):
+        business_follow_on_batches = [*business_follow_on_batches, feedback_batch]
 
     compile_results = {
         _text(key): dict(value)
@@ -426,6 +651,11 @@ def run_experiment_candidate(
         for row in _list(expansion.get("selected_rows"))
         if isinstance(row, dict)
     ]
+    (
+        initial_accounting_rows,
+        expansion_accounting_rows,
+        accounting_rows,
+    ) = _accounting_rows_for_execution(plan, expansion)
     surface_selected_rows = [
         dict(row)
         for row in _list(surface_execution.get("selected_rows"))
@@ -444,8 +674,12 @@ def run_experiment_candidate(
         ]
         + expansion_selected_rows
     )
+    # Budget-deferred / pending terminals must be sealed before the mechanical
+    # accounting filler. Running ``_ensure_accounting_terminal_receipts`` first
+    # mis-labelled SELECTED+COMPILED gaps as HARNESS_FAILED+BLOCKED_EXECUTION
+    # and then blocked manual DEFERRED sealing because execution_results was set.
     _manual_terminal_receipts(
-        selected_rows=initial_selected_rows,
+        selected_rows=initial_accounting_rows,
         experiments_by_obligation=dict(
             _dict(plan.experiments.get("by_obligation"))
         ),
@@ -455,7 +689,7 @@ def run_experiment_candidate(
         execution_results=execution_results,
     )
     _manual_terminal_receipts(
-        selected_rows=expansion_selected_rows,
+        selected_rows=expansion_accounting_rows,
         experiments_by_obligation=dict(
             _dict(expansion.get("by_obligation"))
         ),
@@ -464,20 +698,26 @@ def run_experiment_candidate(
         compile_results=compile_results,
         execution_results=execution_results,
     )
+    _ensure_accounting_terminal_receipts(
+        accounting_rows=accounting_rows,
+        compile_results=compile_results,
+        execution_results=execution_results,
+        runtime_contract=runtime_contract,
+    )
     (
         compile_results,
         execution_results,
         gate_results,
     ) = bind_stage_receipt_identity(
         mainline_run=plan.mainline_run,
-        selected=selected_rows,
+        selected=accounting_rows,
         compile_results=compile_results,
         execution_results=execution_results,
         gate_results=gate_results,
     )
     ledger = build_obligation_attempt_ledger(
         mainline_run=plan.mainline_run,
-        selected=selected_rows,
+        selected=accounting_rows,
         compile_results=compile_results,
         execution_results=execution_results,
         gate_results=gate_results,
@@ -678,6 +918,17 @@ def run_experiment_candidate(
                 _dict(expansion.get("agent_intent_plan"))
             ),
         },
+        "runtime_feedback": {
+            "status": _text(runtime_feedback.get("status")),
+            "candidate_ledger": dict(
+                _dict(runtime_feedback.get("candidate_ledger"))
+            ),
+            "feedback_receipt": dict(
+                _dict(runtime_feedback.get("feedback_receipt"))
+            ),
+            "expansion": dict(_dict(runtime_feedback.get("expansion"))),
+            "high_authority_promotions": 0,
+        },
         "experiment_execution": {
             "selected_count": len(selected_rows),
             "scheduled_count": (
@@ -815,6 +1066,8 @@ def run_experiment_candidate(
                 "blocked": sum(
                     1
                     for row in ledger["attempts"]
+                    if _text(row.get("selection_status")).upper()
+                    in {"", "SELECTED"}
                     if _text(row.get("terminal_status")).upper()
                     in {"BLOCKED", "DEFERRED"}
                 ),

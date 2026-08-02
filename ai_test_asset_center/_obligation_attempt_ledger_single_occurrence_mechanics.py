@@ -30,6 +30,12 @@ TERMINAL_STATUSES = frozenset({
     "DEFERRED",
     "HARNESS_FAILED",
 })
+SELECTION_STATUSES = frozenset({
+    "SELECTED",
+    "DEFERRED_NOT_SELECTED",
+    "COMPILE_BLOCKED",
+    "PLAN_BLOCKED",
+})
 _STAGE_STATUSES = {
     "compile": frozenset({"COMPILED", "BLOCKED", "DEFERRED", "HARNESS_FAILED"}),
     "execution": frozenset({"EXECUTED", "BLOCKED", "DEFERRED", "HARNESS_FAILED", "DELIVERABLE"}),
@@ -73,6 +79,51 @@ def _fingerprint(value: Any) -> str:
         default=str,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_DIAGNOSTIC_STEP_LIMIT = 20
+
+
+def _diagnostic_rows(value: Any, limit: int | None = None) -> list[dict[str, Any]]:
+    rows = [dict(row) for row in (value or []) if isinstance(row, dict)]
+    return rows[:limit] if limit is not None else rows
+
+
+def _execution_diagnostic_bundle(
+    execution_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    """Retain execution evidence for attempts that never reach the delivery gate.
+
+    ``delivery_evidence_bundle`` is only built when a customer delivery gate
+    receipt exists, so every blocked or rejected attempt discarded the very
+    receipts and steps that explain *why* it was blocked. That left the
+    blocked funnel opaque: the ledger recorded a reason code and fingerprints
+    with no observable evidence behind them, and diagnosing any blocked path
+    required re-running the whole scan.
+
+    This carries already-captured evidence through verbatim. Nothing is
+    synthesised, and the sealed delivery bundle is left untouched.
+    """
+
+    contracts = _diagnostic_rows(execution_receipt.get("contract_evidence_receipts"))
+    observers = _diagnostic_rows(execution_receipt.get("observer_receipts"))
+    all_steps = _diagnostic_rows(execution_receipt.get("steps"))
+    steps = all_steps[:_DIAGNOSTIC_STEP_LIMIT]
+    if not (contracts or observers or steps):
+        return {}
+
+    bundle: dict[str, Any] = {}
+    if contracts:
+        bundle["contract_evidence_receipts"] = contracts
+    if observers:
+        bundle["observer_receipts"] = observers
+    if steps:
+        bundle["steps"] = steps
+        if len(all_steps) > len(steps):
+            # Keep truncation visible instead of silently presenting a
+            # partial step list as if it were complete.
+            bundle["steps_truncated_from"] = len(all_steps)
+    return bundle
 
 
 def _reason_detail(receipt: dict[str, Any]) -> str:
@@ -722,6 +773,12 @@ def build_obligation_attempt_ledger(
         raise ObligationAttemptLedgerError("campaign_id_missing")
 
     selected_ids, selected_by_id = _selected_rows(selected)
+    selected_execution_ids = {
+        obligation_id
+        for obligation_id, row in selected_by_id.items()
+        if _text(row.get("selection_status")).upper()
+        in {"", "SELECTED"}
+    }
     compile_by_id = _receipt_map(compile_results, field="compile_results")
     execution_by_id = _receipt_map(execution_results, field="execution_results")
     gate_by_id = _receipt_map(gate_results, field="gate_results")
@@ -897,6 +954,10 @@ def build_obligation_attempt_ledger(
                     f"operational_receipt_invalid:{obligation_id}:{exc}"
                 ) from exc
         attempt: dict[str, Any] = {
+            "selection_status": (
+                _text(selected_row.get("selection_status")).upper()
+                or "SELECTED"
+            ),
             "candidate_id": _text(
                 selected_row.get("candidate_id")
                 or compile_receipt.get("candidate_id")
@@ -1022,6 +1083,13 @@ def build_obligation_attempt_ledger(
                 == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
             ):
                 attempt["delivery_evidence_bundle"] = gate_evidence_bundle
+        if not attempt.get("delivery_evidence_bundle"):
+            # No delivery gate means no sealed bundle, but the execution
+            # evidence still exists and is the only record of why this
+            # attempt failed. Persist it on a separate diagnostic channel.
+            diagnostic_bundle = _execution_diagnostic_bundle(execution_receipt)
+            if diagnostic_bundle:
+                attempt["execution_diagnostic_bundle"] = diagnostic_bundle
         attempt["attempt_fingerprint"] = _fingerprint(attempt)
         attempts.append(attempt)
 
@@ -1037,8 +1105,17 @@ def build_obligation_attempt_ledger(
         # Obligation rows may reference several source assets and therefore
         # must not be collapsed into a fabricated campaign snapshot hash.
         "identity": _run_identity(run),
-        "selected_count": len(selected_ids),
+        "selected_count": len(selected_execution_ids),
         "terminal_count": len(attempts),
+        "accounted_count": len(attempts),
+        "selection_status_counts": dict(
+            sorted(
+                Counter(
+                    _text(row.get("selection_status")).upper() or "SELECTED"
+                    for row in attempts
+                ).items()
+            )
+        ),
         "complete": len(attempts) == len(selected_ids),
         "terminal_status_counts": terminal_counts,
         "attempts": attempts,
@@ -1122,6 +1199,8 @@ def validate_obligation_attempt_ledger(
     optional_root_fields = {
         "identity",
         "reason_registry",
+        "accounted_count",
+        "selection_status_counts",
     }
     if set(value) - required_root_fields - optional_root_fields:
         raise ObligationAttemptLedgerError(
@@ -1173,6 +1252,7 @@ def validate_obligation_attempt_ledger(
     try:
         selected_count = int(value.get("selected_count"))
         terminal_count = int(value.get("terminal_count"))
+        accounted_count = int(value.get("accounted_count", terminal_count))
     except (TypeError, ValueError) as exc:
         raise ObligationAttemptLedgerError(
             "obligation_attempt_counts_invalid"
@@ -1180,7 +1260,9 @@ def validate_obligation_attempt_ledger(
     if (
         selected_count < 0
         or terminal_count < 0
-        or selected_count != terminal_count
+        or accounted_count < 0
+        or selected_count > accounted_count
+        or terminal_count != accounted_count
         or terminal_count != len(attempts)
         or value.get("complete") is not True
     ):
@@ -1209,6 +1291,26 @@ def validate_obligation_attempt_ledger(
         raise ObligationAttemptLedgerError(
             "obligation_terminal_status_counts_invalid"
         )
+    selection_statuses = [
+        _text(_object(row, field="obligation_attempt").get("selection_status")).upper()
+        or "SELECTED"
+        for row in attempts
+    ]
+    if any(status not in SELECTION_STATUSES for status in selection_statuses):
+        raise ObligationAttemptLedgerError("obligation_selection_status_invalid")
+    expected_selection_counts = dict(
+        sorted(Counter(selection_statuses).items())
+    )
+    declared_selection_counts = value.get("selection_status_counts")
+    if declared_selection_counts is not None:
+        if declared_selection_counts != expected_selection_counts:
+            raise ObligationAttemptLedgerError(
+                "obligation_selection_status_counts_invalid"
+            )
+    if int(expected_selection_counts.get("SELECTED", 0)) != selected_count:
+        raise ObligationAttemptLedgerError(
+            "obligation_selected_count_mismatch"
+        )
     for row in attempts:
         attempt = _object(row, field="obligation_attempt")
         obligation_id = _text(attempt.get("obligation_id"))
@@ -1234,6 +1336,13 @@ def validate_obligation_attempt_ledger(
                 raise ObligationAttemptLedgerError(
                     f"obligation_attempt_identity_mismatch:{obligation_id}:mainline_contract_fingerprint"
                 )
+        selection_status = (
+            _text(attempt.get("selection_status")).upper() or "SELECTED"
+        )
+        if selection_status not in SELECTION_STATUSES:
+            raise ObligationAttemptLedgerError(
+                f"obligation_selection_status_invalid:{obligation_id}"
+            )
         terminal_status = _text(attempt.get("terminal_status")).upper()
         terminal_stage = _text(attempt.get("terminal_stage"))
         if terminal_stage not in {"compile", "execution", "gate"}:
@@ -1465,8 +1574,9 @@ def derive_campaign_terminal_status(ledger: dict[str, Any]) -> str:
     except (TypeError, ValueError) as exc:
         raise ObligationAttemptLedgerError("obligation_attempt_counts_invalid") from exc
     attempts = value["attempts"]
+    accounted_count = int(value.get("accounted_count", terminal_count))
     if (
-        selected_count != terminal_count
+        terminal_count != accounted_count
         or terminal_count != len(attempts)
         or not bool(value.get("complete"))
     ):

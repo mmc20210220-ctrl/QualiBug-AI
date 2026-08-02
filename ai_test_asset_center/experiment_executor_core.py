@@ -47,6 +47,7 @@ from .experiment_cleanup import (  # noqa: F401
     _entity_rows,
     _governed_write_attempts,
     _governed_write_changed_state,
+    _governed_write_reached_transport,
     _meaningful_observation_state,
     _primary_resource_identity_candidates,
     _rejected_writes_left_state_unchanged,
@@ -562,6 +563,7 @@ def execute_one_experiment(
             project=project,
             base_url=base_url,
             runtime_contract=runtime_contract,
+            behavior_ir=behavior_ir,
         )
         provenance_steps = list(
             provenance_cleanup.get("steps_out") or steps_out
@@ -906,6 +908,7 @@ def execute_one_experiment(
         project=project,
         base_url=base_url,
         runtime_contract=runtime_contract,
+        behavior_ir=behavior_ir,
     )
     steps_out = list(cleanup_result.get("steps_out") or steps_out)
     observations = dict(cleanup_result.get("observations") or observations)

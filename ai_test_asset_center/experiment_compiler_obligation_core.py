@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from collections import Counter
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,16 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _request_schema_required_fields(operation: dict[str, Any]) -> list[str]:
+    """Source-declared required body fields from flat or OpenAPI request schema."""
+    schema = _dict(operation.get("request_schema") or operation.get("requestBody"))
+    content = _dict(schema.get("content"))
+    if content:
+        media = _dict(content.get("application/json"))
+        schema = _dict(media.get("schema")) or schema
+    return [_text(name) for name in _list(schema.get("required")) if _text(name)]
 
 
 def _find_collection_get_resolvers(
@@ -431,13 +442,120 @@ def _resolve_fallback_cleanup_tier(
     }
 
 
+def _entity_identity_fields(entity: dict[str, Any]) -> list[str]:
+    """Resolve cleanup identity columns from Behavior IR entity shape.
+
+    Runtime evidence on held-in materials showed every IR entity had
+    ``identity_fields=[]`` while IDENTITY / DB bindings lived on ``fields``.
+    ``_entity_for_operation`` then skipped all entities, so the DB cleanup tier
+    never armed and writes collapsed to ``BLOCKED_NON_REVERSIBLE_WRITE``.
+    """
+    row = _dict(entity)
+
+    def _prefer_generic_primary_key(names: list[str]) -> list[str]:
+        # Prefer generic PK aliases when present. Semantic IDENTITY tagging can
+        # mark unique business columns (e.g. email) ahead of the SQL primary key;
+        # adapter row-delete ownership binds more reliably to id/uuid/guid.
+        ordered = list(dict.fromkeys(names))
+        by_lower = {name.lower(): name for name in ordered}
+        preferred = [
+            by_lower[alias]
+            for alias in ("id", "uuid", "guid")
+            if alias in by_lower
+        ]
+        if not preferred:
+            return ordered
+        rest = [name for name in ordered if name.lower() not in {"id", "uuid", "guid"}]
+        return preferred + rest
+
+    for source in (row, _dict(row.get("typed_fields"))):
+        names = [_text(value) for value in _list(source.get("identity_fields")) if _text(value)]
+        if names:
+            return _prefer_generic_primary_key(names)
+
+    derived: list[str] = []
+    has_database_binding = False
+    field_names: set[str] = set()
+    for field in _list(row.get("fields")):
+        if not isinstance(field, dict):
+            continue
+        fname = _text(field.get("name") or field.get("field"))
+        if fname:
+            field_names.add(fname.lower())
+        if _list(field.get("database_bindings")):
+            has_database_binding = True
+        role = _text(field.get("identity_role")).lower()
+        if role == "foreign_key":
+            continue
+        if _text(field.get("semantic_type")).upper() == "IDENTITY" or role:
+            if fname:
+                derived.append(fname)
+    if derived:
+        return _prefer_generic_primary_key(derived)
+    for alias in ("id", "uuid", "guid"):
+        if alias in field_names:
+            return [alias]
+    kinds = {_text(value).lower() for value in _list(row.get("entity_kinds"))}
+    kind = _text(row.get("kind")).lower()
+    if has_database_binding or "resource" in kinds or kind in {"table", "resource"}:
+        # Industry-neutral SQL primary key when the entity is source-declared as a
+        # persisted resource/table but IR omitted identity_fields projection.
+        return ["id"]
+    return []
+
+
+def _project_entity_for_cleanup(entity: dict[str, Any]) -> dict[str, Any]:
+    """Shallow entity copy with identity_fields + preferred DB table name."""
+    from .cleanup_adapter_ladder import entity_storage_table
+
+    best = _dict(entity)
+    if not best:
+        return {}
+    best_identity = _entity_identity_fields(best)
+    if not best_identity:
+        return {}
+    resolved = dict(best)
+    resolved["name"] = _text(
+        best.get("name") or _dict(best.get("typed_fields")).get("name")
+    )
+    resolved["identity_fields"] = list(best_identity)
+    table_names = [
+        _text(_dict(binding).get("table"))
+        for field in _list(best.get("fields"))
+        if isinstance(field, dict)
+        for binding in _list(field.get("database_bindings"))
+        if _text(_dict(binding).get("table"))
+    ]
+    if table_names:
+        # Prefer the source DB table when bindings agree; cleanup deletes rows by
+        # table name, not business-object vocabulary.
+        resolved["name"] = Counter(table_names).most_common(1)[0][0]
+        resolved["table"] = Counter(table_names).most_common(1)[0][0]
+    else:
+        # Preserve schema-derived physical table (data_tables) over a logical
+        # business-object name that may have won the entity merge.
+        storage = entity_storage_table(resolved)
+        if storage:
+            resolved["table"] = storage
+    return resolved
+
+
 def _entity_for_operation(
     operation: dict[str, Any],
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    """The source-declared entity an operation's path names, if the IR declares one."""
-    path = _text(_dict(operation).get("path") or _dict(operation).get("raw_path")).lower()
-    if not path:
+    """The source-declared entity an operation acts on, if the IR declares one.
+
+    Resolution order (fail-closed on ambiguity):
+    1. Path-segment / flattened name match (cart/items ↔ cart_items)
+    2. Unique produces/mutates/transitions/consumes relation to an entity
+    3. Unique request-field ↔ entity DB-column overlap (≥2 exclusive fields)
+    """
+    op = _dict(operation)
+    path = _text(op.get("path") or op.get("raw_path")).lower()
+    ir = _dict(behavior_ir)
+    entities = [row for row in _list(ir.get("entities")) if isinstance(row, dict)]
+    if not path and not entities:
         return {}
     # A table name joins words with "_" while a path joins them with "/", so
     # /api/cart/items and the cart_items table never matched literally. Compare both
@@ -446,13 +564,19 @@ def _entity_for_operation(
     flat_path = path.replace("_", "").replace("-", "")
     squashed_path = flat_path.replace("/", "")
     best: dict[str, Any] = {}
-    for node in _list(_dict(behavior_ir).get("entities")):
-        row = _dict(node)
-        name = _text(row.get("name")).lower()
-        if not name or not _list(row.get("identity_fields")):
+    for row in entities:
+        name = _text(
+            row.get("name") or _dict(row.get("typed_fields")).get("name")
+        ).lower()
+        identity_fields = _entity_identity_fields(row)
+        if not name or not identity_fields or not path:
             continue
         flat_name = name.replace("_", "").replace("-", "")
-        singular = flat_name[:-1] if flat_name.endswith("s") and not flat_name.endswith("ss") else flat_name
+        singular = (
+            flat_name[:-1]
+            if flat_name.endswith("s") and not flat_name.endswith("ss")
+            else flat_name
+        )
         matched = (
             f"/{flat_name}" in flat_path
             or f"/{singular}" in flat_path
@@ -460,7 +584,117 @@ def _entity_for_operation(
         )
         if matched and len(name) > len(_text(best.get("name"))):
             best = row
-    return best
+    projected = _project_entity_for_cleanup(best)
+    if projected:
+        return projected
+
+    # Relation-backed entity: produces/transitions/… to a unique entity node.
+    op_id = _text(op.get("id"))
+    if op_id:
+        related_ids: set[str] = set()
+        for relation in _list(ir.get("relations")):
+            if not isinstance(relation, dict):
+                continue
+            kind = _text(
+                relation.get("relation_type") or relation.get("kind")
+            ).lower()
+            if kind not in {
+                "produces",
+                "creates",
+                "mutates",
+                "updates",
+                "modifies",
+                "transitions",
+                "state_transition",
+                "consumes",
+                "affects",
+            }:
+                continue
+            endpoints = {
+                _text(relation.get("operation_ref")),
+                _text(relation.get("from_ref")),
+                _text(relation.get("from")),
+                _text(relation.get("source")),
+            }
+            if op_id not in endpoints:
+                continue
+            for field in ("to_ref", "to", "target"):
+                ref = _text(relation.get(field))
+                if ref and ref != op_id:
+                    related_ids.add(ref)
+        by_id = {
+            _text(row.get("id")): row
+            for row in entities
+            if _text(row.get("id"))
+        }
+        entity_hits = [
+            _project_entity_for_cleanup(by_id[ref])
+            for ref in sorted(related_ids)
+            if ref in by_id and _project_entity_for_cleanup(by_id[ref])
+        ]
+        # Deduplicate by projected table/name
+        unique: dict[str, dict[str, Any]] = {}
+        for hit in entity_hits:
+            key = _text(hit.get("name") or hit.get("id")).lower()
+            if key:
+                unique[key] = hit
+        if len(unique) == 1:
+            return next(iter(unique.values()))
+
+    # Request-field ↔ DB-column overlap when unique and ≥2 exclusive matches.
+    # Auth/register paths never contain "users"; overlap against source-bound
+    # columns is the industry-neutral bridge when relations are absent.
+    request_fields = {
+        _text(value).lower()
+        for value in (
+            list(_dict(op.get("request_example")).keys())
+            + list(_list(op.get("parameters")))
+            + list(_list(op.get("affected_fields")))
+            + list(_list(op.get("field_dictionary")))
+        )
+        if _text(value)
+        and not isinstance(value, dict)
+        and _text(value).lower()
+        not in {"password", "passwd", "secret", "token", "authorization"}
+    }
+    # Nested OpenAPI properties
+    request_schema = _dict(op.get("request_schema"))
+    properties = _dict(request_schema.get("properties"))
+    if not properties:
+        for media in _dict(request_schema.get("content")).values():
+            if isinstance(media, dict):
+                properties = _dict(_dict(media.get("schema")).get("properties"))
+                if properties:
+                    break
+    request_fields.update(_text(key).lower() for key in properties if _text(key))
+    if len(request_fields) >= 2:
+        scored: list[tuple[int, dict[str, Any]]] = []
+        for row in entities:
+            columns = {
+                _text(field.get("name") or field.get("field")).lower()
+                for field in _list(row.get("fields"))
+                if isinstance(field, dict)
+                and _text(field.get("name") or field.get("field"))
+            }
+            columns.update(
+                _text(_dict(binding).get("column")).lower()
+                for field in _list(row.get("fields"))
+                if isinstance(field, dict)
+                for binding in _list(field.get("database_bindings"))
+                if _text(_dict(binding).get("column"))
+            )
+            overlap = request_fields & columns
+            if len(overlap) >= 2:
+                projected_row = _project_entity_for_cleanup(row)
+                if projected_row:
+                    scored.append((len(overlap), projected_row))
+        if scored:
+            scored.sort(key=lambda item: item[0], reverse=True)
+            best_score = scored[0][0]
+            winners = [row for score, row in scored if score == best_score]
+            if len(winners) == 1:
+                return winners[0]
+    return {}
 
 
 def compile_experiment_for_obligation(
@@ -716,10 +950,21 @@ def compile_experiment_for_obligation(
         _infer_operation_effect(primary_op, _op_method_upper) == "write"
         and not is_ephemeral_session
     )
+    _primary_example = _source_request_example(
+        primary_op,
+        sibling_operations=list(ops.values()),
+    )
+    _schema_required = _request_schema_required_fields(primary_op)
     if (
         is_write
-        and _op_method_upper in {"PUT", "PATCH"}
-        and not _source_request_example(primary_op)
+        and not _primary_example
+        and (
+            _op_method_upper in {"PUT", "PATCH"}
+            # POST with a source-declared required body and no example must not
+            # reach transport as `{}` — that yields target 5xx and misleading
+            # CONTROL_SUCCESS_NOT_PROVEN instead of a compile-time gap.
+            or (_op_method_upper == "POST" and _schema_required)
+        )
     ):
         return blocked_experiment(
             oid,
@@ -786,14 +1031,20 @@ def compile_experiment_for_obligation(
             obs for obs in required_observers
             if obs not in _WRITE_ONLY_OBSERVERS
         ]
-        if not required_observers:
-            required_observers = ["http_response"]
     binding_plan = build_binding_plan(
         operation=primary_op,
         obligation=obl,
         actors=[actors[a] for a in required_actors if a in actors],
         behavior_ir=ir,
     )
+    # Planning-stage materialization extras (fixture create paths, etc.) from
+    # abstract→concrete promotion. Appended only; never invents semantics.
+    _planning_mat = _dict(obl.get("_planning_materialization"))
+    for _extra in _list(_planning_mat.get("binding_plan_extras")) + _list(
+        _dict(prop.get("planning_materialization_bindings"))
+    ):
+        if isinstance(_extra, dict):
+            binding_plan.append(dict(_extra))
     # ── V1.2.3 §15: Write Readback Contract into Binding Graph ──
     # The readback binding entry tells the runtime how to resolve the
     # readback operation's path parameter from the write response.
@@ -1021,10 +1272,11 @@ def compile_experiment_for_obligation(
             )
 
     if not required_observers:
-        # Instead of blocking, inject the most basic observer. http_response
-        # can detect status-code and body-level violations without any extra
-        # fixture or readback setup.
-        required_observers = ["http_response"]
+        return blocked_experiment(
+            oid,
+            "BLOCKED_MISSING_OBSERVER",
+            "none",
+        )
 
     raw_cleanup_req = obl.get("cleanup_requirement")
     if isinstance(raw_cleanup_req, str):
@@ -1079,15 +1331,18 @@ def compile_experiment_for_obligation(
                     or relation.get("to")
                     or relation.get("target")
                 )
-                # Check if this relation compensates the primary operation
-                if target_ref == primary_op_id and comp_ref in ops and comp_ref != primary_op_id:
+                # Canonical IR: from_ref/operation_ref = compensator (cleanup),
+                # to_ref = primary being compensated. Never invert: treating the
+                # compensated create as cleanup for cancel/ship produced
+                # explicit_compensator_no_source_relation on the action itself.
+                if (
+                    target_ref == primary_op_id
+                    and comp_ref in ops
+                    and comp_ref != primary_op_id
+                ):
                     relation_compensators.add(comp_ref)
-                elif comp_ref == primary_op_id:
-                    # Reverse direction: source is primary, target is compensator
-                    alt_ref = target_ref
-                    if alt_ref in ops and alt_ref != primary_op_id:
-                        relation_compensators.add(alt_ref)
-                # Also check effects list
+                # effects[].cleanup_target_operation_ref names the compensated
+                # primary; the relation's operation_ref/from_ref is cleanup.
                 if any(
                     isinstance(effect, dict)
                     and _text(effect.get("cleanup_target_operation_ref"))
@@ -1122,6 +1377,9 @@ def compile_experiment_for_obligation(
                 "action": "inverse_delta_compensation",
                 "mode": "delta_inverse",
                 "operation_ref": primary_op_id,
+                # Multi-write expansion scopes by the compensated write, not by
+                # the compensator operation identity.
+                "compensates_operation_ref": primary_op_id,
                 "path": primary_path,
                 "method": primary_method,
                 "delta_field": delta_field,
@@ -1142,6 +1400,7 @@ def compile_experiment_for_obligation(
                 "action": "restore_before_snapshot",
                 "mode": "snapshot_restore",
                 "operation_ref": primary_op_id,
+                "compensates_operation_ref": primary_op_id,
                 "path": primary_path,
                 "method": primary_method,
                 "runtime_response_binding_required": "{" in primary_path,
@@ -1266,6 +1525,7 @@ def compile_experiment_for_obligation(
                 "action": "restore_before_snapshot",
                 "mode": "restore_snapshot",
                 "operation_ref": primary_op_id,
+                "compensates_operation_ref": primary_op_id,
                 "path": primary_path,
                 "method": primary_method,
                 "runtime_response_binding_required": "{" in primary_path,
@@ -1330,6 +1590,7 @@ def compile_experiment_for_obligation(
                     "action": "restore_before_snapshot",
                     "mode": "restore_snapshot",
                     "operation_ref": primary_op_id,
+                    "compensates_operation_ref": primary_op_id,
                     "path": primary_path,
                     "method": primary_method,
                     "runtime_response_binding_required": True,
@@ -1420,10 +1681,15 @@ def compile_experiment_for_obligation(
                 elif cleanup_mode == "recreate_compensated_resource":
                     # DELETE/empty-body primary: recreate from the create operation's
                     # source example; executor must materialize runtime tokens.
+                    # compensates_operation_ref MUST name the primary write: multi-write
+                    # expansion matches write steps by that ref. Falling back to
+                    # operation_ref (the create compensator) leaves source_step_id
+                    # unbound → missing_cleanup_for_steps:control_1,treatment_1.
                     cleanup_plan = [{
                         "action": "reverse_order_compensation",
                         "mode": cleanup_mode,
                         "operation_ref": cleanup_op,
+                        "compensates_operation_ref": primary_op_id,
                         "path": cleanup_path,
                         "method": cleanup_method,
                         "body": cleanup_body or None,
@@ -1652,7 +1918,11 @@ def compile_experiment_for_obligation(
             if _text(obs.get("observer_id")) not in _WRITE_ONLY_OBSERVERS
         ]
         if not observers:
-            observers = [{"observer_id": "http_response"}]
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_OBSERVER",
+                "read_observer",
+            )
     if _text(protocol.get("status")) != "COMPILED":
         return blocked_experiment(
             oid,
@@ -2168,6 +2438,13 @@ def compile_experiment_for_obligation(
             "non_production_required": True,
             "governed_write": is_write,
             "cleanup_not_required": cleanup_explicitly_not_required,
+            # DELETE→unique source create may mint a new identity; WRP exact_recreate
+            # admits that only when this flag (or a source recreate body) is present.
+            "business_equivalence_allows_new_identity": any(
+                isinstance(row, dict)
+                and _text(row.get("mode")) == "recreate_compensated_resource"
+                for row in cleanup_plan
+            ),
             # The path classifier is source-derived and is the only authority for
             # treating session/token exchanges as non-durable. Preserve that
             # boundary for the runtime assertion gate instead of asking it to
@@ -2218,30 +2495,30 @@ def compile_experiment_for_obligation(
                 ).upper()
                 if _s_method in {"POST", "PUT", "PATCH", "DELETE"}:
                     _write_step_rows.append((_text(_s.get("step_id")), _s_op))
-        if len(_write_step_rows) > 1:
-            # A snapshot restore is an experiment-level authority: the
-            # cleanup executor restores every accepted write for the same
-            # operation from the captured before-state. Expanding it once per
-            # step would execute the same restore repeatedly.
-            _snapshot_cleanup = [
-                _tmpl
-                for _tmpl in cleanup_plan
-                if _text(_tmpl.get("action")) == "restore_before_snapshot"
-                and _text(_tmpl.get("mode")) in {"snapshot_restore", "restore_snapshot"}
-            ]
-            if len(_snapshot_cleanup) == 1 and len(_snapshot_cleanup) == len(cleanup_plan):
-                _expanded_cleanup = list(cleanup_plan)
-            else:
-                _expanded_cleanup = []
-            if not _expanded_cleanup:
-                for _step_id, _step_op_ref in reversed(_write_step_rows):
-                    for _tmpl in cleanup_plan:
-                        _comp_ref = _text(
-                            _tmpl.get("compensates_operation_ref")
-                            or _tmpl.get("operation_ref")
-                        )
-                        if _comp_ref == _step_op_ref:
-                            _expanded_cleanup.append({**_tmpl, "source_step_id": _step_id})
+        if _write_step_rows:
+            # Scope every cleanup template to the write step it compensates.
+            # Matching must use compensates_operation_ref / source_operation_ref
+            # (the write being undone). Falling back to operation_ref alone is
+            # only safe for same-operation restores; for recreate/DELETE
+            # compensators operation_ref names the undo op and must not be used
+            # as the write-step key (that produced missing_cleanup_for_steps).
+            # Single-write experiments still need source_step_id so runtime and
+            # residual probes can attribute cleanup to treatment_1.
+            _expanded_cleanup: list[dict[str, Any]] = []
+            for _step_id, _step_op_ref in reversed(_write_step_rows):
+                if not _step_id or not _step_op_ref:
+                    continue
+                for _tmpl in cleanup_plan:
+                    _comp_ref = _text(
+                        _tmpl.get("compensates_operation_ref")
+                        or _tmpl.get("source_operation_ref")
+                    )
+                    _op_ref = _text(_tmpl.get("operation_ref"))
+                    _binds_write = _comp_ref == _step_op_ref or (
+                        not _comp_ref and _op_ref == _step_op_ref
+                    )
+                    if _binds_write:
+                        _expanded_cleanup.append({**_tmpl, "source_step_id": _step_id})
             if _expanded_cleanup:
                 experiment["cleanup_plan"] = _expanded_cleanup
 

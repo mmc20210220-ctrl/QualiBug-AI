@@ -58,6 +58,22 @@ _ORACLE_INDETERMINATE_REASON_CODES = frozenset({
     "VALIDATION_GATE_EXCEPTION",
 })
 
+_EXECUTION_APPROVAL_CODES = frozenset({
+    "EXECUTION_APPROVAL_REQUIRED",
+    "EXECUTION_APPROVAL_MISSING",
+    "EXECUTION_APPROVAL_NOT_FOUND",
+    "EXECUTION_APPROVAL_HASH_MISMATCH",
+    "EXECUTION_APPROVAL_EXPIRED",
+    "EXECUTION_APPROVAL_TARGET_INVALID",
+    "EXECUTION_APPROVAL_REGISTRY_UNREADABLE",
+    "EXECUTION_APPROVAL_CAMPAIGN_ID_MISMATCH",
+    "EXECUTION_APPROVAL_SCOPE_ID_MISMATCH",
+    "EXECUTION_APPROVAL_ENVIRONMENT_REF_MISMATCH",
+    "EXECUTION_APPROVAL_SOURCE_HASH_MISMATCH",
+    "EXECUTION_APPROVAL_TARGET_ORIGIN_MISMATCH",
+    "EXECUTION_APPROVAL_EXECUTION_MODE_MISMATCH",
+})
+
 
 class DiscoveryFunnelError(ValueError):
     """Authoritative attempt or formal projection receipts are missing."""
@@ -137,6 +153,238 @@ def _status_count(rows: list[dict[str, Any]], *statuses: str) -> int:
     )
 
 
+def _attempt_selection_status(attempt: dict[str, Any]) -> str:
+    return _text(attempt.get("selection_status")).upper() or "SELECTED"
+
+
+def _attempt_is_selected(attempt: dict[str, Any]) -> bool:
+    return _attempt_selection_status(attempt) == "SELECTED"
+
+
+def _accounting_rows_for_parts(
+    *,
+    obligations: list[dict[str, Any]],
+    experiments: dict[str, Any],
+    agent_intent_plan: dict[str, Any],
+    obligation_plan: dict[str, Any],
+    planning_round: int,
+) -> list[dict[str, Any]]:
+    """Build one traceable accounting row for every formal obligation."""
+
+    selected_ids = {
+        _text(row.get("obligation_id"))
+        for row in _list(_dict(obligation_plan).get("selected"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
+    selected_rows = {
+        _text(row.get("obligation_id")): dict(row)
+        for row in _list(_dict(obligation_plan).get("selected"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
+    pending_rows = {
+        _text(row.get("obligation_id")): dict(row)
+        for row in _list(_dict(obligation_plan).get("pending_next_round"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
+    intents = {
+        _text(_dict(row).get("obligation_id")): dict(row)
+        for row in _list(_dict(agent_intent_plan).get("intents"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
+    rows: list[dict[str, Any]] = []
+    for obligation in obligations:
+        if not isinstance(obligation, dict):
+            continue
+        obligation_id = _text(obligation.get("obligation_id"))
+        experiment = _dict(experiments.get(obligation_id))
+        intent = _dict(intents.get(obligation_id))
+        compile_receipt = _dict(experiment.get("compile_receipt"))
+        compile_status = _text(
+            compile_receipt.get("status") or experiment.get("compile_status")
+        ).upper()
+        compile_reason = _text(
+            compile_receipt.get("reason_code") or experiment.get("block_reason")
+        )
+        if obligation_id in selected_ids:
+            selection_status = "SELECTED"
+        elif compile_status in {"BLOCKED", "HARNESS_FAILED"}:
+            selection_status = "COMPILE_BLOCKED"
+        elif compile_status == "DEFERRED":
+            selection_status = (
+                "DEFERRED_NOT_SELECTED"
+                if compile_reason in {
+                    "OBLIGATION_NOT_IN_PLAN",
+                    "OBLIGATION_BUDGET_REACHED",
+                    "DEFERRED",
+                }
+                else "COMPILE_BLOCKED"
+            )
+        elif not compile_status:
+            selection_status = "PLAN_BLOCKED" if not experiment else "COMPILE_BLOCKED"
+        else:
+            selection_status = "DEFERRED_NOT_SELECTED"
+        adapters = [
+            _text(value)
+            for value in _list(intent.get("execution_adapters"))
+            if _text(value)
+        ]
+        rows.append({
+            **obligation,
+            "candidate_id": _text(obligation.get("candidate_id")) or obligation_id,
+            "experiment_id": _text(
+                experiment.get("experiment_id") or compile_receipt.get("experiment_id")
+            ),
+            "compile_status": compile_status,
+            "adapter": (
+                adapters[0]
+                if len(adapters) == 1
+                else "multi_surface"
+                if adapters
+                else "unavailable"
+            ),
+            "execution_adapters": adapters,
+            "agent_intent_id": _text(intent.get("intent_id")),
+            "planning_round": planning_round,
+            "operation_refs": list(obligation.get("required_operations") or []),
+            "actor_refs": list(obligation.get("required_actors") or []),
+            "behavior_ir_refs": list(obligation.get("relation_refs") or []),
+            "selection_status": selection_status,
+            "selection_reason_code": _text(
+                _dict(selected_rows.get(obligation_id)).get("not_in_plan_reason")
+                or _dict(pending_rows.get(obligation_id)).get("not_in_plan_reason")
+                or compile_reason
+                or (
+                    "COMPILE_RECEIPT_MISSING"
+                    if selection_status == "COMPILE_BLOCKED" and not compile_status
+                    else ""
+                )
+            ),
+        })
+    return rows
+
+
+def _accounting_rows(plan: Any) -> list[dict[str, Any]]:
+    return _accounting_rows_for_parts(
+        obligations=[
+            dict(row)
+            for row in _list(_dict(getattr(plan, "obligations", {})).get("obligations"))
+            if isinstance(row, dict)
+        ],
+        experiments=dict(_dict(getattr(plan, "experiments", {})).get("by_obligation")),
+        agent_intent_plan=_dict(
+            _dict(getattr(plan, "experiments", {})).get("agent_intent_plan")
+        ),
+        obligation_plan=_dict(
+            _dict(getattr(plan, "experiments", {})).get("obligation_plan")
+        ),
+        planning_round=1,
+    )
+
+
+def _selected_rows(plan: Any) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in _accounting_rows(plan)
+        if _text(row.get("selection_status")).upper() == "SELECTED"
+    ]
+
+
+def _accounting_rows_for_execution(
+    plan: Any,
+    expansion: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Join base and runtime-expansion rows into one accounting scope."""
+
+    initial = _accounting_rows(plan)
+    expansion_rows = _accounting_rows_for_parts(
+        obligations=[
+            dict(row)
+            for row in _list(expansion.get("delta_obligations"))
+            if isinstance(row, dict)
+        ],
+        experiments=dict(_dict(expansion.get("by_obligation"))),
+        agent_intent_plan=_dict(expansion.get("agent_intent_plan")),
+        obligation_plan=_dict(expansion.get("obligation_plan")),
+        planning_round=2,
+    )
+    expansion_ids = {
+        _text(row.get("obligation_id"))
+        for row in expansion_rows
+        if _text(row.get("obligation_id"))
+    }
+    combined = [
+        row for row in initial
+        if _text(row.get("obligation_id")) not in expansion_ids
+    ] + expansion_rows
+    return initial, expansion_rows, combined
+
+
+def _ensure_accounting_terminal_receipts(
+    *,
+    accounting_rows: list[dict[str, Any]],
+    compile_results: dict[str, dict[str, Any]],
+    execution_results: dict[str, dict[str, Any]],
+    runtime_contract: dict[str, Any],
+) -> None:
+    """Fill only mechanically provable terminal gaps before ledger sealing."""
+
+    runtime_approved = (
+        _text(runtime_contract.get("status")) == "approved"
+        and bool(_text(runtime_contract.get("approved_base_url")))
+    )
+    for row in accounting_rows:
+        obligation_id = _text(row.get("obligation_id"))
+        if not obligation_id or obligation_id in execution_results:
+            continue
+        selection_status = _attempt_selection_status(row)
+        compile_receipt = _dict(compile_results.get(obligation_id))
+        compile_status = _text(
+            compile_receipt.get("status") or row.get("compile_status")
+        ).upper()
+        experiment_id = _text(
+            compile_receipt.get("experiment_id") or row.get("experiment_id")
+        )
+        if compile_status == "COMPILED":
+            if obligation_id not in compile_results:
+                compile_results[obligation_id] = {
+                    "status": "COMPILED",
+                    "experiment_id": experiment_id,
+                    "cost_coverage_status": "UNKNOWN",
+                }
+            # SELECTED + COMPILED + approved runtime without an execution
+            # receipt is a blocked execution gap, not a harness crash.
+            # Budget-deferred work must be sealed by
+            # ``_manual_terminal_receipts`` *before* this filler runs; when
+            # that order is respected, pending rows never reach this branch.
+            # Status must stay aligned with ``BLOCKED_EXECUTION`` — sealing
+            # ``HARNESS_FAILED`` here falsely degrades
+            # ``derive_campaign_terminal_status`` and blocks MEASURED.
+            if selection_status != "SELECTED":
+                execution_status = "DEFERRED"
+                execution_reason = "OBLIGATION_NOT_IN_PLAN"
+            elif not runtime_approved:
+                execution_status = "BLOCKED"
+                execution_reason = "BLOCKED_RUNTIME_TARGET"
+            else:
+                execution_status = "BLOCKED"
+                execution_reason = "BLOCKED_EXECUTION"
+            execution_results[obligation_id] = {
+                "status": execution_status,
+                "reason_code": execution_reason,
+                "detail": "compiled_obligation_has_no_execution_receipt",
+                "experiment_id": experiment_id,
+                "cost_coverage_status": "UNKNOWN",
+            }
+        elif selection_status == "SELECTED" and not compile_status:
+            compile_results[obligation_id] = {
+                "status": "HARNESS_FAILED",
+                "reason_code": "COMPILE_RECEIPT_MISSING",
+                "detail": "formal_obligation_has_no_compile_receipt",
+                "experiment_id": experiment_id,
+                "cost_coverage_status": "UNKNOWN",
+            }
+
+
 def _oracle_bucket(
     gate_stage: dict[str, Any],
 ) -> str:
@@ -189,7 +437,10 @@ def _build_funnel_conservation(
     terminal = _int(ledger.get("terminal_count"))
     generated = _generated_obligation_count(result)
     formal_identity = _formal_obligation_identity(result)
-    selected_ids = [_text(attempt.get("obligation_id")) for attempt in attempts]
+    selected_attempts = [attempt for attempt in attempts if _attempt_is_selected(attempt)]
+    selected_ids = [
+        _text(attempt.get("obligation_id")) for attempt in selected_attempts
+    ]
     selected_id_set = {value for value in selected_ids if value}
     selected_identity_complete = (
         len(selected_ids) == len(selected_id_set)
@@ -197,16 +448,60 @@ def _build_funnel_conservation(
         and all(selected_ids)
     )
     generated_id_set = set(formal_identity["ids"])
+    accounted_id_set = {
+        _text(attempt.get("obligation_id"))
+        for attempt in attempts
+        if _text(attempt.get("obligation_id"))
+    }
     not_selected: int | None = None
+    compile_blocked_not_selected: int | None = None
+    plan_blocked: int | None = None
+    unaccounted_count: int | None = None
     selected_outside_generated: int | None = None
     if formal_identity["status"] == "PASS" and selected_identity_complete:
         selected_outside_generated = len(selected_id_set - generated_id_set)
         if selected_outside_generated == 0:
-            not_selected = len(generated_id_set - selected_id_set)
+            nonselected_attempts = [
+                attempt for attempt in attempts if not _attempt_is_selected(attempt)
+            ]
+            not_selected = sum(
+                1
+                for attempt in nonselected_attempts
+                if _attempt_selection_status(attempt) == "DEFERRED_NOT_SELECTED"
+            )
+            compile_blocked_not_selected = sum(
+                1
+                for attempt in nonselected_attempts
+                if _attempt_selection_status(attempt) == "COMPILE_BLOCKED"
+            )
+            plan_blocked = sum(
+                1
+                for attempt in nonselected_attempts
+                if _attempt_selection_status(attempt) == "PLAN_BLOCKED"
+            )
+            unaccounted_count = len(generated_id_set - accounted_id_set)
+            accounted_outside_generated_count = len(
+                accounted_id_set - generated_id_set
+            )
+        else:
+            accounted_outside_generated_count = None
+    else:
+        accounted_outside_generated_count = None
     compile_rows = [_stage(attempt, "compile") for attempt in attempts]
-    execution_rows = [_stage(attempt, "execution") for attempt in attempts]
-    gate_rows = [_stage(attempt, "gate") for attempt in attempts]
+    selected_compile_rows = [
+        _stage(attempt, "compile") for attempt in selected_attempts
+    ]
+    execution_rows = [
+        _stage(attempt, "execution") for attempt in selected_attempts
+    ]
+    accounted_execution_rows = [
+        _stage(attempt, "execution") for attempt in attempts
+    ]
+    gate_rows = [_stage(attempt, "gate") for attempt in selected_attempts]
     compile_success_count = _status_count(compile_rows, "COMPILED")
+    selected_compile_success_count = _status_count(
+        selected_compile_rows, "COMPILED"
+    )
     compile_blocked_count = _status_count(compile_rows, "BLOCKED")
     compile_deferred_count = _status_count(compile_rows, "DEFERRED")
     compile_harness_failure_count = _status_count(
@@ -214,6 +509,9 @@ def _build_funnel_conservation(
     )
     compile_missing_count = sum(not row for row in compile_rows)
     execution_count = _status_count(execution_rows, "EXECUTED", "DELIVERABLE")
+    accounted_execution_count = _status_count(
+        accounted_execution_rows, "EXECUTED", "DELIVERABLE"
+    )
     execution_blocked_count = _status_count(
         execution_rows, "BLOCKED", "DEFERRED"
     )
@@ -222,7 +520,7 @@ def _build_funnel_conservation(
     )
     execution_missing_after_compile_count = sum(
         not execution
-        for compile, execution in zip(compile_rows, execution_rows)
+        for compile, execution in zip(selected_compile_rows, execution_rows)
         if _text(compile.get("status")).upper() == "COMPILED"
     )
     gate_count = sum(bool(row) for row in gate_rows)
@@ -308,8 +606,16 @@ def _build_funnel_conservation(
             checks,
             name="obligation_selection_conservation",
             expected=generated,
-            observed=selected + not_selected,
-            detail="generated IDs are partitioned into selected and not-selected receipts",
+            observed=(
+                selected
+                + not_selected
+                + int(compile_blocked_not_selected or 0)
+                + int(plan_blocked or 0)
+            ),
+            detail=(
+                "generated IDs are partitioned into selected, deferred, "
+                "compile-blocked, and plan-blocked receipts"
+            ),
         )
     else:
         checks.append({
@@ -319,32 +625,67 @@ def _build_funnel_conservation(
             "observed": {
                 "selected": selected,
                 "not_selected": not_selected,
+                "compile_blocked_not_selected": compile_blocked_not_selected,
+                "plan_blocked": plan_blocked,
+                "unaccounted": unaccounted_count,
                 "selected_outside_generated": selected_outside_generated,
             },
             "detail": "Formal and selected obligation identities do not prove a complete partition.",
+        })
+    if generated is None:
+        checks.append({
+            "name": "formal_terminal_accounting_conservation",
+            "status": "INCOMPLETE",
+            "expected": "one terminal attempt per formal obligation",
+            "observed": terminal,
+            "detail": "Formal obligation identity is required before terminal coverage can be measured.",
+        })
+    else:
+        _conservation_check(
+            checks,
+            name="formal_terminal_accounting_conservation",
+            expected=generated,
+            observed=terminal,
+            detail="every formal obligation has exactly one terminal attempt in the same ledger",
+        )
+    if formal_identity["status"] == "PASS":
+        _conservation_check(
+            checks,
+            name="formal_accounting_identity_conservation",
+            expected=sorted(generated_id_set),
+            observed=sorted(accounted_id_set),
+            detail="accounting attempts contain exactly the formal obligation identities",
+        )
+    else:
+        checks.append({
+            "name": "formal_accounting_identity_conservation",
+            "status": "INCOMPLETE",
+            "expected": "formal obligation identities",
+            "observed": sorted(accounted_id_set),
+            "detail": "Formal obligation identity must be valid before accounting identity can be compared.",
         })
     _conservation_check(
         checks,
         name="selected_terminal_conservation",
         expected=selected,
-        observed=terminal,
+        observed=len(selected_attempts),
     )
     _conservation_check(
         checks,
         name="selected_compile_outcome_conservation",
         expected=selected,
         observed=(
-            compile_success_count
-            + compile_blocked_count
-            + compile_deferred_count
-            + compile_harness_failure_count
+            _status_count(selected_compile_rows, "COMPILED")
+            + _status_count(selected_compile_rows, "BLOCKED")
+            + _status_count(selected_compile_rows, "DEFERRED")
+            + _status_count(selected_compile_rows, "HARNESS_FAILED")
         ),
         detail="each selected attempt has exactly one compile outcome",
     )
     _conservation_check(
         checks,
         name="compiled_execution_outcome_conservation",
-        expected=compile_success_count,
+        expected=selected_compile_success_count,
         observed=(
             execution_count
             + execution_blocked_count
@@ -511,17 +852,26 @@ def _build_funnel_conservation(
         "generated_duplicate_ids": formal_identity["duplicate_ids"],
         "generated_missing_id_count": formal_identity["missing_id_count"],
         "not_selected_count": not_selected,
+        "compile_blocked_not_selected_count": compile_blocked_not_selected,
+        "plan_blocked_count": plan_blocked,
+        "unaccounted_count": unaccounted_count,
+        "accounted_outside_generated_count": accounted_outside_generated_count,
         "selected_outside_generated_count": selected_outside_generated,
         "selected_count": selected,
         "terminal_count": terminal,
+        "accounted_count": _int(ledger.get("accounted_count"), default=terminal),
         "compile_count": compile_success_count,
         "compile_success_count": compile_success_count,
+        # SELECTED-only compile successes for selected_to_* conversion rates.
+        # All-attempt compile_success_count remains for total compiled diagnostics.
+        "selected_compile_success_count": selected_compile_success_count,
         "compile_blocked_count": compile_blocked_count,
         "compile_deferred_count": compile_deferred_count,
         "compile_harness_failure_count": compile_harness_failure_count,
         "compile_missing_count": compile_missing_count,
         "pre_execution_blocked_count": pre_execution_count,
         "execution_count": execution_count,
+        "accounted_execution_count": accounted_execution_count,
         "execution_blocked_count": execution_blocked_count,
         "execution_harness_failure_count": execution_harness_failure_count,
         "execution_missing_after_compile_count": execution_missing_after_compile_count,
@@ -564,16 +914,16 @@ def _is_execution_approval_gate(runtime_contract: dict[str, Any]) -> bool:
     """
     approval = _dict(runtime_contract.get("execution_approval"))
     if approval:
-        code = str(approval.get("code") or "").strip().upper()
-        if code.startswith("EXECUTION_APPROVAL"):
+        code = _text(approval.get("code")).upper()
+        if code in _EXECUTION_APPROVAL_CODES:
             return True
         if str(approval.get("approval_id") or "").strip():
             return True
     for item in _list(runtime_contract.get("missing_requirements")):
-        if str(item).strip().upper().startswith("EXECUTION_APPROVAL"):
+        if _text(item).upper() in _EXECUTION_APPROVAL_CODES:
             return True
     reason = str(runtime_contract.get("reason") or "").strip().lower()
-    return "execution_approval" in reason
+    return reason.upper() in _EXECUTION_APPROVAL_CODES
 
 
 def _attempt_ledger(result: dict[str, Any] | None) -> dict[str, Any]:
@@ -612,12 +962,16 @@ def effective_execution_status(v12_result: dict[str, Any] | None) -> str:
         execution_phase = _dict(_dict(result.get("phases")).get("execution"))
         legacy = execution_phase.get("status")
         return str(legacy or "not_executed").strip().lower()
-    if bool(ledger.get("complete")) and selected == terminal:
+    accounted = _int(ledger.get("accounted_count"), default=terminal)
+    if bool(ledger.get("complete")) and terminal == accounted:
         attempts = [
             _dict(attempt) for attempt in _list(ledger.get("attempts"))
         ]
         observed_attempt_count = sum(
-            1 for attempt in attempts if _list(attempt.get("observation_receipt_ids"))
+            1
+            for attempt in attempts
+            if _attempt_is_selected(attempt)
+            and _list(attempt.get("observation_receipt_ids"))
         )
         if observed_attempt_count == 0:
             return "blocked"
@@ -695,7 +1049,7 @@ def _observation(
         if not execution_stage:
             return {"status": "RECEIPT_MISSING", "reason": "STAGE_RECEIPT_MISSING", "elapsed_ms": None}
         reason = _text(execution_stage.get("reason_code"))
-        if "FIXTURE" in reason.upper():
+        if profile_reason_code(reason).get("reason_family") == "FIXTURE_CAPABILITY_GAP":
             return {"status": "BLOCKED", "reason": reason, "elapsed_ms": execution_stage.get("elapsed_ms")}
         return {"status": "SUCCEEDED", "reason": "", "elapsed_ms": None}
     if stage_name == "governed_execution":
@@ -740,7 +1094,11 @@ def _observation(
             "elapsed_ms": gate_stage.get("elapsed_ms"),
         }
     if stage_name == "cleanup":
-        if terminal_status == "HARNESS_FAILED" and "CLEANUP" in terminal_reason.upper():
+        if (
+            terminal_status == "HARNESS_FAILED"
+            and profile_reason_code(terminal_reason).get("reason_family")
+            == "CLEANUP_CAPABILITY_GAP"
+        ):
             return {"status": "HARNESS_FAILED", "reason": terminal_reason, "elapsed_ms": None}
         return {"status": "NOT_REQUIRED", "reason": "", "elapsed_ms": None}
     if stage_name == "formal_projection":
@@ -933,15 +1291,30 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     terminal_counts = Counter(_text(item.get("terminal_status")).upper() for item in attempts)
     selected = _int(ledger.get("selected_count"))
     terminal = _int(ledger.get("terminal_count"))
+    selected_attempts = [attempt for attempt in attempts if _attempt_is_selected(attempt)]
     execution_status = effective_execution_status(result)
     harness_failures = int(terminal_counts.get("HARNESS_FAILED", 0))
     blocked = int(terminal_counts.get("BLOCKED", 0) + terminal_counts.get("DEFERRED", 0))
+    selected_harness_failures = sum(
+        1
+        for attempt in selected_attempts
+        if _text(attempt.get("terminal_status")).upper() == "HARNESS_FAILED"
+    )
+    selected_blocked = sum(
+        1
+        for attempt in selected_attempts
+        if _text(attempt.get("terminal_status")).upper()
+        in {"BLOCKED", "DEFERRED"}
+    )
     executed = sum(
-        1 for attempt in attempts if _text(_stage(attempt, "execution").get("status")).upper() in ("EXECUTED", "DELIVERABLE")
+        1
+        for attempt in selected_attempts
+        if _text(_stage(attempt, "execution").get("status")).upper()
+        in ("EXECUTED", "DELIVERABLE")
     )
     observation_missing = sum(
         1
-        for attempt in attempts
+        for attempt in selected_attempts
         if _text(_stage(attempt, "execution").get("status")).upper() in ("EXECUTED", "DELIVERABLE")
         and not _list(attempt.get("observation_receipt_ids"))
     )
@@ -986,12 +1359,17 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     _EVIDENCE_ONLY_CLEANUP_REASONS = {
         "CLEANUP_EVIDENCE_INCOMPLETE",
         "CLEANUP_WRITE_COVERAGE_MISMATCH",
+        "CLEANUP_ACTIVATION_REFERENCE_MISMATCH",
+        "CLEANUP_PROOF_DEFERRED_FIELD_ORACLE",
     }
     attempt_cleanup_failures = sum(
         1
-        for attempt in attempts
-        if "CLEANUP" in _text(attempt.get("reason_code")).upper()
-        and _text(attempt.get("reason_code")).upper() not in _EVIDENCE_ONLY_CLEANUP_REASONS
+        for attempt in selected_attempts
+        if profile_reason_code(
+            _text(attempt.get("reason_code"))
+        ).get("reason_family") == "CLEANUP_CAPABILITY_GAP"
+        and _text(attempt.get("reason_code")).upper()
+        not in _EVIDENCE_ONLY_CLEANUP_REASONS
         and _text(attempt.get("terminal_status")).upper() == "HARNESS_FAILED"
     )
     operational_cleanup_failures = _operational_cleanup_failure_count(result)
@@ -1009,7 +1387,7 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     )
     cost_unknown = any(
         _text(attempt.get("cost_coverage_status")).upper() == "UNKNOWN"
-        for attempt in attempts
+        for attempt in selected_attempts
     )
     status = "OK"
     if (
@@ -1022,12 +1400,12 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         status = "FAILED_SAFE"
     elif selected == 0:
         status = "BLOCKED"
-    elif selected and blocked == selected:
+    elif selected and selected_blocked == selected:
         status = "BLOCKED"
     elif (
-        harness_failures
+        selected_harness_failures
         or cleanup_failures
-        or blocked
+        or selected_blocked
         or execution_status != "completed"
         or reasoner_failure_count
         or reasoner_status in {"degraded", "failed", "provider_unavailable"}
@@ -1099,7 +1477,9 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         "terminal_obligation_count": terminal,
         "executed_obligation_count": executed,
         "blocked_obligation_count": blocked,
+        "selected_blocked_obligation_count": selected_blocked,
         "harness_failure_count": harness_failures,
+        "selected_harness_failure_count": selected_harness_failures,
         "cleanup_failure_count": cleanup_failures,
         "observation_receipt_missing_count": observation_missing,
         "empty_findings_means_no_bugs": empty_means_no_bugs,
@@ -1263,9 +1643,18 @@ def _reason_details(
         if profile.get("registry_status") == "UNREGISTERED":
             unregistered.append(reason)
         examples: list[dict[str, Any]] = []
+        seen_detail_prefixes: set[str] = set()
+        # Prefer distinct reason_detail prefixes so operators see the mode and
+        # rare sub-causes, not three copies of whichever attempt landed first.
         for attempt in attempts:
             if _text(attempt.get("reason_code")) != reason:
                 continue
+            detail = _attempt_reason_detail(attempt)[:500]
+            prefix = detail.split(":", 1)[0] if detail else ""
+            if prefix and prefix in seen_detail_prefixes:
+                continue
+            if prefix:
+                seen_detail_prefixes.add(prefix)
             examples.append({
                 "obligation_id": _text(attempt.get("obligation_id")),
                 "risk_family": _text(attempt.get("risk_family")),
@@ -1282,10 +1671,37 @@ def _reason_details(
                     if _text(value)
                 ][:8],
                 "source_refs": _safe_source_refs(attempt),
-                "reason_detail": _attempt_reason_detail(attempt)[:500],
+                "reason_detail": detail,
             })
             if len(examples) >= 3:
                 break
+        if len(examples) < 3:
+            for attempt in attempts:
+                if _text(attempt.get("reason_code")) != reason:
+                    continue
+                oid = _text(attempt.get("obligation_id"))
+                if any(_text(row.get("obligation_id")) == oid for row in examples):
+                    continue
+                examples.append({
+                    "obligation_id": oid,
+                    "risk_family": _text(attempt.get("risk_family")),
+                    "terminal_stage": _text(attempt.get("terminal_stage")),
+                    "terminal_status": _text(attempt.get("terminal_status")),
+                    "operation_refs": [
+                        _text(value)[:240]
+                        for value in _list(attempt.get("operation_refs"))
+                        if _text(value)
+                    ][:8],
+                    "actor_refs": [
+                        _text(value)[:240]
+                        for value in _list(attempt.get("actor_refs"))
+                        if _text(value)
+                    ][:8],
+                    "source_refs": _safe_source_refs(attempt),
+                    "reason_detail": _attempt_reason_detail(attempt)[:500],
+                })
+                if len(examples) >= 3:
+                    break
         family = _text(profile.get("reason_family")) or "UNREGISTERED"
         reason_attempts = [
             attempt
@@ -1427,8 +1843,18 @@ def _build_conversion_rates(
 
     generated = conservation.get("generated_count")
     selected = conservation.get("selected_count")
+    # selected_to_* rates must use SELECTED-only numerators. All-attempt
+    # compile_success_count includes COMPILE_BLOCKED / DEFERRED_NOT_SELECTED
+    # rows that still carry COMPILED stages after follow-on rounds, which makes
+    # 109/32 look like FAILED_SAFE even when every SELECTED row compiled.
+    selected_compiled = conservation.get("selected_compile_success_count")
+    if not isinstance(selected_compiled, int) or isinstance(selected_compiled, bool):
+        selected_compiled = conservation.get("compile_success_count")
     compiled = conservation.get("compile_success_count")
     executed = conservation.get("execution_count")
+    accounted_executed = conservation.get("accounted_execution_count")
+    if not isinstance(accounted_executed, int) or isinstance(accounted_executed, bool):
+        accounted_executed = executed
     oracle = conservation.get("oracle_count")
     violations = conservation.get("oracle_violation_count")
     deliverable = conservation.get("customer_deliverable_finding_count")
@@ -1440,22 +1866,22 @@ def _build_conversion_rates(
             definition="selected obligations / generated formal obligations",
         ),
         _conversion_rate(
-            numerator=compiled,
+            numerator=selected_compiled,
             denominator=selected,
             name="selected_to_compiled",
-            definition="compiled obligations / selected obligations",
+            definition="compiled selected obligations / selected obligations",
         ),
         _conversion_rate(
             numerator=executed,
             denominator=selected,
             name="selected_to_executed",
-            definition="executed obligations / selected obligations",
+            definition="executed selected obligations / selected obligations",
         ),
         _conversion_rate(
-            numerator=executed,
+            numerator=accounted_executed,
             denominator=compiled,
             name="compiled_to_executed",
-            definition="executed obligations / compiled obligations",
+            definition="accounted executed obligations / compiled obligations",
         ),
         _conversion_rate(
             numerator=oracle,
@@ -1585,8 +2011,17 @@ def build_funnel_report(
         "metrics": {
             "generated_count": conservation.get("generated_count"),
             "not_selected_count": conservation.get("not_selected_count"),
+            "compile_blocked_not_selected_count": conservation.get(
+                "compile_blocked_not_selected_count"
+            ),
+            "plan_blocked_count": conservation.get("plan_blocked_count"),
+            "unaccounted_count": conservation.get("unaccounted_count"),
             "selected_count": conservation.get("selected_count"),
             "terminal_count": conservation.get("terminal_count"),
+            "accounted_count": conservation.get("accounted_count"),
+            "accounted_outside_generated_count": conservation.get(
+                "accounted_outside_generated_count"
+            ),
             "compiled_count": conservation.get("compile_success_count"),
             "compile_blocked_count": conservation.get("compile_blocked_count"),
             "compile_deferred_count": conservation.get("compile_deferred_count"),
@@ -1664,8 +2099,12 @@ def render_funnel_report_markdown(report: dict[str, Any]) -> str:
         "| --- | ---: |",
         f"| Generated | {display_metric(metrics.get('generated_count'))} |",
         f"| Not selected | {display_metric(metrics.get('not_selected_count'))} |",
+        f"| Compile-blocked but not selected | {display_metric(metrics.get('compile_blocked_not_selected_count'))} |",
+        f"| Plan blocked | {display_metric(metrics.get('plan_blocked_count'))} |",
         f"| Selected | {display_metric(metrics.get('selected_count'))} |",
+        f"| Accounted | {display_metric(metrics.get('accounted_count'))} |",
         f"| Terminal | {display_metric(metrics.get('terminal_count'))} |",
+        f"| Accounted outside generated | {display_metric(metrics.get('accounted_outside_generated_count'))} |",
         f"| Compiled | {display_metric(metrics.get('compiled_count'))} |",
         f"| Compile blocked | {display_metric(metrics.get('compile_blocked_count'))} |",
         f"| Pre-execution blocked | {display_metric(metrics.get('pre_execution_blocked_count'))} |",
@@ -1783,7 +2222,12 @@ def write_funnel_report_files(
 _COMPARISON_METRICS = (
     "generated_count",
     "not_selected_count",
+    "compile_blocked_not_selected_count",
+    "plan_blocked_count",
+    "unaccounted_count",
     "selected_count",
+    "accounted_count",
+    "accounted_outside_generated_count",
     "terminal_count",
     "compiled_count",
     "compile_blocked_count",
@@ -2343,12 +2787,13 @@ def _runtime_recompile_round0_obligation_ids(
     obligations: Any,
     experiments_by_obligation: Any,
 ) -> set[str]:
-    """Select only compile-blocked body bindings that runtime discovery can resolve.
+    """Select compile-blocked body bindings that runtime discovery can resolve.
 
     A runtime interface observation may reopen a round-0 compile terminal only
-    when no target request was possible.  Other blockers (cleanup authority,
-    missing fixtures, observers, or source request bodies) need their own
-    source evidence and must remain blocked instead of being retried blindly.
+    when no target request was possible. Phase-2 ABSTRACT retention keeps the
+    same capability-gap reason_code, so ABSTRACT body-binding gaps are eligible
+    under the same rule. Other blockers need their own source evidence unless a
+    later runtime-feedback pass explicitly widens selection.
     """
 
     experiments = _dict(experiments_by_obligation)
@@ -2361,7 +2806,8 @@ def _runtime_recompile_round0_obligation_ids(
             continue
         experiment = _dict(experiments.get(obligation_id))
         compile_receipt = _dict(experiment.get("compile_receipt"))
-        if _text(compile_receipt.get("status")).upper() != "BLOCKED":
+        status = _text(compile_receipt.get("status")).upper()
+        if status not in {"BLOCKED", "ABSTRACT"}:
             continue
         if _text(compile_receipt.get("reason_code")) != "BLOCKED_MISSING_BINDING":
             continue
@@ -2849,7 +3295,10 @@ def build_business_discovery_separation(
         if terminal == "DELIVERABLE":
             row["finding"] += 1
         # Blocked
-        if terminal in ("BLOCKED", "HARNESS_FAILED") or reason.startswith("BLOCKED"):
+        if (
+            terminal in ("BLOCKED", "HARNESS_FAILED")
+            or bool(profile_reason_code(reason).get("is_blocking"))
+        ):
             row["blocked"] += 1
 
     # ── Business funnel totals ──

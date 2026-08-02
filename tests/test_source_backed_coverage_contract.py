@@ -3,6 +3,8 @@ from __future__ import annotations
 from ai_test_asset_center.behavior_ir_hypothesis_coverage import (
     build_behavior_ir_coverage_map,
     build_exhaustive_obligation_matrix,
+    build_source_backed_coverage_obligations,
+    compute_obligation_coverage_gaps,
 )
 from ai_test_asset_center.behavior_ir import empty_behavior_ir
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
@@ -191,6 +193,120 @@ def test_unbound_postcondition_is_a_behavior_ir_gap_before_obligation_compile() 
         row.get("code") == "SOURCE_POSTCONDITION_EFFECT_UNBOUND"
         and row.get("subject_ref") == "inv_unbound_postcondition"
         for row in result["coverage_gaps"]
+    )
+
+
+def test_coverage_obligations_do_not_emit_bare_invariant_family() -> None:
+    """Coverage recovery must not paper over make_obligation failures with bare invariant.
+
+    RUN_ffc491a26bb4b0227d9a2f03 left exactly two
+    FIELD_LEVEL_RULE_NOT_EXECUTABLE:invariant_assertion_kind_missing rows. Both
+    carried risk_family=invariant and 16-hex obl ids from the coverage-path
+    exception fallback, which swallowed ValueError from cleanup_requirement=str.
+    """
+    behavior_ir = {
+        "operations": [{
+            "id": "op_write",
+            "method": "POST",
+            "path": "/orders",
+            "read_write": "write",
+            "source_refs": [{"source_id": "api", "locator": "POST /orders"}],
+            "entity_refs": ["order"],
+        }],
+        "actors": [{"id": "actor_buyer", "runtime_bound": True}],
+        "relations": [],
+        "invariants": [{
+            "id": "inv_business_rule",
+            "description": "orders remain consistent",
+            "expression": {
+                "kind": "business_rule",
+                "operands": [{"entity_ref": "order", "field": "status"}],
+            },
+            "operation_refs": ["op_write"],
+            "source_refs": [{"source_id": "rules", "locator": "rule:consistency"}],
+            "entity_refs": ["order"],
+        }],
+        "entities": [{"id": "order"}],
+        "states": [],
+        "state_machines": [],
+    }
+
+    gaps = compute_obligation_coverage_gaps(behavior_ir, [])
+    obligations = build_source_backed_coverage_obligations(behavior_ir, gaps)
+    inv_rows = [
+        row
+        for row in obligations
+        if row.get("_coverage_obligation")
+        and (
+            (row.get("property") or {}).get("invariant_ref") == "inv_business_rule"
+            or (row.get("property_spec") or {}).get("invariant_ref") == "inv_business_rule"
+        )
+    ]
+    assert inv_rows, "uncovered invariant node must become a coverage obligation"
+    assert not [row for row in inv_rows if row.get("risk_family") == "invariant"]
+    assert all(isinstance(row.get("cleanup_requirement"), dict) for row in inv_rows)
+    assert all(
+        isinstance((row.get("property") or {}).get("expression"), dict)
+        and (row.get("property") or {}).get("expression")
+        for row in inv_rows
+    )
+
+    experiment = compile_experiment_for_obligation(
+        inv_rows[0],
+        behavior_ir=behavior_ir,
+        environment_type="test",
+    )
+    assert experiment["compile_receipt"].get("detail") != "invariant_assertion_kind_missing"
+
+
+def test_matrix_strategy7_routes_postcondition_through_state_family() -> None:
+    """Matrix Strategy-7 must not emit bare risk_family=invariant without expression.
+
+    Runtime evidence (RUN_21c56000): 42/52 FIELD_LEVEL blocks were
+    invariant_assertion_kind_missing from matrix rows that bypassed make_obligation
+    and omitted expression — the compiler had no assertion kind to compile.
+    """
+    behavior_ir = {
+        "operations": [{
+            "id": "write_order",
+            "method": "POST",
+            "path": "/orders",
+            "read_write": "write",
+            "source_refs": [{"source_id": "api", "locator": "POST /orders"}],
+            "affected_fields": ["status"],
+            "entity_refs": ["order"],
+        }],
+        "actors": [{"id": "actor_buyer", "runtime_bound": True}],
+        "relations": [],
+        "invariants": [{
+            "id": "inv_paid",
+            "expression": {
+                "kind": "postcondition",
+                "operands": [{
+                    "entity_ref": "order",
+                    "field": "status",
+                    "expected_value": "PAID",
+                }],
+            },
+            "operation_refs": ["write_order"],
+            "source_refs": [{"source_id": "rules", "locator": "rule:paid"}],
+        }],
+    }
+
+    obligations = build_exhaustive_obligation_matrix(behavior_ir)
+    inv_rows = [
+        row
+        for row in obligations
+        if (row.get("property") or {}).get("invariant_ref") == "inv_paid"
+        or (row.get("property_spec") or {}).get("invariant_ref") == "inv_paid"
+    ]
+    assert inv_rows, "bound postcondition invariant must become a matrix obligation"
+    assert not [row for row in inv_rows if row.get("risk_family") == "invariant"]
+    assert all(row.get("risk_family") == "state" for row in inv_rows)
+    assert all(
+        isinstance((row.get("property") or {}).get("expression"), dict)
+        and (row.get("property") or {}).get("expression", {}).get("kind") == "postcondition"
+        for row in inv_rows
     )
 
 

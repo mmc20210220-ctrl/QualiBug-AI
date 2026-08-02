@@ -92,3 +92,141 @@ def test_unbound_runtime_rule_is_preserved_as_stable_coverage_gap() -> None:
     )
     assert gap["invariant_ref"]
     assert gap["source_rule_refs"]
+
+
+def test_runtime_ddl_columns_union_weak_inventory_same_table_id() -> None:
+    """Weak inventory must not erase runtime DDL columns for the same table_id.
+
+    Industry-neutral: no path/entity special cases. Register-style ops bind via
+    request-field ↔ entity-column overlap once DDL columns reach the IR.
+    """
+    from ai_test_asset_center.experiment_compiler_obligation_core import (
+        _entity_for_operation,
+    )
+
+    weak_asset = {
+        "data_tables": [
+            {
+                "table_id": "table:accounts",
+                "name": "accounts",
+                "columns": ["role"],
+                "identity_fields": [],
+                "field_dictionary": [
+                    {"field_id": "field:inv:role", "table": "accounts", "field": "role"}
+                ],
+                "derivation": "entity_inventory_table",
+                "source_id": "src:inventory",
+            }
+        ],
+        "field_dictionary": [
+            {"field_id": "field:inv:role", "table": "accounts", "field": "role"}
+        ],
+    }
+    overlay = build_runtime_source_knowledge_overlay(
+        db_schema_text=(
+            "CREATE TABLE accounts ("
+            "id UUID PRIMARY KEY, "
+            "email TEXT UNIQUE NOT NULL, "
+            "name TEXT NOT NULL, "
+            "phone TEXT, "
+            "role TEXT NOT NULL, "
+            "password TEXT NOT NULL"
+            ");"
+        ),
+    )
+    merged = merge_knowledge_asset_overlay(weak_asset, overlay)
+    accounts = next(
+        row
+        for row in merged["data_tables"]
+        if str(row.get("name") or "").lower() == "accounts"
+    )
+    columns = {str(value).lower() for value in accounts.get("columns") or []}
+    assert {"id", "email", "name", "phone", "role", "password"} <= columns
+    assert "role" in columns
+
+    behavior_ir = build_behavior_ir_from_knowledge_asset(
+        merged,
+        project_id="ddl-column-union",
+        api_operations=[
+            {
+                "method": "POST",
+                "path": "/api/auth/register",
+                "operation_id": "register",
+                "request_example": {
+                    "email": "a@example.com",
+                    "name": "Ada",
+                    "password": "secret",
+                    "phone": "10086",
+                },
+            }
+        ],
+    )
+    entity = next(
+        row
+        for row in behavior_ir["entities"]
+        if str(row.get("name") or "").lower() == "accounts"
+    )
+    field_names = {
+        str(field.get("name") or field.get("field") or "").lower()
+        for field in entity.get("fields") or []
+        if isinstance(field, dict)
+    }
+    assert {"email", "name", "phone"}.issubset(field_names)
+
+    register_op = next(
+        row
+        for row in behavior_ir["operations"]
+        if str(row.get("path") or "") == "/api/auth/register"
+    )
+    bound = _entity_for_operation(register_op, behavior_ir)
+    assert bound
+    assert str(bound.get("name") or bound.get("table") or "").lower() in {
+        "accounts",
+        "table:accounts",
+    }
+
+
+def test_interface_merge_keeps_overlay_request_schema_over_stub() -> None:
+    """Persisted interface stubs must not erase markdown field-table schemas."""
+    from ai_test_asset_center.universal_api_parser import build_api_operations_from_text
+
+    api_text = """
+### POST /api/catalog/items
+
+Create a catalog item.
+
+| field | type | required | description |
+| --- | --- | --- | --- |
+| sku | string | yes | unique item code |
+| name | string | no | display name |
+"""
+    overlay = build_runtime_source_knowledge_overlay(api_spec_text=api_text)
+    stub_asset = {
+        "interfaces": [
+            {
+                "interface_id": "markdown_api:POST:/api/catalog/items",
+                "method": "POST",
+                "path": "/api/catalog/items",
+                "request_schema": None,
+                "request_example": None,
+            }
+        ]
+    }
+    merged = merge_knowledge_asset_overlay(stub_asset, overlay)
+    iface = next(
+        row
+        for row in merged["interfaces"]
+        if row.get("interface_id") == "markdown_api:POST:/api/catalog/items"
+    )
+    schema = iface.get("request_schema") or {}
+    assert schema.get("required") == ["sku"]
+    assert "sku" in dict(schema.get("properties") or {})
+
+    ops = build_api_operations_from_text(api_text)
+    op = next(
+        row
+        for row in ops
+        if str(row.get("method")).upper() == "POST"
+        and str(row.get("path")) == "/api/catalog/items"
+    )
+    assert (op.get("request_schema") or {}).get("required") == ["sku"]

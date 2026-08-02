@@ -979,6 +979,42 @@ def evaluate_completed_scan(
                 ),
                 "scoring_contract": "diagnostic_only_never_changes_tp_fp_fn",
             }
+        # Evaluator-private SPEC first-loss join. Product fact ledgers remain
+        # GT-free; this projection only runs at the authenticated evaluation
+        # boundary and never changes TP/FP/FN.
+        try:
+            from benchmark_evaluator.fact_first_loss_join import (
+                build_evaluator_fact_first_loss_ledger,
+            )
+
+            stage_loss_payload = metrics.get("stage_loss_diagnostics")
+            stage_loss_payload = (
+                stage_loss_payload if isinstance(stage_loss_payload, dict) else {}
+            )
+            metrics["fact_first_loss_diagnostics"] = build_evaluator_fact_first_loss_ledger(
+                stage_loss_matrix=stage_loss_payload,
+                product_fact_first_loss_ledger={},
+                matched_bug_ids=matched_bug_ids,
+                false_positive_count=(
+                    int(metrics.get("false_positives") or metrics.get("fp") or 0)
+                    if metrics.get("false_positives") is not None
+                    or metrics.get("fp") is not None
+                    else None
+                ),
+                campaign_id=str(
+                    validated_attempt_ledger.get("campaign_id")
+                    or validated_mainline.get("campaign_id")
+                    or ""
+                ).strip(),
+                run_id=run_id,
+            )
+        except ModuleNotFoundError:
+            metrics["fact_first_loss_diagnostics"] = {
+                "schema_version": "qualibug.evaluator-fact-first-loss-ledger.v1",
+                "status": "NOT_AVAILABLE",
+                "reason": "fact_first_loss_join_missing",
+                "scoring_contract": "diagnostic_only_never_changes_tp_fp_fn",
+            }
         metrics["aggregate_only"] = True
     elif measurement_status == "MEASURED":
         high_value = [
@@ -2359,29 +2395,29 @@ def validate_authenticated_policy_comparison(
 
 
 def _atomic_write_json(destination: Path, payload: dict[str, Any]) -> None:
-    """Atomically write JSON, including Windows MAX_PATH boundary paths."""
+    """Atomically write JSON, including Windows MAX_PATH boundary paths.
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    Temp files stay on the destination volume. ``NamedTemporaryFile(dir=...)``
+    still breaks past Windows MAX_PATH even with ``\\\\?\\``, so the temp name
+    is opened directly through the extended-path form.
+    """
+
+    os.makedirs(_filesystem_path(destination.parent), exist_ok=True)
     temporary: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=destination.parent,
-            prefix=".q-",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary = Path(handle.name)
+        temporary = destination.parent / f".q-{os.getpid()}-{time.time_ns()}.tmp"
+        with open(_filesystem_path(temporary), "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
             handle.flush()
             os.fsync(handle.fileno())
-        if temporary is None:
-            raise RuntimeError("atomic JSON temporary path was not created")
         os.replace(_filesystem_path(temporary), _filesystem_path(destination))
+        temporary = None
     finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+        if temporary is not None:
+            try:
+                os.unlink(_filesystem_path(temporary))
+            except FileNotFoundError:
+                pass
 
 
 def _filesystem_path(path: Path) -> str:

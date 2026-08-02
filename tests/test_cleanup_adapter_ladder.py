@@ -573,3 +573,197 @@ def test_an_entity_with_no_dependents_yields_a_single_step() -> None:
     )
     assert len(plan) == 1
     assert plan[0]["table"] == "refunds"
+
+
+# ── storage-table catalog rebinding (logical vs physical names) ─────────────
+
+def test_storage_candidates_include_source_aliases_not_invented_plurals() -> None:
+    from ai_test_asset_center.cleanup_adapter_ladder import storage_table_candidates
+
+    entities = [{
+        "name": "payment",
+        "table": "payments",
+        "source_entity_names": ["payment", "payments"],
+    }]
+    assert storage_table_candidates("payment", entities=entities) == ["payment", "payments"]
+
+
+def test_catalog_resolve_binds_single_present_alias() -> None:
+    from ai_test_asset_center.cleanup_adapter_ladder import resolve_storage_table_against_catalog
+
+    class _CatalogCursor:
+        def __init__(self):
+            self._rows = []
+
+        def execute(self, sql, params=None):
+            names = (params or [[]])[0]
+            present = {"payments", "orders", "refunds"}
+            self._rows = [(name,) for name in names if str(name).lower() in present]
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class _CatalogConn:
+        def cursor(self):
+            return _CatalogCursor()
+
+    entities = [{
+        "name": "payment",
+        "source_entity_names": ["payment", "payments"],
+        "table": "payments",
+    }]
+    table, reason = resolve_storage_table_against_catalog(
+        "payment",
+        entities=entities,
+        connection=_CatalogConn(),
+    )
+    assert reason == ""
+    assert table == "payments"
+
+
+def test_delete_rebinds_logical_table_via_catalog_before_sql() -> None:
+    """payment cleanup must DELETE payments when schema only has payments."""
+    from ai_test_asset_center.cleanup_adapter_ladder import execute_declared_adapter_cleanup
+
+    sink = []
+
+    class _CatalogAwareCursor:
+        def __init__(self, sink, rowcount=1):
+            self.sink = sink
+            self.rowcount = rowcount
+            self._rows = []
+
+        def execute(self, sql, params=None):
+            self.sink.append((sql, params))
+            if "information_schema.tables" in sql:
+                names = (params or [[]])[0]
+                present = {"payments"}
+                self._rows = [(name,) for name in names if str(name).lower() in present]
+                self.rowcount = 0
+            else:
+                self.rowcount = 1
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class _CatalogAwareConn:
+        def __init__(self, sink):
+            self.sink = sink
+            self.committed = False
+
+        def cursor(self):
+            return _CatalogAwareCursor(self.sink)
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    step = {
+        "adapter": "db_sql",
+        "mode": "row_delete",
+        "table": "payment",
+        "identity_column": "id",
+        "requires_ownership_proof": True,
+    }
+    entities = [{
+        "name": "payment",
+        "table": "payments",
+        "source_entity_names": ["payment", "payments"],
+    }]
+    receipt = execute_declared_adapter_cleanup(
+        step,
+        identity_value="qb_auto_pay_1",
+        connect=lambda: _CatalogAwareConn(sink),
+        policy_decision=APPROVED_POLICY,
+        entities=entities,
+        creation_receipts=[{
+            "status": "created",
+            "table": "payment",
+            "identity_value": "qb_auto_pay_1",
+        }],
+    )
+    assert receipt["status"] == "CLEANED"
+    assert receipt["table"] == "payments"
+    delete_sql = [sql for sql, _ in sink if sql.startswith("DELETE")]
+    assert delete_sql == ['DELETE FROM "payments" WHERE "id" = %s']
+
+
+def test_merged_logical_entity_compiles_cleanup_against_storage_table() -> None:
+    """business_object payment + data_table payments must plan DELETE payments."""
+    from ai_test_asset_center.behavior_ir_core import build_behavior_ir_from_knowledge_asset
+    from ai_test_asset_center.cleanup_adapter_ladder import (
+        entity_storage_table,
+        resolve_cleanup_adapter,
+    )
+    from ai_test_asset_center.experiment_compiler_obligation_core import (
+        _entity_for_operation,
+    )
+
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "business_objects": [{"name": "payment", "kind": "business_object"}],
+            "data_tables": [{
+                "name": "payments",
+                "kind": "resource",
+                "identity_fields": ["id"],
+                "fields": ["id", "order_id"],
+            }],
+        },
+        project_id="cleanup-storage-table",
+        api_operations=[{
+            "operation_id": "pay",
+            "method": "POST",
+            "path": "/api/payments/pay",
+        }],
+    )
+    entity = ir["entities"][0]
+    assert entity["name"] == "payment"
+    assert entity["table"] == "payments"
+    resolved = _entity_for_operation(
+        {"id": "pay", "method": "POST", "path": "/api/payments/pay"},
+        ir,
+    )
+    assert entity_storage_table(resolved) == "payments"
+    plan = resolve_cleanup_adapter(
+        available_adapters={"db_sql"},
+        entity=resolved,
+        identity_value="",
+        availability_only=True,
+        target_write_approved=True,
+    )
+    assert plan["plan"]["table"] == "payments"
+
+
+def test_unowned_row_still_opens_no_connection_with_entities() -> None:
+    from ai_test_asset_center.cleanup_adapter_ladder import execute_declared_adapter_cleanup
+
+    opened = []
+
+    def _connect():
+        opened.append(True)
+        raise AssertionError("must not connect for unowned rows")
+
+    receipt = execute_declared_adapter_cleanup(
+        {
+            "adapter": "db_sql",
+            "table": "payment",
+            "identity_column": "id",
+            "requires_ownership_proof": True,
+        },
+        identity_value="982ab14f-real-payment",
+        connect=_connect,
+        policy_decision=APPROVED_POLICY,
+        entities=[{
+            "name": "payment",
+            "table": "payments",
+            "source_entity_names": ["payment", "payments"],
+        }],
+    )
+    assert receipt["status"] == "REFUSED"
+    assert receipt["reason_code"] == REASON_NOT_RUN_OWNED
+    assert opened == []

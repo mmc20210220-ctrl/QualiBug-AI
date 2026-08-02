@@ -85,6 +85,8 @@ def _selected_rows(
     rows: list[dict[str, Any]] = []
     for obligation in obligations:
         obligation_id = _text(obligation.get("obligation_id"))
+        if obligation_id not in intents:
+            continue
         experiment = _dict(experiments_by_obligation.get(obligation_id))
         intent = _dict(intents.get(obligation_id))
         adapters = [
@@ -109,6 +111,7 @@ def _selected_rows(
             "operation_refs": list(obligation.get("required_operations") or []),
             "actor_refs": list(obligation.get("required_actors") or []),
             "behavior_ir_refs": list(obligation.get("relation_refs") or []),
+            "selection_status": "SELECTED",
         })
     return rows
 
@@ -175,6 +178,7 @@ def expand_behavior_ir_from_runtime_observations(
     policy_version: str,
     budget: int,
     planning_round: int,
+    planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Rebuild IR from proven runtime facts and compile only new obligations."""
 
@@ -205,7 +209,11 @@ def expand_behavior_ir_from_runtime_observations(
         for row in merged_operations
         if _operation_key(row) not in documented_keys
     ]
-    if not discovered_operations:
+    # Recompile-only feedback may reopen BLOCKED/ABSTRACT obligations after
+    # materialization capabilities improve, even when no new operation identity
+    # was discovered. New-operation stagnation still applies when neither path
+    # has work.
+    if not discovered_operations and not recompile_ids:
         receipt = _round_receipt(
             planning_round=planning_round,
             input_behavior_ir_id=initial_id,
@@ -221,6 +229,7 @@ def expand_behavior_ir_from_runtime_observations(
             "status": "STAGNATED",
             "behavior_ir": dict(initial_behavior_ir),
             "delta_obligations": [],
+            "recompile_obligations": [],
             "experiment_pack": {"experiments": [], "blocked_experiments": []},
             "all_experiments": [],
             "by_obligation": {},
@@ -230,20 +239,32 @@ def expand_behavior_ir_from_runtime_observations(
             "round_receipt": receipt,
         }
 
-    behavior_ir = build_behavior_ir_from_knowledge_asset(
-        knowledge_asset,
-        project_id=project_id,
-        source_snapshot_hash=source_snapshot_hash,
-        api_operations=merged_operations,
-        runtime_actors=runtime_actors,
-    )
-    obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
-    all_obligations = [
-        dict(row)
-        for row in _list(obligation_pack.get("obligations"))
-        if isinstance(row, dict)
-        and _text(row.get("obligation_id"))
-    ]
+    if discovered_operations:
+        behavior_ir = build_behavior_ir_from_knowledge_asset(
+            knowledge_asset,
+            project_id=project_id,
+            source_snapshot_hash=source_snapshot_hash,
+            api_operations=merged_operations,
+            runtime_actors=runtime_actors,
+        )
+        obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
+        all_obligations = [
+            dict(row)
+            for row in _list(obligation_pack.get("obligations"))
+            if isinstance(row, dict)
+            and _text(row.get("obligation_id"))
+        ]
+    else:
+        # Recompile-only: keep the immutable IR identity and retry named
+        # obligations against the same operation set + planning materialization.
+        behavior_ir = dict(initial_behavior_ir)
+        obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
+        all_obligations = [
+            dict(row)
+            for row in _list(obligation_pack.get("obligations"))
+            if isinstance(row, dict)
+            and _text(row.get("obligation_id"))
+        ]
     available_ids = {
         _text(row.get("obligation_id")) for row in all_obligations
     }
@@ -272,13 +293,39 @@ def expand_behavior_ir_from_runtime_observations(
         row
         for row in all_obligations
         if _text(row.get("obligation_id")) not in existing_obligation_ids
-    ]
+    ] if discovered_operations else []
     round_obligations = [*recompile_obligations, *delta_obligations]
+    if not round_obligations:
+        receipt = _round_receipt(
+            planning_round=planning_round,
+            input_behavior_ir_id=initial_id,
+            output_behavior_ir_id=_text(behavior_ir.get("model_id")) or initial_id,
+            observation_receipts=observation_receipts,
+            discovered_operations=discovered_operations,
+            new_obligation_count=0,
+            recompiled_obligation_ids=[],
+            selected_count=0,
+            stop_reason="recompile_ids_unavailable",
+        )
+        return {
+            "status": "STAGNATED",
+            "behavior_ir": behavior_ir,
+            "delta_obligations": [],
+            "recompile_obligations": [],
+            "experiment_pack": {"experiments": [], "blocked_experiments": []},
+            "all_experiments": [],
+            "by_obligation": {},
+            "obligation_plan": {},
+            "agent_intent_plan": {},
+            "selected_rows": [],
+            "round_receipt": receipt,
+        }
     experiment_pack = compile_experiments(
         round_obligations,
         behavior_ir=behavior_ir,
         environment_type=environment_type,
         policy_version=policy_version,
+        planning_context=planning_context,
     )
     experiment_pack = attach_fixture_dag_to_experiments(
         experiment_pack,
@@ -312,11 +359,14 @@ def expand_behavior_ir_from_runtime_observations(
         for row in all_selected_rows
         if _text(row.get("obligation_id")) in recompile_ids
     ]
-    stop_reason = (
-        "round_ready"
-        if delta_obligations
-        else "runtime_operations_created_no_new_obligations"
-    )
+    if delta_obligations:
+        stop_reason = "round_ready"
+    elif recompile_obligations and not discovered_operations:
+        stop_reason = "recompile_without_new_operations"
+    elif recompile_obligations:
+        stop_reason = "runtime_operations_created_no_new_obligations"
+    else:
+        stop_reason = "runtime_operations_created_no_new_obligations"
     receipt = _round_receipt(
         planning_round=planning_round,
         input_behavior_ir_id=initial_id,
@@ -329,7 +379,7 @@ def expand_behavior_ir_from_runtime_observations(
         stop_reason=stop_reason,
     )
     return {
-        "status": "EXPANDED",
+        "status": "EXPANDED" if discovered_operations else "RECOMPILED",
         "behavior_ir": behavior_ir,
         "delta_obligations": delta_obligations,
         "recompile_obligations": recompile_obligations,

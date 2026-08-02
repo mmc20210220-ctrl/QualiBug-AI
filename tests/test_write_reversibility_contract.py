@@ -850,6 +850,47 @@ class TestHarnessFailureSubclassification:
         )
         assert reason == "HARNESS_RUNTIME_BINDING_LOST"
 
+    def test_connection_error_still_connection_failed(self) -> None:
+        from ai_test_asset_center.experiment_outcome_finalizer import _classify_harness_failure
+        reason = _classify_harness_failure(
+            steps_out=[{
+                "error": "URLError: Connection refused",
+                "status_code": 0,
+            }],
+            observations={},
+            pre_transport_block_reasons=[],
+        )
+        assert reason == "HARNESS_CONNECTION_FAILED"
+
+    def test_governance_zero_transport_not_connection_failed(self) -> None:
+        """Before-GET responded; write never attempted — not a connection loss."""
+        from ai_test_asset_center.experiment_outcome_finalizer import _classify_harness_failure
+        reason = _classify_harness_failure(
+            steps_out=[{
+                "phase": "treatment",
+                "status_code": 0,
+                "error": "governed_write_identity_unobservable",
+                "governance_receipt": {
+                    "reason": "governed_write_identity_unobservable",
+                    "write_request_attempt_count": 0,
+                    "before": {"status": 404, "body": {}},
+                    "write": {"status": 0, "error": "governed_write_identity_unobservable"},
+                },
+            }],
+            observations={},
+            pre_transport_block_reasons=[],
+        )
+        assert reason != "HARNESS_CONNECTION_FAILED"
+
+    def test_empty_fallback_does_not_claim_connection(self) -> None:
+        from ai_test_asset_center.experiment_outcome_finalizer import _classify_harness_failure
+        reason = _classify_harness_failure(
+            steps_out=[],
+            observations={},
+            pre_transport_block_reasons=[],
+        )
+        assert reason != "HARNESS_CONNECTION_FAILED"
+
     def test_all_subtypes_are_prefixed(self) -> None:
         from ai_test_asset_center.experiment_outcome_finalizer import HARNESS_FAILURE_SUBTYPES
         for subtype in HARNESS_FAILURE_SUBTYPES:

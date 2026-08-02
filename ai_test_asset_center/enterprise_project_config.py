@@ -8,7 +8,6 @@ inventory-service, logistics-service, notification-service... each with its own
 base URL, OpenAPI spec, and document set.
 
 This module replaces the single-service assumption in real_project_onboarding
-with a multi-service model that enables:
 
 1. Per-service configuration (base_url, openapi_spec, prd docs)
 2. Cross-service relationship modeling (order→payment, payment→refund, etc.)

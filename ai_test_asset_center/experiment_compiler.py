@@ -257,13 +257,21 @@ def _attach_source_observed_mutations(
         for operation in _list(_dict(behavior_ir).get("operations"))
         if isinstance(operation, dict) and _text(operation.get("id"))
     }
+    siblings = list(operations.values())
     for step in _list(experiment.get("control_plan")) + _list(experiment.get("treatment_plan")):
         if not isinstance(step, dict):
             continue
         operation_ref = _text(step.get("operation_ref"))
         operation = _dict(operations.get(operation_ref))
         method = _text(operation.get("method")).upper()
-        body = step.get("body") if "body" in step else operation.get("request_example")
+        body = step.get("body") if "body" in step else None
+        if body in (None, {}):
+            from .experiment_compiler_support import _source_request_example
+
+            body = _source_request_example(
+                operation,
+                sibling_operations=siblings,
+            )
         if method not in {"PATCH", "PUT"} or body not in (None, {}):
             continue
         obligation_id = _text(experiment.get("obligation_id")) or "unknown_obligation"
@@ -326,6 +334,7 @@ def compile_experiments(
     environment_type: str = "",
     policy_version: str = "",
     available_adapters: "set[str] | frozenset[str] | None" = None,
+    planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile and project one governed database observation/oracle chain."""
     pack = _base._base.compile_experiments(
@@ -335,6 +344,21 @@ def compile_experiments(
         policy_version=policy_version,
         compile_one=compile_experiment_for_obligation,
         available_adapters=available_adapters,
+    )
+    # Abstract → Runtime Materialization → concrete recompile (no parallel pipeline).
+    from .experiment_runtime_materialization import (
+        materialize_and_recompile_abstract_pack,
+    )
+
+    pack = materialize_and_recompile_abstract_pack(
+        pack,
+        obligations=obligations,
+        behavior_ir=behavior_ir,
+        compile_one=compile_experiment_for_obligation,
+        environment_type=environment_type,
+        policy_version=policy_version,
+        available_adapters=available_adapters,
+        planning_context=planning_context,
     )
     bridged = bind_experiment_pack_to_captured_materializations(
         pack,

@@ -228,7 +228,58 @@ def build_api_operations_from_text(
             })
     if not operations:
         raise ValueError("api_spec_operations_missing")
+    # Markdown field tables (字段/类型/必填) are source contracts too. The
+    # heading→OpenAPI converter only lifts fenced JSON examples; enrich empty
+    # request schemas from the knowledge-center markdown operation parser so
+    # required body fields reach Behavior IR without inventing example values.
+    _enrich_operations_from_markdown_field_tables(operations, text, submitted)
     return operations
+
+
+def _normalize_api_path(path: str) -> str:
+    text = str(path or "").strip()
+    text = re.sub(r":([A-Za-z_][A-Za-z0-9_]*)", r"{\1}", text)
+    return text.rstrip("/") or "/"
+
+
+def _enrich_operations_from_markdown_field_tables(
+    operations: list[dict[str, Any]],
+    *source_texts: str,
+) -> None:
+    try:
+        from .enterprise_knowledge_center._parsing import _markdown_api_operations
+    except Exception:
+        return
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for source_text in source_texts:
+        if not str(source_text or "").strip():
+            continue
+        for row in _markdown_api_operations(str(source_text), "api_spec"):
+            if not isinstance(row, dict):
+                continue
+            method = str(row.get("method") or "").upper()
+            path = _normalize_api_path(str(row.get("path") or ""))
+            if method and path:
+                by_key[(method, path)] = row
+    if not by_key:
+        return
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        method = str(operation.get("method") or "").upper()
+        path = _normalize_api_path(str(operation.get("path") or ""))
+        md = by_key.get((method, path))
+        if not md:
+            continue
+        existing = operation.get("request_schema")
+        if isinstance(existing, dict) and existing:
+            continue
+        schema = md.get("request_schema")
+        if isinstance(schema, dict) and schema:
+            operation["request_schema"] = dict(schema)
+        example = md.get("request_example")
+        if isinstance(example, dict) and example and not operation.get("request_example"):
+            operation["request_example"] = dict(example)
 
 
 def _convert_markdown_api(text: str) -> dict[str, Any]:

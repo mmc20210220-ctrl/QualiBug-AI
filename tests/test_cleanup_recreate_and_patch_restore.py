@@ -114,11 +114,130 @@ def test_patch_prefers_restore_before_snapshot_over_delete_compensator() -> None
         environment_type="test",
     )
     assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
-    assert experiment["cleanup_plan"] == [{
-        "action": "restore_before_snapshot",
-        "mode": "snapshot_restore",
-        "operation_ref": "op-patch",
-        "path": "/api/resources/demo",
-        "method": "PATCH",
-        "runtime_response_binding_required": False,
-    }]
+    cleanup = experiment["cleanup_plan"]
+    # Dual control+treatment writes require reverse-order step-scoped cleanup.
+    assert [row.get("source_step_id") for row in cleanup] == [
+        "treatment_1",
+        "control_1",
+    ]
+    for row in cleanup:
+        assert row["action"] == "restore_before_snapshot"
+        assert row["mode"] == "snapshot_restore"
+        assert row["operation_ref"] == "op-patch"
+        assert row["compensates_operation_ref"] == "op-patch"
+        assert row["path"] == "/api/resources/demo"
+        assert row["method"] == "PATCH"
+
+
+def test_authz_dual_write_recreate_cleanup_binds_source_step_ids() -> None:
+    """Multi-write control+treatment must scope recreate cleanup per write step.
+
+    Observed residual after H11: reverse_order_compensation / recreate plans set
+    operation_ref to the create compensator but omitted compensates_operation_ref,
+    so expansion never attached source_step_id → missing_cleanup_for_steps.
+    """
+    ir = {
+        "operations": [
+            {
+                "id": "op-delete-item",
+                "method": "DELETE",
+                "path": "/api/cart/items/demo",
+                "read_write": "write",
+                "source_refs": [{"source_id": "api", "locator": "DELETE cart item"}],
+            },
+            {
+                "id": "op-create-item",
+                "method": "POST",
+                "path": "/api/cart/items",
+                "read_write": "write",
+                "request_example": {"sku": "SKU-1", "qty": 1},
+                "request_schema": {
+                    "type": "object",
+                    "properties": {
+                        "sku": {"type": "string"},
+                        "qty": {"type": "integer"},
+                    },
+                },
+                "source_refs": [{"source_id": "api", "locator": "POST cart item"}],
+            },
+            {
+                "id": "op-read-item",
+                "method": "GET",
+                "path": "/api/cart/items/demo",
+                "read_write": "read",
+                "source_refs": [{"source_id": "api", "locator": "GET cart item"}],
+            },
+        ],
+        "actors": [
+            {
+                "id": "actor-owner",
+                "role": "buyer",
+                "credential_secret_ref": "secret_ref:owner",
+                "account_status": "active",
+            },
+            {
+                "id": "actor-other",
+                "role": "buyer",
+                "credential_secret_ref": "secret_ref:other",
+                "account_status": "active",
+            },
+        ],
+        "entities": [
+            {
+                "id": "ent-cart-item",
+                "name": "cart_items",
+                "identity_fields": ["id"],
+                "fields": [
+                    {
+                        "name": "id",
+                        "semantic_type": "IDENTITY",
+                        "database_bindings": [{"table": "cart_items", "column": "id"}],
+                    }
+                ],
+            }
+        ],
+        "relations": [],
+    }
+    obligation = {
+        "obligation_id": "obl-authz-delete-recreate",
+        "risk_family": "authorization",
+        "property": {
+            "template": "permitted_operation_invocation",
+            "operation_ref": "op-delete-item",
+            "control_actor_ref": "actor-owner",
+            "treatment_actor_ref": "actor-other",
+            "require_same_resource": True,
+        },
+        "required_actors": ["actor-owner", "actor-other"],
+        "required_operations": ["op-delete-item"],
+        "required_fixtures": [],
+        "required_observers": ["http_response", "actor_identity", "entity_state"],
+        "cleanup_requirement": {
+            "required": True,
+            "operation_ref": "op-create-item",
+            "mode": "recreate_compensated_resource",
+        },
+        "source_refs": [{"source_id": "api", "locator": "DELETE cart item"}],
+    }
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=ir,
+        environment_type="test",
+        available_adapters={"http_api", "db_sql", "process_ledger"},
+    )
+    receipt = experiment.get("compile_receipt") or {}
+    detail = str(receipt.get("detail") or "")
+    # Multi-write coverage binds both write steps; recreate is admitted when the
+    # create compensator carries a source request body (new identity allowed).
+    assert "missing_cleanup_for_steps" not in detail, receipt
+    assert receipt.get("status") == "COMPILED", receipt
+    assert experiment.get("safety_contract", {}).get(
+        "business_equivalence_allows_new_identity"
+    ) is True
+    cleanup = experiment.get("cleanup_plan") or []
+    # permitted_operation_invocation emits treatment only (no control write).
+    assert [row.get("source_step_id") for row in cleanup] == ["treatment_1"], cleanup
+    for row in cleanup:
+        assert row.get("compensates_operation_ref") == "op-delete-item"
+        assert row.get("operation_ref") == "op-create-item"
+        assert row.get("mode") == "recreate_compensated_resource"

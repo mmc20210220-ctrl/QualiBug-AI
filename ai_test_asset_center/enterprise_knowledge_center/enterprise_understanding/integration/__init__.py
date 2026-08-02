@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..business_world_model import project_business_world_model
+from ..fact_experimentability_projection import project_fact_experimentability
 from ..identity_downstream_projection import project_identity_to_downstream
 from ..schema import as_dict
 
@@ -47,6 +48,9 @@ def enrich_asset_with_enterprise_understanding(
     model = as_dict(enriched.get("enterprise_understanding_model"))
     model = project_identity_to_downstream(enriched, model)
     model = project_business_world_model(enriched, model)
+    # Fact → experimentability receipts (reference-only). Observability first:
+    # Phase 1 must not fail-close scenario planning on this projection.
+    model = project_fact_experimentability(enriched, model)
     _legacy.project_final_scenario_planning_gate(enriched, model)
     enriched["enterprise_understanding_model"] = model
 
@@ -71,6 +75,21 @@ def enrich_asset_with_enterprise_understanding(
                     as_dict(model.get("business_world_model")).get("gate")
                 ).get("world_model_ready")
             ),
+            "fact_experimentability_receipt_count": int(
+                as_dict(enriched.get("fact_experimentability_ledger")).get(
+                    "receipt_count"
+                )
+                or 0
+            ),
+            "fact_experimentability_ready_count": int(
+                as_dict(enriched.get("fact_experimentability_ledger")).get(
+                    "ready_count"
+                )
+                or 0
+            ),
+            "fact_experimentability_ledger_fingerprint": as_dict(
+                enriched.get("fact_experimentability_ledger")
+            ).get("ledger_fingerprint"),
         }
     )
     enriched["summary"] = summary
@@ -85,6 +104,8 @@ def enrich_asset_with_enterprise_understanding(
             "business_world_model_reuses_enterprise_understanding_authority": True,
             "business_world_model_semantic_payload_duplication_allowed": False,
             "business_world_model_automatic_entity_union_allowed": False,
+            "fact_experimentability_projection_enabled": True,
+            "fact_experimentability_silent_drop_allowed": False,
         }
     )
     enriched["governance"] = governance

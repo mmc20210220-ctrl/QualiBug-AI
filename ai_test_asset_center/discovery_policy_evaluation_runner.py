@@ -40,7 +40,10 @@ from .discovery_evaluation_contract import (
 from .policy_evaluation_gate import PolicyPromotionGate
 from .policy_registry import PolicyRecord, StrategyBundle
 from .policy_wiring import policy_strategy_override
-from .evaluator_execution_attestation import build_execution_attestation
+from .evaluator_execution_attestation import (
+    ExecutionAttestationError,
+    build_execution_attestation,
+)
 from .evaluator_receipt_auth import (
     EvaluatorReceiptAuthError,
     seal_evaluator_artifact,
@@ -655,6 +658,35 @@ class DiscoveryPolicyEvaluationRunner:
                 raise PolicyEvaluationRunnerError(
                     f"isolated process boundary missing for {target.target_id}"
                 )
+            # Persist post-scan authority before attestation so a later crash
+            # or process kill cannot erase a completed observed scan.
+            checkpoint_dir = (
+                self.output_root
+                / evaluation_id
+                / "checkpoints"
+                / target.target_id
+            )
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint_payload = {
+                "schema_version": "qualibug.observed-evaluation-checkpoint.v1",
+                "evaluation_id": evaluation_id,
+                "evaluation_mode": evaluation_mode,
+                "target_id": target.target_id,
+                "campaign_id": campaign_id,
+                "policy_id": policy.policy_id,
+                "scan_output": scan_output,
+                "fixture_governance": governance,
+                "preparation_receipt": preparation,
+                "cleanup_receipt": cleanup,
+                "execution_policy_identity": execution_policy_identity,
+                "additional_request_attempts": additional_request_attempts,
+            }
+            checkpoint_path = checkpoint_dir / "post_scan_checkpoint.json"
+            checkpoint_path.write_text(
+                json.dumps(checkpoint_payload, ensure_ascii=False, indent=2)
+                + "\n",
+                encoding="utf-8",
+            )
             trusted_observations = self.trusted_observation_store.load(
                 run_id=str(scan_output["run_id"]),
                 campaign_id=str(
@@ -662,18 +694,27 @@ class DiscoveryPolicyEvaluationRunner:
                 ),
                 target_id=target.target_id,
             )
-            execution_attestation = build_execution_attestation(
-                mainline_run=dict(scan_output["mainline_run"]),
-                obligation_attempt_ledger=dict(
-                    scan_output["obligation_attempt_ledger"]
-                ),
-                policy_identity=execution_policy_identity,
-                fixture_governance=governance,
-                process_boundary=process_boundary,
-                trusted_observations=trusted_observations,
-                additional_request_attempts=additional_request_attempts,
-                signing_key=self.receipt_signing_key,
-            )
+            try:
+                execution_attestation = build_execution_attestation(
+                    mainline_run=dict(scan_output["mainline_run"]),
+                    obligation_attempt_ledger=dict(
+                        scan_output["obligation_attempt_ledger"]
+                    ),
+                    policy_identity=execution_policy_identity,
+                    fixture_governance=governance,
+                    process_boundary=process_boundary,
+                    trusted_observations=trusted_observations,
+                    additional_request_attempts=additional_request_attempts,
+                    signing_key=self.receipt_signing_key,
+                )
+            except ExecutionAttestationError as attestation_error:
+                # Keep the completed scan measurable as NOT_MEASURED rather than
+                # discarding the whole observed run when attestation cannot seal.
+                (checkpoint_dir / "attestation_error.txt").write_text(
+                    f"{type(attestation_error).__name__}:{attestation_error}\n",
+                    encoding="utf-8",
+                )
+                execution_attestation = None
             receipt = evaluate_completed_scan(
                 self.manifest,
                 target.target_id,

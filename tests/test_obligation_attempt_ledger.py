@@ -68,6 +68,49 @@ def test_every_selected_obligation_has_one_terminal_attempt() -> None:
     assert ledger["ledger_fingerprint"]
 
 
+def test_ledger_accounts_for_deferred_formal_obligations_without_counting_them_selected() -> None:
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[
+            {"obligation_id": "obl-selected", "selection_status": "SELECTED"},
+            {
+                "obligation_id": "obl-deferred",
+                "selection_status": "DEFERRED_NOT_SELECTED",
+            },
+        ],
+        compile_results={
+            "obl-selected": {"status": "COMPILED", "experiment_id": "exp-1"},
+            "obl-deferred": {
+                "status": "DEFERRED",
+                "reason_code": "OBLIGATION_NOT_IN_PLAN",
+                "reason_detail": "BUDGET_EXHAUSTED",
+            },
+        },
+        execution_results={
+            "obl-selected": {
+                "status": "EXECUTED",
+                "execution_id": "exec-1",
+                "observation_receipt_ids": ["obs-1"],
+            },
+        },
+        gate_results={
+            "obl-selected": {
+                "status": "REJECTED",
+                "reason_code": "ORACLE_NOT_VIOLATED",
+            },
+        },
+    )
+
+    assert ledger["selected_count"] == 1
+    assert ledger["accounted_count"] == 2
+    assert ledger["terminal_count"] == 2
+    assert ledger["complete"] is True
+    assert ledger["selection_status_counts"] == {
+        "DEFERRED_NOT_SELECTED": 1,
+        "SELECTED": 1,
+    }
+
+
 def test_attempt_ledger_preserves_validated_operational_terminal_receipt() -> None:
     operational_receipt = build_execution_operational_receipt(
         receipt_id="operational-exec-1",
@@ -457,3 +500,141 @@ def test_artifact_redaction_reseals_obligation_attempt_ledger() -> None:
     from ai_test_asset_center.observer_contracts_base import validate_observer_receipt
 
     validate_observer_receipt(reseal_observer_receipt(redacted_obs))
+
+
+def _execution_blocked_result(
+    *,
+    contracts: list[dict[str, Any]] | None = None,
+    observers: list[dict[str, Any]] | None = None,
+    steps: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mirror the real experiment-execution.v1 payload the finalizer emits.
+
+    The finalizer returns ``steps`` / ``observer_receipts`` /
+    ``contract_evidence_receipts`` at the top level of the execution result
+    even when the experiment is BLOCKED. The ledger used to discard them for
+    any attempt that never reached a delivery gate.
+    """
+
+    result: dict[str, Any] = {
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_MISSING_BINDING",
+    }
+    if contracts is not None:
+        result["contract_evidence_receipts"] = contracts
+    if observers is not None:
+        result["observer_receipts"] = observers
+    if steps is not None:
+        result["steps"] = steps
+    return result
+
+
+def test_execution_diagnostic_bundle_retains_execution_blocked_evidence() -> None:
+    """End-to-end: a blocked experiment's evidence must survive on a diagnostic
+    channel when no delivery gate exists (regression for the opaque funnel)."""
+
+    from ai_test_asset_center.obligation_attempt_ledger import (
+        reseal_obligation_attempt_ledger,
+        validate_obligation_attempt_ledger,
+    )
+
+    contracts = [
+        {
+            "obligation_id": "obl-1",
+            "evidence": {
+                "status_code": 500,
+                "control_succeeded": False,
+                "response_observed": True,
+            },
+        },
+        {
+            "obligation_id": "obl-1",
+            "evidence": {
+                "status_code": 500,
+                "control_succeeded": False,
+                "response_observed": True,
+            },
+        },
+    ]
+    observers = [
+        {"observer_id": "http_status", "status": "OBSERVED"},
+        {"observer_id": "business_state", "status": "OBSERVED"},
+    ]
+    steps = [
+        {
+            "method": "POST",
+            "path": "/coupons/redeem",
+            "status_code": 500,
+            "step_index": i,
+        }
+        for i in range(3)
+    ]
+
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={"obl-1": {"status": "COMPILED", "experiment_id": "exp-1"}},
+        execution_results={
+            "obl-1": _execution_blocked_result(
+                contracts=contracts, observers=observers, steps=steps
+            )
+        },
+        gate_results={},
+    )
+
+    attempt = ledger["attempts"][0]
+    # No delivery gate -> no sealed bundle, but the diagnostic channel must fire.
+    assert "delivery_evidence_bundle" not in attempt
+    diag = attempt["execution_diagnostic_bundle"]
+    assert diag["contract_evidence_receipts"] == contracts
+    assert diag["observer_receipts"] == observers
+    assert diag["steps"] == steps
+    assert "steps_truncated_from" not in diag
+
+    # The new channel must not break validation or redaction reseal.
+    validate_obligation_attempt_ledger(ledger)
+    resealed = reseal_obligation_attempt_ledger(ledger)
+    assert resealed["attempts"][0]["execution_diagnostic_bundle"] == diag
+
+
+def test_execution_diagnostic_bundle_absent_when_no_execution_evidence() -> None:
+    """A compile-stage block with no execution payload must NOT invent evidence."""
+
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1", "operation_refs": ["op-pay"]}],
+        compile_results={
+            "obl-1": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_OBSERVER",
+                "detail": "GET /payments/order/{orderId}",
+            }
+        },
+        execution_results={},
+        gate_results={},
+    )
+
+    attempt = ledger["attempts"][0]
+    assert "execution_diagnostic_bundle" not in attempt
+    assert "delivery_evidence_bundle" not in attempt
+
+
+def test_execution_diagnostic_bundle_truncates_steps_with_visible_marker() -> None:
+    """Large step lists are capped, and the cap is marked rather than hidden."""
+
+    steps = [
+        {"method": "POST", "path": "/x", "status_code": 500, "step_index": i}
+        for i in range(25)
+    ]
+
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={"obl-1": {"status": "COMPILED", "experiment_id": "exp-1"}},
+        execution_results={"obl-1": _execution_blocked_result(steps=steps)},
+        gate_results={},
+    )
+
+    diag = ledger["attempts"][0]["execution_diagnostic_bundle"]
+    assert len(diag["steps"]) == 20
+    assert diag["steps_truncated_from"] == 25

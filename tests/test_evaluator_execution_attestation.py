@@ -200,6 +200,21 @@ def test_compile_blocked_attempt_without_execution_is_not_request_bearing() -> N
     assert expected == {}
 
 
+def test_execution_blocked_without_execution_id_is_not_request_bearing() -> None:
+    expected = _expected_request_attempts({
+        "attempts": [{
+            "obligation_id": "obligation-pre-transport-block",
+            "execution_id": "",
+            "terminal_stage": "execution",
+            "terminal_status": "BLOCKED",
+            "reason_code": "BLOCKED_EXECUTION",
+            "operational_receipt": {},
+        }],
+    })
+
+    assert expected == {}
+
+
 def test_execution_stage_attempt_without_operational_receipt_fails_closed() -> None:
     with pytest.raises(
         ExecutionAttestationError,

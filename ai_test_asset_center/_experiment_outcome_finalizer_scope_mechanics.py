@@ -204,21 +204,35 @@ def _step_scoped_http_response_receipts(
             continue
         seen_steps.add(step_id)
         status_code = _status_code(step)
+        governance = _dict(step.get("governance_receipt"))
+        write_reached = int(governance.get("write_request_attempt_count") or 0) > 0
         response_id = _text(
             step.get("response_receipt_id")
-            or _dict(step.get("governance_receipt")).get("receipt_id")
+            or governance.get("receipt_id")
         )
+        # Zero-transport governed steps never issued the write — missing HTTP
+        # is INDETERMINATE evidence, not a harness transport failure.
+        if status_code > 0:
+            observer_status = "OBSERVED"
+            reason_code = ""
+        elif governance and not write_reached:
+            observer_status = "INDETERMINATE"
+            reason_code = "HTTP_RESPONSE_NOT_ATTEMPTED"
+        else:
+            observer_status = "FAILED"
+            reason_code = "HTTP_RESPONSE_MISSING"
         receipts.append(
             build_observer_receipt(
                 observer_id="http_response",
-                status="OBSERVED" if status_code > 0 else "FAILED",
-                reason_code="" if status_code > 0 else "HTTP_RESPONSE_MISSING",
+                status=observer_status,
+                reason_code=reason_code,
                 evidence={
                     "step_id": step_id,
                     "phase": phase,
                     "operation_ref": _text(step.get("operation_ref")),
                     "status_code": status_code,
                     "response_received": status_code > 0,
+                    "write_reached_transport": write_reached,
                     "response_receipt_id": response_id,
                     "response_body_fingerprint": _stable_fingerprint(step.get("body")),
                     "source_observer_receipt_id": _scope_receipt_id(aggregate_receipt),

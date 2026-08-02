@@ -262,13 +262,20 @@ def _field_variants(
     return variants, []
 
 
-def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[str, Any]:
+def compile_obligations_from_behavior_ir(
+    behavior_ir: dict[str, Any],
+    *,
+    root: str = "",
+    project: str = "",
+) -> dict[str, Any]:
     baseline_compile = _original_compile
     paired_result = _pair.compile_obligations_from_behavior_ir(
         behavior_ir,
         base_compile=baseline_compile,
+        root=root,
+        project=project,
     )
-    original_result = baseline_compile(behavior_ir)
+    original_result = baseline_compile(behavior_ir, root=root, project=project)
     additions: list[dict[str, Any]] = []
     field_gaps: list[dict[str, Any]] = []
     expanded_keys: set[tuple[str, str]] = set()

@@ -150,9 +150,10 @@ def build_runtime_source_knowledge_overlay(
         "source_inventory": [dict(source) for source, _ in parsed_rows],
         "parser_receipts": parser_receipts,
         "interfaces": interfaces,
-        "data_tables": _dedupe_by_id(
-            [row for _, parsed in parsed_rows for row in parsed.get("tables") or []],
-            "table_id",
+        # Same identity as persisted-asset composition: identical table_id rows
+        # (inventory + DDL) must union columns, not first-wins drop.
+        "data_tables": _merge_table_identities(
+            [row for _, parsed in parsed_rows for row in parsed.get("tables") or []]
         ),
         "field_dictionary": _dedupe_by_id(
             [row for _, parsed in parsed_rows for row in parsed.get("field_dictionary") or []],
@@ -183,19 +184,89 @@ def build_runtime_source_knowledge_overlay(
     }
 
 
+def _merge_interface_identities(rows: list[Any]) -> list[dict[str, Any]]:
+    """Merge interfaces by ``interface_id``, preserving richer request contracts.
+
+    First-wins ``_dedupe_by_id`` kept persisted markdown stubs (no schema) over
+    runtime overlay rows that carry field-table ``request_schema``. That made
+    required body fields invisible to IR/compile/pre-transport guards and turned
+    empty POST bodies into ``CONTROL_SUCCESS_NOT_PROVEN`` at execution.
+    """
+    merged_by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        interface_id = str(raw.get("interface_id") or "").strip()
+        if not interface_id:
+            continue
+        row = dict(raw)
+        if interface_id not in merged_by_id:
+            merged_by_id[interface_id] = row
+            order.append(interface_id)
+            continue
+        base = merged_by_id[interface_id]
+        for field in ("request_schema", "requestBody", "request_example", "response_schema"):
+            incoming = row.get(field)
+            existing = base.get(field)
+            if incoming in (None, "", {}, []):
+                continue
+            if existing in (None, "", {}, []):
+                base[field] = incoming
+                continue
+            # Prefer the side that declares required properties / concrete example.
+            if field in {"request_schema", "requestBody"} and isinstance(incoming, dict):
+                in_props = dict(incoming.get("properties") or {})
+                if not in_props:
+                    for media in dict(incoming.get("content") or {}).values():
+                        if isinstance(media, dict):
+                            in_props.update(
+                                dict(dict(media.get("schema") or {}).get("properties") or {})
+                            )
+                ex_props = dict(existing.get("properties") or {}) if isinstance(existing, dict) else {}
+                if not ex_props and isinstance(existing, dict):
+                    for media in dict(existing.get("content") or {}).values():
+                        if isinstance(media, dict):
+                            ex_props.update(
+                                dict(dict(media.get("schema") or {}).get("properties") or {})
+                            )
+                in_required = list(incoming.get("required") or []) if isinstance(incoming, dict) else []
+                ex_required = list(existing.get("required") or []) if isinstance(existing, dict) else []
+                if len(in_props) > len(ex_props) or len(in_required) > len(ex_required):
+                    base[field] = incoming
+            elif field == "request_example" and isinstance(incoming, dict):
+                if isinstance(existing, dict) and len(incoming) > len(existing):
+                    base[field] = incoming
+                elif not isinstance(existing, dict):
+                    base[field] = incoming
+        for field, value in row.items():
+            if field in base and base.get(field) not in (None, "", {}, []):
+                continue
+            if value not in (None, "", {}, []):
+                base[field] = value
+        merged_by_id[interface_id] = base
+    return [merged_by_id[key] for key in order]
+
+
 def merge_knowledge_asset_overlay(
     asset: dict[str, Any] | None,
     overlay: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Merge structured runtime facts into a persisted knowledge asset by identity."""
+    """Merge structured runtime facts into a persisted knowledge asset by identity.
+
+    ``data_tables`` use column-union merge for the same ``table_id``. A weak
+    inventory row (e.g. entity list with one field) must not erase runtime DDL /
+    OpenAPI columns that share that identity — first-wins dedupe was projection loss.
+
+    ``interfaces`` similarly prefer richer ``request_schema`` / examples from the
+    runtime overlay over stale persisted stubs.
+    """
 
     merged = dict(asset or {})
     extra = dict(overlay or {})
     identity_fields = {
         "source_inventory": "source_id",
         "parser_receipts": "receipt_id",
-        "interfaces": "interface_id",
-        "data_tables": "table_id",
         "field_dictionary": "field_id",
         "ui_design_specs": "ui_spec_id",
         "permission_matrix": "permission_id",
@@ -213,6 +284,20 @@ def merge_knowledge_asset_overlay(
             ],
             identity_field,
         )
+    merged["interfaces"] = _merge_interface_identities(
+        [
+            dict(row)
+            for row in [*(merged.get("interfaces") or []), *(extra.get("interfaces") or [])]
+            if isinstance(row, dict)
+        ]
+    )
+    merged["data_tables"] = _merge_table_identities(
+        [
+            dict(row)
+            for row in [*(merged.get("data_tables") or []), *(extra.get("data_tables") or [])]
+            if isinstance(row, dict)
+        ]
+    )
     merged["coverage_gaps"] = [
         dict(row)
         for row in [

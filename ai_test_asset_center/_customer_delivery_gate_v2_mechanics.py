@@ -991,13 +991,83 @@ def _validate_active_chain(
             # Soft field-oracle activation intentionally defers cleanup proof so
             # Trace can emit before restoration is sealed. Fail closed as BLOCKED
             # delivery — never crash the campaign, never waive as deliverable.
-            if (
+            # H28: soft ACTIVE may verify a proper SUBSET of required cleanup
+            # receipts (partial restoration). Empty-only deferral left that
+            # shape raising after H27 restored VIOLATIONs and aborted the scan.
+            soft_cleanup_deferred = (
                 soft_field_oracle
                 and kind == "cleanup"
-                and not verified_ids
-                and matching
-            ):
+                and bool(matching)
+                and verified_ids.issubset(matching)
+            )
+            # region agent log
+            try:
+                import json as _dbg_json
+                import time as _dbg_time
+                from pathlib import Path as _DbgPath
+
+                _dbg_path = (
+                    _DbgPath(__file__).resolve().parents[1]
+                    / ".cursor"
+                    / "debug-0de9ac.log"
+                )
+                _dbg_path.parent.mkdir(parents=True, exist_ok=True)
+                with _dbg_path.open("a", encoding="utf-8") as _dbg_fh:
+                    _dbg_fh.write(
+                        _dbg_json.dumps(
+                            {
+                                "sessionId": "0de9ac",
+                                "runId": "h28-cleanup-activation",
+                                "hypothesisId": (
+                                    "H28a"
+                                    if soft_cleanup_deferred
+                                    else "H28b"
+                                    if kind == "cleanup"
+                                    else "H28c"
+                                ),
+                                "location": (
+                                    "_customer_delivery_gate_v2_mechanics.py:"
+                                    "_validate_active_chain"
+                                ),
+                                "message": "activation_reference_mismatch",
+                                "data": {
+                                    "kind": kind,
+                                    "soft_field_oracle": soft_field_oracle,
+                                    "soft_cleanup_deferred": soft_cleanup_deferred,
+                                    "required_n": len(required_subjects),
+                                    "verified_n": len(verified_ids),
+                                    "matching_n": len(matching),
+                                    "verified_subset": verified_ids.issubset(
+                                        matching
+                                    ),
+                                    "verified_extra_n": len(
+                                        verified_ids - matching
+                                    ),
+                                    "matching_extra_n": len(
+                                        matching - verified_ids
+                                    ),
+                                    "oracle_status": oracle_status,
+                                    "experiment_id": _text(
+                                        oracle.get("experiment_id")
+                                    ),
+                                },
+                                "timestamp": int(_dbg_time.time() * 1000),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+            # endregion
+            if soft_cleanup_deferred:
                 return "BLOCKED", ["CLEANUP_PROOF_DEFERRED_FIELD_ORACLE"]
+            if kind == "cleanup":
+                # Exact-id mismatch remains non-deliverable, but must not abort
+                # the whole campaign via an uncaught DeliveryGateV2Error.
+                return "HARNESS_FAILED", [
+                    "CLEANUP_ACTIVATION_REFERENCE_MISMATCH"
+                ]
             raise DeliveryGateV2Error(
                 f"delivery_{kind}_activation_reference_mismatch"
             )

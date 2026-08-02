@@ -25,18 +25,36 @@ _MAX_SOURCE_BYTES = 5_000_000
 _MAX_SOURCE_FILES = 200
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
+_SCHEMA_TYPED_SOURCE_TYPES = frozenset(
+    {"database_schema", "db_schema", "db_design", "sql"}
+)
+# Same seed/fixture vocabulary as declared-source discovery: dumps are not DDL.
+_SCHEMA_SQL_SEED_NAME_TOKENS = frozenset(
+    {"seed", "seeds", "fixture", "fixtures", "dump", "backup", "sample_data"}
+)
+
+
+def _is_schema_sql_seed_filename(path: Path) -> bool:
+    stem = re.sub(r"[^a-z0-9]+", "_", path.stem.lower()).strip("_")
+    tokens = {token for token in stem.split("_") if token}
+    return bool(tokens & _SCHEMA_SQL_SEED_NAME_TOKENS) or stem in _SCHEMA_SQL_SEED_NAME_TOKENS
+
+
 def _load_schema_assets(root: Path, project: str) -> str:
     """Load project-scoped database schema for data-layer observation planning.
 
     Checks, in order:
-    1. registered ``database_schema`` source assets (canonical ingest authority)
-    2. ``platform_workspace/<project>/input/*.sql`` (legacy workspace)
-    3. ``platform_inputs/<project>/schema.sql`` (legacy customer material)
-    4. ``platform_inputs/<project>/DB_SCHEMA.md`` (legacy markdown material)
+    1. registered ``database_schema`` (and alias) source assets
+    2. any other registered source whose body contains ``CREATE TABLE``
+       (content-backed; misclassified DDL must still reach the overlay)
+    3. ``platform_workspace/<project>/input/*.sql`` (non-seed)
+    4. ``platform_inputs/<project>/*.sql`` (non-seed; not only ``schema.sql``)
+    5. ``platform_inputs/<project>/DB_SCHEMA.md`` (legacy markdown inventory)
 
     The HTTP knowledge-ingest path stores uploaded files in the source registry,
     so looking only at legacy filesystem aliases made a successfully parsed
-    schema disappear before the mainline planner received it.
+    schema disappear before the mainline planner received it. Weak inventory
+    markdown alone must not hide CREATE TABLE DDL from SQL materials.
     """
     safe = _safe_project(project)
     chunks: list[str] = []
@@ -61,38 +79,67 @@ def _load_schema_assets(root: Path, project: str) -> str:
             return
         _ingest_text(text)
 
+    def _ingest_sql_dir(directory: Path) -> None:
+        if not directory.is_dir():
+            return
+        for path in sorted(directory.glob("*.sql")):
+            if _is_schema_sql_seed_filename(path):
+                continue
+            _ingest(path)
+
     from .enterprise_source_registry import (
         SourceRegistryError,
         list_source_assets,
         load_source_content,
     )
 
+    typed_assets: list[dict[str, Any]] = []
+    content_ddl_assets: list[dict[str, Any]] = []
     for asset in list_source_assets(project, root=root):
         if not isinstance(asset, dict):
             continue
         source_type = str(asset.get("source_type") or "").strip().lower()
-        if source_type not in {"database_schema", "db_schema", "db_design", "sql"}:
-            continue
         source_hash = str(asset.get("latest_source_hash") or "").strip().lower()
         if not _SHA256_RE.fullmatch(source_hash):
-            raise RuntimeError("database_schema_source_hash_invalid")
+            if source_type in _SCHEMA_TYPED_SOURCE_TYPES:
+                raise RuntimeError("database_schema_source_hash_invalid")
+            continue
+        if source_type in _SCHEMA_TYPED_SOURCE_TYPES:
+            typed_assets.append(asset)
+            continue
+        # Defer content inspection until after typed loads so typed failures
+        # still fail closed before a broader scan.
+        content_ddl_assets.append(asset)
+
+    for asset in typed_assets:
+        source_hash = str(asset.get("latest_source_hash") or "").strip().lower()
         try:
             _ingest_text(load_source_content(project, source_hash, root=root))
         except SourceRegistryError as exc:
             raise RuntimeError("database_schema_source_unreadable") from exc
 
-    workspace_sql = root / "platform_workspace" / safe / "input"
-    if workspace_sql.exists():
-        for path in sorted(workspace_sql.glob("*.sql")):
-            _ingest(path)
+    joined_so_far = "\n\n".join(chunks).upper()
+    if "CREATE TABLE" not in joined_so_far:
+        for asset in content_ddl_assets:
+            source_hash = str(asset.get("latest_source_hash") or "").strip().lower()
+            try:
+                body = load_source_content(project, source_hash, root=root)
+            except SourceRegistryError:
+                continue
+            if "CREATE TABLE" in str(body or "").upper():
+                _ingest_text(body)
 
+    _ingest_sql_dir(root / "platform_workspace" / safe / "input")
     inputs_dir = root / "platform_inputs" / safe
+    _ingest_sql_dir(inputs_dir)
+    # Backward-compatible exact name when present under a nested layout.
     _ingest(inputs_dir / "schema.sql")
     db_schema_md = inputs_dir / "DB_SCHEMA.md"
     if db_schema_md.exists():
         _ingest(db_schema_md)
 
-    return "\n\n".join(chunks)
+    joined = "\n\n".join(chunks)
+    return joined
 
 
 def _project_requirement_input_dirs(root: Path, project: str) -> list[Path]:

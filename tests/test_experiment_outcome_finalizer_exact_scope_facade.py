@@ -76,7 +76,9 @@ def test_legacy_implementation_is_moved_not_duplicated() -> None:
     assert facade.exists()
     assert core.exists()
     assert facade.stat().st_size < core.stat().st_size
-    assert "from . import experiment_outcome_finalizer_core as _core" in facade.read_text(
+    # The facade is a thin delegator: it re-exports the exact-scope mechanics
+    # layer, which in turn holds the canonical core implementation.
+    assert "from . import _experiment_outcome_finalizer_scope_mechanics as _scope" in facade.read_text(
         encoding="utf-8"
     )
 
@@ -135,7 +137,7 @@ def test_observer_adapter_merges_existing_exact_receipts(monkeypatch) -> None:
     }
 
     monkeypatch.setattr(
-        finalizer,
+        finalizer._scope,
         "_original_observe_experiment_requirements",
         lambda *args, **kwargs: [
             {"receipt_id": "generated", "step_id": "step-1"},
@@ -163,7 +165,7 @@ def test_oracle_adapter_publishes_verdict_for_semantic_sync(monkeypatch) -> None
         "target_reached": True,
     }
     monkeypatch.setattr(
-        finalizer,
+        finalizer._scope,
         "_original_evaluate_contract_oracle",
         lambda *args, **kwargs: verdict,
     )
@@ -187,7 +189,7 @@ def test_scope_sync_receives_raw_source_ledger(monkeypatch) -> None:
         return {"complete": True}
 
     monkeypatch.setattr(
-        finalizer,
+        finalizer._scope,
         "synchronize_scoped_receipts_from_observations",
         capture_scope,
     )
@@ -244,7 +246,10 @@ def test_facade_seals_exact_scope_and_restores_semantic_view(monkeypatch) -> Non
 
     result = finalizer.finalize_experiment_execution(observations=observations)
 
-    assert result == {"status": "EXECUTED"}
+    # The facade fans the core result out through the deterministic finding
+    # fanout, so it returns the enriched dict (status + findings), not the raw
+    # core payload.
+    assert result["status"] == "EXECUTED"
     assert isinstance(captured["proxy"], finalizer._ExactScopeFinalizerLedger)
     assert isinstance(observations["process_step_ledger"], ProcessStepSemanticView)
     assert observations["process_step_ledger_view"] == "semantic_completion"

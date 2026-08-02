@@ -274,6 +274,10 @@ Authorization: Bearer <token>
 {"receiver":"张三","phone":"13800000000","province":"上海","city":"上海","detail":"浦东新区"}
 ```
 
+### DELETE /api/users/addresses/:id
+
+删除用户地址（身份绑定清理；创建后必须可逆）。
+
 ### GET /api/users/admin/search
 
 管理员搜索用户（应仅限管理员）。

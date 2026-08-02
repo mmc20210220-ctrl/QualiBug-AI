@@ -414,6 +414,23 @@ def test_rule_extraction_keeps_semantics_and_drops_tabular_credentials() -> None
     assert rule["semantic_frame"]["behavior"] == "sign in or submit"
 
 
+def test_rule_semantic_frame_uses_the_same_redacted_source_as_statement() -> None:
+    parsed = _parse_source(
+        b"# Business rules\nThe user must use Bearer abcdefghijklmnop to call the endpoint.\n",
+        "BUSINESS_RULES.md",
+        "business_rules",
+        "src_redacted_semantics",
+    )
+
+    rule = parsed["rules"][0]
+    statement = rule["statement"]
+    frame = rule["semantic_frame"]
+
+    assert "abcdefghijklmnop" not in statement
+    assert "abcdefghijklmnop" not in frame["behavior"]
+    assert frame["behavior"].casefold() in statement.casefold()
+
+
 def test_test_data_notes_are_not_permission_authority() -> None:
     doc = """# Test accounts
 
@@ -624,6 +641,105 @@ def test_declared_source_sync_includes_implementation_sources(tmp_path: Path) ->
     discovered = _declared_project_source_files(project_id, tmp_path)
 
     assert discovered == [implementation]
+
+
+def test_declared_source_sync_ignores_nested_product_knowledge_assets(
+    tmp_path: Path,
+) -> None:
+    # Keep paths short: nested platform_outputs trees easily exceed Windows MAX_PATH
+    # under the repo-local pytest basetemp.
+    project_id = "nested_asset"
+    input_dir = tmp_path / "platform_inputs" / project_id
+    input_dir.mkdir(parents=True, exist_ok=True)
+    nested = input_dir / "platform_outputs" / "ekc"
+    nested.mkdir(parents=True, exist_ok=True)
+    (input_dir / "API_SPEC.md").write_text("# API\nGET /orders\n", encoding="utf-8")
+    nested_asset = nested / "enterprise_business_knowledge_asset.json"
+    nested_asset.write_text(
+        json.dumps({"schema": "product-output-not-source"}),
+        encoding="utf-8",
+    )
+    top_asset = input_dir / "enterprise_business_knowledge_asset.json"
+    top_asset.write_text(
+        json.dumps({"schema": "also-not-a-source"}),
+        encoding="utf-8",
+    )
+
+    discovered = _declared_project_source_files(project_id, tmp_path)
+
+    assert [path.name for path in discovered] == ["API_SPEC.md"]
+
+
+def test_declared_source_sync_fails_closed_on_divergent_logical_key_copies(
+    tmp_path: Path,
+) -> None:
+    """Same logical key under dual input roots with different bytes must fail closed."""
+    from ai_test_asset_center.enterprise_knowledge_center import (
+        _sync_declared_project_sources,
+    )
+
+    project_id = "dual_root_conflict"
+    platform_dir = tmp_path / "platform_inputs" / project_id
+    project_dir = tmp_path / "projects" / project_id / "input"
+    platform_dir.mkdir(parents=True)
+    project_dir.mkdir(parents=True)
+    (platform_dir / "API_SPEC.md").write_text(
+        "# API\n### GET /orders\nList orders.\n",
+        encoding="utf-8",
+    )
+    (project_dir / "API_SPEC.md").write_text(
+        "# API\n### GET /orders\nList orders.\n### DELETE /orders/:id\nRemove.\n",
+        encoding="utf-8",
+    )
+
+    try:
+        _sync_declared_project_sources(project_id, tmp_path, {"sources": []})
+        raise AssertionError("expected DECLARED_SOURCE_LOGICAL_KEY_CONFLICT")
+    except RuntimeError as exc:
+        detail = str(exc)
+        assert "DECLARED_SOURCE_LOGICAL_KEY_CONFLICT" in detail
+        assert "markdown_api:api_spec" in detail
+        assert "API_SPEC.md" in detail
+
+
+def test_declared_source_sync_skips_identical_dual_root_copies(
+    tmp_path: Path,
+) -> None:
+    """Identical content under dual roots must not collide; one ingest is enough."""
+    from ai_test_asset_center.enterprise_knowledge_center import (
+        _sync_declared_project_sources,
+        _load_registry,
+    )
+
+    project_id = "dual_root_same"
+    platform_dir = tmp_path / "platform_inputs" / project_id
+    project_dir = tmp_path / "projects" / project_id / "input"
+    platform_dir.mkdir(parents=True)
+    project_dir.mkdir(parents=True)
+    body = "# API\n### GET /orders\nList orders.\n"
+    (platform_dir / "API_SPEC.md").write_text(body, encoding="utf-8")
+    (project_dir / "API_SPEC.md").write_text(body, encoding="utf-8")
+
+    registry = _sync_declared_project_sources(project_id, tmp_path, {"sources": []})
+    active = [
+        row
+        for row in registry.get("sources") or []
+        if isinstance(row, dict) and row.get("status") == "active"
+    ]
+    api_rows = [row for row in active if row.get("logical_key") == "markdown_api:api_spec"]
+    assert len(api_rows) == 1
+    # Second sync is a no-op (hash already active).
+    again = _sync_declared_project_sources(
+        project_id, tmp_path, _load_registry(project_id, tmp_path)
+    )
+    again_api = [
+        row
+        for row in again.get("sources") or []
+        if isinstance(row, dict)
+        and row.get("status") == "active"
+        and row.get("logical_key") == "markdown_api:api_spec"
+    ]
+    assert len(again_api) == 1
 
 
 def test_token_overlap_relationships_are_candidate_only() -> None:

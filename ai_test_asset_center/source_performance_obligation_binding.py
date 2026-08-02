@@ -64,8 +64,9 @@ def compile_obligations_with_source_performance(
     behavior_ir: dict[str, Any],
     *,
     base_compile: Any,
+    **kwargs: Any,
 ) -> dict[str, Any]:
-    baseline = dict(base_compile(behavior_ir))
+    baseline = dict(base_compile(behavior_ir, **kwargs))
     invariants = _performance_invariants(behavior_ir)
     if not invariants:
         by_family = dict(baseline.get("by_family") or {})
@@ -261,10 +262,11 @@ def install_source_performance_obligation_binding() -> None:
     )
     setattr(_planning, _ORIGINAL_MARKER, original)
 
-    def compile_with_performance(behavior_ir: dict[str, Any]) -> dict[str, Any]:
+    def compile_with_performance(behavior_ir: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return compile_obligations_with_source_performance(
             behavior_ir,
             base_compile=original,
+            **kwargs,
         )
 
     _planning.compile_obligations_from_behavior_ir = compile_with_performance

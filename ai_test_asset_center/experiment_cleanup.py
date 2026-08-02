@@ -580,6 +580,20 @@ def _governed_write_attempts(steps: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
+def _governed_write_reached_transport(attempt: dict[str, Any]) -> bool:
+    """True only when the governed write HTTP attempt left the harness.
+
+    A governance receipt may exist after a before-GET / identity block while
+    ``write_request_attempt_count`` stays 0. That is not target mutation and
+    must not seal cleanup transport failure.
+    """
+    row = _dict(attempt)
+    try:
+        return int(row.get("write_request_attempt_count") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _rejected_writes_left_state_unchanged(
     attempts: list[dict[str, Any]],
 ) -> bool:

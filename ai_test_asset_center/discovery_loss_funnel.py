@@ -63,6 +63,11 @@ def _attempt_stage_status(attempt: dict[str, Any], stage: str) -> str:
     return ""
 
 
+def _attempt_is_selected(attempt: dict[str, Any]) -> bool:
+    selection_status = _text(attempt.get("selection_status")).upper()
+    return not selection_status or selection_status == "SELECTED"
+
+
 def _stage(
     name: str,
     count: int,
@@ -110,16 +115,19 @@ def build_discovery_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
         for row in _list(_dict(result.get("test_obligations")).get("obligations"))
         if isinstance(row, dict)
     ])
+    selected_raw = ledger.get("selected_count")
     selected = _safe_int(
-        ledger.get("selected_count")
-        or _dict(result.get("experiment_execution")).get("selected_count")
+        selected_raw
+        if selected_raw is not None
+        else _dict(result.get("experiment_execution")).get("selected_count")
     )
+    selected_attempts = [attempt for attempt in attempts if _attempt_is_selected(attempt)]
     compiled = sum(
-        1 for attempt in attempts
+        1 for attempt in selected_attempts
         if _attempt_stage_status(attempt, "compile") == "COMPILED"
     )
     executed = sum(
-        1 for attempt in attempts
+        1 for attempt in selected_attempts
         if _attempt_stage_status(attempt, "execution") in {
             "EXECUTED",
             "DELIVERABLE",
@@ -129,7 +137,7 @@ def build_discovery_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
     oracle_evaluated = 0
     observer_status_counts: Counter[str] = Counter()
     observer_reason_counts: Counter[str] = Counter()
-    for attempt in attempts:
+    for attempt in selected_attempts:
         obligation_id = _text(attempt.get("obligation_id"))
         execution = _dict(execution_by_obligation.get(obligation_id))
         observer_receipts = [
@@ -160,7 +168,7 @@ def build_discovery_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
             oracle_evaluated += 1
 
     deliverable = sum(
-        1 for attempt in attempts
+        1 for attempt in selected_attempts
         if _text(attempt.get("terminal_status")).upper() == "DELIVERABLE"
     )
     canonical_ids = [
@@ -266,7 +274,11 @@ def build_discovery_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
         measurement_status = "PLAN_ONLY"
     elif not attempts and selected == 0:
         measurement_status = "NO_SELECTED_OBLIGATIONS"
-    elif ledger_complete and len(attempts) == selected:
+    elif ledger_complete and len(attempts) == _safe_int(
+        ledger.get("accounted_count")
+        if ledger.get("accounted_count") is not None
+        else len(attempts)
+    ):
         measurement_status = "MEASURED"
     else:
         measurement_status = "PARTIAL"
@@ -278,6 +290,20 @@ def build_discovery_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
         "run_id": _text(ledger.get("run_id")),
         "campaign_id": _text(ledger.get("campaign_id")),
         "ledger_complete": ledger_complete,
+        "accounted_count": _safe_int(
+            ledger.get("accounted_count")
+            if ledger.get("accounted_count") is not None
+            else len(attempts)
+        ),
+        "selected_terminal_count": len(selected_attempts),
+        "selection_status_counts": dict(
+            sorted(
+                Counter(
+                    _text(attempt.get("selection_status")).upper() or "SELECTED"
+                    for attempt in attempts
+                ).items()
+            )
+        ),
         "stages": stages,
         "upstream_readiness": {
             "semantic_link_status": _text(semantic_link_receipt.get("status")),

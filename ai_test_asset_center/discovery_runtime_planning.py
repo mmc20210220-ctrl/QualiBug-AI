@@ -347,6 +347,27 @@ def build_discovery_plan(
         _dict(inputs.campaign_context.get("_runtime_contract")),
     )
 
+    # ── Adapter-declared observation surfaces ──
+    # A customer-declared database turns the db_sql adapter on. The persistence
+    # surface (observer + assertion kinds + risk family) is installed HERE, on the
+    # planning authority, so the obligation compiler, the observer gate and the
+    # executor answer one question: an entity with a source-declared table compiles
+    # into a persistence observation only when the surface is actually installed.
+    # Idempotent; registers without opening any connection.
+    adapter_surface_install_receipt = {
+        "schema_version": "qualibug.adapter-surface-install.v1",
+        "status": "NOT_REQUESTED",
+        "adapters": sorted(_available_adapters),
+        "installed": {},
+    }
+    if "db_sql" in _available_adapters:
+        from .persistence_assertions import install_persistence_surface
+
+        adapter_surface_install_receipt.update({
+            "status": "INSTALLED",
+            "installed": install_persistence_surface(),
+        })
+
     behavior_ir = build_behavior_ir_from_knowledge_asset(
         asset,
         project_id=inputs.project,
@@ -400,7 +421,11 @@ def build_discovery_plan(
         _binding_ledger, strategy="evidence_priority"
     )
 
-    obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
+    obligation_pack = compile_obligations_from_behavior_ir(
+        behavior_ir,
+        root=str(inputs.root),
+        project=inputs.project,
+    )
     obligations = [
         dict(row)
         for row in _list(obligation_pack.get("obligations"))
@@ -450,36 +475,6 @@ def build_discovery_plan(
     # auth matrix, boundary validation, state integrity, isolation,
     # idempotency, conservation, invariant checks.
     matrix_report: dict[str, Any] = {}
-    try:
-        from .behavior_ir_hypothesis_coverage import build_exhaustive_obligation_matrix
-
-        matrix_skip_report: dict[str, Any] = {}
-        matrix_obligations = build_exhaustive_obligation_matrix(
-            behavior_ir,
-            report=matrix_skip_report,
-        )
-        # Deduplicate against existing obligations by signature
-        existing_sigs = {
-            _text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)
-        }
-        new_matrix = [
-            mo for mo in matrix_obligations
-            if _text(mo.get("obligation_id")) not in existing_sigs
-        ]
-        obligations.extend(new_matrix)
-        matrix_report = {
-            "matrix_obligations_generated": len(matrix_obligations),
-            "matrix_obligations_added": len(new_matrix),
-            "total_obligations_after_matrix": len(obligations),
-            # Candidates the source does not decide, or that nothing can observe,
-            # are a coverage gap rather than an obligation that is sure to block.
-            **matrix_skip_report,
-        }
-    except Exception as exc:
-        matrix_report = {
-            "matrix_obligations_added": 0,
-            "matrix_error": f"{type(exc).__name__}: {str(exc)[:200]}",
-        }
 
     # ── Read-only state audit obligations (Phase 3-A) ──
     # For invariants with no operation binding, map entity type to GET
@@ -531,35 +526,53 @@ def build_discovery_plan(
             risk_family_map = {
                 "field_required_mismatch": "consistency",
                 "permission_contradiction": "authorization",
-                "rule_contradiction": "invariant",
+                # Never emit bare compile-family ``invariant`` — that path has no
+                # assertion kind and dies as invariant_assertion_kind_missing.
+                "rule_contradiction": "validation",
             }
             risk_family = risk_family_map.get(conflict_type, "consistency")
             obl_id = _cov_stable_id(
                 "obl", "cross_doc_conflict", conflict_type, entity,
             )
-            conflict_obligations.append({
-                "obligation_id": obl_id,
-                "risk_family": risk_family,
-                "hypothesis": (
-                    f"Cross-document conflict ({conflict_type}): "
-                    f"{conflict.get('detail', entity)}"
-                ),
-                "source_refs": [
-                    {
-                        "source_id": _text(conflict.get("source_a")) or "unknown",
-                        "locator": entity,
-                        "kind": "cross_document_conflict",
+            from .test_obligation import make_obligation as _make_conflict_obligation
+
+            conflict_obligations.append(
+                _make_conflict_obligation(
+                    risk_family=risk_family,
+                    subject_refs=[entity, conflict_type],
+                    property_spec={
+                        "template": "cross_document_conflict",
+                        "conflict_type": conflict_type,
+                        "entity": entity,
+                        "hypothesis": (
+                            f"Cross-document conflict ({conflict_type}): "
+                            f"{conflict.get('detail', entity)}"
+                        ),
+                        "_strategy": "cross_document_conflict",
                     },
-                    {
-                        "source_id": _text(conflict.get("source_b")) or "unknown",
-                        "locator": entity,
-                        "kind": "cross_document_conflict",
-                    },
-                ],
-                "derivation": "cross_document_conflict",
-                "conflict_type": conflict_type,
-                "entity": entity,
-            })
+                    required_actors=[],
+                    required_operations=[],
+                    required_observers=["http_response"],
+                    cleanup_requirement={"required": False},
+                    source_refs=[
+                        {
+                            "source_id": _text(conflict.get("source_a")) or "unknown",
+                            "locator": entity,
+                            "kind": "cross_document_conflict",
+                        },
+                        {
+                            "source_id": _text(conflict.get("source_b")) or "unknown",
+                            "locator": entity,
+                            "kind": "cross_document_conflict",
+                        },
+                    ],
+                    confidence=0.4,
+                    obligation_id=obl_id,
+                )
+            )
+            conflict_obligations[-1]["derivation"] = "cross_document_conflict"
+            conflict_obligations[-1]["conflict_type"] = conflict_type
+            conflict_obligations[-1]["entity"] = entity
         if conflict_obligations:
             existing_sigs = {
                 _text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)
@@ -761,12 +774,27 @@ def build_discovery_plan(
     # The runtime contract lives under campaign_context["_runtime_contract"], not as an
     # attribute on inputs -- reading it as an attribute silently yielded None and made the
     # contract-declared adapter path dead.
+    _runtime_contract_for_materialization = _dict(
+        inputs.campaign_context.get("_runtime_contract")
+    )
     experiment_pack = compile_experiments(
         obligations,
         behavior_ir=behavior_ir,
         environment_type=environment_type,
         policy_version=_text(inputs.campaign_context.get("policy_version")),
         available_adapters=_available_adapters,
+        planning_context={
+            "root": inputs.root,
+            "project": inputs.project,
+            "base_url": _text(
+                _runtime_contract_for_materialization.get("approved_base_url")
+                or inputs.approved_base_url
+            ),
+            "campaign_id": _text(inputs.campaign_context.get("campaign_id")),
+            "available_adapters": _available_adapters,
+            "environment_type": environment_type,
+            "runtime_contract": _runtime_contract_for_materialization,
+        },
     )
     experiment_pack = attach_fixture_dag_to_experiments(
         experiment_pack,
@@ -777,6 +805,7 @@ def build_discovery_plan(
         for row in (
             _list(experiment_pack.get("experiments"))
             + _list(experiment_pack.get("blocked_experiments"))
+            + _list(experiment_pack.get("abstract_experiments"))
         )
         if isinstance(row, dict)
     ]
@@ -992,6 +1021,16 @@ def build_discovery_plan(
         experiments_by_obligation=by_obligation,
         behavior_ir=behavior_ir,
     )
+    # Non-authoritative fact_ref projection for first-loss join. Must not alter
+    # compile/selection/execution decisions.
+    from .fact_first_loss_ledger import attach_fact_refs_to_planning_artifacts
+
+    _fact_exp_ledger = _dict(asset.get("fact_experimentability_ledger"))
+    _fact_ref_attach_receipt = attach_fact_refs_to_planning_artifacts(
+        obligations=obligations,
+        experiments=all_experiments,
+        fact_experimentability_ledger=_fact_exp_ledger,
+    )
     return DiscoveryPlanningBundle(
         mainline_run=contract,
         behavior_ir=behavior_ir,
@@ -1002,6 +1041,8 @@ def build_discovery_plan(
             "behavior_ir_coverage_report": coverage_report,
             "state_audit_report": state_audit_report,
             "conflict_report": conflict_report,
+            "fact_ref_attach_receipt": _fact_ref_attach_receipt,
+            "adapter_surface_install_receipt": adapter_surface_install_receipt,
         },
         experiments={
             **experiment_pack,
@@ -1031,6 +1072,13 @@ def build_discovery_plan(
                 **_space_exploration_report,
                 "coverage_reorder": _reorder_receipt,
             },
+            "fact_experimentability_ledger_fingerprint": _text(
+                _fact_exp_ledger.get("ledger_fingerprint")
+            ),
+            # Public reference-only ledger for post-run first-loss accounting.
+            # Not a second Business World Model; items cite Canonical fact_refs.
+            "fact_experimentability_ledger": dict(_fact_exp_ledger),
+            "fact_ref_attach_receipt": _fact_ref_attach_receipt,
             "knowledge_asset_id": _text(asset.get("asset_id")),
             # Immutable in-memory inputs for observation-driven round 2. These
             # private keys are intentionally excluded from product artifacts.

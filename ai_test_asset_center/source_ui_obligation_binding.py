@@ -185,9 +185,10 @@ def compile_obligations_with_source_ui(
     behavior_ir: dict[str, Any],
     *,
     base_compile: Any,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Run the established compiler, replace only misclassified UI invariant rows."""
-    baseline = dict(base_compile(behavior_ir))
+    baseline = dict(base_compile(behavior_ir, **kwargs))
     ui_invariants = _ui_invariants(behavior_ir)
     if not ui_invariants:
         baseline["source_ui_obligation_receipt"] = {
@@ -421,10 +422,11 @@ def install_source_ui_obligation_binding() -> None:
     )
     setattr(_planning, _ORIGINAL_MARKER, original)
 
-    def compile_with_ui(behavior_ir: dict[str, Any]) -> dict[str, Any]:
+    def compile_with_ui(behavior_ir: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return compile_obligations_with_source_ui(
             behavior_ir,
             base_compile=original,
+            **kwargs,
         )
 
     _planning.compile_obligations_from_behavior_ir = compile_with_ui

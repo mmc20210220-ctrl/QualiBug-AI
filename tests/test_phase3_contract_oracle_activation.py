@@ -184,17 +184,51 @@ def test_delivery_gate_rejects_cleanup_activation_reference_mismatch() -> None:
         "contract_unrelated_cleanup"
     ]
 
-    with pytest.raises(
-        DeliveryGateV2Error,
-        match="delivery_cleanup_activation_reference_mismatch",
-    ):
-        _validate_active_chain(
-            execution={"observation_receipt_ids": []},
-            contracts=evidence["contract_evidence_receipts"],
-            observers=evidence["observer_receipts"],
-            oracle=oracle,
-            reproduction={},
-        )
+    # H28: hard cleanup↔activation id mismatch stays non-deliverable, but must
+    # return a terminal gate status instead of aborting the campaign.
+    status, reasons = _validate_active_chain(
+        execution={"observation_receipt_ids": []},
+        contracts=evidence["contract_evidence_receipts"],
+        observers=evidence["observer_receipts"],
+        oracle=oracle,
+        reproduction={},
+    )
+    assert status == "HARNESS_FAILED"
+    assert "CLEANUP_ACTIVATION_REFERENCE_MISMATCH" in reasons
+
+
+def test_soft_field_oracle_partial_cleanup_blocks_not_crash() -> None:
+    """Soft ACTIVE may verify a subset of required cleanup receipts.
+
+    Live 132823Z sealed bundles show req=2/ver=1/match=2 under soft field
+    oracle while oracle status is INDETERMINATE. After H27 restores VIOLATION,
+    the gate must BLOCK (deferred proof), never raise.
+    """
+    evidence = _evidence()
+    evidence["contract_evidence_receipts"].append(
+        _contract_receipt("cleanup", "cleanup-2", "COMPLETED")
+    )
+    oracle = evaluate_contract_oracle(experiment=_experiment(), evidence=evidence)
+    act = oracle["activation_receipt"]
+    act["field_oracle_soft_activation"] = True
+    act["required"]["cleanup"] = ["cleanup-1", "cleanup-2"]
+    first_verified = [
+        str(row.get("receipt_id") or "")
+        for row in evidence["contract_evidence_receipts"]
+        if row.get("kind") == "cleanup" and row.get("subject_id") == "cleanup-1"
+    ]
+    assert len(first_verified) == 1
+    act["verified_receipt_ids"]["cleanup"] = first_verified
+
+    status, reasons = _validate_active_chain(
+        execution={"observation_receipt_ids": []},
+        contracts=evidence["contract_evidence_receipts"],
+        observers=evidence["observer_receipts"],
+        oracle=oracle,
+        reproduction={},
+    )
+    assert status == "BLOCKED"
+    assert "CLEANUP_PROOF_DEFERRED_FIELD_ORACLE" in reasons
 
 
 def test_delivery_gate_rejects_observer_activation_reference_mismatch() -> None:

@@ -50,6 +50,40 @@ NEW_MODULES = [
 ]
 
 
+def test_missing_observer_contract_blocks_before_compile() -> None:
+    operation = {
+        "id": "read_resource",
+        "method": "GET",
+        "path": "/api/resources",
+        "read_write": "read",
+        "source_refs": [{"source_id": "api", "kind": "api_operation", "locator": "GET /api/resources"}],
+    }
+    experiment = compile_experiment_for_obligation(
+        {
+            "obligation_id": "obl_missing_observer",
+            "risk_family": "validation",
+            "property": {"operation_ref": "read_resource"},
+            "required_operations": ["read_resource"],
+            "required_actors": ["actor-public"],
+            "required_observers": [],
+            "source_refs": list(operation["source_refs"]),
+        },
+        behavior_ir={
+            "operations": [operation],
+            "actors": [{"id": "actor-public", "role": "public"}],
+            "relations": [],
+            "conflicts": [],
+        },
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"] == {
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_MISSING_OBSERVER",
+        "detail": "none",
+    }
+
+
 def test_request_example_does_not_become_required_request_schema() -> None:
     schema = _request_schema_for_operation(
         {
@@ -1208,6 +1242,9 @@ def test_behavior_ir_merges_structural_entity_aliases_and_binds_operation_path()
     assert len(ir["entities"]) == 1
     entity = ir["entities"][0]
     assert set(entity["source_entity_names"]) == {"order", "orders"}
+    # Physical storage name from data_tables must stamp entity.table so cleanup
+    # plans target orders, not the logical business-object name order.
+    assert entity["table"] == "orders"
     operation = ir["operations"][0]
     relation = next(
         row for row in ir["relations"]

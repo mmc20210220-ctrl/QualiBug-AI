@@ -125,6 +125,155 @@ def _unresolved_body_placeholders(
     return unresolved
 
 
+def _missing_required_body_fields(
+    request_body: Any,
+    operation: dict[str, Any],
+) -> list[str]:
+    """Return required request-body field names absent/empty in ``request_body``.
+
+    Reads the operation's declared request schema (OpenAPI-derived). This is the
+    fail-fast guard for the funnel's worst loss segment: when the materialized
+    body omits a field the target requires (e.g. ``sku``), the target returns a
+    5xx instead of QualiBug surfacing the missing contract up front.
+
+    Returns ``[]`` whenever no required fields are declared, so requests against
+    a target whose contract is unknown are never blocked on a guessed contract.
+    """
+
+    schema = _dict(operation.get("request_schema") or operation.get("requestBody"))
+    content = _dict(schema.get("content"))
+    if content:
+        # OpenAPI requestBody shape: content -> application/json -> schema.
+        media = _dict(content.get("application/json"))
+        schema = _dict(media.get("schema")) or schema
+    required = [str(f) for f in _list(schema.get("required")) if _text(f)]
+    if not required:
+        return []
+    body = request_body if isinstance(request_body, dict) else {}
+    missing: list[str] = []
+    for field in required:
+        value = body.get(field)
+        if value is None or value == "" or value == [] or value == {}:
+            missing.append(field)
+    return missing
+
+
+# A foreign-key value that is one of these literals (case-insensitive) cannot
+# reference a real entity: it is a placeholder/sentinel or a fabricated default
+# that the target would reject with 500/404. Used by the FK guard.
+_FK_FABRICATED_WORDS = frozenset({
+    "null", "none", "undefined", "nil", "na", "n/a",
+    "fake", "dummy", "unknown", "placeholder", "todo", "test", "xxx",
+})
+# Numeric fabricated defaults (as int or bare string) for FK ids.
+_FK_FABRICATED_NUMBERS = frozenset({"0", "1"})
+# Matches a placeholder token that survived materialization, e.g. "<user_id>" or
+# "{order_id}" left embedded inside a scalar body value.
+_FK_EMBEDDED_PLACEHOLDER_RE = re.compile(r"[<{][A-Za-z_][A-Za-z0-9_]*[>}]")
+
+
+def _foreign_key_field_names(operation: dict[str, Any]) -> list[str]:
+    """Return body field names declared as foreign keys in the operation schema.
+
+    Only fields explicitly marked ``x-foreign-key: true`` in the request schema
+    are returned, so non-reference fields are never blocked. When no foreign
+    keys are declared (e.g. an OpenAPI target without the extension) the FK
+    guard is a safe no-op — precision over recall: a target whose contract
+    omits FK metadata is never blocked on a guess.
+    """
+
+    schema = _dict(operation.get("request_schema") or operation.get("requestBody"))
+    content = _dict(schema.get("content"))
+    if content:
+        media = _dict(content.get("application/json"))
+        schema = _dict(media.get("schema")) or schema
+    props = _dict(schema.get("properties"))
+    return [
+        str(name)
+        for name, prop in props.items()
+        if _dict(prop).get("x-foreign-key") is True
+    ]
+
+
+def _foreign_key_violations(
+    request_body: Any,
+    operation: dict[str, Any],
+) -> list[str]:
+    """Return foreign-key body fields whose value cannot reference a real entity.
+
+    This is the fail-fast guard for the funnel's foreign-key loss segment
+    (§8.4): a bound ``user_id`` / ``order_id`` / ``coupon_code`` that resolves to
+    a placeholder, sentinel, or fabricated default (e.g. ``1``) will 500/404 at
+    the target. We block such payloads up front with a visible reason instead of
+    spending a request on a guaranteed failure — "avoid sending requests with
+    fabricated IDs" (§8.5.3).
+
+    Only contract-declared FK fields are inspected (see ``_foreign_key_field_names``),
+    so absent optional FKs are left to the target and required FKs are already
+    covered by the required-field guard. A full existence probe (GET the
+    referenced row) is intentionally out of scope: it would inject network
+    round-trips and could mask the binding-graph root cause.
+    """
+
+    fks = _foreign_key_field_names(operation)
+    if not fks:
+        return []
+    body = request_body if isinstance(request_body, dict) else {}
+    violations: list[str] = []
+    for field in fks:
+        if field not in body:
+            continue
+        value = body.get(field)
+        if value is None or value == "" or value == [] or value == {}:
+            violations.append(field)
+            continue
+        if isinstance(value, str):
+            stripped = value.strip()
+            if _FK_EMBEDDED_PLACEHOLDER_RE.search(value):
+                violations.append(field)
+                continue
+            if stripped.lower() in _FK_FABRICATED_WORDS or stripped in _FK_FABRICATED_NUMBERS:
+                violations.append(field)
+                continue
+        if isinstance(value, (int, float)) and value in (0, 1):
+            violations.append(field)
+            continue
+    return violations
+
+
+def _unauthorized_actor_role(
+    operation: Any,
+    actor: Any,
+) -> str | None:
+    """Return the actor role that fails the operation's required-role check.
+
+    Mirrors the foreign-key guard's precision rule: only a contract-declared
+    role restriction blocks. Returns a normalized role label (e.g. ``"buyer"``
+    or ``"missing_role"``) when the actor is NOT permitted on the operation,
+    or ``None`` when the guard is a no-op (operation declares no required roles)
+    or the actor's role is in the permitted set.
+
+    This is the fail-fast guard for the funnel's 403 loss segment (§8.4/§8.5.4):
+    54 envelope-observed 403s (e.g. ``PATCH /api/users/admin/.../balance``,
+    ``POST /api/products/admin``) came from an actor whose role is not permitted
+    on the target. We block before transport instead of letting the target
+    return 403, which the funnel would misread as a discovery finding.
+    """
+
+    op = _dict(operation)
+    act = _dict(actor)
+    required = [
+        str(r).lower()
+        for r in _list(op.get("required_roles") or op.get("allowed_roles"))
+    ]
+    if not required:
+        return None
+    actor_role = _text(act.get("role")).lower()
+    if not actor_role or actor_role not in required:
+        return actor_role or "missing_role"
+    return None
+
+
 def _cleanup_body_preflight_error(experiment: dict[str, Any]) -> str:
     """Reject structurally unbindable cleanup bodies before target writes.
 
@@ -344,6 +493,136 @@ def _jwt_expired(token: str, *, skew_seconds: int = 30) -> bool:
     return bool(time.time() + skew_seconds >= float(exp))
 
 
+def _token_from_login_response(body: Any) -> str:
+    if not isinstance(body, dict):
+        return ""
+    return _text(
+        body.get("token")
+        or body.get("access_token")
+        or body.get("jwt")
+        or _dict(body.get("data")).get("token")
+        or _dict(body.get("data")).get("access_token")
+    )
+
+
+def _login_declared_account(
+    *,
+    base_url: str,
+    login_path: str,
+    email: str,
+    password: str,
+) -> tuple[str, int]:
+    """Acquire a live bearer token from a source-declared account password.
+
+    Returns ``(token, http_status)``. An empty token means login did not yield
+    usable credentials; callers must not fall back to an orphan snapshot when a
+    password was declared for this account.
+    """
+    resp = _http_request(
+        "POST",
+        base_url.rstrip("/") + login_path,
+        body={"email": email, "password": password},
+        timeout=8.0,
+    )
+    status = int(resp.get("status") or 0)
+    token = _token_from_login_response(resp.get("body"))
+    return token, status
+
+
+def _register_actor_token_aliases(
+    tokens: dict[str, str],
+    *,
+    token: str,
+    role: str,
+    account_ref: str,
+    email: str,
+    status: str,
+    aliases: list[Any],
+) -> None:
+    for alias in dict.fromkeys(_text(value) for value in aliases):
+        if not alias:
+            continue
+        tokens[alias] = token
+        tokens[f"secret_ref:test_accounts:{alias}"] = token
+    if status not in {"DISABLED", "LOCKED"}:
+        if role:
+            tokens.setdefault(role, token)
+            tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
+            tokens.setdefault(f"secret_ref:context:{role}", token)
+            tokens.setdefault(f"secret_ref:actor:{role}", token)
+    if email.count("@") == 1:
+        local = email.split("@", 1)[0]
+        if local:
+            tokens.setdefault(local, token)
+            tokens.setdefault(f"secret_ref:test_accounts:{local}", token)
+    if account_ref:
+        tokens.setdefault(account_ref, token)
+        tokens.setdefault(f"secret_ref:test_accounts:{account_ref}", token)
+
+
+def _persist_refreshed_account_tokens(
+    path: Path,
+    payload: Any,
+    refreshed: dict[str, str],
+) -> None:
+    """Write live login tokens back into the declared account catalog.
+
+    Other readers (interface discovery, bootstrap) consume the same file. Leaving
+    an orphan JWT snapshot after a successful password login recreates the
+    create-time foreign-key failure on the next consumer.
+    """
+    if not refreshed:
+        return
+
+    def apply_row(row: dict[str, Any], *, source_key: str = "") -> bool:
+        email = _text(row.get("email") or row.get("username"))
+        account_ref = _text(
+            row.get("account_ref")
+            or row.get("profile")
+            or row.get("name")
+            or row.get("id")
+            or source_key
+        )
+        token = refreshed.get(email) or refreshed.get(account_ref)
+        if not token:
+            return False
+        row["token"] = token
+        if "access_token" in row:
+            row["access_token"] = token
+        if "jwt" in row:
+            row["jwt"] = token
+        row["identity_observation_source"] = "login_response"
+        return True
+
+    changed = False
+    if isinstance(payload, list):
+        for row in payload:
+            if isinstance(row, dict):
+                changed = apply_row(row) or changed
+    elif isinstance(payload, dict):
+        matched_collection = False
+        for collection_key in ("accounts", "actors", "users"):
+            collection = payload.get(collection_key)
+            if not isinstance(collection, list):
+                continue
+            matched_collection = True
+            for row in collection:
+                if isinstance(row, dict):
+                    changed = apply_row(row) or changed
+            break
+        if not matched_collection:
+            for key, row in payload.items():
+                if key in {"schema", "schema_version", "meta"} or not isinstance(row, dict):
+                    continue
+                changed = apply_row(row, source_key=_text(key)) or changed
+    if not changed:
+        return
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _credential_config_path(root: Path, project: str) -> Path | None:
     """Return the project credential config from its existing SSOT location."""
     for candidate in (
@@ -494,7 +773,15 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
     threaded from the caller's approved target because relying on the
     QUALIBUG_TARGET_BASE_URL environment variable made that fallback dead under
     the HTTP scan entrypoint, which never sets it.
+
+    When a declared account still carries a password and an approved ``base_url``
+    is available, password login is preferred over any stored JWT snapshot. An
+    unexpired token can still be orphaned after a target DB reset: the signature
+    validates and reads may return empty 200, but writes fail with a user-identity
+    foreign key. Preferring live login closes that gap without inventing bodies.
     """
+    base_url = _text(base_url) or _text(os.environ.get("QUALIBUG_TARGET_BASE_URL") or "")
+    login_path = _text(os.environ.get("QUALIBUG_LOGIN_PATH") or "/api/auth/login")
     path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
     if path.exists():
         try:
@@ -503,6 +790,8 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
             payload = {}
         tokens: dict[str, str] = {}
         expired_roles: list[str] = []
+        password_login_failed: list[str] = []
+        refreshed_for_persist: dict[str, str] = {}
         rows: list[Any] = []
         if isinstance(payload, dict):
             rows = list(payload.get("accounts") or payload.get("actors") or payload.get("users") or [])
@@ -531,14 +820,8 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                 or row.get("email")
                 or row.get("username")
             )
-            token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
-            if not role or not token:
-                continue
-            if _jwt_expired(token):
-                # Recorded, not silently skipped: a stale snapshot is the difference
-                # between "no credential" and "a credential the target will reject".
-                expired_roles.append(role)
-                continue
+            email = _text(row.get("email") or row.get("username"))
+            password = _text(row.get("password"))
             status = _text(
                 row.get("authenticated_status")
                 or row.get("status")
@@ -546,6 +829,65 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                 or row.get("state")
                 or "active"
             ).upper()
+            stored_token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
+            token = ""
+            if (
+                base_url
+                and email
+                and password
+                and status not in {"DISABLED", "LOCKED", "SUSPENDED", "INACTIVE"}
+            ):
+                try:
+                    live_token, login_status = _login_declared_account(
+                        base_url=base_url,
+                        login_path=login_path,
+                        email=email,
+                        password=password,
+                    )
+                except Exception as exc:
+                    _LOGGER.warning(
+                        "actor_login_transport_failed project=%s role=%s error=%s",
+                        project,
+                        role or account_ref or email,
+                        type(exc).__name__,
+                    )
+                    password_login_failed.append(role or account_ref or email)
+                    continue
+                if login_status == 200 and live_token:
+                    token = live_token
+                    refreshed_for_persist[email or account_ref] = live_token
+                else:
+                    _LOGGER.warning(
+                        "actor_login_rejected project=%s role=%s status=%s "
+                        "token_present=%s action=skip_orphan_snapshot",
+                        project,
+                        role or account_ref or email,
+                        login_status,
+                        False,
+                    )
+                    password_login_failed.append(role or account_ref or email)
+                    # Password was the authority. Do not hand the executor an
+                    # orphan JWT that reads as authenticated but cannot insert.
+                    continue
+            if not token:
+                if not role or not stored_token:
+                    continue
+                if _jwt_expired(stored_token):
+                    # Recorded, not silently skipped: a stale snapshot is the
+                    # difference between "no credential" and "a credential the
+                    # target will reject".
+                    expired_roles.append(role)
+                    print(
+                        f"[STALE] declared actor token expired role={role} "
+                        f"account_ref={account_ref}",
+                        flush=True,
+                    )
+                    continue
+                token = stored_token
+            if not token:
+                continue
+            if not role and not account_ref and not email:
+                continue
             aliases = [
                 row.get("account_ref"),
                 row.get("profile"),
@@ -554,35 +896,42 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                 row.get("email"),
                 row.get("username"),
                 account_ref,
+                email,
             ]
-            email = _text(row.get("email"))
-            if email.count("@") == 1:
-                aliases.append(email.split("@", 1)[0])
-            for alias in dict.fromkeys(_text(value) for value in aliases):
-                if not alias:
-                    continue
-                tokens[alias] = token
-                tokens[f"secret_ref:test_accounts:{alias}"] = token
-            if status not in {"DISABLED", "LOCKED"}:
-                tokens.setdefault(role, token)
-                tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
-                tokens.setdefault(f"secret_ref:context:{role}", token)
-                tokens.setdefault(f"secret_ref:actor:{role}", token)
+            _register_actor_token_aliases(
+                tokens,
+                token=token,
+                role=role,
+                account_ref=account_ref,
+                email=email,
+                status=status,
+                aliases=aliases,
+            )
+        if refreshed_for_persist:
+            try:
+                _persist_refreshed_account_tokens(path, payload, refreshed_for_persist)
+            except OSError as exc:
+                _LOGGER.warning(
+                    "actor_token_persist_failed project=%s error=%s",
+                    project,
+                    type(exc).__name__,
+                )
         if tokens:
             return tokens
-        if expired_roles:
+        if expired_roles or password_login_failed:
             _LOGGER.warning(
-                "declared_actor_tokens_expired project=%s count=%s roles=%s "
-                "action=reload_test_accounts",
+                "declared_actor_tokens_expired project=%s expired_count=%s "
+                "login_failed_count=%s roles=%s action=reload_test_accounts",
                 project,
                 len(expired_roles),
-                ",".join(sorted(set(expired_roles))[:6]),
+                len(password_login_failed),
+                ",".join(
+                    sorted(set(expired_roles + password_login_failed))[:6]
+                ),
             )
 
     # ── P0-4: Fallback to TEST_ACCOUNTS.md with login ──
     md_accounts = _parse_test_accounts_md(root, project)
-    base_url = _text(base_url) or _text(os.environ.get("QUALIBUG_TARGET_BASE_URL") or "")
-    login_path = _text(os.environ.get("QUALIBUG_LOGIN_PATH") or "/api/auth/login")
     tokens = {}
     if base_url:
         for acct in md_accounts:
@@ -592,28 +941,22 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
             if not role or not email or not password:
                 continue
             try:
-                resp = _http_request(
-                    "POST",
-                    base_url.rstrip("/") + login_path,
-                    body={"email": email, "password": password},
-                    timeout=8.0,
+                token, status = _login_declared_account(
+                    base_url=base_url,
+                    login_path=login_path,
+                    email=email,
+                    password=password,
                 )
-                status = int(resp.get("status") or 0)
-                body = resp.get("body")
-                token = ""
-                if isinstance(body, dict):
-                    token = _text(body.get("token") or body.get("access_token") or body.get("jwt") or _dict(body.get("data")).get("token"))
                 if status == 200 and token:
-                    account_ref = email
-                    tokens[account_ref] = token
-                    tokens[f"secret_ref:test_accounts:{account_ref}"] = token
-                    # Keep the local-part alias for legacy callers, but the
-                    # exact account coordinate is always the full declared email.
-                    if "@" in email:
-                        tokens.setdefault(email.split("@", 1)[0], token)
-                    tokens.setdefault(role, token)
-                    tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
-                    tokens.setdefault(f"secret_ref:context:{role}", token)
+                    _register_actor_token_aliases(
+                        tokens,
+                        token=token,
+                        role=role,
+                        account_ref=email,
+                        email=email,
+                        status="ACTIVE",
+                        aliases=[email, email.split("@", 1)[0] if "@" in email else ""],
+                    )
                 else:
                     _LOGGER.warning(
                         "actor_login_rejected project=%s role=%s status=%s "

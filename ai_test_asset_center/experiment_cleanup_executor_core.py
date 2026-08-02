@@ -17,6 +17,7 @@ from .experiment_cleanup import (
     _governance_audit_receipt_id,
     _governed_write_attempts,
     _governed_write_changed_state,
+    _governed_write_reached_transport,
     _rejected_writes_left_state_unchanged,
 )
 from .experiment_runtime_support import (
@@ -247,6 +248,39 @@ def seal_after_cleanup_observation(
         return {}
     observations["after_cleanup_observation"] = sealed
     observations.pop("after_cleanup_observation_seal", None)
+    # This GET crosses the evaluator observation gateway under the same
+    # correlation headers as the experiment. Emit an explicit cleanup-phase
+    # step so operational receipts count it; otherwise attestation sees
+    # trusted_observation_target_request_count_mismatch.
+    status_code = int(sealed.get("status_code") or 0)
+    steps_out.append(
+        {
+            "phase": "cleanup",
+            "method": "GET",
+            "path": observation_path,
+            "observation_path": observation_path,
+            "status_code": status_code,
+            "body": sealed.get("body"),
+            "governance_receipt": {
+                # Observation-only: must not count as an accepted cleanup write.
+                "accepted": False,
+                "status": "executed",
+                "reason": "post_cleanup_readback",
+                "method": "GET",
+                "path": observation_path,
+                "observation_path": observation_path,
+                "before": {},
+                "write": {},
+                "after": {
+                    "status": status_code,
+                    "body": sealed.get("body"),
+                },
+                "http_attempt_count": 1,
+                "write_request_attempt_count": 0,
+                "production_http_requests": 0,
+            },
+        }
+    )
     return sealed
 
 
@@ -304,8 +338,9 @@ def _append_adapter_cleanup_runtime_step(
                     },
                 },
                 "after": after_payload,
-                # Adapter DB cleanup is not HTTP transport. Emit explicit zeros so
-                # operational receipts stay fail-closed without None coercion.
+                # Adapter DB cleanup is not HTTP transport. Post-cleanup HTTP
+                # readback is recorded as its own step by
+                # seal_after_cleanup_observation when that GET is issued.
                 "http_attempt_count": 0,
                 "write_request_attempt_count": 0,
                 "production_http_requests": 0,
@@ -460,6 +495,113 @@ def _project_database_dsn(root: Path, project: str) -> tuple[str, str]:
     return "", ""
 
 
+def _scoped_accepted_write_count_for_cleanup(
+    cleanup: dict[str, Any] | None,
+    accepted_governed_writes: list[dict[str, Any]],
+) -> int:
+    """Count accepted writes this cleanup subject must cover for the delivery gate.
+
+    The gate sums ``evidence.accepted_write_count`` across every cleanup contract
+    receipt. Stamping the full accepted-write set on each control/treatment
+    subject double-counts and yields false ``CLEANUP_WRITE_COVERAGE_MISMATCH``.
+    Prefer ``source_step_id`` / ``compensates_operation_ref`` scope; unscoped
+    legacy plans keep whole-plan cardinality.
+    """
+    cleanup_row = _dict(cleanup)
+    source_step_id = _text(cleanup_row.get("source_step_id"))
+    compensates_op = _text(cleanup_row.get("compensates_operation_ref"))
+    writes = [row for row in accepted_governed_writes if isinstance(row, dict)]
+    if not source_step_id and not compensates_op:
+        return len(writes)
+    count = 0
+    for attempt in writes:
+        attempt_step = _text(attempt.get("step_id"))
+        attempt_op = _text(attempt.get("operation_ref"))
+        if source_step_id:
+            if not attempt_step or attempt_step != source_step_id:
+                continue
+        elif compensates_op:
+            if not attempt_op or attempt_op != compensates_op:
+                continue
+        count += 1
+    return count
+
+
+def _creation_receipts_from_accepted_writes(
+    *,
+    cleanup_plan: list[Any],
+    accepted_governed_writes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build ownership creation receipts for declared db_sql cleanup plans.
+
+    Uses the same declared-column + response-envelope identity rules as adapter
+    cleanup. Multi-write plans stamp ``source_step_id``; each accepted write
+    binds to its compensating template so control/treatment rows stay distinct.
+    """
+    from .cleanup_adapter_ladder import identity_value_from_body
+
+    receipts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    templates = [
+        _dict(row)
+        for row in _list(cleanup_plan)
+        if _text(_dict(row).get("adapter")) == "db_sql"
+    ]
+    if not templates:
+        return receipts
+    for attempt in accepted_governed_writes:
+        attempt_step = _text(attempt.get("step_id"))
+        attempt_op = _text(attempt.get("operation_ref"))
+        tmpl: dict[str, Any] = {}
+        for candidate in templates:
+            source_step = _text(candidate.get("source_step_id"))
+            compensates_op = _text(candidate.get("compensates_operation_ref"))
+            if source_step and attempt_step and source_step != attempt_step:
+                continue
+            if compensates_op and attempt_op and compensates_op != attempt_op:
+                continue
+            tmpl = candidate
+            break
+        if not tmpl:
+            tmpl = templates[0]
+        write_row = _dict(attempt.get("write"))
+        write_status = int(write_row.get("status") or 0)
+        if not (200 <= write_status < 300):
+            continue
+        identity_column = _text(tmpl.get("identity_column")) or "id"
+        table = _text(tmpl.get("table"))
+        created_id = ""
+        for body in (
+            _dict(attempt.get("response_bound_after")).get("body"),
+            write_row.get("body"),
+            _dict(attempt.get("after")).get("body"),
+            attempt.get("body"),
+        ):
+            if isinstance(body, dict):
+                created_id = identity_value_from_body(body, identity_column)
+                if created_id:
+                    break
+        if not created_id:
+            continue
+        key = (table.lower(), created_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        receipts.append(
+            {
+                "status": "created",
+                "identity_value": created_id,
+                "resource_id": created_id,
+                "table": table,
+                "source_step_id": attempt_step
+                or _text(tmpl.get("source_step_id")),
+                "operation_ref": attempt_op
+                or _text(tmpl.get("compensates_operation_ref")),
+            }
+        )
+    return receipts
+
+
 def _adapter_cleanup_identity(
     cleanup: dict[str, Any],
     *,
@@ -469,28 +611,46 @@ def _adapter_cleanup_identity(
     """The concrete row identity for an adapter cleanup, from what the run observed.
 
     Restricts to control/treatment governance bodies for the write being
-    compensated — never fixture/cleanup step bodies. Resolves only via the
-    declared identity_column (plus generic primary-key aliases when the column
-    itself is id/uuid/key). Returns "" when unbound rather than guessing.
+    compensated — never fixture/cleanup step bodies. When compile stamped
+    ``source_step_id``, only that write may supply the identity (control and
+    treatment often share one operation_ref but create distinct rows).
+    Resolves only via the declared identity_column (plus generic primary-key
+    aliases when the column itself is id/uuid/key). Returns "" when unbound
+    rather than guessing.
     """
     from .cleanup_adapter_ladder import identity_body_keys, identity_value_from_body
 
-    column = _text(_dict(cleanup).get("identity_column")) or "id"
+    cleanup_row = _dict(cleanup)
+    column = _text(cleanup_row.get("identity_column")) or "id"
+    source_step_id = _text(cleanup_row.get("source_step_id"))
+    compensates_op = _text(cleanup_row.get("compensates_operation_ref"))
     for step in reversed(_list(steps_out)):
         if _text(step.get("phase")) not in {"control", "treatment"}:
+            continue
+        if source_step_id and _text(step.get("step_id")) != source_step_id:
+            continue
+        if compensates_op and _text(step.get("operation_ref")) not in {
+            "",
+            compensates_op,
+        }:
             continue
         gov = _dict(step.get("governance_receipt"))
         if not gov or gov.get("accepted") is not True:
             continue
         for body in (
-            _dict(_dict(gov.get("after")).get("body")),
+            _dict(_dict(gov.get("response_bound_after")).get("body")),
             _dict(_dict(gov.get("write")).get("body")),
+            _dict(_dict(gov.get("after")).get("body")),
             _dict(_dict(gov.get("before")).get("body")),
             _dict(step.get("body")) if isinstance(step.get("body"), dict) else {},
         ):
             value = identity_value_from_body(body, column)
             if value:
                 return value
+    if source_step_id:
+        # A step-scoped cleanup must not fall back to a shared binding map —
+        # that would reintroduce cross-write identity collapse.
+        return ""
     bindings = _dict(runtime_bindings)
     for key in identity_body_keys(column):
         value = _text(bindings.get(key))
@@ -499,27 +659,29 @@ def _adapter_cleanup_identity(
     return ""
 
 
-def _mutation_restore_fields_from_steps(
+def _mutation_restore_plan_from_steps(
     steps_out: list[dict[str, Any]],
     *,
     identity_value: str = "",
     identity_column: str = "id",
-) -> dict[str, Any]:
-    """Scalar fields a governed write changed, restored from before-state.
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return ``(restore_fields, attestation)`` from one governed write step.
 
-    Used when adapter cleanup would otherwise row-delete an existing entity the
-    run only mutated (action POSTs like ship/confirm). Server-managed timestamps
-    are excluded so timestamp-only noise cannot drive a restore.
+    Field restore and its attestation must bind the same control/treatment
+    step. Selecting restore diffs from one arm and attestation snapshots from
+    another produces false ``attestation_restore_value_mismatch`` refusals.
 
-    Requires a positive primary-identity match on both before and after bodies
-    when ``identity_value`` is supplied — partial/missing ids never contribute
-    a restore map.
+    An empty ``identity_value`` yields empty maps: unscoped scalar diffs must
+    not enter field-restore (that previously dead-ended as
+    ``CLEANUP_MUTATION_NOT_ATTESTED`` and blocked the owned-row DELETE path).
     """
     from .cleanup_adapter_ladder import identity_value_from_body
     from .cleanup_equivalence import SERVER_MANAGED_FIELDS
 
     identity = _text(identity_value)
     column = _text(identity_column) or "id"
+    if not identity:
+        return {}, {}
     for step in reversed(_list(steps_out)):
         if _text(step.get("phase")) not in {"control", "treatment"}:
             continue
@@ -530,11 +692,10 @@ def _mutation_restore_fields_from_steps(
         after_body = _dict(_dict(gov.get("after")).get("body"))
         if not before_body or not after_body:
             continue
-        if identity:
-            before_id = identity_value_from_body(before_body, column)
-            after_id = identity_value_from_body(after_body, column)
-            if before_id != identity or after_id != identity:
-                continue
+        before_id = identity_value_from_body(before_body, column)
+        after_id = identity_value_from_body(after_body, column)
+        if before_id != identity or after_id != identity:
+            continue
         restore: dict[str, Any] = {}
         for key, before_val in before_body.items():
             field = _text(key)
@@ -547,9 +708,41 @@ def _mutation_restore_fields_from_steps(
                 continue
             if before_val != after_val:
                 restore[field] = before_val
-        if restore:
-            return restore
-    return {}
+        if not restore:
+            continue
+        write_receipt_ref = _text(
+            gov.get("audit_path") or gov.get("before_ref") or gov.get("after_ref")
+        )
+        # Restore map and attestation always share this step. Missing write
+        # receipt ref yields restore-without-attestation so the executor can
+        # refuse field-restore *and* refuse falling through to customer-row
+        # DELETE (see ``_execute_adapter_cleanup_step``).
+        attestation = {
+            "identity_value": identity,
+            "identity_column": column,
+            "accepted_write": True,
+            "before_body": before_body,
+            "after_body": after_body,
+            "restore_fields": dict(restore),
+            "write_receipt_ref": write_receipt_ref,
+        } if write_receipt_ref else {}
+        return restore, attestation
+    return {}, {}
+
+
+def _mutation_restore_fields_from_steps(
+    steps_out: list[dict[str, Any]],
+    *,
+    identity_value: str = "",
+    identity_column: str = "id",
+) -> dict[str, Any]:
+    """Scalar fields a governed write changed, restored from before-state."""
+    restore_fields, _attestation = _mutation_restore_plan_from_steps(
+        steps_out,
+        identity_value=identity_value,
+        identity_column=identity_column,
+    )
+    return restore_fields
 
 
 def _mutation_attestation_from_steps(
@@ -559,39 +752,22 @@ def _mutation_attestation_from_steps(
     identity_column: str,
     restore_fields: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build the mutation attestation field_restore requires before any UPDATE."""
-    from .cleanup_adapter_ladder import identity_value_from_body
+    """Build the mutation attestation field_restore requires before any UPDATE.
 
-    identity = _text(identity_value)
-    column = _text(identity_column) or "id"
-    if not identity or not _dict(restore_fields):
+    When ``restore_fields`` is supplied, only a same-step plan whose restore
+    map matches exactly may attest — never a sibling control/treatment arm.
+    """
+    restore_plan, attestation = _mutation_restore_plan_from_steps(
+        steps_out,
+        identity_value=identity_value,
+        identity_column=identity_column,
+    )
+    if not attestation:
         return {}
-    for step in reversed(_list(steps_out)):
-        if _text(step.get("phase")) not in {"control", "treatment"}:
-            continue
-        gov = _dict(step.get("governance_receipt"))
-        if not gov or gov.get("accepted") is not True:
-            continue
-        before_body = _dict(_dict(gov.get("before")).get("body"))
-        after_body = _dict(_dict(gov.get("after")).get("body"))
-        if not before_body or not after_body:
-            continue
-        if identity_value_from_body(before_body, column) != identity:
-            continue
-        if identity_value_from_body(after_body, column) != identity:
-            continue
-        return {
-            "identity_value": identity,
-            "identity_column": column,
-            "accepted_write": True,
-            "before_body": before_body,
-            "after_body": after_body,
-            "restore_fields": dict(restore_fields),
-            "write_receipt_ref": _text(
-                gov.get("audit_path") or gov.get("before_ref") or gov.get("after_ref")
-            ),
-        }
-    return {}
+    expected = _dict(restore_fields)
+    if expected and restore_plan != expected:
+        return {}
+    return attestation
 
 
 def _execute_adapter_cleanup_step(
@@ -644,18 +820,12 @@ def _execute_adapter_cleanup_step(
         }
 
     identity_column = _text(step.get("identity_column")) or "id"
-    restore_fields = _mutation_restore_fields_from_steps(
+    restore_fields, attestation = _mutation_restore_plan_from_steps(
         steps_out,
         identity_value=identity,
         identity_column=identity_column,
     )
     if restore_fields:
-        attestation = _mutation_attestation_from_steps(
-            steps_out,
-            identity_value=identity,
-            identity_column=identity_column,
-            restore_fields=restore_fields,
-        )
         if not attestation:
             # Observed scalar diffs without a sealed mutation attestation must
             # never fall through to UPDATE or to a customer-row DELETE.
@@ -682,6 +852,7 @@ def _execute_adapter_cleanup_step(
             project=project,
             runtime_contract=runtime_contract,
             mutation_attestation=attestation,
+            entities=_list(_dict(behavior_ir).get("entities")),
         )
         summary = dict(receipt)
         summary["dependent_receipts"] = []
@@ -700,6 +871,7 @@ def _execute_adapter_cleanup_step(
         entities=_list(_dict(behavior_ir).get("entities")),
     )
 
+    _entity_rows = _list(_dict(behavior_ir).get("entities"))
     receipts = [
         execute_declared_adapter_cleanup(
             sub_step,
@@ -709,6 +881,7 @@ def _execute_adapter_cleanup_step(
             root=root,
             project=project,
             runtime_contract=runtime_contract,
+            entities=_entity_rows,
         )
         for sub_step in ordered
     ]
@@ -749,15 +922,30 @@ def execute_experiment_cleanup_compensation(
     project: str,
     base_url: str,
     runtime_contract: dict[str, Any],
+    behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run governed cleanup + fixture compensation; always continue to observers.
 
     Mutates ``steps_out``, ``observations``, ``contract_evidence_receipts``, and
     pending fixture receipt status in place. Returns the updated cleanup_failures
     counter and the same mutable containers for the caller.
+
+    ``behavior_ir`` is the campaign-level IR. Experiments rarely embed a full
+    entity graph; adapter cleanup needs those source table aliases to rebind
+    logical names (payment) onto catalog-present storage tables (payments).
     """
     # Cleanup compensation in reverse order for write experiments.
     safety = _dict(exp.get("safety_contract"))
+    _cleanup_behavior_ir = _dict(behavior_ir) or _dict(exp.get("behavior_ir"))
+    # fixture_cleanup:* subjects are sealed only by pending_fixture_cleanups.
+    # Bulk NOT_REQUIRED/BLOCKED stamps that also cover those subjects produced
+    # CONTRACT_EVIDENCE_IDENTITY_DUPLICATE when the real fixture cleanup later
+    # emitted COMPLETED for the same subject_id (1× on T140342Z).
+    plan_cleanup_subjects = [
+        _text(subject)
+        for subject in _list(activation_requirements.get("cleanup"))
+        if _text(subject) and not _text(subject).startswith("fixture_cleanup:")
+    ]
     governed_write_attempts = _governed_write_attempts(steps_out)
     accepted_governed_writes = [
         attempt
@@ -803,11 +991,77 @@ def execute_experiment_cleanup_compensation(
                 return True
         return False
 
+    def _write_step_requires_cleanup(
+        step: dict[str, Any],
+        *,
+        cleanup_method: str,
+        cleanup_path_template: str,
+    ) -> bool:
+        """Mirror execution-time source_step selection for one cleanup contract.
+
+        Aggregation must use the real write step (path/bindings/body), not a
+        projection that drops runtime identity — otherwise identity-bound
+        DELETE cleanup that already returned 2xx is sealed FAILED with
+        cleanup_required_write_count=0 (T113119Z treatment CLEANUP_RECEIPT_FAILED).
+        """
+        receipt = _dict(step.get("governance_receipt"))
+        if not receipt or receipt.get("accepted") is not True:
+            return False
+        if _governed_write_changed_state(receipt):
+            return True
+        if cleanup_method == "DELETE" and cleanup_path_template:
+            targets, missing = _runtime_cleanup_paths(
+                cleanup_path_template,
+                [step],
+            )
+            return bool(targets) and not missing
+        return False
+
+    accepted_write_steps = [
+        step
+        for step in steps_out
+        if _text(_dict(step).get("phase")) in {"control", "treatment"}
+        and _dict(step.get("governance_receipt")).get("accepted") is True
+    ]
+    # Start from governed attempts (facade may stamp adapter-binding markers onto
+    # these copies). Then add identity-bound DELETE needs that only bind against
+    # the real write step — receipt-only projections lose effectful_write_receipt
+    # and would skip cleanup, later sealing false CLEANUP_RECEIPT_FAILED.
     accepted_governed_writes_requiring_cleanup = [
         attempt
         for attempt in accepted_governed_writes
         if _accepted_write_needs_cleanup(attempt)
     ]
+    requiring_audit_ids = {
+        _governance_audit_receipt_id(attempt)
+        for attempt in accepted_governed_writes_requiring_cleanup
+        if _governance_audit_receipt_id(attempt)
+    }
+    for step in accepted_write_steps:
+        receipt = _dict(step.get("governance_receipt"))
+        receipt_audit = _governance_audit_receipt_id(receipt)
+        if receipt_audit and receipt_audit in requiring_audit_ids:
+            continue
+        if not any(
+            _write_step_requires_cleanup(
+                step,
+                cleanup_method="DELETE",
+                cleanup_path_template=path_template,
+            )
+            for path_template in delete_cleanup_templates
+        ):
+            continue
+        matched = next(
+            (
+                attempt
+                for attempt in accepted_governed_writes
+                if _governance_audit_receipt_id(attempt) == receipt_audit
+            ),
+            receipt,
+        )
+        accepted_governed_writes_requiring_cleanup.append(matched)
+        if receipt_audit:
+            requiring_audit_ids.add(receipt_audit)
     if (
         safety.get("governed_write")
         and _list(exp.get("cleanup_plan"))
@@ -839,7 +1093,7 @@ def execute_experiment_cleanup_compensation(
                 ]
                 + pre_transport_block_reasons
             ))
-            for cleanup_subject in activation_requirements["cleanup"]:
+            for cleanup_subject in plan_cleanup_subjects:
                 contract_evidence_receipts.append(build_contract_evidence_receipt(
                     kind="cleanup",
                     experiment_id=eid,
@@ -860,6 +1114,47 @@ def execute_experiment_cleanup_compensation(
                 ))
             observations["cleanup_status"] = "blocked"
             observations["cleanup_reason"] = "write_blocked_before_transport"
+        elif not governed_write_attempts or not any(
+            _governed_write_reached_transport(attempt)
+            for attempt in governed_write_attempts
+        ):
+            # Read-only / denied-before-governance paths, and governance
+            # receipts that only cover before-GET / identity / mutation blocks
+            # (write_request_attempt_count=0), never mutated the target.
+            # Those must be NOT_REQUIRED cleanup, not a transport failure.
+            # Empty attempts previously fell through to
+            # REJECTED_WRITE_STATE_NOT_PROVEN_UNCHANGED because
+            # `_rejected_writes_left_state_unchanged([])` is False (26× on
+            # T113119Z). Zero-transport receipts with before!=after({}) still
+            # tripped the same false HF (16× on T120110Z/T123504Z).
+            no_transport_audit_ids = sorted({
+                receipt_id
+                for receipt_id in (
+                    _governance_audit_receipt_id(attempt)
+                    for attempt in governed_write_attempts
+                )
+                if receipt_id
+            })
+            for cleanup_subject in plan_cleanup_subjects:
+                contract_evidence_receipts.append(build_contract_evidence_receipt(
+                    kind="cleanup",
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=cleanup_subject,
+                    status="NOT_REQUIRED",
+                    evidence={
+                        "accepted_write_count": 0,
+                        "cleanup_write_count": 0,
+                        "write_reached_transport": False,
+                        "state_unchanged": True,
+                        "audit_receipt_ids": no_transport_audit_ids,
+                        "reason_code": "NO_WRITE_REACHED_TRANSPORT",
+                    },
+                ))
+            observations["cleanup_status"] = "not_required"
+            observations["cleanup_reason"] = "no_write_reached_transport"
         else:
             rejected_state_unchanged = _rejected_writes_left_state_unchanged(
                 governed_write_attempts
@@ -872,7 +1167,7 @@ def execute_experiment_cleanup_compensation(
                 )
                 if receipt_id
             })
-            for cleanup_subject in activation_requirements["cleanup"]:
+            for cleanup_subject in plan_cleanup_subjects:
                 contract_evidence_receipts.append(build_contract_evidence_receipt(
                     kind="cleanup",
                     experiment_id=eid,
@@ -884,6 +1179,7 @@ def execute_experiment_cleanup_compensation(
                     evidence={
                         "accepted_write_count": 0,
                         "cleanup_write_count": 0,
+                        "write_reached_transport": True,
                         "state_unchanged": rejected_state_unchanged,
                         "audit_receipt_ids": rejected_audit_ids,
                         "reason_code": (
@@ -912,7 +1208,12 @@ def execute_experiment_cleanup_compensation(
             )
             if receipt_id
         })
-        for cleanup_subject in activation_requirements["cleanup"]:
+        # Gate coverage sums accepted_write_count across every cleanup subject.
+        # Attribute the unchanged accepted writes once — repeating the full
+        # cardinality on control + treatment falsely trips
+        # CLEANUP_WRITE_COVERAGE_MISMATCH (covered 4 vs accepted 2).
+        unchanged_write_count = len(accepted_governed_writes)
+        for index, cleanup_subject in enumerate(plan_cleanup_subjects):
             contract_evidence_receipts.append(build_contract_evidence_receipt(
                 kind="cleanup",
                 experiment_id=eid,
@@ -922,7 +1223,9 @@ def execute_experiment_cleanup_compensation(
                 subject_id=cleanup_subject,
                 status="NOT_REQUIRED",
                 evidence={
-                    "accepted_write_count": len(accepted_governed_writes),
+                    "accepted_write_count": (
+                        unchanged_write_count if index == 0 else 0
+                    ),
                     "cleanup_required_write_count": 0,
                     "cleanup_write_count": 0,
                     "state_unchanged": True,
@@ -944,25 +1247,10 @@ def execute_experiment_cleanup_compensation(
         # Build creation receipts from accepted governed writes so the DB
         # adapter can prove row ownership. Each accepted 2xx write response
         # body may contain the created resource identity.
-        _creation_receipts_for_cleanup: list[dict[str, Any]] = []
-        for _attempt in accepted_governed_writes:
-            _write_row = _dict(_attempt.get("write"))
-            _write_status = int(_write_row.get("status") or 0)
-            _write_body = _write_row.get("body")
-            if 200 <= _write_status < 300 and isinstance(_write_body, dict):
-                _cr_id = _text(
-                    _write_body.get("id")
-                    or _write_body.get("resource_id")
-                    or _write_body.get("entity_id")
-                    or _write_body.get("created_id")
-                )
-                if _cr_id:
-                    _creation_receipts_for_cleanup.append({
-                        "status": "created",
-                        "identity_value": _cr_id,
-                        "resource_id": _cr_id,
-                        "table": _text(_dict(cleanup_plan[0]).get("table")) if cleanup_plan else "",
-                    })
+        _creation_receipts_for_cleanup = _creation_receipts_from_accepted_writes(
+            cleanup_plan=cleanup_plan,
+            accepted_governed_writes=accepted_governed_writes,
+        )
         # The compiler emits cleanup plans in compensation order (reverse write
         # order: later writes are compensated first). Iterating them in that
         # emitted order preserves reverse-order compensation semantics for
@@ -982,6 +1270,58 @@ def execute_experiment_cleanup_compensation(
             # in the target. Authorising a write whose cleanup cannot run is worse than
             # blocking the write.
             if _text(_dict(cleanup).get("adapter")) == "db_sql":
+                _scoped_n = _scoped_accepted_write_count_for_cleanup(
+                    cleanup, accepted_governed_writes
+                )
+                _source_step_id = _text(_dict(cleanup).get("source_step_id"))
+                # Mirror the HTTP cleanup arm: a db_sql plan whose scoped
+                # accepted-write set is empty must not call the adapter and
+                # FAIL as CLEANUP_ROW_IDENTITY_NOT_RESOLVABLE.
+                #
+                # Two live shapes (T120110Z, 16× CLEANUP_RECEIPT_FAILED):
+                # 1) source_step_id=treatment_1 and that arm never accepted
+                #    (type-mutation 404/500) — covered when source_step_id set.
+                # 2) compensates_operation_ref matches no accepted write and
+                #    source_step_id is absent — scoped count is 0 but the old
+                #    guard required source_step_id, so the adapter still ran
+                #    with an empty identity. Scope emptiness alone is enough.
+                if _scoped_n == 0:
+                    contract_evidence_receipts.append(
+                        build_contract_evidence_receipt(
+                            kind="cleanup",
+                            experiment_id=eid,
+                            obligation_id=oid,
+                            campaign_id=resolved_campaign_id,
+                            execution_id=resolved_execution_id,
+                            subject_id=cleanup_subject_id,
+                            status="NOT_REQUIRED",
+                            evidence={
+                                "accepted_write_count": 0,
+                                "cleanup_required_write_count": 0,
+                                "cleanup_write_count": 0,
+                                "state_unchanged": True,
+                                "restoration_verified": True,
+                                "audit_receipt_ids": [],
+                                "reason_code": "NO_ACCEPTED_WRITE",
+                                "cleanup_adapter": "db_sql",
+                                "cleanup_table": _text(_dict(cleanup).get("table")),
+                                "ownership_basis": "",
+                                "cleanup_mode": _text(_dict(cleanup).get("mode"))
+                                or "row_delete",
+                                "source_step_id": _source_step_id,
+                                "compensates_operation_ref": _text(
+                                    _dict(cleanup).get("compensates_operation_ref")
+                                ),
+                            },
+                        )
+                    )
+                    if observations.get("cleanup_status") not in {
+                        "cleaned",
+                        "failed",
+                    }:
+                        observations["cleanup_status"] = "not_required"
+                        observations["cleanup_reason"] = "no_accepted_write"
+                    continue
                 _adapter_receipt = _execute_adapter_cleanup_step(
                     cleanup,
                     root=root,
@@ -989,8 +1329,7 @@ def execute_experiment_cleanup_compensation(
                     runtime_bindings=runtime_bindings,
                     steps_out=steps_out,
                     runtime_contract=runtime_contract,
-                    behavior_ir={"entities": _list(_dict(exp.get("behavior_ir")).get("entities"))}
-                    if exp.get("behavior_ir") else {"entities": []},
+                    behavior_ir=_cleanup_behavior_ir,
                     creation_receipts=_creation_receipts_for_cleanup,
                 )
                 # contract_evidence_receipts has its own strict schema and the delivery
@@ -1033,6 +1372,10 @@ def execute_experiment_cleanup_compensation(
                     int(_adapter_receipt.get("rows_updated") or 0)
                     + int(_adapter_receipt.get("rows_deleted") or 0)
                 )
+                _scoped_accepted_writes = _scoped_accepted_write_count_for_cleanup(
+                    cleanup,
+                    accepted_governed_writes,
+                )
                 contract_evidence_receipts.append(build_contract_evidence_receipt(
                     kind="cleanup",
                     experiment_id=eid,
@@ -1046,7 +1389,7 @@ def execute_experiment_cleanup_compensation(
                     # survived while every adapter cleanup FAILED.
                     status="COMPLETED" if _adapter_cleaned else "FAILED",
                     evidence={
-                        "accepted_write_count": len(accepted_governed_writes),
+                        "accepted_write_count": _scoped_accepted_writes,
                         "cleanup_write_count": (
                             _adapter_cleanup_writes if _adapter_cleaned else 0
                         ),
@@ -1119,9 +1462,56 @@ def execute_experiment_cleanup_compensation(
                         if bound_targets and not bound_missing:
                             source_steps.append(step)
                 if not source_steps:
-                    cleanup_failures += 1
-                    observations["cleanup_status"] = "failed"
-                    observations["cleanup_reason"] = "cleanup_accepted_write_missing"
+                    # Sibling arms of a dual-write plan may have no accepted
+                    # write that needs cleanup while another arm does. That is
+                    # NOT_REQUIRED for this subject — not a harness cleanup
+                    # failure for the whole experiment.
+                    _sibling_accepted = [
+                        step
+                        for step in steps_out
+                        if _text(_dict(step).get("phase")) in {"control", "treatment"}
+                        and (
+                            not source_step_id
+                            or _text(_dict(step).get("step_id")) == source_step_id
+                        )
+                        and _text(_dict(step).get("operation_ref"))
+                        == source_operation_ref
+                        and _dict(step.get("governance_receipt")).get("accepted")
+                        is True
+                    ]
+                    contract_evidence_receipts.append(
+                        build_contract_evidence_receipt(
+                            kind="cleanup",
+                            experiment_id=eid,
+                            obligation_id=oid,
+                            campaign_id=resolved_campaign_id,
+                            execution_id=resolved_execution_id,
+                            subject_id=cleanup_subject_id,
+                            status="NOT_REQUIRED",
+                            evidence={
+                                "accepted_write_count": len(_sibling_accepted),
+                                "cleanup_required_write_count": 0,
+                                "cleanup_write_count": 0,
+                                "state_unchanged": True,
+                                "restoration_verified": True,
+                                "audit_receipt_ids": sorted({
+                                    receipt_id
+                                    for receipt_id in (
+                                        _governance_audit_receipt_id(
+                                            _dict(step.get("governance_receipt"))
+                                        )
+                                        for step in _sibling_accepted
+                                    )
+                                    if receipt_id
+                                }),
+                                "reason_code": (
+                                    "ACCEPTED_WRITE_STATE_UNCHANGED"
+                                    if _sibling_accepted
+                                    else "NO_ACCEPTED_WRITE"
+                                ),
+                            },
+                        )
+                    )
                     continue
                 for source_step in reversed(source_steps):
                     actor_ref, actor, token = _cleanup_actor_for_write_step(
@@ -1639,6 +2029,17 @@ def execute_experiment_cleanup_compensation(
         _dict(pending.get("receipt"))["fixture_cleanup_status"] = (
             "completed" if completed else "failed"
         )
+        fixture_subject = f"fixture_cleanup:{_text(pending.get('target'))}"
+        # Replace any prior bulk stamp for this subject — the governed fixture
+        # cleanup just executed and is the authority for this identity.
+        contract_evidence_receipts[:] = [
+            receipt
+            for receipt in contract_evidence_receipts
+            if not (
+                _text(receipt.get("kind")) == "cleanup"
+                and _text(receipt.get("subject_id")) == fixture_subject
+            )
+        ]
         if not completed:
             cleanup_failures += 1
         contract_evidence_receipts.append(build_contract_evidence_receipt(
@@ -1647,7 +2048,7 @@ def execute_experiment_cleanup_compensation(
             obligation_id=oid,
             campaign_id=resolved_campaign_id,
             execution_id=resolved_execution_id,
-            subject_id=f"fixture_cleanup:{_text(pending.get('target'))}",
+            subject_id=fixture_subject,
             status="COMPLETED" if completed else "FAILED",
             evidence={
                 "method": _text(cleanup.get("method")).upper(),
@@ -1663,7 +2064,7 @@ def execute_experiment_cleanup_compensation(
         ))
         steps_out.append({
             "phase": "fixture_cleanup",
-            "cleanup_subject_id": f"fixture_cleanup:{_text(pending.get('target'))}",
+            "cleanup_subject_id": fixture_subject,
             "method": _text(cleanup.get("method")).upper(),
             "path": cleanup_path,
             "status_code": cleanup_status,
@@ -1690,6 +2091,18 @@ def execute_experiment_cleanup_compensation(
             else {}
         )
         source_step_id = _text(cleanup_contract.get("source_step_id"))
+        cleanup_op_ref = _text(cleanup_contract.get("operation_ref"))
+        cleanup_op = ops.get(cleanup_op_ref) or {}
+        cleanup_method = _text(
+            cleanup_contract.get("method") or cleanup_op.get("method") or ""
+        ).upper()
+        cleanup_path_template = normalize_path_placeholders(
+            _text(
+                cleanup_contract.get("path")
+                or cleanup_op.get("path")
+                or cleanup_op.get("raw_path")
+            )
+        )
         if source_step_id:
             scoped_write_steps = [
                 step
@@ -1703,9 +2116,13 @@ def execute_experiment_cleanup_compensation(
                 for step in scoped_write_steps
             ]
             scoped_writes_requiring_cleanup = [
-                attempt
-                for attempt in scoped_accepted_writes
-                if _accepted_write_needs_cleanup(attempt)
+                _dict(step.get("governance_receipt"))
+                for step in scoped_write_steps
+                if _write_step_requires_cleanup(
+                    step,
+                    cleanup_method=cleanup_method,
+                    cleanup_path_template=cleanup_path_template,
+                )
             ]
         else:
             # Legacy cleanup plans without source_step_id have no safe per-step
@@ -1733,7 +2150,54 @@ def execute_experiment_cleanup_compensation(
             for step in matching_steps
             if isinstance(step.get("governance_receipt"), dict)
         ]
-        restoration_verified = bool(scoped_writes_requiring_cleanup) and all(
+        if not scoped_writes_requiring_cleanup:
+            # No source write for this subject needs cleanup. Do not seal FAILED
+            # merely because a cleanup HTTP step exists — that double-failed
+            # identity-bound treatment arms after a successful 2xx DELETE.
+            not_required_reason = (
+                "ACCEPTED_WRITE_STATE_UNCHANGED"
+                if scoped_accepted_writes
+                else "NO_ACCEPTED_WRITE"
+            )
+            contract_evidence_receipts.append(build_contract_evidence_receipt(
+                kind="cleanup",
+                experiment_id=eid,
+                obligation_id=oid,
+                campaign_id=resolved_campaign_id,
+                execution_id=resolved_execution_id,
+                subject_id=cleanup_subject,
+                status="NOT_REQUIRED",
+                evidence={
+                    "step_count": len(matching_steps),
+                    "status_codes": [
+                        int(_dict(step).get("status_code") or 0)
+                        for step in matching_steps
+                    ],
+                    "accepted_write_count": len(scoped_accepted_writes),
+                    "cleanup_required_write_count": 0,
+                    "cleanup_write_count": sum(
+                        1
+                        for receipt in cleanup_governance_receipts
+                        if receipt.get("accepted") is True
+                    ),
+                    "restoration_verified": True,
+                    "state_unchanged": True,
+                    "audit_receipt_ids": sorted({
+                        receipt_id
+                        for receipt_id in (
+                            _governance_audit_receipt_id(governed)
+                            for governed in [
+                                *scoped_accepted_writes,
+                                *cleanup_governance_receipts,
+                            ]
+                        )
+                        if receipt_id
+                    }),
+                    "reason_code": not_required_reason,
+                },
+            ))
+            continue
+        restoration_verified = all(
             any(
                 _cleanup_restores_governed_write(original, cleanup)
                 for cleanup in cleanup_governance_receipts

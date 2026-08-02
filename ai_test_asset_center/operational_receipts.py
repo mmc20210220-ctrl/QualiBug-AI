@@ -333,9 +333,13 @@ def build_execution_operational_receipt(
                 write_request_attempts += 1
 
     failure_count = _non_negative_int(cleanup_failures, "cleanup_failures")
+    # COMPLETED requires at least one accepted cleanup write. Counting mere
+    # attempts (including adapter probes that never accepted) previously sealed
+    # COMPLETED with completed_count=0 while contract evidence was NOT_REQUIRED
+    # (ACCEPTED_WRITE_STATE_UNCHANGED) — 4× CLEANUP_EVIDENCE_INCOMPLETE on T140342Z.
     if failure_count:
         cleanup_status = "FAILED"
-    elif accepted_non_cleanup and cleanup_attempted:
+    elif cleanup_completed:
         cleanup_status = "COMPLETED"
     else:
         cleanup_status = "NOT_REQUIRED"

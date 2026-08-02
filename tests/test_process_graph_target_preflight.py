@@ -130,7 +130,7 @@ def test_pregraph_actor_never_receives_credential_deferral() -> None:
     assert adapted == (
         False,
         "BLOCKED_MISSING_ACTOR",
-        "token_unresolved:actor-writer",
+        "exact_credential_unresolved:actor-writer",
     )
 
 
@@ -154,5 +154,5 @@ def test_fixture_actor_never_receives_credential_deferral() -> None:
     assert adapted == (
         False,
         "BLOCKED_MISSING_ACTOR",
-        "token_unresolved:actor-writer",
+        "exact_credential_unresolved:actor-writer",
     )

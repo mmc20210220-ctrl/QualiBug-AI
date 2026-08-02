@@ -101,3 +101,43 @@ def test_agent_intent_rejects_an_invented_obligation_identity() -> None:
                 "relations": [],
             },
         )
+
+
+def test_agent_intent_rejects_missing_compiled_observer_contract() -> None:
+    with pytest.raises(AgentIntentError, match="observer_contract_missing:OBL-1"):
+        build_agent_intent_plan(
+            {
+                "schema_version": "qualibug.adaptive-obligation-plan.v1",
+                "selected": [{
+                    "obligation_id": "OBL-1",
+                    "experiment_id": "EXP-1",
+                }],
+                "pending_next_round": [],
+            },
+            obligations=[{
+                "obligation_id": "OBL-1",
+                "risk_family": "validation",
+                "required_operations": ["op-read"],
+                "required_actors": ["actor-public"],
+                "source_refs": [_source("GET /resources")],
+            }],
+            experiments_by_obligation={
+                "OBL-1": {
+                    "experiment_id": "EXP-1",
+                    "compile_receipt": {"status": "COMPILED"},
+                    "source_refs": [_source("GET /resources")],
+                    "observers": [],
+                }
+            },
+            behavior_ir={
+                "model_id": "BIR-1",
+                "operations": [{
+                    "id": "op-read",
+                    "method": "GET",
+                    "path": "/resources",
+                    "source_refs": [_source("GET /resources")],
+                }],
+                "actors": [{"id": "actor-public"}],
+                "relations": [],
+            },
+        )

@@ -142,6 +142,15 @@ def _pre_transport_reason_code(reasons: list[str]) -> str:
     combined = " ".join(_text(reason).upper() for reason in reasons)
     if "TARGET_POLICY" in combined or "READ_ONLY" in combined:
         return "BLOCKED_TARGET_POLICY"
+    # A control arm that was dispatched but never proven successful is an
+    # oracle-activation gap, not a missing observer.  It must be matched before
+    # the generic OBSERVER substring test, otherwise a mixed requirement list
+    # ("CONTROL_SUCCESS_NOT_PROVEN,OBSERVER_RECEIPT_INDETERMINATE") reports the
+    # downstream symptom instead of the upstream cause.
+    if "CONTROL_SUCCESS_NOT_PROVEN" in combined:
+        return "BLOCKED_CONTROL_ARM_NOT_PROVEN"
+    if "OBSERVER_RECEIPT_INDETERMINATE" in combined:
+        return "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE"
     if "OBSERVER" in combined:
         return "BLOCKED_MISSING_OBSERVER"
     if "OPERATION" in combined:
@@ -150,7 +159,47 @@ def _pre_transport_reason_code(reasons: list[str]) -> str:
         return "BLOCKED_MISSING_ACTOR"
     if "FIXTURE" in combined:
         return "BLOCKED_MISSING_FIXTURE"
+    # Includes governed_write_identity_unobservable / mutation materialization
+    # blocks after a real before-GET: binding/identity gaps, not connection loss.
     return "BLOCKED_MISSING_BINDING"
+
+
+# A ``blocked_experiment`` verdict states its real gate failures in
+# ``missing_requirements``.  Collapsing all of them onto one observer code hid
+# control-arm and observer-receipt failures behind an "observer capability gap",
+# which then propagated through blocker attribution into customer-facing advice
+# telling operators to declare read endpoints they already had.  Derive the
+# terminal code from the requirement tokens the oracle actually emitted.
+# Order matters: upstream causes precede the symptoms they produce.
+_MISSING_REQUIREMENT_REASON_RULES: tuple[tuple[str, str], ...] = (
+    ("CONTROL_SUCCESS_NOT_PROVEN", "BLOCKED_CONTROL_ARM_NOT_PROVEN"),
+    ("OBSERVER_RECEIPT_INDETERMINATE", "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE"),
+    ("MISSING_OBSERVER", "BLOCKED_MISSING_OBSERVER"),
+    ("OBSERVER", "BLOCKED_MISSING_OBSERVER"),
+    ("MISSING_BINDING", "BLOCKED_MISSING_BINDING"),
+    ("MISSING_ACTOR", "BLOCKED_MISSING_ACTOR"),
+    ("MISSING_FIXTURE", "BLOCKED_MISSING_FIXTURE"),
+    ("MISSING_OPERATION", "BLOCKED_MISSING_OPERATION"),
+)
+
+
+def _blocked_experiment_reason_code(missing_requirements: list[Any]) -> str:
+    """Derive the terminal reason code for a blocked-experiment verdict.
+
+    Never guesses.  When the oracle blocked an experiment without stating any
+    missing requirement, that is an oracle contract violation and is surfaced
+    as an oracle-input gap rather than being attributed to a capability the
+    target system may well already provide.
+    """
+
+    tokens = [_text(item).upper() for item in missing_requirements if _text(item)]
+    if not tokens:
+        return "BLOCKED_ORACLE_INPUT_INCOMPLETE"
+    combined = " ".join(tokens)
+    for marker, code in _MISSING_REQUIREMENT_REASON_RULES:
+        if marker in combined:
+            return code
+    return "BLOCKED_ORACLE_INPUT_INCOMPLETE"
 
 
 # ── P0-9: Harness failure sub-classification (SPEC §11) ──
@@ -297,6 +346,7 @@ def _classify_harness_failure(
         return "HARNESS_ROUTE_FAILED"
 
     # Check steps for connection/timeout errors
+    saw_connection_error = False
     for step in steps_out:
         if not isinstance(step, dict):
             continue
@@ -305,9 +355,27 @@ def _classify_harness_failure(
         if "timeout" in error.lower() or "convergence" in error.lower():
             return "HARNESS_ASYNC_CONVERGENCE_TIMEOUT"
         if "connection" in error.lower():
-            return "HARNESS_CONNECTION_FAILED"
+            saw_connection_error = True
         if status in (404, 503):
             return "HARNESS_ROUTE_FAILED"
+        # Zero-transport governance with a real before observation is not a
+        # connection failure — the target already responded on the before-GET.
+        gov = step.get("governance_receipt")
+        if isinstance(gov, dict):
+            before = gov.get("before") if isinstance(gov.get("before"), dict) else {}
+            before_status = int(before.get("status") or 0)
+            write_attempts = int(gov.get("write_request_attempt_count") or 0)
+            gov_reason = _text(gov.get("reason") or error)
+            if (
+                write_attempts == 0
+                and before_status > 0
+                and gov_reason
+                and "connection" not in gov_reason.lower()
+            ):
+                return "HARNESS_REQUEST_BUILD_FAILED"
+
+    if saw_connection_error:
+        return "HARNESS_CONNECTION_FAILED"
 
     # Observer response unreadable
     for step in steps_out:
@@ -317,10 +385,12 @@ def _classify_harness_failure(
             if int(step.get("status_code") or 0) == 0:
                 return "HARNESS_OBSERVER_RESPONSE_UNREADABLE"
 
-    # Fallback: generic harness failure
+    # Fallback: do not claim CONNECTION without connection evidence. Empty
+    # steps with no error text previously defaulted to CONNECTION_FAILED and
+    # degraded campaigns after governance blocks left status_code=0.
     if observations.get("harness_error"):
         return "HARNESS_REQUEST_BUILD_FAILED"
-    return "HARNESS_CONNECTION_FAILED"
+    return "HARNESS_REQUEST_BUILD_FAILED"
 
 
 def _run_cross_entity_observation_completeness(
@@ -1055,6 +1125,28 @@ def finalize_experiment_execution(
         isinstance(s, dict) and isinstance(s.get("status_code"), int) and s["status_code"] > 0
         for s in steps_out
     )
+    # Defense in depth: governed writes blocked after a real before-GET leave
+    # write status_code=0. Without lifting those reasons into the pre-transport
+    # block list, finalize used to seal HARNESS_CONNECTION_FAILED even though
+    # the observation gateway already counted the before request.
+    for step in steps_out:
+        if not isinstance(step, dict):
+            continue
+        gov = step.get("governance_receipt")
+        if not isinstance(gov, dict):
+            continue
+        before = gov.get("before") if isinstance(gov.get("before"), dict) else {}
+        before_status = int(before.get("status") or 0)
+        write_attempts = int(gov.get("write_request_attempt_count") or 0)
+        gov_reason = _text(gov.get("reason") or step.get("error"))
+        if (
+            write_attempts == 0
+            and before_status > 0
+            and "connection" not in gov_reason.lower()
+        ):
+            block_reason = gov_reason or "governed_write_not_attempted"
+            if block_reason not in pre_transport_block_reasons:
+                pre_transport_block_reasons.append(block_reason)
     status = "EXECUTED" if has_http else "HARNESS_FAILURE"
     # ── P0-9: Fine-grained harness failure classification ──
     harness_failure_reason = ""
@@ -1192,8 +1284,15 @@ def finalize_experiment_execution(
             ) or ",".join(_list(verdict.get("missing_requirements"))[:8])
         else:
             status = "BLOCKED"
-            reason = "BLOCKED_MISSING_OBSERVER"
-            detail = ",".join(_list(verdict.get("missing_requirements"))[:8])
+            missing_requirements = _list(verdict.get("missing_requirements"))
+            reason = _blocked_experiment_reason_code(missing_requirements)
+            detail = ",".join(
+                _text(item) for item in missing_requirements[:8] if _text(item)
+            )
+            if not detail:
+                # Fail fast: keep the contract violation visible instead of
+                # emitting a blocked verdict with no stated cause.
+                detail = "oracle_missing_requirements_absent"
         return {
             "schema_version": "qualibug.experiment-execution.v1",
             "experiment_id": eid,

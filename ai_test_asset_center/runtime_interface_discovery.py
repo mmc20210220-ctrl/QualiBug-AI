@@ -165,16 +165,22 @@ def load_runtime_interface_discovery_resources() -> list[str]:
 def load_runtime_interface_confirmation_tokens(
     root: Path,
     project: str,
+    *,
+    base_url: str = "",
 ) -> list[str]:
     """Load unique active bearer tokens from the declared test-actor catalog.
 
     Tokens are returned only for transport use and must never be copied into a
     receipt.  A malformed catalog fails fast because silently treating broken
     credentials as an empty actor set would make interface absence ambiguous.
+
+    Active rows resolve through ``load_actor_tokens`` so password-declared
+    accounts refresh against the approved target instead of orphan JWT snapshots.
+    Disabled/locked accounts remain excluded from confirmation probes.
     """
 
     path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
-    tokens: list[str] = []
+    rows: list[Any] = []
     if path.exists():
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -188,7 +194,7 @@ def load_runtime_interface_confirmation_tokens(
             declared = payload.get("accounts") or payload.get("actors") or payload.get("users")
             if declared is None:
                 rows = [
-                    value
+                    {**(value if isinstance(value, dict) else {}), "_source_key": key}
                     for key, value in payload.items()
                     if key not in {"schema", "schema_version", "meta"}
                 ]
@@ -202,6 +208,15 @@ def load_runtime_interface_confirmation_tokens(
         for row in rows:
             if not isinstance(row, dict):
                 raise ValueError("runtime_interface_actor_catalog_row_invalid")
+
+    from .experiment_runtime_support import load_actor_tokens
+
+    token_map = load_actor_tokens(root, project, base_url=_text(base_url))
+    tokens: list[str] = []
+    if rows:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
             status = _text(
                 row.get("status")
                 or row.get("account_status")
@@ -211,24 +226,36 @@ def load_runtime_interface_confirmation_tokens(
             ).upper()
             if status in {"DISABLED", "LOCKED", "SUSPENDED", "INACTIVE"}:
                 continue
-            token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
-            if token and token not in tokens:
-                tokens.append(token)
+            identities = [
+                row.get("email"),
+                row.get("username"),
+                row.get("account_ref"),
+                row.get("profile"),
+                row.get("name"),
+                row.get("id"),
+                row.get("_source_key"),
+                row.get("authenticated_role"),
+                row.get("role"),
+            ]
+            email = _text(row.get("email"))
+            if email.count("@") == 1:
+                identities.append(email.split("@", 1)[0])
+            resolved = ""
+            for identity in identities:
+                key = _text(identity)
+                if not key:
+                    continue
+                resolved = _text(token_map.get(key) or token_map.get(f"secret_ref:test_accounts:{key}"))
+                if resolved:
+                    break
+            if resolved and resolved not in tokens:
+                tokens.append(resolved)
+        return tokens
 
-    if not tokens:
-        # The enterprise settings route stores credentials in the existing
-        # credential manager, not in the legacy test_accounts.json alias. Reuse
-        # that authority so a source-bound project can confirm a read-only
-        # interface probe with its declared actors. The helper returns token
-        # material only for transport; this discovery module never persists it
-        # in an observation receipt.
-        from .experiment_runtime_support import _configured_credential_tokens
-
-        configured = _configured_credential_tokens(root, project)
-        for token in configured.values():
-            token = _text(token)
-            if token and token not in tokens:
-                tokens.append(token)
+    for token in token_map.values():
+        token = _text(token)
+        if token and token not in tokens:
+            tokens.append(token)
     return tokens
 
 

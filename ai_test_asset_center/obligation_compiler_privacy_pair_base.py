@@ -280,8 +280,17 @@ def compile_obligations_from_behavior_ir(
     behavior_ir: dict[str, Any],
     *,
     base_compile: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    root: str = "",
+    project: str = "",
 ) -> dict[str, Any]:
     compiler = base_compile or _original_compile
+    if root or project:
+        # Forwarded only when the caller actually has a workspace identity; a
+        # base_compile that predates the parameters still works on plain IR.
+        return _pair_obligations(
+            compiler(behavior_ir, root=root, project=project),
+            behavior_ir,
+        )
     return _pair_obligations(
         compiler(behavior_ir),
         behavior_ir,

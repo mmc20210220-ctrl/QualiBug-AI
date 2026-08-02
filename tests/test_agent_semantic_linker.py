@@ -248,6 +248,8 @@ def test_agent_semantic_linker_sends_expert_context_without_credentials() -> Non
     assert "state:transfer" in prompt
     assert "table:transfers" in prompt
     assert "semantic_frame" in prompt
+    assert "NO_EXECUTABLE_INTERFACE and AMBIGUOUS require relationships to be exactly an empty array" in prompt
+    assert "if disposition is not LINKED, emit `relationships: []`" in prompt
     assert "buyer@example.com" not in prompt
     assert "Test@123456" not in prompt
 

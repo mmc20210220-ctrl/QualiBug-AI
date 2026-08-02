@@ -4,10 +4,12 @@ Governance, graph-proof, account-identity and authorization-comparison adapters
 live in ``experiment_executor_governance``. This module keeps the established
 public identities and monkeypatch surface while delegating one execution call.
 The final public result additionally applies the authorization causal-evidence
-gate so an Oracle candidate cannot leave the execution boundary without the
-existing control/treatment/observer/binding receipt chain. Passed authorization
-findings embed that complete receipt and exact binding proofs before Gate v2
-fingerprints the customer-facing payload.
+gate and SPEC Oracle Validity Gates (with Effect Observation Graph) so an
+Oracle candidate cannot leave the execution boundary without the existing
+control/treatment/observer/binding receipt chain and non-vacuous
+identity/contrast/evidence proof. Passed authorization findings embed that
+complete receipt and exact binding proofs before Gate v2 fingerprints the
+customer-facing payload.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ from .authorization_delivery_gate import (
 from .authorization_oracle_causality import (
     enforce_authorization_oracle_causality,
 )
+from .oracle_validity_gates import enforce_oracle_validity_gates
 from .binding_materialization_identity_receipt import (
     BindingMaterializationIdentityError,
     binding_identity_proofs_for_targets,
@@ -235,6 +238,13 @@ def execute_one_experiment(
             experiment=experiment,
             behavior_ir=behavior_ir,
             account_rows=_governance._test_account_rows(root, project),
+        )
+        # SPEC §7.6–7.7: Effect Observation Graph + Oracle Validity Gates demote
+        # PROPERTY_HELD/VIOLATION when identity/contrast/preconditions/causal/
+        # evidence are incomplete. Never upgrades a verdict.
+        governed = enforce_oracle_validity_gates(
+            result=governed,
+            experiment=experiment,
         )
         causal_passed = (
             _text(

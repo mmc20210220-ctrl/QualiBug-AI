@@ -1081,6 +1081,43 @@ def build_source_backed_coverage_obligations(
         source_refs = _list(node.get("source_refs"))
         coverage_id = _text(node.get("coverage_id"))
 
+        # Coverage nodes may still label taxonomy as ``invariant``. Compile
+        # authority must use the same expression→family map as Strategy-7; a bare
+        # ``risk_family=invariant`` without expression hits
+        # ``invariant_assertion_kind_missing`` at the experiment compiler.
+        invariant_ref = ""
+        expression: dict[str, Any] = {}
+        executable_kind = ""
+        if node_type == "invariant":
+            inv_row = next(
+                (
+                    row
+                    for row in _list(behavior_ir.get("invariants"))
+                    if isinstance(row, dict)
+                    and _text(row.get("id")) == _text(node.get("ir_node_id"))
+                ),
+                {},
+            )
+            invariant_ref = _text(inv_row.get("id") or node.get("ir_node_id"))
+            inv_kind = _invariant_kind(inv_row) if inv_row else ""
+            expression = _dict(inv_row.get("expression")) if inv_row else {}
+            if not expression and inv_kind:
+                expression = {"kind": inv_kind}
+            if inv_kind == "postcondition" and not _postcondition_has_bound_effect(
+                expression
+            ):
+                # Same gate as Strategy-7 / coverage-map builders: prose-only
+                # postconditions stay coverage gaps, not compile-blocked obligations.
+                continue
+            family = _risk_family_for_matrix_invariant(inv_kind)
+            executable_kind = (
+                inv_kind.lower()
+                if inv_kind.lower() in _EXECUTABLE_INVARIANT_ASSERTION_KINDS
+                else _text(expression.get("kind")).lower()
+            )
+            if executable_kind not in _EXECUTABLE_INVARIANT_ASSERTION_KINDS:
+                executable_kind = ""
+
         # Determine property template
         template_map: dict[str, str] = {
             "authorization": "permitted_operation_invocation",
@@ -1088,8 +1125,17 @@ def build_source_backed_coverage_obligations(
             "visibility": "permitted_operation_invocation",
             "consistency": "single_dimension_mutation",
             "state_integrity": "state_transition_boundary",
+            "state": "invariant_violation_detection",
+            "conservation": "invariant_violation_detection",
+            "validation": "invariant_violation_detection",
+            "idempotency": "idempotent_write_verification",
+            "concurrency": "conservation_under_concurrency",
+            "temporal": "invariant_violation_detection",
+            "privacy": "invariant_violation_detection",
         }
         template = template_map.get(family, "permitted_operation_invocation")
+        if node_type == "invariant":
+            template = "invariant_violation_detection"
 
         # Actor handling
         actors = _list(behavior_ir.get("actors"))
@@ -1108,27 +1154,29 @@ def build_source_backed_coverage_obligations(
         if alt_actor_ref and template == "owner_viewer_isolation":
             required_actors = [actor_ref, alt_actor_ref]
 
-        # Observer determination
-        observer_map: dict[str, list[str]] = {
-            "authorization": ["http_response", "actor_identity"],
-            "isolation": ["http_response", "resource_ownership"],
-            "visibility": ["http_response", "actor_identity"],
-            "consistency": ["http_response", "entity_state"],
-            "state_integrity": ["http_response", "entity_state"],
-            "lifecycle": ["http_response", "entity_state"],
-            "invariant": ["http_response", "entity_state"],
-        }
-        required_observers = observer_map.get(family, ["http_response"])
+        # Observers: resolve through make_obligation's canonical family so
+        # promotion candidates (invariant→validation) still get a real list.
+        from .test_obligation import resolve_risk_family
+
+        resolved_family = _text(resolve_risk_family(family).get("canonical")) or family
+        required_observers = (
+            _MATRIX_OBSERVERS_BY_FAMILY.get(resolved_family)
+            or _MATRIX_OBSERVERS_BY_FAMILY.get(family)
+            or ["http_response"]
+        )
 
         # Cleanup follows the source-declared semantic effect. A POST can be a
         # read-only validation/preview action; method-only classification would
         # create an impossible cleanup obligation for that operation.
+        # make_obligation requires a dict — a bare string raises ValueError and
+        # previously fell into a silent fallback that emitted bare
+        # risk_family=invariant (measured as invariant_assertion_kind_missing).
         effect_input = primary_operation or {
             "side_effect_class": node.get("side_effect_class"),
             "read_write": node.get("read_write"),
         }
         is_write = _infer_operation_effect(effect_input, op_method.upper()) == "write"
-        cleanup_requirement = "required" if is_write else "not_required"
+        cleanup_requirement: dict[str, Any] = {"required": bool(is_write)}
 
         # Build property spec
         primary_op = op_refs[0] if op_refs else ""
@@ -1142,38 +1190,32 @@ def build_source_backed_coverage_obligations(
         if alt_actor_ref and template == "owner_viewer_isolation":
             property_spec["owner_actor_ref"] = actor_ref
             property_spec["viewer_actor_ref"] = alt_actor_ref
+        if node_type == "invariant":
+            property_spec.update({
+                "invariant_ref": invariant_ref,
+                "operation_refs": list(op_refs),
+                "invariant_kind": executable_kind,
+                "expression": expression,
+                "_strategy": "coverage_invariant",
+            })
 
-        try:
-            obl = make_obligation(
-                risk_family=family,
-                subject_refs=op_refs + ([actor_ref] if actor_ref else []),
-                property_spec=property_spec,
-                required_actors=required_actors,
-                required_operations=op_refs,
-                required_observers=required_observers,
-                cleanup_requirement=cleanup_requirement,
-                source_refs=source_refs,
-                confidence=0.5,
-            )
-        except Exception:
-            # Build minimal obligation if make_obligation rejects
-            raw_id = f"obl_cov_{coverage_id}"
-            obl = {
-                "obligation_id": f"obl_{hashlib.sha256(raw_id.encode()).hexdigest()[:16]}",
-                "risk_family": family,
-                "subject_refs": op_refs,
-                "property_spec": property_spec,
-                "required_actors": required_actors,
-                "required_operations": op_refs,
-                "required_observers": required_observers,
-                "cleanup_requirement": cleanup_requirement,
-                "source_refs": source_refs,
-                "confidence": 0.5,
-                "_coverage_obligation": True,
-            }
+        # Fail visible: do not paper over factory errors with a bare-family
+        # obligation that can only die later as invariant_assertion_kind_missing.
+        obl = make_obligation(
+            risk_family=family,
+            subject_refs=op_refs + ([actor_ref] if actor_ref else []),
+            property_spec=property_spec,
+            required_actors=required_actors,
+            required_operations=op_refs,
+            required_observers=list(required_observers),
+            cleanup_requirement=cleanup_requirement,
+            source_refs=source_refs,
+            confidence=0.5,
+        )
 
         obl["_coverage_obligation"] = True
         obligations.append(obl)
+
 
     return obligations
 
@@ -1237,10 +1279,25 @@ _MATRIX_OBSERVERS_BY_FAMILY: dict[str, list[str]] = {
     "authorization": ["http_response", "actor_identity"],
     "isolation": ["http_response", "resource_ownership"],
     "validation": ["http_response", "typed_assertion"],
+    "state": ["entity_state", "typed_assertion", "source_invariant", "before_state", "after_state"],
     "state_integrity": ["http_response", "entity_state"],
+    "conservation": ["typed_assertion", "source_invariant", "entity_state"],
     "consistency": ["http_response", "entity_state"],
-    "invariant": ["http_response", "entity_state"],
+    # Kept for legacy matrix rows; new Strategy-7 rows resolve via make_obligation.
+    "invariant": ["http_response", "entity_state", "typed_assertion", "source_invariant"],
 }
+
+# Assertion kinds the invariant compile gate accepts (keep aligned with
+# experiment_compiler_obligation_core._INVARIANT_ASSERTION_KINDS).
+_EXECUTABLE_INVARIANT_ASSERTION_KINDS = frozenset({
+    "conservation",
+    "cross_entity_consistency",
+    "field_delta",
+    "forbidden_state_transition",
+    "idempotency",
+    "postcondition",
+    "state_transition",
+})
 
 
 def _invariant_kind(invariant: dict[str, Any]) -> str:
@@ -1248,6 +1305,63 @@ def _invariant_kind(invariant: dict[str, Any]) -> str:
     if isinstance(expression, dict):
         return _text(expression.get("kind"))
     return _text(invariant.get("kind"))
+
+
+def _risk_family_for_matrix_invariant(inv_kind: str) -> str:
+    """Map a source expression kind to a compile family (obligation-compiler SSOT).
+
+    The exhaustive matrix previously emitted ``risk_family=invariant`` without going
+    through ``make_obligation`` and without attaching ``expression``. That left the
+    compiler with an empty protocol assertion and
+    ``FIELD_LEVEL_RULE_NOT_EXECUTABLE:invariant_assertion_kind_missing`` — measured
+    ×42 on held-in-131 after cleanup was already fixed.
+    """
+    kind = _text(inv_kind).lower()
+    if any(token in kind for token in ("idempot", "exactly_once", "deduplic")):
+        return "idempotency"
+    if any(token in kind for token in ("concurr", "race", "atomic")):
+        return "concurrency"
+    if any(
+        token in kind
+        for token in (
+            "conserv",
+            "data_conservation",
+            "balance",
+            "amount",
+            "quantity",
+            "库存",
+            "金额",
+        )
+    ):
+        return "conservation"
+    if any(token in kind for token in ("privacy", "pii", "mask", "隐私")):
+        return "privacy"
+    if any(token in kind for token in ("time", "expir", "temporal", "过期")):
+        return "temporal"
+    if any(
+        token in kind
+        for token in (
+            "permission",
+            "access_control",
+            "authorization",
+            "authorisation",
+            "authz",
+            "acl",
+            "rbac",
+            "visib",
+            "scope",
+            "可见",
+        )
+    ):
+        return "visibility"
+    if any(token in kind for token in ("state_machine", "state", "状态", "status_")):
+        return "state"
+    if any(
+        token in kind
+        for token in ("postcondition", "must_become", "must_create", "因果", "后置")
+    ):
+        return "state"
+    return "validation"
 
 
 def _normalized_field(value: Any) -> str:
@@ -1405,12 +1519,21 @@ def build_exhaustive_obligation_matrix(
             return
         # An obligation with no observer cannot compile: the experiment compiler
         # blocks it as BLOCKED_MISSING_OBSERVER before it ever reaches a target.
-        observers = _MATRIX_OBSERVERS_BY_FAMILY.get(risk_family)
+        # Resolve family through the same registry as make_obligation so promotion
+        # candidates (consistency→validation) still get an observer list.
+        from .test_obligation import make_obligation, resolve_risk_family
+
+        resolved_family = _text(resolve_risk_family(risk_family).get("canonical")) or _text(
+            risk_family
+        )
+        observers = _MATRIX_OBSERVERS_BY_FAMILY.get(
+            resolved_family
+        ) or _MATRIX_OBSERVERS_BY_FAMILY.get(_text(risk_family))
         if not observers:
-            skipped["unobservable_family:" + risk_family] += 1
+            skipped["unobservable_family:" + (_text(risk_family) or resolved_family)] += 1
             return
         if not source_refs:
-            skipped["no_source_ref:" + risk_family] += 1
+            skipped["no_source_ref:" + (_text(risk_family) or resolved_family)] += 1
             return
         if cleanup is None:
             cleanup = "not_required"
@@ -1424,24 +1547,30 @@ def build_exhaustive_obligation_matrix(
         if sig in seen_signatures:
             return
         seen_signatures.add(sig)
-        raw_id = f"obl_mtx_{sig}"
-        # Experiment compiler reads ``property`` (make_obligation SSOT). Keep
-        # ``property_spec`` only as a diagnostic mirror for matrix provenance.
         prop = dict(property_spec or {})
-        obl: dict[str, Any] = {
-            "obligation_id": f"obl_{hashlib.sha256(raw_id.encode()).hexdigest()[:16]}",
-            "risk_family": risk_family,
-            "subject_refs": subject_refs,
-            "property": prop,
-            "property_spec": prop,
-            "required_actors": required_actors,
-            "required_operations": required_operations,
-            "required_observers": list(observers),
-            "cleanup_requirement": cleanup,
-            "source_refs": source_refs,
-            "confidence": confidence,
-            "_matrix_obligation": True,
-        }
+        cleanup_requirement: dict[str, Any] | str
+        if isinstance(cleanup, dict):
+            cleanup_requirement = cleanup
+        else:
+            cleanup_requirement = {
+                "required": _text(cleanup).lower() in {"required", "true", "1", "yes"}
+            }
+        obl = make_obligation(
+            risk_family=risk_family,
+            subject_refs=subject_refs,
+            property_spec=prop,
+            required_actors=required_actors,
+            required_operations=required_operations,
+            required_observers=list(observers),
+            cleanup_requirement=cleanup_requirement
+            if isinstance(cleanup_requirement, dict)
+            else {"required": bool(cleanup_requirement)},
+            source_refs=source_refs,
+            confidence=confidence,
+        )
+        # Keep a diagnostic mirror for matrix provenance / older readers.
+        obl["property_spec"] = dict(obl.get("property") or prop)
+        obl["_matrix_obligation"] = True
         obligations.append(obl)
 
     # ── Strategy 1: source-decided (actor, write op) pairs → authorization ──
@@ -1680,14 +1809,27 @@ def build_exhaustive_obligation_matrix(
         if not inv_ops:
             skipped["invariant_not_bound_to_operation"] += 1
             continue
+        expression = _dict(inv.get("expression"))
+        if not expression and inv_kind:
+            expression = {"kind": inv_kind}
+        family = _risk_family_for_matrix_invariant(inv_kind)
+        executable_kind = (
+            inv_kind.lower()
+            if inv_kind.lower() in _EXECUTABLE_INVARIANT_ASSERTION_KINDS
+            else _text(expression.get("kind")).lower()
+        )
+        if executable_kind not in _EXECUTABLE_INVARIANT_ASSERTION_KINDS:
+            executable_kind = ""
         _add_obligation(
-            "invariant",
+            family,
             [inv_id],
             {
                 "template": "invariant_violation_detection",
                 "invariant_ref": inv_id,
                 "operation_refs": inv_ops,
-                "invariant_kind": inv_kind,
+                "operation_ref": inv_ops[0],
+                "invariant_kind": executable_kind,
+                "expression": expression,
                 "_strategy": "invariant_matrix",
             },
             [_text(active_actors[0].get("id"))] if active_actors else [],

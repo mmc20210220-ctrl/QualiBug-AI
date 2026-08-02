@@ -54,25 +54,20 @@ def _minimal_body_from_schema(operation: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
-def source_request_example(operation: dict[str, Any]) -> dict[str, Any]:
+def source_request_example(
+    operation: dict[str, Any],
+    *,
+    sibling_operations: list[Any] | None = None,
+) -> dict[str, Any]:
     """Return an explicitly documented request example, never synthesized data."""
 
-    direct = _dict(operation).get("request_example")
-    if isinstance(direct, dict) and direct:
-        return deepcopy(direct)
-    request_schema = _dict(_dict(operation).get("request_schema"))
-    content = _dict(request_schema.get("content"))
-    for media in content.values():
-        if not isinstance(media, dict):
-            continue
-        example = media.get("example")
-        if isinstance(example, dict) and example:
-            return deepcopy(example)
-        for row in _dict(media.get("examples")).values():
-            value = _dict(row).get("value")
-            if isinstance(value, dict) and value:
-                return deepcopy(value)
-    return {}
+    from .experiment_compiler_support import _source_request_example
+
+    example = _source_request_example(
+        operation,
+        sibling_operations=sibling_operations,
+    )
+    return deepcopy(example) if example else {}
 
 
 def _request_body_schema(operation: dict[str, Any]) -> dict[str, Any]:
@@ -420,6 +415,9 @@ def compile_family_protocol(
     family = _text(risk_family)
     method = _text(operation.get("method")).upper()
     template = _text(property_spec.get("template"))
+    sibling_operations = (
+        _list(_dict(behavior_ir).get("operations")) if behavior_ir else []
+    )
     # Source-grounded permitted invocation: one actor, observe the documented
     # operation. Used when IR has permits but no executable deny pair — must
     # not invent a second actor or silently drop the module from scheduling.
@@ -477,7 +475,7 @@ def compile_family_protocol(
                 "reason_code": "BLOCKED_MISSING_OPERATION",
                 "detail": "idempotency_requires_write_operation",
             }
-        body = source_request_example(operation)
+        body = source_request_example(operation, sibling_operations=sibling_operations)
         if method in {"POST", "PUT", "PATCH"} and not body:
             body = _minimal_body_from_schema(operation)
         return {
@@ -509,7 +507,7 @@ def compile_family_protocol(
                 "reason_code": "BLOCKED_MISSING_OPERATION",
                 "detail": "concurrency_requires_write_operation",
             }
-        body = source_request_example(operation)
+        body = source_request_example(operation, sibling_operations=sibling_operations)
         if method in {"POST", "PUT", "PATCH"} and not body:
             body = _minimal_body_from_schema(operation)
         barrier_group = f"barrier:{operation_ref}"
@@ -546,7 +544,7 @@ def compile_family_protocol(
                 "reason_code": "BLOCKED_MISSING_OPERATION",
                 "detail": "conservation_requires_write_operation",
             }
-        body = source_request_example(operation)
+        body = source_request_example(operation, sibling_operations=sibling_operations)
         if method in {"POST", "PUT", "PATCH"} and not body:
             body = _minimal_body_from_schema(operation)
         expression = _dict(property_spec.get("expression"))
@@ -637,7 +635,7 @@ def compile_family_protocol(
                 "reason_code": "BLOCKED_MISSING_OPERATION",
                 "detail": "temporal_requires_write_operation",
             }
-        body = source_request_example(operation)
+        body = source_request_example(operation, sibling_operations=sibling_operations)
         if method in {"POST", "PUT", "PATCH"} and not body:
             return {
                 "status": "BLOCKED",
@@ -940,7 +938,7 @@ def compile_family_protocol(
         family in {"authorization", "isolation", "visibility"}
         and method in {"POST", "PUT", "PATCH"}
     ):
-        write_body = source_request_example(operation)
+        write_body = source_request_example(operation, sibling_operations=sibling_operations)
         if not write_body:
             write_body = _minimal_body_from_schema(operation)
 
