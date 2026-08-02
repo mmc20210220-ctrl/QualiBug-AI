@@ -936,9 +936,14 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
                     "operator_action": err.get("operator_action", "enhance_parser_or_provide_machine_readable_source"),
                 })
     # ── Phase 3: LLM semantic extraction for zero-output sources ──
+    # Rule extraction (SPEC §12/§13) runs independently of the legacy
+    # zero-output gate: tables / field dictionaries never cover the textual
+    # business rules the regex vocabulary may have missed.
     semantic_candidates: list[dict[str, Any]] = []
     semantic_receipts: list[dict[str, Any]] = []
     from ._semantic_extraction import (
+        provider_status,
+        resolve_semantic_rule_extraction_mode,
         run_semantic_extraction,
         semantic_extraction_availability,
     )
@@ -946,7 +951,20 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         options.get("enable_semantic_extraction")
         or os.getenv("QUALIBUG_SEMANTIC_EXTRACTION", "").strip() in {"1", "true", "yes"}
     )
-    _sem_availability = semantic_extraction_availability(_sem_requested)
+    _rule_mode_receipt = resolve_semantic_rule_extraction_mode(
+        requested_mode=str(options.get("semantic_rule_extraction_mode") or "shadow"),
+        provider_status_value=provider_status(),
+        governance_policy={
+            "promotion_gates_met": options.get("rule_promotion_gates_met") is True
+        },
+    )
+    _rule_mode_active = _rule_mode_receipt["effective_mode"] in {
+        "shadow",
+        "augment",
+        "required",
+    }
+    _should_run_llm = _sem_requested or _rule_mode_active
+    _sem_availability = semantic_extraction_availability(_should_run_llm)
     if not _sem_availability.get("available"):
         parse_coverage_gaps.append({
             "kind": "SEMANTIC_EXTRACTION_UNAVAILABLE",
@@ -957,6 +975,7 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
                 f"{_sem_availability.get('detail')}"
             )[:200],
         })
+    semantic_receipts.append(_rule_mode_receipt)
     _sem_targets: list[tuple[dict[str, Any], str]] = []
     if _sem_availability.get("available"):
         for source, parsed in parsed_rows:
@@ -966,7 +985,10 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
                 + len(parsed.get("field_dictionary") or [])
                 + len(parsed.get("permissions") or [])
             )
-            if _src_structured == 0 and _src_text.strip():
+            if _rule_mode_active:
+                if _src_text.strip():
+                    _sem_targets.append((source, _src_text))
+            elif _src_structured == 0 and _src_text.strip():
                 _sem_targets.append((source, _src_text))
     # Each target costs one provider round-trip, so the layer is both capped and
     # run concurrently — otherwise a document-heavy project serializes minutes of
@@ -1056,6 +1078,67 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
     )
     rules.extend(dsl_rules)
     rules = _dedupe_by_id(rules, "rule_id")
+    # ── Augment promotion (SPEC §12.3): validated explicit LLM-only rule
+    # candidates enter rule_library when the mode receipt resolved to augment,
+    # then flow through the existing governance chain. Shadow keeps them as
+    # candidates only.
+    if _rule_mode_receipt["effective_mode"] == "augment":
+        _llm_rule_candidates = [
+            dict(row)
+            for row in semantic_candidates
+            if isinstance(row, dict)
+            and str(row.get("kind") or "").lower() == "rule"
+        ]
+        if _llm_rule_candidates:
+            from ._semantic_extraction import (
+                build_rule_candidate_ledger,
+                promote_rule_candidates_to_rules,
+            )
+
+            _regex_rules_by_source: dict[str, list[dict[str, Any]]] = {}
+            for _r in rules:
+                for _span in (_r.get("source_spans") or []):
+                    if (
+                        isinstance(_span, dict)
+                        and str(_span.get("source_id") or "").strip()
+                    ):
+                        _regex_rules_by_source.setdefault(
+                            str(_span.get("source_id") or "").strip(), []
+                        ).append(_r)
+                        break
+            _promoted_all: list[dict[str, Any]] = []
+            for _cand in _llm_rule_candidates:
+                _src = str(_cand.get("source_id") or "").strip()
+                if not _src:
+                    continue
+                _src_text = next(
+                    (p.get("text") or "" for _, p in parsed_rows
+                     if str(_.get("source_id") or "").strip() == _src),
+                    "",
+                )
+                _ledger = build_rule_candidate_ledger(
+                    _regex_rules_by_source.get(_src, []),
+                    [_cand],
+                    source_id=_src,
+                    source_text=_src_text,
+                )
+                _promoted, _promo_receipt = promote_rule_candidates_to_rules(
+                    _ledger.get("entries", []),
+                    source_id=_src,
+                )
+                _promoted_all.extend(_promoted)
+            if _promoted_all:
+                _existing_rule_ids = {
+                    str(row.get("rule_id") or "").strip() for row in rules
+                }
+                rules.extend(
+                    [
+                        dict(row)
+                        for row in _promoted_all
+                        if str(row.get("rule_id") or "").strip()
+                        not in _existing_rule_ids
+                    ]
+                )
     industry_oracles = list(industry.get("industry_oracles") or []) + dsl_oracles
     objects = list(industry.get("business_objects") or [])
     object_names = {str(row.get("object") or "") for row in objects if isinstance(row, dict)}

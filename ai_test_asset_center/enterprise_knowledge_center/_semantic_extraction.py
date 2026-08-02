@@ -707,6 +707,9 @@ _SYSTEM_PROMPT = """\
 15. normalized_suggestion 是标准化建议，不是事实；每个标准化字段必须在
     derivations 中给出 derived_from_text（原文证据）与 normalization_method。
 16. 保留中文，不翻译后再抽取。
+17. 一条规则 = 一个候选：evidence_spans 只包含同一条规则的证据。原文包含多条
+    规则（如"逾期订单不得发货。金额超过 5000 元需要审批。"）必须拆分为多个
+    rule 候选，每个候选只描述自己的规则，不得合并。
 """
 
 _USER_PROMPT_TEMPLATE = """\
@@ -1343,14 +1346,18 @@ def _numeric_fidelity(
 def _derivations_cover_suggestion(
     suggestion: dict[str, Any],
     derivations: list[dict[str, Any]],
-) -> bool:
-    """Every non-empty leaf of normalized_suggestion needs a derivation entry."""
+) -> tuple[bool, str]:
+    """Every non-empty leaf of normalized_suggestion needs a derivation entry.
+
+    Returns (covered, missing_paths). The missing paths are named so a rejected
+    candidate is diagnosable instead of a bare AMBIGUOUS_STRUCTURE.
+    """
     covered: set[str] = set()
     for row in derivations:
         if isinstance(row, dict) and _text(row.get("normalized_path")):
             covered.add(_text(row.get("normalized_path")))
             if not _text(row.get("normalization_method")):
-                return False
+                return False, f"normalization_method_missing:{row.get('normalized_path')}"
 
     def leaves(prefix: str, node: Any) -> list[str]:
         if isinstance(node, dict):
@@ -1362,10 +1369,71 @@ def _derivations_cover_suggestion(
             return []
         return [prefix]
 
-    for path in leaves("", suggestion):
-        if path not in covered:
-            return False
-    return True
+    missing = [
+        path for path in leaves("", suggestion) if path not in covered
+    ]
+    return (not missing), ",".join(sorted(missing))
+
+
+def _augment_derivations_from_semantic_spans(
+    suggestion: dict[str, Any],
+    semantic_spans: dict[str, Any],
+    derivations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Deterministically complete derivations from containment-checked spans.
+
+    The derivation requirement exists so every normalized value carries source
+    evidence. When the model omits a derivation row, the validator can still
+    ground the value: the semantic span for the matching role was already
+    containment-verified against the evidence, so a derivation generated from
+    that span text is deterministic and traceable — never a hallucination.
+    """
+    out = [dict(row) for row in derivations if isinstance(row, dict)]
+    covered = {_text(row.get("normalized_path")) for row in out}
+    span_role_by_path = {
+        "object": "object",
+        "actor": "actor",
+        "effect.action": "action",
+        "effect.operator_family": "modality",
+        "condition.state": "condition",
+        "threshold": "threshold",
+        "exception": "exception",
+        "temporal": "temporal",
+    }
+
+    def leaves(prefix: str, node: Any) -> list[tuple[str, Any]]:
+        if isinstance(node, dict):
+            result: list[tuple[str, Any]] = []
+            for key, child in node.items():
+                result.extend(
+                    leaves(f"{prefix}.{key}" if prefix else key, child)
+                )
+            return result
+        if node is None or node == "" or node == [] or node == {}:
+            return []
+        return [(prefix, node)]
+
+    for path, value in leaves("", suggestion):
+        if path in covered:
+            continue
+        role = span_role_by_path.get(path)
+        if not role:
+            continue
+        terms = [
+            _text(row.get("text"))
+            for row in _list(semantic_spans.get(role))
+            if isinstance(row, dict) and _text(row.get("text"))
+        ]
+        if not terms:
+            continue
+        out.append({
+            "normalized_path": path,
+            "normalized_value": value,
+            "derived_from_text": terms[0],
+            "normalization_method": "semantic_span_verbatim",
+        })
+        covered.add(path)
+    return out
 
 
 def validate_rule_candidates(
@@ -1439,9 +1507,19 @@ def validate_rule_candidates(
             refuse("REJECTED_NUMERIC_MISMATCH", "threshold_not_in_evidence")
             continue
         derivations = _list(candidate.get("derivations"))
-        if suggestion and not _derivations_cover_suggestion(suggestion, derivations):
-            refuse("REJECTED_AMBIGUOUS_STRUCTURE", "derivation_requirement_missing")
-            continue
+        if suggestion:
+            derivations = _augment_derivations_from_semantic_spans(
+                suggestion, semantic_spans, derivations
+            )
+            derivations_ok, missing_paths = _derivations_cover_suggestion(
+                suggestion, derivations
+            )
+            if not derivations_ok:
+                refuse(
+                    "REJECTED_AMBIGUOUS_STRUCTURE",
+                    f"derivation_requirement_missing:{missing_paths}",
+                )
+                continue
 
         joined_evidence = " ".join(evidence_texts)
         if _EXAMPLE_LEAD_RE.search(joined_evidence.strip()):

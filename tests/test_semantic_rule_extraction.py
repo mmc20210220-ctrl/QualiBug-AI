@@ -341,12 +341,34 @@ def test_quote_mismatch_is_rejected(monkeypatch) -> None:
     assert receipt.rule_candidates_rejected[0]["reason"] == "REJECTED_QUOTE_MISMATCH"
 
 
-def test_missing_derivation_is_rejected(monkeypatch) -> None:
+def test_missing_derivation_is_rejected_when_no_anchored_span(
+    monkeypatch,
+) -> None:
+    """derivations 缺失且 semantic span 也缺失 → 无法锚定 → 拒绝。
+
+    有 containment 校验过的 semantic span 时，校验层会确定性补全 derivation
+    （semantic_span_verbatim）；两者都缺才是真正的无证据标准化。"""
     source = "逾期订单不再具备出库资格。"
-    candidate = _rule_candidate(derivations=[])
+    candidate = _rule_candidate(derivations=[], semantic_spans={})
     receipt = _run(source, [candidate], monkeypatch)
     assert receipt.rule_candidates_validated == []
     assert receipt.rule_candidates_rejected[0]["reason"] == "REJECTED_AMBIGUOUS_STRUCTURE"
+
+
+def test_derivation_is_augmented_from_anchored_semantic_span(
+    monkeypatch,
+) -> None:
+    """derivations 缺失但有 containment 校验过的 semantic span → 自动补全。"""
+    source = "逾期订单不再具备出库资格。"
+    candidate = _rule_candidate(derivations=[])
+    receipt = _run(source, [candidate], monkeypatch)
+    rules = receipt.rule_candidates_validated
+    assert len(rules) == 1
+    assert rules[0]["derivations"]
+    assert any(
+        row.get("normalization_method") == "semantic_span_verbatim"
+        for row in rules[0]["derivations"]
+    )
 
 
 def test_inferred_rule_is_recorded_not_promoted(monkeypatch) -> None:

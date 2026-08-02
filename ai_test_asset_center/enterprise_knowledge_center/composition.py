@@ -1141,6 +1141,11 @@ def _incremental_run_semantic_extraction(
     receipts: list[dict[str, Any]] = []
     attempted = 0
     max_sources = int(getattr(_base_api, "_MAX_LLM_SOURCES_PER_BUILD", 12))
+    rule_mode_active = rule_mode_receipt["effective_mode"] in {
+        "shadow",
+        "augment",
+        "required",
+    }
     for parsed in parsed_rows:
         if attempted >= max_sources:
             break
@@ -1149,7 +1154,13 @@ def _incremental_run_semantic_extraction(
             len(_incremental_list(parsed.get(key)))
             for key in ("tables", "field_dictionary", "permissions")
         )
-        if structured_count or not source_text:
+        if not source_text:
+            continue
+        # The structured-output skip applies to the legacy 5-kind extraction
+        # only. Rule extraction must still run on structured sources: tables /
+        # field dictionaries never cover the textual business rules the regex
+        # signal vocabulary may have missed.
+        if structured_count and not rule_mode_active:
             continue
         attempted += 1
         receipt = run_semantic_extraction(

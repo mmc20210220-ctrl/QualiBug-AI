@@ -258,7 +258,24 @@ def build_discovery_plan(
         merge_knowledge_asset_overlay,
     )
 
-    asset = build_enterprise_business_knowledge_asset(inputs.project, inputs.root)
+    asset = build_enterprise_business_knowledge_asset(
+        inputs.project,
+        inputs.root,
+        options={
+            # SPEC §12/§13: rule-extraction mode and promotion-gate confirmation
+            # are operator-declared via campaign context; default shadow.
+            "semantic_rule_extraction_mode": _text(
+                inputs.campaign_context.get("semantic_rule_extraction_mode")
+            )
+            or "shadow",
+            "rule_promotion_gates_met": (
+                inputs.campaign_context.get("rule_promotion_gates_met") is True
+            ),
+            "enable_semantic_extraction": bool(
+                inputs.campaign_context.get("enable_semantic_extraction")
+            ),
+        },
+    )
     runtime_source_overlay = build_runtime_source_knowledge_overlay(
         prd_text=inputs.prd_text,
         api_spec_text=_text(
