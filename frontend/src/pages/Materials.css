@@ -525,6 +525,23 @@
   margin-bottom: 4px;
 }
 
+.materials-source-copy span:last-of-type {
+  font-size: 12px;
+}
+
+.connector-resource-preview-list article {
+  display: grid;
+  gap: 3px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.connector-resource-preview-list article span,
+.connector-resource-preview-list article small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .materials-source-copy code {
   display: block;
   max-width: 100%;

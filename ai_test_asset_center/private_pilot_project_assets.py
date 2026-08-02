@@ -255,6 +255,32 @@ def _knowledge_asset_sources(asset: dict[str, Any], root: Path) -> list[dict[str
     for item in inventory:
         if not isinstance(item, dict):
             continue
+        source_ref = str(
+            item.get("source_ref") or item.get("external_ref") or ""
+        ).strip()
+        source_origin = str(item.get("source_origin") or "").strip().upper()
+        if source_origin not in {"ONLINE_CONNECTOR", "DOCUMENT_REFERENCE"}:
+            source_origin = (
+                "ONLINE_CONNECTOR"
+                if source_ref.startswith("connector://")
+                else "DOCUMENT_REFERENCE"
+            )
+        raw_permission_scope = item.get("permission_scope")
+        permission_scope: dict[str, Any] = {}
+        if isinstance(raw_permission_scope, dict):
+            for key in (
+                "visibility",
+                "availability",
+                "evidence_status",
+                "acl_version",
+            ):
+                value = str(raw_permission_scope.get(key) or "").strip()[:240]
+                if value:
+                    permission_scope[key] = value.upper() if key != "acl_version" else value
+            for key in ("complete", "propagation_allowed"):
+                if key in raw_permission_scope:
+                    permission_scope[key] = raw_permission_scope.get(key) is True
+            permission_scope["raw_remote_principals_returned"] = False
         stored_path = str(item.get("stored_path") or item.get("path") or "").strip()
         path: Path | None = None
         if stored_path:
@@ -270,6 +296,8 @@ def _knowledge_asset_sources(asset: dict[str, Any], root: Path) -> list[dict[str
         rows.append(
             {
                 "source_id": str(item.get("source_id") or item.get("id") or ""),
+                "source_ref": source_ref,
+                "source_origin": source_origin,
                 "filename": str(
                     item.get("original_name")
                     or item.get("filename")
@@ -286,6 +314,16 @@ def _knowledge_asset_sources(asset: dict[str, Any], root: Path) -> list[dict[str
                     or ""
                 ),
                 "version": item.get("version", 1),
+                "created_at_utc": str(item.get("created_at_utc") or "")[:80],
+                "updated_at_utc": str(
+                    item.get("updated_at_utc")
+                    or item.get("last_seen_at_utc")
+                    or item.get("created_at_utc")
+                    or ""
+                )[:80],
+                "last_seen_at_utc": str(item.get("last_seen_at_utc") or "")[:80],
+                "source_updated_at": str(item.get("source_updated_at") or "")[:240],
+                "permission_scope": permission_scope,
                 "parse_status": str(
                     (item.get("parse") or {}).get("parse_status")
                     or item.get("parse_status")

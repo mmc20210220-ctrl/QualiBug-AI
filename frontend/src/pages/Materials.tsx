@@ -15,6 +15,7 @@ import {
   startKnowledgeConnectorOAuth,
   type ConfigureConnectorInput,
   type ConnectorManifest,
+  type ConnectorPermissionScope,
   type ConnectorResourceInventory,
   type ConnectorSourcePreflight,
   type KnowledgeConnectorActionResult,
@@ -37,6 +38,13 @@ type KnowledgeSource = {
   original_name: string;
   status: string;
   version?: number;
+  source_origin?: string;
+  source_identity_fingerprints?: string[];
+  created_at_utc?: string;
+  updated_at_utc?: string;
+  last_seen_at_utc?: string;
+  source_updated_at?: string;
+  permission_scope?: ConnectorPermissionScope;
 };
 
 type ScopeProperty = Record<string, unknown>;
@@ -56,19 +64,51 @@ const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 const asString = (value: unknown): string => typeof value === 'string' ? value : '';
 const asNumber = (value: unknown): number | undefined => typeof value === 'number' ? value : undefined;
 
+function sourcePermissionScope(value: unknown): ConnectorPermissionScope | undefined {
+  const row = asRecord(value);
+  if (Object.keys(row).length === 0) return undefined;
+  if (row.raw_remote_principals_returned !== false) {
+    throw new Error('knowledge_source_permission_scope_principals_returned');
+  }
+  return {
+    visibility: asString(row.visibility) || undefined,
+    availability: asString(row.availability) || undefined,
+    evidence_status: asString(row.evidence_status) || undefined,
+    acl_version: asString(row.acl_version) || undefined,
+    complete: typeof row.complete === 'boolean' ? row.complete : undefined,
+    propagation_allowed: typeof row.propagation_allowed === 'boolean'
+      ? row.propagation_allowed
+      : undefined,
+    raw_remote_principals_returned: false,
+  };
+}
+
 function sourceRows(payload: unknown): KnowledgeSource[] {
   const root = asRecord(payload);
   const asset = asRecord(root.knowledge_asset || root.data || root);
   return asArray(asset.sources)
     .map(asRecord)
-    .map((row) => ({
-      source_id: asString(row.source_id) || asString(row.source_occurrence_id),
-      source_ref: asString(row.source_ref) || asString(row.external_ref),
-      source_type: asString(row.source_type),
-      original_name: asString(row.original_name) || asString(row.filename),
-      status: asString(row.status) || 'active',
-      version: asNumber(row.version) || asNumber(row.occurrence_version),
-    }))
+    .map((row) => {
+      const fingerprints = asArray(row.source_identity_fingerprints)
+        .map(asString)
+        .filter(Boolean);
+      return {
+        source_id: asString(row.source_id) || asString(row.source_occurrence_id) || fingerprints[0] || '',
+        source_ref: asString(row.source_ref) || asString(row.external_ref),
+        source_type: asString(row.source_type),
+        original_name: asString(row.original_name) || asString(row.filename),
+        status: asString(row.status) || 'active',
+        version: asNumber(row.version) || asNumber(row.occurrence_version),
+        source_origin: asString(row.source_origin)
+          || (asString(row.source_ref).startsWith('connector://') ? 'ONLINE_CONNECTOR' : 'DOCUMENT_REFERENCE'),
+        source_identity_fingerprints: fingerprints,
+        created_at_utc: asString(row.created_at_utc) || undefined,
+        updated_at_utc: asString(row.updated_at_utc) || undefined,
+        last_seen_at_utc: asString(row.last_seen_at_utc) || undefined,
+        source_updated_at: asString(row.source_updated_at) || undefined,
+        permission_scope: sourcePermissionScope(row.permission_scope),
+      };
+    })
     .filter((row) => Boolean(row.source_id || row.source_ref));
 }
 
@@ -89,6 +129,16 @@ function syncCompletionMessage(prefix: string, result: KnowledgeConnectorActionR
     return `${prefix}。发现 ${discovered} 项，已读取 ${covered} 项，${unsupported} 项资料类型暂不支持。`;
   }
   return `${prefix}，已读取 ${covered} 份在线资料。`;
+}
+
+function permissionScopeLabel(scope?: ConnectorPermissionScope): string {
+  if (!scope) return '未声明权限范围';
+  if (scope.visibility === 'NOT_DECLARED') return '未声明权限范围';
+  if (scope.availability === 'PERMISSION_DENIED') return '远端权限不足';
+  if (scope.evidence_status && scope.evidence_status !== 'COMPLETE') {
+    return `权限证据待确认 · ${scope.evidence_status}`;
+  }
+  return `权限范围 · ${scope.visibility || 'UNKNOWN'}`;
 }
 
 function connectorHealthLabel(health?: KnowledgeConnectorHealth): string {
@@ -387,6 +437,13 @@ function ConnectorResourcePreview({ preview }: { preview?: ConnectorResourceInve
             <article key={resource.resource_index}>
               <strong>{resource.display_title || '未命名资源'}</strong>
               <span>{resource.remote_object_type || resource.resource_kind || resource.state}</span>
+              <small>
+                {resource.updated_at_utc
+                  ? `最近观测 · ${formatTime(resource.updated_at_utc, '暂无记录')}`
+                  : '尚未记录更新时间'}
+                {resource.source_updated_at ? ` · 来源更新标记 · ${resource.source_updated_at}` : ''}
+                {resource.permission_scope ? ` · ${permissionScopeLabel(resource.permission_scope)}` : ''}
+              </small>
             </article>
           ))}
         </div>
@@ -492,11 +549,17 @@ export function Materials() {
   }, [refresh]);
 
   const onlineSources = useMemo(
-    () => sources.filter((source) => source.source_ref.startsWith('connector://')),
+    () => sources.filter((source) => (
+      source.source_origin === 'ONLINE_CONNECTOR'
+      || source.source_ref.startsWith('connector://')
+    )),
     [sources],
   );
   const uploadedSources = useMemo(
-    () => sources.filter((source) => !source.source_ref.startsWith('connector://')),
+    () => sources.filter((source) => (
+      source.source_origin !== 'ONLINE_CONNECTOR'
+      && !source.source_ref.startsWith('connector://')
+    )),
     [sources],
   );
 
@@ -1318,7 +1381,9 @@ export function Materials() {
         ) : (
           <div className="materials-source-list">
             {sources.map((source) => {
-              const online = source.source_ref.startsWith('connector://');
+              const online = source.source_origin === 'ONLINE_CONNECTOR'
+                || source.source_ref.startsWith('connector://');
+              const fingerprint = source.source_identity_fingerprints?.[0];
               return (
                 <article className="materials-source-row" key={source.source_id || source.source_ref}>
                   <span className={`materials-source-icon ${online ? 'online' : 'upload'}`}>{online ? '在线' : '文件'}</span>
@@ -1328,6 +1393,16 @@ export function Materials() {
                       {online ? '在线资料' : '离线补充资料'} · {source.source_type || '自动识别'}
                       {source.version ? ` · v${source.version}` : ''}
                     </span>
+                    <span>
+                      最近观测 · {formatTime(source.updated_at_utc || source.last_seen_at_utc, '尚未观测')}
+                      {' · '}{permissionScopeLabel(source.permission_scope)}
+                    </span>
+                    {source.source_updated_at && (
+                      <span>来源更新标记 · {source.source_updated_at}</span>
+                    )}
+                    {fingerprint && (
+                      <code>来源指纹 · {fingerprint.slice(0, 12)}…</code>
+                    )}
                   </div>
                   <span className="status status-success">{source.status === 'active' ? '可用' : source.status}</span>
                 </article>

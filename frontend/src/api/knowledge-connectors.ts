@@ -57,6 +57,16 @@ export type ConnectorManifest = {
   oauth_schema?: Record<string, unknown>;
 };
 
+export type ConnectorPermissionScope = {
+  visibility?: string;
+  availability?: string;
+  evidence_status?: string;
+  acl_version?: string;
+  complete?: boolean;
+  propagation_allowed?: boolean;
+  raw_remote_principals_returned: false;
+};
+
 export type ConnectorTypeCatalog = {
   schema: string;
   connector_types: ConnectorManifest[];
@@ -390,6 +400,8 @@ export type ConnectorResource = {
   state: string;
   reason_code?: string;
   updated_at_utc?: string;
+  source_updated_at?: string;
+  permission_scope?: ConnectorPermissionScope;
 };
 
 export type ConnectorResourceInventory = {
@@ -497,6 +509,25 @@ const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 const asString = (value: unknown): string => typeof value === 'string' ? value : '';
 const asBoolean = (value: unknown): boolean => value === true;
 const asNumber = (value: unknown): number | undefined => typeof value === 'number' ? value : undefined;
+
+function toPermissionScope(value: unknown): ConnectorPermissionScope | undefined {
+  const row = asRecord(value);
+  if (Object.keys(row).length === 0) return undefined;
+  if (row.raw_remote_principals_returned !== false) {
+    throw new Error('connector_permission_scope_principals_returned');
+  }
+  return {
+    visibility: asString(row.visibility) || undefined,
+    availability: asString(row.availability) || undefined,
+    evidence_status: asString(row.evidence_status) || undefined,
+    acl_version: asString(row.acl_version) || undefined,
+    complete: typeof row.complete === 'boolean' ? row.complete : undefined,
+    propagation_allowed: typeof row.propagation_allowed === 'boolean'
+      ? row.propagation_allowed
+      : undefined,
+    raw_remote_principals_returned: false,
+  };
+}
 
 function assertFalseFields(row: JsonRecord, fields: string[], label: string): void {
   if (fields.some((field) => row[field] !== false)) {
@@ -1360,6 +1391,8 @@ export async function listConnectorResources(
         state: asString(row.state) || 'UNKNOWN',
         reason_code: asString(row.reason_code) || undefined,
         updated_at_utc: asString(row.updated_at_utc) || undefined,
+        source_updated_at: asString(row.source_updated_at) || undefined,
+        permission_scope: toPermissionScope(row.permission_scope),
       };
     }),
     preview_truncated: asBoolean(data.preview_truncated),

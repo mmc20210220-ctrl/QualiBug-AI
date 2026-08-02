@@ -824,6 +824,24 @@ def _connector_resources_projection(
             continue
         if not _text(source.get("source_ref"), 2000).startswith(prefix):
             continue
+        raw_permission_scope = source.get("permission_scope")
+        permission_scope = (
+            {
+                key: raw_permission_scope[key]
+                for key in (
+                    "visibility",
+                    "availability",
+                    "evidence_status",
+                    "acl_version",
+                    "complete",
+                    "propagation_allowed",
+                    "raw_remote_principals_returned",
+                )
+                if key in raw_permission_scope
+            }
+            if isinstance(raw_permission_scope, dict)
+            else {}
+        )
         resources.append(
             {
                 "resource_index": len(resources),
@@ -834,6 +852,8 @@ def _connector_resources_projection(
                 "resource_kind": _text(source.get("source_type"), 120),
                 "state": "MATERIALIZED",
                 "updated_at_utc": _text(source.get("updated_at_utc"), 80),
+                "source_updated_at": _text(source.get("source_updated_at"), 240),
+                "permission_scope": permission_scope,
             }
         )
         if len(resources) >= 100:
