@@ -21,6 +21,7 @@ from .experiment_plan_step_executor import (
 )
 from .experiment_runtime_support import _dict, _list, _text
 from .process_graph_executor_support import (
+    blocked_graph_result as _blocked_graph_result,
     copy_subledger_rows,
     merge_result_bags,
     new_master_ledger,
@@ -59,57 +60,6 @@ def _sync_step_kernel_hooks() -> None:
 def _delegate_sequential(**kwargs: Any) -> dict[str, Any]:
     _sync_step_kernel_hooks()
     return _step_kernel.execute_non_barrier_plans(**kwargs)
-
-
-def _blocked_graph_result(
-    *,
-    runtime: dict[str, Any],
-    treatment_plan: list[Any],
-    master: Any,
-    bags: dict[str, Any],
-    observations: dict[str, Any],
-    eid: str,
-    oid: str,
-    resolved_campaign_id: str,
-    resolved_execution_id: str,
-) -> dict[str, Any]:
-    reason = _text(runtime.get("reason_code")) or GRAPH_RUNTIME_INVALID
-    detail = _text(runtime.get("detail")) or "graph_runtime_not_ready"
-    for step in treatment_plan:
-        if not isinstance(step, dict):
-            continue
-        bags["steps"].append(
-            record_blocked_step(
-                master=master,
-                contract_evidence_receipts=bags["contract_evidence_receipts"],
-                pre_transport_block_reasons=bags[
-                    "pre_transport_block_reasons"
-                ],
-                step=step,
-                reason_code=reason,
-                detail=detail,
-                phase="treatment",
-                eid=eid,
-                oid=oid,
-                resolved_campaign_id=resolved_campaign_id,
-                resolved_execution_id=resolved_execution_id,
-                graph_meta={},
-            )
-        )
-    observations["process_graph_runtime"] = dict(runtime)
-    attach_ledger_refs_to_observations(observations, master)
-    return {
-        **bags,
-        "process_step_ledger": master,
-        "process_step_ledger_id": master.ledger_id,
-        "process_step_ledger_hash": master.compute_hash(),
-        "process_timeline": master.build_timeline_receipt(),
-        "required_step_ids": list(master.required_step_ids),
-        "planned_step_ids": list(master.required_step_ids),
-        "executed_step_ids": master.executed_step_ids(),
-        "process_graph_runtime": dict(runtime),
-        "process_graph_binding_ledger": {},
-    }
 
 
 def _apply_graph_outcome_to_master(

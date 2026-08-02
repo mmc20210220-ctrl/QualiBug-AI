@@ -87,7 +87,7 @@ def test_timeline_is_only_written_for_multi_step_phases() -> None:
     """
     source = (
         Path(__file__).resolve().parents[1]
-        / "ai_test_asset_center" / "experiment_plan_executor.py"
+        / "ai_test_asset_center" / "experiment_plan_step_executor_core.py"
     ).read_text(encoding="utf-8")
     assert "if len(plan) > 1:" in source
     assert 'observations.setdefault("process_timeline", []).append(' in source
@@ -99,7 +99,7 @@ def test_timeline_is_not_written_into_barrier_timeline() -> None:
     degraded concurrency reading from a process that has no concurrency in it."""
     source = (
         Path(__file__).resolve().parents[1]
-        / "ai_test_asset_center" / "experiment_plan_executor.py"
+        / "ai_test_asset_center" / "experiment_plan_step_executor_core.py"
     ).read_text(encoding="utf-8")
     # The per-step block writes process_timeline, never barrier_timeline.
     block = source[source.index("Per-step evidence channel"):]

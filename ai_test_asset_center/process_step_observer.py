@@ -52,12 +52,35 @@ def _declared(spec: dict[str, Any], key: str) -> Any:
 def _timeline_events(observations: dict[str, Any]) -> list[dict[str, Any]]:
     raw = observations.get("process_timeline")
     if isinstance(raw, dict):
-        return [
+        rows = [
             dict(row)
             for row in _list(raw.get("events"))
             if isinstance(row, dict)
         ]
-    return [dict(row) for row in _list(raw) if isinstance(row, dict)]
+    else:
+        rows = [dict(row) for row in _list(raw) if isinstance(row, dict)]
+
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        if _text(row.get("event_type")):
+            events.append(row)
+            continue
+        if "status_code" not in row:
+            events.append(row)
+            continue
+        try:
+            status_code = int(row.get("status_code") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "legacy process timeline status_code must be an integer"
+            ) from exc
+        migrated = {
+            **row,
+            "event_type": "STEP_COMPLETED" if status_code > 0 else "STEP_FAILED",
+            "event_source": "legacy_flat_process_timeline",
+        }
+        events.append(migrated)
+    return events
 
 
 def _ledger_rows(observations: dict[str, Any]) -> dict[str, dict[str, Any]]:

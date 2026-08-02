@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import html
 import json
+import logging
 import os
 import re
 import tempfile
@@ -74,6 +75,7 @@ from .release_risk_dashboard import build_release_risk_dashboard
 from .product_ui import _icon, callout, detail_list, empty_state, h, metric_card, product_shell, section, status_badge, table
 
 PHASE = "phase60_enterprise_pilot_runtime"
+_LOGGER = logging.getLogger(__name__)
 CONFIG_MANAGERS = {"project_owner", "qa_lead", "security_owner", "testops_admin", "admin"}
 
 
@@ -296,6 +298,47 @@ def load_connector_registry(project_id: str = "real_project_demo", root: Path | 
             default["test_profile"] = saved["test_profile"]
         default["updated_at_utc"] = str(saved.get("updated_at_utc") or default["updated_at_utc"])
     return default
+
+
+def _has_login_material(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    identity = str(
+        row.get("email")
+        or row.get("username")
+        or row.get("account")
+        or row.get("mobile")
+        or row.get("phone")
+        or ""
+    ).strip()
+    password = str(row.get("password") or row.get("pass") or "").strip()
+    return bool(identity and password)
+
+
+def _bind_preflight_test_credentials(
+    project: str,
+    root: Path,
+    diagnostics_config: dict[str, Any],
+) -> str:
+    """Bind preflight to the same project credential catalog as runtime."""
+
+    configured = ordered_test_credentials({"test_profile": diagnostics_config})
+    if any(_has_login_material(row) for row in configured):
+        return "connector_registry.test_profile"
+
+    loaded = load_project_test_credentials(project, root)
+    usable = [dict(row) for row in loaded if _has_login_material(row)]
+    if not usable:
+        return "none"
+
+    diagnostics_config["test_credentials"] = usable
+    _LOGGER.info(
+        "preflight_test_credentials_bound project=%s source=%s count=%d",
+        project,
+        "project_test_credential_catalog",
+        len(usable),
+    )
+    return "project_test_credential_catalog"
 
 
 def ordered_test_credentials(config: dict[str, Any] | None) -> list[dict[str, Any]]:
