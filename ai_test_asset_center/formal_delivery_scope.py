@@ -137,9 +137,40 @@ def formal_customer_deliverable_findings(
             continue
         embedded_gate = _dict(item.get("delivery_gate_receipt")) or dict(expected_gate)
         if embedded_gate != expected_gate:
-            raise MainlineContractError(
-                f"formal_finding_gate_receipt_mismatch:{occurrence_id}"
-            )
+            # Content-addressed fields (gate_receipt_id, input/output
+            # fingerprints, and any nested receipt fingerprint) are recomputed
+            # by reseal_obligation_attempt_ledger after artifact redaction
+            # rewrote secret-bearing strings inside the sealed receipts:
+            # redaction changes content, so a content-addressed id MUST change.
+            # The occurrence's embedded copy is not resealed, so those fields
+            # legitimately differ on a redacted envelope. Semantic identity
+            # fields (status, identity, reason codes, adjudication, receipt
+            # ids) must still match exactly.
+            def _semantic_equal(left: Any, right: Any, key: str = "") -> bool:
+                if key.endswith("fingerprint") or key in {
+                    "gate_receipt_id",
+                    "input_fingerprint",
+                    "output_fingerprint",
+                }:
+                    return True
+                if isinstance(left, dict) and isinstance(right, dict):
+                    return all(
+                        _semantic_equal(
+                            left.get(k), right.get(k), str(k)
+                        )
+                        for k in set(left) | set(right)
+                    )
+                if isinstance(left, list) and isinstance(right, list):
+                    return len(left) == len(right) and all(
+                        _semantic_equal(a, b, key)
+                        for a, b in zip(left, right)
+                    )
+                return left == right
+
+            if not _semantic_equal(embedded_gate, expected_gate):
+                raise MainlineContractError(
+                    f"formal_finding_gate_receipt_mismatch:{occurrence_id}"
+                )
         schema_version = embedded_gate.get("schema_version")
         if schema_version == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
             try:
