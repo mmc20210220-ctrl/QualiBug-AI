@@ -790,6 +790,7 @@ def _publicize_connector_identity(value: Any) -> Any:
             {hashlib.sha256(ref.encode("utf-8")).hexdigest()[:32] for ref in direct_refs}
         )
         output["source_identity_fingerprints"] = fingerprints
+        output["source_origin"] = "ONLINE_CONNECTOR"
         output["remote_resource_identities_returned"] = False
         output["source_refs_returned"] = False
     return output

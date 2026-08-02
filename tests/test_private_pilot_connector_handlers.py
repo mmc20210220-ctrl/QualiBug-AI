@@ -32,6 +32,59 @@ def test_connector_route_is_project_scoped_and_non_connector_routes_fall_through
         "/api/v1/projects/enterprise-project/knowledge-connectors/feishu-prod/sync"
     ) == (PROJECT, ["feishu-prod", "sync"])
     assert _connector_route("/api/knowledge/asset") is None
+    assert _connector_route(
+        "/api/v1/projects/enterprise-project/knowledge-connectors/source-preflight"
+    ) == (PROJECT, ["source-preflight"])
+
+
+def test_source_preflight_handler_is_project_scoped_and_returns_governed_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    import ai_test_asset_center.private_pilot_connector_handlers as handlers
+
+    captured = {}
+
+    def fake_preflight(url, **kwargs):
+        captured.update({"url": url, **kwargs})
+        return {
+            "schema": "qualibug.connector-source-preflight.v1",
+            "status": "READY",
+            "recommended_connector_type": "website",
+            "candidates": [],
+            "governance": {
+                "network_access_performed": True,
+                "write_performed": False,
+                "source_content_returned": False,
+            },
+        }
+
+    monkeypatch.setattr(handlers, "preflight_source_entry", fake_preflight)
+    result = DummyHandler()._handle_connector_source_preflight(
+        PROJECT,
+        {"url": "https://source.example.test/docs"},
+        tmp_path,
+        ACTOR,
+    )
+
+    assert result["status"] == 200
+    assert result["body"]["ok"] is True
+    assert result["body"]["data"]["project_id"] == PROJECT
+    assert captured["url"] == "https://source.example.test/docs"
+    assert captured["timeout"] == 5.0
+    assert captured["max_bytes"] == 64 * 1024
+
+
+def test_source_preflight_handler_rejects_unknown_fields(tmp_path):
+    from ai_test_asset_center.connector_source_preflight import SourcePreflightError
+
+    with pytest.raises(SourcePreflightError, match="field_not_supported"):
+        DummyHandler()._handle_connector_source_preflight(
+            PROJECT,
+            {"url": "https://source.example.test/docs", "connector_type": "website"},
+            tmp_path,
+            ACTOR,
+        )
 
 
 def test_connector_type_route_is_global_and_manifest_lookup_is_metadata_only():

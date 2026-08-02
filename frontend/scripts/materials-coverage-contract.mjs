@@ -34,6 +34,7 @@ for (const field of [
 }
 
 requireText(page, '<ConnectorCoverage coverage={connector.coverage} />', 'materials page');
+requireText(api, 'source-preflight', 'source entry preflight API');
 requireText(page, '已读取 ${connector.coverage.covered_count}/${connector.coverage.discovered_count}', 'connector status');
 requireText(page, '资料类型暂不支持', 'sync completion message');
 requireText(page, 'materials-health-summary', 'connector health projection');
@@ -42,6 +43,21 @@ for (const marker of [
   'scopeProperties(',
   'serializeScope(',
   'missingRequiredScopeFields(',
+  'quickConnectManifests(',
+  'applyQuickConnectUrl(',
+  'quick_connect_schema',
+  'preflightConnectorSource(',
+  'preflightSourceUrl',
+  'permissionScopeLabel(',
+  'source_identity_fingerprints',
+  'updated_at_utc',
+  '识别并填写范围',
+  'materials-preflight-result',
+  'materials-scope-editor-details',
+  '调整同步范围（可选）',
+  'credentialFieldLabel(',
+  'authModeLabel(',
+  'display_name',
   'property.enum',
   "type === 'array'",
   'JSON.stringify(properties)',

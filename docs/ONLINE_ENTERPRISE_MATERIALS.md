@@ -45,6 +45,44 @@ Adapter 不解析业务语义，不创建独立知识库，不写回远端资料
 
 连接器范围编辑器由 Manifest 的 `scope_schema` 驱动。对象范围会把字段、默认值、枚举、数组、布尔值和数值约束直接转换为表单；普通用户不需要手工拼接 JSON。保存前会校验 Manifest 声明的必填字段，同时保留旧的 URL/字符串简写兼容性。未知范围字段不会被前端自行补全，仍由连接器配置服务拒绝或接受并返回明确结果。
 
+### 来源优先快速接入
+
+需要降低首次接入理解成本的连接器，可以在同一份 Manifest 中声明 `quick_connect_schema`：
+
+```json
+{
+  "input_type": "url",
+  "scope_field": "seed_urls",
+  "priority": 10
+}
+```
+
+`scope_field` 必须是 `scope_schema` 中声明且必填的字符串或数组字段。Materials 页面只把用户粘贴的 HTTP(S) 入口写入这个字段，并保留 Manifest 默认范围；连接器类型、提供商、凭据、业务规则和 SSRF 放行范围不会由 URL 猜测。保存后仍复用既有配置、连接测试和 managed sync 主链，失败会返回明确原因，不会伪造连接成功或资料。
+
+通用配置接口要求请求显式提交已注册的 `connector_type`。缺失类型会直接返回 `connector_type_required`，不会把请求静默降级为 Feishu；所有注册类型都经由同一 `configure_managed_connector` 主链。Feishu 专用配置 facade 只保留给已有兼容调用方，不能成为通用 HTTP 入口的隐式默认值。
+
+### 陌生入口预检
+
+为降低“先判断连接器类型”的用户成本，URL 入口还可以由 Manifest 声明 `entrypoint_evidence`。除响应内容类型、结构形状和路径后缀外，连接器可以声明受限的 `host_suffixes`；它只作为候选证据，不会绕过用户确认、SSRF 校验或真实连接测试：
+
+```json
+{
+  "content_types": ["text/html", "application/json"],
+  "document_shapes": ["openapi_document"],
+  "host_suffixes": ["github.com"],
+  "path_suffixes": [".json"]
+}
+```
+
+Materials 页面会先调用项目范围接口 `POST /api/v1/projects/{project_id}/knowledge-connectors/source-preflight`，服务端仅执行一次受 SSRF 保护、无凭据、无请求体的有界只读 `GET`。它只返回 HTTP 状态、内容类型、结构形状和响应指纹，以及由已安装 Manifest 声明证据排序的候选连接器；不返回正文、凭据、游标，不创建连接器，也不触发同步。只有唯一的已声明证据匹配才会给出推荐；多个候选、需要授权、没有证据或远端失败都保持“需要确认/失败”并在界面可见，绝不把猜测当成连接成功。
+
+凭据字段也属于 Manifest 元数据：适配器可以声明 `display_name`，前端展示用户可理解的名称；未声明时只对字段名做通用格式化，不改变实际存储键。凭据值、掩码值和原始远端错误仍不会展示给用户。
+
+当前通用 URL 入口能力覆盖网站/帮助中心、在线 OpenAPI 文档和通用 Git 仓库。它只降低配置步骤，不替代真实连接测试、首次同步收据、覆盖率与权限证据；没有真实同步证据时，健康状态仍为 `NOT_SYNCED`/`UNKNOWN`。
+
+Source Occurrence 与资源预览还会展示受限的来源闭环信息：来源版本、最近观测/更新时间、连接器声明的来源更新标记、来源起点分类，以及 ACL 的权限范围和证据状态。连接器来源在普通用户投影中只保留短来源指纹；远端资源 ID、来源 URL、ACL 主体、凭据和 cursor 均不会返回。权限缺失或 ACL 证据不完整必须继续显示为待处理状态，不能被解释为资料已完整接入。
+快速路径默认收起其余可选范围字段；用户主动展开“调整同步范围”后，仍可编辑完整的 Manifest 范围。这样不会把分页、路径、大小或节点参数误当成首次接入必填项。
+
 ## 私有服务 API
 
 所有接口均要求登录、租户校验和项目范围校验。配置、测试、同步与中止要求知识资料管理角色：

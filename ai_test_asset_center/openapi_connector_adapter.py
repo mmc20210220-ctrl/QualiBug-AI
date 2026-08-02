@@ -1530,6 +1530,34 @@ def openapi_connector_manifest(
                 "max_ref_depth": {"type": "integer", "minimum": 0, "maximum": _MAX_REF_DEPTH},
             },
         },
+        quick_connect_schema=(
+            {
+                "input_type": "url",
+                "scope_field": "document_urls",
+                "priority": 20,
+            }
+            if normalized_type == OPENAPI_CONNECTOR_TYPE
+            else {}
+        ),
+        entrypoint_evidence=(
+            {
+                "content_types": [
+                    "application/json",
+                    "application/yaml",
+                    "application/x-yaml",
+                    "text/json",
+                    "text/yaml",
+                ],
+                "document_shapes": [
+                    "openapi_document",
+                    "postman_collection",
+                    "openapi_reference",
+                ],
+                "path_suffixes": [".json", ".yaml", ".yml"],
+            }
+            if normalized_type == OPENAPI_CONNECTOR_TYPE
+            else {}
+        ),
         supported_resource_types=tuple(sorted(_SUPPORTED_OBJECT_TYPES)),
         sync_modes=("FULL", "INCREMENTAL"),
         read_only=True,
@@ -1539,6 +1567,7 @@ def openapi_connector_manifest(
                 field_type="token",
                 required=True,
                 secret=True,
+                display_name="只读 Bearer Token",
                 description="Bearer token used only for read-only document GET requests.",
                 auth_modes=("bearer_token",),
             ),
@@ -1546,6 +1575,7 @@ def openapi_connector_manifest(
                 name="header_name",
                 field_type="text",
                 required=True,
+                display_name="API Key 请求头",
                 description="Explicit API-key request header name.",
                 auth_modes=("api_key",),
             ),
@@ -1554,6 +1584,7 @@ def openapi_connector_manifest(
                 field_type="token",
                 required=True,
                 secret=True,
+                display_name="API Key",
                 description="API-key value used only for read-only document GET requests.",
                 auth_modes=("api_key",),
             ),
@@ -1562,6 +1593,7 @@ def openapi_connector_manifest(
                 field_type="cookie_session_reference",
                 required=True,
                 secret=True,
+                display_name="登录会话 Cookie",
                 description="Cookie session reference used only for read-only document GET requests.",
                 auth_modes=("cookie_session",),
             ),

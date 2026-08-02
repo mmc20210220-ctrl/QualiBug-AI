@@ -1523,6 +1523,15 @@ def website_connector_manifest() -> ConnectorManifest:
             },
             "shorthand": "单个 HTTP(S) Seed URL 也可直接作为范围值",
         },
+        quick_connect_schema={
+            "input_type": "url",
+            "scope_field": "seed_urls",
+            "priority": 10,
+        },
+        entrypoint_evidence={
+            "content_types": ["text/html", "application/xhtml+xml"],
+            "document_shapes": ["html_page"],
+        },
         supported_resource_types=("html_page", "attachment"),
         sync_modes=("FULL", "INCREMENTAL"),
         webhook_supported=False,
@@ -1535,6 +1544,7 @@ def website_connector_manifest() -> ConnectorManifest:
                 field_type="cookie_session_reference",
                 required=True,
                 secret=True,
+                display_name="登录会话 Cookie",
                 description="私有在线资料的会话 Cookie；仅在内存中用于只读 GET",
                 auth_modes=("cookie_session",),
             ),

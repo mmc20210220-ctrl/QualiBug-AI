@@ -82,15 +82,39 @@ def _project_occurrence(
     canonical_source_id = _text(occurrence.get("canonical_source_id"))
     metadata = copy.deepcopy(occurrence.get("source_metadata") or {})
     remote_title = _text(metadata.get("remote_display_title"))
+    source_ref = _text(occurrence.get("source_ref"))
+    permission_scope: dict[str, Any] = {
+        "visibility": _text(metadata.get("acl_visibility"))[:40].upper()
+        or "NOT_DECLARED",
+        "availability": _text(metadata.get("acl_availability"))[:60].upper()
+        or "NOT_DECLARED",
+        "evidence_status": _text(metadata.get("acl_evidence_status"))[:40].upper()
+        or "NOT_DECLARED",
+        "acl_version": _text(metadata.get("acl_version"))[:240],
+        "raw_remote_principals_returned": False,
+    }
+    if "acl_complete" in metadata:
+        permission_scope["complete"] = metadata.get("acl_complete") is True
+    if "acl_propagation_allowed" in metadata:
+        permission_scope["propagation_allowed"] = (
+            metadata.get("acl_propagation_allowed") is True
+        )
+    observed_at = _text(occurrence.get("last_seen_at_utc"))[:80]
+    updated_at = (
+        observed_at
+        or _text(occurrence.get("updated_at_utc"))[:80]
+        or _text(occurrence.get("created_at_utc"))[:80]
+        or _text((canonical or {}).get("updated_at_utc"))[:80]
+    )
     base = copy.deepcopy(canonical or {})
     base.update(
         {
             "source_id": occurrence_id,
             "source_occurrence_id": occurrence_id,
             "canonical_source_id": canonical_source_id,
-            "source_ref": _text(occurrence.get("source_ref")),
-            "external_ref": _text(occurrence.get("source_ref")),
-            "source_origin_ref": _text(occurrence.get("source_ref")),
+            "source_ref": source_ref,
+            "external_ref": source_ref,
+            "source_origin_ref": source_ref,
             "content_asset_id": occurrence.get("content_asset_id"),
             "interpretation_asset_id": occurrence.get("interpretation_asset_id"),
             "content_hash": occurrence.get("content_hash")
@@ -102,6 +126,22 @@ def _project_occurrence(
             or (canonical or {}).get("original_name"),
             "version": occurrence.get("version"),
             "occurrence_version": occurrence.get("version"),
+            "created_at_utc": _text(
+                occurrence.get("created_at_utc")
+                or (canonical or {}).get("created_at_utc"),
+            )[:80],
+            "updated_at_utc": updated_at,
+            "last_seen_at_utc": observed_at,
+            "source_updated_at": _text(
+                metadata.get("remote_updated_at")
+                or metadata.get("last_modified")
+            ),
+            "source_origin": (
+                "ONLINE_CONNECTOR"
+                if source_ref.startswith("connector://")
+                else "DOCUMENT_REFERENCE"
+            ),
+            "permission_scope": permission_scope,
             "status": occurrence.get("status"),
             "tags": list(occurrence.get("tags") or []),
             "source_metadata": metadata,

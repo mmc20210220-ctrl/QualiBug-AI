@@ -25,7 +25,6 @@ from .connector_registry import (
 )
 from .connector_configuration_service import (
     configure_managed_connector,
-    configure_managed_feishu_connector,
     set_managed_connector_status,
 )
 from .connector_connection_profiles import (
@@ -78,6 +77,10 @@ from .connector_oauth_authority import (
     handle_connector_oauth_callback,
     project_connector_oauth,
     start_connector_oauth,
+)
+from .connector_source_preflight import (
+    SourcePreflightError,
+    preflight_source_entry,
 )
 from .local_runner_connector import (
     LocalRunnerError,
@@ -820,6 +823,24 @@ def _connector_resources_projection(
             continue
         if not _text(source.get("source_ref"), 2000).startswith(prefix):
             continue
+        raw_permission_scope = source.get("permission_scope")
+        permission_scope = (
+            {
+                key: raw_permission_scope[key]
+                for key in (
+                    "visibility",
+                    "availability",
+                    "evidence_status",
+                    "acl_version",
+                    "complete",
+                    "propagation_allowed",
+                    "raw_remote_principals_returned",
+                )
+                if key in raw_permission_scope
+            }
+            if isinstance(raw_permission_scope, dict)
+            else {}
+        )
         resources.append(
             {
                 "resource_index": len(resources),
@@ -830,6 +851,8 @@ def _connector_resources_projection(
                 "resource_kind": _text(source.get("source_type"), 120),
                 "state": "MATERIALIZED",
                 "updated_at_utc": _text(source.get("updated_at_utc"), 80),
+                "source_updated_at": _text(source.get("source_updated_at"), 240),
+                "permission_scope": permission_scope,
             }
         )
         if len(resources) >= 100:
@@ -1064,6 +1087,7 @@ def _error_status(exc: Exception) -> int:
             "download_failed",
             "export_poll_exhausted",
             "connection_profile_resolution_failed",
+            "source_preflight_transport_failed",
         )
     ):
         return 502
@@ -1089,6 +1113,8 @@ class KnowledgeConnectorHandlersMixin:
             if isinstance(exc, ConnectorOAuthError)
             else "KNOWLEDGE_CONNECTOR_WEBHOOK_ERROR"
             if isinstance(exc, ConnectorWebhookError)
+            else "KNOWLEDGE_CONNECTOR_PREFLIGHT_ERROR"
+            if isinstance(exc, SourcePreflightError)
             else "KNOWLEDGE_CONNECTOR_ERROR"
         )
         return self._json(
@@ -1435,7 +1461,9 @@ class KnowledgeConnectorHandlersMixin:
         actor: dict[str, Any],
     ) -> Any:
         connector = _text(body.get("connector_instance_id"), 160)
-        connector_type = _text(body.get("connector_type"), 160) or "feishu"
+        connector_type = _text(body.get("connector_type"), 160)
+        if not connector_type:
+            raise ConnectorProfileError("connector_type_required")
         profile = body.get("connection_profile")
         if not isinstance(profile, dict):
             manifest = build_default_connector_registry().manifest(connector_type)
@@ -1461,17 +1489,11 @@ class KnowledgeConnectorHandlersMixin:
             "sync_policy": body.get("sync_policy"),
             "webhook_policy": body.get("webhook_policy"),
         }
-        if _text(body.get("connector_type"), 160):
-            result = configure_managed_connector(
-                project,
-                connector_type=connector_type,
-                **configuration_kwargs,
-            )
-        else:
-            result = configure_managed_feishu_connector(
-                project,
-                **configuration_kwargs,
-            )
+        result = configure_managed_connector(
+            project,
+            connector_type=connector_type,
+            **configuration_kwargs,
+        )
         public_result = {
             "ok": bool(result.get("ok")),
             "created": bool(result.get("created")),
@@ -1858,6 +1880,7 @@ class KnowledgeConnectorHandlersMixin:
                 },
                 200 if run.get("status") == "COMPLETE" else 409,
             )
+
         if action == "share-project":
             source_ref = _text(body.get("source_ref"), 2000)
             if not source_ref.startswith(f"connector://{connector}/"):
@@ -1941,6 +1964,38 @@ class KnowledgeConnectorHandlersMixin:
                 202,
             )
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
+
+    def _handle_connector_source_preflight(
+        self,
+        project: str,
+        body: dict[str, Any],
+        root: Path,
+        actor: dict[str, Any],
+    ) -> Any:
+        del root, actor
+        allowed = {"url", "timeout", "max_bytes"}
+        unknown = sorted(set(body) - allowed)
+        if unknown:
+            raise SourcePreflightError(
+                f"source_preflight_field_not_supported:{unknown[0]}"
+            )
+        result = preflight_source_entry(
+            body.get("url"),
+            timeout=_bounded_float(body.get("timeout"), 5.0, 1.0, 15.0),
+            max_bytes=_bounded_int(
+                body.get("max_bytes"),
+                64 * 1024,
+                4 * 1024,
+                128 * 1024,
+            ),
+        )
+        result["project_id"] = project
+        return self._json(
+            {
+                "ok": True,
+                "data": result,
+            }
+        )
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -2075,6 +2130,13 @@ class KnowledgeConnectorHandlersMixin:
         try:
             body = self._body()
             tail = route[1]
+            if tail == ["source-preflight"]:
+                return self._handle_connector_source_preflight(
+                    project,
+                    body,
+                    root,
+                    actor,
+                )
             if tail == ["runners", "register"]:
                 return self._handle_local_runner_register(
                     project,
@@ -2135,6 +2197,7 @@ class KnowledgeConnectorHandlersMixin:
             ConnectorSyncError,
             ConnectorAclError,
             ConnectorOAuthError,
+            SourcePreflightError,
             LocalRunnerError,
             FeishuConnectorError,
             FeishuTenantAcceptanceJobError,

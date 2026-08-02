@@ -25,7 +25,10 @@ from ai_test_asset_center.enterprise_knowledge_center import (
 from ai_test_asset_center.enterprise_knowledge_center.source_occurrence_observation import (
     list_source_occurrence_observations,
 )
-from ai_test_asset_center.private_pilot_connector_handlers import _sanitize_sync_response
+from ai_test_asset_center.private_pilot_connector_handlers import (
+    _connector_resources_projection,
+    _sanitize_sync_response,
+)
 
 
 PROJECT = "enterprise-project"
@@ -60,6 +63,7 @@ def _item(
         "content": content,
         "filename": "requirements.md",
         "remote_revision": revision,
+        "remote_updated_at": "2026-08-02T00:00:00Z",
         "acl": acl,
     }
 
@@ -144,6 +148,32 @@ def test_sync_records_acl_visibility_and_executes_incremental_refresh(tmp_path):
     assert "acl_fingerprint" in occurrence["source_metadata"]
     assert PRINCIPAL not in metadata_text
 
+    source_inventory = list_enterprise_knowledge_sources(PROJECT, root=tmp_path)
+    source = source_inventory["sources"][0]
+    assert source["source_origin"] == "ONLINE_CONNECTOR"
+    assert source["source_updated_at"] == "2026-08-02T00:00:00Z"
+    assert source["updated_at_utc"]
+    assert source["permission_scope"] == {
+        "visibility": "PRIVATE",
+        "availability": "AVAILABLE",
+        "evidence_status": "COMPLETE",
+        "acl_version": "acl-v1",
+        "complete": True,
+        "propagation_allowed": True,
+        "raw_remote_principals_returned": False,
+    }
+    assert PRINCIPAL not in json.dumps(source, ensure_ascii=False)
+
+    resource_projection = _connector_resources_projection(
+        PROJECT,
+        CONNECTOR,
+        tmp_path,
+    )
+    resource = resource_projection["resources"][0]
+    assert resource["updated_at_utc"] == source["updated_at_utc"]
+    assert resource["permission_scope"]["visibility"] == "PRIVATE"
+    assert "remote_resource_id" not in json.dumps(resource, ensure_ascii=False)
+
     principal_fp = fingerprint_connector_principal(PROJECT, CONNECTOR, PRINCIPAL)
     allowed = connector_source_visibility_decision(
         PROJECT,
@@ -205,6 +235,10 @@ def test_sync_records_acl_visibility_and_executes_incremental_refresh(tmp_path):
     assert "connector://generic-docs/document/doc-1" not in visible_text
     assert "source_identity_fingerprints" in visible_text
     assert '"remote_resource_id":' not in visible_text
+    visible_source = visible_asset["source_inventory"][0]
+    assert visible_source["source_origin"] == "ONLINE_CONNECTOR"
+    assert len(visible_source["source_identity_fingerprints"]) == 1
+    assert visible_source["remote_resource_identities_returned"] is False
 
     shared = record_connector_project_share(
         PROJECT,

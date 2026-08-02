@@ -1928,6 +1928,20 @@ def git_connector_manifest(connector_type: str = "git") -> ConnectorManifest:
                 "max_commits": {"type": "integer", "minimum": 1, "maximum": _MAX_COMMITS},
             },
         },
+        quick_connect_schema=(
+            {
+                "input_type": "url",
+                "scope_field": "repository_url",
+                "priority": 20 if kind != "git" else 30,
+            }
+            if kind in GIT_CONNECTOR_TYPES
+            else {}
+        ),
+        entrypoint_evidence=(
+            {"host_suffixes": [f"{kind}.com"]}
+            if kind in {"gitee", "gitlab", "github"}
+            else {"path_suffixes": [".git"]}
+        ),
         supported_resource_types=tuple(sorted({"file", "submodule", "lfs_pointer", "issue", "wiki_page", "release", "commit"})),
         sync_modes=("FULL", "INCREMENTAL"),
         webhook_supported=True,
@@ -1940,6 +1954,7 @@ def git_connector_manifest(connector_type: str = "git") -> ConnectorManifest:
                 field_type="personal_access_token",
                 required=True,
                 secret=True,
+                display_name="代码仓库访问令牌",
                 description="Provider token used only for read-only repository API GET requests.",
                 auth_modes=("personal_access_token",),
             ),

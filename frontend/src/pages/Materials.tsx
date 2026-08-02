@@ -7,6 +7,7 @@ import {
   listConnectorResources,
   listConnectorTypes,
   listKnowledgeConnectors,
+  preflightConnectorSource,
   pauseKnowledgeConnector,
   reauthorizeKnowledgeConnector,
   refreshKnowledgeConnector,
@@ -14,7 +15,9 @@ import {
   startKnowledgeConnectorOAuth,
   type ConfigureConnectorInput,
   type ConnectorManifest,
+  type ConnectorPermissionScope,
   type ConnectorResourceInventory,
+  type ConnectorSourcePreflight,
   type KnowledgeConnectorActionResult,
   type KnowledgeConnectorHealth,
   type KnowledgeConnectorRecord,
@@ -35,11 +38,19 @@ type KnowledgeSource = {
   original_name: string;
   status: string;
   version?: number;
+  source_origin?: string;
+  source_identity_fingerprints?: string[];
+  created_at_utc?: string;
+  updated_at_utc?: string;
+  last_seen_at_utc?: string;
+  source_updated_at?: string;
+  permission_scope?: ConnectorPermissionScope;
 };
 
 type ScopeProperty = Record<string, unknown>;
 type ScopeValues = Record<string, unknown>;
 type ParsedScopeValues = { values: ScopeValues; error?: string };
+type QuickConnectResult = { values: ScopeValues; manifest: ConnectorManifest };
 
 const DEFAULT_CONNECTOR_ID = 'connector-main';
 const DEFAULT_CONNECTOR_NAME = '在线资料连接器';
@@ -53,19 +64,51 @@ const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 const asString = (value: unknown): string => typeof value === 'string' ? value : '';
 const asNumber = (value: unknown): number | undefined => typeof value === 'number' ? value : undefined;
 
+function sourcePermissionScope(value: unknown): ConnectorPermissionScope | undefined {
+  const row = asRecord(value);
+  if (Object.keys(row).length === 0) return undefined;
+  if (row.raw_remote_principals_returned !== false) {
+    throw new Error('knowledge_source_permission_scope_principals_returned');
+  }
+  return {
+    visibility: asString(row.visibility) || undefined,
+    availability: asString(row.availability) || undefined,
+    evidence_status: asString(row.evidence_status) || undefined,
+    acl_version: asString(row.acl_version) || undefined,
+    complete: typeof row.complete === 'boolean' ? row.complete : undefined,
+    propagation_allowed: typeof row.propagation_allowed === 'boolean'
+      ? row.propagation_allowed
+      : undefined,
+    raw_remote_principals_returned: false,
+  };
+}
+
 function sourceRows(payload: unknown): KnowledgeSource[] {
   const root = asRecord(payload);
   const asset = asRecord(root.knowledge_asset || root.data || root);
   return asArray(asset.sources)
     .map(asRecord)
-    .map((row) => ({
-      source_id: asString(row.source_id) || asString(row.source_occurrence_id),
-      source_ref: asString(row.source_ref) || asString(row.external_ref),
-      source_type: asString(row.source_type),
-      original_name: asString(row.original_name) || asString(row.filename),
-      status: asString(row.status) || 'active',
-      version: asNumber(row.version) || asNumber(row.occurrence_version),
-    }))
+    .map((row) => {
+      const fingerprints = asArray(row.source_identity_fingerprints)
+        .map(asString)
+        .filter(Boolean);
+      return {
+        source_id: asString(row.source_id) || asString(row.source_occurrence_id) || fingerprints[0] || '',
+        source_ref: asString(row.source_ref) || asString(row.external_ref),
+        source_type: asString(row.source_type),
+        original_name: asString(row.original_name) || asString(row.filename),
+        status: asString(row.status) || 'active',
+        version: asNumber(row.version) || asNumber(row.occurrence_version),
+        source_origin: asString(row.source_origin)
+          || (asString(row.source_ref).startsWith('connector://') ? 'ONLINE_CONNECTOR' : 'DOCUMENT_REFERENCE'),
+        source_identity_fingerprints: fingerprints,
+        created_at_utc: asString(row.created_at_utc) || undefined,
+        updated_at_utc: asString(row.updated_at_utc) || undefined,
+        last_seen_at_utc: asString(row.last_seen_at_utc) || undefined,
+        source_updated_at: asString(row.source_updated_at) || undefined,
+        permission_scope: sourcePermissionScope(row.permission_scope),
+      };
+    })
     .filter((row) => Boolean(row.source_id || row.source_ref));
 }
 
@@ -86,6 +129,16 @@ function syncCompletionMessage(prefix: string, result: KnowledgeConnectorActionR
     return `${prefix}。发现 ${discovered} 项，已读取 ${covered} 项，${unsupported} 项资料类型暂不支持。`;
   }
   return `${prefix}，已读取 ${covered} 份在线资料。`;
+}
+
+function permissionScopeLabel(scope?: ConnectorPermissionScope): string {
+  if (!scope) return '未声明权限范围';
+  if (scope.visibility === 'NOT_DECLARED') return '未声明权限范围';
+  if (scope.availability === 'PERMISSION_DENIED') return '远端权限不足';
+  if (scope.evidence_status && scope.evidence_status !== 'COMPLETE') {
+    return `权限证据待确认 · ${scope.evidence_status}`;
+  }
+  return `权限范围 · ${scope.visibility || 'UNKNOWN'}`;
 }
 
 function connectorHealthLabel(health?: KnowledgeConnectorHealth): string {
@@ -199,6 +252,19 @@ function manifestFields(manifest: ConnectorManifest | undefined, authMode: strin
   ));
 }
 
+function credentialFieldLabel(field: ConnectorManifest['credential_fields'][number]): string {
+  if (field.display_name) return field.display_name;
+  return field.name
+    .replace(/[_:-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function authModeLabel(mode: string): string {
+  return mode
+    .replace(/[_:-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function scopePresets(manifest: ConnectorManifest | undefined): string[] {
   const presets = manifest?.scope_schema?.presets;
   return Array.isArray(presets)
@@ -222,6 +288,50 @@ function scopeSchemaHint(manifest: ConnectorManifest | undefined): string {
 function scopeProperties(manifest: ConnectorManifest | undefined): Array<[string, ScopeProperty]> {
   const properties = asRecord(asRecord(manifest?.scope_schema).properties);
   return Object.entries(properties).map(([name, value]) => [name, asRecord(value)]);
+}
+
+function quickConnectManifests(manifests: ConnectorManifest[]): ConnectorManifest[] {
+  return manifests
+    .filter((manifest) => {
+      const schema = asRecord(manifest.quick_connect_schema);
+      return asString(schema.input_type) === 'url' && Boolean(asString(schema.scope_field));
+    })
+    .sort((left, right) => {
+      const leftPriority = asNumber(asRecord(left.quick_connect_schema).priority) ?? 100;
+      const rightPriority = asNumber(asRecord(right.quick_connect_schema).priority) ?? 100;
+      return leftPriority - rightPriority || left.display_name.localeCompare(right.display_name);
+    });
+}
+
+function applyQuickConnectUrl(
+  manifest: ConnectorManifest,
+  rawUrl: string,
+): QuickConnectResult {
+  const value = rawUrl.trim();
+  if (!value) throw new Error('璇峰厛绮樿创涓€涓湪绾胯祫鏂欏叆鍙ｆ湇鍔″櫒 URL');
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('璇疯緭鍏ユ湁鏁堢殑 HTTP(S) URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('鍦ㄧ嚎璧勬枡鍏ュ彛蹇呴』浣跨敤 HTTP(S) URL');
+  }
+  const schema = asRecord(manifest.quick_connect_schema);
+  const scopeField = asString(schema.scope_field);
+  const property = scopeProperties(manifest).find(([name]) => name === scopeField)?.[1];
+  const propertyType = asString(property?.type);
+  if (!scopeField || (propertyType !== 'array' && propertyType !== 'string')) {
+    throw new Error('鎺ュ叆鍣ㄧ殑 Manifest 鏈０鏄庡彲鐢ㄧ殑 URL 鑼冨洿瀛楁');
+  }
+  return {
+    manifest,
+    values: {
+      ...defaultScopeValues(manifest),
+      [scopeField]: propertyType === 'array' ? [value] : value,
+    },
+  };
 }
 
 function isObjectScope(manifest: ConnectorManifest | undefined): boolean {
@@ -327,6 +437,13 @@ function ConnectorResourcePreview({ preview }: { preview?: ConnectorResourceInve
             <article key={resource.resource_index}>
               <strong>{resource.display_title || '未命名资源'}</strong>
               <span>{resource.remote_object_type || resource.resource_kind || resource.state}</span>
+              <small>
+                {resource.updated_at_utc
+                  ? `最近观测 · ${formatTime(resource.updated_at_utc, '暂无记录')}`
+                  : '尚未记录更新时间'}
+                {resource.source_updated_at ? ` · 来源更新标记 · ${resource.source_updated_at}` : ''}
+                {resource.permission_scope ? ` · ${permissionScopeLabel(resource.permission_scope)}` : ''}
+              </small>
             </article>
           ))}
         </div>
@@ -356,6 +473,11 @@ export function Materials() {
   const [resourceScope, setResourceScope] = useState('');
   const [scopeValues, setScopeValues] = useState<ScopeValues>({});
   const [scopeParseError, setScopeParseError] = useState('');
+  const [quickConnectType, setQuickConnectType] = useState('');
+  const [quickConnectUrl, setQuickConnectUrl] = useState('');
+  const [quickConnectApplied, setQuickConnectApplied] = useState(false);
+  const [sourcePreflight, setSourcePreflight] = useState<ConnectorSourcePreflight | null>(null);
+  const [preflighting, setPreflighting] = useState(false);
   const [authMode, setAuthMode] = useState('');
   const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
   const [webhookEnabled, setWebhookEnabled] = useState(false);
@@ -372,6 +494,10 @@ export function Materials() {
   const selectedCredentialFields = useMemo(
     () => manifestFields(selectedManifest, authMode),
     [authMode, selectedManifest],
+  );
+  const quickConnectOptions = useMemo(
+    () => quickConnectManifests(manifests),
+    [manifests],
   );
 
   const refresh = useCallback(async () => {
@@ -392,10 +518,16 @@ export function Materials() {
       ]);
       setConnectors(inventory.connectors);
       setManifests(catalog.connector_types);
+      const quickOptions = quickConnectManifests(catalog.connector_types);
       setConnectorType((current) => (
         current && catalog.connector_types.some((manifest) => manifest.connector_type === current)
           ? current
           : catalog.connector_types[0]?.connector_type || ''
+      ));
+      setQuickConnectType((current) => (
+        current && quickOptions.some((manifest) => manifest.connector_type === current)
+          ? current
+          : quickOptions[0]?.connector_type || ''
       ));
       const previews = await Promise.all(
         inventory.connectors.map(async (connector) => [
@@ -417,18 +549,28 @@ export function Materials() {
   }, [refresh]);
 
   const onlineSources = useMemo(
-    () => sources.filter((source) => source.source_ref.startsWith('connector://')),
+    () => sources.filter((source) => (
+      source.source_origin === 'ONLINE_CONNECTOR'
+      || source.source_ref.startsWith('connector://')
+    )),
     [sources],
   );
   const uploadedSources = useMemo(
-    () => sources.filter((source) => !source.source_ref.startsWith('connector://')),
+    () => sources.filter((source) => (
+      source.source_origin !== 'ONLINE_CONNECTOR'
+      && !source.source_ref.startsWith('connector://')
+    )),
     [sources],
   );
 
   const resetForm = () => {
     setEditingId('');
-    const firstManifest = manifests[0];
+    const firstManifest = quickConnectOptions[0] || manifests[0];
     setConnectorType(firstManifest?.connector_type || '');
+    setQuickConnectType(firstManifest?.connector_type || '');
+    setQuickConnectUrl('');
+    setQuickConnectApplied(false);
+    setSourcePreflight(null);
     setResourceScope(scopePresets(firstManifest)[0] || '');
     setScopeValues(defaultScopeValues(firstManifest));
     setScopeParseError('');
@@ -450,6 +592,10 @@ export function Materials() {
     const parsedScope = parseScopeValues(manifest, connector.resource_scope);
     setScopeValues(parsedScope.values);
     setScopeParseError(parsedScope.error || '');
+    setQuickConnectType('');
+    setQuickConnectUrl('');
+    setQuickConnectApplied(false);
+    setSourcePreflight(null);
     const mode = connector.connection_profile?.auth_mode
       || manifests.find((manifest) => manifest.connector_type === connector.connector_type)?.auth_modes[0]
       || '';
@@ -457,6 +603,83 @@ export function Materials() {
     setCredentialValues({});
     setWebhookEnabled(connector.webhook?.enabled === true);
     setFormOpen(true);
+  };
+
+  const applyQuickConnectManifest = (manifest: ConnectorManifest, message: string) => {
+    if (!manifest) {
+      toast.show('褰撳墠娌℃湁 Manifest 澹版槑 URL 鍏ュ彛鐨勮繛鎺ュ櫒', 'warning');
+      return;
+    }
+    try {
+      const result = applyQuickConnectUrl(manifest, quickConnectUrl);
+      setConnectorType(result.manifest.connector_type);
+      setQuickConnectType(result.manifest.connector_type);
+      setAuthMode(result.manifest.auth_modes[0] || '');
+      setScopeValues(result.values);
+      setResourceScope('');
+      setScopeParseError('');
+      setCredentialValues({});
+      setWebhookEnabled(false);
+      setQuickConnectApplied(true);
+      toast.show(message, 'success');
+    } catch (error: unknown) {
+      toast.show(error instanceof Error ? error.message : '入口 URL 未能用于快速接入', 'warning');
+    }
+  };
+
+  const useQuickConnectUrl = () => {
+    const manifest = quickConnectOptions.find((item) => item.connector_type === quickConnectType)
+      || quickConnectOptions[0];
+    if (!manifest) {
+      toast.show('褰撳墠娌℃湁 Manifest 澹版槑 URL 鍏ュ彛鐨勮繛鎺ュ櫒', 'warning');
+      return;
+    }
+    applyQuickConnectManifest(
+      manifest,
+      '已根据入口 URL 填写安全默认范围；首次读取前仍会执行连接与边界检查',
+    );
+  };
+
+  const preflightSourceUrl = async () => {
+    if (!project) return;
+    setPreflighting(true);
+    setSourcePreflight(null);
+    try {
+      const result = await preflightConnectorSource(project, quickConnectUrl);
+      setSourcePreflight(result);
+      const recommended = quickConnectOptions.find(
+        (manifest) => manifest.connector_type === result.recommended_connector_type,
+      );
+      if (recommended) {
+        applyQuickConnectManifest(
+          recommended,
+          `已根据在线入口识别为${recommended.display_name}；请确认授权后开始读取`,
+        );
+      } else if (result.status === 'AUTHORIZATION_REQUIRED') {
+        toast.show('入口需要授权才能识别类型；请从下方候选能力继续并填写授权。', 'warning');
+      } else if (result.candidates.length > 0) {
+        toast.show('入口可以接入，但需要你确认使用哪一种资料能力。', 'warning');
+      } else {
+        toast.show('当前没有可用的 URL 连接器 Manifest，请改用已声明的接入方式。', 'warning');
+      }
+    } catch (error: unknown) {
+      toast.show(error instanceof Error ? error.message : '入口预检未完成，请检查 URL 后重试。', 'danger');
+    } finally {
+      setPreflighting(false);
+    }
+  };
+
+  const choosePreflightCandidate = (connectorTypeValue: string) => {
+    const manifest = quickConnectOptions.find((item) => item.connector_type === connectorTypeValue);
+    if (!manifest) {
+      toast.show('候选连接器 Manifest 已不可用，请刷新页面后重试。', 'warning');
+      return;
+    }
+    setQuickConnectType(manifest.connector_type);
+    applyQuickConnectManifest(
+      manifest,
+      `已选择${manifest.display_name}并填写入口范围；首次读取前仍会执行连接与边界检查`,
+    );
   };
 
   const profilePayload = (): ConfigureConnectorInput['connection_profile'] => {
@@ -799,6 +1022,112 @@ export function Materials() {
             <button className="btn btn-ghost" type="button" onClick={() => setFormOpen(false)}>关闭</button>
           </div>
 
+          {!editingId && quickConnectOptions.length > 0 && (
+            <section className="materials-quick-connect" aria-label="快速接入在线资料">
+              <div>
+                <span className="settings-hero-kicker">来源优先</span>
+                <h3>粘贴一个在线资料入口</h3>
+                <p>系统先用一次受边界约束的只读预检识别可用资料能力，再按 Manifest 填写范围；无需先理解连接器类型或手工编写范围 JSON。</p>
+              </div>
+              <div className="materials-quick-connect-row">
+                <label className="form-group materials-quick-connect-url">
+                  <span className="form-label">入口 URL</span>
+                  <input
+                    className="form-input"
+                    type="url"
+                    value={quickConnectUrl}
+                    onChange={(event) => setQuickConnectUrl(event.target.value)}
+                    placeholder="https://example.com/docs"
+                    autoComplete="url"
+                  />
+                </label>
+                <button className="btn btn-secondary" type="button" onClick={() => void preflightSourceUrl()} disabled={preflighting}>
+                  {preflighting ? '正在识别入口…' : '识别并填写范围'}
+                </button>
+              </div>
+              <details className="materials-advanced materials-quick-connect-manual">
+                <summary>我已知道资料类型，直接选择</summary>
+                <div className="materials-advanced-field">
+                  <label className="form-group">
+                    <span className="form-label">资料来源能力</span>
+                    <select
+                      className="form-input"
+                      value={quickConnectType}
+                      onChange={(event) => setQuickConnectType(event.target.value)}
+                    >
+                      {quickConnectOptions.map((manifest) => (
+                        <option key={manifest.connector_type} value={manifest.connector_type}>
+                          {manifest.display_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="btn btn-secondary" type="button" onClick={useQuickConnectUrl}>
+                    按所选能力填写范围
+                  </button>
+                </div>
+              </details>
+              {sourcePreflight && (
+                <div className="materials-preflight-result" aria-label="在线入口识别结果">
+                  <div className="materials-preflight-heading">
+                    <strong>
+                      {sourcePreflight.status === 'READY'
+                        ? '已找到明确的资料能力'
+                        : sourcePreflight.status === 'AUTHORIZATION_REQUIRED'
+                          ? '入口需要授权后才能确认'
+                          : sourcePreflight.status === 'REMOTE_ERROR'
+                            ? '入口暂时无法读取'
+                          : sourcePreflight.status === 'NO_QUICK_CONNECTOR'
+                            ? '没有可用的 URL 连接器'
+                            : '请确认要使用的资料能力'}
+                    </strong>
+                    <span>
+                      只读预检 · HTTP {sourcePreflight.observation.http_status}
+                      {sourcePreflight.observation.content_type
+                        ? ` · ${sourcePreflight.observation.content_type}`
+                        : ''}
+                    </span>
+                  </div>
+                  <small>预检只返回结构证据和指纹，不返回资料正文、凭据或写入结果。</small>
+                  {sourcePreflight.candidates.length > 0 && (
+                    <div className="materials-preflight-candidates">
+                      {sourcePreflight.candidates.map((candidate) => {
+                        const manifest = quickConnectOptions.find(
+                          (item) => item.connector_type === candidate.connector_type,
+                        );
+                        return (
+                          <div className="materials-preflight-candidate" key={candidate.connector_type}>
+                            <div>
+                              <strong>{candidate.display_name || candidate.connector_type}</strong>
+                              <span>
+                                {candidate.match_status === 'MATCHED' ? '已获得来源证据' : '可按此能力继续'}
+                                {candidate.evidence.length > 0 ? ` · ${candidate.evidence.join('、')}` : ''}
+                              </span>
+                            </div>
+                            {manifest && (
+                              <button
+                                className="btn btn-secondary"
+                                type="button"
+                                onClick={() => choosePreflightCandidate(candidate.connector_type)}
+                              >
+                                使用此能力
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+              {quickConnectApplied && (
+                <div className="materials-quick-connect-applied">
+                  已使用入口 URL；其余范围保持 Manifest 默认值。保存后会直接进入连接测试和首次只读同步。
+                </div>
+              )}
+            </section>
+          )}
+
           <div className="materials-step">
             <span className="materials-step-number">1</span>
             <div>
@@ -818,6 +1147,11 @@ export function Materials() {
                   const next = event.target.value;
                   const manifest = manifests.find((item) => item.connector_type === next);
                   setConnectorType(next);
+                  setSourcePreflight(null);
+                  setQuickConnectType(
+                    quickConnectOptions.some((item) => item.connector_type === next) ? next : '',
+                  );
+                  setQuickConnectApplied(false);
                   setAuthMode(manifest?.auth_modes[0] || '');
                   setResourceScope(scopePresets(manifest)[0] || '');
                   setScopeValues(defaultScopeValues(manifest));
@@ -845,7 +1179,7 @@ export function Materials() {
                   setAuthMode(event.target.value);
                   setCredentialValues({});
                 }}>
-                  {selectedManifest.auth_modes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+                  {selectedManifest.auth_modes.map((mode) => <option key={mode} value={mode}>{authModeLabel(mode)}</option>)}
                 </select>
               </div>
             </details>
@@ -854,7 +1188,7 @@ export function Materials() {
           <div className="materials-form-grid">
             {selectedCredentialFields.map((field) => (
               <label className="form-group" key={field.name}>
-                <span className="form-label">{field.name}{field.required ? ' *' : ''}</span>
+                <span className="form-label">{credentialFieldLabel(field)}{field.required ? ' *' : ''}</span>
                 <input
                   className="form-input"
                   type={field.secret || field.field_type.includes('token') || field.field_type.includes('password') ? 'password' : 'text'}
@@ -912,6 +1246,13 @@ export function Materials() {
           )}
 
           {isObjectScope(selectedManifest) && (
+            <details
+              className="materials-advanced materials-scope-editor-details"
+              open={!quickConnectApplied}
+            >
+              <summary>{quickConnectApplied ? '调整同步范围（可选）' : '配置同步范围'}</summary>
+              <div className="materials-advanced-field">
+                {selectedManifest && (
             <div className="materials-form-grid materials-scope-editor">
               {scopeProperties(selectedManifest).map(([name, property]) => {
                 const required = asArray(asRecord(selectedManifest?.scope_schema).required)
@@ -972,6 +1313,9 @@ export function Materials() {
                 );
               })}
             </div>
+                )}
+              </div>
+            </details>
           )}
 
           {isObjectScope(selectedManifest) && (
@@ -1037,7 +1381,9 @@ export function Materials() {
         ) : (
           <div className="materials-source-list">
             {sources.map((source) => {
-              const online = source.source_ref.startsWith('connector://');
+              const online = source.source_origin === 'ONLINE_CONNECTOR'
+                || source.source_ref.startsWith('connector://');
+              const fingerprint = source.source_identity_fingerprints?.[0];
               return (
                 <article className="materials-source-row" key={source.source_id || source.source_ref}>
                   <span className={`materials-source-icon ${online ? 'online' : 'upload'}`}>{online ? '在线' : '文件'}</span>
@@ -1047,6 +1393,16 @@ export function Materials() {
                       {online ? '在线资料' : '离线补充资料'} · {source.source_type || '自动识别'}
                       {source.version ? ` · v${source.version}` : ''}
                     </span>
+                    <span>
+                      最近观测 · {formatTime(source.updated_at_utc || source.last_seen_at_utc, '尚未观测')}
+                      {' · '}{permissionScopeLabel(source.permission_scope)}
+                    </span>
+                    {source.source_updated_at && (
+                      <span>来源更新标记 · {source.source_updated_at}</span>
+                    )}
+                    {fingerprint && (
+                      <code>来源指纹 · {fingerprint.slice(0, 12)}…</code>
+                    )}
                   </div>
                   <span className="status status-success">{source.status === 'active' ? '可用' : source.status}</span>
                 </article>

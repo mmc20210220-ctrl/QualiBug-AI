@@ -73,6 +73,19 @@ _OAUTH_SCHEMA_KEYS = {
     "scope_field",
     "token_type_field",
 }
+_QUICK_CONNECT_SCHEMA_KEYS = {
+    "input_type",
+    "scope_field",
+    "priority",
+}
+_ENTRYPOINT_EVIDENCE_KEYS = {
+    "content_types",
+    "document_shapes",
+    "host_suffixes",
+    "path_suffixes",
+}
+_ENTRYPOINT_EVIDENCE_MAX_ITEMS = 32
+_QUICK_CONNECT_INPUT_TYPES = {"url"}
 _DEFAULT_WEBHOOK_POLICY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": "Configuration-driven HMAC webhook verification and sync triggering.",
@@ -206,6 +219,7 @@ class ConnectorCredentialField:
     secret: bool = False
     description: str = ""
     auth_modes: tuple[str, ...] = ()
+    display_name: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _identifier(self.name, "credential_field_name"))
@@ -223,6 +237,11 @@ class ConnectorCredentialField:
             "auth_modes",
             _unique_strings(self.auth_modes, "credential_field_auth_modes"),
         )
+        object.__setattr__(
+            self,
+            "display_name",
+            str(self.display_name or "").strip()[:160],
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -232,6 +251,7 @@ class ConnectorCredentialField:
             "secret": self.secret,
             "description": self.description,
             "auth_modes": list(self.auth_modes),
+            "display_name": self.display_name,
         }
 
 
@@ -245,6 +265,8 @@ class ConnectorManifest:
     version: str
     auth_modes: tuple[str, ...] = ()
     scope_schema: Mapping[str, Any] = field(default_factory=dict)
+    quick_connect_schema: Mapping[str, Any] = field(default_factory=dict)
+    entrypoint_evidence: Mapping[str, Any] = field(default_factory=dict)
     supported_resource_types: tuple[str, ...] = ()
     sync_modes: tuple[str, ...] = ("FULL",)
     webhook_supported: bool = False
@@ -279,7 +301,111 @@ class ConnectorManifest:
         object.__setattr__(self, "auth_modes", _unique_strings(self.auth_modes, "auth_modes"))
         if not isinstance(self.scope_schema, Mapping):
             raise ConnectorRegistryError("scope_schema_must_be_object")
-        object.__setattr__(self, "scope_schema", dict(self.scope_schema))
+        scope_schema = dict(self.scope_schema)
+        object.__setattr__(self, "scope_schema", scope_schema)
+        if not isinstance(self.quick_connect_schema, Mapping):
+            raise ConnectorRegistryError("quick_connect_schema_must_be_object")
+        quick_connect_schema = dict(self.quick_connect_schema)
+        if quick_connect_schema:
+            unknown_quick_connect_keys = sorted(
+                set(quick_connect_schema) - _QUICK_CONNECT_SCHEMA_KEYS
+            )
+            if unknown_quick_connect_keys:
+                raise ConnectorRegistryError(
+                    "quick_connect_schema_field_not_supported:"
+                    + unknown_quick_connect_keys[0]
+                )
+            input_type = str(quick_connect_schema.get("input_type") or "").strip().lower()
+            if input_type not in _QUICK_CONNECT_INPUT_TYPES:
+                raise ConnectorRegistryError("quick_connect_schema_input_type_invalid")
+            scope_field = _identifier(
+                quick_connect_schema.get("scope_field"),
+                "quick_connect_schema_scope_field",
+            )
+            properties = scope_schema.get("properties")
+            if not isinstance(properties, Mapping) or scope_field not in properties:
+                raise ConnectorRegistryError("quick_connect_schema_scope_field_not_declared")
+            property_schema = properties.get(scope_field)
+            if not isinstance(property_schema, Mapping) or str(
+                property_schema.get("type") or ""
+            ).strip().lower() not in {"array", "string"}:
+                raise ConnectorRegistryError("quick_connect_schema_scope_field_not_url_input")
+            required = scope_schema.get("required")
+            if not isinstance(required, (list, tuple)) or scope_field not in required:
+                raise ConnectorRegistryError("quick_connect_schema_scope_field_not_required")
+            priority = quick_connect_schema.get("priority", 100)
+            if isinstance(priority, bool) or not isinstance(priority, int) or not 0 <= priority <= 1000:
+                raise ConnectorRegistryError("quick_connect_schema_priority_invalid")
+            quick_connect_schema = {
+                "input_type": input_type,
+                "scope_field": scope_field,
+                "priority": priority,
+            }
+        object.__setattr__(self, "quick_connect_schema", quick_connect_schema)
+        if not isinstance(self.entrypoint_evidence, Mapping):
+            raise ConnectorRegistryError("entrypoint_evidence_must_be_object")
+        entrypoint_evidence = dict(self.entrypoint_evidence)
+        unknown_entrypoint_evidence_keys = sorted(
+            set(entrypoint_evidence) - _ENTRYPOINT_EVIDENCE_KEYS
+        )
+        if unknown_entrypoint_evidence_keys:
+            raise ConnectorRegistryError(
+                "entrypoint_evidence_field_not_supported:"
+                + unknown_entrypoint_evidence_keys[0]
+            )
+        normalized_entrypoint_evidence: dict[str, list[str]] = {}
+        for key in sorted(_ENTRYPOINT_EVIDENCE_KEYS):
+            raw_values = entrypoint_evidence.get(key, ())
+            if isinstance(raw_values, str) or not isinstance(raw_values, (list, tuple)):
+                raise ConnectorRegistryError(
+                    f"entrypoint_evidence_{key}_must_be_list"
+                )
+            if len(raw_values) > _ENTRYPOINT_EVIDENCE_MAX_ITEMS:
+                raise ConnectorRegistryError(
+                    f"entrypoint_evidence_{key}_limit_exceeded"
+                )
+            values: list[str] = []
+            seen: set[str] = set()
+            for raw_value in raw_values:
+                value = str(raw_value or "").strip()
+                if not value or len(value) > 160:
+                    raise ConnectorRegistryError(
+                        f"entrypoint_evidence_{key}_contains_invalid_value"
+                    )
+                if key == "content_types":
+                    value = value.lower().split(";", 1)[0].strip()
+                    if "/" not in value:
+                        raise ConnectorRegistryError(
+                            "entrypoint_evidence_content_type_invalid"
+                        )
+                elif key == "path_suffixes":
+                    value = value.lower()
+                    if not value.startswith(".") or "/" in value or "\\" in value:
+                        raise ConnectorRegistryError(
+                            "entrypoint_evidence_path_suffix_invalid"
+                        )
+                elif key == "host_suffixes":
+                    value = value.lower().rstrip(".")
+                    labels = value.split(".") if value else []
+                    if any(
+                        not re.fullmatch(
+                            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+                            label,
+                        )
+                        for label in labels
+                    ):
+                        raise ConnectorRegistryError(
+                            "entrypoint_evidence_host_suffix_invalid"
+                        )
+                if value in seen:
+                    raise ConnectorRegistryError(
+                        f"entrypoint_evidence_{key}_contains_duplicate:{value}"
+                    )
+                seen.add(value)
+                values.append(value)
+            if values:
+                normalized_entrypoint_evidence[key] = values
+        object.__setattr__(self, "entrypoint_evidence", normalized_entrypoint_evidence)
         object.__setattr__(
             self,
             "supported_resource_types",
@@ -428,6 +554,11 @@ class ConnectorManifest:
             "version": self.version,
             "auth_modes": list(self.auth_modes),
             "scope_schema": dict(self.scope_schema),
+            "quick_connect_schema": dict(self.quick_connect_schema),
+            "entrypoint_evidence": {
+                key: list(values)
+                for key, values in self.entrypoint_evidence.items()
+            },
             "supported_resource_types": list(self.supported_resource_types),
             "sync_modes": list(self.sync_modes),
             "webhook_supported": self.webhook_supported,

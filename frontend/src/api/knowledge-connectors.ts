@@ -19,6 +19,7 @@ export type KnowledgeConnectorProfile = {
 
 export type ConnectorCredentialField = {
   name: string;
+  display_name?: string;
   field_type: string;
   required: boolean;
   secret: boolean;
@@ -34,6 +35,17 @@ export type ConnectorManifest = {
   version: string;
   auth_modes: string[];
   scope_schema: Record<string, unknown>;
+  quick_connect_schema?: {
+    input_type?: string;
+    scope_field?: string;
+    priority?: number;
+  };
+  entrypoint_evidence?: {
+    content_types?: string[];
+    document_shapes?: string[];
+    host_suffixes?: string[];
+    path_suffixes?: string[];
+  };
   supported_resource_types: string[];
   sync_modes: string[];
   webhook_supported: boolean;
@@ -46,9 +58,50 @@ export type ConnectorManifest = {
   oauth_schema?: Record<string, unknown>;
 };
 
+export type ConnectorPermissionScope = {
+  visibility?: string;
+  availability?: string;
+  evidence_status?: string;
+  acl_version?: string;
+  complete?: boolean;
+  propagation_allowed?: boolean;
+  raw_remote_principals_returned: false;
+};
+
 export type ConnectorTypeCatalog = {
   schema: string;
   connector_types: ConnectorManifest[];
+  governance: Record<string, unknown>;
+};
+
+export type ConnectorSourcePreflightCandidate = {
+  connector_type: string;
+  display_name: string;
+  category: string;
+  scope_field: string;
+  match_status: 'MATCHED' | 'AVAILABLE' | 'REVIEW_REQUIRED' | string;
+  reason_code: string;
+  evidence: string[];
+  priority: number;
+  requires_user_confirmation: boolean;
+};
+
+export type ConnectorSourcePreflight = {
+  schema?: string;
+  project_id: string;
+  status: 'READY' | 'NEEDS_USER_CONFIRMATION' | 'AUTHORIZATION_REQUIRED' | 'REMOTE_ERROR' | 'NO_QUICK_CONNECTOR' | string;
+  recommended_connector_type: string;
+  candidates: ConnectorSourcePreflightCandidate[];
+  observation: {
+    http_status: number;
+    content_type: string;
+    response_bytes_read: number;
+    response_fingerprint: string;
+    document_shapes: string[];
+    path_suffix_observed: boolean;
+    redirected: boolean;
+    final_host_fingerprint: string;
+  };
   governance: Record<string, unknown>;
 };
 
@@ -348,6 +401,8 @@ export type ConnectorResource = {
   state: string;
   reason_code?: string;
   updated_at_utc?: string;
+  source_updated_at?: string;
+  permission_scope?: ConnectorPermissionScope;
 };
 
 export type ConnectorResourceInventory = {
@@ -455,6 +510,25 @@ const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 const asString = (value: unknown): string => typeof value === 'string' ? value : '';
 const asBoolean = (value: unknown): boolean => value === true;
 const asNumber = (value: unknown): number | undefined => typeof value === 'number' ? value : undefined;
+
+function toPermissionScope(value: unknown): ConnectorPermissionScope | undefined {
+  const row = asRecord(value);
+  if (Object.keys(row).length === 0) return undefined;
+  if (row.raw_remote_principals_returned !== false) {
+    throw new Error('connector_permission_scope_principals_returned');
+  }
+  return {
+    visibility: asString(row.visibility) || undefined,
+    availability: asString(row.availability) || undefined,
+    evidence_status: asString(row.evidence_status) || undefined,
+    acl_version: asString(row.acl_version) || undefined,
+    complete: typeof row.complete === 'boolean' ? row.complete : undefined,
+    propagation_allowed: typeof row.propagation_allowed === 'boolean'
+      ? row.propagation_allowed
+      : undefined,
+    raw_remote_principals_returned: false,
+  };
+}
 
 function assertFalseFields(row: JsonRecord, fields: string[], label: string): void {
   if (fields.some((field) => row[field] !== false)) {
@@ -964,6 +1038,29 @@ function toManifest(value: unknown): ConnectorManifest {
     version: asString(row.version),
     auth_modes: asArray(row.auth_modes).map(asString).filter(Boolean),
     scope_schema: asRecord(row.scope_schema),
+    quick_connect_schema: row.quick_connect_schema
+      ? {
+        input_type: asString(asRecord(row.quick_connect_schema).input_type) || undefined,
+        scope_field: asString(asRecord(row.quick_connect_schema).scope_field) || undefined,
+        priority: asNumber(asRecord(row.quick_connect_schema).priority),
+      }
+      : undefined,
+    entrypoint_evidence: row.entrypoint_evidence
+      ? {
+        content_types: asArray(asRecord(row.entrypoint_evidence).content_types)
+          .map(asString)
+          .filter(Boolean),
+        document_shapes: asArray(asRecord(row.entrypoint_evidence).document_shapes)
+          .map(asString)
+          .filter(Boolean),
+        host_suffixes: asArray(asRecord(row.entrypoint_evidence).host_suffixes)
+          .map(asString)
+          .filter(Boolean),
+        path_suffixes: asArray(asRecord(row.entrypoint_evidence).path_suffixes)
+          .map(asString)
+          .filter(Boolean),
+      }
+      : undefined,
     supported_resource_types: asArray(row.supported_resource_types).map(asString).filter(Boolean),
     sync_modes: asArray(row.sync_modes).map(asString).filter(Boolean),
     webhook_supported: asBoolean(row.webhook_supported),
@@ -974,6 +1071,7 @@ function toManifest(value: unknown): ConnectorManifest {
       const item = asRecord(field);
       return {
         name: asString(item.name),
+        display_name: asString(item.display_name) || undefined,
         field_type: asString(item.field_type),
         required: asBoolean(item.required),
         secret: asBoolean(item.secret),
@@ -1036,6 +1134,68 @@ export async function getConnectorType(connectorType: string): Promise<Connector
   const manifest = toManifest(row);
   if (!manifest.connector_type || !manifest.display_name) throw new Error('connector_manifest_incomplete');
   return manifest;
+}
+
+export async function preflightConnectorSource(
+  projectId: string,
+  url: string,
+): Promise<ConnectorSourcePreflight> {
+  const sourceUrl = url.trim();
+  if (!sourceUrl) throw new Error('请先粘贴一个在线资料入口 URL。');
+  const payload = await connectorRequest(
+    projectConnectorPath(projectId, '/source-preflight'),
+    {
+      method: 'POST',
+      body: JSON.stringify({ url: sourceUrl }),
+    },
+  );
+  const data = asRecord(payload.data);
+  const governance = asRecord(data.governance);
+  assertFalseFields(
+    governance,
+    [
+      'request_body_sent',
+      'write_performed',
+      'source_content_returned',
+      'response_body_persisted',
+      'credentials_returned',
+      'raw_cursor_returned',
+    ],
+    '来源入口预检',
+  );
+  return {
+    schema: asString(data.schema) || undefined,
+    project_id: asString(data.project_id) || projectId,
+    status: asString(data.status) || 'NO_QUICK_CONNECTOR',
+    recommended_connector_type: asString(data.recommended_connector_type),
+    candidates: asArray(data.candidates).map((value) => {
+      const row = asRecord(value);
+      return {
+        connector_type: asString(row.connector_type),
+        display_name: asString(row.display_name),
+        category: asString(row.category),
+        scope_field: asString(row.scope_field),
+        match_status: asString(row.match_status) || 'AVAILABLE',
+        reason_code: asString(row.reason_code),
+        evidence: asArray(row.evidence).map(asString).filter(Boolean),
+        priority: asNumber(row.priority) ?? 100,
+        requires_user_confirmation: asBoolean(row.requires_user_confirmation),
+      };
+    }).filter((candidate) => Boolean(candidate.connector_type)),
+    observation: {
+      http_status: asNumber(asRecord(data.observation).http_status) ?? 0,
+      content_type: asString(asRecord(data.observation).content_type),
+      response_bytes_read: asNumber(asRecord(data.observation).response_bytes_read) ?? 0,
+      response_fingerprint: asString(asRecord(data.observation).response_fingerprint),
+      document_shapes: asArray(asRecord(data.observation).document_shapes)
+        .map(asString)
+        .filter(Boolean),
+      path_suffix_observed: asBoolean(asRecord(data.observation).path_suffix_observed),
+      redirected: asBoolean(asRecord(data.observation).redirected),
+      final_host_fingerprint: asString(asRecord(data.observation).final_host_fingerprint),
+    },
+    governance,
+  };
 }
 
 export async function getKnowledgeConnector(
@@ -1235,6 +1395,8 @@ export async function listConnectorResources(
         state: asString(row.state) || 'UNKNOWN',
         reason_code: asString(row.reason_code) || undefined,
         updated_at_utc: asString(row.updated_at_utc) || undefined,
+        source_updated_at: asString(row.source_updated_at) || undefined,
+        permission_scope: toPermissionScope(row.permission_scope),
       };
     }),
     preview_truncated: asBoolean(data.preview_truncated),
