@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re as _re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -2311,6 +2312,577 @@ def reconcile_pipeline_health_after_campaign_cleanup(
             f"original cleanup_failure_count={health['cleanup_failure_count']} remains visible."
         ).strip()
     return health
+
+# Discovery execution identity and source-flow projections stay with the funnel
+# authority so the mainline execution module remains a thin authority wrapper.
+_VARIANT_RE = _re.compile(r"^(.+?)__v_[a-f0-9]+$")
+def _compiled_round0_obligation_ids(all_experiments: Any) -> set[str]:
+    """Compatibility diagnostic for the historical compiled-only projection.
+
+    Variant experiments (``obl_x__v_<digest>``) collapse to their base
+    identity. This helper is not used by the product expansion path: round 2
+    receives every immutable round-0 obligation identity, including compile-
+    blocked rows, so a retry cannot create a duplicate formal obligation.
+    """
+
+    compiled: set[str] = set()
+    for row in _list(all_experiments):
+        if not isinstance(row, dict):
+            continue
+        if _text(_dict(row.get("compile_receipt")).get("status")).upper() != "COMPILED":
+            continue
+        obligation_id = _text(row.get("obligation_id"))
+        if not obligation_id:
+            continue
+        match = _VARIANT_RE.match(obligation_id)
+        compiled.add(match.group(1) if match else obligation_id)
+    return compiled
+
+
+def _runtime_recompile_round0_obligation_ids(
+    obligations: Any,
+    experiments_by_obligation: Any,
+) -> set[str]:
+    """Select only compile-blocked body bindings that runtime discovery can resolve.
+
+    A runtime interface observation may reopen a round-0 compile terminal only
+    when no target request was possible.  Other blockers (cleanup authority,
+    missing fixtures, observers, or source request bodies) need their own
+    source evidence and must remain blocked instead of being retried blindly.
+    """
+
+    experiments = _dict(experiments_by_obligation)
+    retry_ids: set[str] = set()
+    for obligation in _list(obligations):
+        if not isinstance(obligation, dict):
+            continue
+        obligation_id = _text(obligation.get("obligation_id"))
+        if not obligation_id:
+            continue
+        experiment = _dict(experiments.get(obligation_id))
+        compile_receipt = _dict(experiment.get("compile_receipt"))
+        if _text(compile_receipt.get("status")).upper() != "BLOCKED":
+            continue
+        if _text(compile_receipt.get("reason_code")) != "BLOCKED_MISSING_BINDING":
+            continue
+        detail = _text(
+            compile_receipt.get("detail")
+            or compile_receipt.get("reason_detail")
+        )
+        if "BODY_PARAMETER_NOT_SOURCE_BOUND" in detail:
+            retry_ids.add(obligation_id)
+    return retry_ids
+
+
+def _formal_obligation_rows_and_identity_receipt(
+    plan: Any,
+    expansion: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Validate the final formal identity before any round-2 transport."""
+
+    base_rows = [
+        dict(row)
+        for row in _list(plan.obligations.get("obligations"))
+        if isinstance(row, dict)
+    ]
+    expansion_rows = [
+        dict(row)
+        for row in _list(expansion.get("delta_obligations"))
+        if isinstance(row, dict)
+    ]
+    formal_rows = [*base_rows, *expansion_rows]
+    base_ids = {
+        _text(row.get("obligation_id"))
+        for row in base_rows
+        if _text(row.get("obligation_id"))
+    }
+    expansion_ids = {
+        _text(row.get("obligation_id"))
+        for row in expansion_rows
+        if _text(row.get("obligation_id"))
+    }
+    all_id_values = [
+        _text(row.get("obligation_id")) for row in formal_rows
+    ]
+    missing_formal_ids = sum(not value for value in all_id_values)
+    duplicate_formal_ids = sorted(
+        obligation_id
+        for obligation_id, count in Counter(
+            value for value in all_id_values if value
+        ).items()
+        if count > 1
+    )
+    expansion_overlap_ids = sorted(base_ids & expansion_ids)
+    if missing_formal_ids or duplicate_formal_ids or expansion_overlap_ids:
+        raise ValueError(
+            "formal_obligation_identity_invalid:"
+            f"missing={missing_formal_ids};"
+            f"duplicates={','.join(duplicate_formal_ids[:20])};"
+            f"expansion_overlap={','.join(expansion_overlap_ids[:20])}"
+        )
+    planning_identity_receipt = _dict(
+        plan.obligations.get("obligation_identity_receipt")
+    )
+    return formal_rows, {
+        "schema_version": "qualibug.obligation-identity-receipt.v1",
+        "authority": "discovery_runtime_execution.formal_obligation_rows",
+        "status": "PASS",
+        "input_row_count": len(formal_rows),
+        "unique_count": len(formal_rows),
+        "duplicate_count": 0,
+        "duplicate_ids": [],
+        "missing_id_count": 0,
+        "expansion_added_count": len(expansion_rows),
+        "expansion_overlap_ids": [],
+        "planning_receipt": planning_identity_receipt,
+    }
+
+
+def _build_knowledge_source_flow_receipt(
+    *,
+    plan: Any,
+    behavior_ir: dict[str, Any],
+    formal_obligation_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Project source-bound funnel counts without persisting source prose.
+
+    The planning bundle keeps the enterprise knowledge asset private because it
+    may contain customer material.  The product result still needs a durable
+    explanation of how that material reached the executable funnel.  This
+    receipt therefore carries only exact structural counts, identifiers and
+    explicit gate statuses from the asset and the runtime Behavior IR.
+    """
+
+    def row_count(value: Any) -> int | None:
+        return len(value) if isinstance(value, list) else None
+
+    def integer(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        return None
+
+    asset = _dict(plan.experiments.get("_knowledge_asset"))
+    receipt: dict[str, Any] = {
+        "schema_version": "qualibug.discovery-source-flow-receipt.v1",
+        "authority": (
+            "enterprise_business_knowledge_asset -> enterprise_understanding_model "
+            "-> Behavior IR -> formal obligations"
+        ),
+        "status": "NOT_MEASURED",
+        "knowledge_asset": {},
+        "source_materials": {},
+        "business_facts": {},
+        "enterprise_behavior_ir": {},
+        "runtime_behavior_ir": {},
+        "formal_obligations": {},
+        "links": {},
+        "missing_evidence": [],
+        "issues": [],
+    }
+    if not asset:
+        receipt["missing_evidence"].append("planning._knowledge_asset")
+        receipt["reason"] = "knowledge_asset_not_available_in_planning_bundle"
+        return receipt
+
+    asset_id = _text(asset.get("asset_id"))
+    model = _dict(asset.get("enterprise_understanding_model"))
+    model_id = _text(model.get("model_id"))
+    source_summary = _dict(model.get("source_summary"))
+    asset_summary = _dict(asset.get("summary"))
+    receipt["knowledge_asset"] = {
+        "asset_id": asset_id,
+        "enterprise_understanding_model_id": model_id,
+        "source_snapshot_hash": _text(
+            _dict(plan.mainline_run).get("source_snapshot_hash")
+        ),
+        "asset_gate_status": _text(_dict(model.get("gate")).get("status")),
+        "business_comprehension_status": _text(
+            asset_summary.get("business_comprehension_status")
+        ),
+    }
+    if not asset_id:
+        receipt["missing_evidence"].append("knowledge_asset.asset_id")
+    if not model_id:
+        receipt["missing_evidence"].append(
+            "enterprise_understanding_model.model_id"
+        )
+
+    source_rows = asset.get("canonical_source_inventory")
+    source_count = row_count(source_rows)
+    declared_source_count = integer(source_summary.get("canonical_source_count"))
+    if declared_source_count is None:
+        declared_source_count = integer(asset_summary.get("canonical_source_count"))
+    receipt["source_materials"] = {
+        "status": "MEASURED" if source_count is not None else "NOT_MEASURED",
+        "source_material_count": source_count,
+        "canonical_source_count": source_count,
+        "declared_canonical_source_count": declared_source_count,
+        "active_source_count": integer(source_summary.get("active_source_count"))
+        if integer(source_summary.get("active_source_count")) is not None
+        else integer(asset_summary.get("active_source_count")),
+        "parse_succeeded_count": integer(asset_summary.get("source_parse_succeeded")),
+        "evidence_path": "canonical_source_inventory",
+    }
+    if source_count is None:
+        receipt["missing_evidence"].append("canonical_source_inventory")
+    elif declared_source_count is not None and source_count != declared_source_count:
+        receipt["issues"].append(
+            "canonical_source_count_mismatch:"
+            f"observed={source_count};declared={declared_source_count}"
+        )
+
+    fact_ledger = _dict(asset.get("business_fact_ledger"))
+    fact_rows = fact_ledger.get("items")
+    fact_count = row_count(fact_rows)
+    fact_ids = [
+        _text(_dict(row).get("fact_id"))
+        for row in _list(fact_rows)
+        if isinstance(row, dict)
+    ]
+    fact_id_count = sum(bool(value) for value in fact_ids)
+    unique_fact_id_count = len({value for value in fact_ids if value})
+    compilation = _dict(asset.get("structure_first_business_fact_compilation_receipt"))
+    final_fact_count = integer(compilation.get("final_fact_count"))
+    exact_evidence_fact_count = integer(compilation.get("exact_evidence_fact_count"))
+    receipt["business_facts"] = {
+        "status": _text(compilation.get("status")) or (
+            "MEASURED" if fact_count is not None else "NOT_MEASURED"
+        ),
+        "ledger_schema": _text(fact_ledger.get("schema")),
+        "business_fact_count": fact_count,
+        "observed_row_count": fact_count,
+        "unique_fact_id_count": unique_fact_id_count,
+        "missing_fact_id_count": max(0, (fact_count or 0) - fact_id_count)
+        if fact_count is not None
+        else None,
+        "final_fact_count": final_fact_count,
+        "exact_evidence_fact_count": exact_evidence_fact_count,
+        "accepted_fact_count": integer(compilation.get("accepted_fact_count")),
+        "pending_fact_count": integer(compilation.get("pending_fact_count")),
+        "evidence_path": "business_fact_ledger.items",
+    }
+    if fact_count is None:
+        receipt["missing_evidence"].append("business_fact_ledger.items")
+    for field, value in (
+        ("final_fact_count", final_fact_count),
+        ("exact_evidence_fact_count", exact_evidence_fact_count),
+    ):
+        if fact_count is not None and value is not None and value != fact_count:
+            receipt["issues"].append(
+                f"business_fact_{field}_mismatch:observed={fact_count};declared={value}"
+            )
+    if fact_count is not None and fact_id_count != unique_fact_id_count:
+        receipt["issues"].append("business_fact_identity_duplicate_or_missing")
+    if fact_count is not None and fact_id_count != fact_count:
+        receipt["issues"].append(
+            "business_fact_identity_missing:"
+            f"observed={fact_id_count};rows={fact_count}"
+        )
+
+    enterprise_ir = _dict(model.get("business_behavior_ir"))
+    behavior_rows = enterprise_ir.get("behaviors")
+    behavior_count = row_count(behavior_rows)
+    source_fact_refs = [
+        _text(source_ref)
+        for row in _list(behavior_rows)
+        if isinstance(row, dict)
+        for source_ref in _list(row.get("source_refs"))
+        if _text(source_ref)
+    ]
+    source_fact_ref_set = set(source_fact_refs)
+    fact_id_set = {value for value in fact_ids if value}
+    accepted_behavior_fact_count = integer(
+        source_summary.get("accepted_behavior_fact_count")
+    )
+    declared_behavior_count = integer(source_summary.get("business_behavior_count"))
+    receipt["enterprise_behavior_ir"] = {
+        "status": _text(_dict(enterprise_ir.get("behavior_gate")).get("status"))
+        or ("MEASURED" if behavior_count is not None else "NOT_MEASURED"),
+        "schema": _text(enterprise_ir.get("schema")),
+        "behavior_node_count": behavior_count,
+        "behavior_ir_fact_count": len(source_fact_ref_set),
+        "declared_behavior_node_count": declared_behavior_count,
+        "source_bound_fact_ref_count": len(source_fact_refs),
+        "unique_source_bound_fact_ref_count": len(source_fact_ref_set),
+        "accepted_behavior_fact_count": accepted_behavior_fact_count,
+        "fact_refs_not_in_ledger_count": len(source_fact_ref_set - fact_id_set),
+        "facts_without_behavior_ref_count": len(fact_id_set - source_fact_ref_set),
+        "gate_status": _text(_dict(enterprise_ir.get("behavior_gate")).get("status")),
+        "evidence_path": "enterprise_understanding_model.business_behavior_ir.behaviors",
+    }
+    if behavior_count is None:
+        receipt["missing_evidence"].append(
+            "enterprise_understanding_model.business_behavior_ir.behaviors"
+        )
+    elif declared_behavior_count is not None and behavior_count != declared_behavior_count:
+        receipt["issues"].append(
+            "business_behavior_count_mismatch:"
+            f"observed={behavior_count};declared={declared_behavior_count}"
+        )
+    if (
+        accepted_behavior_fact_count is not None
+        and len(source_fact_ref_set) != accepted_behavior_fact_count
+    ):
+        receipt["issues"].append(
+            "accepted_behavior_fact_count_mismatch:"
+            f"observed={len(source_fact_ref_set)};declared={accepted_behavior_fact_count}"
+        )
+
+    runtime_ir = _dict(behavior_ir)
+    runtime_counts = {
+        field: row_count(runtime_ir.get(field))
+        for field in (
+            "sources",
+            "entities",
+            "operations",
+            "actors",
+            "invariants",
+            "relations",
+            "states",
+            "observation_surfaces",
+            "coverage_gaps",
+        )
+    }
+    receipt["runtime_behavior_ir"] = {
+        "status": "MEASURED" if runtime_ir else "NOT_MEASURED",
+        "schema": _text(runtime_ir.get("schema_version")),
+        "model_id": _text(runtime_ir.get("model_id")),
+        "source_snapshot_hash": _text(runtime_ir.get("source_snapshot_hash")),
+        "node_counts": runtime_counts,
+        "evidence_path": "runtime_behavior_ir",
+    }
+    if not runtime_ir:
+        receipt["missing_evidence"].append("runtime_behavior_ir")
+    elif not _text(runtime_ir.get("model_id")):
+        receipt["missing_evidence"].append("runtime_behavior_ir.model_id")
+
+    obligation_ids = [
+        _text(row.get("obligation_id"))
+        for row in formal_obligation_rows
+        if isinstance(row, dict)
+    ]
+    unique_obligation_ids = {value for value in obligation_ids if value}
+    missing_obligation_id_count = sum(not value for value in obligation_ids)
+    duplicate_obligation_id_count = len(obligation_ids) - len(unique_obligation_ids)
+    obligation_status = (
+        "FAILED_SAFE"
+        if duplicate_obligation_id_count or missing_obligation_id_count
+        else "MEASURED"
+        if formal_obligation_rows
+        else "NOT_MEASURED"
+    )
+    receipt["formal_obligations"] = {
+        "status": obligation_status,
+        "obligation_count": len(formal_obligation_rows),
+        "formal_obligation_count": len(formal_obligation_rows),
+        "unique_obligation_id_count": len(unique_obligation_ids),
+        "missing_obligation_id_count": missing_obligation_id_count,
+        "duplicate_obligation_id_count": duplicate_obligation_id_count,
+        "evidence_path": "test_obligations.obligations",
+    }
+    if not formal_obligation_rows:
+        receipt["missing_evidence"].append("test_obligations.obligations")
+
+    links = receipt["links"]
+    links.update({
+        "facts_to_enterprise_behavior_ir": {
+            "status": (
+                "GAP"
+                if receipt["enterprise_behavior_ir"].get(
+                    "facts_without_behavior_ref_count"
+                )
+                else "PASS"
+                if fact_count is not None and behavior_count is not None
+                else "NOT_MEASURED"
+            ),
+            "source_fact_ref_count": len(source_fact_ref_set),
+            "facts_without_behavior_ref_count": receipt["enterprise_behavior_ir"].get(
+                "facts_without_behavior_ref_count"
+            ),
+        },
+        "runtime_behavior_ir_to_formal_obligations": {
+            "status": (
+                "PASS"
+                if runtime_ir and formal_obligation_rows
+                and not missing_obligation_id_count
+                and not duplicate_obligation_id_count
+                else "NOT_MEASURED"
+            ),
+            "runtime_behavior_ir_model_id": _text(runtime_ir.get("model_id")),
+            "formal_obligation_count": len(formal_obligation_rows),
+        },
+    })
+
+    if receipt["issues"]:
+        receipt["status"] = "FAILED_SAFE"
+    elif receipt["missing_evidence"]:
+        receipt["status"] = "INCOMPLETE"
+    elif _text(receipt["business_facts"].get("status")).upper() == "BLOCKED":
+        receipt["status"] = "BLOCKED"
+    elif _text(receipt["enterprise_behavior_ir"].get("status")).upper().startswith(
+        "BLOCKED"
+    ) or receipt["enterprise_behavior_ir"].get("facts_without_behavior_ref_count"):
+        receipt["status"] = "BLOCKED"
+    else:
+        receipt["status"] = "PASS"
+    return receipt
+
+
+def _execution_ir_with_discovered_operations(
+    behavior_ir: dict[str, Any],
+    discovered_operations: Any,
+) -> dict[str, Any]:
+    """Append governed runtime-discovered operations to an execution IR view.
+
+    Round-1 experiments were compiled against the immutable documented IR, but
+    governed runtime interface discovery may prove additional routes before
+    round 1 executes (e.g. GET /api/users/addresses for an order fixture's
+    addressId dependency). The discovered operations are appended without
+    rebuilding the IR so compiled operation identities stay valid; the same
+    observations are covered by the behavior-ir-expansion-round receipt.
+    """
+    ir = dict(_dict(behavior_ir))
+    rows = [
+        dict(row)
+        for row in _list(discovered_operations)
+        if isinstance(row, dict)
+    ]
+    if not rows:
+        return ir
+    existing_ops = [
+        dict(row)
+        for row in _list(ir.get("operations"))
+        if isinstance(row, dict)
+    ]
+    existing_keys = {
+        (
+            _text(row.get("method")).upper(),
+            _text(row.get("path") or row.get("raw_path")),
+        )
+        for row in existing_ops
+    }
+    added = 0
+    for row in rows:
+        normalized = dict(row)
+        if not _text(normalized.get("id")):
+            # Runtime-discovered operations carry operation_id, while runtime
+            # operation indexes are keyed by id. Normalize so the execution IR
+            # view exposes the discovered route to resolver lookups.
+            normalized["id"] = _text(normalized.get("operation_id"))
+        row = normalized
+        key = (
+            _text(row.get("method")).upper(),
+            _text(row.get("path") or row.get("raw_path")),
+        )
+        if key and key not in existing_keys:
+            existing_ops.append(dict(row))
+            existing_keys.add(key)
+            added += 1
+    if added:
+        ir = {**ir, "operations": existing_ops}
+    return ir
+
+# ── P0-2: Business / Discovery funnel separation ──
+_DISCOVERY_REASON_CODES = frozenset({
+    "SURFACE_DISCOVERY_OBSERVATION_ONLY",
+})
+_DISCOVERY_FAMILIES = frozenset({
+    "interface_discovery",
+})
+
+
+def _is_discovery_task(attempt: dict[str, Any]) -> bool:
+    """Classify an attempt as a discovery task vs business obligation."""
+    reason = _text(attempt.get("reason_code")).upper()
+    family = _text(attempt.get("risk_family")).lower()
+    return reason in _DISCOVERY_REASON_CODES or family in _DISCOVERY_FAMILIES
+
+
+def build_business_discovery_separation(
+    ledger: dict[str, Any],
+    findings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Separate ledger attempts into business obligations and discovery tasks.
+
+    Produces per-type funnel statistics for business obligations and a
+    separate discovery task summary. Existing metrics remain compatible.
+    """
+    attempts = [_dict(a) for a in _list(ledger.get("attempts"))]
+    business_attempts = [a for a in attempts if not _is_discovery_task(a)]
+    discovery_attempts = [a for a in attempts if _is_discovery_task(a)]
+
+    # ── Business obligation per-type funnel ──
+    _STAGES = (
+        "generated", "eligible", "planned", "prepared",
+        "executed", "observed", "oracle_evaluated", "finding", "confirmed_tp",
+    )
+    per_type: dict[str, dict[str, int]] = {}
+    for a in business_attempts:
+        family = _text(a.get("risk_family")) or "unknown"
+        if family not in per_type:
+            per_type[family] = {s: 0 for s in _STAGES}
+            per_type[family]["blocked"] = 0
+        row = per_type[family]
+        row["generated"] += 1
+        terminal = _text(a.get("terminal_status")).upper()
+        reason = _text(a.get("reason_code")).upper()
+        # Eligible: not blocked at compile
+        if terminal not in ("DEFERRED",) or reason != "OBLIGATION_NOT_IN_PLAN":
+            row["eligible"] += 1
+        # Planned: selected for execution
+        if reason != "OBLIGATION_NOT_IN_PLAN" and terminal != "DEFERRED":
+            row["planned"] += 1
+        # Executed: reached transport
+        if terminal in ("DELIVERABLE", "REJECTED", "HARNESS_FAILED"):
+            row["executed"] += 1
+        # Observed: has observation receipts
+        if terminal in ("DELIVERABLE", "REJECTED"):
+            row["observed"] += 1
+        # Oracle evaluated
+        if terminal in ("DELIVERABLE", "REJECTED") and reason not in (
+            "CONTRACT_ORACLE_BLOCKED", "CONTRACT_ORACLE_HARNESS_FAILED",
+        ):
+            row["oracle_evaluated"] += 1
+        # Finding produced
+        if terminal == "DELIVERABLE":
+            row["finding"] += 1
+        # Blocked
+        if terminal in ("BLOCKED", "HARNESS_FAILED") or reason.startswith("BLOCKED"):
+            row["blocked"] += 1
+
+    # ── Business funnel totals ──
+    biz_total = {s: sum(per_type[t][s] for t in per_type) for s in _STAGES}
+    biz_total["blocked"] = sum(per_type[t]["blocked"] for t in per_type)
+
+    # ── Discovery task summary ──
+    disc_executed = sum(
+        1 for a in discovery_attempts
+        if _text(a.get("terminal_status")).upper() in ("REJECTED", "EXECUTED", "DELIVERABLE")
+    )
+    discovery_summary = {
+        "generated_discovery_tasks": len(discovery_attempts),
+        "executed_discovery_tasks": disc_executed,
+        "successful_discovery_tasks": disc_executed,
+        "discovered_operations": 0,  # filled by runtime_interface_discovery
+        "discovered_observers": 0,
+    }
+
+    return {
+        "schema_version": "qualibug.business-discovery-separation.v1",
+        "business_obligation_summary": {
+            "total": len(business_attempts),
+            **biz_total,
+        },
+        "business_per_type": per_type,
+        "discovery_task_summary": discovery_summary,
+        "separation_note": (
+            f"{len(business_attempts)} business obligations separated from "
+            f"{len(discovery_attempts)} discovery tasks. "
+            "Discovery tasks do not consume business execution budget."
+        ),
+    }
 
 
 def reconcile_product_pipeline_health(
