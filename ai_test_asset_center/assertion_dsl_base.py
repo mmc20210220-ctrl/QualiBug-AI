@@ -728,6 +728,44 @@ def _evaluate_compensation(
     return ("COMPENSATION_NOT_OBSERVED", expected, actual)
 
 
+def _compute_invariant_held_from_source(
+    expression: dict[str, Any],
+    observations: dict[str, Any],
+) -> tuple[bool | None, str]:
+    """Compute the concurrency final invariant from a source-declared expression.
+
+    Only a structured comparison the source actually declared is computed:
+    ``{left} OP {right}`` with OP in GTE/LTE/GT/LT/EQ/NEQ, evaluated over the
+    after-state numerics observed by the final_state observer. This is how a
+    concurrent lost-update becomes falsifiable: a declared bound such as
+    ``available_qty >= 0`` is checked against the observed final value, so a
+    race that drives it negative is a VIOLATION. Anything else — natural-language
+    invariants, missing fields, missing numerics — returns (None, reason) and the
+    caller keeps FINAL_INVARIANT_MISSING. Nothing is inferred; the computed
+    verdict is stamped with COMPUTED_FROM_SOURCE_INVARIANT for traceability.
+    """
+    expr = _dict(expression)
+    structured = _dict(expr.get("structured_expression"))
+    operator = _text(expr.get("operator") or structured.get("operator")).upper()
+    if operator not in {"GTE", "LTE", "GT", "LT", "EQ", "NEQ"}:
+        return None, "CONCURRENCY_INVARIANT_NOT_COMPARABLE"
+    left = _dict(expr.get("left") or structured.get("left"))
+    right = _dict(expr.get("right") or structured.get("right"))
+    if not left or not right:
+        return None, "CONCURRENCY_INVARIANT_NOT_COMPARABLE"
+    # After-state comparison only. before == after conservation would misreport a
+    # legitimate concurrent mutation (a concurrent debit changes the total by
+    # design), so unchanged-sum semantics are never applied here.
+    left_val = _resolve_expression_side(left, observations, "after")
+    right_val = _resolve_expression_side(right, observations, "after")
+    if left_val is None or right_val is None:
+        return None, "CONCURRENCY_INVARIANT_VALUES_MISSING"
+    return (
+        _compare_decimals(left_val, right_val, operator),
+        "COMPUTED_FROM_SOURCE_INVARIANT",
+    )
+
+
 def _assertion_receipt(
     *,
     assertion_id: str,
@@ -1649,7 +1687,29 @@ def evaluate_assertion(
             if isinstance(after_values, dict) and after_values:
                 actual["after_values"] = dict(after_values)
             if not isinstance(obs.get("invariant_held"), bool):
-                reason_code = "FINAL_INVARIANT_MISSING"
+                # The barrier protocol released control and treatment and the
+                # final state was observed, but no producer wrote invariant_held.
+                # Compute it from the source-declared expression over the observed
+                # after-values when the source declared a structured comparison;
+                # otherwise stay INDETERMINATE (never guess a verdict).
+                _prop = _dict(spec.get("property"))
+                _computed, _compute_reason = _compute_invariant_held_from_source(
+                    _dict(spec.get("expression"))
+                    or _dict(_prop.get("expression"))
+                    or _dict(
+                        _dict(_prop.get("field_rule_binding")).get("typed_expression")
+                    ),
+                    obs,
+                )
+                if isinstance(_computed, bool):
+                    obs["invariant_held"] = _computed
+                    actual["invariant_held"] = _computed
+                    actual["invariant_held_basis"] = _compute_reason
+                    passed = _computed
+                    reason_code = ""
+                else:
+                    reason_code = "FINAL_INVARIANT_MISSING"
+                    actual["invariant_held_missing_reason"] = _compute_reason
             else:
                 passed = obs["invariant_held"] is True
         elif effective_kind == "eventual_consistency":
