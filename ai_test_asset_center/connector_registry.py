@@ -73,6 +73,12 @@ _OAUTH_SCHEMA_KEYS = {
     "scope_field",
     "token_type_field",
 }
+_QUICK_CONNECT_SCHEMA_KEYS = {
+    "input_type",
+    "scope_field",
+    "priority",
+}
+_QUICK_CONNECT_INPUT_TYPES = {"url"}
 _DEFAULT_WEBHOOK_POLICY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": "Configuration-driven HMAC webhook verification and sync triggering.",
@@ -245,6 +251,7 @@ class ConnectorManifest:
     version: str
     auth_modes: tuple[str, ...] = ()
     scope_schema: Mapping[str, Any] = field(default_factory=dict)
+    quick_connect_schema: Mapping[str, Any] = field(default_factory=dict)
     supported_resource_types: tuple[str, ...] = ()
     sync_modes: tuple[str, ...] = ("FULL",)
     webhook_supported: bool = False
@@ -279,7 +286,47 @@ class ConnectorManifest:
         object.__setattr__(self, "auth_modes", _unique_strings(self.auth_modes, "auth_modes"))
         if not isinstance(self.scope_schema, Mapping):
             raise ConnectorRegistryError("scope_schema_must_be_object")
-        object.__setattr__(self, "scope_schema", dict(self.scope_schema))
+        scope_schema = dict(self.scope_schema)
+        object.__setattr__(self, "scope_schema", scope_schema)
+        if not isinstance(self.quick_connect_schema, Mapping):
+            raise ConnectorRegistryError("quick_connect_schema_must_be_object")
+        quick_connect_schema = dict(self.quick_connect_schema)
+        if quick_connect_schema:
+            unknown_quick_connect_keys = sorted(
+                set(quick_connect_schema) - _QUICK_CONNECT_SCHEMA_KEYS
+            )
+            if unknown_quick_connect_keys:
+                raise ConnectorRegistryError(
+                    "quick_connect_schema_field_not_supported:"
+                    + unknown_quick_connect_keys[0]
+                )
+            input_type = str(quick_connect_schema.get("input_type") or "").strip().lower()
+            if input_type not in _QUICK_CONNECT_INPUT_TYPES:
+                raise ConnectorRegistryError("quick_connect_schema_input_type_invalid")
+            scope_field = _identifier(
+                quick_connect_schema.get("scope_field"),
+                "quick_connect_schema_scope_field",
+            )
+            properties = scope_schema.get("properties")
+            if not isinstance(properties, Mapping) or scope_field not in properties:
+                raise ConnectorRegistryError("quick_connect_schema_scope_field_not_declared")
+            property_schema = properties.get(scope_field)
+            if not isinstance(property_schema, Mapping) or str(
+                property_schema.get("type") or ""
+            ).strip().lower() not in {"array", "string"}:
+                raise ConnectorRegistryError("quick_connect_schema_scope_field_not_url_input")
+            required = scope_schema.get("required")
+            if not isinstance(required, (list, tuple)) or scope_field not in required:
+                raise ConnectorRegistryError("quick_connect_schema_scope_field_not_required")
+            priority = quick_connect_schema.get("priority", 100)
+            if isinstance(priority, bool) or not isinstance(priority, int) or not 0 <= priority <= 1000:
+                raise ConnectorRegistryError("quick_connect_schema_priority_invalid")
+            quick_connect_schema = {
+                "input_type": input_type,
+                "scope_field": scope_field,
+                "priority": priority,
+            }
+        object.__setattr__(self, "quick_connect_schema", quick_connect_schema)
         object.__setattr__(
             self,
             "supported_resource_types",
@@ -428,6 +475,7 @@ class ConnectorManifest:
             "version": self.version,
             "auth_modes": list(self.auth_modes),
             "scope_schema": dict(self.scope_schema),
+            "quick_connect_schema": dict(self.quick_connect_schema),
             "supported_resource_types": list(self.supported_resource_types),
             "sync_modes": list(self.sync_modes),
             "webhook_supported": self.webhook_supported,

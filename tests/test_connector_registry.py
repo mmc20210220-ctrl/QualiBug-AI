@@ -58,6 +58,29 @@ def test_manifest_rejects_secret_field_declared_as_non_secret() -> None:
         )
 
 
+def test_manifest_rejects_quick_connect_scope_without_required_url_field() -> None:
+    with pytest.raises(ConnectorRegistryError, match="scope_field_not_required"):
+        ConnectorManifest(
+            connector_type="quick",
+            display_name="quick",
+            category="website",
+            version="1",
+            scope_schema={
+                "type": "object",
+                "required": ["other"],
+                "properties": {
+                    "url": {"type": "string"},
+                    "other": {"type": "string"},
+                },
+            },
+            quick_connect_schema={
+                "input_type": "url",
+                "scope_field": "url",
+            },
+            capability_contract_version="test-v1",
+        )
+
+
 def test_registry_rejects_duplicate_connector_types_and_sorts_catalog() -> None:
     registry = ConnectorRegistry([_Adapter("zeta"), _Adapter("alpha")])
 
@@ -121,6 +144,11 @@ def test_default_registry_exposes_manifest_driven_website_adapter_without_networ
     assert manifest.read_only is True
     assert manifest.auth_modes == ("anonymous", "cookie_session")
     assert manifest.scope_schema["required"] == ["seed_urls"]
+    assert manifest.quick_connect_schema == {
+        "input_type": "url",
+        "scope_field": "seed_urls",
+        "priority": 10,
+    }
     assert {
         field.name
         for field in manifest.credential_fields_for_auth_mode("cookie_session")
@@ -146,6 +174,11 @@ def test_default_registry_exposes_manifest_driven_openapi_adapter_without_networ
     assert manifest.category == "api_contract"
     assert manifest.read_only is True
     assert manifest.scope_schema["required"] == ["document_urls"]
+    assert manifest.quick_connect_schema == {
+        "input_type": "url",
+        "scope_field": "document_urls",
+        "priority": 20,
+    }
     assert set(manifest.auth_modes) == {
         "anonymous",
         "bearer_token",
@@ -153,6 +186,17 @@ def test_default_registry_exposes_manifest_driven_openapi_adapter_without_networ
         "cookie_session",
     }
     assert registry.catalog()["governance"]["network_access_performed"] is False
+
+
+def test_generic_git_quick_connect_uses_url_scope_without_provider_guessing_in_ui() -> None:
+    registry = build_default_connector_registry()
+
+    assert registry.manifest("git").quick_connect_schema == {
+        "input_type": "url",
+        "scope_field": "repository_url",
+        "priority": 30,
+    }
+    assert registry.manifest("github").quick_connect_schema == {}
 
 
 def test_openapi_export_connectors_reuse_the_same_manifest_driven_adapter() -> None:
@@ -164,6 +208,8 @@ def test_openapi_export_connectors_reuse_the_same_manifest_driven_adapter() -> N
     assert type(apifox) is type(yapi)
     assert apifox.manifest().connector_type == "apifox"
     assert yapi.manifest().connector_type == "yapi"
+    assert apifox.manifest().quick_connect_schema == {}
+    assert yapi.manifest().quick_connect_schema == {}
     assert apifox.manifest().scope_schema == yapi.manifest().scope_schema
     assert apifox.manifest().supported_resource_types == yapi.manifest().supported_resource_types
 

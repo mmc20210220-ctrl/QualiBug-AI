@@ -34,6 +34,11 @@ export type ConnectorManifest = {
   version: string;
   auth_modes: string[];
   scope_schema: Record<string, unknown>;
+  quick_connect_schema?: {
+    input_type?: string;
+    scope_field?: string;
+    priority?: number;
+  };
   supported_resource_types: string[];
   sync_modes: string[];
   webhook_supported: boolean;
@@ -964,6 +969,13 @@ function toManifest(value: unknown): ConnectorManifest {
     version: asString(row.version),
     auth_modes: asArray(row.auth_modes).map(asString).filter(Boolean),
     scope_schema: asRecord(row.scope_schema),
+    quick_connect_schema: row.quick_connect_schema
+      ? {
+        input_type: asString(asRecord(row.quick_connect_schema).input_type) || undefined,
+        scope_field: asString(asRecord(row.quick_connect_schema).scope_field) || undefined,
+        priority: asNumber(asRecord(row.quick_connect_schema).priority),
+      }
+      : undefined,
     supported_resource_types: asArray(row.supported_resource_types).map(asString).filter(Boolean),
     sync_modes: asArray(row.sync_modes).map(asString).filter(Boolean),
     webhook_supported: asBoolean(row.webhook_supported),

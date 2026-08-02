@@ -1523,6 +1523,11 @@ def website_connector_manifest() -> ConnectorManifest:
             },
             "shorthand": "单个 HTTP(S) Seed URL 也可直接作为范围值",
         },
+        quick_connect_schema={
+            "input_type": "url",
+            "scope_field": "seed_urls",
+            "priority": 10,
+        },
         supported_resource_types=("html_page", "attachment"),
         sync_modes=("FULL", "INCREMENTAL"),
         webhook_supported=False,

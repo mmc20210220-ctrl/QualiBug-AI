@@ -1928,6 +1928,15 @@ def git_connector_manifest(connector_type: str = "git") -> ConnectorManifest:
                 "max_commits": {"type": "integer", "minimum": 1, "maximum": _MAX_COMMITS},
             },
         },
+        quick_connect_schema=(
+            {
+                "input_type": "url",
+                "scope_field": "repository_url",
+                "priority": 30,
+            }
+            if kind == "git"
+            else {}
+        ),
         supported_resource_types=tuple(sorted({"file", "submodule", "lfs_pointer", "issue", "wiki_page", "release", "commit"})),
         sync_modes=("FULL", "INCREMENTAL"),
         webhook_supported=True,

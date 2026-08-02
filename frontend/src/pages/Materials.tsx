@@ -40,6 +40,7 @@ type KnowledgeSource = {
 type ScopeProperty = Record<string, unknown>;
 type ScopeValues = Record<string, unknown>;
 type ParsedScopeValues = { values: ScopeValues; error?: string };
+type QuickConnectResult = { values: ScopeValues; manifest: ConnectorManifest };
 
 const DEFAULT_CONNECTOR_ID = 'connector-main';
 const DEFAULT_CONNECTOR_NAME = '在线资料连接器';
@@ -224,6 +225,50 @@ function scopeProperties(manifest: ConnectorManifest | undefined): Array<[string
   return Object.entries(properties).map(([name, value]) => [name, asRecord(value)]);
 }
 
+function quickConnectManifests(manifests: ConnectorManifest[]): ConnectorManifest[] {
+  return manifests
+    .filter((manifest) => {
+      const schema = asRecord(manifest.quick_connect_schema);
+      return asString(schema.input_type) === 'url' && Boolean(asString(schema.scope_field));
+    })
+    .sort((left, right) => {
+      const leftPriority = asNumber(asRecord(left.quick_connect_schema).priority) ?? 100;
+      const rightPriority = asNumber(asRecord(right.quick_connect_schema).priority) ?? 100;
+      return leftPriority - rightPriority || left.display_name.localeCompare(right.display_name);
+    });
+}
+
+function applyQuickConnectUrl(
+  manifest: ConnectorManifest,
+  rawUrl: string,
+): QuickConnectResult {
+  const value = rawUrl.trim();
+  if (!value) throw new Error('璇峰厛绮樿创涓€涓湪绾胯祫鏂欏叆鍙ｆ湇鍔″櫒 URL');
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('璇疯緭鍏ユ湁鏁堢殑 HTTP(S) URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('鍦ㄧ嚎璧勬枡鍏ュ彛蹇呴』浣跨敤 HTTP(S) URL');
+  }
+  const schema = asRecord(manifest.quick_connect_schema);
+  const scopeField = asString(schema.scope_field);
+  const property = scopeProperties(manifest).find(([name]) => name === scopeField)?.[1];
+  const propertyType = asString(property?.type);
+  if (!scopeField || (propertyType !== 'array' && propertyType !== 'string')) {
+    throw new Error('鎺ュ叆鍣ㄧ殑 Manifest 鏈０鏄庡彲鐢ㄧ殑 URL 鑼冨洿瀛楁');
+  }
+  return {
+    manifest,
+    values: {
+      ...defaultScopeValues(manifest),
+      [scopeField]: propertyType === 'array' ? [value] : value,
+    },
+  };
+}
+
 function isObjectScope(manifest: ConnectorManifest | undefined): boolean {
   return asString(asRecord(manifest?.scope_schema).type) === 'object'
     && scopeProperties(manifest).length > 0;
@@ -356,6 +401,9 @@ export function Materials() {
   const [resourceScope, setResourceScope] = useState('');
   const [scopeValues, setScopeValues] = useState<ScopeValues>({});
   const [scopeParseError, setScopeParseError] = useState('');
+  const [quickConnectType, setQuickConnectType] = useState('');
+  const [quickConnectUrl, setQuickConnectUrl] = useState('');
+  const [quickConnectApplied, setQuickConnectApplied] = useState(false);
   const [authMode, setAuthMode] = useState('');
   const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
   const [webhookEnabled, setWebhookEnabled] = useState(false);
@@ -372,6 +420,10 @@ export function Materials() {
   const selectedCredentialFields = useMemo(
     () => manifestFields(selectedManifest, authMode),
     [authMode, selectedManifest],
+  );
+  const quickConnectOptions = useMemo(
+    () => quickConnectManifests(manifests),
+    [manifests],
   );
 
   const refresh = useCallback(async () => {
@@ -392,10 +444,16 @@ export function Materials() {
       ]);
       setConnectors(inventory.connectors);
       setManifests(catalog.connector_types);
+      const quickOptions = quickConnectManifests(catalog.connector_types);
       setConnectorType((current) => (
         current && catalog.connector_types.some((manifest) => manifest.connector_type === current)
           ? current
           : catalog.connector_types[0]?.connector_type || ''
+      ));
+      setQuickConnectType((current) => (
+        current && quickOptions.some((manifest) => manifest.connector_type === current)
+          ? current
+          : quickOptions[0]?.connector_type || ''
       ));
       const previews = await Promise.all(
         inventory.connectors.map(async (connector) => [
@@ -427,8 +485,11 @@ export function Materials() {
 
   const resetForm = () => {
     setEditingId('');
-    const firstManifest = manifests[0];
+    const firstManifest = quickConnectOptions[0] || manifests[0];
     setConnectorType(firstManifest?.connector_type || '');
+    setQuickConnectType(firstManifest?.connector_type || '');
+    setQuickConnectUrl('');
+    setQuickConnectApplied(false);
     setResourceScope(scopePresets(firstManifest)[0] || '');
     setScopeValues(defaultScopeValues(firstManifest));
     setScopeParseError('');
@@ -450,6 +511,9 @@ export function Materials() {
     const parsedScope = parseScopeValues(manifest, connector.resource_scope);
     setScopeValues(parsedScope.values);
     setScopeParseError(parsedScope.error || '');
+    setQuickConnectType('');
+    setQuickConnectUrl('');
+    setQuickConnectApplied(false);
     const mode = connector.connection_profile?.auth_mode
       || manifests.find((manifest) => manifest.connector_type === connector.connector_type)?.auth_modes[0]
       || '';
@@ -457,6 +521,30 @@ export function Materials() {
     setCredentialValues({});
     setWebhookEnabled(connector.webhook?.enabled === true);
     setFormOpen(true);
+  };
+
+  const useQuickConnectUrl = () => {
+    const manifest = quickConnectOptions.find((item) => item.connector_type === quickConnectType)
+      || quickConnectOptions[0];
+    if (!manifest) {
+      toast.show('褰撳墠娌℃湁 Manifest 澹版槑 URL 鍏ュ彛鐨勮繛鎺ュ櫒', 'warning');
+      return;
+    }
+    try {
+      const result = applyQuickConnectUrl(manifest, quickConnectUrl);
+      setConnectorType(result.manifest.connector_type);
+      setQuickConnectType(result.manifest.connector_type);
+      setAuthMode(result.manifest.auth_modes[0] || '');
+      setScopeValues(result.values);
+      setResourceScope('');
+      setScopeParseError('');
+      setCredentialValues({});
+      setWebhookEnabled(false);
+      setQuickConnectApplied(true);
+      toast.show('已根据入口 URL 填写安全默认范围；首次读取前仍会执行连接与边界检查', 'success');
+    } catch (error: unknown) {
+      toast.show(error instanceof Error ? error.message : '入口 URL 未能用于快速接入', 'warning');
+    }
   };
 
   const profilePayload = (): ConfigureConnectorInput['connection_profile'] => {
@@ -799,6 +887,51 @@ export function Materials() {
             <button className="btn btn-ghost" type="button" onClick={() => setFormOpen(false)}>关闭</button>
           </div>
 
+          {!editingId && quickConnectOptions.length > 0 && (
+            <section className="materials-quick-connect" aria-label="快速接入在线资料">
+              <div>
+                <span className="settings-hero-kicker">来源优先</span>
+                <h3>粘贴一个在线资料入口</h3>
+                <p>系统会按连接器 Manifest 把入口 URL 写入必需范围，并保留只读、SSRF 和权限边界；无需手工编写范围 JSON。</p>
+              </div>
+              <div className="materials-quick-connect-row">
+                <label className="form-group">
+                  <span className="form-label">资料来源能力</span>
+                  <select
+                    className="form-input"
+                    value={quickConnectType}
+                    onChange={(event) => setQuickConnectType(event.target.value)}
+                  >
+                    {quickConnectOptions.map((manifest) => (
+                      <option key={manifest.connector_type} value={manifest.connector_type}>
+                        {manifest.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="form-group materials-quick-connect-url">
+                  <span className="form-label">入口 URL</span>
+                  <input
+                    className="form-input"
+                    type="url"
+                    value={quickConnectUrl}
+                    onChange={(event) => setQuickConnectUrl(event.target.value)}
+                    placeholder="https://example.com/docs"
+                    autoComplete="url"
+                  />
+                </label>
+                <button className="btn btn-secondary" type="button" onClick={useQuickConnectUrl}>
+                  用此入口填写范围
+                </button>
+              </div>
+              {quickConnectApplied && (
+                <div className="materials-quick-connect-applied">
+                  已使用入口 URL；其余范围保持 Manifest 默认值。保存后会直接进入连接测试和首次只读同步。
+                </div>
+              )}
+            </section>
+          )}
+
           <div className="materials-step">
             <span className="materials-step-number">1</span>
             <div>
@@ -818,6 +951,10 @@ export function Materials() {
                   const next = event.target.value;
                   const manifest = manifests.find((item) => item.connector_type === next);
                   setConnectorType(next);
+                  setQuickConnectType(
+                    quickConnectOptions.some((item) => item.connector_type === next) ? next : '',
+                  );
+                  setQuickConnectApplied(false);
                   setAuthMode(manifest?.auth_modes[0] || '');
                   setResourceScope(scopePresets(manifest)[0] || '');
                   setScopeValues(defaultScopeValues(manifest));

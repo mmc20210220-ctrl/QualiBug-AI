@@ -1530,6 +1530,15 @@ def openapi_connector_manifest(
                 "max_ref_depth": {"type": "integer", "minimum": 0, "maximum": _MAX_REF_DEPTH},
             },
         },
+        quick_connect_schema=(
+            {
+                "input_type": "url",
+                "scope_field": "document_urls",
+                "priority": 20,
+            }
+            if normalized_type == OPENAPI_CONNECTOR_TYPE
+            else {}
+        ),
         supported_resource_types=tuple(sorted(_SUPPORTED_OBJECT_TYPES)),
         sync_modes=("FULL", "INCREMENTAL"),
         read_only=True,
