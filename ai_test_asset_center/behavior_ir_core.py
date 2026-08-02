@@ -3729,7 +3729,43 @@ def build_behavior_ir_from_knowledge_asset(
                 re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", _stmt_lower)
             )
             _has_entity_ref = bool(_text(rule.get("entity") or rule.get("object") or rule.get("business_object")))
-            if not _has_concrete_field and not _has_entity_ref and len(statement) < 30:
+            # A validated semantic frame is source-grounded structure, but it
+            # is not an executable operation binding by itself.  Only an
+            # explicit source operation reference or an accepted exact-source
+            # / agent semantic rule-to-interface edge may keep a short rule
+            # concrete.  This prevents parser-generated frames from turning
+            # broad overlay rules into obligations merely because their text
+            # contains a subject and behavior.
+            _has_source_grounded_semantics = bool(
+                _semantic_frame.get("source_grounded") is True
+                and any(
+                    _text(_semantic_frame.get(field))
+                    for field in ("subject", "condition", "behavior")
+                )
+            )
+            _has_explicit_operation_ref = bool(
+                _text(rule.get("operation_ref") or rule.get("operation_id"))
+                or any(_text(value) for value in _list(rule.get("operation_refs")))
+            )
+            _has_authoritative_operation_link = _has_explicit_operation_ref or any(
+                isinstance(edge, dict)
+                and _text(edge.get("relation") or edge.get("relation_type")).lower()
+                == "rule_to_interface"
+                and _text(edge.get("from") or edge.get("from_ref")) == rid
+                and _text(edge.get("status")).lower() == "accepted"
+                and _text(edge.get("derivation")).lower().replace("-", "_")
+                in {"agent_semantic_mapping", "exact_source_section"}
+                for edge in _list(data.get("relationships"))
+            )
+            if (
+                not _has_concrete_field
+                and not _has_entity_ref
+                and not (
+                    _has_source_grounded_semantics
+                    and _has_authoritative_operation_link
+                )
+                and len(statement) < 30
+            ):
                 _is_umbrella = True
         # ── Field-level grounding: extract structured operands from statement ──
         _rule_kind = _text(rule.get("kind") or rule.get("risk_type") or "business_rule")

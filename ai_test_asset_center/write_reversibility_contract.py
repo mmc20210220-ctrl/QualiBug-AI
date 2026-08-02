@@ -221,7 +221,12 @@ def build_reversibility_proof(
             "after_cleanup_observation_contract": {},
             "cleanup_request_contract": {},
             "equivalence_contract": {},
-            "compile_context": _build_compile_context(ir, exp),
+            "compile_context": _build_compile_context(
+                ir,
+                exp,
+                primary_operation_ref=primary_operation_ref,
+                cleanup_plan=cleanup_plan,
+            ),
             "fingerprint": "",
             "reason_code": "BLOCKED_NON_REVERSIBLE_WRITE",
             "reason_detail": authority_result.get("detail")
@@ -251,7 +256,12 @@ def build_reversibility_proof(
         "after_cleanup_observation_contract": after_cleanup_obs,
         "cleanup_request_contract": cleanup_request,
         "equivalence_contract": equivalence,
-        "compile_context": _build_compile_context(ir, exp),
+        "compile_context": _build_compile_context(
+            ir,
+            exp,
+            primary_operation_ref=primary_operation_ref,
+            cleanup_plan=cleanup_plan,
+        ),
         "fingerprint": "",
         "reason_code": "",
         "reason_detail": "",
@@ -971,11 +981,93 @@ def _sha256_stable(obj: Any) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-def _build_compile_context(ir: dict[str, Any], experiment: dict[str, Any]) -> dict[str, Any]:
-    """Build compile context for proof binding."""
+def _relation_mentions_operation(
+    relation: dict[str, Any], operation_refs: set[str]
+) -> bool:
+    """Keep only source relations that can affect this write proof.
+
+    Runtime Behavior IR may append unrelated source links or observed
+    relationships after an experiment is compiled. Hashing the whole IR made
+    those legitimate additions look like cleanup-contract drift. The proof
+    still binds every operation/relation that can classify its primary write or
+    compensator; unrelated graph growth is intentionally outside this proof's
+    authority.
+    """
+    for key in (
+        "operation_ref",
+        "op_ref",
+        "source",
+        "target",
+        "from",
+        "to",
+        "source_ref",
+        "target_ref",
+        "from_ref",
+        "to_ref",
+        "source_operation_ref",
+        "target_operation_ref",
+    ):
+        value = relation.get(key)
+        if isinstance(value, list):
+            if any(_text(item) in operation_refs for item in value):
+                return True
+        elif _text(value) in operation_refs:
+            return True
+    return False
+
+
+def _build_compile_context(
+    ir: dict[str, Any],
+    experiment: dict[str, Any],
+    *,
+    primary_operation_ref: str = "",
+    cleanup_plan: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a proof context from the exact source graph used by cleanup.
+
+    The full Behavior IR is allowed to grow during runtime expansion. A write
+    proof must remain sensitive to changes in its own operation and cleanup
+    authority, but not to unrelated operations/relations appended for another
+    obligation. This projection is the single source of truth for that scope.
+    """
+    operation_refs = {
+        _text(primary_operation_ref),
+        *(
+            _text(row.get("operation_ref"))
+            for phase in ("control_plan", "treatment_plan", "precondition_plan")
+            for row in _list(experiment.get(phase))
+            if isinstance(row, dict)
+        ),
+        *(
+            _text(row.get("operation_ref"))
+            for row in _list(cleanup_plan)
+            if isinstance(row, dict)
+        ),
+    }
+    operation_refs.discard("")
+    all_operations = _list(ir.get("operations"))
+    all_relations = _list(ir.get("relations"))
+    if operation_refs:
+        operations = [
+            row
+            for row in all_operations
+            if isinstance(row, dict)
+            and _text(row.get("id")) in operation_refs
+        ]
+        relations = [
+            row
+            for row in all_relations
+            if isinstance(row, dict)
+            and _relation_mentions_operation(row, operation_refs)
+        ]
+    else:
+        # Direct callers without an operation identity retain the old
+        # fail-closed context rather than silently hashing an empty graph.
+        operations = all_operations
+        relations = all_relations
     return {
         "behavior_ir_fingerprint": _sha256_stable(
-            _list(ir.get("operations")) + _list(ir.get("relations"))
+            operations + relations
         ),
         "experiment_semantic_fingerprint": _sha256_stable({
             "obligation_id": experiment.get("obligation_id"),

@@ -164,6 +164,57 @@ def test_source_grounded_business_semantic_frame_survives_into_invariant() -> No
     assert invariant["source_refs"][0]["locator"] == "line:7"
 
 
+def test_short_source_grounded_rule_requires_authoritative_operation_link() -> None:
+    asset = {
+        "rule_library": [{
+            "rule_id": "rule-order-once",
+            "statement": "Order pays once",
+            "kind": "idempotency",
+            "semantic_frame": {
+                "schema_version": "qualibug.business-semantic-frame.v1",
+                "modality": "EXCLUSIVE",
+                "polarity": "positive",
+                "condition": "",
+                "subject": "Order",
+                "behavior": "pays once",
+                "source_anchors": ["Order"],
+                "source_grounded": True,
+            },
+            "source_id": "prd",
+        }],
+        "interfaces": [{
+            "interface_id": "api:POST:/orders/pay",
+            "operation_id": "pay_order",
+            "method": "POST",
+            "path": "/orders/pay",
+            "source_id": "api",
+        }],
+        "relationships": [{
+            "edge_id": "edge-agent-order-once",
+            "from": "rule-order-once",
+            "to": "api:POST:/orders/pay",
+            "relation": "rule_to_interface",
+            "status": "accepted",
+            "derivation": "agent_semantic_mapping",
+            "evidence_gate": "behavior_ir_ids_and_runtime_oracle_required",
+            "evidence": {"supporting_fact_refs": ["fact-order-payment"]},
+        }],
+    }
+
+    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="project")
+    invariant = ir["invariants"][0]
+    operation_ref = _operation_ref(ir, "pay_order")
+
+    assert invariant.get("binding_status") != "umbrella_rule_excluded"
+    assert invariant["operation_refs"] == [operation_ref]
+    compiled = compile_obligations_from_behavior_ir(ir)
+    assert any(
+        obligation["risk_family"] == "idempotency"
+        and obligation["property"]["operation_ref"] == operation_ref
+        for obligation in compiled["obligations"]
+    )
+
+
 def test_semantic_frame_does_not_rotate_obligation_ids() -> None:
     """Enrichment on invariants must not change stable obligation_id fingerprints."""
     base_rule = {

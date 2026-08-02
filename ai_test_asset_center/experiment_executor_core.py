@@ -672,6 +672,21 @@ def execute_one_experiment(
                     "reason_code": runtime_validation["reason_code"],
                     "detail": runtime_validation["detail"],
                     "elapsed_ms": int((time.time() - started) * 1000),
+                    # Fixture materialization may already have performed a
+                    # governed read before the runtime proof gate detects
+                    # contract drift. Preserve those observed steps so the
+                    # operational receipt and evaluator attestation account
+                    # for the actual target request.
+                    "steps": list(steps_out),
+                    "observations": dict(observations),
+                    "fixture_receipts": list(fixture_receipts),
+                    "binding_materialization_receipts": list(
+                        binding_materialization_receipts
+                    ),
+                    "contract_evidence_receipts": list(
+                        contract_evidence_receipts
+                    ),
+                    "cleanup_failures": cleanup_failures,
                     "finding": None,
                     "execution_receipt": {
                         "status": "BLOCKED",

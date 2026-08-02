@@ -708,6 +708,62 @@ class TestCleanupPlanValidator:
         )
         assert result["valid"] is True
 
+    def test_runtime_proof_ignores_unrelated_ir_expansion(self) -> None:
+        ir = {
+            "operations": [
+                {"id": "op-create", "method": "POST", "path": "/orders"},
+                {"id": "op-delete", "method": "DELETE", "path": "/orders/{id}"},
+            ],
+            "relations": [],
+        }
+        experiment = {
+            "treatment_plan": [{
+                "operation_ref": "op-create",
+                "method": "POST",
+                "path": "/orders",
+            }],
+            "cleanup_plan": [{
+                "action": "reverse_order_compensation",
+                "mode": "reverse_order",
+                "operation_ref": "op-delete",
+                "method": "DELETE",
+                "path": "/orders/{id}",
+            }],
+            "safety_contract": {"governed_write": True},
+        }
+        proof = build_reversibility_proof(
+            primary_operation_ref="op-create",
+            primary_method="POST",
+            primary_path="/orders",
+            cleanup_plan=experiment["cleanup_plan"],
+            behavior_ir=ir,
+            experiment=experiment,
+        )
+        assert proof["proof_status"] == "PROVEN"
+        experiment["write_reversibility_proof"] = proof
+
+        evolved_ir = {
+            **ir,
+            "operations": ir["operations"] + [
+                {"id": "op-unrelated", "method": "GET", "path": "/catalog"},
+            ],
+            "relations": [{
+                "kind": "observes",
+                "operation_ref": "op-unrelated",
+                "target": "entity-catalog",
+            }],
+        }
+        result = validate_cleanup_plan(
+            experiment,
+            evolved_ir,
+            phase="runtime",
+            compile_proof_fingerprint=proof["fingerprint"],
+            runtime_bindings={},
+            binding_receipts=[],
+        )
+
+        assert result["valid"] is True
+
     def test_invalid_cleanup_op_not_in_ir(self) -> None:
         result = validate_cleanup_plan(
             {
