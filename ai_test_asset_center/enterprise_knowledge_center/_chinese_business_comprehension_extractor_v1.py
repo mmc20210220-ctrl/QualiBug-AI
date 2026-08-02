@@ -9,6 +9,21 @@ business-complete.
 The implementation is additive: it enriches the existing enterprise knowledge
 asset and reuses its source registry, parser receipts, rule library and persistence
 paths instead of creating a parallel product path.
+
+RESPONSIBILITY BOUNDARY (source-backed business-rule semantic extraction):
+this regex extractor is the HIGH-PRECISION CANDIDATE layer, not the open-semantic
+comprehension layer. It owns:
+  * generic language-form parsing (numbers, amounts, percentages, quantities,
+    dates, times, durations, windows, comparison operators, ranges, units,
+    enumerations, table structure, source spans);
+  * high-precision rule hints from cross-industry signal words (必须/不得/禁止/
+    仅限/至少/最多/除非/方可/不超过/大于等于 …);
+  * deterministic evidence validation (quotes exist, spans align, numerics match).
+It must NOT grow industry keyword tables (订单/库存/审批/医疗/制造/财务 vocabularies
+are legacy and frozen). Open-semantic recall of rules that do not hit the signal
+vocabulary is the LLM semantic-extraction layer's job (_semantic_extraction.py,
+kind=rule), which feeds the same candidate → validation → governance chain.
+Regex output is CANDIDATE, never a formal fact.
 """
 from __future__ import annotations
 

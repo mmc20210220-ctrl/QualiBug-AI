@@ -1097,13 +1097,38 @@ def _incremental_run_semantic_extraction(
         in {"1", "true", "yes"}
     )
     from ._semantic_extraction import (
+        provider_status,
+        resolve_semantic_rule_extraction_mode,
         run_semantic_extraction,
         semantic_extraction_availability,
     )
 
-    availability = semantic_extraction_availability(requested)
-    if not availability.get("available"):
-        return [], [], _incremental_text(availability.get("reason"), 160)
+    # SPEC §12/§13: four-mode rule extraction. Default shadow — candidates are
+    # validated and recorded but never touch formal Canonical Rule output.
+    rule_mode_receipt = resolve_semantic_rule_extraction_mode(
+        requested_mode=_incremental_text(
+            options.get("semantic_rule_extraction_mode") or "shadow"
+        ),
+        provider_status_value=provider_status(),
+    )
+    should_run_llm = requested or rule_mode_receipt["effective_mode"] in {
+        "shadow",
+        "required",
+    }
+    availability = semantic_extraction_availability(requested=should_run_llm)
+    if not should_run_llm or not availability.get("available"):
+        # off / provider unavailable: formal output stays regex-only. The mode
+        # receipt is still recorded — no silent degradation (SPEC §12.5).
+        return (
+            [],
+            [rule_mode_receipt],
+            _incremental_text(
+                "NOT_TRIGGERED"
+                if not should_run_llm
+                else availability.get("reason"),
+                160,
+            ),
+        )
     candidates: list[dict[str, Any]] = []
     receipts: list[dict[str, Any]] = []
     attempted = 0
@@ -1126,6 +1151,7 @@ def _incremental_run_semantic_extraction(
         )
         receipts.append(receipt.to_dict())
         candidates.extend(receipt.candidates_validated)
+    receipts.append(rule_mode_receipt)
     return candidates, receipts, "AVAILABLE"
 
 
