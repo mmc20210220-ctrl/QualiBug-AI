@@ -830,13 +830,17 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                 or "active"
             ).upper()
             stored_token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
+            # A restricted account (DISABLED/LOCKED/...) is itself a declared
+            # authorization test subject: the property under test is that the
+            # target rejects its credential.  Its password/stored token must
+            # therefore remain resolvable so authorization obligations can
+            # observe the real rejection.  Live login is still attempted when a
+            # password is declared: an unexpected 200 is itself defect evidence
+            # (a disabled account that can still authenticate), while a
+            # rejected login is the expected observation for this subject.
+            status_restricted = status in {"DISABLED", "LOCKED", "SUSPENDED", "INACTIVE"}
             token = ""
-            if (
-                base_url
-                and email
-                and password
-                and status not in {"DISABLED", "LOCKED", "SUSPENDED", "INACTIVE"}
-            ):
+            if base_url and email and password:
                 try:
                     live_token, login_status = _login_declared_account(
                         base_url=base_url,
@@ -851,39 +855,63 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                         role or account_ref or email,
                         type(exc).__name__,
                     )
-                    password_login_failed.append(role or account_ref or email)
-                    continue
-                if login_status == 200 and live_token:
-                    token = live_token
-                    refreshed_for_persist[email or account_ref] = live_token
+                    if not status_restricted:
+                        password_login_failed.append(role or account_ref or email)
+                        continue
                 else:
-                    _LOGGER.warning(
-                        "actor_login_rejected project=%s role=%s status=%s "
-                        "token_present=%s action=skip_orphan_snapshot",
-                        project,
-                        role or account_ref or email,
-                        login_status,
-                        False,
-                    )
-                    password_login_failed.append(role or account_ref or email)
-                    # Password was the authority. Do not hand the executor an
-                    # orphan JWT that reads as authenticated but cannot insert.
-                    continue
+                    if login_status == 200 and live_token:
+                        token = live_token
+                        refreshed_for_persist[email or account_ref] = live_token
+                    elif status_restricted:
+                        # Rejected login is the declared expected behavior for
+                        # this subject; the stored credential still resolves so
+                        # the executor can observe the target's real rejection.
+                        _LOGGER.info(
+                            "restricted_actor_login_rejected_expected project=%s "
+                            "role=%s status=%s account_ref=%s",
+                            project,
+                            role or account_ref or email,
+                            login_status,
+                            account_ref or email,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "actor_login_rejected project=%s role=%s status=%s "
+                            "token_present=%s action=skip_orphan_snapshot",
+                            project,
+                            role or account_ref or email,
+                            login_status,
+                            False,
+                        )
+                        password_login_failed.append(role or account_ref or email)
+                        # Password was the authority. Do not hand the executor an
+                        # orphan JWT that reads as authenticated but cannot insert.
+                        continue
             if not token:
                 if not role or not stored_token:
                     continue
                 if _jwt_expired(stored_token):
-                    # Recorded, not silently skipped: a stale snapshot is the
-                    # difference between "no credential" and "a credential the
-                    # target will reject".
-                    expired_roles.append(role)
-                    print(
-                        f"[STALE] declared actor token expired role={role} "
-                        f"account_ref={account_ref}",
-                        flush=True,
-                    )
-                    continue
-                token = stored_token
+                    if status_restricted:
+                        # A stale restricted-account snapshot is exactly the
+                        # credential the target is expected to reject.  Keeping
+                        # it resolvable lets the authorization obligation observe
+                        # the real rejection instead of fabricating a missing
+                        # credential; active accounts still drop stale snapshots
+                        # so a 401 is never misread as an authorization defect.
+                        token = stored_token
+                    else:
+                        # Recorded, not silently skipped: a stale snapshot is the
+                        # difference between "no credential" and "a credential the
+                        # target will reject".
+                        expired_roles.append(role)
+                        print(
+                            f"[STALE] declared actor token expired role={role} "
+                            f"account_ref={account_ref}",
+                            flush=True,
+                        )
+                        continue
+                else:
+                    token = stored_token
             if not token:
                 continue
             if not role and not account_ref and not email:

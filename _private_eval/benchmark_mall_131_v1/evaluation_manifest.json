@@ -8,7 +8,7 @@
   "targets": [
     {
       "target_id": "benchmark-mall-held-in-131",
-      "project_id": "evaluation-benchmark-mall-held-in-131",
+      "project_id": "benchmark_mall",
       "industry": "ecommerce",
       "split": "held_in",
       "expectation": "seeded_defects",

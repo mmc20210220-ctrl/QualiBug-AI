@@ -977,21 +977,35 @@ def _sync_declared_project_sources(project: str, root: Path, registry: dict[str,
     # Same stem+type under platform_inputs and projects/<id>/input must not
     # enter one ingest batch with conflicting bytes. Identical content is
     # skipped via hash; divergent content fails closed with both paths named.
+    # Line-ending variants (CRLF vs LF) of the same customer material are the
+    # same document: a Git checkout that normalizes line endings must not turn
+    # one source into two conflicting logical keys, so both the raw bytes and
+    # the CRLF-normalized identity are compared against what is already known.
     pending_logical_keys: dict[str, Path] = {}
     for candidate in _declared_project_source_files(project, root):
         blob = candidate.read_bytes()
         if len(blob) > MAX_SOURCE_BYTES:
             raise ValueError(f"declared source exceeds {MAX_SOURCE_BYTES // (1024 * 1024)}MB limit: {candidate}")
         content_hash = _hash_bytes(blob)
+        normalized_hash = _hash_bytes(blob.replace(b"\r\n", b"\n"))
         # The same customer material may appear under platform_inputs and
         # projects/<id>/input. Duplicate paths in one batch collide logical keys.
-        if content_hash in active_hashes or content_hash in pending_hashes:
+        if (
+            content_hash in active_hashes
+            or content_hash in pending_hashes
+            or normalized_hash in active_hashes
+            or normalized_hash in pending_hashes
+        ):
             continue
         raw_text = blob.decode("utf-8", errors="replace")
         source_type = _classify_source(candidate.name, raw_text, "")
         logical_key = _logical_key(candidate.name, source_type)
         prior_path = pending_logical_keys.get(logical_key)
         if prior_path is not None:
+            # A second file with the same logical key and different bytes is a
+            # genuine declaration conflict. Line-ending-only differences were
+            # already skipped above via the normalized identity, so reaching
+            # here means the content truly diverges and must fail closed.
             raise RuntimeError(
                 "declared enterprise source logical-key conflict: "
                 + json.dumps(
@@ -1006,6 +1020,7 @@ def _sync_declared_project_sources(project: str, root: Path, registry: dict[str,
             )
         pending_logical_keys[logical_key] = candidate
         pending_hashes.add(content_hash)
+        pending_hashes.add(normalized_hash)
         pending.append(candidate)
     if not pending:
         return registry

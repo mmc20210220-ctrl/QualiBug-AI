@@ -1003,6 +1003,33 @@ def finalize_experiment_execution(
             }
         else:
             verdict = evaluate_contract_oracle(experiment=exp_for_oracle, evidence=observations)
+            # ── Diagnostic: surface WHY an oracle could not be decided. The
+            # gate terminal keeps only the public reason code; the concrete
+            # assertion/observer reasons live here and must be visible in the
+            # run log to diagnose INDETERMINATE funnels.
+            _verdict_status = _text(verdict.get("status")).upper()
+            _verdict_verdict = _text(verdict.get("verdict"))
+            _diag_reasons = _list(verdict.get("reason_codes")) or []
+            _diag_assertion_reasons = sorted(
+                {
+                    f"{_text(_ar.get('kind'))}:{_text(_ar.get('reason_code'))}"
+                    for _ar in _list(verdict.get("assertions"))
+                    if isinstance(_ar, dict)
+                    and _text(_ar.get("status")).upper() in {"INDETERMINATE", "VIOLATION", "PASS"}
+                    and _text(_ar.get("reason_code"))
+                }
+            )
+            _diag_blockers = _list(verdict.get("missing_requirements")) or []
+            if _verdict_status in {"INDETERMINATE", "BLOCKED", "HARNESS_FAILED"} or _diag_assertion_reasons:
+                import sys as _sys_diag2
+                print(
+                    f"[ORACLE-DIAG] {_text(exp.get('obligation_id') or '')} "
+                    f"status={_verdict_status} verdict={_verdict_verdict} "
+                    f"reasons={_diag_reasons} "
+                    f"missing={_diag_blockers} "
+                    f"assertions={_diag_assertion_reasons}",
+                    file=_sys_diag2.stderr,
+                )
 
     # ── P0-10: Build field-level oracle trace ──
     oracle_trace: list[dict[str, Any]] = []

@@ -991,6 +991,34 @@ def observe_authorization_comparison(
             "control_effect_count": control_effect,
             "treatment_effect_count": treatment_effect,
         })
+        # An explicit rejection of the restricted treatment write is itself
+        # the authorization observation: the same mutation the authorized
+        # control performed was denied for the viewer, so no business-effect
+        # readback is needed to prove that denial.  This mirrors the GET
+        # branch below (explicit 401/403/404 => viewer denied) and must run
+        # before the business-effect requirement, otherwise a control write
+        # whose readback could not be observed would turn a proven denial
+        # into INDETERMINATE.
+        if _response_status(treatment_row) in {401, 403, 404}:
+            control_path = _text(control_row.get("path")).split("?", 1)[0]
+            treatment_path = _text(treatment_row.get("path")).split("?", 1)[0]
+            same_path = bool(control_path and control_path == treatment_path)
+            base_evidence.update({
+                "same_resource_proven": same_path,
+                "resource_match_basis": (
+                    "same_requested_resource_path_and_explicit_deny"
+                    if same_path
+                    else "explicit_deny_different_resource"
+                ),
+                "owner_can_access": True,
+                "viewer_can_access": False,
+                "leak_detected": False,
+            })
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="OBSERVED",
+                evidence=base_evidence,
+            )
         if effect.get("business_effect_observed") is not True or control_effect is None:
             return _receipt(
                 observer_id="authorization_comparison",
@@ -1012,26 +1040,6 @@ def observe_authorization_comparison(
                 "owner_can_access": True,
                 "viewer_can_access": True,
                 "leak_detected": True,
-            })
-            return _receipt(
-                observer_id="authorization_comparison",
-                status="OBSERVED",
-                evidence=base_evidence,
-            )
-        if _response_status(treatment_row) in {401, 403, 404} and int(treatment_effect or 0) == 0:
-            control_path = _text(control_row.get("path")).split("?", 1)[0]
-            treatment_path = _text(treatment_row.get("path")).split("?", 1)[0]
-            same_path = bool(control_path and control_path == treatment_path)
-            base_evidence.update({
-                "same_resource_proven": same_path,
-                "resource_match_basis": (
-                    "same_requested_resource_path_and_explicit_deny"
-                    if same_path
-                    else "explicit_deny_different_resource"
-                ),
-                "owner_can_access": True,
-                "viewer_can_access": False,
-                "leak_detected": False,
             })
             return _receipt(
                 observer_id="authorization_comparison",
@@ -1389,18 +1397,20 @@ def _observe_business_effect(
         )
 
     phase_windows: dict[str, dict[str, Any]] = {}
+    phase_reasons: dict[str, str] = {}
     for phase in ("control", "treatment"):
         phase_steps = [step for step in write_steps if _text(step.get("phase")) == phase]
         if not phase_steps:
             continue
         window, reason = _effect_window(phase_steps)
         if reason:
-            return _receipt(
-                observer_id="business_effect",
-                status="INDETERMINATE",
-                reason_code=reason,
-                evidence=evidence,
-            )
+            # A failed observation for one phase must not erase an observed
+            # window for the other: validation and authorization assertions
+            # consume per-phase effect counts, and a rejected treatment write
+            # (write_not_accepted) is a complete zero-side-effect observation
+            # even when the control readback could not be captured.
+            phase_reasons[phase] = reason
+            continue
         phase_windows[phase] = window
         evidence[f"{phase}_effect_count"] = window["effect_count"]
 
@@ -1408,13 +1418,9 @@ def _observe_business_effect(
     if aggregate_control_treatment:
         combined_window, combined_reason = _effect_window(write_steps)
         if combined_reason:
-            return _receipt(
-                observer_id="business_effect",
-                status="INDETERMINATE",
-                reason_code=combined_reason,
-                evidence=evidence,
-            )
-        evidence["combined_effect_count"] = combined_window["effect_count"]
+            combined_window = {}
+        else:
+            evidence["combined_effect_count"] = combined_window["effect_count"]
     selected = (
         combined_window
         or phase_windows.get("treatment")
@@ -1424,7 +1430,11 @@ def _observe_business_effect(
         return _receipt(
             observer_id="business_effect",
             status="INDETERMINATE",
-            reason_code="BUSINESS_EFFECT_WINDOW_MISSING",
+            reason_code=(
+                phase_reasons.get("control")
+                or phase_reasons.get("treatment")
+                or "BUSINESS_EFFECT_WINDOW_MISSING"
+            ),
             evidence=evidence,
         )
     evidence.update({

@@ -186,10 +186,6 @@ def _resource_binding_targets(experiment: dict[str, Any]) -> list[str]:
             continue
         if target not in targets:
             targets.append(target)
-    for raw in _list(experiment.get("source_identity_fields")):
-        target = _text(raw)
-        if target and target not in targets:
-            targets.append(target)
     return targets
 
 

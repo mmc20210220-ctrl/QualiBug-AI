@@ -891,7 +891,19 @@ def _validate_active_chain(
     if oracle_status == "PROPERTY_HELD":
         return "REJECTED", ["ORACLE_NOT_VIOLATED"]
     if oracle_status == "INDETERMINATE":
-        return "BLOCKED", ["ASSERTION_INDETERMINATE"]
+        # Preserve the concrete oracle reason (e.g. WRITE_EFFECT_EVIDENCE_REQUIRED,
+        # OBSERVER_EVIDENCE_INDETERMINATE) so the funnel shows WHY the assertion
+        # could not be decided instead of a bare ASSERTION_INDETERMINATE.
+        oracle_reasons = [
+            _text(value)
+            for value in _list(oracle.get("reason_codes"))
+            if _text(value)
+        ]
+        return "BLOCKED", (
+            ["ASSERTION_INDETERMINATE"] + oracle_reasons
+            if oracle_reasons
+            else ["ASSERTION_INDETERMINATE"]
+        )
     if oracle_status == "BLOCKED":
         return "BLOCKED", ["CONTRACT_ORACLE_BLOCKED"]
     if oracle_status == "HARNESS_FAILED":
