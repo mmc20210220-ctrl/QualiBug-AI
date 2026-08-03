@@ -198,6 +198,15 @@ def _check_dimension(
     # Check if needed refs have executable bindings
     missing: list[str] = []
     for ref in needed_refs:
+        # Generic fixture roles (owned_resource, disposable_fixture, …) name a
+        # capability, not an IR node. Any executable fixture binding on the
+        # obligation's entity satisfies them; exact ref matching would block
+        # every isolation/authorization probe because the role string never
+        # appears in an entity-keyed ledger row.
+        if dimension == "fixture" and not _is_ir_node_ref(ref):
+            if not executable:
+                missing.append(f"{ref}(no_binding)")
+            continue
         found = any(
             b.get("source_node_id") == ref or ref in _text(b.get("target_key"))
             for b in executable
@@ -222,6 +231,12 @@ def _check_dimension(
         "reason": "missing_executable_bindings",
         "missing_bindings": missing[:10],
     }
+
+
+def _is_ir_node_ref(ref: str) -> bool:
+    """True when a needed ref names a Behavior IR node (bir_/field:/rel:/…)."""
+    lowered = ref.lower()
+    return lowered.startswith("bir_") or lowered.startswith("field:") or lowered.startswith("rel:")
 
 
 def _get_needed_refs(

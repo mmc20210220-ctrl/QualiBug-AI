@@ -652,7 +652,19 @@ def _build_fixture_bindings(ir: dict, ledger: BindingLedger, module: str) -> int
         entity_id = _text(entity.get("id"))
         entity_name = _text(entity.get("name"))
         collection_path = _text(entity.get("collection_path"))
-        if not entity_id or not collection_path:
+        if not entity_id:
+            continue
+        if not collection_path:
+            # No IR builder emits ``collection_path``; derive the collection
+            # from the entity's source-declared create operation (a collection
+            # POST without path placeholders whose route vocabulary matches
+            # the entity name) so fixture bindings actually reach the ledger.
+            create_op = _find_entity_create_operation(operations, entity_name)
+            if create_op:
+                collection_path = normalize_path_placeholders(
+                    _text(create_op.get("path") or create_op.get("raw_path"))
+                )
+        if not collection_path:
             continue
 
         # Find POST create operation
@@ -894,6 +906,34 @@ def _auto_promote(
                 )
         except ValueError:
             pass
+
+
+def _find_entity_create_operation(
+    operations: list, entity_name: str
+) -> dict[str, Any] | None:
+    """Find a collection POST create for an entity by route vocabulary.
+
+    Used when an entity carries no declared collection path: the create
+    operation is the collection POST whose normalized path matches the
+    entity name segment and has no path placeholders (a pure collection
+    create). Route-vocabulary matching is generic, never name similarity
+    against state or field vocabulary.
+    """
+    if not entity_name:
+        return None
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        if _text(op.get("method")).upper() != "POST":
+            continue
+        op_path = normalize_path_placeholders(
+            _text(op.get("path") or op.get("raw_path"))
+        )
+        if path_has_placeholders(op_path):
+            continue
+        if _operation_matches_entity(op, "", entity_name):
+            return op
+    return None
 
 
 def _find_operation_for_entity(
