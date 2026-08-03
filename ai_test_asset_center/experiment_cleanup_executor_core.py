@@ -1839,6 +1839,24 @@ def execute_experiment_cleanup_compensation(
                     )
                 ]
                 if not restore_steps:
+                    # A scoped source write that never changed target state
+                    # (rejected mutation, idempotent no-op) needs no restore.
+                    # This mirrors the generic compensation arm, which seals
+                    # NOT_REQUIRED with ACCEPTED_WRITE_STATE_UNCHANGED instead
+                    # of failing a compensation that has nothing to undo.
+                    _source_write_seen_unchanged = False
+                    if _source_step_id:
+                        _source_write_seen_unchanged = any(
+                            _text(_dict(step).get("phase")) in {"control", "treatment"}
+                            and _text(_dict(step).get("step_id")) == _source_step_id
+                            for step in steps_out
+                        )
+                    if _source_write_seen_unchanged:
+                        observations["cleanup_status"] = "not_required"
+                        observations["cleanup_reason"] = (
+                            "ACCEPTED_WRITE_STATE_UNCHANGED"
+                        )
+                        continue
                     _fail_cleanup(
                         "mutation_restore_plan",
                         "cleanup_accepted_write_missing",
