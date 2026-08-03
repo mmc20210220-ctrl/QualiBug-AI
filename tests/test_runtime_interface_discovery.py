@@ -241,8 +241,10 @@ def test_confirmation_tokens_reuse_configured_credential_authority(
         load_runtime_interface_confirmation_tokens,
     )
 
+    # ``load_actor_tokens`` resolves this symbol in the extracted credentials
+    # module; ``experiment_runtime_support`` keeps a compatibility re-export.
     monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_support._configured_credential_tokens",
+        "ai_test_asset_center.experiment_runtime_credentials._configured_credential_tokens",
         lambda root, project, *, base_url="": {
             "buyer@example.com": "token-buyer",
             "buyer": "token-buyer",

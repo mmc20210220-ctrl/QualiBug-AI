@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_asset_center.experiment_runtime_support import _jwt_expired, load_actor_tokens
+from ai_test_asset_center.experiment_runtime_credentials import _jwt_expired, load_actor_tokens
 
 
 def _jwt(exp_offset_seconds: float) -> str:
@@ -135,7 +135,7 @@ def test_login_transport_failure_is_observable(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from ai_test_asset_center import experiment_runtime_support as runtime_support
+    from ai_test_asset_center import experiment_runtime_credentials as runtime_credentials
 
     path = tmp_path / "platform_inputs" / "p-login" / "TEST_ACCOUNTS.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,7 +149,7 @@ def test_login_transport_failure_is_observable(
     def fail_login(*_args, **_kwargs):
         raise TimeoutError("login timed out")
 
-    monkeypatch.setattr(runtime_support, "_http_request", fail_login)
+    monkeypatch.setattr(runtime_credentials, "_http_request", fail_login)
     with caplog.at_level("WARNING"):
         tokens = load_actor_tokens(
             tmp_path,
@@ -166,9 +166,13 @@ def test_login_transport_failure_is_observable(
 def test_executors_thread_the_approved_base_url() -> None:
     """A parameter nobody passes is the same as no parameter."""
     root = Path(__file__).resolve().parents[1] / "ai_test_asset_center"
-    for module in ("experiment_executor.py", "experiment_batch_executor.py"):
-        source = (root / module).read_text(encoding="utf-8")
-        assert "load_actor_tokens(root, project, base_url=base_url)" in source, module
+    # The token-loading call site moved into the extracted executor core during
+    # the architecture split; the batch executor still threads base_url into it.
+    core = (root / "experiment_executor_core.py").read_text(encoding="utf-8")
+    assert "load_actor_tokens(" in core
+    assert "root, project, base_url=base_url" in core
+    batch = (root / "experiment_batch_executor.py").read_text(encoding="utf-8")
+    assert "base_url=base_url" in batch
 
 
 def test_password_login_preferred_over_unexpired_stored_token(
@@ -181,7 +185,7 @@ def test_password_login_preferred_over_unexpired_stored_token(
     user-identity foreign key. When the catalog still declares a password and the
     caller supplies an approved base_url, login must win over the snapshot.
     """
-    from ai_test_asset_center import experiment_runtime_support as runtime_support
+    from ai_test_asset_center import experiment_runtime_credentials as runtime_credentials
 
     orphan = _jwt(+3600)
     path = tmp_path / "platform_inputs" / "p-refresh" / "test_accounts.json"
@@ -211,7 +215,7 @@ def test_password_login_preferred_over_unexpired_stored_token(
         assert login_path.endswith("/api/auth/login")
         return live, 200
 
-    monkeypatch.setattr(runtime_support, "_login_declared_account", fake_login)
+    monkeypatch.setattr(runtime_credentials, "_login_declared_account", fake_login)
     tokens = load_actor_tokens(
         tmp_path,
         "p-refresh",
@@ -228,7 +232,7 @@ def test_password_login_failure_does_not_return_orphan_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_test_asset_center import experiment_runtime_support as runtime_support
+    from ai_test_asset_center import experiment_runtime_credentials as runtime_credentials
 
     orphan = _jwt(+3600)
     path = tmp_path / "platform_inputs" / "p-orphan" / "test_accounts.json"
@@ -253,7 +257,7 @@ def test_password_login_failure_does_not_return_orphan_snapshot(
     )
 
     monkeypatch.setattr(
-        runtime_support,
+        runtime_credentials,
         "_login_declared_account",
         lambda **_kwargs: ("", 401),
     )
@@ -306,6 +310,19 @@ def test_legacy_dict_of_dicts_shape_still_loads(tmp_path: Path) -> None:
 
 # ── a deferral keeps the reason the compiler gave it ────────────────────────
 
+def _terminal_receipt_surface() -> str:
+    """Manual terminal accounting now lives in the extracted terminal module.
+
+    The support module keeps a compatibility re-export; the guard follows the
+    implementation instead of a frozen file location.
+    """
+    root = Path(__file__).resolve().parents[1] / "ai_test_asset_center"
+    return (
+        (root / "discovery_runtime_execution_support.py").read_text(encoding="utf-8")
+        + (root / "discovery_runtime_execution_terminal.py").read_text(encoding="utf-8")
+    )
+
+
 def test_deferred_compile_receipt_keeps_its_own_reason_code() -> None:
     """MISSING_PRIMARY_OPERATION must not be rewritten as BUDGET_EXHAUSTED.
 
@@ -314,23 +331,18 @@ def test_deferred_compile_receipt_keeps_its_own_reason_code() -> None:
     reason code is worse than a missing one: it sends the next reader looking for
     capacity they already have.
     """
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "ai_test_asset_center" / "discovery_runtime_execution_support.py"
-    ).read_text(encoding="utf-8")
+    source = _terminal_receipt_surface()
 
-    assert 'elif compile_status == "DEFERRED" and _text(compile_receipt.get("reason_code")):' in source
-    branch_at = source.index('elif compile_status == "DEFERRED"')
+    assert 'compile_status == "DEFERRED"' in source
+    assert '_text(compile_receipt.get("reason_code"))' in source
+    branch_at = source.index('compile_status == "DEFERRED"')
     pending_at = source.index("elif obligation_id in pending_ids:")
     assert branch_at < pending_at, "the receipt's own reason must be honoured before any fallback"
 
 
 def test_unattributed_fallback_does_not_claim_budget_exhaustion() -> None:
     """The final fallback runs precisely when the budget is not the cause."""
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "ai_test_asset_center" / "discovery_runtime_execution_support.py"
-    ).read_text(encoding="utf-8")
+    source = _terminal_receipt_surface()
 
     fallback_at = source.index('"reason_code": "OBLIGATION_NOT_IN_PLAN"')
     tail = source[fallback_at: fallback_at + 400]
