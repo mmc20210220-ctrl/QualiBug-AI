@@ -904,6 +904,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     # ── Closed-Loop Learning: extract patterns + generate probes for next scan ──
     try:
         from .closed_loop_feedback import build_closed_loop_context
+        from .auto_learning_trigger import AutoLearningTrigger, LearningTriggerConfig
 
         if confirmed:
             feedback = build_closed_loop_context(project, root, confirmed)
@@ -925,6 +926,42 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                     "probes": probes,
                 })
                 result["closed_loop"]["probe_pool_path"] = str(probe_pool_path)
+            
+            # ── V2.0: Auto-learning trigger (automated) ──
+            try:
+                trigger = AutoLearningTrigger(
+                    project=project,
+                    root=root,
+                    config=LearningTriggerConfig(
+                        min_confirmed_bugs=3,
+                        schedule="after_each_scan",
+                        dry_run=False,
+                    ),
+                )
+                
+                # Check conditions and execute
+                should_learn, reason = trigger.should_trigger(result)
+                _LOGGER.info("Auto-learning decision: %s (reason: %s)", 
+                           "YES" if should_learn else "NO", reason)
+                
+                if should_learn:
+                    learn_result = trigger.execute()
+                    result["auto_learning"] = {
+                        "success": learn_result.success,
+                        "rounds_analyzed": learn_result.rounds_analyzed,
+                        "patterns_extracted": learn_result.patterns_extracted,
+                        "new_probes_generated": learn_result.new_probes_generated,
+                        "execution_time_seconds": learn_result.execution_time_seconds,
+                        "risk_weights_updated": learn_result.risk_weights_updated,
+                    }
+                    _LOGGER.info("Auto-learning completed: %s", 
+                               "SUCCESS" if learn_result.success else "FAILED")
+            except Exception as e:
+                _LOGGER.warning("Auto-learning trigger failed: %s", e)
+                result.setdefault("stage_failures", []).append(
+                    f"AUTO_LEARNING_FAILED:{type(e).__name__}"
+                )
+                
     except Exception as e:
         _LOGGER.exception("closed_loop_learning_failed")
         failure_code = f"CLOSED_LOOP_LEARNING_FAILED:{type(e).__name__}:{str(e)[:200]}"
