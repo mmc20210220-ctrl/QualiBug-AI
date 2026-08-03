@@ -2227,40 +2227,44 @@ def execute_experiment_cleanup_compensation(
                             cleanup_write.get("body")
                         )
                         if _new_identities:
-                            _recreate_collection = normalize_path_placeholders(
-                                collection_path(path)
+                            _new_identity = next(
+                                iter(sorted(_new_identities)), ""
                             )
-                            _recreate_deletes = [
-                                row
-                                for row in _declared_cleanup_operations(
-                                    _recreate_collection,
-                                    behavior_ir=_cleanup_behavior_ir,
+                            if _new_identity:
+                                _recreate_collection = normalize_path_placeholders(
+                                    collection_path(path)
                                 )
-                                if _text(row.get("method")).upper() == "DELETE"
-                            ]
-                            if _recreate_deletes:
-                                pending_fixture_cleanups.append({
-                                    "target": _new_identities[0],
-                                    "value": _new_identities[0],
-                                    "cleanup": {
-                                        "method": "DELETE",
-                                        "path": _recreate_deletes[0].get("path")
-                                        or f"/{_recreate_collection.strip('/')}/{{id}}",
-                                        "operation_ref": _text(
-                                            _recreate_deletes[0].get("operation_ref")
+                                _recreate_deletes = [
+                                    row
+                                    for row in _declared_cleanup_operations(
+                                        _recreate_collection,
+                                        behavior_ir=_cleanup_behavior_ir,
+                                    )
+                                    if _text(row.get("method")).upper() == "DELETE"
+                                ]
+                                if _recreate_deletes:
+                                    pending_fixture_cleanups.append({
+                                        "target": _new_identity,
+                                        "value": _new_identity,
+                                        "cleanup": {
+                                            "method": "DELETE",
+                                            "path": _recreate_deletes[0].get("path")
+                                            or f"/{_recreate_collection.strip('/')}/{{id}}",
+                                            "operation_ref": _text(
+                                                _recreate_deletes[0].get("operation_ref")
+                                            ),
+                                        },
+                                        "actor_identity": _text(
+                                            actor.get("role") or actor_ref
                                         ),
-                                    },
-                                    "actor_identity": _text(
-                                        actor.get("role") or actor_ref
-                                    ),
-                                    "actor_token": token,
-                                    "observation_path": observation_path,
-                                    "governed_setup": governed_cleanup,
-                                    "receipt": {
-                                        "kind": "fixture_cleanup",
-                                        "target": _new_identities[0],
-                                    },
-                                })
+                                        "actor_token": token,
+                                        "observation_path": observation_path,
+                                        "governed_setup": governed_cleanup,
+                                        "receipt": {
+                                            "kind": "fixture_cleanup",
+                                            "target": _new_identity,
+                                        },
+                                    })
 
     # Fixture setup precedes experiment writes, so its compensation must run
     # after every experiment-write compensation to preserve global reverse
