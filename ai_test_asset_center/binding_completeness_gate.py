@@ -207,6 +207,15 @@ def _check_dimension(
             if not executable:
                 missing.append(f"{ref}(no_binding)")
             continue
+        # Field-level scope parameters (ownership_param like ``userId``) are
+        # runtime body bindings, not ledger node identities. Any executable
+        # scope binding on the ledger satisfies the dimension; exact matching
+        # would block every isolation probe whose ownership field is a body
+        # parameter rather than a relation-scoped node.
+        if dimension == "scope" and not _is_ir_node_ref(ref):
+            if not executable:
+                missing.append(f"{ref}(no_binding)")
+            continue
         found = any(
             b.get("source_node_id") == ref or ref in _text(b.get("target_key"))
             for b in executable
