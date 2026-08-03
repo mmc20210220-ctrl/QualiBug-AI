@@ -1852,6 +1852,37 @@ def execute_experiment_cleanup_compensation(
                             for step in steps_out
                         )
                     if _source_write_seen_unchanged:
+                        # Same NOT_REQUIRED contract-evidence shape as the
+                        # generic compensation arm: activation requires a
+                        # cleanup contract evidence receipt, so recording only
+                        # the observations flag left CLEANUP_EVIDENCE_INCOMPLETE
+                        # and the experiment harness-failed.
+                        contract_evidence_receipts.append(
+                            build_contract_evidence_receipt(
+                                kind="cleanup",
+                                experiment_id=eid,
+                                obligation_id=oid,
+                                campaign_id=resolved_campaign_id,
+                                execution_id=resolved_execution_id,
+                                subject_id=cleanup_subject_id,
+                                status="NOT_REQUIRED",
+                                evidence={
+                                    "accepted_write_count": 0,
+                                    "cleanup_required_write_count": 0,
+                                    "cleanup_write_count": 0,
+                                    "state_unchanged": True,
+                                    "restoration_verified": True,
+                                    "audit_receipt_ids": [],
+                                    "reason_code": "ACCEPTED_WRITE_STATE_UNCHANGED",
+                                    "cleanup_mode": _text(_dict(cleanup).get("mode"))
+                                    or "delta_inverse",
+                                    "source_step_id": _source_step_id,
+                                    "compensates_operation_ref": _text(
+                                        _dict(cleanup).get("compensates_operation_ref")
+                                    ),
+                                },
+                            )
+                        )
                         observations["cleanup_status"] = "not_required"
                         observations["cleanup_reason"] = (
                             "ACCEPTED_WRITE_STATE_UNCHANGED"
