@@ -60,12 +60,13 @@ def test_cumulative_merge_failure_cannot_be_counted_as_zero_new_findings(
     monkeypatch.setattr(
         main_module,
         "scan",
-        lambda *args, **kwargs: {"coverage": 1.0, "total_findings": 1},
+        lambda *args, **kwargs: {"scan_id": "scan-1", "coverage": 1.0, "total_findings": 1},
     )
+    monkeypatch.setattr(service.db_persist, "save_scan", lambda *args: "scan-1")
     monkeypatch.setattr(
         service.db_persist,
-        "init_db",
-        lambda root: (_ for _ in ()).throw(RuntimeError("database locked")),
+        "merge_findings_cumulative",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("database locked")),
     )
     _activate_loop(tmp_path)
 
@@ -102,9 +103,8 @@ def test_state_update_failure_still_emits_a_separate_failure_receipt(
     monkeypatch.setattr(
         main_module,
         "scan",
-        lambda *args, **kwargs: {"coverage": 0.5, "total_findings": 1},
+        lambda *args, **kwargs: {"scan_id": "scan-1", "coverage": 0.5, "total_findings": 1},
     )
-    monkeypatch.setattr(service.db_persist, "init_db", lambda root: None)
     monkeypatch.setattr(service.db_persist, "save_scan", lambda *args: "scan-1")
     monkeypatch.setattr(
         service.db_persist,
@@ -147,9 +147,8 @@ def test_max_rounds_is_a_visible_non_converged_terminal(
     monkeypatch.setattr(
         main_module,
         "scan",
-        lambda *args, **kwargs: {"coverage": 0.9, "total_findings": 1},
+        lambda *args, **kwargs: {"scan_id": "scan-1", "coverage": 0.9, "total_findings": 1},
     )
-    monkeypatch.setattr(service.db_persist, "init_db", lambda root: None)
     monkeypatch.setattr(service.db_persist, "save_scan", lambda *args: "scan-1")
     monkeypatch.setattr(
         service.db_persist,

@@ -257,7 +257,11 @@ def _continuous_scan_loop(
                                 "error": str(exc),
                             }
                         )
-                return
+                # Fail fast: the failure is persisted above and the thread entry
+                # is marked failed, but the original exception must still
+                # propagate to the caller instead of being swallowed.  The
+                # finally block below still performs the thread cleanup.
+                raise
 
             deadline = time.monotonic() + max(1, int(interval_s))
             while time.monotonic() < deadline:
@@ -317,7 +321,13 @@ def _record_continuous_failure(
         state_file.with_name("continuous_discovery_last_error.json"),
         failure,
     )
-    state = _read_json_object(state_file)
+    try:
+        state = _read_json_object(state_file)
+    except ValueError:
+        # The state file is already corrupt.  Never overwrite the failure
+        # scene; the failure receipt above remains the durable record and the
+        # original exception keeps propagating to the caller.
+        return
     state["status"] = "failed"
     state["converged"] = False
     state.pop("converge_reason", None)
@@ -433,6 +443,16 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
         "max_rounds_reached": "持续检测达到安全轮次上限，未判定收敛。",
         "failed": "持续检测失败，请查看 last_failure。",
     }
+    message = messages.get(status, "持续检测状态未知。")
+    last_failure = state.get("last_failure") if isinstance(state.get("last_failure"), dict) else {}
+    termination = state.get("termination") if isinstance(state.get("termination"), dict) else {}
+    if status == "failed" and last_failure:
+        message = (
+            f"持续检测失败（{last_failure.get('phase')} · {last_failure.get('error_type')}）："
+            f"{last_failure.get('error')}。请查看 last_failure。"
+        )
+    elif status == "max_rounds_reached" and termination.get("round"):
+        message = f"持续检测达到安全轮次上限（{termination.get('round')} 轮），未判定收敛。"
     return {
         "status": status,
         "converged": bool(state.get("converged")),
@@ -441,16 +461,12 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
         "last_scan": state.get("last_scan", ""),
         "last_findings": last_run.get("findings", 0),
         "last_coverage": last_run.get("coverage", 0),
-        "last_failure": state.get("last_failure")
-        if isinstance(state.get("last_failure"), dict)
-        else {},
-        "termination": state.get("termination")
-        if isinstance(state.get("termination"), dict)
-        else {},
+        "last_failure": last_failure,
+        "termination": termination,
         "active_scan": state.get("active_scan")
         if isinstance(state.get("active_scan"), dict)
         else {},
-        "message": messages.get(status, "持续检测状态未知。"),
+        "message": message,
     }
 
 

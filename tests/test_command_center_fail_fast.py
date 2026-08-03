@@ -125,13 +125,24 @@ def test_corrupt_continuous_state_and_scan_counter_do_not_reset_silently(tmp_pat
 
 
 def test_command_center_exception_handlers_raise_or_emit_visible_failure() -> None:
-    source = textwrap.dedent(inspect.getsource(PrivatePilotHandler._build_command_center))
-    tree = ast.parse(source)
-    handlers = [node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)]
-
-    assert handlers
-    for handler in handlers:
-        handler_tree = ast.Module(body=handler.body, type_ignores=[])
-        has_raise = any(isinstance(node, ast.Raise) for node in ast.walk(handler_tree))
-        emits_visible_failure = "quality_projection_failed" in ast.unparse(handler_tree)
-        assert has_raise or emits_visible_failure, ast.unparse(handler_tree)
+    # The handler class resolves _build_command_center through the mixin MRO
+    # (a wrapper mixin delegates via super() to the builder implementation).
+    # Every definition on the chain must satisfy the no-swallow contract:
+    # each except handler either re-raises or emits the visible
+    # quality_projection_failed marker.  A method without except handlers
+    # propagates exceptions naturally and is therefore compliant.
+    checked = 0
+    for cls in PrivatePilotHandler.__mro__:
+        member = cls.__dict__.get("_build_command_center")
+        if member is None:
+            continue
+        source = textwrap.dedent(inspect.getsource(member))
+        tree = ast.parse(source)
+        handlers = [node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)]
+        for handler in handlers:
+            handler_tree = ast.Module(body=handler.body, type_ignores=[])
+            has_raise = any(isinstance(node, ast.Raise) for node in ast.walk(handler_tree))
+            emits_visible_failure = "quality_projection_failed" in ast.unparse(handler_tree)
+            assert has_raise or emits_visible_failure, f"{cls.__name__}: {ast.unparse(handler_tree)}"
+        checked += 1
+    assert checked >= 1
