@@ -843,10 +843,18 @@ def _cleanup_gate_decision(
             ):
                 return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
         elif status == "NOT_REQUIRED":
+            # NOT_REQUIRED with zero accepted writes (a rejected/no-op arm)
+            # has no audit receipts by definition — there was no write to
+            # audit. Demanding audit ids there would fail a genuinely
+            # untouched arm. When accepted writes exist they must carry
+            # audit ids proving the state-unchanged claim.
             if not (
                 evidence.get("state_unchanged") is True
                 and int(evidence.get("cleanup_write_count") or 0) == 0
-                and audit_ids
+                and (
+                    audit_ids
+                    or int(evidence.get("accepted_write_count") or 0) == 0
+                )
             ):
                 return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
         else:
