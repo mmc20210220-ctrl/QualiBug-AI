@@ -3,6 +3,9 @@ ClosedLoopFeedback — Bug → Pattern → Scenario → Mutation → Re-run.
 
 V12.2 upgrade: learns bug patterns from confirmed findings, 
 auto-expands scenarios with pattern-based mutations on next scan.
+
+V12.3 upgrade: integrates with SQLite knowledge base via LearningPatternBridge
+for enterprise-grade storage and cross-round knowledge transfer.
 """
 
 from __future__ import annotations
@@ -14,12 +17,17 @@ from pathlib import Path
 from typing import Any
 
 from .customer_delivery_gate import is_customer_deliverable_defect
+from .learning_pattern_bridge import LearningPatternBridge
 
 
 def build_closed_loop_context(
     project: str, root: Path, findings: list[dict], *, max_patterns: int = 20
 ) -> dict[str, Any]:
-    """Build domain expansion context + pattern-based mutation hints."""
+    """Build domain expansion context + pattern-based mutation hints.
+    
+    V12.3: Stores patterns in SQLite knowledge base via LearningPatternBridge
+    for enterprise-grade storage and cross-round knowledge transfer.
+    """
     pool_dir = root / "platform_outputs" / project / "closed_loop"
     pool_dir.mkdir(parents=True, exist_ok=True)
     patterns_file = pool_dir / "bug_patterns.json"
@@ -60,12 +68,24 @@ def build_closed_loop_context(
             "count": p["count"],
             "mutation_hint": pat.get("mutation", ""),
         })
+    
+    # Store patterns in SQLite knowledge base
+    bridge = LearningPatternBridge(project=project)
+    stored_count = bridge.store_patterns(mutations, scan_id="current_scan", confidence=0.85)
+    
+    # Migrate legacy patterns to SQLite if needed
+    migrated_count = bridge.migrate_legacy_patterns_to_sqlite()
 
     return {
         "total_patterns": len(history["patterns"]),
         "new_this_scan": new_patterns,
         "mutations": mutations,
         "generated_probes": _generate_learning_probes(findings, project, root),
+        "sqlite_storage": {
+            "patterns_stored": stored_count,
+            "legacy_migrated": migrated_count,
+            "storage_type": "SQLite_enterprise"
+        }
     }
 
 
