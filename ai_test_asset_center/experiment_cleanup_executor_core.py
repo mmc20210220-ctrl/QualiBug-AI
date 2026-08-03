@@ -2037,25 +2037,11 @@ def execute_experiment_cleanup_compensation(
                 if source_step and not _governed_write_changed_state(
                     _dict(_dict(source_step).get("governance_receipt"))
                 ):
-                    import sys as _sys_skip
-                    print(
-                        f"[CLEANUP-SKIP] exp={_text(eid)} subject={cleanup_subject_id} "
-                        f"source_step={_text(_dict(source_step).get('step_id'))} "
-                        f"path={path}",
-                        file=_sys_skip.stderr,
-                    )
                     observations["cleanup_status"] = "not_required"
                     observations["cleanup_reason"] = (
                         "ACCEPTED_WRITE_STATE_UNCHANGED"
                     )
                     continue
-                import sys as _sys_skip2
-                print(
-                    f"[CLEANUP-EXEC] exp={_text(eid)} subject={cleanup_subject_id} "
-                    f"source_step={_text(_dict(source_step).get('step_id')) if source_step else 'NONE'} "
-                    f"path={path} method={method}",
-                    file=_sys_skip2.stderr,
-                )
                 actor_ref, actor, token = _cleanup_actor_for_write_step(
                     source_step,
                     actors=actors,
@@ -2134,16 +2120,6 @@ def execute_experiment_cleanup_compensation(
                     body=cleanup_body if cleanup_method in {"POST", "PUT", "PATCH"} else None,
                     observation_path=observation_path,
                     restorable_identity_mutation=True,
-                )
-                import sys as _sys_cud
-                print(
-                    f"[CLEANUP-DIAG] exp={_text(eid)} subject={cleanup_subject_id} "
-                    f"method={cleanup_method} path={path} "
-                    f"accepted={governed_cleanup.get('accepted')} "
-                    f"reason={_text(governed_cleanup.get('reason')) or ''} "
-                    f"write_status={int(_dict(governed_cleanup.get('write')).get('status') or 0)} "
-                    f"action={cleanup_action} mode={_text(_dict(cleanup).get('mode'))}",
-                    file=_sys_cud.stderr,
                 )
                 cleanup_write = _dict(governed_cleanup.get("write"))
                 cobs = {
