@@ -950,6 +950,23 @@ def build_discovery_plan(
     )
     if history_match_status == "MATCHED" and not historical_yield:
         history_match_status = "MATCHED_HISTORY_HAS_NO_FAMILY_METRICS"
+    # ── Closed-loop READ consumption ──
+    # learned_knowledge is loaded at scan start from the SQLite knowledge base
+    # and carried through campaign_context. Consume it here as a bounded ranking
+    # boost for compiled obligations; it never changes budget or compile state.
+    from .learning_knowledge_consumption import (
+        build_learning_consumption_receipt,
+        build_learned_boost_index,
+    )
+
+    _learning_boost_index = build_learned_boost_index(
+        inputs.campaign_context.get("learned_knowledge")
+    )
+    if _learning_boost_index.get("status") == "LOAD_FAILED":
+        _planning_logger.warning(
+            "learned_knowledge_load_failed consumption_degraded failure=%s",
+            _learning_boost_index.get("load_failure"),
+        )
     obligation_plan = plan_obligation_round(
         obligations,
         experiments_by_obligation=by_obligation,
@@ -966,6 +983,32 @@ def build_discovery_plan(
             else []
         ),
         cold_start_reason=history_match_status,
+        learned_boost_index=_learning_boost_index,
+    )
+    _boosted_rows = [
+        {
+            "obligation_id": _text(row.get("obligation_id")),
+            "risk_family": _text(row.get("risk_family")),
+            "boost_factor": float(
+                _dict(row.get("learned_boost")).get("boost_factor") or 1.0
+            ),
+            "matches": _list(_dict(row.get("learned_boost")).get("matches")),
+        }
+        for source in (
+            _list(obligation_plan.get("selected")),
+            _list(obligation_plan.get("pending_next_round")),
+        )
+        for row in source
+        if isinstance(row, dict) and _dict(row.get("learned_boost")).get("matches")
+    ]
+    _learning_consumption_receipt = build_learning_consumption_receipt(
+        _learning_boost_index, boosted_rows=_boosted_rows
+    )
+    _planning_logger.info(
+        "learned_knowledge_consumed status=%s patterns=%s obligations_boosted=%s",
+        _learning_consumption_receipt.get("status"),
+        _learning_consumption_receipt.get("pattern_count"),
+        _learning_consumption_receipt.get("obligations_boosted"),
     )
 
     # ── Coverage-Guided Reorder (within selected set only, no budget change) ──
@@ -1090,6 +1133,7 @@ def build_discovery_plan(
                 _dict(inputs.campaign_context.get("_runtime_contract"))
             ),
             "preflight_receipt": preflight_receipt,
+            "learning_consumption_receipt": _learning_consumption_receipt,
             "binding_closure_receipt": _binding_closure_receipt,
             "space_exploration_receipt": {
                 "schema_version": "qualibug.space-exploration-receipt.v1",

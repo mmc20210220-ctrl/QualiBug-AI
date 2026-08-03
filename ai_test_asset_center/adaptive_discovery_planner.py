@@ -213,8 +213,16 @@ def plan_obligation_round(
     cold_start_reason: str = "NO_MATCHING_HISTORY",
     covered_keys: set[str] | None = None,
     type_minimum_guarantees: dict[str, int] | None = None,
+    learned_boost_index: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Select obligations that are compiled and maximize information gain."""
+    """Select obligations that are compiled and maximize information gain.
+
+    ``learned_boost_index`` (built from the SQLite knowledge base by
+    learning_knowledge_consumption.build_learned_boost_index) applies a
+    bounded ranking boost to obligations whose source-declared path or risk
+    family matches entities/families that produced confirmed defects in prior
+    rounds. It never changes compile status, selection semantics, or budget.
+    """
     if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
         raise ValueError("obligation_budget_invalid")
     experiments = dict(experiments_by_obligation or {})
@@ -244,13 +252,36 @@ def plan_obligation_round(
             operations_by_id=operations_by_id,
         )
         score = score_obligation(obl, covered_keys=covered, historical_yield=historical_yield)
+        # Closed-loop READ consumption: boost obligations that match entities
+        # or risk families with historically confirmed defects. Ranking only.
+        _boosted_score = score
+        _boost_matches: list[dict[str, Any]] = []
+        if learned_boost_index:
+            from .learning_knowledge_consumption import apply_learned_boost
+
+            _boosted_score, _boost_matches = apply_learned_boost(
+                score=score,
+                risk_family=_text(obl.get("risk_family")),
+                path_prefix=path_prefix,
+                resolved_path=_resolved_path,
+                boost_index=learned_boost_index,
+            )
         ranked.append({
             "obligation_id": oid,
             "risk_family": _text(obl.get("risk_family")),
             "path_prefix": path_prefix,
             "operation_key": operation_key,
-            "score": round(score, 6),
+            "score": round(_boosted_score, 6),
             "experiment_id": _text(exp.get("experiment_id")),
+            "learned_boost": (
+                {
+                    "base_score": round(score, 6),
+                    "boost_factor": round(_boosted_score / score, 6) if score else 1.0,
+                    "matches": _boost_matches,
+                }
+                if _boost_matches
+                else None
+            ),
         })
     ranked.sort(key=lambda item: (-item["score"], item["obligation_id"]))
 
