@@ -1,9 +1,0 @@
-{
-  "schema_version": "qualibug.root-cause-novelty.v1",
-  "novelty_criteria": [
-    "not_matching_known_invariant",
-    "cross_surface_divergence",
-    "requires_new_classification"
-  ],
-  "timestamp": 1784934385.9440055
-}

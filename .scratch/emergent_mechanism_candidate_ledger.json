@@ -1,9 +1,0 @@
-{
-  "schema_version": "qualibug.emergent-mechanism-candidate.v1",
-  "mechanisms": [
-    "EMERGENT_INVARIANT_VIOLATION",
-    "UNCLASSIFIED_BEHAVIORAL_DIVERGENCE"
-  ],
-  "detection_method": "cross_surface_divergence_without_known_invariant_match",
-  "timestamp": 1784934385.9440055
-}

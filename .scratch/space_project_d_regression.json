@@ -1,8 +1,0 @@
-{
-  "schema_version": "qualibug.space-project-regression.v1",
-  "project": "D",
-  "status": "PASS",
-  "binding_closure_tests": "60/60",
-  "space_exploration_compatible": true,
-  "timestamp": 1784934385.9489985
-}
