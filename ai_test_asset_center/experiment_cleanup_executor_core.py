@@ -1816,6 +1816,13 @@ def execute_experiment_cleanup_compensation(
                 )
                 continue
             if cleanup_action in {"restore_before_snapshot", "inverse_delta_compensation"}:
+                # A per-step cleanup plan (source_step_id scoped) compensates
+                # only the write it was compiled for. Without the filter every
+                # plan item restored every accepted control+treatment write,
+                # so a two-step plan compensated each write twice — the
+                # inverse-delta writes over-compensated and restoration never
+                # verified (EXECUTED_BUT_NOT_RESTORED → HARNESS_FAILED).
+                _source_step_id = _text(_dict(cleanup).get("source_step_id"))
                 restore_steps = [
                     step for step in steps_out
                     if _text(_dict(step).get("phase")) in {"control", "treatment"}
@@ -1825,6 +1832,10 @@ def execute_experiment_cleanup_compensation(
                     and isinstance(_dict(step).get("governance_receipt"), dict)
                     and _governed_write_changed_state(
                         _dict(step.get("governance_receipt"))
+                    )
+                    and (
+                        not _source_step_id
+                        or _text(_dict(step).get("step_id")) == _source_step_id
                     )
                 ]
                 if not restore_steps:
