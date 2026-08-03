@@ -496,6 +496,93 @@ def _fact_conditions(fact: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _fact_claim_effects(
+    fact: dict[str, Any]
+) -> tuple[list[str], list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """Project source-backed effect claims into behavior-consumable effects.
+
+    The structure-first compiler atomizes one accepted statement into claims
+    (POSTCONDITION, STATE_TRANSITION, DATA_EFFECT, COMPENSATION). Without this
+    projection the behavior builder only reads the fact-level effect arrays —
+    which stay empty for atomized statements — and every such behavior is
+    marked BEHAVIOR_MANDATORY_OUTCOME_UNRESOLVED even though the source
+    statement did declare outcomes. Only source-backed claims are consumed;
+    nothing is inferred from text here.
+    """
+    postconditions: list[str] = []
+    state_effects: list[dict[str, Any]] = []
+    data_effects: list[dict[str, Any]] = []
+    compensations: list[str] = []
+    for claim in as_list(fact.get("claims")):
+        if not isinstance(claim, dict) or claim.get("source_backed") is False:
+            continue
+        claim_type = text(claim.get("claim_type")).upper()
+        claim_ref = text(claim.get("claim_id"))
+        value = claim.get("value")
+        if claim_type == "STATE_TRANSITION" and isinstance(value, dict):
+            to_state = text(value.get("to_state") or value.get("to_value"))
+            if not to_state:
+                continue
+            state_effects.append(
+                {
+                    "from_state": text(value.get("from_state") or value.get("from_value")),
+                    "to_state": to_state,
+                    "raw": text(value.get("raw") or value.get("statement")),
+                    "claim_ref": claim_ref,
+                }
+            )
+        elif claim_type == "DATA_EFFECT" and isinstance(value, dict):
+            statement = text(value.get("statement") or value.get("raw"))
+            if not statement:
+                continue
+            objects = [text(row) for row in as_list(claim.get("object_refs")) if text(row)]
+            data_effects.append(
+                {
+                    "statement": statement,
+                    "field": objects[0] if len(objects) == 1 else "",
+                    "object": text(value.get("entity")),
+                    "claim_ref": claim_ref,
+                }
+            )
+        elif claim_type == "POSTCONDITION":
+            statement = (
+                text(value.get("statement") or value.get("raw"))
+                if isinstance(value, dict)
+                else text(value)
+            )
+            if statement:
+                postconditions.append(statement)
+        elif claim_type == "COMPENSATION":
+            statement = (
+                text(value.get("statement") or value.get("raw"))
+                if isinstance(value, dict)
+                else text(value)
+            )
+            if statement:
+                compensations.append(statement)
+    return unique_text(postconditions), state_effects, data_effects, unique_text(compensations)
+
+
+def _merge_effect_rows(
+    existing: list[dict[str, Any]], added: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in [*existing, *added]:
+        if not isinstance(row, dict):
+            continue
+        key = (
+            text(row.get("raw") or row.get("statement")),
+            text(row.get("to_state")),
+            text(row.get("field")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(dict(row))
+    return merged
+
+
 def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
     if text(fact.get("status")) != "ACCEPTED":
         return None
@@ -511,12 +598,25 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         combinator = "UNRESOLVED"
     elif len(conditions) <= 1:
         combinator = "SINGLE_CONDITION" if conditions else ""
-    state_effects = [dict(row) for row in as_list(fact.get("state_effects")) if isinstance(row, dict)]
-    data_effects = [
-        dict(row) if isinstance(row, dict) else {"statement": text(row)}
-        for row in as_list(fact.get("data_effects"))
-        if text(row.get("statement") if isinstance(row, dict) else row)
-    ]
+    (
+        claim_postconditions,
+        claim_state_effects,
+        claim_data_effects,
+        claim_compensations,
+    ) = _fact_claim_effects(fact)
+    state_effects = _merge_effect_rows(
+        [dict(row) for row in as_list(fact.get("state_effects")) if isinstance(row, dict)],
+        claim_state_effects,
+    )
+    data_effects = _merge_effect_rows(
+        [
+            dict(row) if isinstance(row, dict) else {"statement": text(row)}
+            for row in as_list(fact.get("data_effects"))
+            if text(row.get("statement") if isinstance(row, dict) else row)
+        ],
+        claim_data_effects,
+    )
+    postconditions = unique_text([*as_list(fact.get("postconditions")), *claim_postconditions])
     authorization = resolve_fact_authorization(fact)
     permission_decision = text(authorization.get("decision")) or "UNSPECIFIED"
     authorization_unresolved = (
@@ -551,7 +651,7 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         ],
         "expected_effects": unique_text(
             [
-                *as_list(fact.get("postconditions")),
+                *postconditions,
                 *[row.get("statement") for row in data_effects],
             ]
         ),
@@ -575,6 +675,7 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
             [
                 *as_list(fact.get("compensations")),
                 *as_list(fact.get("compensation")),
+                *claim_compensations,
             ]
         ),
         "evidence": evidence,
