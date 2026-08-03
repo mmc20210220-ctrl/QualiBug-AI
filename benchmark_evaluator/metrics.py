@@ -62,7 +62,7 @@ def compute_metrics(truth: list[dict], discovered: list[dict], matches: list[dic
         entry["recall"] = round(entry["detected"] / entry["total"], 4) if entry["total"] else 0.0
 
     # ── Evidence-strength-weighted recall ───────────────────────────────
-    # Weights align with agent_discovery_loop.py EVIDENCE_WEIGHT constants:
+    # Weights follow the evidence-strength convention:
     #   runtime_strong: 0.96, runtime_observed: 0.78, schema_grounded: 0.55,
     #   contract_inferred: 0.45, static_inferred: 0.30, llm_inferred: 0.10
     evidence_weights = {

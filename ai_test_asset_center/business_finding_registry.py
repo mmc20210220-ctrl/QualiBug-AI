@@ -183,65 +183,6 @@ def validate_and_register_findings(
     }
 
 
-def register_in_ledger(
-    registry_result: dict[str, Any],
-    *,
-    project_id: str = "real_project_demo",
-    root: Path | None = None,
-) -> int:
-    """Write VALIDATED_CANDIDATE findings into the canonical ledger for Human Review.
-
-    Does NOT auto-confirm. Writes with state=VALIDATED_CANDIDATE.
-    Returns number of findings registered.
-    """
-    try:
-        from .agent_discovery_loop import _paths as _ledger_paths, _connect as _ledger_connect
-        from contextlib import closing
-        import hashlib, json
-
-        if root is None:
-            from .real_project_onboarding import ROOT
-            root = ROOT
-
-        paths = _ledger_paths(project_id, root)
-        with closing(_ledger_connect(paths["ledger"])) as conn:
-            count = 0
-            for f in registry_result.get("validated_candidates", []):
-                item_id = f.get("finding_id", f"FND_{hashlib.sha256(json.dumps(f, default=str).encode()).hexdigest()[:16]}")
-                title = f.get("title", "")[:200]
-                severity = str(f.get("violated_invariant", {}).get("kind") or "P2")
-                if severity not in ("P0", "P1", "P2", "P3"):
-                    severity = "P2"
-
-                conn.execute(
-                    """INSERT OR REPLACE INTO loop_items
-                       (item_id, project_id, item_type, title, source, source_ref,
-                        oracle_family, risk_type, severity, state, execution_policy,
-                        safety_status, human_review_state, information_gain, priority_score,
-                        evidence_strength, root_cause_cluster, payload_json, evidence_json,
-                        created_at_utc, updated_at_utc)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        item_id, project_id, "VALIDATED_CANDIDATE", title,
-                        "phase83b_adversarial_validator", f.get("hypothesis_id", ""),
-                        (f.get("violated_invariant") or {}).get("kind", ""),
-                        f.get("root_cause_candidate", "")[:120], severity,
-                        "VALIDATED_CANDIDATE", "human_review_required",
-                        "safe", "PENDING_HUMAN_REVIEW",
-                        0.85, 0.85, "adversarial_validated",
-                        f.get("root_cause_candidate", "")[:200],
-                        json.dumps(f, ensure_ascii=False, default=str),
-                        json.dumps(f.get("adversarial_validation", {}), ensure_ascii=False),
-                        _now(), _now(),
-                    ),
-                )
-                count += 1
-            conn.commit()
-        return count
-    except Exception:
-        return 0
-
-
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:

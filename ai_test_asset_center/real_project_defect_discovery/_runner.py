@@ -1169,25 +1169,6 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         "enterprise_testops_environment_problem_count": ((defect_quality_report or {}).get("summary") or {}).get("environment_problem_count", 0),
         "enterprise_testops_duplicate_compression_rate": ((defect_quality_report or {}).get("summary") or {}).get("duplicate_compression_rate", 0.0),
     })
-    # Phase74: the Agent Loop is the single persistent control plane for
-    # unexplored business hypotheses, evidence, approval blockers and next
-    # experiments.  Discovery candidates are synchronized as candidates only;
-    # no report issue becomes a confirmed Bug merely by entering the ledger.
-    try:
-        agent_loop = build_agent_discovery_loop(
-            project,
-            root,
-            {"candidate_findings": issues, "max_next_actions": 12, "actor": "real_project_discovery"},
-        )
-    except Exception as exc:
-        agent_loop = {"status": "unavailable", "error": str(exc)}
-    data["agent_discovery_loop"] = {
-        "summary": (agent_loop or {}).get("summary", {}),
-        "canonical_store": (agent_loop or {}).get("canonical_store", {}),
-        "next_best_actions": (agent_loop or {}).get("next_best_actions", []),
-        "governance": (agent_loop or {}).get("governance", {}),
-        "status": (agent_loop or {}).get("status", "ready"),
-    }
     # Phase90: record normalized candidate outcomes for future coverage-aware
     # planning. Raw issues remain candidates; no entry is promoted here.
     try:

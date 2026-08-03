@@ -112,7 +112,7 @@ DEFECT_FAMILIES: dict[str, dict[str, Any]] = {
         "display_name": "稳定性 Bug",
         "bug_examples": ["间歇性失败", "超时", "重试风暴", "状态抖动"],
         "discovery_mode": "runtime_first",
-        "probe_sources": ["performance_stability_adapter", "agent_discovery_loop", "loop_watchdog"],
+        "probe_sources": ["performance_stability_adapter", "loop_watchdog"],
         "required_evidence": ["repeat_execution", "error_pattern", "runtime_context"],
         "allowed_execution_modes": ["plan_only", "api_probe", "runtime_signal"],
         "dedupe_keys": ["family_id", "path", "method", "error_signature"],
