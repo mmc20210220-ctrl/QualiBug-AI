@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
+from .scan_post_hooks import register_scan_post_hook
+
+HOOK_NAME = "bug_risk_scoring"
 
 SEVERITY_ORDER = ("P0", "P1", "P2", "P3")
 
@@ -128,3 +132,48 @@ def build_bug_risk_report(findings: list[dict[str, Any]]) -> dict[str, Any]:
         "highest_risk_finding": highest,
         "findings": enriched,
     }
+
+
+def attach_bug_risk(
+    scan_result: dict[str, Any],
+    *,
+    project: str,
+    root: Path,
+) -> dict[str, Any]:
+    """Score every finding carrier with risk/severity metadata.
+
+    Scoring is additive per finding; the aggregate report is projected onto the
+    scan result without changing finding status.
+    """
+    if not isinstance(scan_result, dict):
+        return scan_result
+    findings: list[dict[str, Any]] = []
+    for key in (
+        "real_findings",
+        "bug_scores",
+        "db_findings",
+        "e2e_findings",
+        "deep_findings",
+        "ui_findings",
+    ):
+        items = scan_result.get(key)
+        if not isinstance(items, list):
+            continue
+        scored: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                scored.append(item)
+                continue
+            try:
+                scored.append(enrich_bug_with_risk(item))
+            except Exception:
+                scored.append(item)
+        scan_result[key] = scored
+        findings.extend(item for item in scored if isinstance(item, dict))
+    if findings:
+        scan_result["bug_risk_report"] = build_bug_risk_report(findings)
+    return scan_result
+
+
+def install_bug_risk() -> None:
+    register_scan_post_hook(HOOK_NAME, attach_bug_risk)

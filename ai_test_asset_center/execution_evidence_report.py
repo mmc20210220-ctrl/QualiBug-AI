@@ -8,7 +8,12 @@ signals such as status codes, requests, responses, errors, or probe evidence.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+from .scan_post_hooks import register_scan_post_hook
+
+HOOK_NAME = "execution_evidence_report"
 
 EVIDENCE_KEYS = {
     "request",
@@ -141,3 +146,42 @@ def build_execution_evidence_report(
         "per_engine_evidence_backed_ratio": per_engine_ratio,
         "engines_with_no_evidence_backed_output": no_evidence_engines,
     }
+
+
+def attach_execution_evidence_report(
+    scan_result: dict[str, Any],
+    *,
+    project: str,
+    root: Path,
+) -> dict[str, Any]:
+    """Measure whether the scan's verification outputs carry runtime evidence.
+
+    The finding carriers on the scan result are treated as verification items;
+    evidence-backed ratios are projected without altering any finding.
+    """
+    if not isinstance(scan_result, dict):
+        return scan_result
+    carriers = [
+        key
+        for key in (
+            "real_findings",
+            "bug_scores",
+            "db_findings",
+            "e2e_findings",
+            "deep_findings",
+            "ui_findings",
+        )
+        if isinstance(scan_result.get(key), list)
+    ]
+    verification_items = {key: scan_result[key] for key in carriers}
+    if not verification_items:
+        verification_items = []
+    scan_result["execution_evidence_report"] = build_execution_evidence_report(
+        verification_items,
+        engine_names=carriers or None,
+    )
+    return scan_result
+
+
+def install_execution_evidence_report() -> None:
+    register_scan_post_hook(HOOK_NAME, attach_execution_evidence_report)

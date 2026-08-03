@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from .formal_stability_surface import OBSERVER_ID, RISK_FAMILY
+from .scan_post_hooks import register_scan_post_hook
+
+HOOK_NAME = "formal_stability_loss"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -157,3 +161,23 @@ def attach_formal_stability_loss_funnel(result: dict[str, Any], discovery_funnel
 
 
 __all__ = ["attach_formal_stability_loss_funnel", "build_formal_stability_loss_funnel"]
+
+
+def attach_formal_stability_loss_hook(
+    scan_result: dict[str, Any],
+    *,
+    project: str,
+    root: Path,
+) -> dict[str, Any]:
+    """Project short-window stability losses onto the scan's discovery funnel."""
+    if not isinstance(scan_result, dict):
+        return scan_result
+    funnel = scan_result.get("discovery_funnel")
+    if not isinstance(funnel, dict):
+        return scan_result
+    scan_result["discovery_funnel"] = attach_formal_stability_loss_funnel(scan_result, funnel)
+    return scan_result
+
+
+def install_formal_stability_loss() -> None:
+    register_scan_post_hook(HOOK_NAME, attach_formal_stability_loss_hook)

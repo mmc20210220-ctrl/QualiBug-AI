@@ -17,6 +17,30 @@ _BUILTIN_HOOK_INSTALLERS: tuple[tuple[str, str], ...] = (
         "ai_test_asset_center.job_formal_planning_proof",
         "install_job_formal_planning_proof",
     ),
+    (
+        "ai_test_asset_center.validation_summary",
+        "install_validation_summary",
+    ),
+    (
+        "ai_test_asset_center.execution_evidence_report",
+        "install_execution_evidence_report",
+    ),
+    (
+        "ai_test_asset_center.performance_baseline",
+        "install_performance_baseline",
+    ),
+    (
+        "ai_test_asset_center.discovery_stability_loss_projection",
+        "install_formal_stability_loss",
+    ),
+    (
+        "ai_test_asset_center.behavior_semantic_mapper",
+        "install_behavior_semantics",
+    ),
+    (
+        "ai_test_asset_center.bug_risk_scoring",
+        "install_bug_risk",
+    ),
 )
 
 

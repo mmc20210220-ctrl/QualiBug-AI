@@ -15,6 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .scan_post_hooks import register_scan_post_hook
+
+HOOK_NAME = "performance_baseline"
+
 
 @dataclass
 class PerfMetrics:
@@ -289,3 +293,28 @@ if __name__ == "__main__":
     import shutil
     shutil.rmtree(root, ignore_errors=True)
     print("\nAll tests passed!")
+
+
+def attach_performance_baseline(
+    scan_result: dict[str, Any],
+    *,
+    project: str,
+    root: Path,
+) -> dict[str, Any]:
+    """Record the scan's performance metrics against the project baseline.
+
+    Missing performance keys stay at PerfMetrics defaults; the projection never
+    invents measurements that were not observed.
+    """
+    if not isinstance(scan_result, dict):
+        return scan_result
+    metrics = PerfMetrics.from_dict(scan_result)
+    if not metrics.scan_id:
+        return scan_result
+    baseline = PerformanceBaseline(project, root)
+    scan_result["performance_baseline"] = baseline.record(metrics)
+    return scan_result
+
+
+def install_performance_baseline() -> None:
+    register_scan_post_hook(HOOK_NAME, attach_performance_baseline)

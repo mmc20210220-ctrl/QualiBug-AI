@@ -7,7 +7,12 @@ boundary: discover, prove, report, and regression validate.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+from .scan_post_hooks import register_scan_post_hook
+
+HOOK_NAME = "validation_summary"
 
 SUMMARY_SECTION_KEYS = (
     "behavior_registry",
@@ -16,6 +21,32 @@ SUMMARY_SECTION_KEYS = (
     "behavior_traceability",
     "behavior_coverage",
 )
+
+
+def attach_validation_summary(
+    scan_result: dict[str, Any],
+    *,
+    project: str,
+    root: Path,
+) -> dict[str, Any]:
+    """Project an executive validation summary onto the scan result.
+
+    Only report sections that actually exist in the result contribute; missing
+    sections stay visibly absent instead of being invented.
+    """
+    if not isinstance(scan_result, dict):
+        return scan_result
+    reports = {
+        key: scan_result[key]
+        for key in SUMMARY_SECTION_KEYS
+        if isinstance(scan_result.get(key), dict)
+    }
+    scan_result["validation_summary"] = build_validation_summary_report(reports)
+    return scan_result
+
+
+def install_validation_summary() -> None:
+    register_scan_post_hook(HOOK_NAME, attach_validation_summary)
 
 
 def _as_number(value: Any) -> float:

@@ -8,7 +8,21 @@ Integrated into the discovery pipeline after finding generation.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
+
+from .scan_post_hooks import register_scan_post_hook
+
+HOOK_NAME = "behavior_semantic_mapper"
+
+FINDING_CARRIER_KEYS = (
+    "real_findings",
+    "bug_scores",
+    "db_findings",
+    "e2e_findings",
+    "deep_findings",
+    "ui_findings",
+)
 
 # ── Trace ID detection ─────────────────────────────────────
 # Trace header name varies by company. Scan known patterns,
@@ -357,3 +371,37 @@ def _guess_trace_header_name(headers: dict[str, str]) -> str:
             if re.match(pattern, key):
                 return key
     return ""
+
+
+def attach_behavior_semantics(
+    scan_result: dict[str, Any],
+    *,
+    project: str,
+    root: Path,
+) -> dict[str, Any]:
+    """Enrich every finding carrier with business-facing metadata.
+
+    Enrichment mutates finding dicts in place and stays additive: no finding is
+    dropped, reclassified, or promoted by this projection.
+    """
+    if not isinstance(scan_result, dict):
+        return scan_result
+    for key in FINDING_CARRIER_KEYS:
+        items = scan_result.get(key)
+        if not isinstance(items, list):
+            continue
+        enriched: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                enriched.append(item)
+                continue
+            try:
+                enriched.append(enrich_finding(item))
+            except Exception:
+                enriched.append(item)
+        scan_result[key] = enriched
+    return scan_result
+
+
+def install_behavior_semantics() -> None:
+    register_scan_post_hook(HOOK_NAME, attach_behavior_semantics)
