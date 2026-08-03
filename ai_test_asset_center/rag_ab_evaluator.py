@@ -30,7 +30,7 @@ DEFAULT_DEFECT_PROBES = Path("platform_workspace/enterprise_shop/defect_discover
 
 DEPRECATED_STATUS = {
     "status": "deprecated_offline_producer",
-    "reason": "No current Hot Path imports this module directly; rag_quality_gate still consumes its rag_ab_scorecard artifact.",
+    "reason": "No current Hot Path imports this module directly; its scorecard artifact is a benchmark-only input.",
     "next_action": "Either reconnect run_rag_ab_evaluation through a benchmark command with tests or fold it into the active quality gate.",
 }
 

@@ -861,13 +861,7 @@ def _verify_write_observation(probe: dict[str, Any], responses: list[dict[str, A
     summary = _safe_payload_summary(payload)
     sensitive_keys = _find_sensitive_keys(payload)
     negative_values = _find_negative_resource_values(payload)
-    invariant_eval: dict[str, Any] = {}
-    try:
-        from .business_invariant_before_after import evaluate_business_invariants_before_after
-
-        invariant_eval = evaluate_business_invariants_before_after(probe, responses, snapshots)
-    except Exception as exc:  # pragma: no cover - defensive runtime guard
-        invariant_eval = {"verdict": "inconclusive", "reason": f"before_after_invariant_evaluator_error:{type(exc).__name__}:{exc}", "checked_count": 0}
+    invariant_eval: dict[str, Any] = {}  # retired stub always returned {}
     db_snapshot = snapshots.get("db") if isinstance(snapshots.get("db"), dict) else {}
     db_diffs = [item for item in (db_snapshot.get("diffs") or []) if isinstance(item, dict)]
     db_anomalies = [item for item in db_diffs if item.get("added_rows") or item.get("removed_rows") or item.get("modified_rows")]
@@ -1458,13 +1452,7 @@ def _verify_concurrency_observation(probe: dict[str, Any], responses: list[dict[
     plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
     if plan.get("strategy") != "concurrency_race_runtime_probe":
         return None
-    invariant_eval: dict[str, Any] = {}
-    try:
-        from .business_invariant_before_after import evaluate_business_invariants_before_after
-
-        invariant_eval = evaluate_business_invariants_before_after(probe, responses, snapshots)
-    except Exception as exc:  # pragma: no cover
-        invariant_eval = {"verdict": "inconclusive", "reason": f"before_after_invariant_evaluator_error:{type(exc).__name__}:{exc}"}
+    invariant_eval: dict[str, Any] = {}  # retired stub always returned {}
     if invariant_eval.get("verdict") == "failed":
         return {
             "verdict": "validated_candidate",
@@ -1690,13 +1678,7 @@ def _execute_flow_probe(probe: dict[str, Any], decision: ProbeDecision, config: 
 def _verify_flow_observation(probe: dict[str, Any], responses: list[dict[str, Any]], snapshots: dict[str, Any]) -> dict[str, Any]:
     plan = probe.get("probe_plan") if isinstance(probe.get("probe_plan"), dict) else {}
     scenario = plan.get("flow_scenario") if isinstance(plan.get("flow_scenario"), dict) else {}
-    invariant_eval: dict[str, Any] = {}
-    try:
-        from .business_invariant_before_after import evaluate_business_invariants_before_after
-
-        invariant_eval = evaluate_business_invariants_before_after(probe, responses, snapshots)
-    except Exception as exc:  # pragma: no cover
-        invariant_eval = {"verdict": "inconclusive", "reason": f"before_after_invariant_evaluator_error:{type(exc).__name__}:{exc}"}
+    invariant_eval: dict[str, Any] = {}  # retired stub always returned {}
     db_evidence = _db_evidence_from_snapshots(probe, snapshots)
     before_after_snapshot = _flow_before_after_snapshot(responses)
     payload_summary = _safe_payload_summary([r.get("payload") for r in responses])

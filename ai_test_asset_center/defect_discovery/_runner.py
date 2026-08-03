@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from ai_test_asset_center.adaptive_probe_optimizer import build_learned_probe_policy
-from ai_test_asset_center.rag_probe_generator import generate_rag_enhanced_probes, summarize_rag_probes
 
 from ._common import *  # noqa: F401,F403
 from ._model import *  # noqa: F401,F403
@@ -141,7 +140,6 @@ class DefectDiscoveryRunner:
         write_json(self.workspace / "oracle_gap_probes.json", {"count": sum(1 for p in probes if p.get("source") == "oracle_gap"), "items": [p for p in probes if p.get("source") == "oracle_gap"]})
         write_json(self.workspace / "feedback_learning_probes.json", {"count": sum(1 for p in probes if p.get("source") == "feedback_learning"), "items": [p for p in probes if p.get("source") == "feedback_learning"]})
         write_json(self.workspace / "adaptive_policy_probes.json", {"count": sum(1 for p in probes if p.get("source") == "adaptive_policy"), "items": [p for p in probes if p.get("source") == "adaptive_policy"]})
-        write_json(self.workspace / "rag_enhanced_probes.json", {"count": sum(1 for p in probes if p.get("source") == "rag_enhanced"), "items": [p for p in probes if p.get("source") == "rag_enhanced"], "summary": summarize_rag_probes(probes)})
         write_json(self.workspace / "probe_generation_strategy.json", probe_strategy)
         client = HttpClient(sut_config["base_url"])
         execution = self.execute_probes(client, accounts, probes)

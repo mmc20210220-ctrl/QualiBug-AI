@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from ai_test_asset_center.adaptive_probe_optimizer import build_learned_probe_policy
-from ai_test_asset_center.rag_probe_generator import generate_rag_enhanced_probes, summarize_rag_probes
 
 from ._common import *  # noqa: F401,F403
 from ._model import *  # noqa: F401,F403
@@ -257,9 +256,8 @@ def generate_defect_probes(invariants: list[dict], business_model: dict | None =
     feedback_learning = generate_feedback_learning_probes(model)
     adaptive_policy = generate_adaptive_policy_probes(model)
     feedback_adjusted = generate_feedback_adjusted_policy_probes(model)
-    rag_enhanced = generate_rag_enhanced_probes(model, prd=model.get("_source_prd", ""))
     journeys = generate_journey_defect_probes(model)
-    combined = [*generic, *pattern_library, *business_knowledge, *business_adaptation, *high_value_memory, *risk_learning_profile, *high_value_attack_plan, *capability_gap, *oracle_gap, *feedback_learning, *adaptive_policy, *feedback_adjusted, *rag_enhanced, *journeys]
+    combined = [*generic, *pattern_library, *business_knowledge, *business_adaptation, *high_value_memory, *risk_learning_profile, *high_value_attack_plan, *capability_gap, *oracle_gap, *feedback_learning, *adaptive_policy, *feedback_adjusted, *journeys]
     combined = _attach_source_request_contracts(combined, model)
     combined = upgrade_high_value_oracle_probes(combined, model)
     combined = filter_probes_by_policy(combined, policy_profile, mode)
