@@ -316,6 +316,36 @@ for _state_dir in (
         shutil.rmtree(_state_dir, ignore_errors=True)
         print(f"RESET: removed {_state_dir}")
 
+# ── Learning-ablation warm start (explicit, receipted) ──────────────────────
+# For closed-loop learning A/B studies the evaluator may restore a frozen
+# snapshot of the project's SQLite knowledge base AFTER the state wipe and
+# BEFORE the scan, so the warm arm consumes exactly the prior-round learned
+# knowledge while the cold arm stays memoryless. Unset ⇒ pure cold start.
+_KB_SNAPSHOT = os.environ.get("QUALIBUG_LEARNING_KB_SNAPSHOT_PATH", "").strip()
+if _KB_SNAPSHOT:
+    _kb_src = Path(_KB_SNAPSHOT)
+    if not _kb_src.is_file():
+        raise SystemExit(
+            f"QUALIBUG_LEARNING_KB_SNAPSHOT_PATH does not exist: {_kb_src}"
+        )
+    _kb_dst = ROOT / "platform_outputs" / PROJECT / "knowledge.db"
+    _kb_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(_kb_src, _kb_dst)
+    import sqlite3 as _sqlite3
+
+    _kb_conn = _sqlite3.connect(str(_kb_dst))
+    try:
+        _kb_entry_count = int(_kb_conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0])
+    finally:
+        _kb_conn.close()
+    print(
+        "LEARNING_KB_RESTORED: snapshot=" + str(_kb_src)
+        + f" entries={_kb_entry_count} purpose=warm_start_ablation",
+        flush=True,
+    )
+else:
+    print("LEARNING_KB_RESTORED: none (cold start)", flush=True)
+
 api_doc_text = (INPUT / "API_SPEC.md").read_text(encoding="utf-8")
 source_hash = hashlib.sha256(api_doc_text.encode("utf-8")).hexdigest()
 

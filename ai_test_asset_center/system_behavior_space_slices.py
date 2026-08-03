@@ -102,7 +102,7 @@ def _system_behavior_slices(space: dict[str, Any]) -> list[dict[str, Any]]:
             "states": [f"system_promise:{dimension}" for dimension in dimensions[:6]],
             "endpoints": endpoints,
             "priority": max(float(probe.get("priority") or 0.0), float(promise.get("confidence") or 0.0)),
-            "source_refs": [{"source_type": "system_behavior_space", "locator": promise_id, "quote": invariant[:500]}],
+            "source_refs": [{"kind": "system_behavior_space", "source_type": "system_behavior_space", "locator": promise_id, "quote": invariant[:500]}],
             "evidence_gaps": evidence_gaps,
             "status": "pending",
             "_selection_family": dimensions[0] if dimensions else "system_promise",

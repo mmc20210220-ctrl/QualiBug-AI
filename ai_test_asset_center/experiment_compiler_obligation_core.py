@@ -2503,8 +2503,24 @@ def compile_experiment_for_obligation(
                 else "source_operation_effect"
             ),
         },
-        source_refs=list(obl.get("source_refs") or [])[:5] or [
-            {"id": oid, "type": "obligation", "locator": primary_op_id or ""}
+        source_refs=[
+            ref for ref in _list(obl.get("source_refs"))
+            if isinstance(ref, dict)
+            and _text(ref.get("kind") or ref.get("type") or ref.get("source_type"))
+            and _text(
+                ref.get("locator")
+                or ref.get("source_locator")
+                or ref.get("path")
+                or ref.get("ref")
+            )
+        ][:5] or [
+            # Canonical defect-registry projection requires kind+locator on every
+            # source ref. Industry-inferred IR nodes can carry refs with empty
+            # locators (ungrounded); those are filtered above so an ungrounded
+            # ref can never define canonical defect identity. When no grounded
+            # ref survives, the fallback must satisfy the same contract, so the
+            # locator must never be empty.
+            {"id": oid, "kind": "obligation", "type": "obligation", "locator": primary_op_id or oid}
         ],
         source_identity_fields=source_identity_fields_for_operation(primary_op, ir),
         compile_receipt={

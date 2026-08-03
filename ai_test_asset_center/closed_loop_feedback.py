@@ -32,12 +32,17 @@ def load_learned_scan_context(project: str, *, limit: int = 20) -> dict:
 
 
 def build_closed_loop_context(
-    project: str, root: Path, findings: list[dict], *, max_patterns: int = 20
+    project: str, root: Path, findings: list[dict], *, max_patterns: int = 20,
+    consumed_context: dict | None = None,
 ) -> dict[str, Any]:
-    """Build domain expansion context + pattern-based mutation hints.
-    
+    """Write side of the closed loop: extract patterns, reinforce / decay.
+
     V12.3: Stores patterns in SQLite knowledge base via LearningPatternBridge
     for enterprise-grade storage and cross-round knowledge transfer.
+
+    ``consumed_context`` is the learned_knowledge payload loaded at scan
+    start (same data the planning/reasoner stages consumed). Passing it
+    avoids a second usage-recording load; when omitted it is loaded here.
     """
     pool_dir = root / "platform_outputs" / project / "closed_loop"
     pool_dir.mkdir(parents=True, exist_ok=True)
@@ -54,9 +59,11 @@ def build_closed_loop_context(
     confirmed = [f for f in findings if is_customer_deliverable_defect(f)]
     
     new_patterns = 0
+    confirmed_this_scan_keys: set[str] = set()
     for f in confirmed:
         pattern = _extract_pattern(f)
         key = pattern["signature"]
+        confirmed_this_scan_keys.add(key)
         if key not in history["patterns"]:
             history["patterns"][key] = {"pattern": pattern, "count": 1, "first_seen": now, "last_seen": now}
             new_patterns += 1
@@ -68,18 +75,12 @@ def build_closed_loop_context(
     history["updated_at_utc"] = now
     patterns_file.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # Generate mutation hints for next scan
-    top = sorted(history["patterns"].values(), key=lambda p: p["count"], reverse=True)[:max_patterns]
-    mutations = []
-    for p in top:
-        pat = p["pattern"]
-        mutations.append({
-            "pattern": pat["type"],
-            "entity": pat["entity"],
-            "count": p["count"],
-            "mutation_hint": pat.get("mutation", ""),
-        })
-    
+    # Generate learned probes is intentionally NOT part of this module anymore:
+    # the mainline consumes learned knowledge as a bounded ranking boost
+    # (learning_knowledge_consumption.py), and learned_probes.json had no
+    # mainline consumer (dead artifact, removed). Probes stay generated only
+    # by the governed learning pipeline in AutoLearningTrigger.
+
     # Store patterns in SQLite knowledge base.
     # NOTE: bridge keys entries by "signature"; mutations dicts have no unique
     # signature, so build signature-qualified pattern dicts from history to
@@ -95,58 +96,67 @@ def build_closed_loop_context(
             "count": record.get("count", 1),
         })
     bridge = LearningPatternBridge(project=project)
-    stored_count = bridge.store_patterns(sqlite_patterns, scan_id="current_scan", confidence=0.85)
-    
-    # Migrate legacy patterns to SQLite if needed
-    migrated_count = bridge.migrate_legacy_patterns_to_sqlite()
+
+    # The consumed payload this scan's planning/reasoner stages operated on.
+    if isinstance(consumed_context, dict):
+        _consumed_payload = consumed_context
+    else:
+        _consumed_payload = load_learned_scan_context(project)
+    consumed_entries = [
+        p for p in _consumed_payload.get("learned_patterns", []) if isinstance(p, dict)
+    ]
+    consumed_keys = {str(p.get("_key") or "") for p in consumed_entries}
+    consumed_confidence = {
+        str(p.get("_key") or ""): float(p.get("_confidence") or 0.0)
+        for p in consumed_entries
+    }
+
+    # Reinforcement semantics: signatures confirmed THIS scan are reinforced
+    # (0.95); every other stored signature keeps its current (possibly already
+    # decayed) confidence. store() keeps max(new, existing), so passing the
+    # current value is a no-op that protects prior decay from resurrection.
+    confidence_map: dict[str, float] = {}
+    for key in history["patterns"]:
+        if key in confirmed_this_scan_keys:
+            confidence_map[key] = 0.95
+        elif key in consumed_confidence:
+            confidence_map[key] = consumed_confidence[key]
+    stored_count = bridge.store_patterns(
+        sqlite_patterns, scan_id="current_scan", confidence=0.8,
+        confidence_map=confidence_map,
+    )
+
+    # Negative feedback (honest form): the runtime has no false-positive
+    # labels — FP truth is evaluator-private — so the legitimate negative
+    # signal is non-reinforcement: patterns consumed in a scan that produced
+    # no confirmed defect of that signature lose a bounded slice of
+    # confidence. They are never deleted and the floor keeps them testable.
+    stale_keys = sorted(
+        k for k in consumed_keys if k and k not in confirmed_this_scan_keys
+    )
+    decayed_count = bridge.kb.adjust_confidence(
+        "risk_pattern", stale_keys, 0.95, floor=0.05
+    ) if stale_keys else 0
+
+    # Migrate legacy patterns to SQLite once; the flag stops the per-scan
+    # re-migration that used to rewrite every legacy entry each round.
+    migrated_count = 0
+    if not history.get("sqlite_migrated"):
+        migrated_count = bridge.migrate_legacy_patterns_to_sqlite()
+        history["sqlite_migrated"] = True
+        history["updated_at_utc"] = now
+        patterns_file.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return {
         "total_patterns": len(history["patterns"]),
         "new_this_scan": new_patterns,
-        "mutations": mutations,
-        "generated_probes": _generate_learning_probes(findings, project, root),
         "sqlite_storage": {
             "patterns_stored": stored_count,
             "legacy_migrated": migrated_count,
+            "non_reinforced_decayed": decayed_count,
             "storage_type": "SQLite_enterprise"
         }
     }
-
-
-def _generate_learning_probes(
-    findings: list[dict], project: str, root
-) -> list[dict[str, Any]]:
-    """Generate new probes from confirmed bugs using the LearningGenerator.
-
-    This wires the formerly-unused mutation hints into actual probe generation,
-    proving that learning is NOT just re-sorting — it creates new artifacts.
-    """
-    from .learning_generator import LearningGenerator
-
-    confirmed = [f for f in findings if is_customer_deliverable_defect(f)]
-    if not confirmed:
-        return []
-
-    # Build minimal context from findings
-    entities: list[str] = []
-    endpoints: list[dict[str, str]] = []
-    seen_paths: set[str] = set()
-    for f in confirmed:
-        method_val, path_val, _entity = _finding_operation(f)
-        if path_val and method_val:
-            key = f"{method_val}:{path_val}"
-            if key not in seen_paths:
-                seen_paths.add(key)
-                endpoints.append({"method": method_val, "path": path_val})
-        parts = [p for p in path_val.strip("/").split("/") if p and not p.startswith("{")]
-        for p in parts:
-            if p.lower() not in ("api", "v1", "v2", "v3") and p not in entities:
-                entities.append(p)
-
-    context = {"entities": entities[:20], "endpoints": endpoints[:50], "roles": []}
-    generator = LearningGenerator(project_context=context)
-    manifest = generator.generate_from_confirmed_bugs(confirmed)
-    return generator.manifest_to_dict(manifest).get("generated_probes", [])
 
 
 def _finding_operation(finding: dict[str, Any]) -> tuple[str, str, str]:
@@ -171,40 +181,33 @@ def _finding_operation(finding: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def _extract_pattern(finding: dict) -> dict:
-    """Extract a reusable bug pattern from a confirmed finding."""
-    title = str(finding.get("title", ""))
-    category = str(finding.get("category", ""))
+    """Extract a reusable bug pattern from a confirmed finding.
+
+    Open taxonomy: the pattern type is the finding's own observed
+    classification (category/risk_family), carried as data. There is no
+    closed keyword-mapped type list and no coercion into a default bucket —
+    unknown classes stay visible as "uncategorized:<category>" so new bug
+    kinds extend the space instead of being silently relabelled.
+    Mutation hints are never fabricated: only a source-declared hint on the
+    finding itself is carried through; otherwise the field stays empty.
+    """
+    category = str(finding.get("category", "")).strip()
+    risk_family = str(finding.get("risk_family", "")).strip()
     method, path, entity = _finding_operation(finding)
-    oracle = finding.get("oracle", {})
-    
-    # Map to pattern type
-    pattern_type = "state_violation"
-    if "permission" in category or "acces" in category.lower():
-        pattern_type = "permission_bypass"
-    elif "concurrency" in category or "race" in title.lower():
-        pattern_type = "race_condition"
-    elif "money" in category or "amount" in title.lower() or "refund" in title.lower():
-        pattern_type = "money_conservation"
-    elif "idempot" in title.lower():
-        pattern_type = "idempotency"
-    elif "forbidden" in title.lower() or "禁止" in title:
-        pattern_type = "forbidden_transition"
-    
+
+    observed_type = category or risk_family
+    pattern_type = observed_type if observed_type else f"uncategorized:{observed_type or 'unknown'}"
+
     # Build signature for dedup
-    signature = f"{pattern_type}:{category}:{method}:{entity}"
+    signature = f"{pattern_type}:{method}:{entity}"
     signature = signature[:80]
-    
-    # Build mutation hint
-    if pattern_type == "permission_bypass":
-        mutation = f"Try lower-role access on source-declared {entity} endpoints"
-    elif pattern_type == "forbidden_transition":
-        mutation = f"Try all source-declared forbidden transitions on {entity} entity"
-    elif pattern_type == "money_conservation":
-        mutation = "Add negative-amount / zero-amount / duplicate-amount probes"
-    elif pattern_type == "idempotency":
-        mutation = "Double-submit all POST endpoints"
-    else:
-        mutation = "Expand parameter variants for similar endpoints"
-    
+
+    # Only carry an explicitly declared mutation hint; never invent guidance.
+    mutation = str(
+        finding.get("mutation_hint")
+        or (finding.get("oracle", {}) or {}).get("mutation_hint")
+        or ""
+    )
+
     return {"type": pattern_type, "entity": entity,
             "category": category, "method": method, "signature": signature, "mutation": mutation}

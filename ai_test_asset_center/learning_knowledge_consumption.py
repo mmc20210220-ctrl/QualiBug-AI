@@ -24,6 +24,12 @@ _PATH_BOOST_FACTOR = 1.35
 _MIN_CONFIDENCE = 0.1
 _MAX_CONSUMED_PATTERNS = 20
 
+# Comprehension-layer (hypothesis generation) consumption bounds. The learned
+# memory is attention guidance only — it never asserts business rules, bodies,
+# or impact, and every hypothesis still needs source-grounded evidence.
+_MAX_MEMORY_PATTERNS = 8
+_MAX_MEMORY_CHARS = 1200
+
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -152,7 +158,10 @@ def apply_learned_boost(
         elif pattern_type and family and pattern_type == family:
             match_kind = "risk_family"
             kind_factor = _FAMILY_BOOST_FACTOR
-        elif pattern_type and family and pattern_type in family:
+        elif pattern_type and family and (pattern_type in family or family in pattern_type):
+            # Open-taxonomy matching: pattern types are observed labels
+            # (e.g. a finding category) rather than a closed enumeration, so
+            # containment is checked in both directions.
             match_kind = "risk_family"
             kind_factor = _FAMILY_BOOST_FACTOR
         if not match_kind:
@@ -192,3 +201,64 @@ def build_learning_consumption_receipt(
         )[:10],
         "authority": "ranking_boost_only_no_budget_no_compile_change",
     }
+
+
+def build_learned_memory_prompt_block(learned_knowledge: Any) -> tuple[str, dict[str, Any]]:
+    """Render the comprehension-layer prompt block from learned knowledge.
+
+    Returns ``(block_text, receipt)``. The block carries this project's own
+    prior confirmed-defect observation history into hypothesis generation as
+    bounded attention guidance. It never states business rules, request
+    bodies, credentials, or impact claims, and hypotheses must still be
+    source-grounded. Empty or failed payloads yield an empty block with an
+    explicit receipt so consumption stays fail-visible.
+    """
+
+    knowledge = _dict(learned_knowledge)
+    load_failure = _text(knowledge.get("load_failure"))
+    raw_patterns = [
+        item for item in _list(knowledge.get("learned_patterns")) if isinstance(item, dict)
+    ]
+    if load_failure:
+        return "", {"status": "LOAD_FAILED", "load_failure": load_failure, "pattern_count": 0}
+    if not raw_patterns:
+        return "", {"status": "NO_PATTERNS", "load_failure": "", "pattern_count": 0}
+
+    ranked = sorted(
+        raw_patterns,
+        key=lambda item: (
+            int(item.get("_usage_count") or item.get("count") or 0),
+            float(item.get("_confidence") or 0.0),
+        ),
+        reverse=True,
+    )[:_MAX_MEMORY_PATTERNS]
+
+    lines: list[str] = []
+    for item in ranked:
+        pattern_type = _text(item.get("type")) or "uncategorized"
+        entity = _text(item.get("entity")) or "unknown"
+        method = _text(item.get("method"))
+        count = int(item.get("count") or item.get("_usage_count") or 0)
+        parts = [f"type={pattern_type}", f"entity={entity}"]
+        if method:
+            parts.append(f"method={method}")
+        parts.append(f"confirmed_rounds={count}")
+        lines.append("- " + ", ".join(parts))
+
+    block = (
+        "\n\nLEARNED RISK MEMORY (this project's own prior confirmed-defect observation history; "
+        "attention guidance only, not ground truth):\n"
+        + "\n".join(lines)
+        + "\nPrioritize hypotheses about these historically confirmed risk areas and their "
+        "related entities/states. Every hypothesis must still be grounded in the provided "
+        "source materials and system observations; do not assume these defects still exist "
+        "and do not infer request bodies, credentials, or business rules from this memory."
+    )[:_MAX_MEMORY_CHARS]
+
+    receipt = {
+        "status": "CONSUMED",
+        "load_failure": "",
+        "pattern_count": len(lines),
+        "authority": "comprehension_attention_guidance_only",
+    }
+    return block, receipt

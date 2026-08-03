@@ -88,9 +88,17 @@ def _source_ref(
     kind: str,
     fact_ref: Any = "",
 ) -> dict[str, Any]:
+    resolved_locator = _text(locator)
+    if not resolved_locator:
+        # A schema/permission fact carries no document locator when it was
+        # entailed rather than quoted. The fact's own identity (fact_ref) is
+        # still a grounded locator inside the evidence chain — using it keeps
+        # the reference projectable by the canonical defect registry instead
+        # of silently ungrounded. Never invent a locator beyond that.
+        resolved_locator = _text(fact_ref)
     return {
         "source_id": _text(source_id),
-        "source_locator": _text(locator),
+        "source_locator": resolved_locator,
         "kind": kind,
         "fact_ref": _text(fact_ref),
     }

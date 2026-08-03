@@ -93,29 +93,48 @@ class AutoLearningTrigger:
         self.workspace_dir = self.output_dir / "workspace"
         
     def should_trigger(self, current_scan_result: dict) -> tuple[bool, str]:
-        """Check if learning should be triggered based on scan results."""
+        """Check if learning should be triggered based on scan results.
+
+        Signals are evaluated independently with OR semantics: any single
+        strong signal justifies learning. The previous AND-gate required
+        benchmark_metrics.coverage_gain which normal scans do not carry,
+        so the pipeline effectively never ran; each signal now stands alone
+        and the decision reason is explicit and receipt-friendly.
+        """
         benchmark = current_scan_result.get("benchmark_metrics", {})
         summary = current_scan_result.get("high_value_summary", {})
-        
-        # Check minimum bugs threshold
-        confirmed_bugs = summary.get("total_confirmed_bugs", 0)
-        if confirmed_bugs < self.config.min_confirmed_bugs:
-            return False, f"Only {confirmed_bugs} bugs (< {self.config.min_confirmed_bugs})"
-        
-        # Check coverage gain
-        coverage_gain = benchmark.get("coverage_gain", 0.0)
-        if coverage_gain < self.config.min_coverage_gain:
-            return False, f"Coverage gain {coverage_gain:.1%} < {self.config.min_coverage_gain:.1%}"
-        
-        # Enhanced: Also check for other signal types (failed probes, cleanup failures)
+
+        confirmed_bugs = int(summary.get("total_confirmed_bugs", 0) or 0)
+        coverage_gain = float(benchmark.get("coverage_gain", 0.0) or 0.0)
+
         execution = current_scan_result.get("probe_execution_result", [])
-        failed_probes = sum(1 for item in execution if isinstance(item, dict) and item.get("assertion_result") == "failed")
-        
+        failed_probes = sum(
+            1 for item in execution
+            if isinstance(item, dict) and item.get("assertion_result") == "failed"
+        )
+
+        signals: list[str] = []
+        if confirmed_bugs >= self.config.min_confirmed_bugs:
+            signals.append(
+                f"confirmed_bugs={confirmed_bugs}>={self.config.min_confirmed_bugs}"
+            )
+        if coverage_gain >= self.config.min_coverage_gain:
+            signals.append(
+                f"coverage_gain={coverage_gain:.3f}>={self.config.min_coverage_gain:.3f}"
+            )
         if failed_probes > 5:
             # Many failures indicate learning opportunity even with few bugs
-            return True, f"{failed_probes} failed probes detected - high learning potential"
-        
-        return True, f"Thresholds met: {confirmed_bugs} bugs, {failed_probes} failed probes"
+            signals.append(f"failed_probes={failed_probes}>5")
+
+        if signals:
+            return True, "SIGNALS_MET:" + ",".join(signals)
+
+        return False, (
+            "NO_SIGNALS:"
+            f"confirmed_bugs={confirmed_bugs}<{self.config.min_confirmed_bugs},"
+            f"coverage_gain={coverage_gain:.3f}<{self.config.min_coverage_gain:.3f},"
+            f"failed_probes={failed_probes}<=5"
+        )
     
     def execute(self) -> LearningResult:
         """Execute the learning pipeline."""

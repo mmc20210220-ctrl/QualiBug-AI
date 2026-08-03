@@ -49,14 +49,25 @@ class LearningPatternBridge:
         self.pool_dir = Path(_REPO_ROOT) / "platform_outputs" / project / "closed_loop"
         self.patterns_file = self.pool_dir / "bug_patterns.json"
         
-    def store_patterns(self, patterns: list[dict], scan_id: str, 
-                       confidence: float = 0.8) -> int:
+    def store_patterns(
+        self,
+        patterns: list[dict],
+        scan_id: str,
+        confidence: float = 0.8,
+        *,
+        confidence_map: dict[str, float] | None = None,
+    ) -> int:
         """Store learned patterns in SQLite knowledge base.
         
         Args:
             patterns: List of pattern dicts from closed-loop feedback
             scan_id: Current scan identifier
-            confidence: Confidence score for each pattern
+            confidence: Default confidence for each pattern
+            confidence_map: Optional per-signature confidence overrides.
+                Entries present in the map use that value; others use
+                ``confidence``. Callers use this to keep decayed entries
+                decayed (store() otherwise keeps max(new, existing), which
+                would resurrect non-reinforced decay).
             
         Returns:
             Number of patterns stored
@@ -75,13 +86,16 @@ class LearningPatternBridge:
                     "source_scan": scan_id,
                     "stored_at": datetime.now().isoformat()
                 }
+                entry_confidence = float(
+                    (confidence_map or {}).get(str(key), confidence)
+                )
                 
                 # Store in SQLite
                 self.kb.store(
                     category="risk_pattern",
                     key=key,
                     content=content,
-                    confidence=confidence,
+                    confidence=entry_confidence,
                     domains=["web", "api"],  # Default domains
                     expiry_days=365  # Keep for 1 year
                 )
@@ -92,6 +106,12 @@ class LearningPatternBridge:
                 continue
         
         logger.info("Stored %d patterns to SQLite knowledge base", stored_count)
+
+        # Decay scheduling: stale knowledge loses confidence so the pool
+        # stays honest. Propagates on failure (fail-visible upstream).
+        decayed = self.kb.decay_old_knowledge(max_age_days=90)
+        if decayed:
+            logger.info("Decayed %d stale knowledge entries", decayed)
         return stored_count
         
     def get_top_patterns(self, limit: int = 20, min_usage: int = 1) -> list[dict]:
@@ -143,11 +163,17 @@ class LearningPatternBridge:
                 item.setdefault("_usage_count", e.usage_count)
                 patterns.append(item)
 
+            # Usage feedback: patterns loaded for a scan are consumed by the
+            # planning stage, so record the usage here. Failures propagate to
+            # stay visible instead of silently breaking the feedback loop.
+            usage_recorded = self.kb.record_usage([e.entry_id for e in entries])
+
             return {
                 "source": "sqlite_knowledge_base",
                 "project": self.project,
                 "pattern_count": len(patterns),
                 "learned_patterns": patterns,
+                "usage_recorded": usage_recorded,
                 "loaded_at": datetime.now().isoformat(),
             }
         except Exception as e:

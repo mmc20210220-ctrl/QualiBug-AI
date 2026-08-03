@@ -139,7 +139,7 @@ class SemanticScenarioGenerator:
                 confidence=0.5,
                 execution_policy="safe_read_only",
                 evidence_gaps=[],
-                source_refs=[{"source_type": "openapi", "locator": first, "quote": first}],
+                source_refs=[{"kind": "openapi", "source_type": "openapi", "locator": first, "quote": first}],
                 behavior_slice_id=behavior_slice_id("source_observation", entity, ",".join(paths)),
                 behavior_slice_kind="source_observation",
                 discovery_round=discovery_round,

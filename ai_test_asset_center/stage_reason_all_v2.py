@@ -1130,6 +1130,38 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     except Exception:
         pass  # Chunk enrichment is progressive; never blocks reasoning
 
+    # ── Learned risk memory (comprehension layer) ──
+    # Consume this project's own prior confirmed-defect observation history
+    # from the SQLite knowledge base as bounded attention guidance for
+    # hypothesis generation. Requires an explicit project identity; without
+    # it the receipt stays SKIPPED rather than risking cross-project leakage.
+    # Failures never block reasoning but stay visible in the engine report.
+    learned_memory_block = ""
+    learned_memory_receipt: dict = {
+        "status": "SKIPPED", "reason": "project_not_set", "pattern_count": 0
+    }
+    try:
+        _lm_project = os.environ.get("QUALIBUG_PROJECT", "").strip()
+        if _lm_project:
+            from .closed_loop_feedback import load_learned_scan_context
+            from .learning_knowledge_consumption import build_learned_memory_prompt_block
+            learned_memory_block, learned_memory_receipt = build_learned_memory_prompt_block(
+                load_learned_scan_context(_lm_project)
+            )
+            learned_memory_receipt["project"] = _lm_project
+    except Exception as exc:
+        learned_memory_block = ""
+        learned_memory_receipt = {
+            "status": "LOAD_FAILED",
+            "failure": f"{type(exc).__name__}:{str(exc)[:200]}",
+            "pattern_count": 0,
+        }
+    if learned_memory_receipt.get("status") == "CONSUMED":
+        logger.info(
+            "[Stage 2] learned risk memory consumed for comprehension: %d patterns",
+            learned_memory_receipt.get("pattern_count"),
+        )
+
     # ── Build prompts ──
     engine_prompts: dict[str, str] = {}
     for engine_name, template in engines:
@@ -1156,6 +1188,8 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             prompt += "\n\n[PHASE91 GRAPH EVIDENCE PACK]\n" + graph_rendered
         if chunk_evidence:
             prompt += chunk_evidence
+        if learned_memory_block:
+            prompt += learned_memory_block
         engine_prompts[engine_name] = prompt + OUTPUT_HARD_LIMITS
 
     # ── Parallel execution ──
@@ -1503,6 +1537,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         "graph_context_ready": graph_ready,
         "graph_context_active": use_graph_context,
         "graph_context_chars": len(graph_rendered),
+        "learned_memory_receipt": learned_memory_receipt,
         "retried_engines": [e for e in engine_names_for_report if results_by_engine.get(e, {}).get("retry_used")],
         "engines_with_low_output": [e for e in engine_names_for_report if len(results_by_engine.get(e, {}).get("hypotheses", [])) < 3 and e != "local_bootstrap"],
         "engine_outputs": {e: len(results_by_engine.get(e, {}).get("hypotheses", [])) for e in engine_names_for_report},

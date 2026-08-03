@@ -208,9 +208,10 @@ class CrossRoundKnowledgeTransfer:
             
         logger.info("Transferring knowledge from round: %s", source_round_id)
         
-        from .learning_knowledge_base import LearningKnowledgeBase
-        
-        kb = LearningKnowledgeBase(self.project)
+        # SSOT: the SQLite knowledge base is the single store of truth.
+        # (Historically this read from the retired JSON-file knowledge base,
+        # which meant transfers could never see patterns written via SQLite.)
+        kb = LearningKnowledgeDB(self.project)
         
         # Retrieve and transfer risk patterns
         risk_patterns = kb.retrieve("risk_pattern", query={"domains": source_summary.domains_covered}, top_k=20)

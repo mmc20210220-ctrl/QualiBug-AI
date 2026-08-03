@@ -11,6 +11,7 @@ from ai_test_asset_center.learning_knowledge_consumption import (
     apply_learned_boost,
     build_learning_consumption_receipt,
     build_learned_boost_index,
+    build_learned_memory_prompt_block,
 )
 
 
@@ -265,3 +266,38 @@ class TestConsumptionReceipt:
         receipt = build_learning_consumption_receipt(index, boosted_rows=[])
         assert receipt["status"] == "LOAD_FAILED"
         assert receipt["load_failure"] == "OSError:disk"
+
+
+class TestLearnedMemoryPromptBlock:
+    def test_consumed_block_ranked_and_bounded(self):
+        patterns = [
+            _pattern("orders", "state_violation", method="DELETE", usage=1),
+            _pattern("refund", "money_conservation", method="POST", usage=9),
+        ]
+        block, receipt = build_learned_memory_prompt_block(_knowledge(patterns))
+        assert receipt["status"] == "CONSUMED"
+        assert receipt["pattern_count"] == 2
+        assert "LEARNED RISK MEMORY" in block
+        # higher usage ranks first
+        assert block.index("refund") < block.index("orders")
+        assert len(block) <= 1200
+        # guidance must not assert rules or fabricate bodies
+        assert "do not infer request bodies" in block
+
+    def test_empty_payload_no_block(self):
+        block, receipt = build_learned_memory_prompt_block(_knowledge([]))
+        assert block == ""
+        assert receipt["status"] == "NO_PATTERNS"
+
+    def test_load_failure_stays_visible(self):
+        block, receipt = build_learned_memory_prompt_block(
+            _knowledge([], load_failure="OperationalError:locked")
+        )
+        assert block == ""
+        assert receipt["status"] == "LOAD_FAILED"
+        assert receipt["load_failure"] == "OperationalError:locked"
+
+    def test_pattern_cap(self):
+        patterns = [_pattern(f"e{i}", "state_violation", usage=i) for i in range(20)]
+        block, receipt = build_learned_memory_prompt_block(_knowledge(patterns))
+        assert receipt["pattern_count"] == 8

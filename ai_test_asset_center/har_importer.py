@@ -380,6 +380,10 @@ def import_har_endpoints(
             "actors": list(set(actors)),
             "summary": summary,
             "source_refs": [{
+                # Canonical projection contract requires kind+locator; keep the
+                # legacy fields alongside for older consumers.
+                "kind": "har_traffic",
+                "locator": f"{har_file_name}:{method_upper} {norm_path}",
                 "source": har_file_name,
                 "line": 0,
                 "excerpt": f"HAR traffic: {ep.count} calls, {len(ep.statuses)} status codes",

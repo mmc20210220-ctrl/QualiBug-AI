@@ -265,6 +265,7 @@ def redact_and_validate(payload: Any) -> tuple[Any, dict[str, Any]]:
     """Redact then scan. Raises ArtifactSecretLeakError on residual secrets."""
     redacted, receipt = redact_artifact(payload)
     redacted = _reseal_attempt_ledgers(redacted)
+    redacted = _rederive_redaction_sensitive_authority(redacted)
     scan = scan_for_secrets(redacted)
     combined = {
         "schema_version": SCHEMA_VERSION,
@@ -295,6 +296,84 @@ def _reseal_attempt_ledgers(value: Any) -> Any:
     if isinstance(value, list):
         return [_reseal_attempt_ledgers(item) for item in value]
     return value
+
+
+def _rederive_redaction_sensitive_authority(value: Any) -> Any:
+    """Re-derive authority artifacts whose fingerprints bind the attempt ledger.
+
+    Secret redaction is an authorized transform: it may rewrite secret-bearing
+    strings inside sealed receipts embedded in the obligation-attempt ledger,
+    and ``_reseal_attempt_ledgers`` recomputes the ledger fingerprint
+    afterwards. The canonical defect registry and the formal delivery
+    authority receipt embed that fingerprint, so a persisted envelope that
+    keeps the pre-redaction fingerprints can never pass fail-closed
+    validation again (CANONICAL_REGISTRY_AUTHORITY_MISMATCH). Rebuild both
+    artifacts from the resealed inputs so every persisted envelope remains
+    self-consistent. Envelopes without a non-empty registry are untouched.
+    """
+
+    if isinstance(value, dict):
+        for scope in _authority_envelope_scopes(value):
+            ledger = scope.get("obligation_attempt_ledger")
+            registry = scope.get("canonical_defect_registry")
+            mainline = scope.get("mainline_run")
+            occurrences = scope.get("delivery_occurrences")
+            if (
+                not isinstance(ledger, dict)
+                or not isinstance(registry, dict)
+                or not registry
+                or not isinstance(mainline, dict)
+                or not isinstance(occurrences, list)
+            ):
+                continue
+            from ._canonical_defect_registry_mechanics import (
+                CANONICAL_DEFECT_REGISTRY_SCHEMA,
+                build_canonical_defect_registry,
+            )
+            from .formal_delivery_authority import (
+                build_formal_delivery_authority_receipt,
+            )
+
+            if registry.get("schema_version") != CANONICAL_DEFECT_REGISTRY_SCHEMA:
+                # Blocked/degraded projections are not fingerprint-bound
+                # authorities; rebuilding them would fabricate verification.
+                continue
+            # Rebuild inputs are the resealed (post-redaction) artifacts.
+            # Rebuild failure must surface loudly: a persisted envelope whose
+            # authority chain cannot be re-derived is corrupt, not redacted.
+            scope["formal_delivery_authority"] = (
+                build_formal_delivery_authority_receipt(
+                    mainline_run=mainline,
+                    findings=occurrences,
+                    obligation_attempt_ledger=ledger,
+                )
+            )
+            scope["canonical_defect_registry"] = build_canonical_defect_registry(
+                mainline_run=mainline,
+                deliverable_occurrences=occurrences,
+                obligation_attempt_ledger=ledger,
+            )
+        return {
+            key: _rederive_redaction_sensitive_authority(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_rederive_redaction_sensitive_authority(item) for item in value]
+    return value
+
+
+def _authority_envelope_scopes(value: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the envelope dicts that may carry ledger-bound authority.
+
+    Scan results keep authority artifacts at the top level; older/unified
+    envelopes nest them under ``v12``. Both scopes are re-derived in place.
+    """
+
+    scopes = [value]
+    nested = value.get("v12")
+    if isinstance(nested, dict):
+        scopes.append(nested)
+    return scopes
 
 
 def _find_cycle(value: Any) -> str:

@@ -503,6 +503,79 @@ class LearningKnowledgeDB:
             logger.warning("Failed to get effective patterns: %s", e)
             return []
             
+    def record_usage(self, entry_ids: list[str]) -> int:
+        """Increment usage_count for entries consumed by the discovery mainline.
+
+        The read side loads patterns via get_effective_patterns() which does
+        not touch usage stats; this method closes that feedback loop so
+        "effective" really means "consumed and useful", not "never used".
+        """
+        ids = [eid for eid in entry_ids if eid]
+        if not ids:
+            return 0
+        try:
+            with self.transaction():
+                for entry_id in ids:
+                    self.conn.execute("""
+                        UPDATE knowledge
+                        SET usage_count = usage_count + 1,
+                            last_used_at = datetime('now')
+                        WHERE entry_id = ?
+                    """, (entry_id,))
+            for entry_id in ids:
+                cached = self._cache.get(entry_id)
+                if cached is not None:
+                    cached.usage_count += 1
+                    cached.last_used_at = datetime.now()
+            return len(ids)
+        except Exception as e:
+            logger.warning("Failed to record usage for %d entries: %s", len(ids), e)
+            raise
+
+    def adjust_confidence(
+        self,
+        category: str,
+        keys: list[str],
+        factor: float,
+        *,
+        floor: float = 0.05,
+        ceiling: float = 1.0,
+    ) -> int:
+        """Multiply confidence of entries by factor (bounded by floor/ceiling).
+
+        Used for negative feedback (factor < 1) and reinforcement
+        (factor > 1). Entry identity mirrors store(): md5(category:key).
+        """
+        adjusted = 0
+        for key in keys:
+            if not key:
+                continue
+            entry_id = hashlib.md5(f"{category}:{key}".encode()).hexdigest()[:12]
+            try:
+                cursor = self.conn.execute(
+                    "SELECT confidence FROM knowledge WHERE entry_id = ?",
+                    (entry_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    continue
+                new_conf = min(ceiling, max(floor, float(row[0]) * factor))
+                with self.transaction():
+                    self.conn.execute("""
+                        UPDATE knowledge
+                        SET confidence = ?, updated_at = datetime('now')
+                        WHERE entry_id = ?
+                    """, (new_conf, entry_id))
+                cached = self._cache.get(entry_id)
+                if cached is not None:
+                    cached.confidence = new_conf
+                    cached.updated_at = datetime.now()
+                adjusted += 1
+            except Exception as e:
+                logger.warning("Failed to adjust confidence for %s: %s", key, e)
+                raise
+        return adjusted
+
     def decay_old_knowledge(self, max_age_days: int = 90) -> int:
         """Decay confidence of old knowledge entries."""
         threshold_date = datetime.now() - timedelta(days=max_age_days)

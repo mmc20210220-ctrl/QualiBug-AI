@@ -234,8 +234,21 @@ def _source_ref_projection(values: Any) -> list[dict[str, str]]:
     projected: list[dict[str, str]] = []
     for raw in _list(values):
         row = _dict(raw)
-        kind = _normalized_text(row.get("kind"))
-        locator = _text(row.get("locator") or row.get("path") or row.get("ref"))
+        # kind aliases: some historical producers emit "type"/"source_type"
+        # instead of "kind"; accept them so identity derivation stays grounded
+        # instead of dropping the reference.
+        kind = _normalized_text(
+            row.get("kind") or row.get("type") or row.get("source_type")
+        )
+        # Locator aliases: the enterprise fact-evidence chain emits
+        # "source_locator" as its canonical locator field; older producers use
+        # "path"/"ref". Accept all so grounded references are not dropped.
+        locator = _text(
+            row.get("locator")
+            or row.get("source_locator")
+            or row.get("path")
+            or row.get("ref")
+        )
         if not kind or not locator:
             continue
         projected.append({"kind": kind, "locator": _normalized_locator(locator)})
@@ -803,7 +816,36 @@ def build_canonical_defect_registry(
                 attempt,
             )
         else:
-            evidence = derive_canonical_identity_evidence(attempt)
+            try:
+                evidence = derive_canonical_identity_evidence(attempt)
+            except CanonicalDefectRegistryError as exc:
+                # Fail fast, but make the failing attempt traceable: which
+                # finding/obligation/experiment produced the incomplete
+                # identity evidence, and what the raw source_refs looked like
+                # so the non-projectable producer can be found.
+                _dbg_bundle = _dict(attempt.get("delivery_evidence_bundle"))
+                _dbg_repro = _dict(_dbg_bundle.get("reproduction_receipt"))
+                _dbg_oracle = _dict(_dbg_bundle.get("oracle_receipt"))
+
+                def _dbg_ref_shapes(rows: Any) -> str:
+                    shapes: list[str] = []
+                    for raw in _list(rows)[:3]:
+                        row = _dict(raw)
+                        shapes.append("|".join(sorted(row.keys())) or "empty")
+                    return ";".join(shapes) if shapes else "none"
+
+                _dbg_assertion_rows: list[Any] = []
+                for _row in _list(_dbg_oracle.get("assertions")):
+                    if _text(_dict(_row).get("status")).upper() != "VIOLATION":
+                        continue
+                    _dbg_assertion_rows.extend(_list(_dict(_row).get("source_refs")))
+                raise CanonicalDefectRegistryError(
+                    f"{exc}:occurrence={occurrence_id}"
+                    f":obligation={_text(attempt.get('obligation_id'))}"
+                    f":experiment={_text(attempt.get('experiment_id'))}"
+                    f":assertion_ref_shapes={_dbg_ref_shapes(_dbg_assertion_rows)}"
+                    f":reproduction_ref_shapes={_dbg_ref_shapes(_dbg_repro.get('source_refs'))}"
+                ) from exc
         canonical = build_canonical_defect_identity(
             target_id=mainline["target_id"],
             evidence=evidence,
@@ -907,8 +949,15 @@ def validate_canonical_defect_registry(
         obligation_attempt_ledger=obligation_attempt_ledger,
     )
     if row != rebuilt:
+        # Make the mismatch diagnosable: report which top-level keys diverge
+        # and, for list payloads, where the first element-level difference is.
+        diff_keys: list[str] = []
+        for key in sorted(set(row.keys()) | set(rebuilt.keys())):
+            if row.get(key) != rebuilt.get(key):
+                diff_keys.append(key)
+        detail = ",".join(diff_keys[:8]) or "deep"
         raise CanonicalDefectRegistryError(
-            "CANONICAL_REGISTRY_AUTHORITY_MISMATCH"
+            f"CANONICAL_REGISTRY_AUTHORITY_MISMATCH:diff={detail}"
         )
     return dict(row)
 

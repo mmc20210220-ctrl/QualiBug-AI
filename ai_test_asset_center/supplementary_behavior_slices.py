@@ -512,6 +512,7 @@ def generate_permission_slices(
                 {
                     "kind": "permission_matrix",
                     "source_id": str(row.get("source_id") or ""),
+                    "locator": str(row.get("resource") or f"{method} {path}"),
                     "quote": str(row.get("evidence") or "")[:240],
                 }
                 for row in permission_matrix or []
@@ -522,6 +523,7 @@ def generate_permission_slices(
             if declared_roles:
                 permission_source_refs.append({
                     "kind": "api_permission_contract",
+                    "locator": f"{method} {path}",
                     "quote": str(ep.get("summary") or path)[:240],
                 })
             slice_id = behavior_slice_id("permission", entity, actor_label, method, path)
@@ -713,7 +715,7 @@ def generate_isolation_slices(
                     "states": [],
                     "endpoints": [path],
                     "priority": 0.90,
-                    "source_refs": [{"kind": "ownership_contract", "quote": summary[:240] or path}],
+                    "source_refs": [{"kind": "ownership_contract", "locator": f"{path}", "quote": summary[:240] or path}],
                     "evidence_gaps": [],
                     "_hypothesis_origin": "supplementary",
                     "_isolation_viewer_role": role,
@@ -734,6 +736,7 @@ def generate_isolation_slices(
                     if not ownership_docs and query_param in corpus_ownership_params:
                         row["source_refs"].append({
                             "kind": "ownership_query_param_corpus",
+                            "locator": query_param,
                             "quote": query_param,
                         })
                 elif mode == "owned_collection":
@@ -793,7 +796,7 @@ def generate_concurrency_slices(
             "states": [],
             "endpoints": [path],
             "priority": 0.78,
-            "source_refs": [{"kind": "api_endpoint", "quote": path}],
+            "source_refs": [{"kind": "api_endpoint", "locator": f"{method} {path}", "quote": path}],
             "evidence_gaps": [],
             "_concurrency_method": method,
             "_concurrency_path": path,
@@ -848,7 +851,7 @@ def generate_inventory_slices(
             "states": [],
             "endpoints": [path],
             "priority": 0.84,
-            "source_refs": [{"kind": "api_endpoint", "quote": path}],
+            "source_refs": [{"kind": "api_endpoint", "locator": f"{method} {path}", "quote": path}],
             "evidence_gaps": [],
             "_inventory_method": method,
             "_inventory_path": path,
@@ -941,7 +944,7 @@ def generate_money_slices(
             "states": [],
             "endpoints": [path],
             "priority": priority,
-            "source_refs": [{"kind": "api_endpoint", "quote": path}],
+            "source_refs": [{"kind": "api_endpoint", "locator": f"{method} {path}", "quote": path}],
             "evidence_gaps": [],
             "_money_method": method,
             "_money_path": path,
@@ -1126,7 +1129,7 @@ def generate_account_status_slices(
             "states": [],
             "endpoints": [login_path],
             "priority": 0.95,
-            "source_refs": [{"kind": "test_account", "quote": email}],
+            "source_refs": [{"kind": "test_account", "locator": email, "quote": email}],
             "evidence_gaps": [],
             "_account_status": status,
             "_account_status_email": email,

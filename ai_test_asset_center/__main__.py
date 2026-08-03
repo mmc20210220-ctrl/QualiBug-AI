@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -201,6 +202,12 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
 
     project = str(prepared["project"])
     root = Path(prepared["root"])
+
+    # Project identity for stages that resolve per-project runtime state via
+    # env (e.g. learned risk memory consumed by the reasoner). Mirrors the
+    # bug_engine_autorun convention so the direct-scan path behaves the same.
+    os.environ["QUALIBUG_PROJECT"] = project
+
     context = dict(prepared["context"])
     prd_text = str(prepared.get("prd_text") or "")
     api_doc_text = str(prepared.get("api_doc_text") or "")
@@ -939,7 +946,9 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         from .auto_learning_trigger import AutoLearningTrigger, LearningTriggerConfig
 
         if confirmed:
-            feedback = build_closed_loop_context(project, root, confirmed)
+            feedback = build_closed_loop_context(
+                project, root, confirmed, consumed_context=context.get("learned_knowledge")
+            )
             result["closed_loop"] = {
                 "patterns": feedback.get("total_patterns", 0),
                 "new_patterns": feedback.get("new_this_scan", 0),
