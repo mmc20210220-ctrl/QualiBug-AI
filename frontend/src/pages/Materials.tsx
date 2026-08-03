@@ -54,6 +54,7 @@ type QuickConnectResult = { values: ScopeValues; manifest: ConnectorManifest };
 
 const DEFAULT_CONNECTOR_ID = 'connector-main';
 const DEFAULT_CONNECTOR_NAME = '在线资料连接器';
+const EXECUTABLE_SOURCE_TYPES = new Set(['prd', 'openapi', 'database_schema', 'collaboration_document', 'historical_bug']);
 
 const asRecord = (value: unknown): JsonRecord => (
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -841,6 +842,27 @@ export function Materials() {
     );
   }
 
+  const activeCount = sources.filter((item) => item.status === 'active').length;
+  const processingCount = sources.filter((item) => item.status === 'processing').length;
+  const failedCount = sources.filter((item) => ['failed', 'degraded'].includes(String(item.status || ''))).length;
+  const executableCount = sources.filter((item) => EXECUTABLE_SOURCE_TYPES.has(String(item.source_type || '').trim())).length;
+  const prdCount = sources.filter((item) => String(item.source_type || '').trim() === 'prd').length;
+  const apiCount = sources.filter((item) => String(item.source_type || '').trim() === 'openapi').length;
+  const dbCount = sources.filter((item) => ['database_schema', 'db_design'].includes(String(item.source_type || '').trim())).length;
+  const sourceTypeCounts = new Map<string, number>();
+  sources.forEach((item) => {
+    const key = String(item.source_type || '').trim() || '自动识别';
+    sourceTypeCounts.set(key, (sourceTypeCounts.get(key) || 0) + 1);
+  });
+  const topSourceTypes = [...sourceTypeCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const parseHeadline = sources.length === 0
+    ? '等待接入资料'
+    : failedCount > 0
+      ? `${failedCount} 份资料解析失败，需要处理`
+      : processingCount > 0
+        ? `${processingCount} 份资料仍在解析中`
+        : `${activeCount} 份资料已进入企业知识主链`;
+
   return (
     <div className="materials-page">
       <header className="page-header materials-header">
@@ -859,6 +881,48 @@ export function Materials() {
           接入在线资料
         </button>
       </header>
+
+      <section className="customer-summary-grid materials-readiness-grid">
+        {[
+          { label: '资料总数', value: sources.length, tone: sources.length > 0 ? 'primary' : 'neutral', note: '已进入企业知识主链的资料数量' },
+          { label: '已生效', value: activeCount, tone: activeCount > 0 ? 'success' : 'neutral', note: '当前可被扫描链直接消费的资料' },
+          { label: '可执行资料', value: executableCount, tone: executableCount > 0 ? 'success' : 'warning', note: executableCount > 0 ? '已具备驱动测试执行的核心上下文' : '建议补齐 PRD / API / DB 设计' },
+          { label: '异常资料', value: failedCount, tone: failedCount > 0 ? 'danger' : 'neutral', note: failedCount > 0 ? '解析失败会直接影响后续执行' : '当前无失败资料' },
+        ].map((item) => (
+          <article key={item.label} className={`customer-summary-card tone-${item.tone}`}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+            <small>{item.note}</small>
+          </article>
+        ))}
+      </section>
+
+      <section className="materials-secondary-card">
+        <div className="materials-section-heading">
+          <div>
+            <span className="panel-kicker">解析结果</span>
+            <h2>{parseHeadline}</h2>
+            <p>只有真实进入企业知识主链并成功解析的资料，才会被后续扫描和证据链消费。</p>
+          </div>
+        </div>
+        <div className="customer-secondary-grid">
+          <article className="customer-secondary-card">
+            <span className="customer-value-kicker">核心资料覆盖</span>
+            <h3>{prdCount > 0 && apiCount > 0 ? 'PRD + API 已就绪' : '核心资料待补齐'}</h3>
+            <p>PRD {prdCount} 份，接口文档 {apiCount} 份，数据库资料 {dbCount} 份。核心资料越完整，运行中心越容易形成真实可执行路径。</p>
+          </article>
+          <article className="customer-secondary-card">
+            <span className="customer-value-kicker">解析状态</span>
+            <h3>{processingCount > 0 ? '仍在处理' : failedCount > 0 ? '存在失败项' : '当前稳定可用'}</h3>
+            <p>处理中 {processingCount} 份，失败 {failedCount} 份。</p>
+          </article>
+          <article className="customer-secondary-card">
+            <span className="customer-value-kicker">资料结构</span>
+            <h3>{topSourceTypes.length > 0 ? topSourceTypes.map(([label]) => label).join('、') : '等待导入'}</h3>
+            <p>{topSourceTypes.length > 0 ? topSourceTypes.map(([label, count]) => `${label} ${count} 份`).join('，') : '导入后会在这里展示当前项目的资料分布。'}</p>
+          </article>
+        </div>
+      </section>
 
       {loadError && <div className="materials-alert tone-danger">{loadError}</div>}
 

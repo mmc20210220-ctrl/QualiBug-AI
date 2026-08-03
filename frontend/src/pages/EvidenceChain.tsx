@@ -127,9 +127,13 @@ export function EvidenceChain() {
                 </div>
                 {selected.regression && (
                   <div style={{ marginTop: 16, fontSize: 12, color: 'var(--muted)' }}>
-                    <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: 'var(--ink)' }}>回归验证</h4>
+                    <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: 'var(--ink)' }}>回归闭环</h4>
                     <p>生命周期：{selected.regression.lifecycle_label || '待回归'}</p>
                     <p>最新状态：{selected.regression.latest_status_label || '未执行'}</p>
+                    <p>{selected.regression.lifecycle_description || selected.regression.reason || '等待后端上报回归结果。'}</p>
+                    {selected.regression.history?.length > 0 && (
+                      <p>最近轨迹：{selected.regression.history.map((item) => `[${item.generated_at || '未知时间'}] ${item.status_label || item.gate_status || '回归'}`).join(' -> ')}</p>
+                    )}
                   </div>
                 )}
               </div>

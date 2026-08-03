@@ -17,8 +17,9 @@ import { JourneyStrip } from '../components/dashboard/JourneyStrip';
 import { TrustPanel, type TrustSignal } from '../components/dashboard/TrustPanel';
 import { DiscoveryFunnelPanel } from '../components/dashboard/DiscoveryFunnelPanel';
 import { MainChainContractPanel } from '../components/dashboard/MainChainContractPanel';
+import { RegressionClosurePanel } from '../components/dashboard/RegressionClosurePanel';
 import {
-  asRecord, asText, asNum, formatScanTime,
+  asRecord, asText, asNum, firstNum, formatScanTime,
   getSeverityWeight, getFindingModule, riskLevel, releaseDecision,
   getExecutiveHeadline, campaignStatusLabel, campaignDetail,
 } from '../lib/dashboard-utils';
@@ -99,6 +100,7 @@ export function Dashboard() {
   const p0Count = findings.filter((f) => f.severity === 'P0').length;
   const p1Count = findings.filter((f) => f.severity === 'P1').length;
   const currentScanDefects = asNum(formalCounts.formal_customer_deliverable_count, totalRiskCount);
+  const familyShelfDefects = currentScanDefects;
   const currentScanP0Count = Math.min(p0Count, currentScanDefects);
   const modules = Array.from(new Set(findings.map(getFindingModule).filter(Boolean)));
   const modulesCount = modules.length;
@@ -110,6 +112,11 @@ export function Dashboard() {
   const campaign = asRecord(record.campaign);
   const campaignStatus = asText(campaign.campaign_status).toLowerCase();
   const campaignDeferredReason = asText(campaign.coverage_deferred_reason);
+  const continuousCampaign = asRecord(record.continuous_discovery_campaign);
+  const campaignSummary = asRecord(continuousCampaign.summary);
+  const campaignConfirmed = firstNum(campaignSummary.current_campaign_confirmed_slice_count, campaignSummary.confirmed_slice_count, campaign.confirmed_slice_count);
+  const campaignCurrentRawFindings = asNum(campaignSummary.current_campaign_bundle_finding_count_raw);
+  const currentScanFindings = asNum(scanMeta.current_report_total_findings, asNum(scanMeta.total_findings, campaignCurrentRawFindings));
   const pipelineHealth = asRecord(record.pipeline_health);
   const pipelineHealthStatus = asText(pipelineHealth.status) || asText(scanMeta.pipeline_health_status);
   const pipelineFailedSafe = pipelineHealthStatus === 'FAILED_SAFE';
@@ -175,6 +182,11 @@ export function Dashboard() {
     },
   ];
   const topFindings = [...findings].sort((a, b) => { const sg = getSeverityWeight(b.severity) - getSeverityWeight(a.severity); return sg !== 0 ? sg : (b.evidence_quality?.score || 0) - (a.evidence_quality?.score || 0); }).slice(0, 3);
+  const focusFindings = currentScanDefects > 0 ? topFindings : [];
+  const scopeFacts = [
+    { label: '本轮可交付', val: currentScanDefects, tone: 'primary', note: currentScanDefects > 0 ? `当前确认 ${currentScanDefects} 条，均通过正式交付门禁` : '当前没有已确认问题' },
+    { label: '缺陷货架', val: familyShelfDefects, tone: 'neutral', note: '当前正式交付范围的缺陷口径' },
+  ];
 
   if (!hasMaterializedMetrics) {
     return (
@@ -228,6 +240,29 @@ export function Dashboard() {
 
       <DiscoveryFunnelPanel funnel={record.discovery_funnel} report={record.discovery_funnel_report} />
 
+      {/* 交付口径 — 后端正式记账数字与内部原始 finding 的边界 */}
+      <section className="customer-secondary-grid" aria-label="交付口径">
+        <article className="customer-secondary-card">
+          <span className="customer-value-kicker">交付口径</span>
+          <div className="customer-secondary-meta">
+            <span><em>本轮缺陷</em><b>{currentScanDefects} 条</b></span>
+            <span><em>缺陷货架</em><b>{familyShelfDefects} 条</b></span>
+            <span><em>确认回执</em><b>{campaignConfirmed}</b></span>
+          </div>
+          <div className="customer-secondary-meta">
+            {scopeFacts.map((f) => (
+              <span key={f.label} data-tone={f.tone} title={f.note}><em>{f.label}</em><b>{f.val} 条</b></span>
+            ))}
+          </div>
+          {(campaignCurrentRawFindings > 0 || currentScanFindings > currentScanDefects) && (
+            <div className="customer-secondary-meta">
+              <span><em>内部原始 finding（非客户交付）</em><b>{campaignCurrentRawFindings || Math.max(0, currentScanFindings - currentScanDefects)}</b></span>
+              <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮可交付 {currentScanDefects} → 当前正式范围 {familyShelfDefects}；原始 finding 仅供内部观测</b></span>
+            </div>
+          )}
+        </article>
+      </section>
+
       {/* 决策卡片 */}
       <DecisionCards cards={[
         { role: 'CTO / 技术VP', title: '发布决策', value: decision.label, detail: decision.advice },
@@ -252,7 +287,7 @@ export function Dashboard() {
           <h2>重点关注</h2>
           <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看完整清单</button>
         </div>
-        {topFindings.length === 0 ? (
+        {focusFindings.length === 0 ? (
           <div className="focus-list">
             <div className="focus-card">
               <p>{clueCount > 0 ? `本轮仅有 ${clueCount} 条内部线索仍在补证，当前无已确认问题。` : '当前没有需要优先处理的问题。'}</p>
@@ -260,7 +295,7 @@ export function Dashboard() {
           </div>
         ) : (
           <div className="focus-list">
-            {topFindings.map((f) => (
+            {focusFindings.map((f) => (
               <article key={f.id} className={`focus-card severity-${f.severity.toLowerCase()}`}>
                 <div className="focus-card-head">
                   <span className={`severity-badge ${f.severity.toLowerCase()}`}>{f.severity}</span>
@@ -280,6 +315,14 @@ export function Dashboard() {
 
       {/* 为什么可信 — 治理 / 健康 / 守卫 / 回执 / 可靠度 */}
       <TrustPanel signals={trustSignals} />
+
+      {/* 回归闭环 — 缺陷纳入回归、趋势与双轮验真 */}
+      <div className="focus-section-head"><h2>回归闭环</h2></div>
+      <RegressionClosurePanel
+        record={record}
+        regressionRunningMode={regressionRunningMode}
+        onRunRegression={(mode) => void handleRegressionRun(mode)}
+      />
 
       {/* 技术诊断 — 默认折叠 */}
       <TechnicalDiagnostics>

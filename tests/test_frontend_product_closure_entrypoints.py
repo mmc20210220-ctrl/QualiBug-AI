@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SIDEBAR = ROOT / "frontend" / "src" / "components" / "Sidebar.tsx"
 TOPBAR = ROOT / "frontend" / "src" / "components" / "Topbar.tsx"
 SETTINGS = ROOT / "frontend" / "src" / "pages" / "Settings.tsx"
-MATERIALS = ROOT / "frontend" / "src" / "pages" / "EnterpriseMaterials.tsx"
+MATERIALS = ROOT / "frontend" / "src" / "pages" / "Materials.tsx"
 RUN_CENTER = ROOT / "frontend" / "src" / "pages" / "EnterpriseCampaigns.tsx"
 FINDINGS = ROOT / "frontend" / "src" / "pages" / "Findings.tsx"
 DASHBOARD = ROOT / "frontend" / "src" / "pages" / "Dashboard.tsx"
@@ -42,9 +42,24 @@ def test_frontend_settings_and_materials_surface_readiness_and_parse_summary() -
     assert "正式客户前端：`frontend/` React 控制台" in readme
 
 
+def _dashboard_surface() -> str:
+    """Dashboard.tsx plus the modules its surfaces were extracted into.
+
+    Same rationale as test_customer_delivery_gate_contract: the regression
+    closure cards live in components/dashboard/*.tsx after the extraction
+    refactor, so the surface is the page and its modules; the test tracks
+    the capabilities rather than the file they currently live in.
+    """
+    parts = [DASHBOARD]
+    components = DASHBOARD.parent.parent / "components" / "dashboard"
+    if components.is_dir():
+        parts.extend(sorted(components.glob("*.tsx")))
+    return "\n".join(p.read_text(encoding="utf-8") for p in parts if p.is_file())
+
+
 def test_frontend_dashboard_and_findings_surface_regression_closure() -> None:
     findings = FINDINGS.read_text(encoding="utf-8")
-    dashboard = DASHBOARD.read_text(encoding="utf-8")
+    dashboard = _dashboard_surface()
     evidence = EVIDENCE.read_text(encoding="utf-8")
     client = CLIENT.read_text(encoding="utf-8")
 

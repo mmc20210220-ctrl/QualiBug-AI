@@ -24,6 +24,8 @@ QualiBug AI 把企业系统的 Actor、状态、数据、规则与真实执行�
 | 正式客户前端 | `frontend/` React 控制台 |
 | Docker 镜像标签 | `qualibug-ai:95.0.0-private-pilot` |
 
+正式客户前端：`frontend/` React 控制台；正式后端入口：`ai_test_asset_center.private_pilot_entrypoint`（`qualibug-server`）。
+
 `backend/main.py` 仅作兼容 / 实验接口，**不是**正式真实执行主入口。
 
 ---

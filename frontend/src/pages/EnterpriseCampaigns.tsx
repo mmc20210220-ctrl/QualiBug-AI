@@ -110,7 +110,7 @@ function activeApprovedFixtures(value: UploadFixtureRecord[]): UploadFixtureReco
 }
 
 export function EnterpriseCampaigns() {
-  usePageTitle('开始验证');
+  usePageTitle('运行中心');
   const [params] = useSearchParams();
   const toast = useToast();
   const { navigateToProjectPath } = useProjectNavigation();
@@ -361,7 +361,7 @@ export function EnterpriseCampaigns() {
           <div><span className="muted">安全边界</span><p>{forceReadOnly ? '强制只读已开启，后台不会发送写请求' : '环境类型、审批、before/after 与 cleanup 由后台门禁控制'}</p></div>
         </div>
         <div className="settings-actions">
-          <button type="button" className="btn btn-primary" onClick={() => void runStandardScan()} disabled={running || loadingPreflight || loadingFixtures || (!forceReadOnly && (scenarioState.loading || Boolean(scenarioState.error)))}>{running ? '正在自主验证…' : '开始企业系统验证'}</button>
+          <button type="button" className="btn btn-primary" onClick={() => void runStandardScan()} disabled={running || loadingPreflight || loadingFixtures || (!forceReadOnly && (scenarioState.loading || Boolean(scenarioState.error)))}>{running ? '正在自主验证…' : '执行标准扫描'}</button>
           <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>查看系统总览</button>
         </div>
         <p className="muted">阻断、仅计划和部分覆盖会如实展示，不会被包装成通过；发现结果会自动进入问题清单和证据中心。</p>
@@ -395,7 +395,7 @@ export function EnterpriseCampaigns() {
       {result && (
         <section className={`card mb-4 status-card status-${resultTone(result)}`}>
           <span className="panel-kicker">真实运行回执</span>
-          <h2>本次验证结果</h2>
+          <h2>受控运行结果</h2>
           <div className="settings-grid">
             <div><span className="muted">执行状态</span><p>{executionStatusLabel(asText(result.execution_status))}</p></div>
             <div><span className="muted">发现问题</span><p>{result.total_findings ?? 0}</p></div>

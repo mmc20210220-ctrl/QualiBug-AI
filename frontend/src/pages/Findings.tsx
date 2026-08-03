@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { isCustomerReadyFinding, useFindingsData } from '../api/data';
+import { emitScanCompleted, isCustomerReadyFinding, useFindingsData } from '../api/data';
+import { runRegression } from '../api/client';
+import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { FindingCard } from '../components/findings/FindingCard';
@@ -15,16 +17,22 @@ function moduleName(finding: Finding): string {
   return String(finding.business_impact?.module || finding.source_entity || finding.defect_family_label || '未归类').trim() || '未归类';
 }
 
+function regressionLifecycleLabel(finding: Finding): string {
+  return String(finding.regression?.lifecycle_label || (finding.regression?.included_in_suite ? '待回归' : '待纳入回归')).trim() || '待纳入回归';
+}
+
 export function Findings() {
   usePageTitle('问题清单');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
   const { findings, clues, loading, error, refetch } = useFindingsData(project);
+  const toast = useToast();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [drawerFinding, setDrawerFinding] = useState<Finding | null>(null);
+  const [regressionRunning, setRegressionRunning] = useState(false);
 
   const confirmed = findings.filter(isCustomerReadyFinding);
   const bySeverity = {
@@ -61,6 +69,36 @@ export function Findings() {
     return true;
   });
 
+  const pendingRegression = confirmed.filter((f) => f.regression && f.regression.included_in_suite && f.regression.latest_status !== 'passed');
+  const passedRegression = confirmed.filter((f) => f.regression?.latest_status === 'passed');
+  const failedRegression = confirmed.filter((f) => f.regression?.latest_status === 'failed');
+  const regressionHistory = confirmed
+    .flatMap((f) => (f.regression?.history || []).map((item) => ({ finding: f, item })))
+    .sort((a, b) => String(b.item.generated_at || '').localeCompare(String(a.item.generated_at || '')))
+    .slice(0, 6);
+  const hasRegressionFact = confirmed.some((f) => Boolean(f.regression));
+
+  const runReleaseRegression = async (): Promise<void> => {
+    if (!project || regressionRunning) return;
+    setRegressionRunning(true);
+    try {
+      toast.show('正在执行 Release 回归…', 'info');
+      const result = await runRegression(project, { mode: 'release' });
+      emitScanCompleted(project);
+      await refetch();
+      const gateStatus = String(result.ci_feedback?.gate_status || 'unknown');
+      const failedCount = Number(result.summary?.failed_count || 0);
+      toast.show(
+        `Release 回归完成：${gateStatus}${failedCount > 0 ? `，失败 ${failedCount} 项` : ''}`,
+        gateStatus === 'failed' ? 'danger' : gateStatus === 'passed' ? 'success' : 'warning',
+      );
+    } catch (caught: unknown) {
+      toast.show(caught instanceof Error ? caught.message : '回归执行失败', 'danger');
+    } finally {
+      setRegressionRunning(false);
+    }
+  };
+
   return (
     <div>
       <div className="findings-page-head">
@@ -73,10 +111,40 @@ export function Findings() {
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary" onClick={() => void runReleaseRegression()} disabled={!project || regressionRunning}>
+            {regressionRunning ? 'Release 回归中' : '执行 Release 回归'}
+          </button>
           <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>证据中心</button>
           <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project)}>发布门禁</button>
         </div>
       </div>
+
+      {hasRegressionFact && (
+        <section className="customer-secondary-grid findings-regression-grid" aria-label="回归验证">
+          <article className="customer-secondary-card">
+            <span className="customer-value-kicker">回归验证</span>
+            <h3>{failedRegression.length > 0 ? `${failedRegression.length} 个缺陷回归仍失败` : pendingRegression.length > 0 ? `${pendingRegression.length} 个缺陷待执行回归` : passedRegression.length > 0 ? '已纳入缺陷回归均通过' : '尚无回归结果'}</h3>
+            <p>已通过 {passedRegression.length} · 待执行 {pendingRegression.length} · 仍失败 {failedRegression.length}。客户修复后由真实回归验证是否闭环。</p>
+          </article>
+          <article className="customer-secondary-card">
+            <span className="customer-value-kicker">待执行回归</span>
+            <h3>{pendingRegression.length > 0 ? pendingRegression.slice(0, 3).map((f) => f.title).join('、') : '当前无待执行项'}</h3>
+            <p>{pendingRegression.length > 0
+              ? pendingRegression.slice(0, 3).map((f) => `${f.title}（生命周期：${regressionLifecycleLabel(f)}）`).join('；')
+              : '纳入回归套件后，这里会列出尚未验证闭环的缺陷。'}
+            </p>
+          </article>
+          <article className="customer-secondary-card">
+            <span className="customer-value-kicker">回归历史</span>
+            <h3>{regressionHistory.length > 0 ? `最近 ${regressionHistory.length} 条回归记录` : '暂无回归记录'}</h3>
+            {regressionHistory.length > 0 ? (
+              <p>{regressionHistory.map(({ finding, item }) => `[${item.generated_at || '未知时间'}] ${finding.title} · ${item.status_label || item.gate_status || '回归'}`).join('；')}</p>
+            ) : (
+              <p>执行回归后，历史记录会在这里展示。</p>
+            )}
+          </article>
+        </section>
+      )}
 
       <FindingFilter filters={filterOptions} active={filter} onChange={setFilter} searchQuery={searchQuery} onSearchChange={setSearchQuery} />
 
