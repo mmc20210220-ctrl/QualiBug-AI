@@ -341,6 +341,87 @@ def _extract_id_from_response(response: Any, placeholder_name: str) -> str:
     return ""
 
 
+def resolve_state_scoped_bindings(
+    experiments: list[dict[str, Any]],
+    actor_tokens: dict[str, str],
+    base_url: str,
+    *,
+    max_resolution_attempts: int = 40,
+) -> dict[str, dict[str, str]]:
+    """Per-experiment resolution of ``@state=``-scoped path placeholders.
+
+    Batch pre-resolution (``auto_resolve_bindings``) binds one value per
+    placeholder, which cannot serve state-machine experiments: each experiment
+    requires an entity in its declared source state (a CANCELLED order for the
+    cancel step, a PAID order for ship), and different experiments on the same
+    placeholder need different states. Resolve per experiment by calling the
+    binding's source-declared collection resolver and selecting the first
+    entity whose state token matches the binding's required state.
+
+    Returns a mapping obligation_id -> {placeholder: resolved_value}.
+    """
+    from .runtime_binding_materializer_base import (
+        runtime_value_from_response as _state_aware_value,
+    )
+
+    out: dict[str, dict[str, str]] = {}
+    tokens_to_try: list[str] = []
+    for role_key in ("admin", "administrator", "superuser", "root"):
+        if role_key in actor_tokens and actor_tokens[role_key]:
+            tokens_to_try.append(actor_tokens[role_key])
+            break
+    for _role, _token_value in dict(actor_tokens).items():
+        if _token_value and _token_value not in tokens_to_try:
+            tokens_to_try.append(_token_value)
+    attempts = 0
+
+    for exp in experiments:
+        if not isinstance(exp, dict):
+            continue
+        oid = _text(exp.get("obligation_id"))
+        if not oid:
+            continue
+        per_exp: dict[str, str] = {}
+        for binding in _list(exp.get("binding_plan")):
+            if not isinstance(binding, dict) or attempts >= max_resolution_attempts:
+                continue
+            target_path = _text(binding.get("target_path"))
+            if not target_path.startswith("@state="):
+                continue
+            target = _text(binding.get("target"))
+            if not target:
+                continue
+            # Collection list resolvers only: an entity GET with its own
+            # placeholder cannot bootstrap the selection read.
+            resolvers = [
+                _text(row.get("path"))
+                for row in _list(binding.get("resolver_operations"))
+                if isinstance(row, dict)
+                and _text(row.get("path"))
+                and "{" not in _text(row.get("path"))
+                and ":" not in _text(row.get("path"))
+            ]
+            if not resolvers:
+                continue
+            for resolver_path in resolvers:
+                if attempts >= max_resolution_attempts:
+                    break
+                attempts += 1
+                for candidate_token in tokens_to_try:
+                    response = _call_get_endpoint(base_url, resolver_path, candidate_token)
+                    if response is None:
+                        continue
+                    value = _state_aware_value(response, target, target_path)
+                    if value not in (None, "", [], {}):
+                        per_exp[target] = str(value)
+                        break
+                if target in per_exp:
+                    break
+        if per_exp:
+            out[oid] = per_exp
+    return out
+
+
 def auto_resolve_bindings(
     behavior_ir: dict[str, Any],
     actor_tokens: dict[str, str],

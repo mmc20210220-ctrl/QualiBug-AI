@@ -192,6 +192,7 @@ def execute_selected_experiments(
     # ── Phase 2: Auto-resolve runtime bindings before execution ──
     # Pre-resolve path placeholders by calling GET list endpoints from Behavior IR.
     _pre_resolved_bindings: dict[str, str] = {}
+    _state_scoped_bindings: dict[str, dict[str, str]] = {}
     if base_url and tokens:
         from .runtime_binding_resolver import (
             auto_resolve_bindings,
@@ -212,6 +213,18 @@ def execute_selected_experiments(
                 placeholder_collection_hints=_ph_hints,
             )
             _pre_resolved_bindings = dict(_resolution.get("bindings") or {})
+        # State-scoped placeholders cannot share one batch value: a
+        # state-machine experiment needs an entity in its declared source
+        # state (CANCELLED order for cancel, PAID order for ship), and
+        # different experiments on the same placeholder need different
+        # states. Resolve those per experiment and let the per-experiment
+        # values override the batch value.
+        from .runtime_binding_resolver import (
+            resolve_state_scoped_bindings,
+        )
+        _state_scoped_bindings = resolve_state_scoped_bindings(
+            _exps_for_placeholders, tokens, base_url,
+        )
 
     results: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
@@ -412,11 +425,15 @@ def execute_selected_experiments(
             "execution_id": execution_id,
         }):
             # Inject pre-resolved bindings into experiment for runtime use
-            if _pre_resolved_bindings:
+            _exp_bindings = dict(_pre_resolved_bindings)
+            _exp_bindings.update(
+                _dict(_state_scoped_bindings.get(execution_oid))
+            )
+            if _exp_bindings:
                 exp = dict(exp)
-                exp["_pre_resolved_bindings"] = dict(_pre_resolved_bindings)
+                exp["_pre_resolved_bindings"] = _exp_bindings
             # ── P0-7: Validate parameter bindings before execution ──
-            _unresolved_params = _check_required_bindings(exp, _pre_resolved_bindings)
+            _unresolved_params = _check_required_bindings(exp, _exp_bindings)
             if _unresolved_params:
                 blocked += 1
                 compile_results[oid] = {
