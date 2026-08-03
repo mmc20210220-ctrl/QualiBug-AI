@@ -20,10 +20,12 @@
 | 批 1：投影/报告接入 scan 后钩子 | 6 | ✅ 已提交 `52516c83` |
 | 批 2：坏导入修复 + 观察者/执行验证接入 | 13 接入 / 5 退役 | ✅ 已提交 `16482096` |
 | 批 3：坏导入修复 + 规划工具接入 | 21 修复 / 2 接入 | ✅ 已提交 `0d73db04` |
-| 核实为实际活着（动态安装） | 1 | `job_formal_planning_proof`（scan_post_hooks 内置） |
+| 批 4：执行类重复工具退役 | 14 退役 | ✅ 已提交 `008ded26`+`b568585c` |
+| 批 5：学习/记忆孤岛退役 | 17 退役 / 5 确认已接入 | ✅ 已提交 `2eb578fb` |
+| 核实为实际活着（动态安装/子进程） | 3 | `job_formal_planning_proof`、`observed_product_scan_worker`（子进程）、`_chinese_business_comprehension_extractor_v1` |
 | 评测私有（AGENTS.md 契约禁止进运行时） | 10 | 保持评测路径 |
 | AGENTS.md 禁止接入 | 2 | `private_pilot_db_audit_patch`（链外 findings）、`deep_experiment_planner`/`deep_experiment_protocol_adapter`（diagnostic-only） |
-| 待接入（后续批次） | ~134 | 见下方路线图 |
+| 不可达剩余（批 6/7 + 散点） | ~123 | 见下方路线图 |
 
 ### 批 0 退役清单（8）
 
@@ -55,9 +57,9 @@
 
 关键发现：`discovery_engine/_engine.py` 等子包存在 **46 处坏相对导入**（模块移入子包后 `from .X` 指向不存在的路径，运行时 ImportError 被 except 静默吞掉）——批量修正为绝对导入后，Phase78B 语义状态验证、覆盖报告、fixture 自动构造、假设验证、证据规范化、发现门禁等段全部复活，`business_invariant_evaluator`、`state_observer_registry`、`invariant_engine`、`coverage_matrix`、`fixture_auto_constructor`、`hypothesis_schema` 等 13 个模块经 discovery_engine / real_project_defect_discovery / semantic_scenario_generator 路径接入。另接入 `behavior_registry`（scan 后钩子）、`cross_observer_conservation_reconciler`（grounded_probe_executor 验证段）；退役 5 个能力已被主链覆盖的旧 Phase77 编排层模块。
 
-### 批 4：执行类（~20 个，需先定义 executor 扩展点）
+### 批 4：执行类 ✅ 已完成（14 退役 / 5 保留待扩展点）
 
-**核实结论（已扫描）：全部无坏导入，属真正未接线的执行工具。** 与主链能力对照：
+**核实结论：全部无坏导入。** 与主链能力对照：
 - 重复（主链已有一等公民）：`multi_surface_adapter`（主链 surface 安装器体系）、`frontend_ui_tester`（formal_ui_surface/ui_browser）、`flow_orchestrator`（multi_step_protocol 已注册 process 流协议）、`executor_cleanup`（从 experiment_executor 抽取后主链不再引用）、`db_verifier`/`deep_verifier`/`runtime_verifier`（observer/oracle 链覆盖验证语义）、`execution_profiler`+`execution_time_profiler`（双份互斥）
 - 独特能力（需 executor 扩展点）：`concurrent_probe_executor`（并行探针）、`experiment_portfolio`（冻结组合+配额）、`multi_layer_tester`（多层统一评测）
 - 模板/声明：`_fixture_materializer_facade_template`（模板文件，核心是活的主链模块）
@@ -93,7 +95,11 @@
 `defect_discovery._runner/_probes/_scenarios` 等。
 先在 `experiment_executor` 定义 surface / 并行 / 剖析 / 组合四个扩展点，再逐个挂入。
 
-### 批 5：学习/记忆/自进化（~17 个）
+### 批 5：学习/记忆/自进化 ✅ 已完成（17 退役 / 5 确认经批 3 修复接入）
+
+### 批 6：企业知识中心子模块（~15 个，待知识中心管线接线）
+
+**核实结论：614 个相对导入全部正确（零坏导入）；`enterprise_knowledge_center` 包本身**可达且被主链引用**（behavior_ir_core / agent_semantic_linker_authority / connector 体系），但 15 个子模块（`source_occurrence_ledger`/`source_occurrence_ingestion`/`business_world_model`/`classifiers`/`document_intelligence`/`industry_auto_inference`/`service_topology`/`temporal_saga_doc_intel`/`enterprise_understanding.*`/`openapi_path_parameter_projection`）未被包内管线调用——属"活包内未接线组件"。**接入方式**：在知识中心管线的 ingestion/understanding 调用点接线（需先梳理 `composition.py` 等组合点的调用图），单独批次设计。
 
 `adaptive_planning_history` / 自进化触发接口：`discovery_learner`、`enterprise_strategy_learning`、
 `feedback_policy_update`、`policy_memory`、`bug_pattern_library`、`bug_knowledge_graph`、
