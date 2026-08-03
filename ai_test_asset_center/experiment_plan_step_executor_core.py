@@ -317,14 +317,6 @@ def execute_non_barrier_plans(
                     separator = "&" if "?" in path else "?"
                     path = f"{path}{separator}{urlencode(materialized_query)}"
             if unresolved_path_tokens:
-                import sys as _sys_step
-                print(
-                    f"[STEP-DIAG] exp={_text(eid)} phase={phase} subject={subject_id} "
-                    f"path_template={path_template} materialized={path} "
-                    f"unresolved={unresolved_path_tokens} "
-                    f"bindings={sorted(k for k in runtime_bindings if runtime_bindings.get(k) not in (None, '', [], {}))}",
-                    file=_sys_step.stderr,
-                )
                 # ── P0-PLACEHOLDER: BLOCK instead of force-strip ──
                 # Unresolved path placeholders mean no real entity exists.
                 # Executing with placeholder IDs (e.g. "1") guarantees 404/400
@@ -375,22 +367,6 @@ def execute_non_barrier_plans(
                 pre_transport_block_reasons.append(f"unresolved_body_placeholders:{','.join(unresolved_body_tokens[:6])}")
                 continue
             if method in _WRITE_METHODS:
-                import sys as _sys_step2
-                _body_repr = str(request_body)
-                if isinstance(request_body, (dict, list)):
-                    try:
-                        import json as _json_step
-                        _body_repr = _json_step.dumps(request_body, ensure_ascii=False)[:160]
-                    except Exception:
-                        pass
-                print(
-                    f"[STEP-DIAG] exp={_text(eid)} phase={phase} subject={subject_id} "
-                    f"write path={path} body={_body_repr} "
-                    f"missing_required={_missing_required_body_fields(request_body, op)} "
-                    f"fk_violations={_foreign_key_violations(request_body, op)} "
-                    f"unauthorized_role={_unauthorized_actor_role(op, actor)}",
-                    file=_sys_step2.stderr,
-                )
                 # ── P1: fail fast on missing required body fields ──
                 # The materialized body must satisfy the operation's declared
                 # request schema. If a required field is absent/empty (e.g. the
@@ -702,16 +678,6 @@ def execute_non_barrier_plans(
                         source_observed_control_bodies[op_ref] = deepcopy(request_body)
                 request_bodies_for_cleanup[subject_id] = request_body
                 write_receipt = _dict(governed.get("write"))
-                import sys as _sys_gov
-                print(
-                    f"[GOV-DIAG] exp={_text(eid)} phase={phase} subject={subject_id} "
-                    f"path={path} governed_accepted={governed.get('accepted')} "
-                    f"reason={_text(governed.get('reason')) or ''} "
-                    f"write_status={int(write_receipt.get('status') or 0)} "
-                    f"write_attempts={governed.get('write_request_attempt_count')} "
-                    f"runtime_body_blocked={runtime_body_blocked}",
-                    file=_sys_gov.stderr,
-                )
                 # Zero-transport governance blocks after a real before-GET are
                 # identity/mutation gaps, not connection failures. The write step
                 # keeps status_code=0, which previously fell through finalize's

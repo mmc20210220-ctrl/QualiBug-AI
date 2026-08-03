@@ -604,8 +604,7 @@ def materialize_experiment_fixtures(
                 if value not in (None, "", [], {}):
                     break
             if value in (None, "", [], {}):
-                # Try auto-fixture: discover a POST create at the same collection.
-                # Uses the documented request_example from Behavior IR as body_template
+                # Try auto-fixture: discover a POST create at the same collection.                # Uses the documented request_example from Behavior IR as body_template
                 # — industry-neutral, no hardcoding, works across all systems.
                 auto_create = _auto_fixture_create_for_binding_target(
                     target,
