@@ -122,6 +122,11 @@ from .scan_ui_contract_overlay import (
 from .scan_ui_interaction_contract_guard import (
     install_scan_ui_interaction_contract_guard,
 )
+from .scan_stability_contract_overlay import (
+    bind_scan_stability_contract_context,
+    overlay_scan_stability_contracts,
+    reset_scan_stability_contract_context,
+)
 from .semantic_operation_binding import bind_accepted_semantic_operations
 from .source_event_contract_binding import bind_source_event_contracts
 from .source_event_obligation_binding import install_source_event_obligation_binding
@@ -262,8 +267,11 @@ def build_behavior_ir_with_semantic_operation_bindings(
     effective_asset, scan_performance_receipt = overlay_scan_performance_contracts(
         event_asset
     )
+    stability_asset, scan_stability_receipt = overlay_scan_stability_contracts(
+        effective_asset
+    )
     behavior_ir = _original_build_behavior_ir(
-        effective_asset,
+        stability_asset,
         project_id=project_id,
         source_snapshot_hash=source_snapshot_hash,
         api_operations=api_operations,
@@ -305,6 +313,7 @@ def build_behavior_ir_with_semantic_operation_bindings(
     job_ir["scan_performance_contract_overlay_receipt"] = dict(
         scan_performance_receipt
     )
+    job_ir["scan_stability_contract_overlay_receipt"] = dict(scan_stability_receipt)
     return job_ir
 
 
@@ -322,9 +331,11 @@ def build_discovery_plan(inputs: Any, campaign_handle: Any) -> Any:
     ui_token = bind_scan_ui_contract_context(context)
     event_token = bind_scan_event_contract_context(context)
     performance_token = bind_scan_performance_contract_context(context)
+    stability_token = bind_scan_stability_contract_context(context)
     try:
         return _planning.build_discovery_plan(effective_inputs, campaign_handle)
     finally:
+        reset_scan_stability_contract_context(stability_token)
         reset_scan_performance_contract_context(performance_token)
         reset_scan_event_contract_context(event_token)
         reset_scan_ui_contract_context(ui_token)

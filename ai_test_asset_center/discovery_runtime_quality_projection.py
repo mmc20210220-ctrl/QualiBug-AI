@@ -9,6 +9,7 @@ from .discovery_loss_funnel import build_discovery_loss_funnel
 from .discovery_performance_loss_projection import (
     attach_formal_performance_loss_funnel,
 )
+from .discovery_stability_loss_projection import attach_formal_stability_loss_funnel
 from .discovery_ui_loss_projection import attach_formal_ui_loss_funnel
 from .formal_event_binding_evidence_projection import (
     project_formal_event_binding_evidence,
@@ -27,8 +28,9 @@ def project_discovery_quality(result: dict[str, Any]) -> dict[str, Any]:
     generic_funnel = build_discovery_loss_funnel(projected)
     with_ui = attach_formal_ui_loss_funnel(projected, generic_funnel)
     with_event = attach_formal_event_loss_funnel(projected, with_ui)
+    with_stability = attach_formal_stability_loss_funnel(projected, with_event)
     projected["discovery_loss_funnel"] = (
-        attach_formal_performance_loss_funnel(projected, with_event)
+        attach_formal_performance_loss_funnel(projected, with_stability)
     )
     raw_ledger = projected.get("obligation_attempt_ledger")
     if (
