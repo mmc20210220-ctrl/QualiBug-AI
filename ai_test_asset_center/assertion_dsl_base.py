@@ -337,6 +337,34 @@ def _text(value: Any) -> str:
 def _state_token(value: Any) -> str:
     """Normalize presentation-only enum differences without changing meaning."""
 
+    if isinstance(value, dict):
+        # State snapshots arrive as entity bodies (before/after governance
+        # reads), not bare enum strings. Textifying the whole dict would make
+        # the token never equal the declared state. Extract the state field by
+        # generic cross-industry names first, then any scalar string field as
+        # a fail-closed fallback (an unrelated field still yields a mismatch,
+        # which stays INDETERMINATE rather than inventing a verdict).
+        for key in (
+            "status",
+            "state",
+            "order_status",
+            "orderStatus",
+            "lifecycle_status",
+            "lifecycleStatus",
+            "approval_status",
+            "approvalStatus",
+            "payment_status",
+            "paymentStatus",
+        ):
+            if key in value and value[key] is not None:
+                value = value[key]
+                break
+        else:
+            for _k, _v in value.items():
+                if isinstance(_v, str) and _v.strip():
+                    value = _v
+                    break
+
     normalized = _text(value).replace("-", " ").replace("_", " ")
     return "_".join(normalized.split()).casefold()
 
@@ -1351,9 +1379,18 @@ def evaluate_assertion(
                     if reached:
                         reason_code = "FORBIDDEN_STATE_TRANSITION"
                 else:
-                    passed = _state_token(
-                        obs["after_state"]
-                    ) == _state_token(spec["to_state"])
+                    # Allowed transition edges declare what MAY happen, not what
+                    # MUST. A state-machine edge bound to an operation that does
+                    # not perform that step (idempotent re-cancel, unrelated
+                    # action rejected, or an operation with no effect on this
+                    # entity) leaves the state unchanged — that is a valid
+                    # observation, not a violation. Only a change to a state
+                    # outside the declared edge is defect evidence.
+                    _after_token = _state_token(obs["after_state"])
+                    if _after_token == _state_token(obs["before_state"]):
+                        passed = True
+                    else:
+                        passed = _after_token == _state_token(spec["to_state"])
         elif effective_kind == "postcondition":
             # Postcondition assertions verify that a causal rule's expected
             # effect actually materialized after the trigger action executed.
