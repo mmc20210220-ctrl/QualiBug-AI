@@ -29,7 +29,7 @@ def _text(value: Any) -> str:
 
 _PATH_PARAMETER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
-_STATE_TARGET_PATH_RE = re.compile(r"^@state=([a-z0-9]+)@(.*)$")
+_STATE_TARGET_PATH_RE = re.compile(r"^@state=([a-z0-9_]+)@(.*)$")
 
 
 def _field_key(value: Any) -> str:
@@ -37,7 +37,13 @@ def _field_key(value: Any) -> str:
 
 
 def _state_token(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "", _text(value).casefold())
+    # Same normalization as the assertion DSL evaluator: separators become
+    # underscores (``REFUND_REQUESTED`` -> ``refund_requested``). Stripping
+    # separators entirely made this token never equal the required-state
+    # token compiled from the same state name, so every state-scoped binding
+    # with a multi-word state fell back to fixture creation.
+    normalized = _text(value).replace("-", " ").replace("_", " ")
+    return "_".join(normalized.split()).casefold()
 
 
 def _response_scalar_fields(value: Any) -> dict[str, list[Any]]:
