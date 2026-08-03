@@ -215,6 +215,31 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     output_dir = prepared.get("output_dir")
     save_report = bool(prepared.get("save_report", save_report))
 
+    # ── Closed-Loop Learning READ side: load knowledge learned in previous
+    # scans from the SQLite knowledge base and hand it to the pipeline.
+    # Failures stay visible via the load_failure field instead of silently
+    # degrading the scan to zero-memory mode.
+    try:
+        from .closed_loop_feedback import load_learned_scan_context
+
+        learned_context = load_learned_scan_context(project)
+        if learned_context.get("pattern_count") or learned_context.get("load_failure"):
+            context["learned_knowledge"] = learned_context
+            _LOGGER.info(
+                "closed_loop_learned_context_loaded project=%s patterns=%s failure=%s",
+                project,
+                learned_context.get("pattern_count", 0),
+                learned_context.get("load_failure", "none"),
+            )
+    except Exception as exc:
+        _LOGGER.exception("closed_loop_learned_context_load_failed")
+        context["learned_knowledge"] = {
+            "source": "sqlite_knowledge_base",
+            "pattern_count": 0,
+            "learned_patterns": [],
+            "load_failure": f"{type(exc).__name__}:{str(exc)[:200]}",
+        }
+
     try:
         from .v12_pipeline import run_v12_pipeline
         v12 = run_v12_pipeline(project=project, root=root, prd_text=prd_text, api_spec_text=api_doc_text, db_schema_text=schema_text, base_url=approved_base_url, campaign_context=context)
@@ -658,6 +683,10 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         "ci_gate": {"status": "not_evaluated" if ci_gate else "not_requested", "reason": "confirmed_receipts_and_approved_baseline_required" if ci_gate else ""},
         "auto_har": v12.get("auto_har", {}), "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution": ui_execution, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "external_signal_execution": external_signal_execution, "v12": v12,
     }
+    # Closed-loop READ side observability: surface what knowledge this scan
+    # consumed from the SQLite knowledge base (or why it failed to load).
+    if context.get("learned_knowledge") is not None:
+        result["learned_knowledge"] = context["learned_knowledge"]
     from .discovery_quality_projection import (
         attach_quality_projection_to_scan_result,
         suppress_benchmark_quality_when_not_measured,

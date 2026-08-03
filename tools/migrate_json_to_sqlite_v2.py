@@ -164,7 +164,14 @@ def migrate_json_to_sqlite(
         logger.warning("Use --force to overwrite")
         return {
             "status": "SKIPPED",
-            "reason": "Database already exists, use --force to overwrite"
+            "reason": "Database already exists, use --force to overwrite",
+            "statistics": {
+                "total_files_scanned": 0,
+                "valid_entries_migrated": 0,
+                "warnings_count": 0,
+                "migration_duration_ms": 0
+            },
+            "warnings": []
         }
     
     # Scan existing JSON entries
@@ -296,10 +303,11 @@ def main():
     print("MIGRATION REPORT")
     print("=" * 70)
     print("Status: {}".format(result["status"]))
-    print("Total files scanned: {}".format(result["statistics"]["total_files_scanned"]))
-    print("Valid entries: {}".format(result["statistics"]["valid_entries_migrated"]))
-    print("Warnings: {}".format(result["statistics"]["warnings_count"]))
-    print("Duration: {:.2f} ms".format(result["statistics"]["migration_duration_ms"]))
+    stats = result.get("statistics", {})
+    print("Total files scanned: {}".format(stats.get("total_files_scanned", 0)))
+    print("Valid entries: {}".format(stats.get("valid_entries_migrated", 0)))
+    print("Warnings: {}".format(stats.get("warnings_count", 0)))
+    print("Duration: {:.2f} ms".format(stats.get("migration_duration_ms", 0)))
     
     if result.get("warnings"):
         print("\nWarnings:")
@@ -320,6 +328,9 @@ def main():
     if result["status"] == "SUCCESS":
         sys.exit(0)
     elif result["status"] == "DRY_RUN_COMPLETED":
+        sys.exit(0)
+    elif result["status"] == "SKIPPED":
+        # Skipped is an expected condition (db exists), not a failure
         sys.exit(0)
     else:
         sys.exit(1)

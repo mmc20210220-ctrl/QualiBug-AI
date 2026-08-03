@@ -118,6 +118,47 @@ class LearningPatternBridge:
         except Exception as e:
             logger.warning("Failed to retrieve patterns: %s", e)
             return []
+
+    def load_learned_context(self, limit: int = 20) -> dict[str, Any]:
+        """Load learned knowledge from SQLite as scan-ready context.
+
+        This is the READ side of the closed loop: called at scan start so
+        knowledge learned in previous rounds is consumed by the next scan.
+        Fails safe with an explicit reason so missing knowledge is visible.
+
+        Returns:
+            Dict with learned_patterns, pattern_count, source metadata.
+        """
+        try:
+            entries = self.kb.get_effective_patterns("risk_pattern", min_usage=0)
+            entries = sorted(
+                entries, key=lambda e: (e.usage_count, e.confidence), reverse=True
+            )[:limit]
+
+            patterns = []
+            for e in entries:
+                item = dict(e.content) if isinstance(e.content, dict) else {}
+                item.setdefault("_key", e.key)
+                item.setdefault("_confidence", e.confidence)
+                item.setdefault("_usage_count", e.usage_count)
+                patterns.append(item)
+
+            return {
+                "source": "sqlite_knowledge_base",
+                "project": self.project,
+                "pattern_count": len(patterns),
+                "learned_patterns": patterns,
+                "loaded_at": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.warning("Failed to load learned context: %s", e)
+            return {
+                "source": "sqlite_knowledge_base",
+                "project": self.project,
+                "pattern_count": 0,
+                "learned_patterns": [],
+                "load_failure": "{}:{}".format(type(e).__name__, str(e)[:200]),
+            }
             
     def migrate_legacy_patterns_to_sqlite(self) -> int:
         """Migrate patterns from legacy JSON file to SQLite.

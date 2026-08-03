@@ -330,7 +330,7 @@ class LearningKnowledgeDB:
                 )
                 row = cursor.fetchone()
                 if row:
-                    existing_entry = self.from_row(row)
+                    existing_entry = KnowledgeEntry.from_row(row)
             except Exception as e:
                 logger.warning("Failed to check existing entry: %s", e)
                 
@@ -498,7 +498,7 @@ class LearningKnowledgeDB:
                 LIMIT 100
             """, (category, min_usage))
             
-            return [self.from_row(row) for row in cursor.fetchall()]
+            return [KnowledgeEntry.from_row(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.warning("Failed to get effective patterns: %s", e)
             return []

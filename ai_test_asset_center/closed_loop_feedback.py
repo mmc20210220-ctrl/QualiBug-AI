@@ -20,6 +20,17 @@ from .customer_delivery_gate import is_customer_deliverable_defect
 from .learning_pattern_bridge import LearningPatternBridge
 
 
+def load_learned_scan_context(project: str, *, limit: int = 20) -> dict:
+    """READ side of the closed loop: load SQLite-learned knowledge for a scan.
+
+    Called at scan start so patterns learned in previous rounds are consumed
+    by the next scan. Returns an explicit, inspectable payload; failures stay
+    visible via the "load_failure" field instead of being swallowed.
+    """
+    bridge = LearningPatternBridge(project=project)
+    return bridge.load_learned_context(limit=limit)
+
+
 def build_closed_loop_context(
     project: str, root: Path, findings: list[dict], *, max_patterns: int = 20
 ) -> dict[str, Any]:
@@ -69,9 +80,22 @@ def build_closed_loop_context(
             "mutation_hint": pat.get("mutation", ""),
         })
     
-    # Store patterns in SQLite knowledge base
+    # Store patterns in SQLite knowledge base.
+    # NOTE: bridge keys entries by "signature"; mutations dicts have no unique
+    # signature, so build signature-qualified pattern dicts from history to
+    # avoid every pattern collapsing onto a single key.
+    sqlite_patterns = []
+    for key, record in history["patterns"].items():
+        pat = record.get("pattern", {})
+        sqlite_patterns.append({
+            "signature": key,
+            "type": pat.get("type", "unknown"),
+            "entity": pat.get("entity"),
+            "mutation_hint": pat.get("mutation", ""),
+            "count": record.get("count", 1),
+        })
     bridge = LearningPatternBridge(project=project)
-    stored_count = bridge.store_patterns(mutations, scan_id="current_scan", confidence=0.85)
+    stored_count = bridge.store_patterns(sqlite_patterns, scan_id="current_scan", confidence=0.85)
     
     # Migrate legacy patterns to SQLite if needed
     migrated_count = bridge.migrate_legacy_patterns_to_sqlite()
