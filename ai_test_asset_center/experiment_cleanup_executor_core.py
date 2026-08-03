@@ -18,6 +18,7 @@ from .experiment_cleanup import (
     _governed_write_attempts,
     _governed_write_changed_state,
     _governed_write_reached_transport,
+    _primary_resource_identity_candidates,
     _rejected_writes_left_state_unchanged,
 )
 from .experiment_runtime_support import (
@@ -33,10 +34,12 @@ from .experiment_runtime_support import (
     _unresolved_path_placeholders,
 )
 from .real_id_resolver import (
+    collection_path,
     infer_path_params,
     normalize_path_placeholders,
     path_has_placeholders,
 )
+from .runtime_binding_graph import _declared_cleanup_operations
 from .runtime_binding_materializer import (
     materialize_body_template as _materialize_body_template,
     materialize_path as _materialize_path,
@@ -2208,6 +2211,53 @@ def execute_experiment_cleanup_compensation(
                     observations["cleanup_status"] = "failed"
                 elif not cleanup_failures:
                     observations["cleanup_status"] = "completed"
+                    # A compensating create (recreate_compensated_resource /
+                    # compensating_transition POST/PUT/PATCH) introduces a NEW
+                    # resource whose identity differs from the one it
+                    # compensates. Register it for governed cleanup, or every
+                    # DELETE-compensation leaks one residue row (measured:
+                    # fixture_cleanup RESTORATION failures after control/treatment
+                    # consumed the fixture resource and the recreate left a new
+                    # cart item behind).
+                    if cleanup_method in {"POST", "PUT", "PATCH"}:
+                        _new_identities = _primary_resource_identity_candidates(
+                            cleanup_write.get("body")
+                        )
+                        if _new_identities:
+                            _recreate_collection = normalize_path_placeholders(
+                                collection_path(path)
+                            )
+                            _recreate_deletes = [
+                                row
+                                for row in _declared_cleanup_operations(
+                                    _recreate_collection,
+                                    behavior_ir=_cleanup_behavior_ir,
+                                )
+                                if _text(row.get("method")).upper() == "DELETE"
+                            ]
+                            if _recreate_deletes:
+                                pending_fixture_cleanups.append({
+                                    "target": _new_identities[0],
+                                    "value": _new_identities[0],
+                                    "cleanup": {
+                                        "method": "DELETE",
+                                        "path": _recreate_deletes[0].get("path")
+                                        or f"/{_recreate_collection.strip('/')}/{{id}}",
+                                        "operation_ref": _text(
+                                            _recreate_deletes[0].get("operation_ref")
+                                        ),
+                                    },
+                                    "actor_identity": _text(
+                                        actor.get("role") or actor_ref
+                                    ),
+                                    "actor_token": token,
+                                    "observation_path": observation_path,
+                                    "governed_setup": governed_cleanup,
+                                    "receipt": {
+                                        "kind": "fixture_cleanup",
+                                        "target": _new_identities[0],
+                                    },
+                                })
 
     # Fixture setup precedes experiment writes, so its compensation must run
     # after every experiment-write compensation to preserve global reverse
