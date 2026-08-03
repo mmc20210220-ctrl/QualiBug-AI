@@ -329,7 +329,7 @@ export function EnterpriseCampaigns() {
       <div className="page-header">
         <div>
           <span className="panel-kicker">自主验证入口</span>
-          <h1>开始验证</h1>
+          <h1>运行中心</h1>
           <p>QualiBug 自动读取系统接入、测试凭据、企业资料、审批场景和安全策略。正常情况下，用户只需要点击一次。</p>
         </div>
         <div className="settings-actions"><button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>接入信息</button></div>
@@ -401,7 +401,7 @@ export function EnterpriseCampaigns() {
             <div><span className="muted">发现问题</span><p>{result.total_findings ?? 0}</p></div>
             <div><span className="muted">耗时</span><p>{asNumber(result.total_ms)} ms</p></div>
             <div><span className="muted">覆盖度</span><p>{asNumber(result.coverage)}</p></div>
-            <div><span className="muted">真实请求证据</span><p>{harEntries(result.auto_har).length} 条</p></div>
+            <div><span className="muted">真实执行证据</span><p>{harEntries(result.auto_har).length} 条真实请求</p></div>
             <div><span className="muted">结果评级</span><p>{result.grade || '未评级'}</p></div>
             <div><span className="muted">审批上传场景</span><p>{runtimeScenarioRefs.length}/{lastRunScenarioRefs.length} 已注入</p></div>
             <div><span className="muted">运行 Fixture 总数</span><p>{runtimeFixtureRefs.length}</p></div>
@@ -424,7 +424,7 @@ export function EnterpriseCampaigns() {
               <div><span className="muted">自动 UI 场景</span><p>{forceReadOnly ? '只读熔断已跳过' : `${runtimeScenarioRefs.length}/${lastRunScenarioRefs.length} 已确认`}</p></div>
               <div><span className="muted">额外 Fixture</span><p>{lastRunFixtureRefs.length > 0 ? `${lastRunFixtureRefs.length - missingExtraFixtures.length}/${lastRunFixtureRefs.length} 已确认` : '未使用额外绑定'}</p></div>
             </div>
-            <h3>真实 HTTP 请求</h3>
+            <h3>真实 HTTP 请求 · HAR 状态</h3>
             {harEntries(result.auto_har).length === 0 ? <p className="muted">本次没有捕获到 HTTP 请求，通常表示目标未联通或运行被安全门禁阻断。</p> : <ul>{harEntries(result.auto_har).slice(0, 50).map((entry, index) => <li key={`${harRequestLabel(entry)}-${index}`}><code>{harRequestLabel(entry)}</code> · HTTP {harStatusLabel(entry)}</li>)}</ul>}
           </details>
 

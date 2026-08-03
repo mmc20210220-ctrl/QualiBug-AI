@@ -79,7 +79,14 @@ def test_http_surface_has_no_unfenced_abort_path():
         / "ai_test_asset_center"
         / "private_pilot_connector_handlers.py"
     ).read_text(encoding="utf-8")
+    # No abort capability may exist anywhere in the connector HTTP surface:
+    # not as a route segment, not as an action, not as a handler.
     assert "abort_connector_sync_run" not in source
-    assert 'tail[1] in {"test", "sync"}' in source
-    assert 'tail[1] in {"test", "sync", "abort"}' not in source
-    assert 'if action == "abort"' not in source
+    assert '"abort"' not in source
+    assert "action == 'abort'" not in source
+    assert 'action == "abort"' not in source
+    # The connector action fence must keep dispatching the managed sync
+    # authority; sync stays first-class inside the fenced action set.
+    assert "tail[1] in {" in source
+    assert '"sync",' in source
+    assert 'if action == "sync"' in source

@@ -17,10 +17,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "frontend" / "src" / "App.tsx"
 RUN_CENTER = ROOT / "frontend" / "src" / "pages" / "EnterpriseCampaigns.tsx"
+RUN_CENTER_API = ROOT / "frontend" / "src" / "api" / "run-center.ts"
 CLIENT = ROOT / "frontend" / "src" / "api" / "client.ts"
 SIDEBAR = ROOT / "frontend" / "src" / "components" / "Sidebar.tsx"
 TOPBAR = ROOT / "frontend" / "src" / "components" / "Topbar.tsx"
-SERVICE = ROOT / "ai_test_asset_center" / "private_pilot_service.py"
+ROUTING = ROOT / "ai_test_asset_center" / "private_pilot_http_routing.py"
+
+
+def _run_center_surface() -> str:
+    """Run Center page plus the scan wrapper its wiring was extracted into.
+
+    Same rationale as the dashboard surface helper: the one-click scan call
+    now goes through runV12ScanFromRunCenter (api/run-center.ts), which adds
+    approved-scenario sync and the read-only kill switch before hitting the
+    real /api/v1/scan endpoint. The test tracks the end-to-end wiring
+    rather than the single file it historically lived in.
+    """
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (RUN_CENTER, RUN_CENTER_API)
+        if path.is_file()
+    )
 
 
 def test_run_center_page_exists_and_is_routed() -> None:
@@ -33,17 +50,20 @@ def test_run_center_page_exists_and_is_routed() -> None:
 
 def test_run_center_invokes_real_scan_endpoint_and_refreshes_downstream() -> None:
     run_center = RUN_CENTER.read_text(encoding="utf-8")
-    # One-click scan calls the single-backend /api/v1/scan wrapper.
-    assert "runV12Scan(project" in run_center
+    surface = _run_center_surface()
+    # One-click scan calls the single-backend /api/v1/scan wrapper (via the
+    # run-center wrapper, which POSTs to the real endpoint).
+    assert "runV12ScanFromRunCenter(project" in run_center
+    assert "fetch('/api/v1/scan'" in surface
     assert "执行标准扫描" in run_center
     # Auto-reads project context / readiness before running.
     assert "getScanPreflight" in run_center
     assert "getServiceCredentials" in run_center
     assert "getKnowledgeAsset" in run_center
     # Passes real scope / environment / test data contract into the scan body.
-    assert "scope_id" in run_center
-    assert "environment_ref" in run_center
-    assert "test_data_contract" in run_center
+    assert "scope_id" in surface
+    assert "environment_ref" in surface
+    assert "test_data_contract" in surface
     # Explicit OpenAPI source selector — customer can pick which registered API spec to use.
     assert "selectedSourceId" in run_center
     assert "apiSources" in run_center
@@ -89,9 +109,11 @@ def test_nav_has_no_dead_source_assets_entry() -> None:
 
 
 def test_backend_serves_scan_preflight_on_get() -> None:
-    service = SERVICE.read_text(encoding="utf-8")
+    routing = ROUTING.read_text(encoding="utf-8")
+    # Handler behavior lives in mixins after the composition-root split
+    # (AGENTS.md): HTTP scan routes are dispatched in the routing mixin.
     # The preflight readiness endpoint the Run Center calls must be dispatched on GET.
-    assert '"/api/v1/scan/preflight"' in service
-    assert "_handle_scan_preflight" in service
+    assert '"/api/v1/scan/preflight"' in routing
+    assert "_handle_scan_preflight" in routing
     # And the actual scan endpoint the one-click button hits must exist.
-    assert '"/api/v1/scan"' in service
+    assert '"/api/v1/scan"' in routing
