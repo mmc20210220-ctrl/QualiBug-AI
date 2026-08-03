@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Import SQLite knowledge base (enterprise storage)
+from .learning_knowledge_db import LearningKnowledgeDB, KnowledgeEntry
+
 
 @dataclass
 class RoundKnowledgeSummary:
@@ -148,9 +151,7 @@ class CrossRoundKnowledgeTransfer:
         
     def _store_risk_patterns(self, patterns: list[dict]) -> None:
         """Store discovered risk patterns in knowledge base."""
-        from .learning_knowledge_base import LearningKnowledgeBase
-        
-        kb = LearningKnowledgeBase(self.project)
+        kb = LearningKnowledgeDB(self.project)
         
         for pattern in patterns:
             key = pattern.get("signature", pattern.get("type", "unknown"))
@@ -165,9 +166,7 @@ class CrossRoundKnowledgeTransfer:
             
     def _store_effective_probes(self, probes: list[dict]) -> None:
         """Store effective probe templates in knowledge base."""
-        from .learning_knowledge_base import LearningKnowledgeBase
-        
-        kb = LearningKnowledgeBase(self.project)
+        kb = LearningKnowledgeDB(self.project)
         
         for probe in probes:
             key = probe.get("probe_type", probe.get("name", "unknown"))
@@ -182,9 +181,7 @@ class CrossRoundKnowledgeTransfer:
             
     def _store_failure_patterns(self, patterns: list[dict]) -> None:
         """Store failure patterns in knowledge base."""
-        from .learning_knowledge_base import LearningKnowledgeBase
-        
-        kb = LearningKnowledgeBase(self.project)
+        kb = LearningKnowledgeDB(self.project)
         
         for pattern in patterns:
             key = pattern.get("failure_type", pattern.get("reason", "unknown"))
@@ -237,9 +234,7 @@ class CrossRoundKnowledgeTransfer:
         
     def get_learned_patterns(self, category: str, limit: int = 10) -> list[dict]:
         """Get all learned patterns in a category."""
-        from .learning_knowledge_base import LearningKnowledgeBase
-        
-        kb = LearningKnowledgeBase(self.project)
+        kb = LearningKnowledgeDB(self.project)
         
         # Get most effective patterns
         effective = kb.get_effective_patterns(category, min_usage=2)
@@ -314,9 +309,7 @@ class CrossRoundKnowledgeTransfer:
             )
             
         # Export knowledge base
-        from .learning_knowledge_base import LearningKnowledgeBase
-        
-        kb = LearningKnowledgeBase(self.project)
+        kb = LearningKnowledgeDB(self.project)
         kb_export_path = kb.export_to_json(output_path.parent / f"kb_{output_path.name}")
         
         # Create package manifest
