@@ -25,7 +25,8 @@
 | 核实为实际活着（动态安装/子进程） | 3 | `job_formal_planning_proof`、`observed_product_scan_worker`（子进程）、`_chinese_business_comprehension_extractor_v1` |
 | 评测私有（AGENTS.md 契约禁止进运行时） | 10 | 保持评测路径 |
 | AGENTS.md 禁止接入 | 2 | `private_pilot_db_audit_patch`（链外 findings）、`deep_experiment_planner`/`deep_experiment_protocol_adapter`（diagnostic-only） |
-| 不可达剩余（批 6/7 + 散点） | ~123 | 见下方路线图 |
+| 批 7：facade/工具/桥退役 | 14 退役 / 8 测试保护保留 | ✅ 已提交 `0e6e49a4` |
+| **不可达剩余** | **108**（193→108，-44%） | 知识中心 11 + 测试保护 8 + 散点 ~89，见路线图 |
 
 ### 批 0 退役清单（8）
 
