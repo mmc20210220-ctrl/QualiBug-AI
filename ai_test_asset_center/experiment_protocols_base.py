@@ -72,7 +72,18 @@ def source_request_example(
 
 def _request_body_schema(operation: dict[str, Any]) -> dict[str, Any]:
     request_schema = _dict(_dict(operation).get("request_schema"))
-    if _text(request_schema.get("type")) or _dict(request_schema.get("properties")):
+    # Prefer the schema that actually declares fields. A top-level
+    # ``{"type": "object", "properties": {}}`` shell with the real field
+    # declarations under ``content.<media>.schema`` must resolve to the
+    # content schema, or every field-based protocol sees an empty field set
+    # and blocks on a source schema that does declare fields.
+    if _dict(request_schema.get("properties")):
+        return request_schema
+    for media in _dict(request_schema.get("content")).values():
+        schema = _dict(_dict(media).get("schema"))
+        if schema and _dict(schema.get("properties")):
+            return schema
+    if _text(request_schema.get("type")):
         return request_schema
     for media in _dict(request_schema.get("content")).values():
         schema = _dict(_dict(media).get("schema"))

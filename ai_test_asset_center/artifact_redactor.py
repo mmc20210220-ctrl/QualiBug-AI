@@ -197,7 +197,17 @@ def scan_for_secrets(payload: Any) -> dict[str, Any]:
             re.I,
         ))
 
-    def walk(value: Any, path: str = "$", key: str = "") -> None:
+    def walk(value: Any, path: str = "$", key: str = "", _seen: set[int] | None = None) -> None:
+        # Runtime payloads may legally contain self-referential structures
+        # (e.g. an experiment embedding its own obligation). Guard with an
+        # identity set so the scanner terminates instead of recursing forever.
+        if _seen is None:
+            _seen = set()
+        if isinstance(value, (dict, list)):
+            _mark = id(value)
+            if _mark in _seen:
+                return
+            _seen.add(_mark)
         if isinstance(value, dict):
             for child_key, child_val in value.items():
                 child_path = f"{path}.{child_key}"
@@ -217,11 +227,11 @@ def scan_for_secrets(payload: Any) -> dict[str, Any]:
                         "reason": "sensitive_key_unredacted",
                         "preview": child_val[:8] + "…",
                     })
-                walk(child_val, child_path, key_l)
+                walk(child_val, child_path, key_l, _seen)
             return
         if isinstance(value, list):
             for index, item in enumerate(value[:2000]):
-                walk(item, f"{path}[{index}]", key)
+                walk(item, f"{path}[{index}]", key, _seen)
             return
         if not isinstance(value, str) or _is_safe_placeholder(value):
             return
@@ -287,6 +297,39 @@ def _reseal_attempt_ledgers(value: Any) -> Any:
     return value
 
 
+def _find_cycle(value: Any) -> str:
+    """Return the first self-referential path in a payload, or empty string.
+
+    A payload must be serializable before redaction can trust it; a cyclic
+    structure (an object embedding itself) would otherwise hang or fail the
+    JSON write deep in a post-hook with no diagnostics. This walk terminates
+    on the first cycle and names the path.
+    """
+
+    def probe(item: Any, path: str, active: set[int]) -> str:
+        if isinstance(item, (dict, list)):
+            marker = id(item)
+            if marker in active:
+                return path
+            active.add(marker)
+            try:
+                if isinstance(item, dict):
+                    for child_key, child_val in item.items():
+                        hit = probe(child_val, f"{path}.{child_key}", active)
+                        if hit:
+                            return hit
+                else:
+                    for index, child in enumerate(item[:2000]):
+                        hit = probe(child, f"{path}[{index}]", active)
+                        if hit:
+                            return hit
+            finally:
+                active.discard(marker)
+        return ""
+
+    return probe(value, "$", set())
+
+
 def write_json_redacted(
     path: Path | str,
     payload: Any,
@@ -296,6 +339,12 @@ def write_json_redacted(
 ) -> dict[str, Any]:
     """Write JSON only after recursive redaction and secret scan succeed."""
     target = Path(path)
+    cycle_path = _find_cycle(payload)
+    if cycle_path:
+        raise ArtifactSecretLeakError(
+            f"artifact payload is not serializable (cycle at {cycle_path})",
+            scan_result={"cycle_path": cycle_path},
+        )
     redacted, receipt = redact_and_validate(payload)
     if post_redaction_validator is not None:
         post_redaction_validator(redacted)

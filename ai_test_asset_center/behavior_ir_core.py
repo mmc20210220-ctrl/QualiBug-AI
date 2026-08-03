@@ -1771,6 +1771,23 @@ _COMPENSATION_ACTION_PATH_VERBS = frozenset({
     "compensate",
     "unbook",
     "rescind",
+    # Cross-industry reverse-action vocabulary: cancelling a created order,
+    # terminating a created subscription, revoking a created entitlement,
+    # withdrawing a submitted request, aborting a started process and closing
+    # a created record are the standard compensating action for the matching
+    # collection create in every domain (orders, bookings, entitlements,
+    # requests, jobs). The compensation relation still requires the exact
+    # ``{collection}/{id}/{verb}`` shape against the create operation, so the
+    # vocabulary only opens the reverse-action family, never a free-for-all.
+    "cancel",
+    "close",
+    "terminate",
+    "revoke",
+    "withdraw",
+    "abort",
+    "annul",
+    "nullify",
+    "invalidate",
 })
 
 

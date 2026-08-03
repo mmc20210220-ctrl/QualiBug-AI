@@ -995,6 +995,52 @@ def build_source_backed_coverage_obligations(
             rel_op_ref = _text(node.get("operation_ref"))
             if rel_op_ref and rel_op_ref in valid_op_ids:
                 op_refs = [rel_op_ref]
+            elif _text(node.get("relation_type")) == "transitions":
+                # State-machine edges declare flows, not triggers: a
+                # schema-derived transition (S1 -> S2) carries no operation_ref.
+                # Bind it to the exact source-declared transition operations on
+                # the same entity instead of the entity-co-reference fallback,
+                # which would guess a create/read operation and compile a
+                # field-mutation probe that can never observe a lifecycle step.
+                # Identity here is precise IR node identity: the entity of an
+                # endpoint state, matched against the to_ref of an
+                # operation-derived transitions relation (from_ref is the
+                # operation, to_ref the entity). No path/state-name similarity.
+                _ent_ids: set[str] = set()
+                _endpoint_state_ids = {
+                    _text(node.get("from_ref")),
+                    _text(node.get("to_ref")),
+                }
+                if _endpoint_state_ids:
+                    for _st in _list(behavior_ir.get("states")):
+                        if not isinstance(_st, dict):
+                            continue
+                        if _text(_st.get("id")) not in _endpoint_state_ids:
+                            continue
+                        _ent_name = _text(_st.get("entity_ref"))
+                        if not _ent_name:
+                            continue
+                        for _ent in _list(behavior_ir.get("entities")):
+                            if not isinstance(_ent, dict):
+                                continue
+                            if _ent_name in {
+                                _text(_ent.get("id")),
+                                _text(_ent.get("name")),
+                                *(_text(x) for x in _list(_ent.get("source_entity_names"))),
+                            }:
+                                _ent_ids.add(_text(_ent.get("id")))
+                                break
+                for _rel in _list(behavior_ir.get("relations")):
+                    if not isinstance(_rel, dict):
+                        continue
+                    if _text(_rel.get("relation_type")) != "transitions":
+                        continue
+                    _from = _text(_rel.get("from_ref"))
+                    _to = _text(_rel.get("to_ref"))
+                    if not _from or _from not in valid_op_ids or _from in op_refs:
+                        continue
+                    if _to in _ent_ids:
+                        op_refs.append(_from)
         elif node_type == "state":
             # State nodes reference entities — resolve operations via transitions
             _state_id = _text(node.get("ir_node_id"))
@@ -1007,6 +1053,36 @@ def build_source_backed_coverage_obligations(
                     _rel_op = _text(_rel.get("operation_ref"))
                     if _rel_op and _rel_op in valid_op_ids and _rel_op not in op_refs:
                         op_refs.append(_rel_op)
+            if not op_refs:
+                # Same exact-identity binding as relation nodes: a state node
+                # with no operation-labelled transition edge still belongs to an
+                # entity whose source-declared transition operations can move
+                # the entity into/out of this state. Bind those operations
+                # instead of falling back to the entity-co-reference fallback,
+                # which would guess a create/read operation that can never
+                # perform a lifecycle step.
+                _ent_name = _text(node.get("entity_ref"))
+                _ent_ids = {
+                    _text(_ent.get("id"))
+                    for _ent in _list(behavior_ir.get("entities"))
+                    if isinstance(_ent, dict)
+                    and _ent_name in {
+                        _text(_ent.get("id")),
+                        _text(_ent.get("name")),
+                        *(_text(x) for x in _list(_ent.get("source_entity_names"))),
+                    }
+                }
+                for _rel in _list(behavior_ir.get("relations")):
+                    if not isinstance(_rel, dict):
+                        continue
+                    if _text(_rel.get("relation_type")) != "transitions":
+                        continue
+                    _from = _text(_rel.get("from_ref"))
+                    _to = _text(_rel.get("to_ref"))
+                    if not _from or _from not in valid_op_ids or _from in op_refs:
+                        continue
+                    if _to in _ent_ids:
+                        op_refs.append(_from)
         elif op_id and op_id in valid_op_ids:
             op_refs = [op_id]
         elif node_type in ("operation", "actor_operation"):
@@ -1064,18 +1140,16 @@ def build_source_backed_coverage_obligations(
         if not op_refs:
             continue
 
-        primary_operation = next(
-            (
-                operation
-                for operation in all_ops
-                if isinstance(operation, dict)
-                and _text(operation.get("id")) == op_refs[0]
-            ),
-            {},
-        )
-        op_path = _text(node.get("operation_path") or primary_operation.get("path"))
-        op_method = _text(
-            primary_operation.get("method") or node.get("operation_method")
+        # ── Per-operation obligation splitting ──
+        # A state-machine edge bound to N exact transition operations yields N
+        # obligations, one per operation. Only the operation that actually
+        # performs the step changes the state; compiling only the first
+        # candidate would silently drop the real trigger and the others would
+        # never be exercised.
+        split_ops = (
+            list(op_refs)
+            if node_type in ("relation", "state") and len(op_refs) > 1
+            else op_refs[:1]
         )
         actor_id = _text(node.get("actor_id"))
         source_refs = _list(node.get("source_refs"))
@@ -1165,56 +1239,145 @@ def build_source_backed_coverage_obligations(
             or ["http_response"]
         )
 
-        # Cleanup follows the source-declared semantic effect. A POST can be a
-        # read-only validation/preview action; method-only classification would
-        # create an impossible cleanup obligation for that operation.
-        # make_obligation requires a dict — a bare string raises ValueError and
-        # previously fell into a silent fallback that emitted bare
-        # risk_family=invariant (measured as invariant_assertion_kind_missing).
-        effect_input = primary_operation or {
-            "side_effect_class": node.get("side_effect_class"),
-            "read_write": node.get("read_write"),
-        }
-        is_write = _infer_operation_effect(effect_input, op_method.upper()) == "write"
-        cleanup_requirement: dict[str, Any] = {"required": bool(is_write)}
+        # State-machine transition edges carry concrete endpoint states in the
+        # IR; carry them through to the property spec so the state protocol
+        # compiles a real state_transition assertion instead of an empty shell.
+        _relation_state_refs: dict[str, Any] = {}
+        if node_type == "relation" and _text(node.get("relation_type")) == "transitions":
+            _state_by_id = {
+                _text(s.get("id")): s
+                for s in _list(behavior_ir.get("states"))
+                if isinstance(s, dict) and _text(s.get("id"))
+            }
+            _from_st = _state_by_id.get(_text(node.get("from_ref"))) or {}
+            _to_st = _state_by_id.get(_text(node.get("to_ref"))) or {}
+            _from_name = _text(_from_st.get("name"))
+            _to_name = _text(_to_st.get("name"))
+            _relation_state_refs = {
+                "from_state_ref": _text(node.get("from_ref")),
+                "to_state_ref": _text(node.get("to_ref")),
+                "from_state": _from_name,
+                "to_state": _to_name,
+                "expression": {
+                    "kind": "state_transition",
+                    "from_state": _from_name,
+                    "to_state": _to_name,
+                    "from_state_ref": _text(node.get("from_ref")),
+                    "to_state_ref": _text(node.get("to_ref")),
+                },
+                "_strategy": "coverage_relation",
+            }
+        elif node_type == "state":
+            # A state node names its own target state; the from state is the
+            # source of an inbound transition edge when one exists (multiple
+            # inbound edges keep the first exact one — the edge itself gets its
+            # own obligation). Without any inbound edge the state has no
+            # trigger evidence and stays a coverage gap rather than guessing.
+            _state_id = _text(node.get("ir_node_id"))
+            _state_by_id = {
+                _text(s.get("id")): s
+                for s in _list(behavior_ir.get("states"))
+                if isinstance(s, dict) and _text(s.get("id"))
+            }
+            _own_st = _state_by_id.get(_state_id) or {}
+            _own_name = _text(_own_st.get("name"))
+            _in_from = ""
+            for _rel in _list(behavior_ir.get("relations")):
+                if not isinstance(_rel, dict):
+                    continue
+                if (
+                    _text(_rel.get("relation_type")) == "transitions"
+                    and _text(_rel.get("to_ref")) == _state_id
+                ):
+                    _in_from = _text(_rel.get("from_ref"))
+                    break
+            if _own_name and _in_from:
+                _in_st = _state_by_id.get(_in_from) or {}
+                _in_name = _text(_in_st.get("name"))
+                _relation_state_refs = {
+                    "from_state_ref": _in_from,
+                    "to_state_ref": _state_id,
+                    "from_state": _in_name,
+                    "to_state": _own_name,
+                    "expression": {
+                        "kind": "state_transition",
+                        "from_state": _in_name,
+                        "to_state": _own_name,
+                        "from_state_ref": _in_from,
+                        "to_state_ref": _state_id,
+                    },
+                    "_strategy": "coverage_state",
+                }
 
-        # Build property spec
-        primary_op = op_refs[0] if op_refs else ""
-        property_spec: dict[str, Any] = {
-            "template": template,
-            "actor_ref": actor_ref or "",
-            "operation_ref": primary_op,
-            "operation_path_prefix": op_path,
-            "_coverage_node_id": coverage_id,
-        }
-        if alt_actor_ref and template == "owner_viewer_isolation":
-            property_spec["owner_actor_ref"] = actor_ref
-            property_spec["viewer_actor_ref"] = alt_actor_ref
-        if node_type == "invariant":
-            property_spec.update({
-                "invariant_ref": invariant_ref,
-                "operation_refs": list(op_refs),
-                "invariant_kind": executable_kind,
-                "expression": expression,
-                "_strategy": "coverage_invariant",
-            })
+        for _op_ref in split_ops:
+            if node_type == "state" and not _relation_state_refs:
+                # A state node without a concrete inbound transition edge has no
+                # source-grounded from/to evidence. It stays a visible coverage
+                # gap instead of compiling an empty state_transition shell.
+                continue
+            _op_row = next(
+                (
+                    operation
+                    for operation in all_ops
+                    if isinstance(operation, dict)
+                    and _text(operation.get("id")) == _op_ref
+                ),
+                {},
+            )
+            op_path = _text(node.get("operation_path") or _op_row.get("path"))
+            op_method = _text(_op_row.get("method") or node.get("operation_method"))
 
-        # Fail visible: do not paper over factory errors with a bare-family
-        # obligation that can only die later as invariant_assertion_kind_missing.
-        obl = make_obligation(
-            risk_family=family,
-            subject_refs=op_refs + ([actor_ref] if actor_ref else []),
-            property_spec=property_spec,
-            required_actors=required_actors,
-            required_operations=op_refs,
-            required_observers=list(required_observers),
-            cleanup_requirement=cleanup_requirement,
-            source_refs=source_refs,
-            confidence=0.5,
-        )
+            # Cleanup follows the source-declared semantic effect. A POST can be a
+            # read-only validation/preview action; method-only classification would
+            # create an impossible cleanup obligation for that operation.
+            # make_obligation requires a dict — a bare string raises ValueError and
+            # previously fell into a silent fallback that emitted bare
+            # risk_family=invariant (measured as invariant_assertion_kind_missing).
+            effect_input = _op_row or {
+                "side_effect_class": node.get("side_effect_class"),
+                "read_write": node.get("read_write"),
+            }
+            is_write = _infer_operation_effect(effect_input, op_method.upper()) == "write"
+            cleanup_requirement: dict[str, Any] = {"required": bool(is_write)}
 
-        obl["_coverage_obligation"] = True
-        obligations.append(obl)
+            # Build property spec
+            property_spec: dict[str, Any] = {
+                "template": template,
+                "actor_ref": actor_ref or "",
+                "operation_ref": _op_ref,
+                "operation_path_prefix": op_path,
+                "_coverage_node_id": coverage_id,
+            }
+            if alt_actor_ref and template == "owner_viewer_isolation":
+                property_spec["owner_actor_ref"] = actor_ref
+                property_spec["viewer_actor_ref"] = alt_actor_ref
+            if node_type == "invariant":
+                property_spec.update({
+                    "invariant_ref": invariant_ref,
+                    "operation_refs": list(op_refs),
+                    "invariant_kind": executable_kind,
+                    "expression": expression,
+                    "_strategy": "coverage_invariant",
+                })
+            if _relation_state_refs:
+                property_spec.update(_relation_state_refs)
+
+            # Fail visible: do not paper over factory errors with a bare-family
+            # obligation that can only die later as invariant_assertion_kind_missing.
+            obl = make_obligation(
+                risk_family=family,
+                subject_refs=[_op_ref] + ([actor_ref] if actor_ref else []),
+                property_spec=property_spec,
+                required_actors=required_actors,
+                required_operations=[_op_ref],
+                required_observers=list(required_observers),
+                cleanup_requirement=cleanup_requirement,
+                source_refs=source_refs,
+                confidence=0.5,
+            )
+
+            obl["_coverage_obligation"] = True
+            obligations.append(obl)
 
 
     return obligations

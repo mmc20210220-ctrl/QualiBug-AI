@@ -35,6 +35,8 @@ _SEMANTIC_COMPENSATION_MODES = frozenset(
         "restore_snapshot",
         "snapshot_restore",  # alias emitted by some cleanup plan builders
         "inverse_delta",
+        "delta_inverse",  # alias emitted by the obligation compiler for
+                          # inverse-delta cleanup (same mode, two spellings)
         "compensating_transition",
         "row_delete",
         "adapter_row_delete",

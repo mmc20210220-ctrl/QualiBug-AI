@@ -93,13 +93,21 @@ RISK_FAMILY_ALIASES = {
 # tagging produces are what should decide the order.
 # NOTE ON TARGETS: each canonical target below is deliberately the SAME family the
 # old coercion produced, so this change adds visibility without moving execution.
-# Several are semantically wrong -- "invariant" and "state_integrity" both map to
-# state_transition in _FAMILY_ASSERTION_KIND and belong under "state", not
-# "validation" -- but retargeting them narrows the required IR relations and would
-# newly block obligations. That is a promotion decision to make per family, with
-# the counts this tagging produces, not a silent side effect of this change.
+# "state_integrity" is the exception: it was a promotion candidate that measured
+# exactly the failure this tag existed to surface. Its obligations come from
+# source-declared state-machine transition edges (entity_relation:transitions),
+# and the state protocol compiles them end to end (transitions relation type,
+# state_transition assertion kind, before/after_state observers) -- the same
+# shape the "state_machine" alias already resolves to. Retargeting it from
+# validation to state was previously deferred because it narrows the required
+# IR relations; the transition edges it is generated from satisfy that
+# requirement, and the validation fallback could only compile the edge as a
+# field-mutation probe against a guessed operation -- a wrong operation (the
+# entity-co-reference fallback) under a wrong protocol (no example/schema
+# material for a transition edge). The remaining candidates stay on their
+# historical targets until their own counts justify promotion.
 PROMOTION_CANDIDATE_FAMILIES = {
-    "state_integrity": "validation",
+    "state_integrity": "state",
     "lifecycle": "state",
     "invariant": "validation",
     "consistency": "validation",
