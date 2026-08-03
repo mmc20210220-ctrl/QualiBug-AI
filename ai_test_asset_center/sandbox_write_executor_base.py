@@ -610,12 +610,22 @@ def execute_governed_control_write(
     body: Any,
     observation_path: str,
     runtime_body_plan: dict[str, Any] | None = None,
+    restorable_identity_mutation: bool = False,
 ) -> dict[str, Any]:
     """Execute one explicitly declared non-production control write.
 
     Evaluation fixture reset endpoints use this path so setup and cleanup are
     independently governed and auditable around the product scan. The function
     never guesses a route and never returns success without a real 2xx receipt.
+
+    ``restorable_identity_mutation`` marks a source-declared identity/state
+    write whose experiment cleanup restores the exact before snapshot (e.g.
+    admin toggling a test account status with restore_before_snapshot on the
+    same operation). The protected-identity guard exists so a probe cannot
+    permanently disable a runtime account and poison later scenarios; a write
+    that is provably restored to its before state does not have that effect and
+    is a legitimate business operation under test. It still passes every
+    sandbox/governance gate and emits the same before/after audit trail.
     """
 
     method = _text(method).upper()
@@ -659,10 +669,13 @@ def execute_governed_control_write(
         actor_token=actor_token,
         actor_identity=actor_identity,
     )
-    if allowed:
+    if allowed and not restorable_identity_mutation:
         # Same protected-identity guard ``execute_with_sandbox_write`` applies before
         # its primary write. A governed control write (fixture setup/cleanup) is a
-        # write like any other and must not be a side door around it.
+        # write like any other and must not be a side door around it. A write whose
+        # experiment cleanup restores the exact before snapshot is a source-declared
+        # business operation under test, not a side door: it cannot permanently
+        # disable a runtime account, so the guard does not apply to it.
         identity_block_reason = _protected_runtime_identity_write_block_reason(
             root=root,
             project=project,

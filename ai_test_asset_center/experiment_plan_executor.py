@@ -311,6 +311,7 @@ def execute_non_barrier_plans(
     base_url: str,
     runtime_contract: dict[str, Any],
     cleanup_failures: int = 0,
+    cleanup_plan: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a normal plan unchanged or resume one source-backed graph."""
     call_args = {
@@ -333,6 +334,7 @@ def execute_non_barrier_plans(
         "base_url": base_url,
         "runtime_contract": runtime_contract,
         "cleanup_failures": cleanup_failures,
+        "cleanup_plan": cleanup_plan,
     }
     graph, graph_error = extract_execution_graph(treatment_plan)
     if not graph and not graph_error:

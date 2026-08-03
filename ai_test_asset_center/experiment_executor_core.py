@@ -818,6 +818,7 @@ def execute_one_experiment(
             base_url=base_url,
             runtime_contract=runtime_contract,
             cleanup_failures=cleanup_failures,
+            cleanup_plan=_list(exp.get("cleanup_plan")),
         )
         steps_out.extend(list(plan_result.get("steps") or []))
         contract_evidence_receipts.extend(
