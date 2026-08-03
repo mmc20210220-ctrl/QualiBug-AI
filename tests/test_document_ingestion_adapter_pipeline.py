@@ -9,15 +9,18 @@ from ai_test_asset_center.enterprise_knowledge_center.document_ingestion import 
     DocumentAdapter,
     DocumentAdapterRegistry,
     DocumentSource,
+    SupplementalContext,
     build_default_registry,
     build_document_structure_ir,
     plan_document_parsing,
 )
 from ai_test_asset_center.enterprise_knowledge_center.document_ingestion.contract import (
-    CAP_HEADING_HIERARCHY,
+    CAP_OCR,
+    CAP_PAGE_RENDERING,
     CAP_TEXT_EXTRACTION,
     MODE_PRIMARY,
     MODE_SUPPLEMENTAL,
+    text,
 )
 
 
@@ -71,17 +74,65 @@ class _PrimaryAdapter(DocumentAdapter):
         return _ir("订单不得删除", adapter_name=self.name)
 
 
-class _SupplementalAdapter(DocumentAdapter):
-    name = "fake-supplemental"
+class _GapExposingPrimaryAdapter(_PrimaryAdapter):
+    """Primary whose parsed IR exposes a concrete scanned-page gap."""
+
+    name = "fake-gap-primary"
+
+    def extract(self, source: DocumentSource) -> dict[str, Any]:
+        ir = _ir("订单不得删除", adapter_name=self.name)
+        ir["unsupported_content"] = [
+            {
+                "kind": "SCANNED_PAGE_REQUIRES_OCR",
+                "reason_code": "SCANNED_PAGE_REQUIRES_OCR",
+                "count": 1,
+                "pages": [1],
+                "severity": "P0",
+                "blocks_formal_understanding": True,
+                "included_in_plain_text_authority": False,
+            }
+        ]
+        return ir
+
+
+class _DeferredSupplementalAdapter(DocumentAdapter):
+    """Deferred supplemental selected only after a primary exposes a structural gap."""
+
+    name = "fake-deferred-supplemental"
     parser_version = "1"
     priority = 80
     mode = MODE_SUPPLEMENTAL
-    capabilities = frozenset({CAP_HEADING_HIERARCHY})
+    capabilities = frozenset({CAP_OCR, CAP_PAGE_RENDERING})
 
     def probe(self, source: DocumentSource) -> AdapterMatch | None:
-        return AdapterMatch(self.name, 90, "fake-supplemental-match", tuple(self.capabilities), self.mode)
+        return None
 
     def extract(self, source: DocumentSource) -> dict[str, Any]:
+        raise AssertionError("deferred adapter must not run as primary")
+
+    def probe_supplemental(
+        self,
+        source: DocumentSource,
+        context: SupplementalContext,
+    ) -> AdapterMatch | None:
+        if any(
+            text(row.get("reason_code") or row.get("kind")) == "SCANNED_PAGE_REQUIRES_OCR"
+            for row in context.trigger_gaps
+        ):
+            return AdapterMatch(
+                self.name,
+                90,
+                "fake-supplemental-match",
+                tuple(sorted(self.capabilities)),
+                self.mode,
+            )
+        return None
+
+    def extract_supplemental(
+        self,
+        source: DocumentSource,
+        context: SupplementalContext,
+    ) -> dict[str, Any]:
         return _ir("合同不得删除", adapter_name=self.name, block_type="HEADING")
 
 
@@ -131,8 +182,23 @@ def test_generic_text_fallback_builds_structure_without_format_specific_branch()
     assert ir["ingestion_pipeline_receipt"]["business_semantics_added"] is False
 
 
+def test_supplemental_is_not_run_eagerly_beside_primary_without_gap() -> None:
+    registry = DocumentAdapterRegistry([_PrimaryAdapter(), _DeferredSupplementalAdapter()])
+    ir = build_document_structure_ir(
+        b"fake",
+        filename="sample.fake",
+        source_id="no-gap-1",
+        registry=registry,
+    )
+    assert ir["adapter_merge_receipt"]["adapter_count"] == 1
+    assert ir["adapter_merge_receipt"]["block_conflict_count"] == 0
+    assert ir["ingestion_pipeline_receipt"]["deferred_plan_status"] == "NOT_REQUIRED"
+
+
 def test_multi_adapter_conflict_is_preserved_and_blocks_formal_understanding() -> None:
-    registry = DocumentAdapterRegistry([_PrimaryAdapter(), _SupplementalAdapter()])
+    registry = DocumentAdapterRegistry(
+        [_GapExposingPrimaryAdapter(), _DeferredSupplementalAdapter()]
+    )
     ir = build_document_structure_ir(
         b"fake",
         filename="sample.fake",

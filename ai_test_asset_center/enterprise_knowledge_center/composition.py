@@ -1472,18 +1472,18 @@ def refresh_enterprise_business_knowledge_asset_incremental(
         parsed_text = _incremental_text(parsed.get("text"), 2_000_000)
         regex_rules = [
             dict(row)
-            for row in _list(asset.get("rule_library"))
+            for row in _incremental_list(asset.get("rule_library"))
             if isinstance(row, dict)
             and any(
                 isinstance(span, dict)
                 and _incremental_text(span.get("source_id"), 300)
                 == parsed_source_id
-                for span in _list(row.get("source_spans"))
+                for span in _incremental_list(row.get("source_spans"))
             )
         ]
         llm_rules = [
             dict(row)
-            for row in _list(parsed.get("semantic_candidates"))
+            for row in _incremental_list(parsed.get("semantic_candidates"))
             if isinstance(row, dict)
             and _incremental_text(row.get("kind"), 30).lower() == "rule"
         ]
@@ -1527,13 +1527,13 @@ def refresh_enterprise_business_knowledge_asset_incremental(
     if _augment_active and promoted_rows_all:
         existing_rule_ids = {
             _incremental_text(row.get("rule_id"), 300)
-            for row in _list(asset.get("rule_library"))
+            for row in _incremental_list(asset.get("rule_library"))
             if isinstance(row, dict)
         }
         asset["rule_library"] = [
             *[
                 dict(row)
-                for row in _list(asset.get("rule_library"))
+                for row in _incremental_list(asset.get("rule_library"))
                 if isinstance(row, dict)
             ],
             *[

@@ -271,23 +271,14 @@ def test_recovery_rolls_back_interrupted_apply_without_source_bytes(tmp_path: Pa
     assert _pending_transactions(tmp_path) == []
 
 
-def test_feishu_facade_defaults_to_atomic_lifecycle_authority(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import ai_test_asset_center.feishu_connector_capability_sync as facade
+def test_feishu_core_delegates_lifecycle_to_mainline_authority() -> None:
+    """The retired facade wired an atomic lifecycle authority into Feishu sync. The
+    surviving core module reconciles remote lifecycle through the mainline connector
+    lifecycle authority, and the atomic authority stays exported as a formal API."""
+    import ai_test_asset_center.connector_remote_lifecycle as mainline_lifecycle
+    import ai_test_asset_center.feishu_connector_capability_sync_core as core
 
-    captured = {}
-
-    def fake_sync(*args, **kwargs):
-        captured["authority"] = facade._core.reconcile_connector_remote_lifecycle
-        return {"status": "COMPLETE"}
-
-    monkeypatch.setattr(facade._core, "sync_feishu_connector", fake_sync)
-    facade.reconcile_connector_remote_lifecycle = (
-        authority.reconcile_connector_remote_lifecycle_atomic
+    assert core.reconcile_connector_remote_lifecycle is (
+        mainline_lifecycle.reconcile_connector_remote_lifecycle
     )
-
-    result = facade.sync_feishu_connector("project", connector_instance_id="connector")
-
-    assert result["status"] == "COMPLETE"
-    assert captured["authority"] is authority.reconcile_connector_remote_lifecycle_atomic
+    assert authority.reconcile_connector_remote_lifecycle_atomic is not None

@@ -220,6 +220,8 @@ def test_scanned_pdf_deferred_ocr_renders_only_requested_page() -> None:
     assert ir["parsing_plan"]["deferred_plan"]["requested_capabilities"] == [
         "OCR",
         "PAGE_RENDERING",
+        "TABLE_REGION_DETECTION",
+        "TABLE_STRUCTURE",
     ]
     assert not any(
         row.get("reason_code") == "SCANNED_PAGE_REQUIRES_OCR"

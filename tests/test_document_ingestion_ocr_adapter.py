@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
 from typing import Any
+
+import pytest
 
 from ai_test_asset_center.enterprise_knowledge_center.document_ingestion import (
     AdapterMatch,
@@ -28,6 +31,16 @@ from ai_test_asset_center.enterprise_knowledge_center.document_ingestion.contrac
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.integration import (
     enrich_asset_with_enterprise_understanding,
 )
+
+
+def _renderable_png() -> bytes:
+    """A real decodable raster image the shared renderer registry can render."""
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (320, 200), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 class _FakeOcrProvider:
@@ -291,7 +304,7 @@ def test_ocr_adapter_runs_standalone_for_raster_image() -> None:
     adapter = OcrSupplementalAdapter(provider=_FakeOcrProvider())
     registry = DocumentAdapterRegistry([adapter])
     ir = build_document_structure_ir(
-        b"\x89PNG\r\n\x1a\nvisual-test",
+        _renderable_png(),
         filename="审批规则.png",
         source_id="image-1",
         registry=registry,
@@ -309,7 +322,7 @@ def test_low_confidence_ocr_remains_formally_blocked() -> None:
         minimum_confidence=0.55,
     )
     ir = build_document_structure_ir(
-        b"\x89PNG\r\n\x1a\nlow-confidence",
+        _renderable_png(),
         filename="模糊扫描.png",
         source_id="image-low",
         registry=DocumentAdapterRegistry([adapter]),

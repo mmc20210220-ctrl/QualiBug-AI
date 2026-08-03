@@ -275,12 +275,14 @@ def test_recovery_repairs_registry_when_run_commit_was_already_written(
     assert summary["cursor_checkpoint_pending_lifecycle_commit"] is False
 
 
-def test_feishu_facade_defaults_to_lifecycle_bound_checkpoint() -> None:
-    import ai_test_asset_center.feishu_connector_capability_sync as facade
+def test_mainline_binds_feishu_sync_to_lifecycle_bound_checkpoint() -> None:
+    """The retired Feishu facade forwarded sync to the checkpoint authority. The
+    mainline recovery supervisor keeps the same lifecycle-bound checkpoint binding,
+    and the surviving Feishu core delegates to the canonical snapshot batch."""
+    import ai_test_asset_center.connector_lifecycle_recovery_supervisor as supervisor
+    import ai_test_asset_center.feishu_connector_capability_sync_core as core
 
-    assert facade.sync_connector_snapshot_batch is (
-        checkpoint.sync_connector_snapshot_batch_deferred
-    )
-    assert facade.reconcile_connector_remote_lifecycle is (
+    assert supervisor.reconcile_connector_remote_lifecycle_with_checkpoint is (
         checkpoint.reconcile_connector_remote_lifecycle_with_checkpoint
     )
+    assert core.sync_connector_snapshot_batch is sync.sync_connector_snapshot_batch
