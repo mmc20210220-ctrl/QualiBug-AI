@@ -1581,6 +1581,27 @@ def _select_runtime_binding(
     entity whose declared mutation fields differ from the planned request;
     otherwise preserve the canonical structural resolver result.
     """
+    # State-scoped target paths (``@state=cancelled@/api/orders/{id}/cancel``)
+    # select an entity in the required state from the collection response
+    # before structural binding — the compiled binding carries the required
+    # state and the batch pre-resolution may not have supplied a value.
+    if isinstance(body, list) and target_path.startswith("@state="):
+        from .runtime_binding_materializer_base import (
+            _STATE_TARGET_PATH_RE,
+            _state_selected_entity,
+        )
+
+        _state_match = _STATE_TARGET_PATH_RE.match(target_path)
+        if _state_match:
+            _required = _state_match.group(1).lower()
+            target_path = _state_match.group(2)
+            _selected = _state_selected_entity(body, _required)
+            if not _selected:
+                # No entity in the required state: binding the first row would
+                # fail the state precondition later; return empty so the
+                # materializer falls back to fixture setup or blocks visibly.
+                return {}
+            body = _selected
     default = bind_entity_fields(body, target_path)
     desired = _scalar_body_bindings(preferred_body)
     if not default or not desired:
