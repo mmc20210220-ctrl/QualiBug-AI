@@ -182,7 +182,10 @@ def test_write_status_pair_requires_business_effect_evidence() -> None:
         phase="control",
     )
     treatment = _http_observation(
-        status=200,
+        # A restricted write that was NOT accepted (500) cannot be proven by
+        # status alone; business-effect evidence is still required. (Accepted
+        # 2xx writes are covered by the strengthened dual-accepted rule.)
+        status=500,
         body={"id": "r-1"},
         phase="treatment",
     )
@@ -199,7 +202,46 @@ def test_write_status_pair_requires_business_effect_evidence() -> None:
     assert receipt["reason_code"] == "WRITE_EFFECT_EVIDENCE_REQUIRED"
 
 
-def test_write_success_without_restricted_business_effect_is_observed_property_held() -> None:
+def test_dual_accepted_write_is_observed_leak_without_business_effect() -> None:
+    """Strengthened contract: once the authorized control write proves the
+    operation is real, a restricted actor whose write request is ACCEPTED
+    (2xx) has already broken enforcement. A temporary no-op must not convert
+    an accepted forbidden request into a passing result, so no business-effect
+    readback is required to prove this leak.
+    """
+    control = _http_observation(
+        status=200,
+        body={"id": "r-1"},
+        phase="control",
+    )
+    treatment = _http_observation(
+        status=200,
+        body={"id": "r-1"},
+        phase="treatment",
+    )
+    control["method"] = "POST"
+    treatment["method"] = "POST"
+
+    receipt = observe_authorization_comparison(
+        control=control,
+        treatment=treatment,
+        require_same_resource=True,
+    )
+
+    assert receipt["status"] == "OBSERVED"
+    assert (
+        receipt["evidence"]["resource_match_basis"]
+        == "dual_accepted_write_status_comparison"
+    )
+    assert receipt["evidence"]["viewer_can_access"] is True
+    assert receipt["evidence"]["leak_detected"] is True
+
+
+def test_write_success_without_restricted_business_effect_is_observed_leak() -> None:
+    """Even when readback shows zero business effect for the restricted actor,
+    an ACCEPTED forbidden write request remains an observed enforcement
+    violation under the strengthened contract.
+    """
     control = _http_observation(
         status=200,
         body={"id": "r-1"},
@@ -225,9 +267,8 @@ def test_write_success_without_restricted_business_effect_is_observed_property_h
     )
 
     assert receipt["status"] == "OBSERVED"
-    assert receipt["evidence"]["viewer_request_accepted"] is True
-    assert receipt["evidence"]["viewer_business_effect_observed"] is False
-    assert receipt["evidence"]["leak_detected"] is False
+    assert receipt["evidence"]["viewer_can_access"] is True
+    assert receipt["evidence"]["leak_detected"] is True
 
 
 def _behavior_ir() -> dict:
@@ -243,13 +284,17 @@ def _behavior_ir() -> dict:
             {
                 "id": "actor-control",
                 "role": "owner",
-                "credential_secret_ref": "secret_ref:owner",
+                # Canonical spelling: the credential loader registers
+                # secret_ref:test_accounts:{role} aliases and governance
+                # role_aliases accepts exactly this form; a bare
+                # secret_ref:{role} reads as an unresolvable exact secret.
+                "credential_secret_ref": "secret_ref:test_accounts:owner",
                 "account_status": "active",
             },
             {
                 "id": "actor-treatment",
                 "role": "restricted",
-                "credential_secret_ref": "secret_ref:restricted",
+                "credential_secret_ref": "secret_ref:test_accounts:restricted",
                 "account_status": "active",
             },
         ],
@@ -327,13 +372,16 @@ def test_executor_does_not_emit_finding_for_empty_2xx_pair(
         campaign_id="campaign",
         execution_id="execution-readable-denial",
         actor_tokens={
-            "secret_ref:owner": "owner-token",
-            "secret_ref:restricted": "restricted-token",
+            "secret_ref:test_accounts:owner": "owner-token",
+            "secret_ref:test_accounts:restricted": "restricted-token",
         },
     )
 
     assert result["status"] == "BLOCKED", json.dumps(result, default=str, indent=2)
-    assert result["reason_code"] == "BLOCKED_MISSING_OBSERVER"
+    # An INDETERMINATE observer receipt is intentionally classified separately
+    # from a missing observer: it keeps retry eligibility while still blocking
+    # finding emission.
+    assert result["reason_code"] == "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE"
     assert result["finding"] is None
     comparison = next(
         receipt
@@ -355,8 +403,8 @@ def test_runtime_preflight_rejects_authorization_without_comparison_observer() -
         experiment,
         behavior_ir=_behavior_ir(),
         actor_tokens={
-            "secret_ref:owner": "owner-token",
-            "secret_ref:restricted": "restricted-token",
+            "secret_ref:test_accounts:owner": "owner-token",
+            "secret_ref:test_accounts:restricted": "restricted-token",
         },
     )
 
@@ -462,7 +510,9 @@ def test_authorization_write_blocks_without_business_effect_observer() -> None:
 
     assert experiment["compile_receipt"]["status"] == "BLOCKED"
     assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_OBSERVER"
-    assert experiment["compile_receipt"]["detail"] == "write_observer"
+    # The compile detail names the exact missing observer id(s), not a
+    # category label.
+    assert experiment["compile_receipt"]["detail"] == "business_effect"
 
 
 def test_executor_blocks_response_only_write_observer_before_create_transport(
@@ -497,7 +547,8 @@ def test_executor_blocks_response_only_write_observer_before_create_transport(
         "actors": [{
             "id": "actor-control",
             "role": "owner",
-            "credential_secret_ref": "secret_ref:owner",
+            # Canonical alias spelling (see _behavior_ir note).
+            "credential_secret_ref": "secret_ref:test_accounts:owner",
             "account_status": "active",
         }],
     }
@@ -607,7 +658,7 @@ def test_executor_blocks_response_only_write_observer_before_create_transport(
         },
         campaign_id="campaign",
         execution_id="execution-response-bound-create",
-        actor_tokens={"secret_ref:owner": "owner-token"},
+        actor_tokens={"secret_ref:test_accounts:owner": "owner-token"},
     )
 
     assert result["status"] == "BLOCKED", json.dumps(result, default=str, indent=2)
@@ -688,8 +739,8 @@ def test_executor_uses_same_resource_receipt_for_violation(
         campaign_id="campaign",
         execution_id="execution-same-resource",
         actor_tokens={
-            "secret_ref:owner": "owner-token",
-            "secret_ref:restricted": "restricted-token",
+            "secret_ref:test_accounts:owner": "owner-token",
+            "secret_ref:test_accounts:restricted": "restricted-token",
         },
     )
 
@@ -760,8 +811,8 @@ def test_executor_treatment_rejection_does_not_emit_finding(
         campaign_id="campaign",
         execution_id="execution-different-resource",
         actor_tokens={
-            "secret_ref:owner": "owner-token",
-            "secret_ref:restricted": "restricted-token",
+            "secret_ref:test_accounts:owner": "owner-token",
+            "secret_ref:test_accounts:restricted": "restricted-token",
         },
     )
 

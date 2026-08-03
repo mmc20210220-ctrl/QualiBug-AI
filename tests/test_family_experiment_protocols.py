@@ -1085,6 +1085,11 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
                     "phase": kwargs["operation_phase"],
                     "id": write_id,
                 },
+                # Real governance receipts always carry attempt-count contract
+                # fields; transport-block classification reads them.
+                "http_attempt_count": 3,
+                "write_request_attempt_count": 1,
+                "production_http_requests": 0,
             }
         assert kwargs["operation_phase"] == "experiment_cleanup"
         cleanup_paths.append(kwargs["path"])
@@ -1101,6 +1106,9 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
             "after": {"status": 200, "body": []},
             "audit_path": "sandbox_write_audit.jsonl",
             "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
+            "http_attempt_count": 3,
+            "write_request_attempt_count": 1,
+            "production_http_requests": 0,
         }
 
     monkeypatch.setattr(
@@ -1633,6 +1641,11 @@ def test_isolation_executor_forces_owned_fixture_and_emits_ownership_receipt(
                 },
                 "audit_path": "sandbox_write_audit.jsonl",
                 "audit_record": {"phase": "fixture_setup", "path": kwargs["path"]},
+                # Real governance receipts always carry attempt-count contract
+                # fields; transport-block classification reads them.
+                "http_attempt_count": 3,
+                "write_request_attempt_count": 1,
+                "production_http_requests": 0,
             }
         assert kwargs["operation_phase"] == "experiment_fixture_cleanup"
         assert kwargs["path"] == "/resources/r-owned"
@@ -1646,6 +1659,9 @@ def test_isolation_executor_forces_owned_fixture_and_emits_ownership_receipt(
             "after": {"status": 404, "body": {}},
             "audit_path": "sandbox_write_audit.jsonl",
             "audit_record": {"phase": "fixture_cleanup", "path": kwargs["path"]},
+            "http_attempt_count": 3,
+            "write_request_attempt_count": 1,
+            "production_http_requests": 0,
         }
 
     _patch_http_request(
@@ -3343,6 +3359,11 @@ def test_conservation_executor_evaluates_snapshot_values_through_contract_oracle
                 },
                 "audit_path": "sandbox_write_audit.jsonl",
                 "audit_record": {"phase": "treatment", "id": "resource-1"},
+                # Real governance receipts always carry attempt-count contract
+                # fields; transport-block classification reads them.
+                "http_attempt_count": 3,
+                "write_request_attempt_count": 1,
+                "production_http_requests": 0,
             }
         assert kwargs["operation_phase"] == "experiment_cleanup"
         return {
@@ -3355,6 +3376,9 @@ def test_conservation_executor_evaluates_snapshot_values_through_contract_oracle
             "after": {"status": 404, "body": {}},
             "audit_path": "sandbox_write_audit.jsonl",
             "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
+            "http_attempt_count": 3,
+            "write_request_attempt_count": 1,
+            "production_http_requests": 0,
         }
 
     monkeypatch.setattr(
@@ -3515,6 +3539,11 @@ def test_temporal_executor_feeds_window_evidence_to_contract_oracle(
                 },
                 "audit_path": "sandbox_write_audit.jsonl",
                 "audit_record": {"phase": "treatment", "id": "resource-1"},
+                # Real governance receipts always carry attempt-count contract
+                # fields; transport-block classification reads them.
+                "http_attempt_count": 3,
+                "write_request_attempt_count": 1,
+                "production_http_requests": 0,
             }
         assert kwargs["operation_phase"] == "experiment_cleanup"
         return {
@@ -3527,6 +3556,9 @@ def test_temporal_executor_feeds_window_evidence_to_contract_oracle(
             "after": {"status": 404, "body": {}},
             "audit_path": "sandbox_write_audit.jsonl",
             "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
+            "http_attempt_count": 3,
+            "write_request_attempt_count": 1,
+            "production_http_requests": 0,
         }
 
     monkeypatch.setattr(

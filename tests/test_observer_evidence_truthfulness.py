@@ -406,15 +406,21 @@ def test_business_effect_not_observed_prevents_oracle_pass():
     """When business_effect_receipt is INDETERMINATE, it must not contribute
     business_effect_evidence to authorization_comparison (which would
     incorrectly fabricate an OBSERVED verdict).
+
+    The treatment write here was NOT accepted (500): status alone cannot prove
+    a leak, and missing business-effect evidence must yield INDETERMINATE.
+    (Accepted 2xx writes are governed by the strengthened dual-accepted rule,
+    which is proven by the status comparison itself.)
     """
     from ai_test_asset_center.observer_contracts_base import (
         observe_authorization_comparison,
     )
-    # Even when control succeeded via HTTP, no business_effect evidence means
-    # the authorization comparison must not fabricate a leak verdict.
+    # Even when control succeeded via HTTP, a non-accepted treatment write plus
+    # no business_effect evidence means the comparison must not fabricate a
+    # leak verdict.
     receipt = observe_authorization_comparison(
         control={"method": "POST", "path": "/r", "status_code": 200, "body": {"id": 1}},
-        treatment={"method": "POST", "path": "/r", "status_code": 200, "body": {}},
+        treatment={"method": "POST", "path": "/r", "status_code": 500, "body": {}},
         require_same_resource=True,
         business_effect={"business_effect_observed": False, "control_effect_count": None},
     )
