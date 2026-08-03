@@ -200,6 +200,7 @@ def test_rejected_semantic_edge_never_enters_behavior_ir() -> None:
 def test_public_discovery_runtime_installs_binding_before_plan_compilation() -> None:
     from ai_test_asset_center import discovery_runtime
     from ai_test_asset_center import discovery_runtime_planning
+    from ai_test_asset_center import discovery_runtime_semantic_binding
     from ai_test_asset_center.discovery_runtime_semantic_binding import (
         build_behavior_ir_with_semantic_operation_bindings,
     )
@@ -207,6 +208,32 @@ def test_public_discovery_runtime_installs_binding_before_plan_compilation() -> 
     assert discovery_runtime_planning.build_behavior_ir_from_knowledge_asset is (
         build_behavior_ir_with_semantic_operation_bindings
     )
+    # The public entry point is the binding-layer plan wrapper (it binds the
+    # scan UI/event/performance/stability contract contexts around one
+    # planning call) and it must delegate to the planning authority; the
+    # wrapper never replaces compilation.
     assert discovery_runtime.build_discovery_plan is (
-        discovery_runtime_planning.build_discovery_plan
+        discovery_runtime_semantic_binding.build_discovery_plan
     )
+
+    class _ProbeInputs:
+        campaign_context: dict = {}
+
+    delegated: list[tuple] = []
+    sentinel = object()
+    original_plan = discovery_runtime_planning.build_discovery_plan
+
+    def _recording_plan(inputs, campaign_handle):
+        delegated.append((inputs, campaign_handle))
+        return sentinel
+
+    discovery_runtime_planning.build_discovery_plan = _recording_plan
+    try:
+        handle = object()
+        result = discovery_runtime.build_discovery_plan(_ProbeInputs(), handle)
+    finally:
+        discovery_runtime_planning.build_discovery_plan = original_plan
+
+    assert result is sentinel
+    assert len(delegated) == 1
+    assert delegated[0][1] is handle

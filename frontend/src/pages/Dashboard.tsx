@@ -16,6 +16,7 @@ import { EnterpriseUnderstandingPanel } from '../components/dashboard/Enterprise
 import { JourneyStrip } from '../components/dashboard/JourneyStrip';
 import { TrustPanel, type TrustSignal } from '../components/dashboard/TrustPanel';
 import { DiscoveryFunnelPanel } from '../components/dashboard/DiscoveryFunnelPanel';
+import { MainChainContractPanel } from '../components/dashboard/MainChainContractPanel';
 import {
   asRecord, asText, asNum, formatScanTime,
   getSeverityWeight, getFindingModule, riskLevel, releaseDecision,
@@ -282,6 +283,7 @@ export function Dashboard() {
 
       {/* 技术诊断 — 默认折叠 */}
       <TechnicalDiagnostics>
+        <MainChainContractPanel record={record} />
         <section className="customer-secondary-grid">
           <article className="customer-secondary-card">
             <span className="customer-value-kicker">本轮检测说明</span>

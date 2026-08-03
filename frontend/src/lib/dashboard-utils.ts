@@ -230,7 +230,7 @@ export function evidenceItemTitle(i: JsonRecord): string {
 }
 
 export function evidenceItemAction(i: JsonRecord): string {
-  return asText(i.next_action) || '补齐缺失字段后重新运行。';
+  return asText(i.next_action) || '补齐该证据项缺失字段后重新运行主链路合同';
 }
 
 export function evidenceNormalizationLabel(s: JsonRecord): string {
@@ -250,10 +250,10 @@ export function mainChainStatusLabel(s: JsonRecord): string {
 }
 
 export function mainChainReadyLabel(ready: boolean, has: boolean): string {
-  if (!has) return '检测流程未上报';
-  return ready ? '检测流程已完成' : '检测流程未完成';
+  if (!has) return '主链路未上报';
+  return ready ? '主链路已闭合' : '主链路未闭合';
 }
 
 export function gatePatchLabel(p: boolean): string {
-  return p ? '严格质量门已启用' : '严格质量门未确认';
+  return p ? '严格 Gate 已启用' : '严格 Gate 未确认';
 }
