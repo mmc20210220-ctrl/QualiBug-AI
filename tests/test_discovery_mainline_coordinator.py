@@ -169,7 +169,7 @@ def test_runtime_actor_uses_source_accounts_when_credential_config_cannot_decryp
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_test_asset_center import discovery_runtime_planning as planning
+    from ai_test_asset_center import discovery_runtime_planning_actors as planning
     from ai_test_asset_center.credential_crypto import CredentialDecryptionError
     from ai_test_asset_center.discovery_runtime import _runtime_actors
 
@@ -216,7 +216,9 @@ def test_runtime_actor_does_not_hide_credential_decryption_without_source_accoun
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_test_asset_center import discovery_runtime_planning as planning
+    # ``_runtime_actors`` resolves these symbols in the extracted planning
+    # actors module; ``discovery_runtime_planning`` keeps compatibility re-exports.
+    from ai_test_asset_center import discovery_runtime_planning_actors as planning
     from ai_test_asset_center.credential_crypto import CredentialDecryptionError
     from ai_test_asset_center.discovery_runtime import _runtime_actors
 
@@ -234,7 +236,7 @@ def test_registered_test_data_source_supplies_exact_account_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_test_asset_center import experiment_runtime_support as runtime_support
+    from ai_test_asset_center import experiment_runtime_credentials as runtime_support
     from ai_test_asset_center.enterprise_source_registry import register_source_asset
 
     project = "PROJECT-1"
