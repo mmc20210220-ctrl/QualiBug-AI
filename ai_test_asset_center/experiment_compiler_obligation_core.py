@@ -1081,22 +1081,25 @@ def compile_experiment_for_obligation(
     # ── Placeholder interception: block if any binding is unresolvable ──
     _blocked_reasons = blocked_binding_reasons(binding_plan)
     if _blocked_reasons:
-        # V1.8: Authorization/isolation/visibility families test access denial.
-        # The write is expected to be REJECTED (403). The path placeholder only
-        # needs a concrete resource ID to aim at — rescue blocked bindings by
-        # finding any source-declared GET on the same entity collection.
-        if response_only_family:
-            _rescued = _rescue_binding_for_response_only_family(
-                binding_plan, primary_op, ir,
-            )
-            if _rescued:
-                _blocked_reasons = blocked_binding_reasons(binding_plan)
-            logger.warning(
-                "[V1.8-rescue] oid=%s family=%s path=%s rescued=%s still_blocked=%s",
-                oid[:30], family,
-                _text(primary_op.get("path") or primary_op.get("raw_path"))[:50],
-                _rescued, _blocked_reasons[:2],
-            )
+        # V1.8: Any write with path placeholders may resolve them through a
+        # source-declared collection GET resolver, falling back to a governed
+        # disposable create fixture. The original response-only special case is
+        # subsumed: denial tests and real state-transition probes alike only
+        # need a concrete resource identity to aim the request at, and the
+        # binding contract requires exact source-declared actor-bound
+        # GET/HEAD resolvers before governed disposable-fixture setup for all
+        # runtime bindings — not just authorization-family probes.
+        _rescued = _rescue_binding_for_response_only_family(
+            binding_plan, primary_op, ir,
+        )
+        if _rescued:
+            _blocked_reasons = blocked_binding_reasons(binding_plan)
+        logger.warning(
+            "[V1.8-rescue] oid=%s family=%s path=%s rescued=%s still_blocked=%s",
+            oid[:30], family,
+            _text(primary_op.get("path") or primary_op.get("raw_path"))[:50],
+            _rescued, _blocked_reasons[:2],
+        )
         if _blocked_reasons:
             return blocked_experiment(
                 oid,
@@ -1138,30 +1141,67 @@ def compile_experiment_for_obligation(
             for row in binding_plan
             if isinstance(row, dict)
         ):
-            identity_resolvers = [
-                {
-                    "operation_ref": _text(candidate.get("id")),
+            # V1.9: Arm-isolated identity resolution — each arm must read its
+            # own user_id via its own actor's /me. We collect /me operations
+            # per actor to avoid cross-arm contamination (control token reading
+            # treatment resource and vice versa).
+            control_actor_ref = _text(prop.get("control_actor_ref") or prop.get("owner_actor_ref"))
+            treatment_actor_ref = _text(prop.get("treatment_actor_ref"))
+            
+            # Collect all /me operations indexed by declaring actor
+            me_operations_by_actor: dict[str, list[dict]] = {}
+            for op in _list(ir.get("operations")):
+                if not isinstance(op, dict):
+                    continue
+                if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
+                    continue
+                normalized_p = normalize_path_placeholders(
+                    _text(op.get("path") or op.get("raw_path"))
+                ).rstrip("/")
+                if not normalized_p.endswith("/me"):
+                    continue
+                op_id = _text(op.get("id"))
+                if not op_id:
+                    continue
+                # Find which actor declares this operation
+                op_actor = _text(op.get("actor_ref"))
+                if not op_actor:
+                    # Fallback: try to infer from required_actors
+                    for actor_ref in [control_actor_ref, treatment_actor_ref]:
+                        if actor_ref and actor_ref in actors:
+                            actor_op_refs = [_text(a.get("operation_ref")) for a in _list(actors[actor_ref].get("operations")) if isinstance(a, dict)]
+                            if op_id in actor_op_refs:
+                                op_actor = actor_ref
+                                break
+                if not op_actor:
+                    continue
+                me_operations_by_actor.setdefault(op_actor, []).append({
+                    "operation_ref": op_id,
                     "method": "GET",
                     "path": normalize_path_placeholders(
-                        _text(candidate.get("path") or candidate.get("raw_path"))
+                        _text(op.get("path") or op.get("raw_path"))
                     ),
-                }
-                for candidate in _list(ir.get("operations"))
-                if isinstance(candidate, dict)
-                and _text(candidate.get("method")).upper() in {"GET", "HEAD"}
-                and normalize_path_placeholders(
-                    _text(candidate.get("path") or candidate.get("raw_path"))
-                ).rstrip("/").endswith("/me")
-                and _text(candidate.get("id"))
-            ]
-            if identity_resolvers:
+                    "declaring_actor_ref": op_actor,
+                })
+            
+            # Build arm-specific resolver lists
+            arm_resolvers: list[dict] = []
+            for actor_ref in [control_actor_ref, treatment_actor_ref]:
+                if actor_ref and actor_ref in me_operations_by_actor:
+                    arm_resolvers.extend(me_operations_by_actor[actor_ref])
+            
+            if arm_resolvers:
                 binding_plan.append({
                     "target": identity_target,
                     "target_path": "/{" + identity_target + "}",
                     "status": "runtime_resolvable",
                     "source_priority": "owner_identity_read",
-                    "resolver_operations": identity_resolvers[:2],
+                    "resolver_operations": arm_resolvers,
                     "value_fingerprint": "",
+                    "arm_isolated_resolvers": {
+                        "control": me_operations_by_actor.get(control_actor_ref, []),
+                        "treatment": me_operations_by_actor.get(treatment_actor_ref, []),
+                    },
                 })
             else:
                 return blocked_experiment(
@@ -1192,13 +1232,14 @@ def compile_experiment_for_obligation(
                 binding["required_state"] = _text(prop.get("from_state"))
     unresolved = unresolved_placeholders(primary_op, binding_plan)
     if unresolved:
-        # V1.8: Same rescue for response-only families at the unresolved check.
-        if response_only_family:
-            _rescue_unresolved = _rescue_unresolved_for_response_only_family(
-                binding_plan, primary_op, ir, unresolved,
-            )
-            if _rescue_unresolved:
-                unresolved = unresolved_placeholders(primary_op, binding_plan)
+        # V1.8: Same collection-resolver/fixture rescue at the unresolved check,
+        # for every family with path placeholders (see the blocked-binding
+        # rescue above for the binding-contract rationale).
+        _rescue_unresolved = _rescue_unresolved_for_response_only_family(
+            binding_plan, primary_op, ir, unresolved,
+        )
+        if _rescue_unresolved:
+            unresolved = unresolved_placeholders(primary_op, binding_plan)
         if unresolved:
             return blocked_experiment(
                 oid,
