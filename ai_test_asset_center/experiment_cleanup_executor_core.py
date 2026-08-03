@@ -2276,7 +2276,12 @@ def execute_experiment_cleanup_compensation(
         cleanup_bindings = dict(runtime_bindings)
         cleanup_placeholders = infer_path_params(_text(cleanup.get("path")))
         if len(cleanup_placeholders) == 1:
-            cleanup_bindings.setdefault(cleanup_placeholders[0], pending.get("value"))
+            # Force the pending identity: runtime_bindings may have been
+            # updated by later compensating creates (recreate writes bind a
+            # fresh id into the shared binding map), and setdefault would
+            # silently DELETE the wrong resource — the same id twice, while
+            # the fixture's own row was never touched.
+            cleanup_bindings[cleanup_placeholders[0]] = pending.get("value")
         cleanup_path = _materialize_path(_text(cleanup.get("path")), cleanup_bindings)
         governed_cleanup = execute_governed_control_write(
             root=root,
