@@ -123,11 +123,17 @@ def _entity_identity_sort_key(entity: dict[str, Any]) -> tuple[str, str]:
 
 
 def _state_selected_entity(body: Any, required_state_token: str) -> dict[str, Any]:
+    # Compare separator-insensitively: the compiled required token may be
+    # ``pendingpayment`` (legacy stripped form) or ``pending_payment``
+    # (underscore form), and observed values may be ``PENDING_PAYMENT`` or
+    # ``pending-payment``. Strip separators on both sides so every spelling
+    # of the same state matches.
+    required_norm = re.sub(r"[^a-z0-9]", "", required_state_token.lower())
     matches = [
         row
         for row in _entity_rows(body)
         if any(
-            _state_token(value) == required_state_token
+            re.sub(r"[^a-z0-9]", "", _state_token(value)) == required_norm
             for value in _entity_state_values(row)
         )
     ]
