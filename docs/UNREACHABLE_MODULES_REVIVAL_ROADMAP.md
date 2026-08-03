@@ -27,6 +27,68 @@
 | AGENTS.md 禁止接入 | 2 | `private_pilot_db_audit_patch`（链外 findings）、`deep_experiment_planner`/`deep_experiment_protocol_adapter`（diagnostic-only） |
 | 批 7：facade/工具/桥退役 | 14 退役 / 8 测试保护保留 | ✅ 已提交 `0e6e49a4` |
 | **不可达剩余** | **108**（193→108，-44%） | 知识中心 11 + 测试保护 8 + 散点 ~89，见路线图 |
+| 批 8：stability overlay 闭环 + 剩余 108 处置 | 2 接入 / 40 退役 / 66 保留 | ✅ 已提交 `174277ff`+`0ec57fd9`，见下方章节 |
+
+### 批 8：stability overlay 闭环 + 剩余 108 处置（✅ 已完成）
+
+**1. stability overlay 闭环接入（`174277ff`）** —— 修正 BFS（alias 相对导入解析）后确认：
+UI/event/performance 三个 surface 均有「build_discovery_plan 绑定 contextvar + IR 构建前 overlay +
+receipt 写入 job_ir」双层接线，唯独 stability 的 `scan_stability_contract_overlay` 从未被调用——
+`discovery_stability_loss_projection`（批 1 接入的 hook）消费的 `scan_stability_contract_overlay_receipt`
+恒为空。同构补齐：
+- `discovery_runtime_semantic_binding.build_discovery_plan`：绑定/重置 stability contextvar
+- `build_behavior_ir_with_semantic_operation_bindings`：`overlay_scan_stability_contracts` 进 IR 构建链，
+  receipt 写入 `job_ir["scan_stability_contract_overlay_receipt"]`
+- `discovery_runtime_quality_projection.project_discovery_quality`：`formal_stability` loss funnel
+  从 scan 后钩子提升为主投影一等公民（与 ui/event/performance 同构）
+- 连带清理：删除 10 个引用批 4-7 已退役模块的残留测试
+  （`multi_surface_adapter`、`feishu_connector_capability_sync`、`feishu_lifecycle_recovery_runtime`、
+  `historical_behavior_slices`、`scenario_execution_probe_guard`）
+
+**2. 剩余 108 处置（`0ec57fd9`，修正 BFS 后实为 106）** —— 修正 BFS 全树扫描
+（含 `from . import x` alias 解析），与旧快照逐项 diff 收敛一致（差 2 = 本次接入的两个）。
+闭包分析（引用方必须在退役集内）+ 全树 AST/字符串/测试引用三重扫描后：
+
+- **退役 40 个散点死代码**（无 import、无 importlib/子进程、无 tools/ CLI、无测试）：
+  `_db_auth`、`auto_mobile_setup`、`binding_runtime_probe`、`broad_hypothesis_generator`、
+  `bug_validation_queue`、`business_adversarial_validator`、`business_finding_registry`、
+  `business_finding_schema_validator`、`change_impact`、`change_impact_cli`、`ci_release_gate`、
+  `concurrent_probe_executor`、`deep_bug_mining`、`enterprise_resource_dependency_resolver`、
+  `experiment_portfolio`、`finding_deduplicator`、`frontend_task_journey_registry`、
+  `hypothesis_prioritizer`、`independent_evidence_verifier`、`industry_auto_inference`、
+  `mobile_app_detector`、`multi_layer_tester`、`phase104_ci_quality_gate`、
+  `phase104_frontend_integration_workspace`、`phase105_frontend_preview_release_package`、
+  `phase105_frontend_release_smoke_demo`、`prd_to_probe_adapter`、`private_pilot_acceptance_smoke`、
+  `private_pilot_db_audit_patch`（链外 findings，AGENTS.md 禁止）、`probe_roi_optimizer`、
+  `report_exporter`、`rule_reconciliation`、`semantic_diff`、`service_topology`、
+  `shared_test_environment`、`systematic_probe_engine`、`target_profiler`、
+  `temporal_saga_doc_intel`、`ui_design_oracle_manifest`、`ui_ux_bug_detector`
+- **恢复 3 个**（初判退役、核实有真实消费者）：`confirmed_bug_gate`（tools/
+  `render_confirmed_bug_evidence_report.py` CLI + 测试，docstring 明言为 CLI/CI 复用设计）、
+  `experiment_contract`（tools/`build_breakthrough_audit_pack.py` 审计包工具引用其 SCHEMA_VERSION）、
+  `invariant_operation_binder`（AGENTS.md 标注 diagnostic-only + 专属测试）
+- **保留 66 个**（不再退役，记录为待接线/保护/评测）：
+  - 知识中心 18：`enterprise_knowledge_center.*` 8（含 3 个 importlib 动态加载豁免：
+    `_chinese_business_comprehension_extractor_v1`、`builder_legacy_v1`、`integration_legacy_v1`）
+    + `classifiers`、`document_intelligence`、`semantic_analysis`、`defect_discovery` 主包 + 7 子模块
+  - 测试保护 18：`connector_tenant_acceptance`、`enterprise_pilot_runtime_with_chain`、
+    `external_signal_adapter`、`loop_watchdog`、`main_chain_contract`、`stability_scan_context_bridge`、
+    `sweep_loop`、`historical_authorization_inventory/_rerun_consumer/_rerun_plan`、
+    `actor_matrix_planning`、`cross_entity_chain_planning`、`idempotency_replay_planning`、
+    `hypothesis_slice_bridge`、`private_pilot_doctor`、`real_project_discovery_with_chain`、
+    `violation_activation`、`invariant_operation_binder`（各有专属或集成测试）
+  - 已接入但静态不可见 7（scan_post_hooks 字符串安装器）：`behavior_registry`、`bug_risk_scoring`、
+    `execution_evidence_report`、`job_formal_planning_proof`、`validation_summary`、
+    `performance_baseline`、`behavior_semantic_mapper`
+  - 评测/AGENTS 约束：评测私有 10 + `adaptive_probe_optimizer` +
+    `deep_experiment_planner`/`deep_experiment_protocol_adapter`（diagnostic-only）+
+    `benchmark_runtime_cleanup_assessment`/`benchmark_target_cleanliness`（benchmark_evaluator 引用）
+  - 豁免 4：`observed_product_scan_worker`（子进程）、`architecture_inventory`（tools/ 运行时 trace）、
+    `_fixture_materializer_facade_template`（模板文件）、`replay_benchmark_runner`（评测基础设施）
+  - 依赖保留模块 3：`evidence_bundle_normalizer`（← `real_project_discovery_with_chain`）、
+    `state_path_exploration`、`temporal_experiment_planning`（← `deep_experiment_planner`）
+
+**剩余不可达：66**（108→66，-39%）——全部为有消费者/有测试/评测/动态加载模块，无纯死代码残留。
 
 ### 批 0 退役清单（8）
 
