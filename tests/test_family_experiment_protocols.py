@@ -41,6 +41,10 @@ def _patch_http_request(monkeypatch: pytest.MonkeyPatch, http_request) -> None:
         http_request,
     )
     monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_credentials._http_request",
+        http_request,
+    )
+    monkeypatch.setattr(
         "ai_test_asset_center.experiment_plan_executor._http_request",
         http_request,
     )
@@ -1424,6 +1428,7 @@ def test_empty_collection_binding_uses_auto_fixture_and_binds(
     becomes the binding value.
     """
     import ai_test_asset_center.experiment_runtime_support as runtime_support
+    import ai_test_asset_center.experiment_runtime_credentials as runtime_credentials
     import ai_test_asset_center.sandbox_write_executor as sandbox_executor
 
     new_item_id = "c8f0aaaa-1111-2222-3333-444455556666"
@@ -1456,6 +1461,7 @@ def test_empty_collection_binding_uses_auto_fixture_and_binds(
         return True, "test"
 
     monkeypatch.setattr(runtime_support, "_http_request", mock_http_request)
+    monkeypatch.setattr(runtime_credentials, "_http_request", mock_http_request)
     monkeypatch.setattr(sandbox_executor, "_http_request", mock_http_request)
     monkeypatch.setattr(sandbox_executor, "sandbox_write_allowed", mock_sandbox_allowed)
 

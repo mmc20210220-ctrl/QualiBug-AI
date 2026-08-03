@@ -306,6 +306,10 @@ def test_executor_does_not_emit_finding_for_empty_2xx_pair(
         "ai_test_asset_center.experiment_runtime_support._http_request",
         lambda *_args, **_kwargs: next(responses),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_credentials._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
 
     result = execute_one_experiment(
         _authorization_experiment(),
@@ -580,6 +584,10 @@ def test_executor_blocks_response_only_write_observer_before_create_transport(
         fake_http,
     )
     monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_credentials._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
         "ai_test_asset_center.sandbox_write_executor._http_request",
         fake_http,
     )
@@ -665,6 +673,10 @@ def test_executor_uses_same_resource_receipt_for_violation(
         "ai_test_asset_center.experiment_runtime_support._http_request",
         lambda *_args, **_kwargs: next(responses),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_credentials._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
 
     result = execute_one_experiment(
         _authorization_experiment(),
@@ -733,6 +745,10 @@ def test_executor_treatment_rejection_does_not_emit_finding(
         "ai_test_asset_center.experiment_runtime_support._http_request",
         lambda *_args, **_kwargs: next(responses),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_credentials._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
 
     result = execute_one_experiment(
         _authorization_experiment(),
@@ -784,6 +800,10 @@ def test_batch_lineage_includes_typed_observer_receipt_ids(
     )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_runtime_support._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_credentials._http_request",
         lambda *_args, **_kwargs: next(responses),
     )
 

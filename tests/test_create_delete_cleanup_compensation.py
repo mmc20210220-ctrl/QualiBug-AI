@@ -170,6 +170,10 @@ def _run_create_delete_experiment(
         fake_http,
     )
     monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_credentials._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
         "ai_test_asset_center.sandbox_write_executor._http_request",
         fake_http,
     )
@@ -402,6 +406,10 @@ def test_cleanup_uses_each_write_actor_for_actor_scoped_collections(
     )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_runtime_support._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_credentials._http_request",
         fake_http,
     )
     monkeypatch.setattr(

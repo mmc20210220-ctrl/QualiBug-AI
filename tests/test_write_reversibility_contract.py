@@ -311,6 +311,7 @@ class TestResponseBoundCreateBlocking:
         monkeypatch.setattr("ai_test_asset_center.experiment_executor._http_request", fake_http)
         monkeypatch.setattr("ai_test_asset_center.experiment_plan_executor._http_request", fake_http)
         monkeypatch.setattr("ai_test_asset_center.experiment_runtime_support._http_request", fake_http)
+        monkeypatch.setattr("ai_test_asset_center.experiment_runtime_credentials._http_request", fake_http)
         monkeypatch.setattr("ai_test_asset_center.sandbox_write_executor._http_request", fake_http)
 
         result = execute_one_experiment(
