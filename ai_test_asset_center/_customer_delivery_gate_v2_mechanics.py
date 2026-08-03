@@ -1879,7 +1879,18 @@ def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
             "rejected_write_observer_unchanged",
             "setup_rejected_observer_unchanged",
         }
-        if not rejection_proved_unchanged:
+        # The receipt-chain delivery gate is the sole adjudication authority:
+        # a DELIVERABLE gate with adjudication.cleanup == NOT_REQUIRED has
+        # already proven no dirty state. Its projection carries the attested
+        # reason code plus a receipt reference instead of a legacy strategy
+        # label; accepting it keeps the field re-check consistent with the
+        # formal gate instead of rejecting receipt-proven findings.
+        receipt_attested = (
+            _text(cleanup.get("reason_code")).upper()
+            == "CLEANUP_NOT_REQUIRED_RECEIPT_ATTESTED"
+            and bool(_text(cleanup.get("receipt_ref")))
+        )
+        if not rejection_proved_unchanged and not receipt_attested:
             return ["CLEANUP_NOT_SUCCEEDED"]
     elif status not in {"completed", "success", "succeeded"}:
         return ["CLEANUP_NOT_SUCCEEDED"]

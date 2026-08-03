@@ -133,6 +133,43 @@ def finalize_finding_evidence_after_delivery_gate(
     row["business_evidence_status"] = "VALIDATED"
     row["final_review_status"] = "VALIDATED_CANDIDATE"
     row["semantic_verdict"] = "SEMANTIC_CONFIRMED"
+    # Project the receipt adjudication onto the status fields that every
+    # field-based downstream consumer reads (delivery re-check, regression
+    # suite, closed-loop learning, readiness counters). A DELIVERABLE gate
+    # only exists after the receipt chain proved execution, violation,
+    # reproduction, and cleanup; leaving these fields at their initial
+    # "suspected"/"candidate" values makes the field-based re-check reject
+    # exactly the findings the formal gate adjudicated deliverable.
+    adjudication = _dict(gate.get("adjudication"))
+    if _text(adjudication.get("reproduction")).upper() == "REPRODUCED":
+        row["bug_status"] = "reproduced"
+    row["confirmation_status"] = "validated_candidate"
+    row["execution_status"] = _text(row.get("execution_status")) or "executed"
+    refs = _dict(gate.get("receipt_refs"))
+    cleanup_decision = _text(adjudication.get("cleanup")).upper()
+    if cleanup_decision in ("COMPLETED", "NOT_REQUIRED"):
+        evidence_row = dict(_dict(row.get("evidence")))
+        cleanup_refs = [
+            _text(_dict(value).get("receipt_id"))
+            for value in _list(refs.get("cleanup"))
+            if isinstance(value, dict) and _text(_dict(value).get("receipt_id"))
+        ]
+        if cleanup_decision == "COMPLETED" and cleanup_refs:
+            evidence_row["cleanup"] = {
+                "status": "completed",
+                "receipt_ref": cleanup_refs[0],
+                "source": "delivery_gate_receipt_adjudication",
+            }
+        elif cleanup_decision == "NOT_REQUIRED":
+            execution_ref = _text(_dict(refs.get("execution")).get("receipt_id"))
+            if execution_ref:
+                evidence_row["cleanup"] = {
+                    "status": "not_required",
+                    "reason_code": "CLEANUP_NOT_REQUIRED_RECEIPT_ATTESTED",
+                    "receipt_ref": execution_ref,
+                    "source": "delivery_gate_receipt_adjudication",
+                }
+        row["evidence"] = evidence_row
     if reproduction:
         row["reproduction_receipt"] = reproduction
     return row
