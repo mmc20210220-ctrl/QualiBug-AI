@@ -90,6 +90,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
     from .database_model_adapter import DatabaseModelDocumentAdapter
     from .guarded_api_artifact_adapter import GuardedApiArtifactDocumentAdapter
     from .guarded_compatible_office_adapter import GuardedCompatibleOfficeDocumentAdapter
+    from .html_document_adapter import HtmlDocumentAdapter
     from .native_office_policy_adapters import (
         MacroAwareDocxDocumentAdapter,
         MacroAwarePresentationDocumentAdapter,
@@ -111,6 +112,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
             DatabaseModelDocumentAdapter(),
             GuardedCompatibleOfficeDocumentAdapter(),
             GuardedApiArtifactDocumentAdapter(),
+            HtmlDocumentAdapter(),
             OcrSupplementalAdapter(),
             VisualTableSupplementalAdapter(provider=advanced_table_provider),
             GenericTextDocumentAdapter(),
