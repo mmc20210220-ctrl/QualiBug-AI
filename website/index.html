@@ -1,0 +1,2046 @@
+<!DOCTYPE html>
+<!--
+  ===========================================================================
+  QualiBug AI 官网 · 上线前替换清单
+  ---------------------------------------------------------------------------
+  下列内容全部为占位符，均带 data-placeholder 属性，可一次性检出：
+      grep -n 'data-placeholder' index.html
+
+  data-placeholder 值        当前占位内容                 说明
+  --------------------------  ---------------------------  ----------------------
+  contact-email-bd            bd@qualibug.example          商务合作邮箱
+  contact-email-solutions     solutions@qualibug.example   技术评估申请邮箱
+  contact-phone               +86 000-0000-0000            联系电话
+  icp-license                 ICP 备案号                    中国大陆托管必填
+
+  已是真实信息、不要当占位符处理：
+      公司主体  昆山观迹知因智能科技有限公司
+      地址      昆山全球数字创新港
+
+  邮箱域名使用 IANA 保留的 .example 顶级域（RFC 2606），永远不会解析到真实
+  邮箱，因此占位符不可能误发邮件。所有占位文本套用 class="ph"（琥珀色虚线下划线），
+  替换真实信息时请一并移除该 class。
+  ===========================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>QualiBug AI — 企业软件行为空间基础设施</title>
+<meta name="description" content="QualiBug AI 是企业软件行为空间基础设施：把操作者、状态、数据、规则与真实执行轨迹映射为可计算的行为空间模型，在受治理的非生产环境中自动发现高价值业务缺陷，只交付带证据、可复现的结论。" />
+<meta name="theme-color" content="#06101E" />
+<meta name="author" content="昆山观迹知因智能科技有限公司" />
+<meta property="og:site_name" content="QualiBug AI" />
+<meta property="og:title" content="QualiBug AI — 企业软件行为空间基础设施" />
+<meta property="og:description" content="让企业系统的行为成为可计算、可验证的资产。无证据不交付。" />
+<meta property="og:type" content="website" />
+<meta property="og:locale" content="zh_CN" />
+<meta name="twitter:card" content="summary_large_image" />
+<!-- TODO 上线前补充：<meta property="og:url"> / <link rel="canonical"> / <meta property="og:image">（1200×630 品牌图） -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='q' x1='12%25' y1='90%25' x2='90%25' y2='10%25'%3E%3Cstop offset='0' stop-color='%231D4ED8'/%3E%3Cstop offset='.55' stop-color='%230EA5E9'/%3E%3Cstop offset='1' stop-color='%2314B8A6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M46 14A23 23 0 1 0 46 50M41 43l14 14' fill='none' stroke='url(%23q)' stroke-width='9' stroke-linecap='round'/%3E%3Cpath d='M20 35c8-8 16-7 24-2' fill='none' stroke='%232563EB' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='35' r='4' fill='%232563EB'/%3E%3Ccircle cx='44' cy='33' r='4' fill='%230EA5E9'/%3E%3C/svg%3E" />
+
+<noscript><style>.reveal{opacity:1!important;translate:none!important}</style></noscript>
+<style>
+/* =========================================================================
+   QualiBug AI — 官网品牌来源：frontend/src/brand/behavior-field-brand.json（Behavior Field）约束：无昆虫 / 爬虫 / 蛛网 / 雷达语义；装饰动效不代表任何真实系统状态。
+   ========================================================================= */
+
+:root{
+  /* 品牌核心色板 */
+  --space-navy:#06101E;
+  --system-blue:#2563EB;
+  --trajectory-cyan:#0EA5E9;
+  --state-teal:#2DD4BF;
+  --cloud:#F8FAFC;
+  --slate:#64748B;
+
+  /* 派生表面 */
+  --bg:#06101E;
+  --bg-raise:#0A1729;
+  --surface:rgba(255,255,255,.028);
+  --surface-2:rgba(255,255,255,.05);
+  --line:rgba(125,190,255,.11);
+  --line-strong:rgba(125,190,255,.22);
+
+  --text:#E8EFF9;
+  --text-2:#9DB0C9;
+  /* #6D8099 只有 4.45:1，差一点点就过不了 WCAG AA(4.5:1)。抬到 #8B9EB5 = 6.56:1。 */
+  --text-3:#8B9EB5;
+
+  --sky:#7DD3FC;
+  --ok:#2DD4BF;
+  --warn:#F5B252;
+  /* NOT_MEASURED 徽标文字色。#64748B 仅 3.69:1，不可用于文字。 */
+  --mute:#94A3B8;
+  /* 承载深色文字的 CTA 渐变起点：品牌 System Blue #2563EB 上放 #04121F 只有 3.66:1，这里用更亮一档的蓝，起点 5.14:1、终点 6.82:1，整条按钮均达标。
+     --system-blue 作为品牌 token 保持不变。 */
+  --cta-blue:#3B82F6;
+
+  --font:"Instrument Sans","DM Sans","Inter","Segoe UI Variable Display","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --mono:ui-monospace,"JetBrains Mono","Cascadia Code",Consolas,"SF Mono","Courier New",monospace;
+
+  --maxw:1180px;
+  --r-s:8px; --r-chip:10px; --r-m:14px; --r-l:20px;
+
+  /* 正文三级字阶：此前同一语义角色散落着 12 种字号（.76~.95rem），
+     其中 .84/.85/.86/.87/.88/.89 六个值总跨度不到 1px，肉眼无法区分。 */
+  --fs-body:.92rem;      /* 卡片正文 */
+  --fs-body-s:.86rem;    /* 密集 / 次级正文 */
+  --fs-caption:.78rem;   /* 微型说明 */
+
+  --lift:-3px;           /* 标准卡片悬停位移；CSS 与 JS 倾斜必须使用同一值 */
+  --pad-section:clamp(72px,9vw,132px);
+  --ease:cubic-bezier(.22,.8,.28,1);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--text);font-family:var(--font);
+  font-size:16px;line-height:1.7;letter-spacing:.005em;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+}
+img,svg,canvas{display:block;max-width:100%}
+a{color:inherit;text-decoration:none}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.02em;line-height:1.2}
+p{margin:0}
+ul{margin:0;padding:0;list-style:none}
+
+/* 全局环境光 —— 有界的冷色辉光，不做大面积色块 */
+body::before{
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(900px 520px at 78% -6%, rgba(37,99,235,.20), transparent 62%),
+    radial-gradient(760px 480px at 4% 12%, rgba(14,165,233,.11), transparent 60%),
+    radial-gradient(1000px 600px at 50% 108%, rgba(45,212,191,.07), transparent 62%);
+}
+body::after{
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.4;
+  background-image:
+    linear-gradient(to right, rgba(125,190,255,.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(125,190,255,.045) 1px, transparent 1px);
+  background-size:64px 64px;
+  mask-image:radial-gradient(ellipse 90% 60% at 50% 0%, #000 20%, transparent 78%);
+  -webkit-mask-image:radial-gradient(ellipse 90% 60% at 50% 0%, #000 20%, transparent 78%);
+}
+#page{position:relative;z-index:1}
+
+/* ---------- 基础排版件 ---------- */
+.wrap{width:min(var(--maxw), calc(100% - 44px));margin-inline:auto}
+section{padding-block:var(--pad-section);position:relative}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:10px;
+  font-family:var(--mono);font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--sky);margin-bottom:22px;
+}
+.eyebrow .idx{color:var(--text-3)}
+.eyebrow::before{content:"";width:26px;height:1px;background:linear-gradient(90deg,var(--trajectory-cyan),transparent)}
+/* 用 em 而不是 ch 限宽：ch 以数字 "0" 计量，会把中文标题挤到只剩 11 个字 */
+h2.sec{font-size:clamp(1.75rem,3.6vw,2.65rem);max-width:15em;line-height:1.24}
+.lede{color:var(--text-2);font-size:clamp(1rem,1.35vw,1.12rem);max-width:62ch;margin-top:20px}
+.sec-head{margin-bottom:clamp(40px,5vw,62px)}
+.sec-head.split{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:end}
+@media(max-width:880px){.sec-head.split{grid-template-columns:1fr;gap:24px;align-items:start}}
+
+/* 跳过导航直达正文：平时移出屏幕，键盘聚焦时归位。 */
+.skip{
+  position:absolute;left:14px;top:-64px;z-index:200;
+  padding:11px 20px;border-radius:0 0 var(--r-s) var(--r-s);
+  background:var(--cta-blue);color:#04121F;font-size:var(--fs-body);font-weight:600;
+  transition:top .2s var(--ease);
+}
+.skip:focus{top:0}
+
+.hair{height:1px;background:linear-gradient(90deg,transparent,var(--line-strong) 18%,var(--line-strong) 82%,transparent);border:0;margin:0}
+
+/* ---------- 按钮 ---------- */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:9px;
+  padding:13px 24px;border-radius:999px;font-size:var(--fs-body);font-weight:600;
+  border:1px solid transparent;cursor:pointer;transition:.32s var(--ease);
+  white-space:nowrap;
+}
+.btn-primary{
+  background:linear-gradient(96deg,var(--cta-blue),var(--trajectory-cyan));
+  color:#04121F;box-shadow:0 10px 32px -12px rgba(37,99,235,.85);
+}
+.btn-primary:hover{transform:translateY(var(--lift));box-shadow:0 18px 44px -14px rgba(14,165,233,.9)}
+.btn-ghost{border-color:var(--line-strong);color:var(--text);background:rgba(255,255,255,.02)}
+.btn-ghost:hover{border-color:rgba(125,211,252,.55);background:rgba(125,211,252,.07);transform:translateY(var(--lift))}
+.btn .arw{transition:transform .32s var(--ease)}
+.btn:hover .arw{transform:translateX(4px)}
+
+/* ---------- 导航 ---------- */
+header.nav{
+  position:sticky;top:0;z-index:60;
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  background:rgba(6,16,30,.62);border-bottom:1px solid transparent;transition:.3s var(--ease);
+}
+header.nav.stuck{background:rgba(6,16,30,.9);border-bottom-color:var(--line)}
+.nav-in{display:flex;align-items:center;gap:26px;height:68px}
+.brand{display:flex;align-items:center;gap:14px;flex-shrink:0}
+.brand svg{width:34px;height:34px}
+/* 两行之间要有真正的呼吸：line-height:1.05 会让主名和副标题几乎贴在一起。 */
+.brand-text{display:flex;flex-direction:column;gap:5px;line-height:1.15}
+/* 字标不用负字距——负字距会把 QualiBug 的字母挤成一坨。 */
+.brand-name{font-size:1.06rem;font-weight:650;letter-spacing:.004em}
+.brand-name .ai{
+  background:linear-gradient(92deg,var(--trajectory-cyan),var(--state-teal));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  margin-left:.12em;   /* 与 QualiBug 之间留一点独立感 */
+}
+/* 副标题原来被 .16em 字距拉得比主名还宽一倍，反而喧宾夺主。收紧字距、压低对比度，让它退回成第二层信息。 */
+.brand-sub{
+  font-family:var(--mono);font-size:.545rem;letter-spacing:.11em;
+  /* 加了字母间距就必须同步加词间距，否则词与词之间的空隙和字母间隙几乎一样宽，三个单词会糊成一长串读不出来。 */
+  word-spacing:.5em;
+  color:var(--text-3);text-transform:uppercase;opacity:.82;
+}
+/* nav 在 DOM 里排在汉堡按钮之后（这样移动端展开时 Tab 顺序才正确），桌面端用 order 把视觉位置还原到 CTA 左侧；order 值写在各自的原始声明块里。 */
+.nav-links{display:flex;gap:4px;margin-left:auto}
+.nav-links a{
+  padding:8px 13px;border-radius:999px;font-size:.875rem;color:var(--text-2);transition:.24s var(--ease);
+}
+.nav-links .nav-menu-cta{display:none}
+@media(max-width:1040px){.nav-links.open .nav-menu-cta{display:block}}
+.nav-links a:hover{color:var(--text);background:rgba(125,211,252,.08)}
+.nav-cta{margin-left:6px}
+.nav-cta .btn{padding:9px 18px;font-size:var(--fs-body-s)}
+.nav-toggle{display:none;margin-left:auto;background:none;border:1px solid var(--line-strong);border-radius:var(--r-s);width:44px;height:44px;cursor:pointer;color:var(--text);align-items:center;justify-content:center}
+.nav-toggle span{display:block;width:16px;height:1.5px;background:currentColor;position:relative}
+.nav-toggle span::before,.nav-toggle span::after{content:"";position:absolute;left:0;width:16px;height:1.5px;background:currentColor}
+.nav-toggle span::before{top:-5px}.nav-toggle span::after{top:5px}
+/* 1040 而不是 960：七个中文导航项 + CTA 在 1032px 以下就放不下了，停在 960 会留出 961–1031 这段区间——导航仍是桌面版但已经换行成两行。 */
+@media(max-width:1040px){
+  .nav-links,.nav-cta{display:none}
+  .nav-toggle{display:flex}
+  .nav-links.open{
+    display:flex;flex-direction:column;position:absolute;top:68px;left:0;right:0;
+    background:rgba(7,18,33,.98);border-bottom:1px solid var(--line);padding:14px 22px 22px;gap:2px;margin:0;
+  }
+  .nav-links.open a{padding:12px 6px;font-size:.98rem;border-radius:var(--r-s)}
+  .nav-links.open .nav-menu-cta{
+    margin-top:10px;text-align:center;font-weight:600;color:#04121F;
+    background:linear-gradient(96deg,var(--cta-blue),var(--trajectory-cyan));
+    border-radius:999px;padding:13px 20px;
+  }
+}
+
+/* ---------- Hero ---------- */
+.hero{padding-block:clamp(56px,7vw,92px) clamp(56px,7vw,96px);position:relative}
+.hero-grid{display:grid;grid-template-columns:1.02fr .98fr;gap:clamp(32px,4.5vw,66px);align-items:center}
+@media(max-width:980px){.hero-grid{grid-template-columns:1fr;gap:40px}}
+.hero-kicker{
+  display:inline-flex;align-items:center;gap:10px;padding:6px 14px 6px 8px;border-radius:999px;
+  border:1px solid var(--line-strong);background:rgba(125,211,252,.05);
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.13em;color:var(--sky);text-transform:uppercase;
+}
+.hero-kicker .dot{width:6px;height:6px;border-radius:50%;background:var(--state-teal);box-shadow:0 0 0 4px rgba(45,212,191,.14)}
+h1{
+  font-size:clamp(2.15rem,5vw,3.75rem);line-height:1.1;letter-spacing:-.035em;
+  margin:26px 0 0;font-weight:640;
+}
+h1 .grad{background:linear-gradient(94deg,#BFDBFE 4%,var(--trajectory-cyan) 48%,var(--state-teal) 96%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero-sub{margin-top:24px;color:var(--text-2);font-size:clamp(1rem,1.4vw,1.14rem);max-width:56ch}
+.hero-sub b{color:var(--text);font-weight:600}
+.hero-cta{display:flex;flex-wrap:wrap;gap:13px;margin-top:34px}
+.hero-note{margin-top:18px;font-size:var(--fs-body-s);color:var(--text-3)}
+
+/* 信任条：横跨 Hero 全宽，作为承诺清单而不是装饰标签 */
+.trust{
+  display:grid;grid-template-columns:repeat(5,1fr);gap:0;
+  margin-top:clamp(48px,6vw,78px);border-top:1px solid var(--line);
+}
+.trust li{
+  display:flex;align-items:flex-start;gap:10px;padding:20px 22px 4px 0;
+  font-size:var(--fs-body-s);line-height:1.5;color:var(--text-2);transition:.3s var(--ease);
+  border-right:1px solid var(--line);
+}
+.trust li:last-child{border-right:0}
+.trust li::before{
+  content:"";width:6px;height:6px;flex-shrink:0;margin-top:7px;background:var(--state-teal);
+  transform:rotate(45deg);border-radius:1px;opacity:.9;
+  box-shadow:0 0 0 3px rgba(45,212,191,.10);
+}
+.trust li:hover{color:var(--text)}
+@media(max-width:980px){
+  .trust{grid-template-columns:repeat(2,1fr)}
+  .trust li{border-right:0;padding-right:14px}
+}
+@media(max-width:430px){.brand-sub{display:none}}
+@media(max-width:560px){.trust{grid-template-columns:1fr}.trust li{padding-block:14px 2px}}
+
+/* Hero 行为空间画布 */
+.field-card{
+  position:relative;border:1px solid var(--line);border-radius:var(--r-l);
+  background:linear-gradient(168deg,rgba(14,165,233,.075),rgba(6,16,30,.5) 58%);
+  padding:16px;overflow:hidden;
+  box-shadow:0 40px 90px -50px rgba(2,10,22,1), inset 0 1px 0 rgba(255,255,255,.05);
+}
+.field-card::before{
+  content:"";position:absolute;inset:-40% -10% auto;height:70%;
+  background:radial-gradient(ellipse at 50% 0%, rgba(37,99,235,.20), transparent 70%);pointer-events:none;
+}
+.field-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 6px 12px}
+.field-title{font-family:var(--mono);font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3)}
+.field-chip{font-family:var(--mono);font-size:.6rem;letter-spacing:.1em;color:var(--text-3);border:1px solid var(--line);border-radius:999px;padding:3px 9px}
+#behaviorField{width:100%;height:auto;aspect-ratio:16/12;border-radius:var(--r-m)}
+.field-legend{display:flex;flex-wrap:wrap;gap:16px;padding:14px 6px 2px;border-top:1px solid var(--line);margin-top:12px}
+.field-legend li{display:flex;align-items:center;gap:7px;font-size:.71rem;color:var(--text-3)}
+.field-legend i{width:9px;height:9px;border-radius:50%;display:block;flex-shrink:0}
+.field-legend .l-plane{border-radius:2px;background:rgba(56,189,248,.30);border:1px solid #38BDF8}
+.field-legend .l-teal{border-radius:2px;background:rgba(45,212,191,.22);border:1px solid #2DD4BF}
+.field-legend .l-dim{border-radius:2px;background:rgba(56,189,248,.10);border:1px solid rgba(56,189,248,.35)}
+.field-legend .l-node{background:#22D3EE}
+.field-legend .l-traj{width:16px;height:2px;border-radius:2px;background:var(--sky)}
+
+/* ---------- 通用卡片 ---------- */
+.card{
+  border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);
+  padding:26px;transition:.36s var(--ease);position:relative;overflow:hidden;
+}
+.card:hover{border-color:rgba(125,211,252,.32);background:var(--surface-2);transform:translateY(var(--lift))}
+.card h3{font-size:1.06rem;margin-bottom:10px}
+.card p{color:var(--text-2);font-size:var(--fs-body)}
+.card .num{
+  font-family:var(--mono);font-size:.68rem;color:var(--text-3);letter-spacing:.14em;
+  display:block;margin-bottom:14px;
+}
+.grid{display:grid;gap:16px}
+.g-3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:980px){.g-3{grid-template-columns:repeat(2,1fr)}
+  .g-3>:last-child:nth-child(odd){grid-column:1/-1}}
+@media(max-width:660px){.g-3{grid-template-columns:1fr}}
+
+/* ---------- 01 问题 ---------- */
+.cost-list{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+@media(max-width:1080px){.cost-list{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:660px){.cost-list{grid-template-columns:1fr}}
+.cost{
+  border:1px solid var(--line);border-radius:var(--r-m);padding:22px 20px;background:var(--surface);
+  transition:.36s var(--ease);
+}
+.cost:hover{border-color:rgba(245,178,82,.35);background:rgba(245,178,82,.045);transform:translateY(var(--lift))}
+.cost .cost-i{font-family:var(--mono);font-size:.66rem;color:var(--warn);letter-spacing:.12em;display:block;margin-bottom:12px}
+.cost h4{font-size:.98rem;font-weight:600;margin:0 0 8px}
+.cost p{font-size:var(--fs-body-s);color:var(--text-3);line-height:1.6}
+
+.verdict{
+  margin-top:34px;border:1px solid var(--line-strong);border-radius:var(--r-m);
+  background:linear-gradient(100deg,rgba(37,99,235,.11),rgba(45,212,191,.05));
+  padding:clamp(26px,3.4vw,40px);
+}
+.verdict .q{font-size:clamp(1.15rem,2.1vw,1.5rem);font-weight:600;line-height:1.45;letter-spacing:-.02em;text-wrap:balance}
+.verdict .q em{font-style:normal;color:var(--sky)}
+.verdict .src{margin-top:14px;font-family:var(--mono);font-size:.7rem;color:var(--text-3);letter-spacing:.1em}
+
+/* ---------- 02 行为空间流程 ---------- */
+.flow{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--line);border-radius:var(--r-l);overflow:hidden}
+@media(max-width:880px){.flow{grid-template-columns:1fr}}
+.flow-col{padding:30px 26px;background:var(--surface);border-right:1px solid var(--line)}
+.flow-col:last-child{border-right:0}
+@media(max-width:880px){.flow-col{border-right:0;border-bottom:1px solid var(--line)}.flow-col:last-child{border-bottom:0}}
+.flow-col.mid{background:linear-gradient(180deg,rgba(14,165,233,.09),rgba(255,255,255,.02))}
+.flow-tag{font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;color:var(--sky);margin-bottom:16px;display:block}
+.flow-col h3{font-size:1.05rem;margin-bottom:16px}
+.flow-items li{
+  display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px dashed var(--line);
+  font-size:var(--fs-body-s);color:var(--text-2);
+}
+.flow-items li:first-child{border-top:0}
+.flow-items li b{color:var(--text);font-weight:600}
+.flow-items .k{
+  font-family:var(--mono);font-size:.62rem;color:var(--text-3);min-width:20px;padding-top:4px;flex-shrink:0;
+}
+/* 主线链条：每一格统一为「中文术语 + 英文术语」两行。原来第一格中文、其余五格英文，是全站唯一中英不统一的地方。 */
+.ir-chain{
+  margin:30px 0 0;padding:0;list-style:none;
+  display:flex;flex-wrap:wrap;align-items:stretch;justify-content:center;
+}
+.ir-chain li{
+  position:relative;display:flex;flex-direction:column;gap:3px;
+  margin:7px 0 7px 28px;padding:11px 16px;
+  border:1px solid var(--line);border-radius:var(--r-chip);
+  background:rgba(125,211,252,.055);transition:.3s var(--ease);
+}
+.ir-chain li:first-child{margin-left:0}
+.ir-chain li:hover{border-color:rgba(125,211,252,.32);background:rgba(125,211,252,.1)}
+.ir-chain li::before{
+  content:"→";position:absolute;left:-23px;top:50%;transform:translateY(-50%);
+  color:var(--text-3);font-size:var(--fs-body);line-height:1;
+}
+.ir-chain li:first-child::before{content:none}
+.ir-chain b{font-size:var(--fs-body-s);font-weight:600;color:var(--text);white-space:nowrap;letter-spacing:.01em}
+.ir-chain i{
+  font-family:var(--mono);font-style:normal;font-size:.6rem;letter-spacing:.06em;
+  color:var(--sky);opacity:.8;white-space:nowrap;
+}
+/* 窄屏改为纵向，箭头转成向下——横向换行会让新行首格左侧挂着一个指向空白的箭头。 */
+@media(max-width:780px){
+  .ir-chain{flex-direction:column;align-items:stretch}
+  .ir-chain li{margin:26px 0 0}
+  .ir-chain li:first-child{margin-top:0}
+  .ir-chain li::before{content:"↓";left:50%;top:-20px;transform:translateX(-50%)}
+}
+
+/* ---------- 04 证据管道 ---------- */
+.pipe{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;position:relative}
+@media(max-width:1000px){.pipe{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){.pipe{grid-template-columns:1fr}}
+.stage{
+  border:1px solid var(--line);border-radius:var(--r-m);padding:24px 20px;position:relative;
+  background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));
+  transition:.36s var(--ease);
+}
+.stage:hover{border-color:rgba(125,211,252,.32);transform:translateY(var(--lift))}
+.stage .sn{
+  width:30px;height:30px;border-radius:var(--r-s);display:grid;place-items:center;
+  font-family:var(--mono);font-size:var(--fs-caption);color:#04121F;font-weight:700;margin-bottom:16px;
+  background:linear-gradient(135deg,var(--cta-blue),var(--trajectory-cyan));
+}
+.stage:nth-child(4) .sn{background:linear-gradient(135deg,var(--trajectory-cyan),var(--state-teal))}
+.stage h4{font-size:.98rem;margin:0 0 8px;font-weight:600}
+.stage .en{font-family:var(--mono);font-size:.63rem;color:var(--text-3);letter-spacing:.08em;display:block;margin-bottom:12px}
+.stage p{font-size:var(--fs-body-s);color:var(--text-2);line-height:1.62}
+.stage::before{
+  content:"";position:absolute;top:38px;right:-14px;width:14px;height:1px;z-index:2;
+  background:linear-gradient(90deg,var(--trajectory-cyan),transparent);
+}
+.stage:last-child::before{display:none}
+@media(max-width:1000px){.stage::before{display:none}}
+
+.rules{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:22px}
+@media(max-width:880px){.rules{grid-template-columns:1fr}}
+.rule{
+  border:1px solid var(--line);border-left:2px solid rgba(45,212,191,.55);
+  border-radius:0 var(--r-m) var(--r-m) 0;padding:20px 22px;background:rgba(45,212,191,.035);
+}
+.rule h4{margin:0 0 7px;font-size:var(--fs-body);font-weight:600;color:var(--text)}
+.rule p{font-size:var(--fs-body-s);color:var(--text-2);line-height:1.6}
+
+/* ---------- 05 交付门禁 ---------- */
+.gate-wrap{display:grid;grid-template-columns:1.15fr .85fr;gap:clamp(28px,4vw,54px);align-items:center}
+@media(max-width:960px){.gate-wrap{grid-template-columns:1fr}}
+.gate-svg{
+  border:1px solid var(--line);border-radius:var(--r-l);background:rgba(255,255,255,.02);padding:18px;
+  overflow-x:auto;
+}
+/* 图内文字随 viewBox 缩放，窄屏下会缩到 5~7px。给一个最小绘制宽度并允许容器内横向滚动，
+   保证标签始终 ≥10px 可读；页面本身不会横滚。 */
+@media(max-width:620px){
+  .gate-svg{padding:14px}
+  .gate-svg svg{min-width:470px}
+}
+.gate-points li{
+  display:flex;gap:14px;padding:18px 0;border-bottom:1px solid var(--line);
+}
+.gate-points li:last-child{border-bottom:0}
+.gate-points .gp-ic{
+  width:32px;height:32px;border-radius:var(--r-s);flex-shrink:0;display:grid;place-items:center;
+  border:1px solid var(--line-strong);background:rgba(125,211,252,.07);
+}
+.gate-points .gp-ic svg{width:15px;height:15px;color:var(--sky)}
+.gate-points h4{font-size:.96rem;margin:0 0 5px}
+.gate-points p{font-size:var(--fs-body-s);color:var(--text-2)}
+.dash{stroke-dasharray:5 6;animation:flow 1.6s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-22}}
+
+/* ---------- 06 治理 ---------- */
+.gov{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:980px){.gov{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){.gov{grid-template-columns:1fr}}
+.gov-card{border:1px solid var(--line);border-radius:var(--r-m);padding:24px;background:var(--surface);transition:.36s var(--ease)}
+.gov-card:hover{border-color:rgba(45,212,191,.32);background:rgba(45,212,191,.04);transform:translateY(var(--lift))}
+.gov-card .gi{width:34px;height:34px;border-radius:var(--r-chip);display:grid;place-items:center;background:rgba(45,212,191,.1);border:1px solid rgba(45,212,191,.25);margin-bottom:16px}
+.gov-card .gi svg{width:16px;height:16px;color:var(--state-teal)}
+.gov-card h4{font-size:.98rem;margin:0 0 9px}
+.gov-card p{font-size:var(--fs-body-s);color:var(--text-2);line-height:1.62}
+.gov-card code{font-family:var(--mono);font-size:var(--fs-caption);color:var(--sky);background:rgba(125,211,252,.08);padding:1px 6px;border-radius:5px}
+
+/* 数据出网边界告知块 */
+.egress{
+  margin-top:16px;border:1px solid rgba(245,178,82,.28);border-radius:var(--r-m);
+  background:linear-gradient(100deg,rgba(245,178,82,.055),rgba(255,255,255,.015));
+  padding:clamp(24px,3vw,34px);
+}
+.egress-tag{
+  display:inline-block;font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--warn);margin-bottom:14px;
+}
+.egress-body{display:grid;grid-template-columns:1.02fr .98fr;gap:clamp(26px,4vw,54px);align-items:start}
+@media(max-width:900px){.egress-body{grid-template-columns:1fr;gap:22px}}
+.egress h4{font-size:1.12rem;margin:0 0 14px;line-height:1.45}
+.egress p{color:var(--text-2);font-size:var(--fs-body)}
+.egress ul{margin:0;display:grid;gap:10px}
+/* 不能用 flex：那样 <b> 会变成独立的 flex item 单独折行，实测把「接外部模型供应商」的「商」字甩到了下一行。 */
+.egress li{
+  position:relative;padding-left:20px;
+  font-size:var(--fs-body-s);color:var(--text-2);line-height:1.65;
+}
+.egress li::before{content:"—";position:absolute;left:0;top:0;color:var(--warn)}
+.egress li b{color:var(--text)}
+.egress code{font-family:var(--mono);font-size:var(--fs-body-s);color:var(--sky)}
+.egress .egress-note{
+  margin-top:16px;padding-top:14px;border-top:1px solid var(--line);
+  font-size:var(--fs-body-s);color:var(--text-3);
+}
+
+/* ---------- 07 缺陷发现能力 ---------- */
+.defect-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin:0;padding:0}
+@media(max-width:760px){.defect-grid{grid-template-columns:1fr}}
+.defect-grid li{
+  display:flex;gap:15px;align-items:flex-start;padding:20px 22px;
+  border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);
+  transition:.36s var(--ease);
+}
+.defect-grid li:hover{border-color:rgba(45,212,191,.36);background:rgba(45,212,191,.05);transform:translateY(var(--lift))}
+.dg-n{
+  font-family:var(--mono);font-size:.68rem;color:var(--state-teal);flex-shrink:0;
+  border:1px solid rgba(45,212,191,.3);background:rgba(45,212,191,.08);
+  border-radius:8px;padding:5px 8px;line-height:1;margin-top:2px;
+}
+.defect-grid div b{display:block;font-size:.97rem;font-weight:600;color:var(--text);margin-bottom:5px}
+.defect-grid div span{display:block;font-size:var(--fs-body-s);color:var(--text-3);line-height:1.6}
+
+.chain-note{
+  margin-top:16px;padding:18px 22px;border:1px solid rgba(45,212,191,.22);
+  border-radius:var(--r-m);background:rgba(45,212,191,.04);
+  font-size:var(--fs-body-s);color:var(--text-2);
+}
+.chain-note b{color:var(--text)}
+
+.cover-tag{
+  display:block;font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ok);margin-bottom:10px;
+}
+.cover-tag.alt{color:var(--sky)}
+.scope-note{
+  margin-top:16px;border:1px solid var(--line);border-radius:var(--r-m);
+  padding:22px;background:rgba(255,255,255,.015);
+}
+.scope-note p{font-size:var(--fs-body-s);color:var(--text-2)}
+.scope-note p b{color:var(--text)}
+.scope-note code{
+  font-family:var(--mono);font-size:var(--fs-caption);color:var(--mute);
+  background:rgba(100,116,139,.12);border:1px solid rgba(100,116,139,.3);
+  border-radius:999px;padding:2px 10px;
+}
+.sn-doc{
+  margin-top:14px;padding-top:14px;border-top:1px solid var(--line);
+  font-size:var(--fs-body-s);color:var(--text-3);
+}
+
+.why-honest{
+  margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px;
+}
+@media(max-width:880px){.why-honest{grid-template-columns:1fr}}
+
+/* ---------- 08 落地路径 ---------- */
+.steps{position:relative;display:grid;gap:0}
+.step{
+  display:grid;grid-template-columns:auto 1fr;gap:24px;padding:26px 0;border-top:1px solid var(--line);
+}
+.step:first-child{border-top:0}
+.step-n{
+  width:42px;height:42px;border-radius:var(--r-chip);display:grid;place-items:center;flex-shrink:0;
+  font-family:var(--mono);font-size:var(--fs-body-s);color:var(--sky);
+  border:1px solid var(--line-strong);background:rgba(125,211,252,.06);
+}
+.step h4{font-size:1.02rem;margin:0 0 8px;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.step h4 .en{font-family:var(--mono);font-size:.66rem;color:var(--text-3);letter-spacing:.1em;font-weight:400}
+.step p{color:var(--text-2);font-size:var(--fs-body);max-width:70ch}
+.deploy{
+  margin-top:34px;border:1px solid var(--line);border-radius:var(--r-m);overflow:hidden;
+  background:rgba(3,10,20,.55);
+}
+.deploy-bar{
+  display:flex;align-items:center;gap:9px;padding:11px 18px;border-bottom:1px solid var(--line);
+  font-family:var(--mono);font-size:.68rem;color:var(--text-3);letter-spacing:.1em;
+}
+.deploy-bar .d{width:9px;height:9px;border-radius:50%;background:rgba(125,190,255,.2)}
+.deploy-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:0;padding:0}
+@media(max-width:860px){.deploy-steps{grid-template-columns:1fr}}
+.deploy-steps li{
+  display:flex;gap:14px;align-items:flex-start;
+  padding:24px clamp(18px,2.4vw,26px);
+  border-right:1px solid var(--line);
+}
+.deploy-steps li:last-child{border-right:0}
+@media(max-width:860px){
+  .deploy-steps li{border-right:0;border-bottom:1px solid var(--line)}
+  .deploy-steps li:last-child{border-bottom:0}
+}
+.deploy-steps .ds-n{
+  font-family:var(--mono);font-size:.7rem;color:var(--sky);flex-shrink:0;
+  border:1px solid var(--line-strong);border-radius:8px;padding:5px 8px;line-height:1;
+  background:rgba(125,211,252,.06);
+}
+.deploy-steps b{display:block;font-size:.96rem;margin-bottom:6px;color:var(--text)}
+.deploy-steps span:not(.ds-n){font-size:var(--fs-body-s);color:var(--text-3);line-height:1.6}
+.deploy-forms{
+  border-top:1px solid var(--line);padding:16px clamp(18px,2.4vw,26px);
+  display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;
+}
+.deploy-forms b{
+  flex-shrink:0;font-family:var(--mono);font-size:.64rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--sky);font-weight:400;
+}
+.deploy-forms span{font-size:var(--fs-body-s);color:var(--text-3);line-height:1.6}
+
+/* ---------- 09 合作模式 ---------- */
+.plans{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:stretch}
+@media(max-width:960px){.plans{grid-template-columns:1fr}}
+.plan{
+  border:1px solid var(--line);border-radius:var(--r-l);padding:30px 26px;background:var(--surface);
+  display:flex;flex-direction:column;transition:.36s var(--ease);position:relative;
+}
+.plan:hover{transform:translateY(-4px);border-color:rgba(125,211,252,.32)}
+.plan.featured{
+  border-color:rgba(125,211,252,.42);
+  background:linear-gradient(172deg,rgba(37,99,235,.16),rgba(255,255,255,.02) 55%);
+  box-shadow:0 40px 80px -50px rgba(37,99,235,.9);
+}
+.plan-badge{
+  position:absolute;top:18px;right:20px;font-family:var(--mono);font-size:.6rem;letter-spacing:.12em;
+  color:#04121F;background:linear-gradient(94deg,var(--trajectory-cyan),var(--state-teal));
+  padding:3px 10px;border-radius:999px;text-transform:uppercase;
+}
+.plan .p-stage{font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;color:var(--sky);margin-bottom:12px;display:block}
+.plan h3{font-size:1.22rem;margin-bottom:8px}
+.plan .p-dur{font-size:var(--fs-body-s);color:var(--text-3);margin-bottom:20px}
+.plan ul{flex:1;margin-bottom:24px}
+.plan li{display:flex;gap:10px;padding:8px 0;font-size:.875rem;color:var(--text-2);line-height:1.55}
+.plan li svg{width:13px;height:13px;color:var(--state-teal);flex-shrink:0;margin-top:5px}
+.plan .btn{width:100%}
+
+/* ---------- 10 愿景 ---------- */
+.vision{
+  border:1px solid var(--line-strong);border-radius:var(--r-l);
+  background:linear-gradient(150deg,rgba(37,99,235,.14),rgba(6,16,30,.4) 52%,rgba(45,212,191,.07));
+  padding:clamp(32px,5vw,64px);position:relative;overflow:hidden;
+}
+.vision::before{
+  content:"";position:absolute;right:-120px;top:-120px;width:420px;height:420px;border-radius:50%;
+  background:radial-gradient(circle,rgba(14,165,233,.18),transparent 65%);pointer-events:none;
+}
+/* 愿景区的大字是视觉呈现；真正进入标题大纲的是 .vh（对读屏可见、视觉隐藏），避免同一句话被读两遍。 */
+.vh{
+  position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+  clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;
+}
+.vision-quote{
+  margin:0;font-size:clamp(1.2rem,2.5vw,1.85rem);font-weight:600;line-height:1.44;letter-spacing:-.025em;max-width:14em;
+}
+.vision-quote .grad{background:linear-gradient(94deg,var(--trajectory-cyan),var(--state-teal));-webkit-background-clip:text;background-clip:text;color:transparent}
+.vision-body{display:grid;grid-template-columns:1fr 1fr;gap:clamp(24px,4vw,54px);align-items:start;margin-top:8px}
+@media(max-width:880px){.vision-body{grid-template-columns:1fr}}
+.vision p:not(.vision-quote):not(.vision-stage):not(.vision-if-note){color:var(--text-2);font-size:var(--fs-body);margin-top:14px}
+.vision-tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:30px;max-width:34ch}
+.vision-tags li{
+  padding:6px 13px;border-radius:999px;border:1px solid var(--line-strong);
+  font-family:var(--mono);font-size:.7rem;color:var(--text-2);background:rgba(255,255,255,.03);
+}
+.vision-if{margin-top:clamp(28px,4vw,44px);padding-top:26px;border-top:1px solid var(--line);position:relative}
+.vision-if-tag{
+  display:block;font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--sky);margin-bottom:16px;
+}
+.vision-if ul{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:0;padding:0}
+@media(max-width:900px){.vision-if ul{grid-template-columns:repeat(2,1fr)}
+  .vision-if li:last-child{grid-column:1/-1}}
+@media(max-width:560px){.vision-if ul{grid-template-columns:1fr}}
+.vision-if li{
+  border:1px solid var(--line);border-radius:var(--r-chip);padding:16px 18px;
+  background:rgba(255,255,255,.02);transition:.3s var(--ease);
+}
+.vision-if li:hover{border-color:rgba(125,211,252,.32);transform:translateY(var(--lift))}
+.vision-if li b{
+  display:block;font-family:var(--mono);font-size:var(--fs-body-s);font-weight:600;
+  color:var(--text);margin-bottom:6px;letter-spacing:.02em;
+}
+.vision-if li span{font-size:var(--fs-caption);color:var(--text-3);line-height:1.5;text-wrap:balance}
+.vision-if li.hl{
+  border-color:rgba(45,212,191,.42);background:rgba(45,212,191,.07);
+  box-shadow:0 14px 34px -22px rgba(45,212,191,.55);
+}
+.vision-if li.hl b{color:var(--state-teal)}
+.vision-if-note{margin-top:14px;font-size:var(--fs-caption);color:var(--text-3)}
+
+.vision-stage{
+  margin-top:26px;padding-top:20px;border-top:1px solid var(--line);
+  font-size:var(--fs-body-s);color:var(--text-3);max-width:36ch;
+}
+
+/* ---------- 原则 ---------- */
+.principles{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+@media(max-width:1000px){.principles{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:600px){.principles{grid-template-columns:repeat(2,1fr)}}
+.prin{border:1px solid var(--line);border-radius:var(--r-m);padding:18px 16px;background:var(--surface);transition:.3s var(--ease)}
+.prin:hover{border-color:rgba(125,211,252,.32);transform:translateY(var(--lift))}
+.prin .pn{font-family:var(--mono);font-size:.62rem;color:var(--sky);letter-spacing:.1em;display:block;margin-bottom:9px}
+.prin h4{margin:0 0 5px;font-size:var(--fs-body-s);font-weight:600}
+.prin p{font-size:var(--fs-caption);color:var(--text-3);line-height:1.55}
+
+/* ---------- FAQ ---------- */
+.faq{border-top:1px solid var(--line);max-width:880px}
+details{border-bottom:1px solid var(--line)}
+summary{
+  padding:22px 40px 22px 0;cursor:pointer;list-style:none;position:relative;
+  font-size:1rem;font-weight:600;color:var(--text);transition:.24s var(--ease);
+}
+summary::-webkit-details-marker{display:none}
+summary:hover{color:var(--sky)}
+summary::after{
+  content:"";position:absolute;right:6px;top:50%;width:9px;height:9px;
+  border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+  transform:translateY(-70%) rotate(45deg);transition:transform .3s var(--ease);opacity:.55;
+}
+details[open] summary::after{transform:translateY(-30%) rotate(-135deg)}
+details .ans{padding:0 0 24px;color:var(--text-2);font-size:var(--fs-body);max-width:76ch}
+details .ans code{font-family:var(--mono);font-size:var(--fs-body-s);color:var(--sky)}
+
+/* ---------- 结尾 CTA ---------- */
+.final{
+  border:1px solid var(--line-strong);border-radius:var(--r-l);padding:clamp(36px,5.5vw,74px);text-align:center;
+  background:
+    radial-gradient(700px 320px at 50% 0%, rgba(37,99,235,.22), transparent 68%),
+    linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.012));
+  position:relative;overflow:hidden;
+}
+.final h2{font-size:clamp(1.7rem,3.6vw,2.6rem);line-height:1.2;max-width:22ch;margin-inline:auto}
+.final p{color:var(--text-2);margin-top:20px;max-width:56ch;margin-inline:auto;font-size:1rem}
+.final .hero-cta{justify-content:center;margin-top:34px}
+
+/* ---------- 页脚 ---------- */
+footer{border-top:1px solid var(--line);padding-block:64px 40px}
+.foot-grid{display:grid;grid-template-columns:1.5fr .8fr .8fr 1.15fr;gap:40px}
+@media(max-width:1040px){.foot-grid{grid-template-columns:1fr 1fr;gap:36px}}
+@media(max-width:560px){.foot-grid{grid-template-columns:1fr;gap:28px}}
+.foot-brand p{color:var(--text-3);font-size:var(--fs-body-s);margin-top:16px;max-width:42ch}
+.foot-motto{
+  color:var(--text-2)!important;font-size:.88rem!important;
+  padding-left:12px;border-left:2px solid rgba(45,212,191,.45);
+}
+.foot-col h5{font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);margin:0 0 16px;font-weight:400}
+.foot-col li{margin-bottom:10px}
+.foot-col a{font-size:var(--fs-body-s);color:var(--text-2);transition:.24s var(--ease)}
+.foot-col a:hover{color:var(--sky)}
+.foot-base{
+  margin-top:44px;padding-top:24px;border-top:1px solid var(--line);
+  display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;
+  font-size:var(--fs-caption);color:var(--text-3);
+}
+.foot-col .ct{font-size:var(--fs-body-s);color:var(--text-2);margin-bottom:12px;line-height:1.5}
+.foot-col .ct b{
+  display:block;font-family:var(--mono);font-size:.6rem;letter-spacing:.14em;
+  color:var(--text-3);font-weight:400;text-transform:uppercase;margin-bottom:3px;
+}
+.foot-col .ct a:hover{color:var(--sky)}
+
+/* 占位符标记：上线前必须替换。琥珀色虚线让它在任何截图 / 评审里都一眼可辨。替换为真实信息时，请连同 class="ph" 与 data-placeholder 属性一并移除。 */
+.ph{
+  color:var(--warn);border-bottom:1px dashed rgba(245,178,82,.5);
+  text-underline-offset:3px;
+}
+
+/* ---------- 指针驱动的 3D 倾斜与光斑 ---------- */
+.card::after,.plan::after,.gov-card::after,.stage::after,.cost::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  opacity:0;transition:opacity .32s var(--ease);
+  background:radial-gradient(360px circle at var(--gx,50%) var(--gy,50%), rgba(125,211,252,.13), transparent 62%);
+}
+.card:hover::after,.plan:hover::after,.gov-card:hover::after,.stage:hover::after,.cost:hover::after{opacity:1}
+.plan,.gov-card,.cost{position:relative;overflow:hidden}
+
+/* ---------- 滚动出现 ---------- */
+/* 入场用独立的 translate 属性而不是 transform，这样 transform 完全留给
+   hover / 指针倾斜，两者不会互相覆盖。 */
+.reveal{opacity:0;translate:0 18px;transition:opacity .62s var(--ease),translate .62s var(--ease)}
+.reveal.in{opacity:1;translate:none}
+.reveal[data-d="1"]{transition-delay:.06s}
+.reveal[data-d="2"]{transition-delay:.12s}
+.reveal[data-d="3"]{transition-delay:.18s}
+.reveal[data-d="4"]{transition-delay:.24s}
+/* 入场结束后必须清零：否则这些交错延迟会一直作用在 hover / 指针倾斜的过渡上，让带 data-d 的卡片比相邻卡片慢 60–240ms 才响应。 */
+.reveal.in{transition-delay:0s}
+
+/* 必须排在 .reveal 之后：几乎每个卡片同时带 .reveal，两者同为 (0,1,0) 特异性，若 .reveal 在后，它的 transition 简写会整条替换掉卡片自己的过渡，导致倾斜跟手延迟到 620ms、且 border-color / background 的悬停过渡彻底失效。 */
+.card,.plan,.gov-card,.stage,.cost,.prin{
+  transform-style:preserve-3d;
+  transition:transform .2s var(--ease),
+             opacity .62s var(--ease),
+             translate .62s var(--ease),
+             border-color .36s var(--ease),
+             background .36s var(--ease);
+}
+
+@media print{
+  body{background:#fff;color:#111}
+  body::before,body::after{display:none}
+  .reveal{opacity:1!important;translate:none!important}
+  header.nav,.nav-cta,.btn,#behaviorField,.field-legend,.skip{display:none!important}
+  .card,.cost,.stage,.gov-card,.plan,.defect-grid li,.vision-if li,.egress,.scope-note,.chain-note,.final{
+    border-color:#bbb!important;background:#fff!important;box-shadow:none!important;
+  }
+  h1,h2,h3,h4,b{color:#111!important}
+  p,span,li,td{color:#333!important}
+  section{padding-block:24px!important;break-inside:avoid}
+}
+
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
+  .reveal{opacity:1;translate:none;transform:none}
+}
+::selection{background:rgba(14,165,233,.32);color:#fff}
+/* 不要在这里写 border-radius：轮廓本身就会跟随元素自己的圆角，写死 4px 会把胶囊形 CTA 按钮在键盘聚焦时压成方角。 */
+:focus-visible{outline:2px solid var(--sky);outline-offset:3px}
+</style>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "昆山观迹知因智能科技有限公司",
+  "brand": { "@type": "Brand", "name": "QualiBug AI" },
+  "address": { "@type": "PostalAddress", "addressLocality": "昆山", "streetAddress": "昆山全球数字创新港" },
+  "description": "企业软件行为空间基础设施：把企业软件系统的操作者、状态、数据、规则与真实执行轨迹映射为可计算、可验证的行为空间模型。"
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">跳到主要内容</a>
+<div id="page">
+
+<!-- ============================ 导航 ============================ -->
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="QualiBug AI 首页">
+      <!-- Behavior Field 品牌标识（compact / dark）—— 源自 frontend/src/brand/behavior-field-brand.json -->
+      <svg viewBox="0 0 96 96" role="img" aria-label="QualiBug AI">
+        <defs><linearGradient id="qmark" x1="12%" y1="90%" x2="90%" y2="10%">
+          <stop offset="0" stop-color="#2563EB"/><stop offset=".55" stop-color="#0EA5E9"/><stop offset="1" stop-color="#2DD4BF"/>
+        </linearGradient></defs>
+        <path d="M70 20A34 34 0 1 0 69 75M61 65l21 21" fill="none" stroke="url(#qmark)" stroke-width="11" stroke-linecap="round"/>
+        <path d="M26 54 48 40 72 53 50 68 26 54Z" fill="rgba(14,165,233,0.11)" stroke="#38BDF8" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M29 55c9-1 13 2 19-4 6-6 12-5 21 1" fill="none" stroke="#7DD3FC" stroke-width="3.5" stroke-linecap="round"/>
+        <circle cx="29" cy="55" r="4" fill="#3B82F6"/><circle cx="48" cy="51" r="4" fill="#22D3EE"/><circle cx="69" cy="52" r="4" fill="#2DD4BF"/>
+      </svg>
+      <span class="brand-text">
+        <span class="brand-name">QualiBug <span class="ai">AI</span></span>
+        <span class="brand-sub" lang="en">Behavior Space Infrastructure</span>
+      </span>
+    </a>
+
+    <nav class="nav-links" id="navLinks">
+      <a href="#why">为什么是现在</a>
+      <a href="#model">行为空间</a>
+      <a href="#evidence">证据链</a>
+      <a href="#governance">执行治理</a>
+      <a href="#boundary">发现能力</a>
+      <a href="#adopt">落地</a>
+      <a href="#vision">愿景</a>
+      <a class="nav-menu-cta" href="#contact">预约技术深度评估 →</a>
+    </nav>
+    <div class="nav-cta"><a class="btn btn-primary" href="#contact">预约技术深度评估 <span class="arw">→</span></a></div>
+    <button class="nav-toggle" id="navToggle" aria-label="展开导航"
+            aria-expanded="false" aria-controls="navLinks"><span></span></button>
+
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ============================ Hero ============================ -->
+<section class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="hero-kicker reveal"><span class="dot"></span>企业软件行为空间基础设施</span>
+
+      <h1 class="reveal" data-d="1">让企业系统的行为<br/>变得<span class="grad">可计算、可验证</span></h1>
+
+      <p class="hero-sub reveal" data-d="2">
+        操作企业软件系统的，可能是人、是自动化程序，也可能是 AI Agent。操作方会变，<b>独立验证层不能缺</b>。QualiBug AI 把操作者、状态、数据、规则与真实执行轨迹映射为一套可计算的行为空间模型，在受治理的非生产环境中自动发现高价值缺陷——
+        并且只交付<b>有证据、可复现</b>的结论。
+      </p>
+
+      <div class="hero-cta reveal" data-d="3">
+        <a class="btn btn-primary" href="#contact">预约技术深度评估 <span class="arw">→</span></a>
+        <a class="btn btn-ghost" href="#boundary">看能找出哪些缺陷</a>
+      </div>
+      <p class="hero-note reveal" data-d="3">能找什么、以什么口径交付，写得清清楚楚——见<a href="#boundary" style="color:var(--sky);border-bottom:1px solid rgba(125,211,252,.4)">发现能力与口径</a></p>
+
+    </div>
+
+    <!-- 装饰性行为空间可视化：不代表任何真实系统 / 服务 / 模型 / 评测状态 -->
+    <div class="field-card reveal" data-d="2">
+      <div class="field-head">
+        <span class="field-title" lang="en">Behavior Field</span>
+        <span class="field-chip">decorative · 示意</span>
+      </div>
+      <canvas id="behaviorField" aria-hidden="true"></canvas>
+      <ul role="list" class="field-legend" aria-hidden="true">
+        <li><i class="l-teal"></i>业务不变量层</li>
+        <li><i class="l-plane"></i>行为空间层</li>
+        <li><i class="l-node"></i>状态节点</li>
+        <li><i class="l-traj"></i>执行轨迹</li>
+        <li><i class="l-dim"></i>运行时事实层</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <ul role="list" class="trust reveal">
+      <li>私有化部署 · 服务与数据落地在企业内网</li>
+      <li>模型接入方式由你决定（内部模型 / 外部供应商）</li>
+      <li>仅对显式声明的非生产目标执行</li>
+      <li>每条结论都可按证据复现</li>
+      <li>无证据不交付</li>
+    </ul>
+  </div>
+</section>
+
+<hr class="hair"/>
+
+<!-- ============================ 01 为什么是现在 ============================ -->
+<section id="why">
+  <div class="wrap">
+    <div class="sec-head split">
+      <div>
+        <span class="eyebrow reveal"><span class="idx">01</span> 为什么是现在</span>
+        <h2 class="sec reveal" data-d="1">系统改得越来越快，<br/>有没有改坏却越来越难说清</h2>
+      </div>
+      <p class="lede reveal" data-d="2">
+        企业软件系统正在被更快地改变——被人改、被自动化程序改、也被 AI Agent 改。变更速度提高了一个数量级，而「这次改动到底破坏了哪条业务规则」，依旧靠人去读需求、造数据、修脚本、猜回归范围、翻失败日志。
+      </p>
+    </div>
+
+    <ul role="list" class="cost-list">
+      <li class="cost reveal"><span class="cost-i">COST 01</span><h3>人工拆解需求</h3><p>把 PRD、接口文档、历史缺陷读成测试点，靠个人经验，无法沉淀。</p></li>
+      <li class="cost reveal" data-d="1"><span class="cost-i">COST 02</span><h3>人工维护数据</h3><p>测试数据造得慢、清得更慢，环境一脏，结论就不可信。</p></li>
+      <li class="cost reveal" data-d="2"><span class="cost-i">COST 03</span><h3>人工维护脚本</h3><p>界面一改、接口一改，脚本与定位器批量失效，维护吃掉全部收益。</p></li>
+      <li class="cost reveal" data-d="3"><span class="cost-i">COST 04</span><h3>人工判定回归范围</h3><p>影响面靠猜：多测浪费窗口，少测直接漏到生产。</p></li>
+      <li class="cost reveal" data-d="4"><span class="cost-i">COST 05</span><h3>人工分析日志</h3><p>失败原因分类、缺陷整理、复现步骤，仍然是纯手工劳动。</p></li>
+    </ul>
+
+    <div class="verdict reveal">
+      <p class="q">企业缺的不是<em>又一个自动化脚本框架</em>，<br/>而是低成本地<em>生成、维护与治理测试资产</em>的能力。</p>
+      <p class="src">— QualiBug AI 企业级落地方案 · 核心判断</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 02 行为空间模型 ============================ -->
+<section id="model">
+  <div class="wrap">
+    <div class="sec-head split">
+      <div>
+        <span class="eyebrow reveal"><span class="idx">02</span> 行为空间</span>
+        <h2 class="sec reveal" data-d="1">先把企业系统<br/>变成一个可计算的空间</h2>
+      </div>
+      <p class="lede reveal" data-d="2">
+        QualiBug 不从「写用例」开始，而是从<b style="color:var(--text)">建模</b>开始。企业资料与运行时事实先被编译成 <b style="color:var(--text)">Behavior IR（行为中间表示）</b>，再由它推导出必须被验证的义务，最后编译成可以真正跑起来的实验。每一步都可追溯到来源，不允许凭空生成。
+      </p>
+    </div>
+
+    <div class="flow reveal">
+      <div class="flow-col">
+        <span class="flow-tag">Input · 输入</span>
+        <h3>企业已有的东西</h3>
+        <ul role="list" class="flow-items">
+          <li><span class="k">01</span><span><b>产品与业务资料</b>：PRD、业务规则、流程说明</span></li>
+          <li><span class="k">02</span><span><b>接口与数据契约</b>：API 文档、字段字典</span></li>
+          <li><span class="k">03</span><span><b>角色与账号</b>：用户角色、测试账号、权限矩阵</span></li>
+          <li><span class="k">04</span><span><b>历史缺陷</b>：过往真实问题与回归记录</span></li>
+          <li><span class="k">05</span><span><b>运行时观测</b>：真实请求与响应事实</span></li>
+        </ul>
+      </div>
+
+      <div class="flow-col mid">
+        <span class="flow-tag">Model · 行为空间</span>
+        <h3>被映射成的坐标</h3>
+        <ul role="list" class="flow-items">
+          <li><span class="k">A</span><span><b>操作者（Actor）</b>：谁在操作——人、程序，还是 AI Agent</span></li>
+          <li><span class="k">S</span><span><b>状态（State）</b>：实体处在哪个业务状态</span></li>
+          <li><span class="k">D</span><span><b>数据（Data）</b>：数据与实体之间的真实关系</span></li>
+          <li><span class="k">R</span><span><b>规则（Rule）</b>：必须始终成立的业务不变量</span></li>
+          <li><span class="k">T</span><span><b>轨迹（Trajectory）</b>：一次真实执行走过的路径</span></li>
+        </ul>
+      </div>
+
+      <div class="flow-col">
+        <span class="flow-tag">Output · 产出</span>
+        <h3>可执行、可交付的资产</h3>
+        <ul role="list" class="flow-items">
+          <li><span class="k">01</span><span><b>测试义务</b>：这个系统必须被验证的性质</span></li>
+          <li><span class="k">02</span><span><b>可执行实验</b>：受治理的读写探针序列</span></li>
+          <li><span class="k">03</span><span><b>证据链</b>：before / after 观察与审计回执</span></li>
+          <li><span class="k">04</span><span><b>正式缺陷</b>：通过交付门禁、可复现的结论</span></li>
+          <li><span class="k">05</span><span><b>发布判断</b>：这次能不能放行</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <ol class="ir-chain reveal" data-d="1" role="list">
+      <li><b>企业资料 + 运行时事实</b><i lang="en">Materials + Runtime Facts</i></li>
+      <li><b>行为中间表示</b><i lang="en">Behavior IR</i></li>
+      <li><b>测试义务</b><i lang="en">Test Obligations</i></li>
+      <li><b>可执行实验</b><i lang="en">Executable Experiments</i></li>
+      <li><b>证据链</b><i lang="en">Evidence</i></li>
+      <li><b>客户交付门禁</b><i lang="en">Delivery Gate</i></li>
+    </ol>
+
+    <div class="grid g-3" style="margin-top:36px">
+      <div class="card reveal"><span class="num">DEPTH · 深度</span><h3>多步业务因果</h3><p>不是「单个请求返回 200 就算通过」。QualiBug 推理跨实体状态、长周期生命周期、以及多步操作串起来之后本应守恒的量。</p></div>
+      <div class="card reveal" data-d="1"><span class="num">BREADTH · 广度</span><h3>不靠固定检测器清单</h3><p>发现由业务不变量与系统空间坐标变化驱动。缺陷类型只是事后用于报告和回归的标签，不是发现能力的上限。</p></div>
+      <div class="card reveal" data-d="2"><span class="num">NEUTRAL · 中立</span><h3>不硬编码任何客户业务</h3><p>行业中立是硬约束：不允许把任何一个客户、任何一个行业的业务规则写进检测逻辑。业务规则只能来自你提供的资料，不能来自我们预置的行业模板。</p></div>
+    </div>
+  </div>
+</section>
+
+<hr class="hair"/>
+
+<!-- ============================ 03 核心能力 ============================ -->
+<section id="capability">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow reveal"><span class="idx">03</span> 核心能力</span>
+      <h2 class="sec reveal" data-d="1">一条从资料到发布决策的完整主线</h2>
+      <p class="lede reveal" data-d="2">六个能力构成一条闭环，而不是六个互相独立的功能模块。</p>
+    </div>
+
+    <div class="grid g-3">
+      <article class="card reveal"><span class="num">01 / MODELING</span><h3>行为空间建模</h3><p>把企业资料与接口文档编译成行为中间表示（Behavior IR），形成操作者、状态、数据、规则的统一表示，作为后续一切推导的唯一事实来源。</p></article>
+      <article class="card reveal" data-d="1"><span class="num">02 / OBLIGATION</span><h3>测试义务编译</h3><p>由不变量推导出「必须被验证的性质」。每条义务都必须挂接到来源声明与具体操作上——没有来源，就不会被生成。</p></article>
+      <article class="card reveal" data-d="2"><span class="num">03 / EXPERIMENT</span><h3>可执行实验编排</h3><p>义务被编译成实验：固定装置 DAG、控制组与实验组、受治理请求序列。绑定不完整的实验会显式标记为 <code style="font-family:var(--mono);font-size:.8rem;color:var(--sky)">BLOCKED</code>，而不是假装通过。</p></article>
+      <article class="card reveal" data-d="3"><span class="num">04 / EVIDENCE</span><h3>四段式证据管道</h3><p>原始探针证据 → 归一化运行时证据 → 语义验证证据 → 业务发现契约。每一段都可回溯，中间不允许出现推断。</p></article>
+      <article class="card reveal" data-d="4"><span class="num">05 / GATE</span><h3>客户交付门禁</h3><p>只有通过正式门禁的结果才会进入客户视野。未通过的会留在「内部线索」里，并明确写出缺了什么——不塞进报告凑数。</p></article>
+      <article class="card reveal" data-d="4"><span class="num">06 / KNOWLEDGE</span><h3>企业知识统一接入</h3><p>企业资料被沉淀为可复用的知识资产，跨项目、跨版本持续积累，而不是每次测试都从零开始读一遍文档。</p></article>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 04 证据链 ============================ -->
+<section id="evidence">
+  <div class="wrap">
+    <div class="sec-head split">
+      <div>
+        <span class="eyebrow reveal"><span class="idx">04</span> 证据链</span>
+        <h2 class="sec reveal" data-d="1">一个缺陷，<br/>凭什么值得你去修</h2>
+      </div>
+      <p class="lede reveal" data-d="2">
+        AI 报告最贵的成本不是生成，是<b style="color:var(--text)">核实</b>。所以 QualiBug 把证据做成一条有形状的管道：每一段都留痕，每一个结论都必须指回真实执行过的请求与观察。
+      </p>
+    </div>
+
+    <ol class="pipe" role="list">
+      <li class="stage reveal"><span class="sn">1</span><span class="en" lang="en">RAW PROBE EVIDENCE</span><h3>原始探针证据</h3><p>真实发出的请求、真实收到的响应、真实发生的时间点，原样留存。</p></li>
+      <li class="stage reveal" data-d="1"><span class="sn">2</span><span class="en" lang="en">NORMALIZED RUNTIME</span><h3>归一化运行时证据</h3><p>把原始观测规整成统一结构，可比较、可回放、可作为下一步判定的输入。</p></li>
+      <li class="stage reveal" data-d="2"><span class="sn">3</span><span class="en" lang="en">SEMANTIC VERIFICATION</span><h3>语义验证证据</h3><p>用断言与契约判定：这次观测到的行为，是否违反了那条业务不变量。</p></li>
+      <li class="stage reveal" data-d="3"><span class="sn">4</span><span class="en" lang="en">BUSINESS FINDING</span><h3>业务发现契约</h3><p>形成一个可交付的缺陷结论：违反了什么、在哪一步、怎么复现。</p></li>
+    </ol>
+
+    <div class="rules">
+      <div class="rule reveal"><h4>不推断，只观测</h4><p>不得推断请求体、凭据、业务规则、表名 / SQL 或影响结论。没有观测到的东西，产品不会替你写出来。</p></div>
+      <div class="rule reveal" data-d="1"><h4>合成指引 ≠ 证据</h4><p>格式化的操作指引可以生成，但会被明确标注，且永远不能替代真实执行证据，也不能通过客户交付门禁。</p></div>
+      <div class="rule reveal" data-d="2"><h4>每次写入都有回执</h4><p>受治理沙箱中的每次写操作，都会产出 before / after 观察、清理结果与审计回执。清理失败会被如实保留。</p></div>
+    </div>
+  </div>
+</section>
+
+<hr class="hair"/>
+
+<!-- ============================ 05 交付门禁 ============================ -->
+<section id="gate">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow reveal"><span class="idx">05</span> 交付门禁</span>
+      <h2 class="sec reveal" data-d="1">宁可少给一条，<br/>也不给一条要你自己去验的</h2>
+      <p class="lede reveal" data-d="2">客户交付门禁决定哪些结论可以送到你面前。未通过的不会被丢弃，而是连同缺失原因一起对你可见。</p>
+    </div>
+
+    <div class="gate-wrap">
+      <div class="gate-svg reveal">
+        <svg viewBox="0 0 560 320" role="img" aria-label="候选发现经过客户交付门禁，分流为正式交付与内部线索">
+          <defs>
+            <linearGradient id="gpass" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#0EA5E9"/><stop offset="1" stop-color="#2DD4BF"/></linearGradient>
+            <linearGradient id="ggate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#0EA5E9"/></linearGradient>
+          </defs>
+
+          <!-- 左：候选池 -->
+          <text x="24" y="34" fill="#8B9EB5" font-family="ui-monospace,monospace" font-size="11" letter-spacing="1.6">CANDIDATES · 候选发现</text>
+          <g fill="none" stroke="rgba(125,190,255,.24)" stroke-width="1">
+            <rect x="20" y="48" width="150" height="224" rx="12"/>
+          </g>
+          <g>
+            <circle cx="56"  cy="86"  r="7" fill="#3B82F6" opacity=".85"/>
+            <circle cx="96"  cy="106" r="7" fill="#22D3EE" opacity=".7"/>
+            <circle cx="136" cy="80"  r="7" fill="#2DD4BF" opacity=".8"/>
+            <circle cx="62"  cy="140" r="7" fill="#64748B" opacity=".7"/>
+            <circle cx="112" cy="158" r="7" fill="#3B82F6" opacity=".7"/>
+            <circle cx="148" cy="134" r="7" fill="#64748B" opacity=".6"/>
+            <circle cx="52"  cy="200" r="7" fill="#22D3EE" opacity=".75"/>
+            <circle cx="100" cy="220" r="7" fill="#64748B" opacity=".6"/>
+            <circle cx="142" cy="196" r="7" fill="#3B82F6" opacity=".65"/>
+            <circle cx="76"  cy="246" r="7" fill="#64748B" opacity=".5"/>
+          </g>
+
+          <!-- 连接线 -->
+          <g stroke="rgba(125,211,252,.42)" stroke-width="1.4" fill="none">
+            <path class="dash" d="M170 120 C 215 120, 225 150, 258 158"/>
+            <path class="dash" d="M170 160 C 210 160, 225 158, 258 160"/>
+            <path class="dash" d="M170 210 C 215 210, 225 172, 258 164"/>
+          </g>
+
+          <!-- 门禁 -->
+          <rect x="258" y="60" width="60" height="200" rx="14" fill="rgba(37,99,235,.10)" stroke="url(#ggate)" stroke-width="1.6"/>
+          <text x="288" y="40" fill="#7DD3FC" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle" letter-spacing="1.4">DELIVERY GATE</text>
+          <g stroke="#38BDF8" stroke-width="1.2" opacity=".55">
+            <path d="M270 100h36M270 130h36M270 160h36M270 190h36M270 220h36"/>
+          </g>
+          <text x="288" y="284" fill="#8B9EB5" font-family="ui-monospace,monospace" font-size="10" text-anchor="middle">证据完备性校验</text>
+
+          <!-- 右上：正式交付 -->
+          <g stroke="url(#gpass)" stroke-width="1.8" fill="none"><path class="dash" d="M318 130 C 360 130, 372 104, 410 100"/></g>
+          <rect x="410" y="66" width="130" height="70" rx="12" fill="rgba(45,212,191,.08)" stroke="rgba(45,212,191,.42)"/>
+          <text x="426" y="94" fill="#2DD4BF" font-family="ui-monospace,monospace" font-size="10" letter-spacing="1.2">FORMAL</text>
+          <text x="426" y="114" fill="#E8EFF9" font-size="14" font-weight="600">正式交付缺陷</text>
+          <text x="426" y="130" fill="#8B9EB5" font-size="10.5">带证据 · 可复现</text>
+
+          <!-- 右下：内部线索 -->
+          <g stroke="rgba(100,116,139,.6)" stroke-width="1.4" fill="none" stroke-dasharray="4 5"><path d="M318 195 C 360 195, 372 220, 410 226"/></g>
+          <rect x="410" y="194" width="130" height="70" rx="12" fill="rgba(100,116,139,.07)" stroke="rgba(100,116,139,.34)"/>
+          <text x="426" y="222" fill="#94A3B8" font-family="ui-monospace,monospace" font-size="10" letter-spacing="1.2">INTERNAL</text>
+          <text x="426" y="242" fill="#9DB0C9" font-size="14" font-weight="600">内部线索</text>
+          <text x="426" y="258" fill="#8B9EB5" font-size="10.5">附带未通过原因</text>
+        </svg>
+      </div>
+
+      <ul role="list" class="gate-points">
+        <li class="reveal">
+          <span class="gp-ic"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12l5 5L20 6"/></svg></span>
+          <div><h3>没有真实执行证据的缺陷，不会被交付</h3><p>这是产品的硬约束，不是一个可以按项目放宽的配置项。</p></div>
+        </li>
+        <li class="reveal" data-d="1">
+          <span class="gp-ic"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/></svg></span>
+          <div><h3>未通过的线索也对你可见</h3><p>它们进入「内部线索」，并写清缺了哪一环。你能看到系统在想什么，而不是只看到一份筛选后的结论。</p></div>
+        </li>
+        <li class="reveal" data-d="2">
+          <span class="gp-ic"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18M4 8h16M4 16h16"/></svg></span>
+          <div><h3>空结果不等于系统没问题</h3><p>如果一次运行的义务全部被阻塞，它会显式标记为 BLOCKED。产品不会把「没跑成」包装成「很干净」。</p></div>
+        </li>
+        <li class="reveal" data-d="3">
+          <span class="gp-ic"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 6h16v12H4z"/><path d="M4 10h16"/></svg></span>
+          <div><h3>内部漏斗计数不会被包装成召回率</h3><p>候选数、确认数、验证数只用于诊断转化损失，永远不会作为商业能力指标对外报出。</p></div>
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 06 执行治理 ============================ -->
+<section id="governance">
+  <div class="wrap">
+    <div class="sec-head split">
+      <div>
+        <span class="eyebrow reveal"><span class="idx">06</span> 执行治理与安全</span>
+        <h2 class="sec reveal" data-d="1">让企业敢把它接进来</h2>
+      </div>
+      <p class="lede reveal" data-d="2">
+        一个会真实发请求、会真实写数据的系统，必须先证明自己是安全的。
+        QualiBug 的默认姿态是<b style="color:var(--text)">失败即关闭（fail-closed）</b>：说不清楚的环境，一律不写。
+      </p>
+    </div>
+
+    <div class="gov">
+      <div class="gov-card reveal">
+        <span class="gi"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6z"/></svg></span>
+        <h3>只对显式声明的非生产目标写入</h3>
+        <p>生产环境与「类型未知」的环境，写操作一律拒绝。localhost 或某个环境名字，永远不构成写入安全的证明。</p>
+      </div>
+      <div class="gov-card reveal" data-d="1">
+        <span class="gi"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg></span>
+        <h3>受治理沙箱与清理回执</h3>
+        <p>每次写入都在治理沙箱中进行，产出 before / after 观察、清理结果与审计回执；清理失败会被如实记录，不会被抹掉。</p>
+      </div>
+      <div class="gov-card reveal" data-d="2">
+        <span class="gi"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8"/><path d="M12 12V7"/></svg></span>
+        <h3>操作员级熔断开关</h3>
+        <p>一个开关即可全局停写：所有写操作在请求发出<b>之前</b>被阻断，而不是发完再回滚。权限在你的运维手里，不在我们这里。</p>
+      </div>
+      <div class="gov-card reveal" data-d="3">
+        <span class="gi"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></span>
+        <h3>完全私有化部署</h3>
+        <p>部署在你的企业内网，默认只监听本机、不对外开放。需要对外访问必须由你显式开启，并置于企业自己的反向代理之后。</p>
+      </div>
+      <div class="gov-card reveal" data-d="4">
+        <span class="gi"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l8 4v6c0 4-3.5 7-8 8-4.5-1-8-4-8-8V7z"/><path d="M9 12l2 2 4-4"/></svg></span>
+        <h3>凭据静态加密，缺密钥拒绝启动</h3>
+        <p>凭据加密主密钥缺失时，服务直接 fail-closed 拒绝启动，而不是降级成明文继续跑。</p>
+      </div>
+      <div class="gov-card reveal" data-d="4">
+        <span class="gi"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 20V10M10 20V4M16 20v-8M22 20V7"/></svg></span>
+        <h3>一键交付现场自检</h3>
+        <p>内置只读诊断，进场一条命令就能判断环境是否满足运行条件，不靠现场调试碰运气。</p>
+      </div>
+    </div>
+
+    <!-- 数据出网边界：这是采购合规的硬门槛，不能藏在 FAQ 里，也不能笼统写成「数据不出企业网」。 -->
+    <div class="egress reveal" id="egress">
+      <span class="egress-tag">数据出网边界</span>
+      <div class="egress-body">
+        <div>
+          <h3>产品私有化部署，<br/>但推理模型的位置由你决定</h3>
+          <p>
+            QualiBug 的服务、运行状态与证据数据全部落在你的企业内网，默认只监听本机、不对外开放。但发现能力依赖大模型推理，而<b>模型接在哪里，决定了内容是否出网</b>。
+          </p>
+          <p class="egress-note">
+            这个选择在部署时由你做，产品不替你决定，也不会把两种情况混为一谈、笼统说成「数据不出企业网」。
+          </p>
+        </div>
+        <div>
+          <ul role="list">
+            <li><b>接企业内部模型</b>（自建或私有化大模型服务）——全链路不出企业网络。</li>
+            <li><b>接外部模型供应商</b>——送去推理的资料内容会离开企业网络，抵达该供应商。</li>
+          </ul>
+          <p class="egress-note">
+            如果贵司的合规要求是数据零出网，请在部署阶段就选择内部模型接入，我们配合完成对接。
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="hair"/>
+
+<!-- ============================ 07 能力边界 ============================ -->
+<section id="boundary">
+  <div class="wrap">
+    <div class="sec-head split">
+      <div>
+        <span class="eyebrow reveal"><span class="idx">07</span> 发现能力与口径</span>
+        <h2 class="sec reveal" data-d="1">十类高价值业务缺陷，<br/>带证据、可复现地交付</h2>
+      </div>
+      <p class="lede reveal" data-d="2">
+        每一类都对应一种真实的业务损失，而这十类只是起点——缺陷类型体系是开放的。当期覆盖矩阵随交付文档逐项确认，<b style="color:var(--text)">你不需要靠试探来发现产品的边界</b>。
+      </p>
+    </div>
+
+    <!-- 主轴是「本版能找出什么」（10 类业务缺陷，全部已交付），而不是「观测面清单」——后者会把 10 项已交付能力压进一个单元格，再用 4 行路线图把整块读成 1/7，与事实不符。 -->
+    <ul class="defect-grid reveal" role="list">
+      <li><span class="dg-n">01</span><div><b>越权访问</b><span>低权限角色能读到或改掉不属于它的数据</span></div></li>
+      <li><span class="dg-n">02</span><div><b>租户 / 项目隔离失效</b><span>一方的操作影响到另一方的数据或额度</span></div></li>
+      <li><span class="dg-n">03</span><div><b>状态非法流转</b><span>跳过必经环节，或已终结的单据被再次变更</span></div></li>
+      <li><span class="dg-n">04</span><div><b>数量与金额不守恒</b><span>多步操作串起来之后，前后账目对不平</span></div></li>
+      <li><span class="dg-n">05</span><div><b>幂等失效</b><span>重复提交产生了重复的业务后果</span></div></li>
+      <li><span class="dg-n">06</span><div><b>并发竞态</b><span>同时操作导致超发、重复扣减或互相覆盖</span></div></li>
+      <li><span class="dg-n">07</span><div><b>校验缺口</b><span>越界与非法输入被接受，落库成脏数据</span></div></li>
+      <li><span class="dg-n">08</span><div><b>可见性口径不一致</b><span>列表、详情与导出对同一份数据给出不同结果</span></div></li>
+      <li><span class="dg-n">09</span><div><b>时序与时间窗</b><span>到期未生效、超时未收敛、跨时段行为不一致</span></div></li>
+      <li><span class="dg-n">10</span><div><b>隐私字段泄漏</b><span>敏感字段出现在不该出现的接口或导出里</span></div></li>
+    </ul>
+
+    <p class="chain-note reveal">
+      每一类都走完整链路：<b>来源可追溯的测试义务 → 受治理实验 → 真实执行观测 → 断言与契约判定 → 客户交付门禁</b>。没有走完这条链路的，不会出现在交给你的结果里。
+    </p>
+
+    <div class="scope-note reveal">
+      <span class="cover-tag alt">开放的缺陷类型体系</span>
+      <p>
+        这十类是典型，不是清单的上限。发现由业务不变量与行为空间坐标变化驱动，不受固定检测器清单限制——<b>任何有证据的不变量违反都在范围内，包括还没有名字的缺陷类型</b>。观测面（API、数据库、UI、消息链、性能……）沿产品路线持续扩展，每打通一层，都进入同一条证据与交付门禁链路。
+      </p>
+      <p class="sn-doc">各观测面的当期覆盖矩阵随交付文档提供，在技术评估中逐项确认——官网介绍能力体系，交付口径以文档为准。</p>
+    </div>
+
+    <div class="grid g-3" style="margin-top:16px">
+      <div class="card reveal"><span class="num">交付的是结论</span><h3>不是一份等你去核实的报告</h3><p>塞满「疑似问题」的报告，成本会转嫁给你的测试与研发逐条核实。可复现的少数结论，比不可核实的多数噪音更值钱。</p></div>
+      <div class="card reveal" data-d="1"><span class="num">交付口径书面化</span><h3>口径写在合同前，不在验收后</h3><p>当期覆盖矩阵在技术评估中逐项书面确认。你的架构决策、排期与验收标准，可以直接建立在确定的口径上，而不是等交付时再对齐。</p></div>
+      <div class="card reveal" data-d="2"><span class="num">标准只升不降</span><h3>能力增长，不以放松标准为代价</h3><p>新观测面上线后走的仍是同一条证据链与交付门禁。发现得更多，从来不意味着交付得更松。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 08 落地路径 ============================ -->
+<section id="adopt">
+  <div class="wrap">
+    <div class="sec-head split">
+      <div>
+        <span class="eyebrow reveal"><span class="idx">08</span> 落地路径</span>
+        <h2 class="sec reveal" data-d="1">从接入到发布决策的<br/>五个步骤</h2>
+      </div>
+      <p class="lede reveal" data-d="2">产品控制台里就是这条主线，没有隐藏的手工环节。</p>
+    </div>
+
+    <div class="steps">
+      <div class="step reveal"><span class="step-n">01</span><div><h3>配置项目与目标 <span class="en" lang="en">SETTINGS</span></h3><p>登记项目、服务地址、鉴权方式与数据库配置，并显式声明每个目标的环境类型。环境类型是一个必填事实——它决定了系统是否允许写入。</p></div></div>
+      <div class="step reveal" data-d="1"><span class="step-n">02</span><div><h3>导入企业资料 <span class="en" lang="en">ENTERPRISE MATERIALS</span></h3><p>把 PRD、接口文档、业务规则、角色权限、历史缺陷导入，沉淀为可复用的知识资产，并编译成行为空间模型。</p></div></div>
+      <div class="step reveal" data-d="2"><span class="step-n">03</span><div><h3>发起发现运行 <span class="en" lang="en">ENTERPRISE CAMPAIGNS</span></h3><p>统一运行中心：发起标准扫描或受控执行。运行权威在创建前冻结，运行中不允许切换——保证结果可复现。</p></div></div>
+      <div class="step reveal" data-d="3"><span class="step-n">04</span><div><h3>查看结果与证据 <span class="en" lang="en">FINDINGS · EVIDENCE CHAIN</span></h3><p>逐条查看正式缺陷与其完整证据链；同时可以查看未通过门禁的内部线索，以及它们各自缺失的环节。</p></div></div>
+      <div class="step reveal" data-d="4"><span class="step-n">05</span><div><h3>发布门禁判断 <span class="en" lang="en">RELEASE GATE</span></h3><p>把发现结果接进发布决策：这次变更是否达到交付就绪，由证据而不是由感觉决定。</p></div></div>
+    </div>
+
+    <!-- 面向采购方与技术评估者：只呈现"部署有多轻"，不暴露端口、端点与内部命令细节。 -->
+    <div class="deploy reveal">
+      <div class="deploy-bar">
+        <span class="d"></span><span class="d"></span><span class="d"></span>
+        <span style="margin-left:8px">私有化部署 · 标准产品，不需要实施驻场</span>
+      </div>
+      <ol class="deploy-steps" role="list">
+        <li>
+          <span class="ds-n">01</span>
+          <div><b>环境自检</b><span>一条只读命令，进场即可判断环境是否满足运行条件，不靠现场调试碰运气。</span></div>
+        </li>
+        <li>
+          <span class="ds-n">02</span>
+          <div><b>容器启动</b><span>标准容器编排一键拉起，默认只监听本机；密钥缺失直接拒绝启动，不会降级成不安全状态。</span></div>
+        </li>
+        <li>
+          <span class="ds-n">03</span>
+          <div><b>接入目标</b><span>在控制台登记项目与非生产目标、导入企业资料，即可发起第一次发现运行。</span></div>
+        </li>
+      </ol>
+      <div class="deploy-forms">
+        <b>交付与接入形态</b>
+        <span>私有化部署是当前主力交付形态；SaaS、API、CLI、Agent-to-Agent 等接入形态沿产品路线逐步开放，当期可用形态以交付文档为准。</span>
+      </div>
+    </div>
+
+    <div class="principles" style="margin-top:36px">
+      <div class="prin reveal"><span class="pn">01</span><h4>Fail Fast</h4><p>错误不得被静默吞掉</p></div>
+      <div class="prin reveal" data-d="1"><span class="pn">02</span><h4>Fix the Cause</h4><p>修根因，不糊表面补丁</p></div>
+      <div class="prin reveal" data-d="1"><span class="pn">03</span><h4>Make It Observable</h4><p>关键路径可追溯、可诊断</p></div>
+      <div class="prin reveal" data-d="2"><span class="pn">04</span><h4>Industry Neutral</h4><p>全行业适配，禁止硬编码</p></div>
+      <div class="prin reveal" data-d="2"><span class="pn">05</span><h4>No Fake Bugs</h4><p>无真实执行证据不交付</p></div>
+      <div class="prin reveal" data-d="3"><span class="pn">06</span><h4>Living Docs</h4><p>方向变更即同步文档</p></div>
+    </div>
+  </div>
+</section>
+
+<hr class="hair"/>
+
+<!-- ============================ 09 合作模式 ============================ -->
+<section id="engage">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow reveal"><span class="idx">09</span> 合作模式</span>
+      <h2 class="sec reveal" data-d="1">从一次技术评估开始</h2>
+      <p class="lede reveal" data-d="2">
+        标准产品交付，不是实施项目：不驻场、不按人天计费、不改造你的系统。我们希望先和你的架构与测试负责人把技术细节走一遍，让能力和边界都摆在台面上再谈商务。
+      </p>
+    </div>
+
+    <div class="plans">
+      <div class="plan reveal">
+        <span class="p-stage">Stage 01</span>
+        <h3>技术深度评估</h3>
+        <p class="p-dur">不接入生产 · 无需源代码</p>
+        <ul>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>企业资料接入与行为空间建模走查</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>一次受控发现运行（非生产目标）</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>逐条证据链复核与结论可复现验证</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>能力边界与差距的书面结论</li>
+        </ul>
+        <a class="btn btn-ghost" href="#contact">预约技术深度评估</a>
+      </div>
+
+      <div class="plan featured reveal" data-d="1">
+        <span class="plan-badge">推荐</span>
+        <span class="p-stage">Stage 02</span>
+        <h3>标准私有化部署</h3>
+        <p class="p-dur">企业内网 · 标准产品交付</p>
+        <ul>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>私有化部署与交付现场自检</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>多个非生产目标接入与环境类型治理</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>客户交付门禁上线，正式缺陷进入既有缺陷流程</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>运维手册、验收冒烟与团队交接</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>不驻场、不按人天计费、不改造你的系统</li>
+        </ul>
+        <a class="btn btn-primary" href="#contact">申请部署 <span class="arw">→</span></a>
+      </div>
+
+      <div class="plan reveal" data-d="2">
+        <span class="p-stage">Stage 03</span>
+        <h3>企业级规模化</h3>
+        <p class="p-dur">多系统 / 多租户 · 按规模计价</p>
+        <ul>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>多系统、多服务、多租户接入</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>接入 CI / CD 流程，作为发布门禁的一部分</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>企业知识资产持续沉淀与跨版本回归</li>
+          <li><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>按你的技术栈共建新的观测面</li>
+        </ul>
+        <a class="btn btn-ghost" href="#contact">联系我们</a>
+      </div>
+    </div>
+    <p style="text-align:center;color:var(--text-3);font-size:.82rem;margin-top:22px">
+      标准产品交付：按部署规模与接入系统数计价，不按人天计费，不需要驻场实施。评估阶段不涉及任何生产环境接入。
+    </p>
+  </div>
+</section>
+
+<!-- ============================ 10 愿景 ============================ -->
+<section id="vision">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow reveal"><span class="idx">10</span> 愿景</span>
+      <h2 class="sec vh">成为企业系统运行的独立验证层</h2>
+    </div>
+    <div class="vision reveal">
+      <div class="vision-body">
+        <div>
+          <p class="vision-quote" aria-hidden="true">成为企业系统运行的<br/><span class="grad">独立验证层</span></p>
+          <ul role="list" class="vision-tags">
+            <li>多系统</li><li>多服务</li><li>多数据库</li><li>多消息链</li>
+            <li>人 / 程序 / AI Agent</li><li>全行业中立</li>
+          </ul>
+          <p class="vision-stage">我们的做法是：先把观测面一层层打通，再宣称对应的能力 —— 而不是先把话说满。</p>
+        </div>
+        <div>
+          <p>
+            在 AI 时代，企业系统会越来越多地由程序和 AI Agent 操作。操作方可以不断更换，但<b style="color:var(--text)">验证层不能缺席</b>——
+            而且它不能属于任何一个操作方。
+          </p>
+          <p>
+            QualiBug AI 的长期方向，是成为这一层独立验证层：不替系统做决定，只对可观测的行为负责；不假设操作者是谁，把操作者身份当作验证的输入，而不是内置在检测逻辑里的假设。验证能力本身也将以 SaaS 形态云端交付，并通过 API、CLI 与 Agent-to-Agent 接口，开放给程序与企业智能体直接调用。
+          </p>
+          <p>
+            目标覆盖全行业、全系统类型：ERP、MES、WMS、CRM、财务、供应链、医疗、教育、多租户 SaaS —— 没有任何一项能力被限定在某个行业里，也没有任何一个行业被排除在外。
+          </p>
+        </div>
+      </div>
+
+      <div class="vision-if">
+        <span class="vision-if-tag">验证能力的调用形态</span>
+        <ul role="list">
+          <li><b>Console</b><span>图形控制台 · 现已可用</span></li>
+          <li><b>SaaS</b><span>云端托管 · 免私有部署</span></li>
+          <li><b>API</b><span>程序与自动化系统直接调用</span></li>
+          <li><b>CLI</b><span>命令行与 CI / CD 集成</span></li>
+          <li class="hl"><b>Agent-to-Agent</b><span>企业智能体直接调用</span></li>
+        </ul>
+        <p class="vision-if-note">除控制台外，其余形态沿产品路线逐步开放，当期可用形态以交付文档为准。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FAQ ============================ -->
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow reveal"><span class="idx">11</span> 常见问题</span>
+      <h2 class="sec reveal" data-d="1">你大概率会问的几件事</h2>
+    </div>
+
+    <div class="faq reveal">
+      <details>
+        <summary>它会不会碰我的生产环境？</summary>
+        <div class="ans">不会。自动读写探针只对<b>显式声明为非生产</b>的目标执行；生产环境与类型未知的环境对写操作一律 fail-closed。此外还有一个由你的运维掌握的全局停写开关，打开后所有写操作会在请求发出之前被阻断。环境类型是必填事实，不会因为地址是 localhost 就被默认成安全。</div>
+      </details>
+      <details>
+        <summary>这是不是一个扫描器 / 爬虫？</summary>
+        <div class="ans">不是。QualiBug 不做全站遍历，也不做规则库匹配式扫描。它先把系统建模成行为空间，再由业务不变量推导出必须验证的义务，然后编译成受治理的实验去执行。产品语义中的 <b>Bug</b> 指的是「观察到的行为」与「期望行为」之间可证据化复现的偏差——与昆虫、爬虫、抓取无关。</div>
+      </details>
+      <details>
+        <summary>需要把源代码给你们吗？</summary>
+        <div class="ans">不需要。产品消费的是可见的企业资料、配置的接口端点、声明的测试角色与运行时观测事实。它以黑盒方式工作在你的非生产环境上。</div>
+      </details>
+      <details>
+        <summary>数据会不会离开我们的网络？</summary>
+        <div class="ans">分两层看，我们不把它们混为一谈。<b>产品自身</b>是完全私有化的：本地或 Docker 部署在企业内网，容器默认只映射到 <code>127.0.0.1</code>，对外暴露需要显式开启并置于企业反向代理之后；凭据在静态存储时加密，加密主密钥缺失时服务直接拒绝启动。<b>模型侧</b>取决于你的选择：接企业内部模型则全链路不出网；接外部模型供应商，则送去推理的资料内容会离开企业网络。如果贵司要求数据零出网，请在部署阶段就选择内部模型接入。详见 <a href="#egress" style="color:var(--sky);border-bottom:1px solid rgba(125,211,252,.4)">数据出网边界</a>。</div>
+      </details>
+      <details>
+        <summary>和我们现有的自动化测试框架冲突吗？</summary>
+        <div class="ans">不冲突，定位不同。现有框架回答的是「我写好的用例有没有通过」；QualiBug 回答的是「这个系统有哪些本该成立的业务性质，现在不成立了」。正式缺陷可以直接进入你既有的缺陷流程，发现结果也可以接进 CI 作为发布门禁的一部分。</div>
+      </details>
+      <details>
+        <summary>为什么你们不公布召回率 / 精确率数字？</summary>
+        <div class="ans">因为这些数字还没有被外部可验证地测量，而我们不公布无法核验的数字。产品内部有一条硬规则：外部质量指标在拿到可验证的评测回执之前必须保持 <code>NOT_MEASURED</code>，内部候选数、确认数、漏斗计数不得被包装成召回率或商业能力。把这条规则写进官网，是因为它同样约束我们在销售场景里的表述。</div>
+      </details>
+      <details>
+        <summary>一次运行没发现缺陷，是不是说明系统是干净的？</summary>
+        <div class="ans">不能这样解读，产品本身也拒绝这样呈现。如果一次运行的测试义务全部被阻塞，它会显式标记为 BLOCKED 而不是「通过」。另外，各观测面的当期覆盖以交付文档为准；未纳入覆盖的观测面上没有结果，只代表未覆盖，不代表那里没有问题。</div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 结尾 CTA ============================ -->
+<section id="contact">
+  <div class="wrap">
+    <div class="final reveal">
+      <h2>先用一次真实运行，<br/>验证我们说的每一句话</h2>
+      <p>
+        带上一个非生产环境和一份业务资料，我们把整条链路跑给你看：从建模、义务、实验，到证据链和交付门禁。
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary"
+           data-placeholder="contact-email-solutions"
+           href="mailto:solutions@qualibug.example?subject=QualiBug%20AI%20技术深度评估申请">预约技术深度评估 <span class="arw">→</span></a>
+        <a class="btn btn-ghost" href="#boundary">再看一遍覆盖口径</a>
+      </div>
+      <p style="font-size:.82rem;color:var(--text-3);margin-top:24px">
+        评估阶段不接入生产环境 · 不需要提供源代码 · 私有化部署
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 页脚 ============================ -->
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#top" aria-label="QualiBug AI">
+          <svg viewBox="0 0 96 96" role="img" aria-label="QualiBug AI">
+            <defs><linearGradient id="qmark2" x1="12%" y1="90%" x2="90%" y2="10%">
+              <stop offset="0" stop-color="#2563EB"/><stop offset=".55" stop-color="#0EA5E9"/><stop offset="1" stop-color="#2DD4BF"/>
+            </linearGradient></defs>
+            <path d="M70 20A34 34 0 1 0 69 75M61 65l21 21" fill="none" stroke="url(#qmark2)" stroke-width="11" stroke-linecap="round"/>
+            <path d="M26 54 48 40 72 53 50 68 26 54Z" fill="rgba(14,165,233,0.11)" stroke="#38BDF8" stroke-width="3" stroke-linejoin="round"/>
+            <path d="M29 55c9-1 13 2 19-4 6-6 12-5 21 1" fill="none" stroke="#7DD3FC" stroke-width="3.5" stroke-linecap="round"/>
+            <circle cx="29" cy="55" r="4" fill="#3B82F6"/><circle cx="48" cy="51" r="4" fill="#22D3EE"/><circle cx="69" cy="52" r="4" fill="#2DD4BF"/>
+          </svg>
+          <span class="brand-text">
+            <span class="brand-name">QualiBug <span class="ai">AI</span></span>
+            <span class="brand-sub" lang="en">Behavior Space Infrastructure</span>
+          </span>
+        </a>
+        <p>企业软件行为空间基础设施。把操作者、状态、数据、规则与真实执行轨迹映射为可计算、可验证、可演进的行为空间模型。</p>
+        <p class="foot-motto">观迹知因 —— 观测真实执行轨迹，追溯可证据化的根因。</p>
+      </div>
+
+      <div class="foot-col">
+        <h5>产品</h5>
+        <ul role="list">
+          <li><a href="#model">行为空间模型</a></li>
+          <li><a href="#capability">核心能力</a></li>
+          <li><a href="#evidence">证据链</a></li>
+          <li><a href="#gate">交付门禁</a></li>
+          <li><a href="#governance">执行治理与安全</a></li>
+        </ul>
+      </div>
+
+      <div class="foot-col">
+        <h5>信息</h5>
+        <ul role="list">
+          <li><a href="#why">为什么是现在</a></li>
+          <li><a href="#boundary">发现能力与口径</a></li>
+          <li><a href="#adopt">落地路径</a></li>
+          <li><a href="#engage">合作模式</a></li>
+          <li><a href="#vision">愿景</a></li>
+          <li><a href="#faq">常见问题</a></li>
+        </ul>
+      </div>
+
+      <div class="foot-col">
+        <h5>联系</h5>
+        <address style="font-style:normal">
+        <p class="ct"><b>商务合作</b>
+          <a class="ph" data-placeholder="contact-email-bd"
+             href="mailto:bd@qualibug.example">bd@qualibug.example</a></p>
+        <p class="ct"><b>技术深度评估</b>
+          <a class="ph" data-placeholder="contact-email-solutions"
+             href="mailto:solutions@qualibug.example">solutions@qualibug.example</a></p>
+        <p class="ct"><b>电话</b>
+          <span class="ph" data-placeholder="contact-phone">+86 000-0000-0000</span></p>
+        <p class="ct"><b>公司主体</b>昆山观迹知因智能科技有限公司</p>
+        <p class="ct"><b>地址</b>昆山全球数字创新港</p>
+        </address>
+      </div>
+    </div>
+
+    <div class="foot-base">
+      <span>© 2026 昆山观迹知因智能科技有限公司 · QualiBug AI. Proprietary，未授权不得复制、分发或商用。</span>
+      <span><span class="ph" data-placeholder="icp-license">［ICP 备案号 · 待填写］</span></span>
+      <span>本站不含任何客户数据、评测答案或行业专有规则。</span>
+    </div>
+  </div>
+</footer>
+
+</div><!-- /#page -->
+
+<script>
+(function(){
+  "use strict";
+  // 保留 MediaQueryList 本体，以便会话中途切换无障碍设置时能实时响应。
+  var motionQuery = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  var reduced = !!(motionQuery && motionQuery.matches);
+
+  // 本文件整体是 ES5 风格。NodeList.prototype.forEach 是较晚才有的 API，
+  // 在正是这套兜底所服务的老浏览器里可能不存在——兜底本身不能依赖它。
+  function each(list, fn){ for (var i = 0; i < list.length; i++) fn(list[i], i); }
+
+  /* ---------- 导航 ---------- */
+  var nav = document.getElementById("nav");
+  var links = document.getElementById("navLinks");
+  var toggle = document.getElementById("navToggle");
+
+  var onScroll = function(){
+    if (window.scrollY > 12) nav.classList.add("stuck"); else nav.classList.remove("stuck");
+  };
+  window.addEventListener("scroll", onScroll, {passive:true});
+  onScroll();
+
+  var closeMenu = function(refocus){
+    links.classList.remove("open");
+    toggle.setAttribute("aria-expanded","false");
+    if (refocus) toggle.focus();
+  };
+
+  toggle.addEventListener("click", function(){
+    var open = links.classList.toggle("open");
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    // 展开后把焦点送进菜单，否则 Tab 会直接跳过全部导航项。
+    if (open) {
+      var first = links.querySelector("a");
+      if (first) first.focus();
+    }
+  });
+  links.addEventListener("click", function(e){
+    if (e.target.tagName === "A") closeMenu(false);
+  });
+  // Esc 关闭并把焦点还给触发按钮
+  document.addEventListener("keydown", function(e){
+    if ((e.key === "Escape" || e.key === "Esc") && links.classList.contains("open")) closeMenu(true);
+  });
+
+  /* ---------- 滚动出现 ---------- */
+  var items = document.querySelectorAll(".reveal");
+  var revealAll = function(){ each(items, function(el){ el.classList.add("in"); }); };
+
+  if (!("IntersectionObserver" in window) || reduced) {
+    revealAll();
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); }
+      });
+    }, {rootMargin:"0px 0px -8% 0px", threshold:0.12});
+    each(items, function(el){ io.observe(el); });
+
+    // 兜底 1：观察器整体未触发（后台标签页、无合成帧、被扩展拦截等）。
+    // 内容不得永久停留在 opacity:0——宁可失去入场动效，也不能丢失内容。
+    setTimeout(function(){
+      if (document.querySelectorAll(".reveal.in").length === 0) revealAll();
+    }, 1800);
+
+    // 兜底 2：瞬时跳转（锚点跳转、End 键、带 #hash 直接打开）可能让某个元素
+    // 从未被观察到相交，从而被永久跳过。滚动停止后补扫一次：凡是已经进入或
+    // 越过视口的，一律置为可见。只扫描尚未显形的元素，代价可忽略。
+    var pending = items.length;
+    var sweep = function(){
+      if (pending <= 0) return;
+      var vh = window.innerHeight, left = 0;
+      each(items, function(el){
+        if (el.classList.contains("in")) return;
+        if (el.getBoundingClientRect().top < vh * 0.94) {
+          el.classList.add("in"); io.unobserve(el);
+        } else { left++; }
+      });
+      pending = left;
+    };
+
+    // 节流 + 防抖两条腿：页面开了 scroll-behavior:smooth，连续的平滑滚动会产生
+    // 不间断的 scroll 事件流，纯防抖的补扫会被一直往后推。节流保证滚动过程中
+    // 也会定期补扫，防抖保证滚动停止后再补最后一次。
+    var lastSweep = 0, tA, tB, tC;
+    var now = function(){
+      return (window.performance && performance.now) ? performance.now() : +new Date();
+    };
+    // 滚动停止后按 150 / 450 / 1000ms 阶梯补扫三次，而不是只补一次。
+    // 单次防抖会被平滑滚动的收尾甩掉：scroll 事件的最后一发可能早于最终静止位置，
+    // 实测会让结尾 CTA 这种大块元素以 opacity:0 停在屏幕中部。
+    var onScrollSweep = function(){
+      var t = now();
+      if (t - lastSweep > 220) { lastSweep = t; sweep(); }
+      clearTimeout(tA); clearTimeout(tB); clearTimeout(tC);
+      tA = setTimeout(sweep, 150);
+      tB = setTimeout(sweep, 450);
+      tC = setTimeout(function(){ lastSweep = now(); sweep(); }, 1000);
+    };
+    window.addEventListener("scroll", onScrollSweep, {passive:true});
+    window.addEventListener("resize", onScrollSweep, {passive:true});
+    window.addEventListener("load", sweep);
+    window.addEventListener("hashchange", function(){ setTimeout(sweep, 140); });
+    // scrollend 在平滑滚动真正停稳后才触发（scroll 事件的最后一发可能早于最终静止位置），
+    // 支持的浏览器用它收口，不支持的仍由上面的防抖兜底。
+    if ("onscrollend" in window) {
+      window.addEventListener("scrollend", function(){ lastSweep = now(); sweep(); }, {passive:true});
+    }
+  }
+
+  /* ---------- 卡片的指针 3D 倾斜与光斑（仅限真正支持悬停的设备） ---------- */
+  if (!reduced && window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+    var tiltables = document.querySelectorAll(".card, .plan, .gov-card, .stage, .cost");
+    each(tiltables, function(el){
+      var cached = null;
+      el.addEventListener("pointerenter", function(){ cached = el.getBoundingClientRect(); }, {passive:true});
+      window.addEventListener("scroll", function(){ cached = null; }, {passive:true});
+      el.addEventListener("pointermove", function(e){
+        var r = cached || (cached = el.getBoundingClientRect());
+        var mx = (e.clientX - r.left) / r.width  - 0.5;
+        var my = (e.clientY - r.top)  / r.height - 0.5;
+        el.style.setProperty("--gx", (mx * 100 + 50).toFixed(1) + "%");
+        el.style.setProperty("--gy", (my * 100 + 50).toFixed(1) + "%");
+        el.style.transform =
+          "perspective(900px) rotateX(" + (-my * 4.5).toFixed(2) + "deg) rotateY(" +
+          (mx * 5.5).toFixed(2) + "deg) translateY(-3px)";
+      }, {passive:true});
+      el.addEventListener("pointerleave", function(){ el.style.transform = ""; cached = null; }, {passive:true});
+    });
+  }
+
+  /* -----------------------------------------------------------------------
+     行为空间 3D 场景（纯装饰）
+     真透视投影 + 三层确定性几何：
+       下层 = 运行时事实平面 · 中层 = 行为空间平面 · 上层 = 业务不变量平面
+       中层承载状态节点与一条观测到的执行轨迹；层间连线表示同一坐标的映射。
+     不含随机粒子、粒子连线、雷达环或扫描扇形；
+     不表示任何真实系统、服务、模型或评测状态。
+     ----------------------------------------------------------------------- */
+  var cv = document.getElementById("behaviorField");
+  if (!cv || !cv.getContext) return;
+  var ctx = cv.getContext("2d");
+  if (!ctx) { console.error("[brand] behavior-field canvas: 2d context unavailable"); return; }
+
+  // ---- 场景常量（全部确定性，无随机） ----
+  var CAM = 2.88;            // 相机距离（越小透视越强）
+  var PITCH = 0.40;          // 基础俯角
+  var YAW0 = 0.62;           // 基础偏航
+
+  var LAYERS = [
+    { y:-0.74, ext:1.10, div:6, stroke:"56,189,248", sa:0.10, fill:"rgba(14,165,233,.035)", edge:0.20 },
+    { y: 0.00, ext:1.00, div:5, stroke:"56,189,248", sa:0.19, fill:"rgba(14,165,233,.085)", edge:0.46 },
+    { y: 0.68, ext:0.70, div:3, stroke:"45,212,191", sa:0.14, fill:"rgba(45,212,191,.05)",  edge:0.30 }
+  ];
+
+  // 状态节点：位于中层平面之上（y 为抬升高度）
+  var NODES = [
+    {x:-0.74, z: 0.40, y:0.14, c:"#3B82F6"},
+    {x:-0.30, z:-0.10, y:0.30, c:"#22D3EE"},
+    {x: 0.08, z: 0.46, y:0.20, c:"#2DD4BF"},
+    {x: 0.52, z:-0.02, y:0.38, c:"#38BDF8"},
+    {x: 0.86, z: 0.42, y:0.22, c:"#22D3EE"}
+  ];
+
+  // 行为空间中尚未被这条轨迹覆盖的状态（空间大于轨迹）
+  var LATENT = [
+    {x:-0.56, z:-0.64, y:0.18},
+    {x: 0.26, z:-0.74, y:0.12},
+    {x: 0.70, z: 0.76, y:0.10},
+    {x:-0.10, z: 0.82, y:0.16}
+  ];
+
+  // 层间映射柱：同一 (x,z) 坐标贯穿三层
+  var PILLARS = [
+    {x:-0.62, z:-0.30}, {x: 0.14, z: 0.18}, {x: 0.72, z:-0.44}
+  ];
+
+  var W=0, H=0, cx=0, cy=0, F=0, lastW=-1, t0=0;
+  var yawT=0, pitT=0, yawC=0, pitC=0;   // 指针环绕（目标 / 当前）
+
+  function resize(){
+    var host = cv.parentElement;
+    var w = Math.round(cv.getBoundingClientRect().width || (host ? host.clientWidth - 32 : 0));
+    if (w <= 0 || w === lastW) return false;
+    lastW = w;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = w;
+    H = Math.round(W * 12 / 16);
+    cv.width = Math.round(W * dpr);
+    cv.height = Math.round(H * dpr);
+    cv.style.height = H + "px";
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    cx = W * 0.5;
+    cy = H * 0.50;
+    F  = W * 0.86;   // 留出安全边距：偏航摆到极值时最近层的角不被画幅切掉
+    return true;
+  }
+
+  // 世界坐标 -> 屏幕：绕 Y 偏航、绕 X 俯仰，再做透视除法
+  function project(x, y, z, yaw, pitch){
+    var cy1 = Math.cos(yaw),  sy1 = Math.sin(yaw);
+    var rx  = x * cy1 - z * sy1;
+    var rz  = x * sy1 + z * cy1;
+    var cp  = Math.cos(pitch), sp = Math.sin(pitch);
+    var ry  = y * cp - rz * sp;
+    var rz2 = y * sp + rz * cp;
+    var d   = rz2 + CAM;
+    if (d < 0.35) d = 0.35;
+    var s = F / d;
+    return { x: cx + rx * s, y: cy - ry * s, s: s, d: d };
+  }
+
+  // 景深：越远越淡
+  function fog(d){
+    var f = 1 - (d - (CAM - 1.15)) / 2.6;
+    return f < 0.16 ? 0.16 : (f > 1 ? 1 : f);
+  }
+
+  function drawLayer(L, yaw, pitch){
+    var e = L.ext;
+    var c = [
+      project(-e, L.y, -e, yaw, pitch), project( e, L.y, -e, yaw, pitch),
+      project( e, L.y,  e, yaw, pitch), project(-e, L.y,  e, yaw, pitch)
+    ];
+
+    ctx.beginPath();
+    ctx.moveTo(c[0].x, c[0].y);
+    for (var i=1;i<4;i++) ctx.lineTo(c[i].x, c[i].y);
+    ctx.closePath();
+    ctx.fillStyle = L.fill;
+    ctx.fill();
+
+    // 栅格：逐段按景深调节透明度
+    ctx.lineWidth = 1;
+    for (var i2=-L.div; i2<=L.div; i2++){
+      var u = (i2 / L.div) * e;
+      var segs = 10, prev = null;
+      for (var k=0;k<=segs;k++){
+        var v = -e + (2*e) * (k/segs);
+        var p = project(u, L.y, v, yaw, pitch);
+        if (prev){
+          ctx.strokeStyle = "rgba("+L.stroke+","+(L.sa * fog((p.d+prev.d)/2)).toFixed(3)+")";
+          ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+        }
+        prev = p;
+      }
+      prev = null;
+      for (var k2=0;k2<=segs;k2++){
+        var v2 = -e + (2*e) * (k2/segs);
+        var p2 = project(v2, L.y, u, yaw, pitch);
+        if (prev){
+          ctx.strokeStyle = "rgba("+L.stroke+","+(L.sa * fog((p2.d+prev.d)/2)).toFixed(3)+")";
+          ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+        }
+        prev = p2;
+      }
+    }
+
+    // 平面外沿
+    ctx.beginPath();
+    ctx.moveTo(c[0].x, c[0].y);
+    for (var i3=1;i3<4;i3++) ctx.lineTo(c[i3].x, c[i3].y);
+    ctx.closePath();
+    ctx.strokeStyle = "rgba("+L.stroke+","+L.edge+")";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+
+  // Catmull–Rom 采样：轨迹在 3D 空间中平滑穿过状态节点
+  function trajectoryPoints(){
+    var pts = [], n = NODES.length, SEG = 22;
+    for (var i=0;i<n-1;i++){
+      var p0 = NODES[i>0?i-1:0], p1 = NODES[i], p2 = NODES[i+1], p3 = NODES[i+2] || NODES[i+1];
+      for (var s=0;s<SEG;s++){
+        var t = s/SEG, t2 = t*t, t3 = t2*t;
+        pts.push({
+          x: 0.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
+          y: 0.5*((2*p1.y)+(-p0.y+p2.y)*t+(2*p0.y-5*p1.y+4*p2.y-p3.y)*t2+(-p0.y+3*p1.y-3*p2.y+p3.y)*t3),
+          z: 0.5*((2*p1.z)+(-p0.z+p2.z)*t+(2*p0.z-5*p1.z+4*p2.z-p3.z)*t2+(-p0.z+3*p1.z-3*p2.z+p3.z)*t3)
+        });
+      }
+    }
+    pts.push({x:NODES[n-1].x, y:NODES[n-1].y, z:NODES[n-1].z});
+    return pts;
+  }
+  var TRAJ = trajectoryPoints();
+
+  function draw(time){
+    var yaw   = YAW0 + (reduced ? 0 : Math.sin(time * 0.000115) * 0.30) + yawC;
+    var pitch = PITCH + (reduced ? 0 : Math.sin(time * 0.000082) * 0.045) + pitC;
+
+    ctx.clearRect(0,0,W,H);
+
+    // 0) 中层的体积光：让空间看起来是被照亮的，而不是线框图
+    var lit = project(0, LAYERS[1].y, 0, yaw, pitch);
+    var lg = ctx.createRadialGradient(lit.x, lit.y, 0, lit.x, lit.y, W * 0.52);
+    lg.addColorStop(0,   "rgba(37,99,235,.20)");
+    lg.addColorStop(0.45,"rgba(14,165,233,.07)");
+    lg.addColorStop(1,   "rgba(6,16,30,0)");
+    ctx.fillStyle = lg;
+    ctx.fillRect(0,0,W,H);
+
+    // 画家算法：必须由远及近。俯仰后深度 d = y·sin(pitch) + z·cos(pitch) + CAM，
+    // 所以 y 越大越远 —— 上层(y=+0.68) 最远，下层(y=-0.74) 最近。
+    // 之前把最远的上层画在最后，等于让它盖住了它前面的节点与轨迹。
+    // 1) 上层：业务不变量（最远）
+    drawLayer(LAYERS[2], yaw, pitch);
+
+    // 2) 层间映射柱（下层 -> 上层）
+    PILLARS.forEach(function(p){
+      var a = project(p.x, LAYERS[0].y, p.z, yaw, pitch);
+      var b = project(p.x, LAYERS[2].y, p.z, yaw, pitch);
+      var g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+      g.addColorStop(0,   "rgba(56,189,248,0)");
+      g.addColorStop(0.5, "rgba(125,211,252,"+(0.30*fog(a.d)).toFixed(3)+")");
+      g.addColorStop(1,   "rgba(45,212,191,0)");
+      ctx.strokeStyle = g; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+
+      var m = project(p.x, LAYERS[1].y, p.z, yaw, pitch);
+      ctx.fillStyle = "rgba(125,211,252,"+(0.55*fog(m.d)).toFixed(3)+")";
+      ctx.beginPath(); ctx.arc(m.x, m.y, 2.2 * m.s / (F/CAM), 0, Math.PI*2); ctx.fill();
+    });
+
+    // 3) 中层：行为空间
+    drawLayer(LAYERS[1], yaw, pitch);
+
+    // 4) 未被覆盖的潜在状态
+    LATENT.forEach(function(n){
+      var p = project(n.x, LAYERS[1].y + n.y, n.z, yaw, pitch);
+      var b = project(n.x, LAYERS[1].y, n.z, yaw, pitch);
+      var a = fog(p.d);
+      ctx.strokeStyle = "rgba(125,190,255,"+(0.14*a).toFixed(3)+")"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(b.x,b.y); ctx.lineTo(p.x,p.y); ctx.stroke();
+      ctx.fillStyle = "rgba(157,176,201,"+(0.40*a).toFixed(3)+")";
+      ctx.beginPath(); ctx.arc(p.x,p.y, 2.0*(p.s/(F/CAM)), 0, Math.PI*2); ctx.fill();
+    });
+
+    // 5) 状态节点的垂直锚定
+    var np = NODES.map(function(n){ return project(n.x, LAYERS[1].y + n.y, n.z, yaw, pitch); });
+    NODES.forEach(function(n, i){
+      var b = project(n.x, LAYERS[1].y, n.z, yaw, pitch);
+      var a = fog(np[i].d);
+      ctx.strokeStyle = "rgba(125,211,252,"+(0.26*a).toFixed(3)+")"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(b.x,b.y); ctx.lineTo(np[i].x, np[i].y); ctx.stroke();
+      ctx.fillStyle = "rgba(56,189,248,"+(0.26*a).toFixed(3)+")";
+      ctx.beginPath();
+      ctx.ellipse(b.x, b.y, 5*(b.s/(F/CAM)), 2.2*(b.s/(F/CAM)), 0, 0, Math.PI*2);
+      ctx.fill();
+    });
+
+    // 6) 观测到的执行轨迹（分段着色以体现景深）
+    var tp = TRAJ.map(function(p){ return project(p.x, LAYERS[1].y + p.y, p.z, yaw, pitch); });
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.shadowColor = "rgba(125,211,252,.55)"; ctx.shadowBlur = 14;
+    for (var i4=0;i4<tp.length-1;i4++){
+      var a1 = tp[i4], b1 = tp[i4+1];
+      var f = fog((a1.d + b1.d)/2);
+      ctx.strokeStyle = "rgba(125,211,252,"+(0.35 + 0.65*f).toFixed(3)+")";
+      ctx.lineWidth = 1.5 + 1.6*f;
+      ctx.beginPath(); ctx.moveTo(a1.x,a1.y); ctx.lineTo(b1.x,b1.y); ctx.stroke();
+    }
+    ctx.restore();
+
+    // 7) 状态节点
+    NODES.forEach(function(n, i){
+      var p = np[i], f = fog(p.d);
+      var k = p.s / (F/CAM);
+      var pulse = reduced ? 0 : (Math.sin(time*0.0017 + i*1.15) + 1) * 0.5;
+      ctx.fillStyle = "rgba(56,189,248,"+((0.05 + pulse*0.08) * f).toFixed(3)+")";
+      ctx.beginPath(); ctx.arc(p.x, p.y, (11 + pulse*5) * k, 0, Math.PI*2); ctx.fill();
+      ctx.save();
+      ctx.globalAlpha = 0.45 + 0.55*f;
+      ctx.shadowColor = n.c; ctx.shadowBlur = 12 * k;
+      ctx.fillStyle = n.c;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4.4*k, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = "rgba(6,16,30,.8)"; ctx.lineWidth = 1.3;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4.4*k, 0, Math.PI*2); ctx.stroke();
+    });
+
+    // 8) 下层：运行时事实（最近，最后画）
+    drawLayer(LAYERS[0], yaw, pitch);
+
+    // 9) 沿轨迹推进的观测游标
+    if (!reduced){
+      var prog = (time * 0.000105) % 1;
+      var idx = prog * (tp.length - 1);
+      var si = Math.min(Math.floor(idx), tp.length - 2);
+      var st = idx - si;
+      var q = {
+        x: tp[si].x + (tp[si+1].x - tp[si].x) * st,
+        y: tp[si].y + (tp[si+1].y - tp[si].y) * st,
+        d: tp[si].d + (tp[si+1].d - tp[si].d) * st
+      };
+      var kq = (F/q.d) / (F/CAM);
+      ctx.save();
+      ctx.shadowColor = "rgba(45,212,191,.95)"; ctx.shadowBlur = 20*kq;
+      ctx.fillStyle = "#2DD4BF";
+      ctx.beginPath(); ctx.arc(q.x, q.y, 3.6*kq, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  var rafId = 0, onScreen = true;
+
+  function frame(time){
+    if (!t0) t0 = time;
+    yawC += (yawT - yawC) * 0.055;
+    pitC += (pitT - pitC) * 0.055;
+    draw(time - t0);
+    rafId = requestAnimationFrame(frame);
+  }
+
+  // 场景滚出视口或标签页隐藏时必须真正停机：这一帧要画三层栅格 + 轨迹 +
+  // 节点，持续空转会在低端机上白白吃掉一个核心和续航。
+  function start(){
+    if (rafId || reduced || !onScreen || document.hidden) return;
+    t0 = 0;
+    rafId = requestAnimationFrame(frame);
+  }
+  function stop(){
+    if (!rafId) return;
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+
+  function relayout(){ if (resize() && (reduced || !rafId)) draw(0); }
+
+  window.addEventListener("resize", relayout, {passive:true});
+  window.addEventListener("load", relayout);
+  if ("ResizeObserver" in window && cv.parentElement) {
+    new ResizeObserver(relayout).observe(cv.parentElement);
+  }
+  resize();
+
+  document.addEventListener("visibilitychange", function(){
+    if (document.hidden) stop(); else start();
+  });
+
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver(function(entries){
+      onScreen = entries[0].isIntersecting;
+      if (onScreen) start(); else stop();
+    }, { threshold: 0 }).observe(cv);
+  }
+
+  // prefers-reduced-motion 可能在会话中途被打开（系统设置 / 无障碍开关）。
+  // 只在加载时采样一次，会让已经在跑的动画一直跑下去。
+  if (motionQuery) {
+    var onMotionChange = function(e){
+      reduced = e.matches;
+      if (reduced) { stop(); draw(0); cv.setAttribute("data-visual-state","reduced-motion"); }
+      else { cv.setAttribute("data-visual-state","ready"); start(); }
+    };
+    if (motionQuery.addEventListener) motionQuery.addEventListener("change", onMotionChange);
+    else if (motionQuery.addListener) motionQuery.addListener(onMotionChange);
+  }
+
+  if (reduced) {
+    draw(0);
+    cv.setAttribute("data-visual-state","reduced-motion");
+  } else {
+    cv.setAttribute("data-visual-state","ready");
+    window.addEventListener("pointermove", function(e){
+      if (!onScreen) return;              // 先用观察器的结果判断，避免每次移动都触发同步布局
+      var r = cv.getBoundingClientRect();
+      // 监听器挂在 window 上，指针在画布之外时这两个比值会远超 [0,1]，
+      // 不钳制的话偏航会甩到 ±44° 而不是设计的 ±12°，俯仰甚至能把相机翻过去。
+      var nx = (e.clientX - r.left) / r.width  - 0.5;
+      var ny = (e.clientY - r.top)  / r.height - 0.5;
+      nx = nx < -0.5 ? -0.5 : (nx > 0.5 ? 0.5 : nx);
+      ny = ny < -0.5 ? -0.5 : (ny > 0.5 ? 0.5 : ny);
+      yawT = nx * 0.42;
+      pitT = ny * -0.22;
+    }, {passive:true});
+    start();
+  }
+})();
+</script>
+</body>
+</html>

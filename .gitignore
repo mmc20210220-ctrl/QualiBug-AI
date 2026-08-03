@@ -143,6 +143,28 @@ artifacts/_backend_dogfood.*
 artifacts/_authority_ux_dogfood_asset_snapshot.json
 artifacts/authority_ux_browser_dogfood/
 artifacts/spec_v1_6_2_cleanup_reval/_*
+artifacts/spec_v1_5_0/
+artifacts/private_pilot_acceptance_smoke_*.json
+artifacts/private_pilot_doctor_*.json
+artifacts/discovery_funnel_closure/optimized_*
+
+# Run artifacts and local-only workspaces (never commit; tracked files stay tracked)
+_funnel_runs/2*
+_funnel_runs/*.json
+_funnel_runs/*.py
+_funnel_runs/benchmark_audit_archive/
+_funnel_runs/observed_detached_launch/
+_funnel_runs/runtime_cleanup_assessments/
+_funnel_runs/v3_evaluation/
+_funnel_runs/v3_observed_registry
+_funnel_runs/*_target_reset_receipt.json
+_funnel_runs_local_aside_*/
+_private_eval/benchmark_mall_131_v1/runtime/
+.codex-ol005/
+.codex-ol006/
+.qoder/
+QualiBug-AI.bundle
+frontend/undefined/
 
 # ── Repo-root hygiene boundary (AGENTS.md: one-off artifact convention) ──
 # All one-off debug scripts and run artifacts live in .scratch/ and never in the root.
