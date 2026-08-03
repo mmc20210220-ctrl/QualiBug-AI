@@ -1637,6 +1637,12 @@ def execute_experiment_cleanup_compensation(
                         path=path,
                         body=cleanup_body if method in {"POST", "PUT", "PATCH"} else None,
                         observation_path=observation_path,
+                        # Cleanup restores/compensates the experiment's own
+                        # writes; it is by definition restorable, so the
+                        # protected-identity guard (which exists to stop
+                        # permanent mutation of runtime accounts) does not
+                        # apply to the compensation itself.
+                        restorable_identity_mutation=True,
                     )
                     cleanup_write = _dict(governed_cleanup.get("write"))
                     cleanup_observation = {
@@ -1817,6 +1823,11 @@ def execute_experiment_cleanup_compensation(
                         path=path,
                         body=restore_body,
                         observation_path=observation_path,
+                        # restore_before_snapshot / inverse_delta_compensation
+                        # restore the exact before state; restorable by
+                        # definition, so the protected-identity guard does not
+                        # apply to the restoration write.
+                        restorable_identity_mutation=True,
                     )
                     cleanup_write = _dict(governed_cleanup.get("write"))
                     cobs = {

@@ -436,6 +436,9 @@ def execute_process_graph_cleanup(
                 else None
             ),
             observation_path=observation_path,
+            # Cleanup compensates the experiment's own writes; restorable by
+            # definition, so the protected-identity guard does not apply.
+            restorable_identity_mutation=True,
         )
         cleanup_write = _dict(governed.get("write"))
         status_code = int(cleanup_write.get("status") or 0)
