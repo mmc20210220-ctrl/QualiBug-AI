@@ -49,7 +49,10 @@ from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Calculate repo root with cross-platform compatibility
+# Use absolute path and normalize to ensure consistency across platforms
+_REPO_ROOT_RESOLVED = Path(__file__).resolve()
+REPO_ROOT = _REPO_ROOT_RESOLVED.parents[1]  # ai_test_asset_center -> repo root
 
 
 @dataclass
@@ -273,7 +276,7 @@ class LearningKnowledgeDB:
             """)
             
             for row in cursor.fetchall():
-                entry = self.from_row(row)
+                entry = KnowledgeEntry.from_row(row)
                 self._cache[entry.entry_id] = entry
                 
             logger.info("Warmed cache with %d entries", len(self._cache))
