@@ -32,7 +32,7 @@ def _safe_float(value: Any, default: float) -> float:
 
 def _read_budget_setting(key: str, default: Any) -> Any:
     """Read budget settings from policy first, then allow env overrides."""
-    from .policy_wiring import get_policy_value
+    from ai_test_asset_center.policy_wiring import get_policy_value
 
     policy_value = get_policy_value("execution", key, default)
     env_key = f"QUALIBUG_{key.upper()}"

@@ -134,7 +134,7 @@ def run_generic_probes(
         if verdict == "confirmed":
             confirmed += 1
             # Extract trace ID from response
-            from .behavior_semantic_mapper import extract_trace_id
+            from ai_test_asset_center.behavior_semantic_mapper import extract_trace_id
             trace_id = extract_trace_id(resp_headers, body_json)
 
             findings.append({

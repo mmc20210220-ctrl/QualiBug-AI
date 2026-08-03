@@ -31,6 +31,9 @@ from .agent_semantic_linker_authority import (
 from .behavior_ir_surface_reconciliation import (
     reconcile_declared_observation_surfaces,
 )
+from .business_behavior_invariant_binding import (
+    bind_business_behavior_invariants,
+)
 from .effect_observer_binding import bind_source_effect_observers
 from .formal_event_capability_guard import install_formal_event_capability_guard
 from .formal_event_pre_cleanup import install_formal_event_pre_cleanup_observer
@@ -275,7 +278,14 @@ def build_behavior_ir_with_semantic_operation_bindings(
         behavior_ir,
         effective_asset,
     )
-    observer_ir, _observer_receipt = bind_source_effect_observers(semantic_ir)
+    # CONFIRMED business behaviors with exact-source API bindings become IR
+    # invariants here, so business understanding produces obligations instead
+    # of staying reference-only. Unbound behaviors remain visible gaps.
+    business_ir, _business_behavior_receipt = bind_business_behavior_invariants(
+        semantic_ir,
+        effective_asset,
+    )
+    observer_ir, _observer_receipt = bind_source_effect_observers(business_ir)
     ui_ir, _ui_receipt = bind_source_ui_contracts(observer_ir, effective_asset)
     event_ir, _event_receipt = bind_source_event_contracts(ui_ir, effective_asset)
     performance_ir, _performance_receipt = bind_source_performance_contracts(

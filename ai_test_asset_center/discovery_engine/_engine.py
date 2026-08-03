@@ -445,7 +445,22 @@ class AutonomousDiscoveryEngine:
                 "total_entities": len(project_context.get("entities", [])),
                 "total_apis": len(project_context.get("apis", [])),
             }, ensure_ascii=False, default=str)[:3000]
-        
+
+        # Structured project summary (business rules / state machine / permission
+        # matrix) extracted deterministically from the same source texts. This is
+        # an additive Reader hint and must never block the pipeline.
+        try:
+            from ai_test_asset_center.project_summary_builder import build_project_summary
+
+            project_summary = build_project_summary(prd_text, api_spec_text)
+            if project_summary and any(project_summary.values()):
+                context_hint = json.dumps({
+                    **(json.loads(context_hint) if context_hint and context_hint != "{}" else {}),
+                    "project_summary": project_summary,
+                }, ensure_ascii=False, default=str)[:3000]
+        except Exception:
+            pass
+
         prompt = self._fill_template(READER_BUSINESS_WORLD_PROMPT,
             documents=prd_text[:8000],
             api_contracts=api_spec_text[:8000],

@@ -1965,6 +1965,17 @@ def execute_experiment_cleanup_compensation(
                     path=path,
                     body=cleanup_body if cleanup_method in {"POST", "PUT", "PATCH"} else None,
                     observation_path=observation_path,
+                    restorable_identity_mutation=True,
+                )
+                import sys as _sys_cud
+                print(
+                    f"[CLEANUP-DIAG] exp={_text(eid)} subject={cleanup_subject_id} "
+                    f"method={cleanup_method} path={path} "
+                    f"accepted={governed_cleanup.get('accepted')} "
+                    f"reason={_text(governed_cleanup.get('reason')) or ''} "
+                    f"write_status={int(_dict(governed_cleanup.get('write')).get('status') or 0)} "
+                    f"action={cleanup_action} mode={_text(_dict(cleanup).get('mode'))}",
+                    file=_sys_cud.stderr,
                 )
                 cleanup_write = _dict(governed_cleanup.get("write"))
                 cobs = {
@@ -2226,6 +2237,15 @@ def execute_experiment_cleanup_compensation(
             )
             if receipt_id
         })
+        import sys as _sys_cud2
+        print(
+            f"[CLEANUP-PROOF] exp={_text(eid)} subject={cleanup_subject} "
+            f"requires_cleanup={len(scoped_writes_requiring_cleanup)} "
+            f"cleanup_receipts={len(cleanup_governance_receipts)} "
+            f"restoration_verified={restoration_verified} "
+            f"audit_ids={len(audit_receipt_ids)}",
+            file=_sys_cud2.stderr,
+        )
         cleanup_statuses_succeeded = bool(matching_steps) and all(
             200 <= int(_dict(step).get("status_code") or 0) < 300
             for step in matching_steps

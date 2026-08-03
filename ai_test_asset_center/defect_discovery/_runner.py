@@ -379,8 +379,8 @@ def execute_probe(client: HttpClient, tokens: dict[str, str], item: dict) -> dic
         # parameters that cannot be pre-resolved from documented endpoints.
         resolved_path = path
         try:
-            from .real_id_resolver_base import normalize_path_placeholders, infer_path_params
-            from .enterprise_test_data_engine import _generate_value, _detect_field_semantic
+            from ai_test_asset_center.real_id_resolver_base import normalize_path_placeholders, infer_path_params
+            from ai_test_asset_center.enterprise_test_data_engine import _generate_value, _detect_field_semantic
             normalized = normalize_path_placeholders(path)
             params = infer_path_params(normalized)
             for param in params:

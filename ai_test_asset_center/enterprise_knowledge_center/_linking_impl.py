@@ -746,7 +746,7 @@ def _oracle_family(risk_type: str) -> str:
 
 def _oracle_dsl_pack_from_recognized_industries(recognized_industries: list[dict[str, Any]] | list[str] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     try:
-        from .oracle_dsl import DSLCompiler, RuleLibrary, normalize_industry_key
+        from ai_test_asset_center.oracle_dsl import DSLCompiler, RuleLibrary, normalize_industry_key
     except ImportError:
         return [], []
     industries: list[str] = []

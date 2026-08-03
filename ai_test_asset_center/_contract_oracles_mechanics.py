@@ -452,6 +452,18 @@ def build_contract_oracle_activation_receipt(
             receipt_status = _text(receipt.get("status")).upper()
             receipt_evidence = _dict(receipt.get("evidence"))
             if kind == "cleanup":
+                import sys as _sys_orc
+                print(
+                    f"[ORACLE-CLEANUP] exp={_text(experiment_id)} subject={subject} "
+                    f"status={receipt_status} "
+                    f"restoration_verified={receipt_evidence.get('restoration_verified')} "
+                    f"state_unchanged={receipt_evidence.get('state_unchanged')} "
+                    f"accepted_writes={receipt_evidence.get('accepted_write_count')} "
+                    f"cleanup_writes={receipt_evidence.get('cleanup_write_count')} "
+                    f"audit_ids={len(_list(receipt_evidence.get('audit_receipt_ids')))} "
+                    f"reason={_text(receipt_evidence.get('reason_code')) or ''}",
+                    file=_sys_orc.stderr,
+                )
                 audit_receipt_ids = [
                     _text(item)
                     for item in _list(receipt_evidence.get("audit_receipt_ids"))
@@ -490,7 +502,12 @@ def build_contract_oracle_activation_receipt(
                     and int(receipt_evidence.get("accepted_write_count") or 0) == 0
                     and int(receipt_evidence.get("cleanup_write_count") or 0) == 0
                     and receipt_evidence.get("state_unchanged") is True
-                    and bool(audit_receipt_ids)
+                    # Zero-write plans have no write to audit: state_unchanged
+                    # (from real governed before/after observations) is the
+                    # complete proof that no restoration was needed. Requiring
+                    # audit ids here would turn a genuinely untouched arm
+                    # (e.g. treatment re-deleting an id control already
+                    # removed) into a fabricated cleanup failure.
                 )
                 not_required_with_proof = accepted_unchanged or rejected_unchanged
                 if completed_with_proof or completed_already_absent or not_required_with_proof:

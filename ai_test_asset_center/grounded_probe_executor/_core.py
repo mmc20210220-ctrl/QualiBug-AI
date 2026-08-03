@@ -1114,7 +1114,7 @@ def _execute_db_snapshot(config: dict[str, Any], probe: dict[str, Any], phase: s
     if not tables:
         return {"status": "skipped", "reason": "no_db_tables_inferred", "tables": []}
     try:
-        from .db_snapshot_verifier import DBSnapshotVerifier
+        from ai_test_asset_center.db_snapshot_verifier import DBSnapshotVerifier
     except Exception as exc:
         return {"status": "skipped", "reason": f"db_snapshot_verifier_unavailable:{type(exc).__name__}", "tables": tables}
 

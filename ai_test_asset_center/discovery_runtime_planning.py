@@ -757,11 +757,18 @@ def build_discovery_plan(
             max_combinations=100,
             behavior_ir=behavior_ir,
         )
+        from ai_test_asset_center.space_dimension_registry import SpaceDimensionRegistry
+
+        _dim_registry = SpaceDimensionRegistry(project_id=inputs.project)
+        _dim_registry.register_defaults()
         _space_exploration_report = {
             "invariant_count": _inv_graph.size,
             "operator_count": _op_registry.size,
             "applicable_operators": len(_applicable_ops),
             "combinations_generated": len(_combos) if isinstance(_combos, list) else 0,
+            "dimension_count": _dim_registry.size,
+            "dimension_types": _dim_registry.all_types(),
+            "dimension_domains": _dim_registry.all_domains(),
         }
     except Exception as _space_exc:
         _planning_logger.warning(

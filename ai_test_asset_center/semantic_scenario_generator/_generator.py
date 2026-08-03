@@ -828,7 +828,7 @@ class SemanticScenarioGenerator:
         # ── Step 2: Cross-surface evidence collection (when surface_plan demands it) ──
         if "log" in sb_surfaces and audit_related:
             # Try to find an audit/log endpoint from the API doc
-            from .business_state_graph import _api_facts as _sb_api_facts
+            from ai_test_asset_center.business_state_graph import _api_facts as _sb_api_facts
             import re as _sb_re
             _, _, all_endpoints = _sb_api_facts(
                 api_doc,
@@ -1265,7 +1265,7 @@ class SemanticScenarioGenerator:
         login_path = ""
         try:
             from pathlib import Path
-            from .supplementary_behavior_slices import load_settings_accounts
+            from ai_test_asset_center.supplementary_behavior_slices import load_settings_accounts
             if root is not None and project:
                 accounts, login_path = load_settings_accounts(Path(str(root)), str(project))
         except Exception:
@@ -1436,7 +1436,7 @@ class SemanticScenarioGenerator:
                         or key_name.lower() in {"sku", "code", "uuid"}
                     ):
                         # Doc used a sibling spelling (order_id vs orderId).
-                        from .real_id_resolver import param_field_candidates
+                        from ai_test_asset_center.real_id_resolver import param_field_candidates
 
                         aliases = {c.lower() for c in param_field_candidates(placeholder)}
                         if key_name.lower() in aliases or "id" in aliases:
@@ -1634,7 +1634,7 @@ class SemanticScenarioGenerator:
         When the API doc is available, also append a bootstrap POST create so empty
         freshly-seeded databases can still materialize identity bindings.
         """
-        from .real_id_resolver import param_field_candidates
+        from ai_test_asset_center.real_id_resolver import param_field_candidates
 
         steps: list[ScenarioStep] = []
         order = start_order
@@ -1838,7 +1838,7 @@ class SemanticScenarioGenerator:
         # Only action-style paths qualify: generic creates must remain
         # source-documented (never invent body fields from siblings).
         if (not body) and method in {"POST", "PUT", "PATCH"}:
-            from .sandbox_write_executor_base import _is_action_style_write_path
+            from ai_test_asset_center.sandbox_write_executor_base import _is_action_style_write_path
 
             if _is_action_style_write_path(path):
                 sibling_body, sibling_provenance = (
@@ -2861,7 +2861,7 @@ class SemanticScenarioGenerator:
                     param_stems.add(f"{stem}s")
             if primary_last not in param_stems and "/admin/" not in primary.lower():
                 ranked = [primary] + [item for item in ranked if item != primary]
-        from .policy_wiring import get_policy_value
+        from ai_test_asset_center.policy_wiring import get_policy_value
 
         attempt_limit = int(get_policy_value("execution", "precondition_resolution_attempts", 2) or 2)
         attempt_limit = max(1, min(attempt_limit, 5))

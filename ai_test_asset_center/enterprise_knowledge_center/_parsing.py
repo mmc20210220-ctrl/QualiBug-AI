@@ -2333,7 +2333,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
     har_errors: list[dict[str, Any]] = []
     if source_type == "har":
         try:
-            from .har_importer import import_har_endpoints, extract_har_error_patterns
+            from ai_test_asset_center.har_importer import import_har_endpoints, extract_har_error_patterns
             har_file = Path(filename)
             if suffix == ".har":
                 # Write blob to temp file for HAR parser
@@ -2371,7 +2371,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
     log_errors: list[dict[str, Any]] = []
     if source_type == "application_log":
         try:
-            from .log_analyzer import analyze_logs
+            from ai_test_asset_center.log_analyzer import analyze_logs
             import tempfile as _tmp2
             with _tmp2.NamedTemporaryFile(suffix=".log", delete=False) as tf:
                 tf.write(blob)

@@ -24,7 +24,7 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     cfg = load_real_project_config(project, root)
 
     # ── Phase78A: Unified Safe HTTP Transport ──
-    from .unified_http_transport import (
+    from ai_test_asset_center.unified_http_transport import (
         SafeHttpTransport, ExecutionPolicy, set_global_transport,
     )
     env = str(cfg.get('environment') or cfg.get('target_environment') or '')
@@ -89,7 +89,7 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     risk_plan = None
     if use_risk_plan:
         try:
-            from .risk_based_probe_planner import build_risk_based_probe_plan, load_risk_based_probe_plan
+            from ai_test_asset_center.risk_based_probe_planner import build_risk_based_probe_plan, load_risk_based_probe_plan
             risk_plan = load_risk_based_probe_plan(project, root) or build_risk_based_probe_plan(project, root)
         except Exception:
             risk_plan = None
@@ -154,12 +154,12 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     except Exception:
         business_assurance_coverage_profile = None
     try:
-        from .business_flow_execution import load_business_flow_execution_result
+        from ai_test_asset_center.business_flow_execution import load_business_flow_execution_result
         business_flow_execution = load_business_flow_execution_result(project, root)
     except Exception:
         business_flow_execution = None
     try:
-        from .replay_evidence_sandbox import load_replay_evidence_sandbox
+        from ai_test_asset_center.replay_evidence_sandbox import load_replay_evidence_sandbox
         replay_evidence_sandbox = load_replay_evidence_sandbox(project, root)
     except Exception:
         replay_evidence_sandbox = None
@@ -187,7 +187,7 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
         enterprise_business_knowledge_probes = generate_enterprise_business_knowledge_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
         enterprise_testops_probes = generate_enterprise_testops_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
         try:
-            from .business_flow_graph import generate_business_flow_probes
+            from ai_test_asset_center.business_flow_graph import generate_business_flow_probes
             flow_probes = generate_business_flow_probes(openapi if isinstance(openapi, dict) else {}, cfg, project, root)
         except Exception:
             flow_probes = []
@@ -307,7 +307,7 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     service_credential_manager = None
     service_token_by_actor: dict[str, dict[str, str | None]] = {}
     try:
-        from .enterprise_credential_manager import EnterpriseCredentialManager
+        from ai_test_asset_center.enterprise_credential_manager import EnterpriseCredentialManager
         svc_mgr = EnterpriseCredentialManager(str(project), root)
         svc_mgr.load_legacy_fallback()
         svc_mgr.load_from_env()
@@ -1172,7 +1172,7 @@ def run_real_project_discovery(project_id: str = "real_project_demo", root: Path
     # Phase90: record normalized candidate outcomes for future coverage-aware
     # planning. Raw issues remain candidates; no entry is promoted here.
     try:
-        from .business_risk_coverage_map import BusinessRiskCoverageMap
+        from ai_test_asset_center.business_risk_coverage_map import BusinessRiskCoverageMap
         coverage_outcomes = []
         for issue in issues:
             coverage_outcomes.append({
