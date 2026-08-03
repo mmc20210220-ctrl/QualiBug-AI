@@ -1860,6 +1860,9 @@ def execute_experiment_cleanup_compensation(
                         # cleanup contract evidence receipt, so recording only
                         # the observations flag left CLEANUP_EVIDENCE_INCOMPLETE
                         # and the experiment harness-failed.
+                        _scoped_accepted_count = _scoped_accepted_write_count_for_cleanup(
+                            cleanup, accepted_governed_writes
+                        )
                         contract_evidence_receipts.append(
                             build_contract_evidence_receipt(
                                 kind="cleanup",
@@ -1870,7 +1873,7 @@ def execute_experiment_cleanup_compensation(
                                 subject_id=cleanup_subject_id,
                                 status="NOT_REQUIRED",
                                 evidence={
-                                    "accepted_write_count": 0,
+                                    "accepted_write_count": _scoped_accepted_count,
                                     "cleanup_required_write_count": 0,
                                     "cleanup_write_count": 0,
                                     "state_unchanged": True,
