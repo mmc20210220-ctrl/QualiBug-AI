@@ -41,6 +41,10 @@ _BUILTIN_HOOK_INSTALLERS: tuple[tuple[str, str], ...] = (
         "ai_test_asset_center.bug_risk_scoring",
         "install_bug_risk",
     ),
+    (
+        "ai_test_asset_center.behavior_registry",
+        "install_behavior_registry",
+    ),
 )
 
 

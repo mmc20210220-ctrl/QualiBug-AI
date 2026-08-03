@@ -53,7 +53,7 @@ class AutonomousDiscoveryEngine:
         # Target resolution is governed and fail-closed: discovery must never
         # silently default to the QualiBug backend. Callers must declare a
         # target explicitly or via QUALIBUG_TARGET_BASE_URL / QUALIBUG_DEFAULT_BASE_URL.
-        from .target_endpoint import resolve_target_base_url
+        from ai_test_asset_center.target_endpoint import resolve_target_base_url
 
         self.base = resolve_target_base_url(base_url)
         self._project = str(
@@ -66,7 +66,7 @@ class AutonomousDiscoveryEngine:
         self.client = _get_client()
         
         # Phase81: Read execution policy from Policy Registry (fallback to hardcoded defaults)
-        from .policy_wiring import get_policy_value
+        from ai_test_asset_center.policy_wiring import get_policy_value
         model = get_policy_value("execution", "model", "deepseek-v4-pro")
         max_tokens = get_policy_value("execution", "max_tokens", 32768)
         http_timeout = get_policy_value("execution", "http_timeout_seconds", 10)
@@ -84,6 +84,10 @@ class AutonomousDiscoveryEngine:
         # Removing this line causes silent loop death (API timeout → crash disguised as "process died").
         # DO NOT refactor/remove/relocate. Test: discovery_engine must have timeout_seconds ≥ 300.
         self.client.config.timeout_seconds = max(getattr(self.client.config, 'timeout_seconds', 120), 300)
+        # Critical Configuration Guardrails (AGENTS.md): floors must never be
+        # lowered; fail fast instead of silently degrading to API timeouts.
+        assert self.client.config.timeout_seconds >= 300, "timeout too low"
+        assert self.client.config.max_tokens >= 32768, "max_tokens too low"
         self._http_timeout = http_timeout
         self._production_blocked = str(os.environ.get("QUALIBUG_PRODUCTION", "")).lower() in {"1", "true", "yes", "on"}
         self.findings: list[DiscoveryFinding] = []
@@ -151,7 +155,7 @@ class AutonomousDiscoveryEngine:
         guard = os.environ.get("QUALIBUG_PROJECT_CONTEXT_GUARD", "").strip()
         if not guard:
             return
-        from . import reasoner_prompt
+        from ai_test_asset_center import reasoner_prompt
         guard_key = f"_context_guard_{hash(guard)}"
         if getattr(reasoner_prompt, guard_key, False):
             return
@@ -171,7 +175,7 @@ class AutonomousDiscoveryEngine:
         and credentials. This method loads them and acquires real tokens.
         """
         try:
-            from .enterprise_credential_manager import EnterpriseCredentialManager
+            from ai_test_asset_center.enterprise_credential_manager import EnterpriseCredentialManager
             mgr = EnterpriseCredentialManager(self._project, self._root)
             mgr.load_legacy_fallback()
             mgr.load_from_env()
@@ -416,7 +420,7 @@ class AutonomousDiscoveryEngine:
         if not self.client.config.enabled:
             return {"error": "LLM not configured"}
 
-        from .reader_prompt import READER_BUSINESS_WORLD_PROMPT, READER_SYSTEM_PROMPT
+        from ai_test_asset_center.reader_prompt import READER_BUSINESS_WORLD_PROMPT, READER_SYSTEM_PROMPT
         
         # Phase79+: Inject structured project context alongside raw text
         context_hint = "{}"
@@ -542,7 +546,7 @@ class AutonomousDiscoveryEngine:
         Each engine gets its own ReasoningClient, 2 attempts max.
         JSON truncation recovered via raw_decode — complete hypotheses salvaged.
         """
-        from .stage_reason_all_v2 import _stage_reason_all_v2
+        from ai_test_asset_center.stage_reason_all_v2 import _stage_reason_all_v2
         return _stage_reason_all_v2(self, prd_text, api_spec, reader_output, prior_findings)
 
     def _build_route_map(self, api_spec_text: str = "") -> dict:
@@ -552,7 +556,7 @@ class AutonomousDiscoveryEngine:
         Priority: in-memory spec > target server > local file.
         """
         import re, json
-        from .route_catalog_builder import RouteCatalogBuilder
+        from ai_test_asset_center.route_catalog_builder import RouteCatalogBuilder
         
         route_map = {}
         spec_texts = []
@@ -1143,7 +1147,7 @@ class AutonomousDiscoveryEngine:
         # Phase79+: Fixture Auto-Constructor for POST hypotheses
         _fixture_constructor = None
         try:
-            from .fixture_auto_constructor import FixtureAutoConstructor, FixtureObject
+            from ai_test_asset_center.fixture_auto_constructor import FixtureAutoConstructor, FixtureObject
             _fixture_constructor = FixtureAutoConstructor()
         except ImportError as exc:
             logger.warning(
@@ -1151,7 +1155,7 @@ class AutonomousDiscoveryEngine:
                 extra={"error_code": "QB-D005", "context": {"error": str(exc)[:200]}},
             )
         
-        from .hypothesis_schema import validate_hypothesis
+        from ai_test_asset_center.hypothesis_schema import validate_hypothesis
         for plan_item in execution_plan:
             raw_hypothesis = plan_item.get("hypothesis", {})
             budget_tier = str(plan_item.get("tier", "A")).upper()
@@ -1361,7 +1365,7 @@ class AutonomousDiscoveryEngine:
                         
                         if entity_type and method != "DELETE":
                             try:
-                                from .fixture_auto_constructor import SchemaAnalyzer
+                                from ai_test_asset_center.fixture_auto_constructor import SchemaAnalyzer
                                 analyzer = SchemaAnalyzer()
                                 dummy_schema = {"properties": {}, "required": []}
                                 for k, v in h.items():
@@ -2149,8 +2153,8 @@ class AutonomousDiscoveryEngine:
             # === Phase78B: Semantic State Verifier — last-resort for inconclusive ===
             if verdict == "inconclusive" and calls and isinstance(r.get("semantic_obligation"), dict):
                 try:
-                    from .state_observer_registry import StateObserver
-                    from .business_invariant_evaluator import BusinessInvariantEvaluator, ProofObligation as EvalObl
+                    from ai_test_asset_center.state_observer_registry import StateObserver
+                    from ai_test_asset_center.business_invariant_evaluator import BusinessInvariantEvaluator, ProofObligation as EvalObl
                     observer = StateObserver(redact_sensitive=True)
                     evaluator = BusinessInvariantEvaluator()
                     # Build before/after snapshots from multi-step calls
@@ -2294,7 +2298,7 @@ class AutonomousDiscoveryEngine:
         self._emit_progress("context", "Compiling project context")
         project_context = {}
         try:
-            from .project_context_compiler import ProjectContextCompiler
+            from ai_test_asset_center.project_context_compiler import ProjectContextCompiler
             compiler = ProjectContextCompiler()
             try:
                 openapi_spec = json.loads(api_spec_text) if str(api_spec_text or "").lstrip().startswith("{") else {}
@@ -2315,7 +2319,7 @@ class AutonomousDiscoveryEngine:
         entities = []; rules = []; artifact_id = ""; artifact_status = "none"
         
         try:
-            from .project_context_artifact import get_artifact_cache
+            from ai_test_asset_center.project_context_artifact import get_artifact_cache
             cache = get_artifact_cache()
             # Reader compilation is intentionally decoupled from the Discovery
             # critical path.  Existing/stale artifacts are returned immediately;
@@ -2374,13 +2378,13 @@ class AutonomousDiscoveryEngine:
         discovery_run_id = f"discovery-{int(t0 * 1000)}"
         policy_version = "baseline"
         try:
-            from .policy_registry import get_policy_registry
+            from ai_test_asset_center.policy_registry import get_policy_registry
             active_record = get_policy_registry().get_active()
             policy_version = active_record.policy_version if active_record else "baseline"
         except Exception:
             active_record = None
         try:
-            from .cognitive_memory_graph import CognitiveMemoryGraph, GraphContextComposer, Phase91ABEvaluator, RiskFrontierPlanner
+            from ai_test_asset_center.cognitive_memory_graph import CognitiveMemoryGraph, GraphContextComposer, Phase91ABEvaluator, RiskFrontierPlanner
             graph = CognitiveMemoryGraph(project_id, environment_id)
             graph_sync = graph.sync_context(
                 project_context,
@@ -2538,8 +2542,8 @@ class AutonomousDiscoveryEngine:
 
         # ── Phase92A: Normalize + Enrich all findings before gate ──
         try:
-            from .evidence_normalizer import normalize_finding_evidence
-            from .business_evidence_enricher import enrich_finding_evidence
+            from ai_test_asset_center.evidence_normalizer import normalize_finding_evidence
+            from ai_test_asset_center.business_evidence_enricher import enrich_finding_evidence
             _bridge_available = True
         except ImportError:
             _bridge_available = False
@@ -2587,8 +2591,8 @@ class AutonomousDiscoveryEngine:
                 finding._final_review_status = "NEEDS_MORE_EVIDENCE"
 
         try:
-            from .discovery_finding_gate import GATED_VERDICTS, gate_discovery_findings
-            from .policy_registry import get_policy_registry
+            from ai_test_asset_center.discovery_finding_gate import GATED_VERDICTS, gate_discovery_findings
+            from ai_test_asset_center.policy_registry import get_policy_registry
 
             active_record = get_policy_registry().get_active()
             policy_version = active_record.policy_version if active_record else "baseline"
@@ -2726,11 +2730,11 @@ class AutonomousDiscoveryEngine:
         evidence_classification: dict[str, Any] = {"confirmed": 0, "candidate": 0, "clue": 0}
 
         try:
-            from .context_extractor import extract_context
-            from .bug_ontology_registry import get_ontology_registry
-            from .behavior_slice_gen import BehaviorSliceGenerator
-            from .invariant_engine import evaluate_all_invariants, invariant_coverage_report
-            from .coverage_matrix import compute_coverage_matrix
+            from ai_test_asset_center.context_extractor import extract_context
+            from ai_test_asset_center.bug_ontology_registry import get_ontology_registry
+            from ai_test_asset_center.behavior_slice_gen import BehaviorSliceGenerator
+            from ai_test_asset_center.invariant_engine import evaluate_all_invariants, invariant_coverage_report
+            from ai_test_asset_center.coverage_matrix import compute_coverage_matrix
 
             # Extract context from available data
             ctx = extract_context(prd_text, api_spec_text)
@@ -2961,7 +2965,7 @@ class AutonomousDiscoveryEngine:
                 tf.write("\n".join(log_lines))
                 tmp_path = tf.name
 
-            from .log_analyzer import analyze_logs, log_errors_to_candidates
+            from ai_test_asset_center.log_analyzer import analyze_logs, log_errors_to_candidates
             result = analyze_logs(tmp_path)
             clusters = [
                 {"error_type": c.error_type, "count": c.count,

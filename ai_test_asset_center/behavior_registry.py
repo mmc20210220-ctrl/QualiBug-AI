@@ -8,10 +8,48 @@ customers decide how to fix their systems.
 from __future__ import annotations
 
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
+from .scan_post_hooks import register_scan_post_hook
+
+HOOK_NAME = "behavior_registry"
 
 BEHAVIOR_STATUS_ORDER = ("violated", "validated", "observed", "untested")
+
+
+def attach_behavior_registry(
+    scan_result: dict[str, Any],
+    *,
+    project: str,
+    root: Path,
+) -> dict[str, Any]:
+    """Project a behavior registry from the scan's finding carriers.
+
+    The registry feeds the executive validation summary; items are gathered
+    from every finding carrier without changing their status.
+    """
+    if not isinstance(scan_result, dict):
+        return scan_result
+    items: list[dict[str, Any]] = []
+    for key in (
+        "real_findings",
+        "bug_scores",
+        "db_findings",
+        "e2e_findings",
+        "deep_findings",
+        "ui_findings",
+    ):
+        carrier = scan_result.get(key)
+        if isinstance(carrier, list):
+            items.extend(item for item in carrier if isinstance(item, dict))
+    if items:
+        scan_result["behavior_registry"] = build_behavior_registry_report(items)
+    return scan_result
+
+
+def install_behavior_registry() -> None:
+    register_scan_post_hook(HOOK_NAME, attach_behavior_registry)
 
 
 def _as_list(value: Any) -> list[Any]:
