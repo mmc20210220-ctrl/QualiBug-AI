@@ -246,6 +246,19 @@ def build_behavior_ir_coverage_map(behavior_ir: dict[str, Any]) -> dict[str, Any
         ):
             continue
         source_refs = _list(rel.get("source_refs"))
+        # Industry-inferred transition edges are not customer source
+        # declarations: their endpoints often reuse foreign state nodes
+        # (order:REFUNDED -> refund:rejected) and no operation can ever
+        # establish the required from-state, so the generated obligations
+        # fail unconditionally. They stay visible coverage gaps instead of
+        # becoming guaranteed-DEFERRED attempts. Only relations carrying a
+        # real customer source (or a runtime observation) generate coverage.
+        if rel_type == "transitions" and source_refs and all(
+            _text(row.get("source_id")) == "industry_inference"
+            for row in source_refs
+            if isinstance(row, dict) and _text(row.get("source_id"))
+        ):
+            continue
 
         # Map relation type to risk family
         family_map = {
