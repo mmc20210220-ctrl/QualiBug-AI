@@ -97,9 +97,9 @@
 
 ### 批 5：学习/记忆/自进化 ✅ 已完成（17 退役 / 5 确认经批 3 修复接入）
 
-### 批 6：企业知识中心子模块（~15 个，待知识中心管线接线）
+### 批 6：企业知识中心子模块（部分完成，剩余待管线接线）
 
-**核实结论：614 个相对导入全部正确（零坏导入）；`enterprise_knowledge_center` 包本身**可达且被主链引用**（behavior_ir_core / agent_semantic_linker_authority / connector 体系），但 15 个子模块（`source_occurrence_ledger`/`source_occurrence_ingestion`/`business_world_model`/`classifiers`/`document_intelligence`/`industry_auto_inference`/`service_topology`/`temporal_saga_doc_intel`/`enterprise_understanding.*`/`openapi_path_parameter_projection`）未被包内管线调用——属"活包内未接线组件"。**接入方式**：在知识中心管线的 ingestion/understanding 调用点接线（需先梳理 `composition.py` 等组合点的调用图），单独批次设计。
+**核实结论（权威）**：614 个相对导入全部正确（零坏导入）；`enterprise_knowledge_center` 包可达且被主链引用；**3 个子模块经 importlib 动态加载实际活着**（`_chinese_business_comprehension_extractor_v1`、`builder_legacy_v1`、`integration_legacy_v1`——豁免）。已退役 `scenario_execution_probe_guard`（自声明 no longer rewrites + 零引用）。剩余 **11 个未接线组件**（`source_occurrence_ledger`/`source_occurrence_ingestion`/`business_world_model`/`classifiers`/`document_intelligence`/`industry_auto_inference`/`service_topology`/`temporal_saga_doc_intel`/`closure`/`document_structure_gate`/`openapi_path_parameter_projection`）——属"活包内未接线组件"，**接入方式**：在知识中心管线的 ingestion/understanding 调用点接线（需先梳理 `composition.py` 等组合点调用图），单独批次设计。
 
 `adaptive_planning_history` / 自进化触发接口：`discovery_learner`、`enterprise_strategy_learning`、
 `feedback_policy_update`、`policy_memory`、`bug_pattern_library`、`bug_knowledge_graph`、
