@@ -107,7 +107,15 @@ class AutoLearningTrigger:
         if coverage_gain < self.config.min_coverage_gain:
             return False, f"Coverage gain {coverage_gain:.1%} < {self.config.min_coverage_gain:.1%}"
         
-        return True, f"Thresholds met: {confirmed_bugs} bugs, {coverage_gain:.1%} coverage gain"
+        # Enhanced: Also check for other signal types (failed probes, cleanup failures)
+        execution = current_scan_result.get("probe_execution_result", [])
+        failed_probes = sum(1 for item in execution if isinstance(item, dict) and item.get("assertion_result") == "failed")
+        
+        if failed_probes > 5:
+            # Many failures indicate learning opportunity even with few bugs
+            return True, f"{failed_probes} failed probes detected - high learning potential"
+        
+        return True, f"Thresholds met: {confirmed_bugs} bugs, {failed_probes} failed probes"
     
     def execute(self) -> LearningResult:
         """Execute the learning pipeline."""
