@@ -624,6 +624,11 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         "findings": confirmed, "candidate_findings": candidates, "db_findings": [], "e2e_findings": [], "ui_findings": ui_findings, "ui_candidate_findings": ui_candidate_findings, "ui_high_confidence_candidates": ui_high_confidence_candidates, "external_findings": external_findings, "deep_findings": [], "spectrum": {},
         "mainline_run": v12.get("mainline_run"),
         "obligation_attempt_ledger": v12.get("obligation_attempt_ledger"),
+        # Fact ledger is promoted by discovery_mainline onto the v12 result;
+        # expose it top-level so the fact-tracking report generator (and any
+        # consumer of the composite scan result) reads the same SSOT instead
+        # of an empty ledger nested under "v12".
+        "fact_experimentability_ledger": v12.get("fact_experimentability_ledger"),
         "canonical_defect_registry": canonical_registry,
         "formal_delivery_authority": v12.get("formal_delivery_authority"),
         "formal_count_projection": canonical_scope["formal_count_projection"],

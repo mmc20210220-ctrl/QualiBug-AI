@@ -792,6 +792,7 @@ def build_fact_first_loss_from_v12_result(v12_result: dict[str, Any]) -> dict[st
     exp_ledger = _dict(
         result.get("fact_experimentability_ledger")
         or _dict(result.get("experiments")).get("fact_experimentability_ledger")
+        or _dict(result.get("v12")).get("fact_experimentability_ledger")
         or asset.get("fact_experimentability_ledger")
         or _dict(result.get("enterprise_understanding_model")).get(
             "fact_experimentability_ledger"
@@ -825,6 +826,7 @@ def write_fact_tracking_report_files(
     )
     exp_ledger = _dict(
         result.get("fact_experimentability_ledger")
+        or _dict(result.get("v12")).get("fact_experimentability_ledger")
         or asset.get("fact_experimentability_ledger")
     )
     report = build_fact_experimentability_report(
