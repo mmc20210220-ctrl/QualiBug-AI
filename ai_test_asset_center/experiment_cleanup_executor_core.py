@@ -937,6 +937,43 @@ def execute_experiment_cleanup_compensation(
     # Cleanup compensation in reverse order for write experiments.
     safety = _dict(exp.get("safety_contract"))
     _cleanup_behavior_ir = _dict(behavior_ir) or _dict(exp.get("behavior_ir"))
+
+    # ── Structured process trace: trigger → decision → failure → result ──
+    # Stable correlation identity (campaign/slice/attempt) lets one cleanup
+    # failure be reconstructed from logs alone, without ad-hoc scripts.
+    _cleanup_slice_id = _text(
+        exp.get("slice_id")
+        or exp.get("behavior_slice_id")
+        or resolved_execution_id
+    )
+    _cleanup_trace_identity = (
+        f"campaign={resolved_campaign_id or '-'} "
+        f"slice={_cleanup_slice_id or '-'} "
+        f"obligation={oid or '-'} experiment={eid or '-'}"
+    )
+
+    def _log_cleanup(event: str, **fields: Any) -> None:
+        extras = " ".join(
+            f"{key}={value}"
+            for key, value in fields.items()
+            if value not in (None, "")
+        )
+        _LOGGER.info(
+            "[cleanup-trace] event=%s %s%s",
+            event,
+            _cleanup_trace_identity,
+            f" {extras}" if extras else "",
+        )
+
+    def _fail_cleanup(stage: str, reason: str) -> None:
+        nonlocal cleanup_failures
+        cleanup_failures += 1
+        _LOGGER.warning(
+            "[cleanup-trace] event=failure %s stage=%s reason=%s",
+            _cleanup_trace_identity,
+            stage,
+            reason,
+        )
     # fixture_cleanup:* subjects are sealed only by pending_fixture_cleanups.
     # Bulk NOT_REQUIRED/BLOCKED stamps that also cover those subjects produced
     # CONTRACT_EVIDENCE_IDENTITY_DUPLICATE when the real fixture cleanup later
@@ -967,6 +1004,15 @@ def execute_experiment_cleanup_compensation(
         ).upper()
         == "DELETE"
     ]
+    _log_cleanup(
+        "trigger",
+        governed_writes=len(governed_write_attempts),
+        accepted_writes=len(accepted_governed_writes),
+        cleanup_plan_items=len(_list(exp.get("cleanup_plan"))),
+        cleanup_subjects=len(plan_cleanup_subjects),
+        pending_fixtures=len(pending_fixture_cleanups),
+        governed_write=bool(safety.get("governed_write")),
+    )
 
     def _accepted_write_needs_cleanup(attempt: dict[str, Any]) -> bool:
         if _governed_write_changed_state(attempt):
@@ -1062,6 +1108,12 @@ def execute_experiment_cleanup_compensation(
         accepted_governed_writes_requiring_cleanup.append(matched)
         if receipt_audit:
             requiring_audit_ids.add(receipt_audit)
+    _log_cleanup(
+        "decision",
+        boundary="cleanup_required_writes",
+        required=len(accepted_governed_writes_requiring_cleanup),
+        audit_ids=len(requiring_audit_ids),
+    )
     if (
         safety.get("governed_write")
         and _list(exp.get("cleanup_plan"))
@@ -1085,6 +1137,12 @@ def execute_experiment_cleanup_compensation(
             ).get("status")).upper() == "BLOCKED"
         ]
         if (pre_transport_blocks or runtime_body_blocks) and not accepted_governed_writes:
+            _log_cleanup(
+                "decision",
+                boundary="blocked_before_transport",
+                pre_transport_blocks=len(pre_transport_blocks),
+                runtime_body_blocks=len(runtime_body_blocks),
+            )
             block_reasons = sorted(set(
                 [
                     _text(_dict(step).get("reason"))
@@ -1192,8 +1250,16 @@ def execute_experiment_cleanup_compensation(
             observations["cleanup_status"] = (
                 "not_required" if rejected_state_unchanged else "failed"
             )
+            _log_cleanup(
+                "decision",
+                boundary="rejected_write_attribution",
+                state_unchanged=rejected_state_unchanged,
+            )
             if not rejected_state_unchanged:
-                cleanup_failures += 1
+                _fail_cleanup(
+                    "rejected_write_attribution",
+                    "rejected_write_state_not_proven_unchanged",
+                )
     if (
         safety.get("governed_write")
         and _list(exp.get("cleanup_plan"))
@@ -1342,8 +1408,21 @@ def execute_experiment_cleanup_compensation(
                 _adapter_cleaned = _text(_adapter_receipt.get("status")) == "CLEANED"
                 if _adapter_cleaned:
                     observations["cleanup_status"] = "cleaned"
+                    _log_cleanup(
+                        "recovery",
+                        mode=_text(_adapter_receipt.get("mode")) or "row_delete",
+                        adapter=_text(_dict(cleanup).get("adapter")),
+                        table=_text(_dict(cleanup).get("table")),
+                        subject=cleanup_subject_id,
+                        rows_deleted=int(_adapter_receipt.get("rows_deleted") or 0),
+                        rows_updated=int(_adapter_receipt.get("rows_updated") or 0),
+                    )
                 else:
-                    cleanup_failures += 1
+                    _fail_cleanup(
+                        "adapter_cleanup_receipt",
+                        _text(_adapter_receipt.get("reason_code"))
+                        or "adapter_receipt_status_not_cleaned",
+                    )
                     observations["cleanup_status"] = "failed"
                     observations["cleanup_reason"] = _text(
                         _adapter_receipt.get("reason_code")
@@ -1527,7 +1606,7 @@ def execute_experiment_cleanup_compensation(
                         actor_identity=_text(actor.get("role") or actor_ref),
                     )
                     if not allowed:
-                        cleanup_failures += 1
+                        _fail_cleanup("cleanup_authorization", reason)
                         observations["cleanup_status"] = "failed"
                         observations["cleanup_reason"] = reason
                         continue
@@ -1536,7 +1615,12 @@ def execute_experiment_cleanup_compensation(
                         [source_step],
                     )
                     if missing_bindings or len(cleanup_targets) != 1:
-                        cleanup_failures += 1
+                        _fail_cleanup(
+                            "identity_bound_delete_binding",
+                            f"cleanup_binding_unresolved:{','.join(missing_bindings)}"
+                            if missing_bindings
+                            else "cleanup_compensation_target_ambiguous",
+                        )
                         observations["cleanup_status"] = "failed"
                         observations["cleanup_reason"] = (
                             f"cleanup_binding_unresolved:{','.join(missing_bindings)}"
@@ -1581,7 +1665,10 @@ def execute_experiment_cleanup_compensation(
                             _text(source_step.get("step_id"))
                         )
                         if original_body is None:
-                            cleanup_failures += 1
+                            _fail_cleanup(
+                                "identity_bound_delete_body",
+                                "cleanup_original_request_missing",
+                            )
                             observations["cleanup_status"] = "failed"
                             observations["cleanup_reason"] = (
                                 "cleanup_original_request_missing"
@@ -1596,7 +1683,11 @@ def execute_experiment_cleanup_compensation(
                             cleanup_bindings,
                         )
                         if unresolved_cleanup_tokens:
-                            cleanup_failures += 1
+                            _fail_cleanup(
+                                "identity_bound_delete_tokens",
+                                "cleanup_body_placeholder_unresolved:"
+                                + ",".join(unresolved_cleanup_tokens),
+                            )
                             observations["cleanup_status"] = "failed"
                             observations["cleanup_reason"] = (
                                 "cleanup_body_placeholder_unresolved:"
@@ -1617,10 +1708,22 @@ def execute_experiment_cleanup_compensation(
                         or method not in {"POST", "PUT", "PATCH", "DELETE"}
                         or not observation_path
                     ):
-                        # ── Diagnostic: log which condition fails ──
-                        import sys as _sys_cu
-                        print(f"[CLEANUP-UNRESOLVED] {oid}: path={path!r} method={method!r} obs_path={observation_path!r} starts_slash={path.startswith('/')} has_ph={path_has_placeholders(path)} bindings={list(cleanup_bindings.keys())[:8]}", file=_sys_cu.stderr, flush=True)
-                        cleanup_failures += 1
+                        # Structured diagnostic (replaces ad-hoc stderr print):
+                        # which condition made the cleanup path unresolvable.
+                        _log_cleanup(
+                            "failure_diagnostic",
+                            stage="identity_bound_delete_transport_path",
+                            path=path,
+                            method=method,
+                            obs_path=observation_path,
+                            starts_slash=path.startswith("/"),
+                            has_placeholders=path_has_placeholders(path),
+                            bindings=",".join(list(cleanup_bindings.keys())[:8]),
+                        )
+                        _fail_cleanup(
+                            "identity_bound_delete_transport_path",
+                            "cleanup_compensation_unresolved",
+                        )
                         observations["cleanup_status"] = "failed"
                         observations["cleanup_reason"] = "cleanup_compensation_unresolved"
                         continue
@@ -1662,13 +1765,19 @@ def execute_experiment_cleanup_compensation(
                     }
                     steps_out.append(cleanup_observation)
                     if not (200 <= int(cleanup_observation.get("status_code") or 0) < 300):
-                        cleanup_failures += 1
+                        _fail_cleanup(
+                            "identity_bound_delete_request",
+                            f"non_2xx_status={int(cleanup_observation.get('status_code') or 0)}",
+                        )
                         observations["cleanup_status"] = "failed"
                     elif not cleanup_failures:
                         observations["cleanup_status"] = "completed"
                 continue
             if cleanup_action == "best_effort_delete":
-                cleanup_failures += 1
+                _fail_cleanup(
+                    "best_effort_delete",
+                    "cleanup_authority_not_source_declared",
+                )
                 observations["cleanup_status"] = "failed"
                 observations["cleanup_reason"] = (
                     "cleanup_authority_not_source_declared"
@@ -1719,7 +1828,10 @@ def execute_experiment_cleanup_compensation(
                     )
                 ]
                 if not restore_steps:
-                    cleanup_failures += 1
+                    _fail_cleanup(
+                        "mutation_restore_plan",
+                        "cleanup_accepted_write_missing",
+                    )
                     observations["cleanup_status"] = "failed"
                     observations["cleanup_reason"] = "cleanup_accepted_write_missing"
                     continue
@@ -1737,13 +1849,16 @@ def execute_experiment_cleanup_compensation(
                         actor_identity=_text(actor.get("role") or actor_ref),
                     )
                     if not allowed:
-                        cleanup_failures += 1
+                        _fail_cleanup("mutation_restore_authorization", reason)
                         observations["cleanup_status"] = "failed"
                         observations["cleanup_reason"] = reason
                         continue
                     path = _text(_dict(step).get("path"))
                     if not path.startswith("/") or path_has_placeholders(path) or method not in {"POST", "PUT", "PATCH"}:
-                        cleanup_failures += 1
+                        _fail_cleanup(
+                            "mutation_restore_path",
+                            "cleanup_restore_target_unresolved",
+                        )
                         observations["cleanup_status"] = "failed"
                         observations["cleanup_reason"] = "cleanup_restore_target_unresolved"
                         steps_out.append({
@@ -1778,7 +1893,10 @@ def execute_experiment_cleanup_compensation(
                             documented_routes=documented_routes,
                         )
                     if not restore_body:
-                        cleanup_failures += 1
+                        _fail_cleanup(
+                            "mutation_restore_body",
+                            f"cleanup_restore_unresolved:{restore_projection}",
+                        )
                         observations["cleanup_status"] = "failed"
                         observations["cleanup_reason"] = f"cleanup_restore_unresolved:{restore_projection}"
                         steps_out.append({
@@ -1797,7 +1915,10 @@ def execute_experiment_cleanup_compensation(
                         runtime_bindings=runtime_bindings,
                     )
                     if not observation_path:
-                        cleanup_failures += 1
+                        _fail_cleanup(
+                            "mutation_restore_observation_path",
+                            "cleanup_observer_unresolved",
+                        )
                         observations["cleanup_status"] = "failed"
                         observations["cleanup_reason"] = "cleanup_observer_unresolved"
                         steps_out.append({
@@ -1848,7 +1969,10 @@ def execute_experiment_cleanup_compensation(
                         "cleanup_subject_id": cleanup_subject_id,
                     })
                     if not (200 <= int(cobs.get("status_code") or 0) < 300):
-                        cleanup_failures += 1
+                        _fail_cleanup(
+                            "mutation_restore_request",
+                            f"non_2xx_status={int(cobs.get('status_code') or 0)}",
+                        )
                         observations["cleanup_status"] = "failed"
                     elif not cleanup_failures:
                         observations["cleanup_status"] = "completed"
@@ -1873,7 +1997,12 @@ def execute_experiment_cleanup_compensation(
                 _cleanup_scoped_steps,
             )
             if missing_bindings or not cleanup_targets:
-                cleanup_failures += 1
+                _fail_cleanup(
+                    "cleanup_plan_binding",
+                    f"cleanup_binding_unresolved:{','.join(missing_bindings)}"
+                    if missing_bindings
+                    else "cleanup_accepted_write_missing",
+                )
                 observations["cleanup_status"] = "failed"
                 observations["cleanup_reason"] = (
                     f"cleanup_binding_unresolved:{','.join(missing_bindings)}"
@@ -1885,15 +2014,47 @@ def execute_experiment_cleanup_compensation(
             compensates_ref = _text(_dict(cleanup).get("compensates_operation_ref"))
             for path, target_bindings in reversed(cleanup_targets):
                 if not path.startswith("/") or path_has_placeholders(path) or method not in {"DELETE", "POST", "PUT", "PATCH"}:
-                    cleanup_failures += 1
+                    _fail_cleanup(
+                        "cleanup_plan_path",
+                        "cleanup_compensation_unresolved",
+                    )
                     observations["cleanup_status"] = "failed"
                     observations["cleanup_reason"] = "cleanup_compensation_unresolved"
                     continue
                 source_step = _write_step_for_cleanup_path(
                     path_template=path_template,
                     cleanup_path=path,
-                    steps_out=steps_out,
+                    steps_out=_cleanup_scoped_steps,
                     compensates_operation_ref=compensates_ref,
+                )
+                # A source write that never changed target state (e.g. a
+                # treatment arm re-deleting an id the control already removed,
+                # or a rejected write) needs no compensation: executing the
+                # compensating write anyway creates residue, and sealing it as
+                # NOT_REQUIRED with cleanup_write_count=0 is the honest proof.
+                # This mirrors the restore_before_snapshot branch, which only
+                # restores steps whose governed write changed state.
+                if source_step and not _governed_write_changed_state(
+                    _dict(_dict(source_step).get("governance_receipt"))
+                ):
+                    import sys as _sys_skip
+                    print(
+                        f"[CLEANUP-SKIP] exp={_text(eid)} subject={cleanup_subject_id} "
+                        f"source_step={_text(_dict(source_step).get('step_id'))} "
+                        f"path={path}",
+                        file=_sys_skip.stderr,
+                    )
+                    observations["cleanup_status"] = "not_required"
+                    observations["cleanup_reason"] = (
+                        "ACCEPTED_WRITE_STATE_UNCHANGED"
+                    )
+                    continue
+                import sys as _sys_skip2
+                print(
+                    f"[CLEANUP-EXEC] exp={_text(eid)} subject={cleanup_subject_id} "
+                    f"source_step={_text(_dict(source_step).get('step_id')) if source_step else 'NONE'} "
+                    f"path={path} method={method}",
+                    file=_sys_skip2.stderr,
                 )
                 actor_ref, actor, token = _cleanup_actor_for_write_step(
                     source_step,
@@ -1908,7 +2069,7 @@ def execute_experiment_cleanup_compensation(
                     actor_identity=_text(actor.get("role") or actor_ref),
                 )
                 if not allowed:
-                    cleanup_failures += 1
+                    _fail_cleanup("cleanup_plan_authorization", reason)
                     observations["cleanup_status"] = "failed"
                     observations["cleanup_reason"] = reason
                     continue
@@ -1922,7 +2083,10 @@ def execute_experiment_cleanup_compensation(
                     request_body=_dict(cleanup).get("body"),
                 )
                 if not observation_path:
-                    cleanup_failures += 1
+                    _fail_cleanup(
+                        "cleanup_plan_observation_path",
+                        "cleanup_observer_unresolved",
+                    )
                     observations["cleanup_status"] = "failed"
                     observations["cleanup_reason"] = "cleanup_observer_unresolved"
                     continue
@@ -1936,7 +2100,11 @@ def execute_experiment_cleanup_compensation(
                         cleanup_bindings,
                     )
                     if unresolved_cleanup_tokens:
-                        cleanup_failures += 1
+                        _fail_cleanup(
+                            "cleanup_plan_tokens",
+                            "cleanup_body_placeholder_unresolved:"
+                            + ",".join(unresolved_cleanup_tokens),
+                        )
                         observations["cleanup_status"] = "failed"
                         observations["cleanup_reason"] = (
                             "cleanup_body_placeholder_unresolved:"
@@ -1997,7 +2165,10 @@ def execute_experiment_cleanup_compensation(
                     "compensates_step_id": _text(source_step.get("step_id")),
                 })
                 if not (200 <= int(cobs.get("status_code") or 0) < 300):
-                    cleanup_failures += 1
+                    _fail_cleanup(
+                        "cleanup_plan_request",
+                        f"non_2xx_status={int(cobs.get('status_code') or 0)}",
+                    )
                     observations["cleanup_status"] = "failed"
                 elif not cleanup_failures:
                     observations["cleanup_status"] = "completed"
@@ -2063,7 +2234,10 @@ def execute_experiment_cleanup_compensation(
             )
         ]
         if not completed:
-            cleanup_failures += 1
+            _fail_cleanup(
+                "fixture_cleanup_seal",
+                f"fixture_cleanup_receipt_not_completed subject={fixture_subject}",
+            )
         contract_evidence_receipts.append(build_contract_evidence_receipt(
             kind="cleanup",
             experiment_id=eid,
@@ -2237,14 +2411,14 @@ def execute_experiment_cleanup_compensation(
             )
             if receipt_id
         })
-        import sys as _sys_cud2
-        print(
-            f"[CLEANUP-PROOF] exp={_text(eid)} subject={cleanup_subject} "
-            f"requires_cleanup={len(scoped_writes_requiring_cleanup)} "
-            f"cleanup_receipts={len(cleanup_governance_receipts)} "
-            f"restoration_verified={restoration_verified} "
-            f"audit_ids={len(audit_receipt_ids)}",
-            file=_sys_cud2.stderr,
+        _log_cleanup(
+            "decision",
+            boundary="cleanup_proof_aggregation",
+            subject=cleanup_subject,
+            requires_cleanup=len(scoped_writes_requiring_cleanup),
+            cleanup_receipts=len(cleanup_governance_receipts),
+            restoration_verified=restoration_verified,
+            audit_ids=len(audit_receipt_ids),
         )
         cleanup_statuses_succeeded = bool(matching_steps) and all(
             200 <= int(_dict(step).get("status_code") or 0) < 300
@@ -2256,7 +2430,10 @@ def execute_experiment_cleanup_compensation(
             and bool(audit_receipt_ids)
         )
         if cleanup_statuses_succeeded and not completed:
-            cleanup_failures += 1
+            _fail_cleanup(
+                "cleanup_completion_verification",
+                "cleanup_statuses_succeeded_but_restoration_or_audit_incomplete",
+            )
             observations["cleanup_status"] = "failed"
         contract_evidence_receipts.append(build_contract_evidence_receipt(
             kind="cleanup",
@@ -2439,6 +2616,13 @@ def execute_experiment_cleanup_compensation(
         if _lineage_receipts:
             observations["fixture_row_lineage_receipts"] = _lineage_receipts
 
+    _log_cleanup(
+        "result",
+        cleanup_status=_text(observations.get("cleanup_status")),
+        cleanup_failures=cleanup_failures,
+        environment_restored=observations.get("environment_restored"),
+        adapter_receipts=len(_list(observations.get("adapter_cleanup_receipts"))),
+    )
     return {
         "steps_out": steps_out,
         "observations": observations,

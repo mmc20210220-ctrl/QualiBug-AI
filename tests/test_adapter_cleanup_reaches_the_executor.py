@@ -413,7 +413,13 @@ def test_a_failed_adapter_cleanup_counts_as_a_cleanup_failure() -> None:
         + len('observations["cleanup_status"] = "failed"')
     )
     block = source[start:end]
-    assert "cleanup_failures += 1" in block
+    # The increment moved into the structured ``_fail_cleanup`` helper (one
+    # trace point for increment + correlated failure log). Pin both halves so
+    # the adapter-run failure path still counts as a cleanup failure.
+    assert "_fail_cleanup(" in block
+    helper_start = source.index("def _fail_cleanup(")
+    helper_end = source.index("def ", helper_start + 1)
+    assert "cleanup_failures += 1" in source[helper_start:helper_end]
     assert 'observations["cleanup_status"] = "failed"' in block
 
 
