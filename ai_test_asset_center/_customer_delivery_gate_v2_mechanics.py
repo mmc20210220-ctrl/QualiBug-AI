@@ -837,6 +837,20 @@ def _cleanup_gate_decision(
     if covered != accepted_non_cleanup:
         return "HARNESS_FAILED", ["CLEANUP_WRITE_COVERAGE_MISMATCH"], "INCOMPLETE"
 
+    # ── Accepted-residue degradation (non-production) ────────────────────────
+    # Every cleanup contract is an accepted-residue marker: the write was
+    # deliberately left uncleaned because no API/DB/UI compensator exists and the
+    # target is a declared non-production environment. The finding is still valid;
+    # the residue is an operational leftover surfaced for later environment reset,
+    # never a cleanup failure. Short-circuit before the coverage/completed logic,
+    # which assumes a real cleanup ran.
+    if cleanup_contracts and all(
+        _text(contract.get("status")).upper() == "RESIDUE_ACCEPTED"
+        and _dict(contract.get("evidence")).get("residue") is True
+        for contract in cleanup_contracts
+    ):
+        return "DELIVERABLE", [], "RESIDUE_ACCEPTED"
+
     completed_seen = False
     for contract in cleanup_contracts:
         status = _text(contract.get("status")).upper()

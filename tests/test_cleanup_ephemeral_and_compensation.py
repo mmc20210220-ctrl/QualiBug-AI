@@ -252,8 +252,13 @@ def test_identity_bound_status_uses_snapshot_restore_with_effect_read() -> None:
     assert experiment["cleanup_plan"][0]["mode"] == "restore_snapshot"
 
 
-def test_identity_bound_ship_blocks_when_empty_body_not_restorable() -> None:
-    """Sibling cancel does not reverse ship; empty-body snapshot is also fake."""
+def test_identity_bound_ship_degrades_to_residue_when_not_restorable() -> None:
+    """Sibling cancel does not reverse ship; empty-body snapshot is also fake.
+
+    On a declared non-production target there is still no real compensator, so
+    per the degradation ladder the write is allowed and the leftover residue is
+    accepted (marked for later environment reset) rather than blocking the
+    experiment. Production stays fail-closed (see the production guard test)."""
     experiment = compile_experiment_for_obligation(
         {
             "obligation_id": "obl-ship",
@@ -302,7 +307,58 @@ def test_identity_bound_ship_blocks_when_empty_body_not_restorable() -> None:
         environment_type="test",
     )
 
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment[
+        "compile_receipt"
+    ]
+    assert experiment["cleanup_plan"][0]["action"] == "accepted_residue"
+    assert experiment["cleanup_plan"][0]["mode"] == "accepted_residue_no_cleanup"
+
+
+def test_identity_bound_ship_still_blocked_on_production() -> None:
+    """Production is a hard write boundary; the accepted-residue degradation
+    must never apply there."""
+    experiment = compile_experiment_for_obligation(
+        {
+            "obligation_id": "obl-ship",
+            "risk_family": "state",
+            "property": {
+                "operation_ref": "op-ship",
+                "actor_ref": "actor-buyer",
+                "from_state_ref": "state-created",
+                "to_state_ref": "state-shipped",
+            },
+            "required_actors": ["actor-buyer"],
+            "required_operations": ["op-ship"],
+            "required_observers": ["http_response", "before_state", "after_state"],
+            "cleanup_requirement": {"required": True},
+        },
+        behavior_ir={
+            "operations": [{
+                "id": "op-ship",
+                "method": "POST",
+                "path": "/api/orders/{id}/ship",
+                "read_write": "write",
+                "request_example": {},
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }, {
+                "id": "op-list-orders",
+                "method": "GET",
+                "path": "/api/orders",
+                "read_write": "read",
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }, {
+                "id": "op-get-order",
+                "method": "GET",
+                "path": "/api/orders/{id}",
+                "read_write": "read",
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }],
+            "actors": [_actor()],
+            "relations": [],
+        },
+        environment_type="production",
+    )
+
     assert experiment["compile_receipt"]["status"] == "BLOCKED", experiment[
         "compile_receipt"
     ]
-    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"

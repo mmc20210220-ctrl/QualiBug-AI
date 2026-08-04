@@ -1711,11 +1711,28 @@ def compile_experiment_for_obligation(
                         "compensates_operation_ref": primary_op_id,
                     }]
                 else:
-                    return blocked_experiment(
-                        oid,
-                        "BLOCKED_NON_REVERSIBLE_WRITE",
-                        f"cleanup_unresolved:{cleanup_op}",
-                    )
+                    # No real compensator resolved on any surface (API/DB/UI). On a
+                    # declared non-production target we degrade to accepted-residue
+                    # instead of killing the experiment: the write proceeds, the
+                    # leftover resource is marked with a residue receipt for later
+                    # environment reset, and the finding still reaches the oracle.
+                    # Production and undeclared/unknown targets stay fail-closed.
+                    from .target_policy import is_nonproduction_environment
+
+                    if not is_nonproduction_environment(environment_type):
+                        return blocked_experiment(
+                            oid,
+                            "BLOCKED_NON_REVERSIBLE_WRITE",
+                            f"cleanup_unresolved:{cleanup_op}",
+                        )
+                    cleanup_plan = [{
+                        "action": "accepted_residue",
+                        "mode": "accepted_residue_no_cleanup",
+                        "compensates_operation_ref": primary_op_id,
+                        "residue_notice": (
+                            f"no_source_compensator:{primary_op_id}"
+                        ),
+                    }]
             # Only build cleanup plan if cleanup_op is valid
             if cleanup_op and cleanup_op in ops and cleanup_op != primary_op_id:
                 cleanup_mode = _text(cleanup_req.get("mode") or "reverse_order")

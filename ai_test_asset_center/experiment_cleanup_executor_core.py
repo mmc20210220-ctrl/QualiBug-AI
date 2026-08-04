@@ -1332,6 +1332,51 @@ def execute_experiment_cleanup_compensation(
                 if cleanup_index < len(cleanup_subjects)
                 else f"cleanup:operation:{cleanup_index + 1}"
             )
+            # ── Accepted-residue (non-production degradation), before adapter/HTTP ──
+            # The compiler deliberately left this write uncleaned: no API/DB/UI
+            # compensator exists and the target is a declared non-production
+            # environment. There is no cleanup request to make, so do not fall
+            # through to the HTTP branch (which would record a spurious failure).
+            # Emit a residue receipt so the leftover resource stays visible for a
+            # later environment reset, and mark the outcome so the delivery gate
+            # reads it as an accepted degradation, never a cleanup failure.
+            if _text(_dict(cleanup).get("action")) == "accepted_residue" or _text(
+                _dict(cleanup).get("mode")
+            ) == "accepted_residue_no_cleanup":
+                _residue_n = _scoped_accepted_write_count_for_cleanup(
+                    cleanup, accepted_governed_writes
+                )
+                contract_evidence_receipts.append(
+                    build_contract_evidence_receipt(
+                        kind="cleanup",
+                        experiment_id=eid,
+                        obligation_id=oid,
+                        campaign_id=resolved_campaign_id,
+                        execution_id=resolved_execution_id,
+                        subject_id=cleanup_subject_id,
+                        status="RESIDUE_ACCEPTED",
+                        evidence={
+                            "accepted_write_count": _residue_n,
+                            "cleanup_required_write_count": _residue_n,
+                            "cleanup_write_count": 0,
+                            "state_unchanged": False,
+                            "restoration_verified": False,
+                            "audit_receipt_ids": [],
+                            "reason_code": "ACCEPTED_RESIDUE_NO_CLEANUP",
+                            "cleanup_mode": "accepted_residue_no_cleanup",
+                            "residue": True,
+                            "residue_notice": _text(
+                                _dict(cleanup).get("residue_notice")
+                            ),
+                            "compensates_operation_ref": _text(
+                                _dict(cleanup).get("compensates_operation_ref")
+                            ),
+                        },
+                    )
+                )
+                observations["cleanup_status"] = "residue_accepted"
+                observations["cleanup_residue"] = True
+                continue
             # ── Declared-adapter cleanup, before any HTTP handling ──
             # A db_sql step carries no path or method, so the HTTP branch below would
             # record cleanup_compensation_unresolved and leave the row behind. That is

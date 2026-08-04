@@ -42,6 +42,13 @@ CLEANUP_AUTHORITIES = frozenset({
     # write rules compile to unknown_cleanup_authority and never reach Field
     # Oracle Trace — the V1.6.0 Stage B breakpoint.
     "declared_adapter_cleanup",
+    # accepted_residue: the write is NOT reversed. Admitted only for a target the
+    # operator explicitly declared non-production AND when no real compensator
+    # (API/DB/UI) resolved. It is a coverage-over-cleanup decision, never a claim
+    # that cleanup happened: proof_kind stays "accepted_residue", reversibility is
+    # "none", and the executor emits a residue receipt so the leftover resource is
+    # visible for later environment reset. Production never reaches this branch.
+    "accepted_residue",
 })
 
 # ── declared_adapter_cleanup: built, tested, and NOT yet authorised ──────────
@@ -393,6 +400,34 @@ def _classify_cleanup_authority_v11(
             primary_operation_ref=primary_operation_ref,
             relations=relations,
         )
+
+    # ── accepted_residue (non-production degradation) ──
+    # The write is deliberately NOT reversed. This branch only ever fires when the
+    # compiler attached an accepted-residue plan, which it does solely for a target
+    # the operator declared non-production and only after every real compensator
+    # (API/DB/UI) failed to resolve. The authority carries no operation_ref and no
+    # cleanup contracts -- there is no cleanup request to make -- so the validator's
+    # source-declared path checks pass vacuously. reversibility stays "none" and
+    # residue_accepted stays True so nothing downstream mistakes this for a real
+    # cleanup.
+    if action == "accepted_residue" or mode == "accepted_residue_no_cleanup":
+        return {
+            "kind": "accepted_residue",
+            "detail": "",
+            "authority_block": {
+                "kind": "accepted_residue",
+                "reversibility": "none",
+                "residue_accepted": True,
+                "residue_notice": _text(first.get("residue_notice"))
+                or "write_left_uncleaned_on_declared_non_production_target",
+            },
+            "identity_contract": {},
+            "before_observation_contract": {},
+            "after_write_observation_contract": {},
+            "after_cleanup_observation_contract": {},
+            "cleanup_request_contract": {},
+            "equivalence_contract": {},
+        }
 
     return {"kind": "none", "detail": "cleanup_authority_unrecognized"}
 

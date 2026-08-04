@@ -131,6 +131,50 @@ def test_cleanup_failure_is_harness_failure() -> None:
     assert decision == ("HARNESS_FAILED", ["CLEANUP_COMPENSATION_FAILED"], "FAILED")
 
 
+def _residue_contract(accepted_write_count: int = 1) -> dict:
+    return {
+        "kind": "cleanup",
+        "status": "RESIDUE_ACCEPTED",
+        "evidence": {
+            "accepted_write_count": accepted_write_count,
+            "cleanup_write_count": 0,
+            "restoration_verified": False,
+            "state_unchanged": False,
+            "audit_receipt_ids": [],
+            "residue": True,
+            "residue_notice": "no_source_compensator:op-ship",
+        },
+    }
+
+
+def test_cleanup_gate_delivers_accepted_residue() -> None:
+    """A non-production write deliberately left uncleaned (no API/DB/UI
+    compensator) still delivers the finding; the residue is an accepted
+    operational leftover, never a cleanup failure."""
+    decision = _cleanup_gate_decision(
+        execution=_execution(
+            accepted_writes=1,
+            cleanup_status="NOT_REQUIRED",  # no cleanup ran; counts derive this
+        ),
+        contracts=[_residue_contract(1)],
+    )
+
+    assert decision == ("DELIVERABLE", [], "RESIDUE_ACCEPTED")
+
+
+def test_cleanup_gate_residue_requires_explicit_residue_flag() -> None:
+    """A RESIDUE_ACCEPTED status without the residue evidence flag is not a
+    genuine accepted-residue receipt and must not short-circuit to DELIVERABLE."""
+    contract = _residue_contract(1)
+    contract["evidence"]["residue"] = False
+    decision = _cleanup_gate_decision(
+        execution=_execution(accepted_writes=1, cleanup_status="NOT_REQUIRED"),
+        contracts=[contract],
+    )
+
+    assert decision[0] == "HARNESS_FAILED"
+
+
 def test_oracle_harness_detail_preserves_activation_failure_reasons() -> None:
     detail = _oracle_harness_reason_detail(
         {
