@@ -11,9 +11,9 @@ sys.path.insert(0, r"d:\QualiBug-AI\QualiBug-AI-main")
 
 from pathlib import Path
 
-# Install DB audit hook
-from ai_test_asset_center.private_pilot_db_audit_patch import install
-install()
+# The legacy ``private_pilot_db_audit_patch`` hook was retired (module-strangler
+# cleanup 0ec57fd9): DB observation now flows through the governed
+# persistence_observer -> assertion -> contract-oracle -> delivery-gate chain.
 
 from ai_test_asset_center.scan_post_hooks import list_scan_post_hooks
 print(f"Registered hooks: {list_scan_post_hooks()}")
@@ -68,8 +68,9 @@ if confirmed:
     for f in confirmed[:10]:
         print(f"    - {f.get('title', '?')[:70]}")
 
-# Save for evaluation
-out_path = Path("scan_fresh_result.json")
+# Save for evaluation (repo-root hygiene: run artifacts live in .scratch/)
+out_path = Path(".scratch/scan_fresh_result.json")
+out_path.parent.mkdir(parents=True, exist_ok=True)
 out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 print(f"\nSaved to {out_path}")
 
