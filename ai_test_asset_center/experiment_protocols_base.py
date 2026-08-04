@@ -950,7 +950,7 @@ def compile_family_protocol(
         and method in {"POST", "PUT", "PATCH"}
     ):
         write_body = source_request_example(operation, sibling_operations=sibling_operations)
-        if not write_body:
+        if not write_body and not property_spec.get("defer_write_body_to_runtime"):
             write_body = _minimal_body_from_schema(operation)
 
     control_plan: list[dict[str, Any]] = []

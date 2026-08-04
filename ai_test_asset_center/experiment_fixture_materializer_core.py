@@ -22,7 +22,9 @@ from .experiment_runtime_support import (
     _select_fixture_actor,
     _select_runtime_binding,
     _text,
+    _runtime_entity_candidates,
     consensus_identity_value,
+    project_observed_body,
 )
 from .real_id_resolver import (
     bind_entity_fields,
@@ -646,7 +648,23 @@ def materialize_experiment_fixtures(
                         break
                     if not (200 <= _sc < 300):
                         continue
-                    if (
+                    _projection_fields = [
+                        _text(field)
+                        for field in _list(binding.get("body_projection_fields"))
+                        if _text(field)
+                    ]
+                    if _projection_fields:
+                        # Observed write body: project the schema-declared
+                        # fields from one observed row (best field coverage
+                        # wins, keeping values mutually coherent). Empty
+                        # projection leaves the binding unresolved and the
+                        # standard fail-closed path reports the gap.
+                        _projected = project_observed_body(
+                            _runtime_entity_candidates(obs.get("body")),
+                            _projection_fields,
+                        )
+                        value = _projected or None
+                    elif (
                         _text(binding.get("identity_extraction"))
                         == "owner_field_consensus"
                     ):

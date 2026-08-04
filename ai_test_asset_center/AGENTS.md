@@ -272,6 +272,24 @@ commercial rules stay in the root Discovery Harness Evolution Contract):
   read exists — or no declared arm actor is present in the actor registry —
   the experiment remains visibly `BLOCKED_MISSING_BINDING`
   (`owner_identity_resolver_missing`); no identity is ever inferred.
+- Write operations that declare a request schema but no request example may
+  source the body from observed data instead of blocking with
+  `source_declared_request_body_missing`. `_observed_write_body_resolver`
+  (`experiment_compiler_support.py`) requires a source-declared collection
+  `GET`/`HEAD` on the write's own collection whose observed entity declares
+  every required body field; the compiler emits a `__observed_body` binding
+  (`source_priority=observed_entity_write_body`,
+  `body_projection_fields=<schema properties>`) pinned to the writer's
+  credentials and suppresses synthetic schema-default bodies in family
+  protocols via `defer_write_body_to_runtime`. At runtime
+  (`project_observed_body` in `experiment_runtime_support.py`) the body is
+  projected from ONE observed row (best field coverage wins) using only
+  schema-declared field names — the environment's own data, never
+  synthesized values; the plan-step executor merges it under step-compiled
+  fields (which win on conflict), and the pre-transport required-field
+  gate still blocks visibly with exactly the fields the observed data
+  could not supply. When no qualifying collection read exists, the
+  historical visible block is preserved unchanged.
 - `deep_experiment_planner` and `deep_experiment_protocol_adapter` are
   diagnostic-only research surfaces. They are not imported or invoked by
   `discovery_runtime_planning`; a heuristic deep plan must never replace a

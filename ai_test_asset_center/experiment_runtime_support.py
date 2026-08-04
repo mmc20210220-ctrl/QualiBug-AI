@@ -1013,6 +1013,46 @@ def _select_runtime_binding(
     return default
 
 
+def project_observed_body(rows: Any, projection_fields: list[Any]) -> dict[str, Any]:
+    """Project source-observed entity field values into a write body template.
+
+    When a write operation declares a request schema but no request example,
+    the compiler marks its binding with ``body_projection_fields`` and the
+    resolver reads the same collection with the writer's credentials. The
+    body is assembled from ONE observed row — the row covering the most
+    projection fields, so the values stay mutually coherent — and only
+    fields the source schema declares are copied, keyed by their schema
+    names. Every value comes from the environment's own observed data;
+    nothing is synthesized.
+
+    Returns {} when no row carries any projection field (the caller treats
+    the binding as unresolved and fails closed). Missing required fields are
+    caught downstream by the pre-transport required-field gate, which keeps
+    the gap visible instead of inventing values.
+    """
+    fields = [str(field).strip() for field in _list(projection_fields) if str(field or "").strip()]
+    if not fields:
+        return {}
+    candidates = [row for row in _list(rows) if isinstance(row, dict)]
+    best: dict[str, Any] = {}
+    for row in candidates:
+        projected: dict[str, Any] = {}
+        for field in fields:
+            field_key = re.sub(r"[^a-z0-9]+", "", field.lower())
+            if not field_key:
+                continue
+            for row_key, row_value in row.items():
+                if re.sub(r"[^a-z0-9]+", "", str(row_key).lower()) != field_key:
+                    continue
+                if row_value in (None, ""):
+                    continue
+                projected[field] = row_value
+                break
+        if len(projected) > len(best):
+            best = projected
+    return best
+
+
 def consensus_identity_value(body: Any, target: str) -> tuple[str, str]:
     """Resolve an owner identity only when every observed entity row agrees.
 

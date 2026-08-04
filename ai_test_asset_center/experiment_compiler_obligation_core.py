@@ -74,6 +74,7 @@ from .experiment_compiler_support import (
     _inverse_delta_cleanup_spec,
     _is_unresolvable_actor_secret_ref,
     _operation_entity_refs,
+    _observed_write_body_resolver,
     _owned_entity_identity_resolver,
     _resolve_state_compile_context,
     _source_declared_control_fixture_binding,
@@ -103,6 +104,19 @@ def _request_schema_required_fields(operation: dict[str, Any]) -> list[str]:
         media = _dict(content.get("application/json"))
         schema = _dict(media.get("schema")) or schema
     return [_text(name) for name in _list(schema.get("required")) if _text(name)]
+
+
+def _request_schema_property_fields(operation: dict[str, Any]) -> list[str]:
+    """Source-declared request body property names from flat or OpenAPI schema."""
+    schema = _dict(operation.get("request_schema") or operation.get("requestBody"))
+    content = _dict(schema.get("content"))
+    if content:
+        media = _dict(content.get("application/json"))
+        schema = _dict(media.get("schema")) or schema
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        return [_text(name) for name in properties if _text(name)]
+    return [_text(name) for name in _list(properties) if _text(name)]
 
 
 def _find_collection_get_resolvers(
@@ -958,6 +972,7 @@ def compile_experiment_for_obligation(
         sibling_operations=list(ops.values()),
     )
     _schema_required = _request_schema_required_fields(primary_op)
+    _observed_body_resolver: dict[str, Any] = {}
     if (
         is_write
         and not _primary_example
@@ -969,11 +984,23 @@ def compile_experiment_for_obligation(
             or (_op_method_upper == "POST" and _schema_required)
         )
     ):
-        return blocked_experiment(
-            oid,
-            "BLOCKED_MISSING_BINDING",
-            f"source_declared_request_body_missing:{primary_op_id}",
+        # V1.9c: Before blocking, try to source the body from observed data:
+        # a caller-scoped collection GET on the write's own collection whose
+        # observed entity covers the required fields lets the runtime project
+        # real field values into the body (the environment's own test data),
+        # which is evidence reuse — never synthesized placeholders.
+        _observed_body_resolver = _observed_write_body_resolver(
+            operation=primary_op,
+            behavior_ir=ir,
+            required_fields=_schema_required,
+            projection_fields=_request_schema_property_fields(primary_op),
         )
+        if not _observed_body_resolver:
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_BINDING",
+                f"source_declared_request_body_missing:{primary_op_id}",
+            )
     write_observers = (
         declared_effect_observers(primary_op, behavior_ir=ir)
         if is_write
@@ -1107,6 +1134,33 @@ def compile_experiment_for_obligation(
                 "BLOCKED_MISSING_BINDING",
                 f"unresolvable_path_placeholders:{';'.join(_blocked_reasons[:4])}",
             )
+    if _observed_body_resolver:
+        # V1.9c: Defer the write body to a runtime projection of an observed
+        # entity row. fixture_owner_actor_ref pins resolution to the writer's
+        # own credentials (the control actor owns the control write; the
+        # treatment arm reuses the same observed data as its body template).
+        binding_plan.append({
+            "target": "__observed_body",
+            "target_path": "/{__observed_body}",
+            "status": "runtime_resolvable",
+            "source_priority": "observed_entity_write_body",
+            "resolver_operations": [{
+                "operation_ref": _text(_observed_body_resolver.get("operation_ref")),
+                "method": _text(_observed_body_resolver.get("method")),
+                "path": _text(_observed_body_resolver.get("path")),
+                "binding_semantics": "caller_scoped",
+            }],
+            "fixture_owner_actor_ref": _text(
+                prop.get("control_actor_ref")
+                or prop.get("owner_actor_ref")
+                or prop.get("actor_ref")
+                or (required_actors[0] if required_actors else "")
+            ),
+            "body_projection_fields": _list(
+                _observed_body_resolver.get("projection_fields")
+            ),
+            "value_fingerprint": "",
+        })
     if (
         not is_write
         and response_only_family
@@ -2007,6 +2061,12 @@ def compile_experiment_for_obligation(
         "final_state",
     }
 
+    if _observed_body_resolver:
+        # Suppress synthetic schema-default bodies in family protocols: the
+        # body arrives at runtime from the observed-entity projection, and a
+        # fabricated minimal body would take precedence over it (and violate
+        # the no-fabricated-data contract).
+        prop = {**prop, "defer_write_body_to_runtime": True}
     protocol = compile_family_protocol(
         risk_family=family,
         operation=primary_op,

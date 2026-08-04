@@ -257,5 +257,18 @@ def test_uncompensated_owned_write_isolation_stays_nrw() -> None:
         behavior_ir=ir,
         environment_type="test",
     )
-    assert experiment["compile_receipt"]["status"] == "BLOCKED"
-    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"
+    # Non-production targets compile with an honest accepted-residue plan
+    # instead of blocking: residue is declared, never disguised as cleanup.
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    cleanup_actions = {
+        row.get("action")
+        for row in experiment.get("cleanup_plan") or []
+        if isinstance(row, dict)
+    }
+    assert cleanup_actions == {"accepted_residue"}
+    residue_notices = {
+        row.get("residue_notice")
+        for row in experiment.get("cleanup_plan") or []
+        if isinstance(row, dict)
+    }
+    assert residue_notices == {"no_source_compensator:op-cart-post"}

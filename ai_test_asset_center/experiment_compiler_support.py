@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .real_id_resolver import normalize_path_placeholders
+from .real_id_resolver import collection_path, normalize_path_placeholders
 from .runtime_binding_graph import _declared_fixture_setup
 
 
@@ -515,6 +515,101 @@ def _owned_entity_identity_resolver(
             row["operation_ref"],
         )
     )
+    return candidates[0]
+
+
+def _observed_write_body_resolver(
+    *,
+    operation: dict[str, Any],
+    behavior_ir: dict[str, Any],
+    required_fields: list[Any],
+    projection_fields: list[Any],
+) -> dict[str, Any]:
+    """Resolve a write-body template from a caller-scoped collection read.
+
+    Fallback when a write operation declares a request schema but no request
+    example: a source-declared collection ``GET``/``HEAD`` on the same
+    collection returns real entities of the same resource shape, so the
+    runtime can project the schema-declared fields from an observed row into
+    the request body — reusing the environment's own test data as observed
+    evidence instead of synthesizing values.
+
+    Every validation dimension is fail-closed; any gap returns {} and the
+    caller keeps the visible source_declared_request_body_missing block:
+    1. the schema must declare at least one property (nothing to project
+       otherwise);
+    2. the resolver must be a source-declared GET/HEAD on the write
+       operation's own collection (no path placeholders);
+    3. the resolver must observe/scope an entity whose source-declared
+       fields cover every required body field (a read model that cannot
+       supply a required field would fail the pre-transport required-field
+       gate anyway, so the block stays compile-time and honest).
+    """
+    fields = [_text(field) for field in projection_fields if _text(field)]
+    if not fields:
+        return {}
+    required_keys = {
+        _field_key(field) for field in required_fields if _field_key(field)
+    }
+    primary_path = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    )
+    collection = normalize_path_placeholders(collection_path(primary_path))
+    if not collection.startswith("/"):
+        return {}
+    ir = _dict(behavior_ir)
+    entities = _list(ir.get("entities"))
+    candidates: list[dict[str, Any]] = []
+    for op in _list(ir.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        method = _text(op.get("method")).upper()
+        if method not in {"GET", "HEAD"}:
+            continue
+        op_id = _text(op.get("id"))
+        if not op_id:
+            continue
+        path = normalize_path_placeholders(
+            _text(op.get("path") or op.get("raw_path"))
+        ).rstrip("/")
+        if path != collection.rstrip("/") or "{" in path or ":" in path:
+            continue
+        if not _list(op.get("source_refs")):
+            continue
+        read_entities = _operation_entity_refs(
+            behavior_ir=ir,
+            operation_ref=op_id,
+            relation_types={"observes", "scopes"},
+        )
+        if not read_entities:
+            continue
+        declared_keys: set[str] = set()
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            if (
+                _text(entity.get("id")) not in read_entities
+                and _text(entity.get("name")) not in read_entities
+            ):
+                continue
+            for field in _list(entity.get("fields")):
+                name = _text(field.get("name") if isinstance(field, dict) else field)
+                if name:
+                    declared_keys.add(_field_key(name))
+        if not declared_keys:
+            continue
+        if required_keys and not required_keys <= declared_keys:
+            continue
+        candidates.append({
+            "operation_ref": op_id,
+            "method": method,
+            "path": path,
+            "binding_semantics": "caller_scoped",
+            "projection_fields": fields,
+        })
+    if not candidates:
+        return {}
+    candidates.sort(key=lambda row: row["operation_ref"])
     return candidates[0]
 
 
