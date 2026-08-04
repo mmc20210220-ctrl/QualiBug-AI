@@ -1,25 +1,4 @@
-import { useSearchParams } from 'react-router-dom';
-import { usePipelineData } from '../api/data';
-import { Dashboard } from './Dashboard';
-
-type JsonRecord = Record<string, unknown>;
-
-function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asNum(value: unknown, fallback = 0): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
+import { asArray, asNum, asRecord, asText, type JsonRecord } from '../../lib/value-guards';
 
 function releaseTone(overallStatus: string): string {
   if (overallStatus === 'fail') return 'danger';
@@ -48,7 +27,12 @@ function gateTone(gateStatus: string, hasPendingObligation: boolean): string {
   return 'neutral';
 }
 
-function DashboardRegressionBanner({ record }: { record: JsonRecord }) {
+/**
+ * 发布门禁 / 回归门禁首屏警示条。
+ * 数据来源：pipeline record 的 release_gate / regression_* 字段；
+ * 无阻断事项时渲染 null（不占用首屏）。
+ */
+export function RegressionGateBanner({ record }: { record: JsonRecord }) {
   const releaseGate = asRecord(record.release_gate);
   const releaseOverall = asText(releaseGate.overall_status);
   const releaseChecks = asArray(releaseGate.checks).map(asRecord);
@@ -108,19 +92,3 @@ function DashboardRegressionBanner({ record }: { record: JsonRecord }) {
     </section>
   );
 }
-
-export function DashboardRegressionGuard() {
-  const [params] = useSearchParams();
-  const project = params.get('project')?.trim() || '';
-  const { data } = usePipelineData(project);
-  const record = asRecord(data);
-
-  return (
-    <>
-      {project && <DashboardRegressionBanner record={record} />}
-      <Dashboard />
-    </>
-  );
-}
-
-export default DashboardRegressionGuard;

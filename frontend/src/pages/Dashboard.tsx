@@ -18,6 +18,7 @@ import { TrustPanel, type TrustSignal } from '../components/dashboard/TrustPanel
 import { DiscoveryFunnelPanel } from '../components/dashboard/DiscoveryFunnelPanel';
 import { MainChainContractPanel } from '../components/dashboard/MainChainContractPanel';
 import { RegressionClosurePanel } from '../components/dashboard/RegressionClosurePanel';
+import { RegressionGateBanner } from '../components/dashboard/RegressionGateBanner';
 import {
   asRecord, asText, asNum, firstNum, formatScanTime,
   getSeverityWeight, getFindingModule, riskLevel, releaseDecision,
@@ -191,6 +192,7 @@ export function Dashboard() {
   if (!hasMaterializedMetrics) {
     return (
       <div>
+        <RegressionGateBanner record={record} />
         <div className="page-header"><div><h1>{asText(record.project_name) || project} · 价值总览</h1><p>当前项目还没有形成真实检测数据。企业理解进度与执行准备状态如下。</p></div></div>
         <EnterpriseUnderstandingPanel
           summary={knowledgeSummary}
@@ -213,6 +215,9 @@ export function Dashboard() {
 
   return (
     <div className="customer-results-page">
+      {/* 发布/回归门禁首屏警示（无阻断时渲染 null） */}
+      <RegressionGateBanner record={record} />
+
       {/* 英雄区 */}
       <ValueHero
         projectName={asText(record.project_name) || project}

@@ -3,7 +3,7 @@ import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import { ScrollToTop } from './components/ScrollToTop';
 import { isAuthenticated } from './api/client';
-import { DashboardRegressionGuard } from './pages/DashboardRegressionGuard';
+import { Dashboard } from './pages/Dashboard';
 import { Findings } from './pages/Findings';
 import { EvidenceChain } from './pages/EvidenceChain';
 import { ReleaseGate } from './pages/ReleaseGate';
@@ -34,7 +34,7 @@ export default function App() {
             <Route element={<Layout />}>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               {/* 成果面 */}
-              <Route path="/dashboard" element={<DashboardRegressionGuard />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/findings" element={<Findings />} />
               <Route path="/evidence" element={<EvidenceChain />} />
               <Route path="/release" element={<ReleaseGate />} />
