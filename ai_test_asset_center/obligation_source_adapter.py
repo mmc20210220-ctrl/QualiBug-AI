@@ -254,6 +254,55 @@ def _planning_property(
     return property_spec
 
 
+def _executable_actor_for_role(
+    actor_ref: str,
+    actors_by_id: dict[str, dict[str, Any]],
+) -> str:
+    """Resolve a non-executable role actor to an executable same-role account.
+
+    Behavior-IR actors fall into two classes: permission-matrix role actors
+    (synthetic ``secret_ref:actor:*`` credential refs that can never log in)
+    and runtime account actors (declared test accounts with resolvable
+    credentials).  IR ``permits``/``denies`` relations reference the role
+    actors, so every obligation the Reasoner bridge produces referenced
+    non-executable identities and the binding gate blocked all 603 of them at
+    compile time -- the single largest funnel loss.  When the referenced actor
+    is non-executable, substitute the executable account actor of the same
+    role (same role_key, resolvable secret, account_ref preferred, runtime
+    bound preferred), mirroring the experiment compiler's implicit actor
+    ranking.  The substitution is source-grounded: the account actor is the
+    declared runtime incarnation of that role, never an invented identity.
+    Falls back to the original ref when no executable same-role actor exists,
+    so the obligation still blocks visibly downstream instead of guessing.
+    """
+    actor = actors_by_id.get(actor_ref)
+    if not actor:
+        return actor_ref
+    secret_ref = _text(actor.get("credential_secret_ref") or actor.get("secret_ref"))
+    if secret_ref and not secret_ref.lower().startswith("secret_ref:actor:"):
+        return actor_ref  # already executable
+    role_key = _text(actor.get("role_key") or actor.get("role")).lower()
+    if not role_key:
+        return actor_ref
+    candidates = sorted(
+        (
+            (
+                0 if _text(candidate.get("account_ref")) else 1,
+                0 if candidate.get("runtime_bound") is True else 1,
+                candidate_id,
+            )
+            for candidate_id, candidate in actors_by_id.items()
+            if candidate_id != actor_ref
+            and _text(candidate.get("role_key") or candidate.get("role")).lower() == role_key
+            and _text(candidate.get("credential_secret_ref") or candidate.get("secret_ref"))
+            and not _text(
+                candidate.get("credential_secret_ref") or candidate.get("secret_ref")
+            ).lower().startswith("secret_ref:actor:")
+        )
+    )
+    return candidates[0][2] if candidates else actor_ref
+
+
 def _make_grounded_obligations(
     candidate: dict[str, Any],
     *,
@@ -355,6 +404,17 @@ def _make_grounded_obligations(
 
     obligations: list[dict[str, Any]] = []
     for actor_refs in actor_sets:
+        # Role actors never execute (synthetic secret_ref:actor:*); substitute
+        # the executable same-role account actor so the obligation can run as
+        # a real declared identity instead of blocking the whole pair.
+        actor_refs = [
+            _executable_actor_for_role(actor_ref, actors_by_id)
+            for actor_ref in actor_refs
+        ]
+        if len(set(actor_refs)) != len(actor_refs):
+            # Control and treatment collapsed onto one account (only one
+            # executable actor for the role): no comparison is possible.
+            continue
         candidate_property = dict(property_spec)
         if family == "authorization" and len(actor_refs) == 2:
             candidate_property.update({
@@ -441,6 +501,22 @@ def adapt_source_candidates_to_obligations(
         operation = matches[0]
         operation_ref = _text(operation.get("id"))
         family = _risk_family(candidate)
+        if family not in _RELATION_TYPES_BY_FAMILY:
+            # A candidate whose family is not in the adapter's supported set
+            # (an unknown or capability-gap family such as audit_trail, or a
+            # candidate with no family at all) is dropped HERE, per candidate,
+            # with a named reason code -- never allowed to KeyError the whole
+            # adaptation loop.  A single unregistered family used to abort the
+            # bridge for every engine's hypotheses at once, silently discarding
+            # the entire mainline reasoner augmentation (the measured first-loss
+            # stage).  The drop is visible and countable; nothing is rewritten
+            # into a wrong family, so "visibly blocked beats wrongly compiled".
+            coverage_gaps.append(_stable_gap(
+                candidate_id=candidate_id,
+                code="BLOCKED_RISK_FAMILY_UNSUPPORTED",
+                detail=f"family_not_supported:{family}",
+            ))
+            continue
         allowed_relation_types = _RELATION_TYPES_BY_FAMILY[family]
         semantic_relations = [
             relation

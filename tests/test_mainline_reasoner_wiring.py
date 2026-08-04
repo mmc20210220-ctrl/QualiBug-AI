@@ -77,10 +77,13 @@ def _patch_bridge(
     import ai_test_asset_center.stage_reason_all_v2 as stage
     import ai_test_asset_center.hypothesis_slice_bridge as bridge
 
-    calls = {"collect": 0, "bridge": 0}
+    calls = {"collect": 0, "bridge": 0, "world": None}
 
-    def fake_collect(prd_text: str, api_text: str):
+    def fake_collect(prd_text: str, api_text: str, *, reader_output=None):
         calls["collect"] += 1
+        # The comprehension bridge must be live: the reasoner receives the
+        # source-derived world model, never an empty business-world dict.
+        calls["world"] = reader_output
         if collect_raises is not None:
             raise collect_raises
         return (
@@ -120,7 +123,11 @@ def test_mainline_reasoner_hypotheses_become_source_bound_obligations(
 
     bundle = planning.build_discovery_plan(_inputs(tmp_path), _campaign())
 
-    assert calls == {"collect": 1, "bridge": 1}
+    assert calls == {"collect": 1, "bridge": 1, "world": calls["world"]}
+    world = calls["world"]
+    assert isinstance(world, dict)
+    assert "documented_rules" in world and "entities" in world
+    assert "state_machines" in world and "relationships" in world
     report = bundle.obligations.get("mainline_reasoner_report")
     assert report is not None
     assert report["schema_version"] == "qualibug.mainline-reasoner-receipt.v1"
@@ -128,6 +135,10 @@ def test_mainline_reasoner_hypotheses_become_source_bound_obligations(
     assert report["hypotheses_generated"] == 1
     assert report["obligations_added"] == 1
     assert report["bridge_funnel"]["bound"] == 1
+    assert isinstance(report.get("world_model"), dict)
+    assert report["world_model"]["documented_rules"] == len(
+        world.get("documented_rules") or []
+    )
 
     obligation_ids = {
         row.get("obligation_id")
@@ -154,7 +165,7 @@ def test_mainline_reasoner_disabled_flag_skips_collection_visibly(
         _campaign(),
     )
 
-    assert calls == {"collect": 0, "bridge": 0}
+    assert calls == {"collect": 0, "bridge": 0, "world": None}
     report = bundle.obligations.get("mainline_reasoner_report")
     assert report is not None
     assert report["status"] == "NOT_REQUESTED"
@@ -169,7 +180,7 @@ def test_mainline_reasoner_env_kill_switch_skips_collection(
 
     bundle = planning.build_discovery_plan(_inputs(tmp_path), _campaign())
 
-    assert calls == {"collect": 0, "bridge": 0}
+    assert calls == {"collect": 0, "bridge": 0, "world": None}
     report = bundle.obligations.get("mainline_reasoner_report")
     assert report is not None
     assert report["status"] == "NOT_REQUESTED"

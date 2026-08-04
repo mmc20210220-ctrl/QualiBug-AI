@@ -82,6 +82,17 @@ RISK_FAMILY_ALIASES = {
     # input_boundary genuinely IS validation semantics -- this one was already
     # landing correctly, by accident rather than by declaration.
     "input_boundary": "validation",
+    # --- hypothesis-bridge vocabulary (hypothesis_slice_bridge._ORACLE_BY_FAMILY) ---
+    # The 11-engine Reasoner emits family/category/risk_type tokens from its own
+    # vocabulary.  Every token the bridge can return must resolve through this
+    # registry, or the source adapter's by-family maps raise KeyError and the
+    # whole mainline reasoner augmentation dies with ALL engines' hypotheses.
+    # Baseline 2026-08-04 crashed exactly here (KeyError 'audit'): one
+    # unregistered family discarded every hypothesis the Reasoner had produced.
+    "async_task": "concurrency",
+    "workflow": "state",
+    "cache_consistency": "validation",
+    "transaction": "validation",
 }
 
 # Families the COMPILER and EVALUATOR understand -- entry in
@@ -121,6 +132,12 @@ PROMOTION_CANDIDATE_FAMILIES = {
 # Closing one requires all four links from AGENTS.md, observer included.
 CAPABILITY_GAP_FAMILIES = {
     "audit_trail": "validation",
+    # The Reasoner's vocabulary for the same capability gap: the ontology's
+    # family id is audit_trail, the hypothesis bridge carries "audit".  Both
+    # spellings resolve to validation with the gap recorded rather than hidden
+    # (the adapter maps were never extended for audit because no assertion kind
+    # or observer exists -- closing it needs all four links from AGENTS.md).
+    "audit": "validation",
 }
 
 RISK_FAMILY_UNREGISTERED_REASON = "RISK_FAMILY_NOT_REGISTERED"

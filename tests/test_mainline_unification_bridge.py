@@ -424,3 +424,182 @@ def test_hypothesis_drop_reason_distinguishes_missing_operation_and_path():
         "missing_op",
         "missing_path",
     }
+
+
+def test_adapter_drops_unregistered_family_as_gap_not_crash() -> None:
+    """Regression: an unregistered family used to KeyError the whole adapter.
+
+    Baseline 2026-08-04 crashed at obligation_source_adapter._RELATION_TYPES_BY_FAMILY
+    with KeyError 'audit', which aborted the mainline reasoner augmentation and
+    discarded every engine's hypotheses.  An unknown family must fail closed per
+    candidate with a named coverage-gap code, never abort the loop.
+    """
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-unknown-family",
+            "risk_family": "quantum_entanglement",
+            "method": "POST",
+            "path": "/resources",
+            "source_refs": [{"source_id": "SRC-1"}],
+        }],
+        _adapter_ir(),
+    )
+
+    assert result["obligations"] == []
+    assert result["coverage_gaps"][0]["code"] == "BLOCKED_RISK_FAMILY_UNSUPPORTED"
+    assert "quantum_entanglement" in result["coverage_gaps"][0]["detail"]
+
+
+def test_bridge_audit_vocabulary_resolves_through_registry() -> None:
+    """The Reasoner emits 'audit'; the registry owns its resolution.
+
+    'audit' is the hypothesis-bridge spelling of the audit_trail capability gap
+    (no assertion kind or observer exists), so it must resolve to canonical
+    'validation' with the capability-gap reason code recorded -- the adapter
+    then compiles it as a validation obligation instead of crashing.
+    """
+    from ai_test_asset_center.test_obligation import resolve_risk_family
+
+    resolved = resolve_risk_family("audit")
+    assert resolved["canonical"] == "validation"
+    assert resolved["registered"] is True
+
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-audit",
+            "risk_family": "audit",
+            "method": "POST",
+            "path": "/resources",
+            "source_refs": [{"source_id": "SRC-1"}],
+        }],
+        _adapter_ir(),
+    )
+    assert result["obligations"]
+    assert result["obligations"][0]["risk_family"] == "validation"
+
+
+def test_adapter_resolves_role_actor_to_executable_account() -> None:
+    """Regression: Reasoner obligations referenced non-executable role actors.
+
+    Permission-matrix role actors carry synthetic ``secret_ref:actor:*``
+    credentials, so the binding gate blocked all 603 of them at compile time.
+    The adapter must substitute the executable same-role account actor so the
+    obligation runs as a real declared identity.
+    """
+    from ai_test_asset_center.obligation_source_adapter import (
+        _executable_actor_for_role,
+    )
+
+    actors_by_id = {
+        "bir_admin_role": {
+            "id": "bir_admin_role",
+            "role": "admin",
+            "role_key": "admin",
+            "credential_secret_ref": "secret_ref:actor:admin",
+        },
+        "bir_admin_account": {
+            "id": "bir_admin_account",
+            "role": "admin",
+            "role_key": "admin",
+            "credential_secret_ref": "secret_ref:test_accounts:admin@example.com",
+            "account_ref": "admin@example.com",
+            "runtime_bound": True,
+        },
+        "bir_finance_account": {
+            "id": "bir_finance_account",
+            "role": "finance",
+            "role_key": "finance",
+            "credential_secret_ref": "secret_ref:test_accounts:finance01@example.com",
+            "account_ref": "finance01@example.com",
+            "runtime_bound": True,
+        },
+    }
+
+    assert _executable_actor_for_role("bir_admin_role", actors_by_id) == "bir_admin_account"
+    # Already executable actors pass through unchanged.
+    assert _executable_actor_for_role("bir_admin_account", actors_by_id) == "bir_admin_account"
+    # No executable same-role actor: stays unchanged (blocks visibly later).
+    assert _executable_actor_for_role("bir_finance_account", actors_by_id) == "bir_finance_account"
+
+
+def test_adapter_obligation_uses_executable_actors() -> None:
+    """A reasoner obligation pair resolves both refs before make_obligation."""
+    ir = empty_behavior_ir(project_id="adapter-actor-test")
+    ir.update({
+        "operations": [{
+            "id": "op-admin-action",
+            "method": "POST",
+            "path": "/admin/actions",
+            "read_write": "write",
+            "source_refs": [{"source_id": "SRC-API"}],
+        }],
+        "actors": [
+            {
+                "id": "bir_admin_role",
+                "role": "admin",
+                "role_key": "admin",
+                "credential_secret_ref": "secret_ref:actor:admin",
+            },
+            {
+                "id": "bir_admin_account",
+                "role": "admin",
+                "role_key": "admin",
+                "credential_secret_ref": "secret_ref:test_accounts:admin@example.com",
+                "account_ref": "admin@example.com",
+                "runtime_bound": True,
+            },
+            {
+                "id": "bir_finance_role",
+                "role": "finance",
+                "role_key": "finance",
+                "credential_secret_ref": "secret_ref:actor:finance",
+            },
+            {
+                "id": "bir_finance_account",
+                "role": "finance",
+                "role_key": "finance",
+                "credential_secret_ref": "secret_ref:test_accounts:finance01@example.com",
+                "account_ref": "finance01@example.com",
+                "runtime_bound": True,
+            },
+        ],
+        "relations": [
+            {
+                "id": "rel-permits-admin",
+                "relation_type": "permits",
+                "from_ref": "bir_admin_role",
+                "actor_ref": "bir_admin_role",
+                "operation_ref": "op-admin-action",
+                "preconditions": [],
+                "effects": [],
+                "source_refs": [{"source_id": "SRC-PERM"}],
+            },
+            {
+                "id": "rel-denies-finance",
+                "relation_type": "denies",
+                "from_ref": "bir_finance_role",
+                "actor_ref": "bir_finance_role",
+                "operation_ref": "op-admin-action",
+                "preconditions": [],
+                "effects": [],
+                "source_refs": [{"source_id": "SRC-PERM"}],
+            },
+        ],
+    })
+
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-actor",
+            "risk_family": "authorization",
+            "method": "POST",
+            "path": "/admin/actions",
+            "source_refs": [{"source_id": "SRC-1"}],
+        }],
+        ir,
+    )
+
+    assert result["obligations"]
+    obl = result["obligations"][0]
+    assert set(obl["required_actors"]) == {"bir_admin_account", "bir_finance_account"}
+    assert obl["property"]["control_actor_ref"] == "bir_admin_account"
+    assert obl["property"]["treatment_actor_ref"] == "bir_finance_account"

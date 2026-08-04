@@ -1075,7 +1075,13 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     use_graph_context = graph_ready and graph_mode == "active"
     graph_rendered = str((graph_pack or {}).get("rendered_context") or "")[:4500]
 
-    reader_json = json.dumps(reader_output, ensure_ascii=False, default=str)[:3000]
+    # The business-world JSON budget is declared by the operator policy
+    # (prompt_truncation_chars/reader_json, default 20000).  A hardcoded cap
+    # here silently starved the reasoner's world-model prompt slots below the
+    # declared budget; the floor stays 3000 and the policy remains the SSOT.
+    reader_json = json.dumps(reader_output, ensure_ascii=False, default=str)[
+        :_limit("reader_json", 3000)
+    ]
     heuristic_json = "[]"
     observed_json = reader_json
     if prior_findings:

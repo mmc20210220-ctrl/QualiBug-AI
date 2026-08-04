@@ -1343,6 +1343,148 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
     return asset
 
 
+# ── Reasoner world-model projection ──
+# The 11-engine Reasoner grounds hypotheses in a structured "business world"
+# (entities / documented_rules / state_machines / roles / relationships), but
+# the discovery mainline owns a strictly richer, source-derived knowledge
+# asset.  This projection adapts the asset to the Reasoner's reader_output
+# contract without adding any subsystem: every value is read from the asset
+# (visible enterprise materials only), nothing is inferred, and sizes are
+# bounded so the declared prompt budget (prompt_truncation_chars/reader_json)
+# governs instead of a silent code-side cap.
+_SEVERITY_RANK = {"P0": 0, "P1": 1, "P2": 2}
+
+
+def project_knowledge_world_model(
+    asset: dict[str, Any] | None,
+    *,
+    max_rules: int = 40,
+    max_relationships: int = 30,
+    max_roles: int = 24,
+    rule_statement_chars: int = 200,
+) -> dict[str, Any]:
+    """Project the knowledge asset into the Reasoner's ``reader_output`` shape.
+
+    The returned dict follows the Business World reader contract consumed by
+    ``stage_reason_all_v2``: ``entities`` (also drives chunk-evidence search),
+    ``documented_rules``, ``state_machines``, ``roles`` and ``relationships``.
+    The world model is the comprehension bridge between the deterministic
+    knowledge asset and LLM reasoning; when it is empty the Reasoner only sees
+    truncated raw PRD/API text and every prompt slot degrades to ``{}``.
+    """
+    asset = asset or {}
+
+    entities: list[dict[str, Any]] = []
+    for row in asset.get("business_objects") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("object") or row.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            confidence = float(row.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        source = str(row.get("source") or "").strip()
+        entities.append({
+            "name": name,
+            "aliases": [],
+            "description": source[:120],
+            "key_identifiers": [],
+            "key_business_fields": [],
+            "is_core": confidence >= 0.6,
+            "source": source[:120],
+        })
+
+    seen_statements: set[str] = set()
+    rules: list[dict[str, Any]] = []
+    for row in sorted(
+        (asset.get("rule_library") or []),
+        key=lambda r: (_SEVERITY_RANK.get(str((r or {}).get("severity") or ""), 9),),
+    ):
+        if not isinstance(row, dict):
+            continue
+        statement = str(row.get("statement") or "").strip()
+        if not statement or statement in seen_statements:
+            continue
+        if len(rules) >= max_rules:
+            break
+        seen_statements.add(statement)
+        locator = str(row.get("source_locator") or "").strip()
+        source = str(row.get("source_id") or "")
+        rules.append({
+            "rule": statement[:rule_statement_chars],
+            "source": f"{source}@{locator}" if locator else source,
+            "entities_involved": [str(t) for t in (row.get("tokens") or [])[:8]],
+            "is_verifiable": True,
+            "severity": str(row.get("severity") or ""),
+        })
+
+    state_machines: list[dict[str, Any]] = []
+    for row in asset.get("state_machines") or []:
+        if not isinstance(row, dict):
+            continue
+        state_machines.append({
+            "entity": str(row.get("object") or row.get("entity") or "").strip(),
+            "states": [str(s) for s in (row.get("states") or [])[:40]],
+            "transitions": [
+                {
+                    "from": str(t.get("from") or ""),
+                    "to": str(t.get("to") or ""),
+                    "trigger": str(t.get("trigger") or ""),
+                }
+                for t in (row.get("transitions") or [])[:60]
+                if isinstance(t, dict)
+            ],
+            "terminal_states": [str(s) for s in (row.get("terminal_states") or [])[:20]],
+            "exception_paths": [str(p) for p in (row.get("exception_paths") or [])[:20]],
+            "source": str(row.get("source_id") or ""),
+        })
+
+    seen_roles: set[str] = set()
+    roles: list[dict[str, Any]] = []
+    for row in asset.get("roles") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("role") or row.get("name") or "").strip()
+        if not name or name in seen_roles:
+            continue
+        if len(roles) >= max_roles:
+            break
+        seen_roles.add(name)
+        roles.append({"name": name, "permissions": [], "source": str(row.get("source_id") or "")})
+
+    relationships: list[dict[str, Any]] = []
+    for row in asset.get("entity_relations") or []:
+        if not isinstance(row, dict):
+            continue
+        from_entity = str(row.get("from_entity") or "").strip()
+        to_entity = str(row.get("to_entity") or "").strip()
+        relation = str(row.get("relation_type") or "").strip()
+        if not (from_entity and to_entity and relation):
+            continue
+        if len(relationships) >= max_relationships:
+            break
+        relationships.append({
+            "from_entity": from_entity,
+            "to_entity": to_entity,
+            "relationship_type": relation,
+            "source": str(row.get("source_id") or row.get("source") or ""),
+        })
+        if len(relationships) >= max_relationships:
+            break
+
+    return {
+        "documented_rules": rules,
+        "state_machines": state_machines,
+        "entities": entities,
+        "roles": roles,
+        "relationships": relationships,
+        "gaps": {},
+        "insufficient_evidence": not (rules or entities or state_machines),
+    }
+
+
 def load_enterprise_business_knowledge_asset(project_id: str = "real_project_demo", root: Path | None = None) -> dict[str, Any] | None:
     root = root or ROOT
     project = _safe_project_id(project_id)

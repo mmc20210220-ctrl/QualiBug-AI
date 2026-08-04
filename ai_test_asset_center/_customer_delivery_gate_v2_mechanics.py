@@ -145,7 +145,20 @@ def _finding_payload(finding: dict[str, Any]) -> dict[str, Any]:
 def finding_payload_fingerprint(finding: dict[str, Any]) -> str:
     if not isinstance(finding, dict) or not finding:
         raise DeliveryGateV2Error("finding_payload_missing")
-    return _fingerprint(_finding_payload(finding))
+    # The fingerprint must be computed on the exact form the evaluator
+    # receives: every persistence boundary runs the artifact redactor, which
+    # deterministically rewrites sensitive values (a response body field named
+    # ``token``, a bearer header in raw evidence, ...).  Fingerprinting the
+    # LIVE payload at gate-build time while re-derivation validated the
+    # REDACTED copy made any finding carrying a redactable value fail with
+    # finding_payload_fingerprint_mismatch at artifact write.  Redaction is
+    # deterministic and idempotent, so redact-then-hash agrees on both sides
+    # and still binds the gate to the exact content the customer sees.
+    from .artifact_redactor import redact_artifact
+
+    redacted, _redaction_receipt = redact_artifact(finding)
+    stable = redacted if isinstance(redacted, dict) else finding
+    return _fingerprint(_finding_payload(stable))
 
 
 def _receipt_ref(receipt: dict[str, Any], *, id_field: str = "receipt_id") -> dict[str, str]:

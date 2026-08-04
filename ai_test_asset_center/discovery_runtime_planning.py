@@ -118,6 +118,7 @@ def build_discovery_plan(
         build_enterprise_business_knowledge_asset,
         build_runtime_source_knowledge_overlay,
         merge_knowledge_asset_overlay,
+        project_knowledge_world_model,
     )
 
     asset = build_enterprise_business_knowledge_asset(
@@ -511,10 +512,25 @@ def build_discovery_plan(
                 inputs.campaign_context.get("_source_verification_text")
             ) or inputs.api_spec_text
             _reasoner_start = time.perf_counter()
+            # Comprehension bridge: project the source-derived knowledge asset
+            # into the Reasoner's business-world contract.  Without this the
+            # 11 engines see only truncated raw PRD/API text and every
+            # business_world prompt slot degrades to ``{}``, which is the
+            # measured first-loss stage (hypothesis generation) for the large
+            # majority of missed defects.
+            _reasoner_world = project_knowledge_world_model(asset)
             _reasoner_hypotheses, _reasoner_meta = collect_reasoner_hypotheses(
                 inputs.prd_text,
                 _reasoner_api_text,
+                reader_output=_reasoner_world,
             )
+            _reasoner_world_model_report = {
+                "entities": len(_reasoner_world.get("entities") or []),
+                "documented_rules": len(_reasoner_world.get("documented_rules") or []),
+                "state_machines": len(_reasoner_world.get("state_machines") or []),
+                "roles": len(_reasoner_world.get("roles") or []),
+                "relationships": len(_reasoner_world.get("relationships") or []),
+            }
             mainline_reasoner_report = {
                 "schema_version": "qualibug.mainline-reasoner-receipt.v1",
                 "status": _text(_reasoner_meta.get("status")) or "empty",
@@ -538,6 +554,7 @@ def build_discovery_plan(
                     time.perf_counter() - _reasoner_start, 3
                 ),
                 "obligations_added": 0,
+                "world_model": _reasoner_world_model_report,
                 "bridge_funnel": {},
             }
             if _reasoner_hypotheses:
