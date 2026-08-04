@@ -369,6 +369,14 @@ if _semantic_flag not in {"0", "1", "false", "true", "off", "on"}:
     raise SystemExit(
         "QUALIBUG_AGENT_SEMANTIC_LINKING_ENABLED must be boolean"
     )
+_discovery_flag = os.environ.get(
+    "QUALIBUG_RUNTIME_INTERFACE_DISCOVERY_ENABLED",
+    "0",
+).strip().lower()
+if _discovery_flag not in {"0", "1", "false", "true", "off", "on"}:
+    raise SystemExit(
+        "QUALIBUG_RUNTIME_INTERFACE_DISCOVERY_ENABLED must be boolean"
+    )
 context = {
     "target_id": _benchmark_target_id,
     "scope_id": _benchmark_target_id,
@@ -377,6 +385,7 @@ context = {
     "environment_kind": "test",
     "evaluation_mode": _evaluation_mode,
     "agent_semantic_linking_enabled": _semantic_flag in {"1", "true", "on"},
+    "runtime_interface_discovery_enabled": _discovery_flag in {"1", "true", "on"},
     "source_manifest": {
         "source_id": "benchmark_mall/API_SPEC.md",
         "source_hash": source_hash,
