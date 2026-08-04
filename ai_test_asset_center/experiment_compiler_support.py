@@ -371,6 +371,153 @@ def _source_declared_control_fixture_binding(
     return {}
 
 
+def _actor_owns_operation(
+    *,
+    behavior_ir: dict[str, Any],
+    actor_ref: str,
+    operation_ref: str,
+) -> bool:
+    """Source-declared caller-scope proof: an accepted ``owns`` relation must
+    tie THIS actor to THIS operation. Relations owned only by other actors
+    never qualify — that would cross-contaminate the arm boundary."""
+    if not actor_ref or not operation_ref:
+        return False
+    for relation in _list(_dict(behavior_ir).get("relations")):
+        if not isinstance(relation, dict):
+            continue
+        if _text(relation.get("status")) in {"conflicting", "unsupported"}:
+            continue
+        if _text(relation.get("relation_type")) != "owns":
+            continue
+        if actor_ref not in {
+            _text(relation.get("from_ref")),
+            _text(relation.get("actor_ref")),
+        }:
+            continue
+        if operation_ref in {
+            _text(relation.get("to_ref")),
+            _text(relation.get("operation_ref")),
+        }:
+            return True
+    return False
+
+
+def _entity_declares_identity_field(
+    entities: list[Any],
+    entity_refs: set[str],
+    field_keys: set[str],
+) -> bool:
+    """An observed entity must declare the ownership field in its source
+    fields, otherwise reading that field would be an assumption, not
+    evidence. Field entries may be plain names or dicts with a ``name``."""
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        if (
+            _text(entity.get("id")) not in entity_refs
+            and _text(entity.get("name")) not in entity_refs
+        ):
+            continue
+        for field in _list(entity.get("fields")):
+            name = _text(field.get("name") if isinstance(field, dict) else field)
+            if name and _field_key(name) in field_keys:
+                return True
+    return False
+
+
+def _owned_entity_identity_resolver(
+    *,
+    control_actor_ref: str,
+    identity_target: str,
+    ownership_param: str,
+    behavior_ir: dict[str, Any],
+    actors: Any,
+    preferred_operation_ref: str = "",
+) -> dict[str, Any]:
+    """Resolve an arm actor's owner identity from a caller-scoped owned read.
+
+    Fallback when the Behavior IR declares no ``*/me`` operation: the
+    isolation protocol needs the resource owner's identity, and a collection
+    GET that the source ties to the control actor via an ``owns`` relation —
+    whose observed entity declares the ownership field — returns rows owned
+    by the caller, so the ownership field on those rows IS the caller's own
+    identity as observed evidence (never inferred).
+
+    Every validation dimension is fail-closed; any gap returns {} and the
+    caller keeps the visible owner_identity_resolver_missing block:
+    1. the control actor must be present in the actor registry;
+    2. the resolver must be a source-declared GET/HEAD collection operation
+       (no path placeholders);
+    3. a source-declared ``owns`` relation must tie THIS control actor to
+       THIS operation (another actor's owned read is cross-contamination);
+    4. an entity observed/scoped by the operation must declare the
+       ownership/identity field in its source fields.
+    """
+    if not control_actor_ref or control_actor_ref not in actors:
+        return {}
+    field_keys = {
+        key
+        for key in (_field_key(ownership_param), _field_key(identity_target))
+        if key
+    }
+    if not field_keys:
+        return {}
+    ir = _dict(behavior_ir)
+    entities = _list(ir.get("entities"))
+    candidates: list[dict[str, Any]] = []
+    for op in _list(ir.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        method = _text(op.get("method")).upper()
+        if method not in {"GET", "HEAD"}:
+            continue
+        op_id = _text(op.get("id"))
+        if not op_id:
+            continue
+        path = normalize_path_placeholders(
+            _text(op.get("path") or op.get("raw_path"))
+        ).rstrip("/")
+        if not path.startswith("/") or "{" in path or ":" in path:
+            continue
+        if not _list(op.get("source_refs")):
+            continue
+        if not _actor_owns_operation(
+            behavior_ir=ir,
+            actor_ref=control_actor_ref,
+            operation_ref=op_id,
+        ):
+            continue
+        read_entities = _operation_entity_refs(
+            behavior_ir=ir,
+            operation_ref=op_id,
+            relation_types={"observes", "scopes"},
+        )
+        if not read_entities:
+            continue
+        if not _entity_declares_identity_field(entities, read_entities, field_keys):
+            continue
+        candidates.append({
+            "operation_ref": op_id,
+            "method": method,
+            "path": path,
+            "declaring_actor_ref": control_actor_ref,
+            "binding_semantics": "caller_scoped",
+            "identity_extraction": "owner_field_consensus",
+        })
+    if not candidates:
+        return {}
+    # Deterministic choice: the obligation's own operation first (a
+    # collection-read isolation probe reads exactly the owned collection
+    # under test), then stable id order.
+    candidates.sort(
+        key=lambda row: (
+            row["operation_ref"] != _text(preferred_operation_ref),
+            row["operation_ref"],
+        )
+    )
+    return candidates[0]
+
+
 def _post_action_can_restore_named_terminal_field(operation: dict[str, Any]) -> bool:
     if _text(operation.get("method")).upper() != "POST":
         return False

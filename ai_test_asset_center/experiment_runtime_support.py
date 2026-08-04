@@ -1013,6 +1013,56 @@ def _select_runtime_binding(
     return default
 
 
+def consensus_identity_value(body: Any, target: str) -> tuple[str, str]:
+    """Resolve an owner identity only when every observed entity row agrees.
+
+    A caller-scoped owned-entity read is trustworthy as an identity source
+    only when all observed rows carry the same owner-field value: the read
+    executes with the owner's own credentials, so agreement means the single
+    observed value is the caller's own identity. Disagreement means the
+    collection mixes owners (leak or shared scope) and any picked value
+    could be another actor's identity — cross-contamination — so the caller
+    must fail closed instead of binding.
+
+    Returns ``(value, status)`` with status in ``{"consensus", "absent",
+    "conflicted"}``. Rows lacking the field entirely abstain rather than
+    conflict; only concrete disagreeing values contaminate.
+    """
+    from .real_id_resolver import param_field_candidates
+
+    rows = _runtime_entity_candidates(body)
+    # Only the target's own declared field names — the generic identity
+    # fallbacks in param_field_candidates (id/sku/code/...) name the ENTITY's
+    # identity, not the OWNER's, and binding them would pollute the arm
+    # identity with an unrelated resource id.
+    target_key = re.sub(r"[^a-z0-9]+", "", str(target or "").lower())
+    field_names = [
+        name
+        for name in param_field_candidates(target)
+        if re.sub(r"[^a-z0-9]+", "", name.lower()) == target_key
+    ]
+    if not field_names:
+        return "", "absent"
+    observed: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for field_name in field_names:
+            value = row.get(field_name)
+            if (
+                value not in (None, "", [], {})
+                and not isinstance(value, (dict, list))
+            ):
+                observed.append(str(value))
+                break
+    distinct = list(dict.fromkeys(observed))
+    if not distinct:
+        return "", "absent"
+    if len(distinct) > 1:
+        return "", "conflicted"
+    return distinct[0], "consensus"
+
+
 def _run_http_step(
     *,
     base_url: str,

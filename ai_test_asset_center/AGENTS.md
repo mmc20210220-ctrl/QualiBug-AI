@@ -256,8 +256,21 @@ commercial rules stay in the root Discovery Harness Evolution Contract):
   `treatment_actor_ref`), because a `/me` endpoint returns the callers own
   identity and arm isolation is enforced at runtime by executing each arm
   with its own credentials. An explicit `actor_ref` on the operation still
-  wins. Missing `/me` operation in IR, or no declared arm actor present in
-  the actor registry, remains visibly `BLOCKED_MISSING_BINDING`
+  wins. When the IR declares no `/me` operation, the compiler falls back to
+  a caller-scoped owned-entity read (`_owned_entity_identity_resolver` in
+  `experiment_compiler_support.py`): a source-declared `owns` relation must
+  tie the control actor to a collection `GET`/`HEAD` whose observed entity
+  declares the ownership field, and the resulting binding
+  (`source_priority=owner_identity_owned_entity_read`,
+  `identity_extraction=owner_field_consensus`) pins
+  `fixture_owner_actor_ref` to the control actor so the runtime resolves
+  with the owner's own credentials. At runtime
+  (`consensus_identity_value` in `experiment_runtime_support.py`) the
+  identity binds only when every observed row agrees on the owner field;
+  disagreement fails closed with `owner_identity_conflict` and never falls
+  through to fixture creation. When neither `/me` nor a qualifying owned
+  read exists — or no declared arm actor is present in the actor registry —
+  the experiment remains visibly `BLOCKED_MISSING_BINDING`
   (`owner_identity_resolver_missing`); no identity is ever inferred.
 - `deep_experiment_planner` and `deep_experiment_protocol_adapter` are
   diagnostic-only research surfaces. They are not imported or invoked by

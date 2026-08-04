@@ -22,6 +22,7 @@ from .experiment_runtime_support import (
     _select_fixture_actor,
     _select_runtime_binding,
     _text,
+    consensus_identity_value,
 )
 from .real_id_resolver import (
     bind_entity_fields,
@@ -598,6 +599,7 @@ def materialize_experiment_fixtures(
                     break
             value: Any = None
             fixture_setup_accepted = False
+            _identity_conflict = False
             receipt: dict[str, Any] = {
                 "target": target,
                 "status": "BLOCKED",
@@ -644,12 +646,30 @@ def materialize_experiment_fixtures(
                         break
                     if not (200 <= _sc < 300):
                         continue
-                    extracted = _select_runtime_binding(
-                        obs.get("body"),
-                        target_path,
-                        preferred_body=preferred_binding_body,
-                    )
-                    value = extracted.get(target)
+                    if (
+                        _text(binding.get("identity_extraction"))
+                        == "owner_field_consensus"
+                    ):
+                        # Owner-identity bindings resolve only on owner-field
+                        # consensus across every observed row. Disagreement
+                        # means the collection mixes owners; picking any row
+                        # would arm the treatment step with another actor's
+                        # identity (cross-contamination), so fail closed and
+                        # skip both further resolvers and fixture fallback.
+                        _identity_value, _identity_status = consensus_identity_value(
+                            obs.get("body"), target,
+                        )
+                        if _identity_status == "conflicted":
+                            _identity_conflict = True
+                            break
+                        value = _identity_value or None
+                    else:
+                        extracted = _select_runtime_binding(
+                            obs.get("body"),
+                            target_path,
+                            preferred_body=preferred_binding_body,
+                        )
+                        value = extracted.get(target)
                     if value in (None, "", [], {}):
                         continue
                     _effective_resolver_actor = _fb_actor
@@ -676,6 +696,56 @@ def materialize_experiment_fixtures(
                     break
                 if value not in (None, "", [], {}):
                     break
+            if value in (None, "", [], {}) and _identity_conflict:
+                # Owner-field disagreement across observed rows: the owned
+                # collection read mixes owners, so no observed value can be
+                # trusted as the arm identity. Fail closed with a distinct,
+                # observable reason; never fall through to fixture creation
+                # (a created fixture would mask the contamination signal) and
+                # never let the experiment proceed without the identity.
+                _conflict_detail = f"owner_identity_conflict:{target}"
+                receipt.update({
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": _conflict_detail,
+                })
+                binding_materialization_receipts.append(receipt)
+                fixture_receipts.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": _conflict_detail,
+                    "resolver_path": _text(receipt.get("resolver_path")),
+                    "resolver_operation_ref": _text(
+                        receipt.get("resolver_operation_ref")
+                    ),
+                    "resolver_status_code": int(receipt.get("status_code") or 0),
+                })
+                return {
+                    "status": "terminal",
+                    "result": {
+                        "schema_version": "qualibug.experiment-execution.v1",
+                        "experiment_id": eid,
+                        "obligation_id": oid,
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_MISSING_BINDING",
+                        "detail": _conflict_detail,
+                        "elapsed_ms": int((time.time() - started) * 1000),
+                        "steps": steps_out,
+                        "fixture_receipts": fixture_receipts,
+                        "binding_materialization_receipts": (
+                            binding_materialization_receipts
+                        ),
+                        "finding": None,
+                        "cleanup_failures": cleanup_failures,
+                        "execution_receipt": {
+                            "status": "BLOCKED",
+                            "reason_code": "BLOCKED_MISSING_BINDING",
+                            "cleanup_failures": cleanup_failures,
+                        },
+                    },
+                }
             if value in (None, "", [], {}):
                 # Try auto-fixture: discover a POST create at the same collection.                # Uses the documented request_example from Behavior IR as body_template
                 # — industry-neutral, no hardcoding, works across all systems.

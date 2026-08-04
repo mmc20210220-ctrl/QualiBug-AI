@@ -74,6 +74,7 @@ from .experiment_compiler_support import (
     _inverse_delta_cleanup_spec,
     _is_unresolvable_actor_secret_ref,
     _operation_entity_refs,
+    _owned_entity_identity_resolver,
     _resolve_state_compile_context,
     _source_declared_control_fixture_binding,
     _source_request_example,
@@ -1212,11 +1213,47 @@ def compile_experiment_for_obligation(
                     },
                 })
             elif me_op_count == 0:
-                return blocked_experiment(
-                    oid,
-                    "BLOCKED_MISSING_BINDING",
-                    f"owner_identity_resolver_missing:{identity_target}",
+                # V1.9b: No /me in IR — fall back to a caller-scoped owned-
+                # entity read. The isolation protocol needs the OWNER's
+                # identity; a collection GET tied to the control actor by a
+                # source-declared owns relation, observing an entity that
+                # declares the ownership field, returns rows owned by the
+                # caller, so the ownership field IS the caller's identity as
+                # observed evidence. The binding pins fixture_owner_actor_ref
+                # to the control actor so the runtime resolves with the
+                # owner's own credentials, and marks owner_field_consensus so
+                # the runtime fails closed when observed rows disagree about
+                # the owner (cross-contamination guard). No owned read ->
+                # the visible block below is preserved unchanged.
+                _owned_resolver = _owned_entity_identity_resolver(
+                    control_actor_ref=control_actor_ref,
+                    identity_target=identity_target,
+                    ownership_param=_text(prop.get("ownership_param")),
+                    behavior_ir=ir,
+                    actors=actors,
+                    preferred_operation_ref=primary_op_id,
                 )
+                if _owned_resolver:
+                    binding_plan.append({
+                        "target": identity_target,
+                        "target_path": "/{" + identity_target + "}",
+                        "status": "runtime_resolvable",
+                        "source_priority": "owner_identity_owned_entity_read",
+                        "resolver_operations": [_owned_resolver],
+                        "fixture_owner_actor_ref": control_actor_ref,
+                        "identity_extraction": "owner_field_consensus",
+                        "value_fingerprint": "",
+                        "arm_isolated_resolvers": {
+                            "control": [_owned_resolver],
+                            "treatment": [],
+                        },
+                    })
+                else:
+                    return blocked_experiment(
+                        oid,
+                        "BLOCKED_MISSING_BINDING",
+                        f"owner_identity_resolver_missing:{identity_target}",
+                    )
             else:
                 # /me exists in IR but no obligation-declared arm actor is
                 # present in the actor registry - fail closed with a distinct
