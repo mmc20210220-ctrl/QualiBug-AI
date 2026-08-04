@@ -190,6 +190,7 @@ by replacing host methods:
 | Canonical product defect identity | `canonical_defect_registry.py` |
 | Evaluator contract implementation | `discovery_evaluation_contract.py` |
 | Artifact persistence / redaction | `artifact_redactor.py` |
+| Scan-envelope account ownership (workspace reconciliation) | `db_persistence.py` (`ensure_workspace_owned_project`) + `private_pilot_scan_handlers.py` (`_handle_v12_scan`) |
 | Completion & funnel SSOT | `qualibug.obligation-attempt-ledger.v1` (sealed by the discovery mainline) |
 | Discovery funnel closure | `discovery_funnel.py` |
 
@@ -210,6 +211,14 @@ product package import or product runtime patches.
 - Project campaign contracts are exposed only under `/api/v1`. Evaluation
   submissions must be Ground-Truth-free, pass `artifact_redactor.py`, and
   stay `NOT_MEASURED` until an external evaluator receipt is verified.
+- Workspace reconciliation: workspace-provisioned projects (directory
+  provisioning, no account-registry row) are registered idempotently by the
+  governed scan path only when the request principal is
+  `local_development` (loopback-bound). Credential-authenticated principals
+  are never auto-provisioned — they must register through the account API.
+  Created tenant rows carry discarded random credentials (identity rows
+  only); a foreign username conflict fails closed instead of binding the
+  workspace to the wrong account.
 - Python-module retirement uses the non-destructive strangler inventory in
   `architecture_inventory.py`, with roots and responsibility overrides in
   `architecture_roots.json`. Architecture counts are diagnostic only and

@@ -483,6 +483,66 @@ def create_project(
     return {"ok": True, "project_id": project, "tenant_id": tenant}
 
 
+def ensure_workspace_owned_project(
+    root: Path,
+    tenant_id: str,
+    project_id: str,
+) -> dict[str, bool]:
+    """Idempotently register a workspace-provisioned project under its tenant.
+
+    Workspace-provisioned projects (benchmark/local targets) are created by
+    directory provisioning and never touch the account registry, so the
+    tenant-scoped persistence layer would otherwise reject their scan
+    envelopes. The governed scan path calls this ONLY for
+    loopback-local-development principals (see
+    private_pilot_scan_handlers._handle_v12_scan); credential-authenticated
+    principals must register through the account API and are never
+    auto-provisioned here. Credentials on a created tenant row are random and
+    their plaintext is discarded immediately — the row exists only to satisfy
+    identity and ownership invariants.
+    """
+    tenant = safe_project_id(tenant_id)
+    project = safe_project_id(project_id)
+    init_db(root)
+    with _conn(root) as db:
+        tenant_exists = (
+            db.execute("SELECT 1 FROM tenants WHERE id = ?", (tenant,)).fetchone()
+            is not None
+        )
+        if not tenant_exists:
+            secret = secrets.token_hex(24)
+            key = secrets.token_hex(24)
+            db.execute(
+                "INSERT INTO tenants "
+                "(id, name, api_key_hash, username, password_hash, role, session_version) "
+                "VALUES (?, ?, ?, ?, ?, 'admin', 1)",
+                (
+                    tenant,
+                    f"{tenant} workspace (local development)",
+                    hashlib.sha256(key.encode()).hexdigest(),
+                    f"{tenant}_dev",
+                    hashlib.sha256(secret.encode()).hexdigest(),
+                ),
+            )
+        project_exists = (
+            db.execute(
+                "SELECT 1 FROM projects WHERE tenant_id = ? AND id = ?",
+                (tenant, project),
+            ).fetchone()
+            is not None
+        )
+        if not project_exists:
+            db.execute(
+                "INSERT INTO projects (id, tenant_id, name, base_url) "
+                "VALUES (?, ?, ?, ?)",
+                (project, tenant, project, ""),
+            )
+    return {
+        "tenant_created": not tenant_exists,
+        "project_created": not project_exists,
+    }
+
+
 def list_projects(root: Path, tenant_id: str) -> list[dict[str, Any]]:
     init_db(root)
     with _conn(root) as db:

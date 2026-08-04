@@ -458,6 +458,13 @@ class ScanHandlersMixin:
         if not self._require_role(actor, _SCAN_ROLES, "scan execution"):
             return None
         tenant_id = self._request_tenant()
+        principal = self._principal()
+        if principal.get("auth_type") == "local_development":
+            # Workspace-provisioned projects never touch the account registry;
+            # register the tenant/project rows so scan persistence can own the
+            # envelope. Loopback binding is enforced in _principal for this
+            # auth type; credential-authenticated principals never auto-provision.
+            db_persist.ensure_workspace_owned_project(root, tenant_id, project)
         try:
             with project_scan_lease(
                 root,
