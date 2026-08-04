@@ -1146,10 +1146,17 @@ def compile_experiment_for_obligation(
             # per actor to avoid cross-arm contamination (control token reading
             # treatment resource and vice versa).
             control_actor_ref = _text(prop.get("control_actor_ref") or prop.get("owner_actor_ref"))
-            treatment_actor_ref = _text(prop.get("treatment_actor_ref"))
-            
-            # Collect all /me operations indexed by declaring actor
+            treatment_actor_ref = _text(
+                prop.get("treatment_actor_ref")
+                or prop.get("viewer_actor_ref")
+                or prop.get("actor_ref")
+            )
+            arm_actor_refs = [
+                a for a in (control_actor_ref, treatment_actor_ref)
+                if a and a in actors
+            ]
             me_operations_by_actor: dict[str, list[dict]] = {}
+            me_op_count = 0
             for op in _list(ir.get("operations")):
                 if not isinstance(op, dict):
                     continue
@@ -1163,26 +1170,27 @@ def compile_experiment_for_obligation(
                 op_id = _text(op.get("id"))
                 if not op_id:
                     continue
-                # Find which actor declares this operation
+                me_op_count += 1
+                me_path = normalize_path_placeholders(
+                    _text(op.get("path") or op.get("raw_path"))
+                )
+                # Caller-scoped /me binding: an explicit actor declaration on
+                # the operation wins; otherwise the /me op serves every arm
+                # actor declared by the obligation (each arm executes with its
+                # own credentials and reads its own identity).
                 op_actor = _text(op.get("actor_ref"))
-                if not op_actor:
-                    # Fallback: try to infer from required_actors
-                    for actor_ref in [control_actor_ref, treatment_actor_ref]:
-                        if actor_ref and actor_ref in actors:
-                            actor_op_refs = [_text(a.get("operation_ref")) for a in _list(actors[actor_ref].get("operations")) if isinstance(a, dict)]
-                            if op_id in actor_op_refs:
-                                op_actor = actor_ref
-                                break
-                if not op_actor:
-                    continue
-                me_operations_by_actor.setdefault(op_actor, []).append({
-                    "operation_ref": op_id,
-                    "method": "GET",
-                    "path": normalize_path_placeholders(
-                        _text(op.get("path") or op.get("raw_path"))
-                    ),
-                    "declaring_actor_ref": op_actor,
-                })
+                declared = (
+                    [op_actor] if op_actor and op_actor in actors
+                    else list(arm_actor_refs)
+                )
+                for actor_ref in declared:
+                    me_operations_by_actor.setdefault(actor_ref, []).append({
+                        "operation_ref": op_id,
+                        "method": "GET",
+                        "path": me_path,
+                        "declaring_actor_ref": actor_ref,
+                        "binding_semantics": "caller_scoped",
+                    })
             
             # Build arm-specific resolver lists
             arm_resolvers: list[dict] = []
@@ -1203,11 +1211,20 @@ def compile_experiment_for_obligation(
                         "treatment": me_operations_by_actor.get(treatment_actor_ref, []),
                     },
                 })
-            else:
+            elif me_op_count == 0:
                 return blocked_experiment(
                     oid,
                     "BLOCKED_MISSING_BINDING",
                     f"owner_identity_resolver_missing:{identity_target}",
+                )
+            else:
+                # /me exists in IR but no obligation-declared arm actor is
+                # present in the actor registry - fail closed with a distinct
+                # reason so the gap stays observable.
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_BINDING",
+                    f"owner_identity_resolver_missing:{identity_target}:no_declared_arm_actor",
                 )
     if family == "state":
         state_token = _state_match_token(prop.get("from_state"))

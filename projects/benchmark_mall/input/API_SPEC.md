@@ -74,6 +74,10 @@ Authorization: Bearer <token>
 
 修改数量或选中状态。
 
+### DELETE /api/cart/items/:id
+
+删除购物车条目。
+
 ## Coupon
 
 ### POST /api/coupons/validate
@@ -155,3 +159,41 @@ Authorization: Bearer <token>
 ### GET /api/reports/inventory-risk
 
 库存风险报表。
+
+## User
+
+### GET /api/users/addresses
+
+查询用户地址（应校验归属）。
+
+可选查询参数：
+
+- `userId` — 目标用户 ID；调用方只能查询自己的地址，跨用户查询应返回 403/404。
+
+### POST /api/users/addresses
+
+创建用户地址。
+
+请求：
+
+```json
+{"receiver":"张三","phone":"13800000000","province":"上海","city":"上海","detail":"浦东新区"}
+```
+
+### DELETE /api/users/addresses/:id
+
+删除用户地址（身份绑定清理；创建后必须可逆）。
+
+### GET /api/users/admin/search
+
+管理员搜索用户（应仅限管理员）。
+
+### PATCH /api/users/admin/users/:id/balance
+
+管理员调整用户余额（应仅限管理员）。
+
+请求：
+
+```json
+{"delta":100,"reason":"补偿"}
+```

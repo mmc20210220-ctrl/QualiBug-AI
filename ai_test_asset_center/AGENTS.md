@@ -249,6 +249,16 @@ commercial rules stay in the root Discovery Harness Evolution Contract):
   envelope — no new budget expansion. Runtime binding probes are
   contract-gated and remain `PROBES_SKIPPED_CONTRACT_NOT_APPROVED` until
   the runtime contract is explicitly approved.
+- Isolation-family identity binding uses caller-scoped `/me` semantics in
+  `experiment_compiler_obligation_core.py`: a `GET`/`HEAD` `*/me` operation
+  in Behavior IR is bound to every arm actor explicitly declared by the
+  obligation (`owner_actor_ref`/`viewer_actor_ref`/`control_actor_ref`/
+  `treatment_actor_ref`), because a `/me` endpoint returns the callers own
+  identity and arm isolation is enforced at runtime by executing each arm
+  with its own credentials. An explicit `actor_ref` on the operation still
+  wins. Missing `/me` operation in IR, or no declared arm actor present in
+  the actor registry, remains visibly `BLOCKED_MISSING_BINDING`
+  (`owner_identity_resolver_missing`); no identity is ever inferred.
 - `deep_experiment_planner` and `deep_experiment_protocol_adapter` are
   diagnostic-only research surfaces. They are not imported or invoked by
   `discovery_runtime_planning`; a heuristic deep plan must never replace a

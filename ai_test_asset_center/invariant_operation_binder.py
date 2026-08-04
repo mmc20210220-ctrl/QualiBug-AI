@@ -192,11 +192,31 @@ def operation_actions(
         lowered = segment.lower()
         if lowered in _PATH_NOISE:
             continue
+        # Step 1: try the segment exactly as it appears in the path. A
+        # tail like ``cancel`` or ``ship`` matches an action here.
         if lowered in canonical_actions:
             actions.add(lowered)
         for written, canonical in verb_lexicon.items():
             if written.lower() == lowered:
                 actions.update(canonical)
+        if actions:
+            break
+        # Step 2: try the singularised form. ``/api/orders`` and
+        # ``/api/refunds`` only carry their action after singularising;
+        # without this fallback they fall through to the method default
+        # ``create`` and bind the wrong obligation (every payment rule
+        # to a refund endpoint, every cancellation rule to an order
+        # create, etc.). The singulariser is the same one used for
+        # entity tokens, so the contract stays single-sourced -- the
+        # risk of over-binding is bounded by canonical_actions and the
+        # verb lexicon, both already required for a binding.
+        singular = _normalise_entity(lowered)
+        if singular and singular != lowered:
+            if singular in canonical_actions:
+                actions.add(singular)
+            for written, canonical in verb_lexicon.items():
+                if written.lower() == singular:
+                    actions.update(canonical)
         if actions:
             break
 
