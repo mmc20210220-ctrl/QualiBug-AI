@@ -181,3 +181,37 @@ def test_a_non_validation_family_is_untouched() -> None:
                                 {"id": "bir_admin", "role": "admin"}]},
     )
     assert "validation_treatment_identical_to_control" not in str(result.get("detail") or "")
+
+
+# ── executor-realizability: path/header-only mutations block at compile ──────
+
+def test_path_only_mutation_blocks_at_compile_time() -> None:
+    """The step executor renders only query/body as a wire difference; it treats
+    step["path"] as a route template and never reads step["header"]. A mutation
+    confined to the path therefore yields two byte-identical wire requests, so
+    the compiler must block it honestly rather than emit a vacuous probe."""
+    result = _compile({
+        "validation_constraint": "required",
+        "field": "sku",
+        "field_tokens": ["@path", "sku"],
+    })
+    assert result.get("status") == "BLOCKED", (
+        "a path-only mutation the executor cannot render on the wire must "
+        f"block at compile time, got: {result}"
+    )
+    assert "identical_to_control" in str(result.get("detail"))
+
+
+def test_header_only_mutation_blocks_at_compile_time() -> None:
+    """No executor dispatch path consumes a header plan dict today, so a
+    header-only mutation cannot be realized on the wire and must block."""
+    result = _compile({
+        "validation_constraint": "required",
+        "field": "X-Api-Version",
+        "field_tokens": ["@header", "X-Api-Version"],
+    })
+    assert result.get("status") == "BLOCKED", (
+        "a header-only mutation the executor cannot render on the wire must "
+        f"block at compile time, got: {result}"
+    )
+    assert "identical_to_control" in str(result.get("detail"))

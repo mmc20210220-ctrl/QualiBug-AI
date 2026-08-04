@@ -553,7 +553,20 @@ def compile_family_protocol(
         # Blocking here is the same discipline the compiler already applies to a
         # synthesized observer: a probe that cannot distinguish its two arms must not
         # run, because its only possible output is a fabricated finding.
-        _comparable = ("path", "query", "header", "body")
+        #
+        # The comparable set must match what the step executor can faithfully render
+        # as a *wire* difference, not merely a plan-dict difference. The executor only
+        # realizes "query" (merged into the request line) and "body" (the payload). It
+        # never consumes a "header" plan dict, and it treats "path" as a string route
+        # template rather than a mutated param dict -- so a path- or header-only
+        # mutation produces two byte-identical wire requests and a vacuous runtime
+        # contrast. Counting those locations here let such plans run and emit a
+        # misleading down-weighted "finding". Restrict the contrast check to the
+        # locations the executor renders; a mutation confined to path/header is blocked
+        # here, honestly, at compile time. Realizing path/header mutations on the wire
+        # (executor path-param substitution + governed-write header threading) is a
+        # deliberate, separately-scoped enhancement.
+        _comparable = ("query", "body")
         if all(
             control_plan[0].get(field) == treatment_plan[0].get(field)
             for field in _comparable
