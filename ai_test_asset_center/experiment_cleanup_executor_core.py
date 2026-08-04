@@ -2330,6 +2330,72 @@ def execute_experiment_cleanup_compensation(
     # missing receipt followed by the real one.
     for pending in reversed(pending_fixture_cleanups):
         cleanup = _dict(pending.get("cleanup"))
+        _pending_residue = _dict(pending.get("accepted_residue"))
+        if _pending_residue:
+            # ── Accepted-residue fixture (non-production degradation) ──
+            # The fixture create deliberately has no compensator: the target
+            # is a declared non-production environment and the run leaves the
+            # created resource behind. Do not fire a DELETE at an empty path;
+            # emit a residue receipt so the leftover stays visible, and keep
+            # coverage accounting balanced exactly like a completed cleanup.
+            fixture_subject = f"fixture_cleanup:{_text(pending.get('target'))}"
+            _dict(pending.get("receipt"))["fixture_cleanup_status"] = (
+                "residue_accepted"
+            )
+            contract_evidence_receipts[:] = [
+                receipt
+                for receipt in contract_evidence_receipts
+                if not (
+                    _text(receipt.get("kind")) == "cleanup"
+                    and _text(receipt.get("subject_id")) == fixture_subject
+                )
+            ]
+            _residue_audit_ids = sorted({
+                receipt_id
+                for receipt_id in (
+                    _governance_audit_receipt_id(_dict(pending.get("governed_setup"))),
+                )
+                if receipt_id
+            })
+            _residue_covers_write = not bool(
+                pending.get("compensates_cleanup_write")
+            )
+            contract_evidence_receipts.append(build_contract_evidence_receipt(
+                kind="cleanup",
+                experiment_id=eid,
+                obligation_id=oid,
+                campaign_id=resolved_campaign_id,
+                execution_id=resolved_execution_id,
+                subject_id=fixture_subject,
+                status="RESIDUE_ACCEPTED",
+                evidence={
+                    "accepted_write_count": 1 if _residue_covers_write else 0,
+                    "cleanup_required_write_count": (
+                        1 if _residue_covers_write else 0
+                    ),
+                    "cleanup_write_count": 0,
+                    "state_unchanged": False,
+                    "restoration_verified": False,
+                    "audit_receipt_ids": _residue_audit_ids,
+                    "reason_code": "ACCEPTED_RESIDUE_NO_CLEANUP",
+                    "cleanup_mode": "accepted_residue_no_cleanup",
+                    "residue": True,
+                    "residue_notice": _text(
+                        _pending_residue.get("residue_notice")
+                    ),
+                },
+            ))
+            steps_out.append({
+                "phase": "fixture_cleanup",
+                "cleanup_subject_id": fixture_subject,
+                "method": "",
+                "path": "",
+                "status_code": 0,
+                "operation_ref": "",
+                "cleanup_mode": "accepted_residue_no_cleanup",
+                "residue_notice": _text(_pending_residue.get("residue_notice")),
+            })
+            continue
         cleanup_bindings = dict(runtime_bindings)
         cleanup_placeholders = infer_path_params(_text(cleanup.get("path")))
         if len(cleanup_placeholders) == 1:
@@ -2430,7 +2496,19 @@ def execute_experiment_cleanup_compensation(
             "governance_receipt": governed_cleanup,
         })
     if pending_fixture_cleanups:
-        observations["cleanup_status"] = "failed" if cleanup_failures else "completed"
+        if cleanup_failures:
+            observations["cleanup_status"] = "failed"
+        elif all(
+            isinstance(pending, dict) and _dict(pending.get("accepted_residue"))
+            for pending in pending_fixture_cleanups
+        ):
+            # Every fixture write was deliberately left as accepted residue —
+            # surface the same degradation vocabulary as the compiled-plan
+            # residue path so the delivery gate short-circuits to DELIVERABLE.
+            observations["cleanup_status"] = "residue_accepted"
+            observations["cleanup_residue"] = True
+        else:
+            observations["cleanup_status"] = "completed"
 
     recorded_cleanup_subjects = {
         _text(receipt.get("subject_id"))

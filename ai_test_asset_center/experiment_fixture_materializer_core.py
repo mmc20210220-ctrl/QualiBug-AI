@@ -186,6 +186,7 @@ def _source_backed_dependency_fixture_setup(
     actors: dict[str, dict[str, Any]],
     behavior_ir: dict[str, Any] | None,
     binding_plan: dict[str, Any],
+    accepted_residue_allowed: bool = False,
 ) -> dict[str, Any]:
     """Build a validated disposable-create setup for one create-body FK.
 
@@ -227,6 +228,7 @@ def _source_backed_dependency_fixture_setup(
             binding_plan,
             actors=actors,
             behavior_ir=behavior_ir,
+            accepted_residue_allowed=accepted_residue_allowed,
         )
         if auto_create:
             binding = {**binding, **auto_create}
@@ -245,6 +247,7 @@ def _auto_fixture_create_for_binding_target(
     binding_plan: dict[str, Any],
     actors: dict[str, dict[str, Any]] | None = None,
     behavior_ir: dict[str, Any] | None = None,
+    accepted_residue_allowed: bool = False,
 ) -> dict[str, Any] | None:
     """Find a POST create operation at the same collection as the binding target path.
 
@@ -300,7 +303,10 @@ def _auto_fixture_create_for_binding_target(
                 op_collection,
                 behavior_ir=source_ir,
             )
-            if not selected_cleanup:
+            if not selected_cleanup and not accepted_residue_allowed:
+                # Without a source-declared compensator the fixture create is
+                # refused unless the environment gate above explicitly allows
+                # accepted residue (declared non-production targets only).
                 continue
             owner = _text(binding.get("fixture_owner_actor_ref"))
             actor_refs = [owner] if owner else []
@@ -321,14 +327,24 @@ def _auto_fixture_create_for_binding_target(
                 ]
             if not actor_refs:
                 continue
+            fixture_setup: dict[str, Any] = {
+                "operation_ref": op_id,
+                "method": "POST",
+                "path": op_path,
+                "cleanup_operations": selected_cleanup,
+                "actor_refs": actor_refs,
+            }
+            if not selected_cleanup:
+                # Accepted residue: the run leaves the created resource behind
+                # on a declared non-production target. The cleanup phase emits
+                # a RESIDUE_ACCEPTED receipt so the leftover stays visible —
+                # never disguised as a real cleanup.
+                fixture_setup["accepted_residue"] = {
+                    "mode": "accepted_residue_no_cleanup",
+                    "residue_notice": f"no_source_compensator:{op_id}",
+                }
             return {
-                "fixture_setup": {
-                    "operation_ref": op_id,
-                    "method": "POST",
-                    "path": op_path,
-                    "cleanup_operations": selected_cleanup,
-                    "actor_refs": actor_refs,
-                },
+                "fixture_setup": fixture_setup,
                 "force_fixture_setup": True,
                 "create_operation_ref": op_id,
                 "create_path": op_path,
@@ -373,6 +389,14 @@ def materialize_experiment_fixtures(
     pending_fixture_cleanups: list[dict[str, Any]] = []
     cleanup_failures = 0
     contract_evidence_receipts: list[dict[str, Any]] = []
+    # Accepted-residue fixture construction is admitted only for targets the
+    # compiler already gated as declared non-production (the env is baked into
+    # the compiled experiment; undeclared/unknown stays fail-closed here too).
+    from .target_policy import is_nonproduction_environment
+
+    _accepted_residue_allowed = is_nonproduction_environment(
+        _text(exp.get("environment_type"))
+    )
 
     # Fixture DAG: actor contexts are resolved via tokens; disposable fixtures
     # without a concrete create path remain BLOCKED (already caught in preflight
@@ -560,6 +584,7 @@ def materialize_experiment_fixtures(
                     binding_plan,
                     actors=actors,
                     behavior_ir=behavior_ir,
+                    accepted_residue_allowed=_accepted_residue_allowed,
                 )
                 if auto_create:
                     binding = {**binding, **auto_create}
@@ -774,6 +799,7 @@ def materialize_experiment_fixtures(
                     binding_plan,
                     actors=actors,
                     behavior_ir=behavior_ir,
+                    accepted_residue_allowed=_accepted_residue_allowed,
                 )
                 if auto_create:
                     binding = {**binding, **auto_create}
@@ -971,6 +997,7 @@ def materialize_experiment_fixtures(
                             actors=actors,
                             behavior_ir=behavior_ir,
                             binding_plan=binding_plan,
+                            accepted_residue_allowed=_accepted_residue_allowed,
                         )
                         dep_actor_ref, dep_actor, dep_token = _select_fixture_actor(
                             dep_setup,
@@ -1046,7 +1073,7 @@ def materialize_experiment_fixtures(
                                     if _dep_cleanup_ops
                                     else {}
                                 )
-                                pending_fixture_cleanups.append({
+                                _dep_pending_entry: dict[str, Any] = {
                                     "target": dependency_leaf,
                                     "value": dependency_value,
                                     "observation_path": dep_observation
@@ -1065,7 +1092,13 @@ def materialize_experiment_fixtures(
                                     ),
                                     "actor_token": dep_token,
                                     "governed_setup": dep_governed,
-                                })
+                                }
+                                _dep_residue = _dict(dep_setup.get("accepted_residue"))
+                                if _dep_residue:
+                                    _dep_pending_entry["accepted_residue"] = dict(
+                                        _dep_residue
+                                    )
+                                pending_fixture_cleanups.append(_dep_pending_entry)
                             else:
                                 _fs_diag["blocked_reason"] = (
                                     f"dependency_fixture_create_failed:{dependency_leaf}"
@@ -1198,7 +1231,7 @@ def materialize_experiment_fixtures(
                             })
                             _cleanup_ops = _list(fixture_setup.get("cleanup_operations"))
                             _first_cleanup = _cleanup_ops[0] if len(_cleanup_ops) > 0 else {}
-                            pending_fixture_cleanups.append({
+                            _pending_entry: dict[str, Any] = {
                                 "target": target,
                                 "value": value,
                                 "observation_path": observation_path,
@@ -1208,7 +1241,17 @@ def materialize_experiment_fixtures(
                                 "actor_identity": _text(fixture_actor.get("role") or fixture_actor_ref),
                                 "actor_token": fixture_token,
                                 "governed_setup": governed_setup,
-                            })
+                            }
+                            _setup_residue = _dict(fixture_setup.get("accepted_residue"))
+                            if _setup_residue:
+                                # The fixture create intentionally has no
+                                # compensator (accepted residue, non-production
+                                # only): the cleanup phase must emit a
+                                # RESIDUE_ACCEPTED receipt, not a DELETE.
+                                _pending_entry["accepted_residue"] = dict(
+                                    _setup_residue
+                                )
+                            pending_fixture_cleanups.append(_pending_entry)
             binding_materialization_receipts.append(receipt)
             if value in (None, "", [], {}):
                 if fixture_setup_accepted:

@@ -814,7 +814,35 @@ def validated_fixture_setup(
                 )
             cleanup_operations.append(cleanup_row)
     if not cleanup_operations:
-        return {}
+        # A fixture create without a source-declared compensator is refused
+        # unless the caller explicitly marked the setup as accepted residue —
+        # a decision only the environment-gated layers above may make for a
+        # declared non-production target. The residue marker is preserved so
+        # the cleanup phase emits a RESIDUE_ACCEPTED receipt instead of a
+        # DELETE; the leftover resource stays visible, never disguised.
+        residue = _dict(setup.get("accepted_residue"))
+        if _text(residue.get("mode")) != "accepted_residue_no_cleanup":
+            return {}
+        actor_refs = [
+            _text(actor_ref)
+            for actor_ref in _list(setup.get("actor_refs"))
+            if _text(actor_ref) in actors
+        ]
+        if not actor_refs:
+            return {}
+        return {
+            "operation_ref": operation_ref,
+            "method": method,
+            "path": path,
+            "actor_refs": list(dict.fromkeys(actor_refs)),
+            "body_template": dict(setup["body_template"]),
+            "body_bindings": body_bindings,
+            "cleanup_operations": [],
+            "accepted_residue": {
+                "mode": "accepted_residue_no_cleanup",
+                "residue_notice": _text(residue.get("residue_notice")),
+            },
+        }
     actor_refs = [
         _text(actor_ref)
         for actor_ref in _list(setup.get("actor_refs"))

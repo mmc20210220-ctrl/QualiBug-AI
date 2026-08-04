@@ -92,6 +92,20 @@ by replacing host methods:
   (trigger / decision / failure / recovery / result) carry the stable
   campaign / slice / obligation / experiment identity so one cleanup failure
   can be reconstructed from logs alone.
+- Accepted-residue degradation (declared non-production targets only): a
+  write without a source-declared compensator is no longer held hostage by
+  cleanup guarantees. The compiler emits `accepted_residue` cleanup-plan
+  entries; the disposable-fixture construction path mirrors the same
+  ladder — `_auto_fixture_create_for_binding_target` attaches an
+  `accepted_residue` marker only when the experiment's baked
+  `environment_type` passes `is_nonproduction_environment`,
+  `validated_fixture_setup` preserves the marker instead of refusing the
+  setup, and the fixture-cleanup phase emits a `RESIDUE_ACCEPTED` contract
+  receipt (a registered `_CONTRACT_EVIDENCE_STATUSES` value) with zero
+  cleanup writes and a visible `residue_notice`. The delivery gate
+  short-circuits all-residue cleanup contracts to `DELIVERABLE`. Residue
+  is always declared and observable — never disguised as a real cleanup —
+  and production/undeclared environments stay fail-closed at every layer.
 
 ## Connector Event & Credential Boundaries
 

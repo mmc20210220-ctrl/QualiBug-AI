@@ -58,6 +58,11 @@ _CONTRACT_EVIDENCE_STATUSES = frozenset({
     "FAILED",
     "NOT_REQUIRED",
     "OBSERVED",
+    # Accepted-residue degradation (declared non-production targets): the
+    # write was deliberately left uncleaned and the leftover is surfaced,
+    # never reported as COMPLETED (no cleanup ran) nor FAILED (the finding
+    # is still valid). The delivery gate short-circuits on this status.
+    "RESIDUE_ACCEPTED",
 })
 
 
