@@ -204,6 +204,13 @@ install_formal_performance_attribution_guard()
 # were structurally unreachable even when a source stability contract existed.
 # Idempotent registration only; activation still requires the source contract.
 install_formal_stability_surface()
+# Read-only state-audit protocol: consumes the state_audit_planner's
+# audit_mode=read_only obligations (template readonly_audit_validation) which
+# previously had no protocol consumer and blocked as
+# validation_body_protocol_requires_write_operation.
+from .readonly_audit_protocol import install_readonly_audit_protocol
+
+install_readonly_audit_protocol()
 install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
 install_source_ui_family_vector_compat()

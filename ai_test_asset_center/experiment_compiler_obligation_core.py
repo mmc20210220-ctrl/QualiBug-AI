@@ -2381,8 +2381,13 @@ def compile_experiment_for_obligation(
             "require_nonzero_effect": True,
             "_secondary_assertion": True,
         })
-    # For validation: add strict rejection assertion
-    if family == "validation":
+    # For validation: add strict rejection assertion. Read-only audit
+    # obligations (readonly_audit_*) execute a GET and judge the response
+    # content — a 4xx-expecting rejection assertion there would assert the
+    # audit READ itself must be refused, which is meaningless and would turn
+    # every successful read into a defect.
+    _is_readonly_audit = _text(prop.get("template")).startswith("readonly_audit")
+    if family == "validation" and not _is_readonly_audit:
         assertions.append({
             "assertion_id": "assert_validation_strict_reject",
             "kind": "http_status_class",

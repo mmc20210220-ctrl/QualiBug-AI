@@ -139,10 +139,15 @@ def _classify_invariant_family(invariant: dict[str, Any]) -> str:
 def _find_get_endpoint_for_entity(
     entity: str,
     operations: list[dict[str, Any]],
+    *,
+    prefer_list: bool = False,
 ) -> dict[str, Any] | None:
     """Find a GET endpoint that reads the given entity type.
 
-    Prefers detail endpoints (GET /entity/{id}) over list endpoints.
+    Prefers detail endpoints (GET /entity/{id}) over list endpoints, except
+    when ``prefer_list`` is set: a uniqueness audit needs a collection read —
+    a single-entity detail response can never exhibit duplicates, so binding
+    it would only produce vacuous INDETERMINATE audits.
     """
     entity_lower = entity.lower()
     # Also match plural forms
@@ -185,7 +190,14 @@ def _find_get_endpoint_for_entity(
         else:
             list_candidates.append(op)
 
-    # Prefer detail endpoints (more specific state check)
+    # Prefer detail endpoints (more specific state check) unless the audit
+    # expression needs a collection (uniqueness).
+    if prefer_list:
+        if list_candidates:
+            return list_candidates[0]
+        if detail_candidates:
+            return detail_candidates[0]
+        return None
     if detail_candidates:
         return detail_candidates[0]
     if list_candidates:
@@ -279,20 +291,29 @@ def build_readonly_state_audit_obligations(
         if not entity:
             continue
 
+        # Classify the invariant family
+        family = _classify_invariant_family(inv)
+
+        # Build the audit obligation
+        expr = _dict(inv.get("expression"))
+
+        # A uniqueness statement is only evidence-able against a collection:
+        # bind the list endpoint when one exists, not the detail endpoint.
+        _is_uniqueness = (
+            _text(expr.get("kind")).lower() == "validation_uniqueness"
+            or _text(expr.get("operator")).lower() == "unique"
+        )
+
         # Find GET endpoint for this entity
-        get_op = _find_get_endpoint_for_entity(entity, operations)
+        get_op = _find_get_endpoint_for_entity(
+            entity, operations, prefer_list=_is_uniqueness
+        )
         if not get_op:
             continue
 
         get_op_id = _text(get_op.get("id"))
         if not get_op_id or get_op_id not in operations_by_id:
             continue
-
-        # Classify the invariant family
-        family = _classify_invariant_family(inv)
-
-        # Build the audit obligation
-        expr = _dict(inv.get("expression"))
 
         # A GET can observe a current state, but it cannot establish or exercise
         # a state transition.  Mapping an unbound forbidden/allowed transition
