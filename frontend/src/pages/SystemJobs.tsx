@@ -7,27 +7,9 @@ import {
   type ConnectorRecord,
 } from '../api/client';
 import { usePageTitle } from '../lib/page-title';
+import { asArray, asNum, asRecord, asText } from '../lib/value-guards';
 
 type JsonRecord = Record<string, unknown>;
-
-function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function asNum(value: unknown): number {
-  const result = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(result) ? result : 0;
-}
 
 function statusLabel(value: string): string {
   if (value === 'EXECUTION_READY') return '可安全执行';

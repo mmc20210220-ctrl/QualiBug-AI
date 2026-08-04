@@ -5,6 +5,7 @@ import {
   submitAuthorityDecision,
   type AuthorityDecisionRecord,
 } from '../../api/authority-decisions';
+import { asArray, asNum, asRecord, asText } from '../../lib/value-guards';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -65,27 +66,8 @@ type UnderstandingView = {
   gates: Array<{ label: string; status: string; ready: boolean }>;
 };
 
-function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
 function asBoolean(value: unknown): boolean {
   return value === true;
-}
-
-function asNumber(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function firstText(...values: unknown[]): string {
@@ -379,15 +361,15 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     statusLabel: statusLabel(status, understandingReady, ready, available),
     modelId,
     sourceTraceabilityRate,
-    businessObjectCount: asNumber(summary.understood_business_object_count) || asArray(model.business_objects).length,
-    actorCount: asNumber(summary.understood_actor_count) || asArray(model.actors).length,
-    operationCount: asNumber(summary.understood_operation_count) || asArray(model.operations).length,
-    lifecycleCount: asNumber(summary.understood_lifecycle_count) || asArray(model.lifecycles).length,
-    processCount: asNumber(summary.understood_process_count) || asArray(model.processes).length,
-    scenarioCount: asNumber(summary.scenario_ir_count) || asArray(asset.scenario_ir).length,
-    runtimePlanCount: asNumber(summary.runtime_plan_count) || asArray(asset.runtime_plans).length,
-    runtimeMaterializationCount: asNumber(summary.runtime_materialization_count) || asArray(asset.runtime_materializations).length,
-    unknownCount: asNumber(summary.enterprise_understanding_unknown_count) || asArray(model.unknowns).length,
+    businessObjectCount: asNum(summary.understood_business_object_count) || asArray(model.business_objects).length,
+    actorCount: asNum(summary.understood_actor_count) || asArray(model.actors).length,
+    operationCount: asNum(summary.understood_operation_count) || asArray(model.operations).length,
+    lifecycleCount: asNum(summary.understood_lifecycle_count) || asArray(model.lifecycles).length,
+    processCount: asNum(summary.understood_process_count) || asArray(model.processes).length,
+    scenarioCount: asNum(summary.scenario_ir_count) || asArray(asset.scenario_ir).length,
+    runtimePlanCount: asNum(summary.runtime_plan_count) || asArray(asset.runtime_plans).length,
+    runtimeMaterializationCount: asNum(summary.runtime_materialization_count) || asArray(asset.runtime_materializations).length,
+    unknownCount: asNum(summary.enterprise_understanding_unknown_count) || asArray(model.unknowns).length,
     // Prefer the authority-aware unresolved list that this receipt actually
     // renders. Summary.enterprise_understanding_conflict_count can lag or count
     // historical RESOLVED rows; never let that inflate "未解决资料冲突".

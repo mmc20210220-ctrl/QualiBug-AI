@@ -1,4 +1,5 @@
 import { currentToken, getSession } from './client';
+import { asArray, asOptionalNumber, asRecord, asString } from '../lib/value-guards';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -501,15 +502,7 @@ export type ConnectFeishuKnowledgeResult = {
   sync: KnowledgeConnectorActionResult;
 };
 
-const asRecord = (value: unknown): JsonRecord => (
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonRecord
-    : {}
-);
-const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
-const asString = (value: unknown): string => typeof value === 'string' ? value : '';
 const asBoolean = (value: unknown): boolean => value === true;
-const asNumber = (value: unknown): number | undefined => typeof value === 'number' ? value : undefined;
 
 function toPermissionScope(value: unknown): ConnectorPermissionScope | undefined {
   const row = asRecord(value);
@@ -638,7 +631,7 @@ function toAutoSync(value: unknown): KnowledgeConnectorAutoSync {
     last_attempt_at_utc: asString(row.last_attempt_at_utc) || undefined,
     last_success_at_utc: asString(row.last_success_at_utc) || undefined,
     next_attempt_at_utc: asString(row.next_attempt_at_utc) || undefined,
-    failure_count: asNumber(row.failure_count) || 0,
+    failure_count: asOptionalNumber(row.failure_count) || 0,
     attention: asString(row.attention) || undefined,
     last_oauth_refresh: row.last_oauth_refresh
       ? {
@@ -655,7 +648,7 @@ function toAutoSync(value: unknown): KnowledgeConnectorAutoSync {
         remote_deletion_inferred: false,
       }
       : undefined,
-    refresh_interval_seconds: asNumber(row.refresh_interval_seconds),
+    refresh_interval_seconds: asOptionalNumber(row.refresh_interval_seconds),
     maintenance_required_by_user: asBoolean(row.maintenance_required_by_user),
     checkpoint_recovery_is_automatic: asBoolean(row.checkpoint_recovery_is_automatic),
     stale_writer_fencing_is_automatic: asBoolean(row.stale_writer_fencing_is_automatic),
@@ -672,7 +665,7 @@ function toUnsupportedResource(value: unknown): KnowledgeConnectorUnsupportedRes
   );
   return {
     remote_resource_id: asString(row.remote_resource_id) || undefined,
-    resource_index: asNumber(row.resource_index),
+    resource_index: asOptionalNumber(row.resource_index),
     resource_kind: asString(row.resource_kind) || undefined,
     remote_object_type: asString(row.remote_object_type) || undefined,
     display_title: asString(row.display_title) || undefined,
@@ -707,15 +700,15 @@ function toRemoteLifecycle(value: unknown): KnowledgeConnectorRemoteLifecycle {
   return {
     status: asString(row.status) || 'NOT_AVAILABLE',
     authoritative_snapshot_complete: asBoolean(row.authoritative_snapshot_complete),
-    present_count: asNumber(row.present_count) || 0,
-    absent_count: asNumber(row.absent_count) || 0,
-    unconfirmed_missing_count: asNumber(row.unconfirmed_missing_count) || 0,
-    retirement_eligible_count: asNumber(row.retirement_eligible_count) || 0,
-    retired_count: asNumber(row.retired_count) || 0,
-    renamed_resource_count: asNumber(row.renamed_resource_count) || 0,
-    moved_resource_count: asNumber(row.moved_resource_count) || 0,
-    reappeared_resource_count: asNumber(row.reappeared_resource_count) || 0,
-    retire_after_complete_snapshots: asNumber(row.retire_after_complete_snapshots) || 0,
+    present_count: asOptionalNumber(row.present_count) || 0,
+    absent_count: asOptionalNumber(row.absent_count) || 0,
+    unconfirmed_missing_count: asOptionalNumber(row.unconfirmed_missing_count) || 0,
+    retirement_eligible_count: asOptionalNumber(row.retirement_eligible_count) || 0,
+    retired_count: asOptionalNumber(row.retired_count) || 0,
+    renamed_resource_count: asOptionalNumber(row.renamed_resource_count) || 0,
+    moved_resource_count: asOptionalNumber(row.moved_resource_count) || 0,
+    reappeared_resource_count: asOptionalNumber(row.reappeared_resource_count) || 0,
+    retire_after_complete_snapshots: asOptionalNumber(row.retire_after_complete_snapshots) || 0,
     requested_deletion_policy: asString(row.requested_deletion_policy) || undefined,
     effective_deletion_policy: asString(row.effective_deletion_policy) || undefined,
     absence_interpretation: asString(row.absence_interpretation) || undefined,
@@ -740,10 +733,10 @@ function toCoverage(value: unknown): KnowledgeConnectorCoverage {
   return {
     status: asString(row.status) || 'NOT_AVAILABLE',
     complete: asBoolean(row.complete),
-    discovered_count: asNumber(row.discovered_count) || 0,
-    covered_count: asNumber(row.covered_count) || 0,
-    unsupported_count: asNumber(row.unsupported_count) || 0,
-    coverage_ratio: asNumber(row.coverage_ratio) || 0,
+    discovered_count: asOptionalNumber(row.discovered_count) || 0,
+    covered_count: asOptionalNumber(row.covered_count) || 0,
+    unsupported_count: asOptionalNumber(row.unsupported_count) || 0,
+    coverage_ratio: asOptionalNumber(row.coverage_ratio) || 0,
     unsupported_resources: asArray(row.unsupported_resources)
       .map(toUnsupportedResource)
       .filter((item) => Boolean(
@@ -785,26 +778,26 @@ function toConnectorHealth(value: unknown): KnowledgeConnectorHealth {
     freshness: {
       status: asString(freshness.status) || 'UNKNOWN',
       last_successful_sync_at_utc: asString(freshness.last_successful_sync_at_utc) || undefined,
-      age_seconds: asNumber(freshness.age_seconds),
-      refresh_interval_seconds: asNumber(freshness.refresh_interval_seconds),
-      stale_after_seconds: asNumber(freshness.stale_after_seconds),
+      age_seconds: asOptionalNumber(freshness.age_seconds),
+      refresh_interval_seconds: asOptionalNumber(freshness.refresh_interval_seconds),
+      stale_after_seconds: asOptionalNumber(freshness.stale_after_seconds),
     },
     webhook: row.webhook ? toWebhook(row.webhook) : undefined,
     oauth: row.oauth ? toOauth(row.oauth) : undefined,
     metrics: {
       last_attempt_at_utc: asString(metrics.last_attempt_at_utc) || undefined,
-      discovered_resource_count: asNumber(metrics.discovered_resource_count) || 0,
-      covered_resource_count: asNumber(metrics.covered_resource_count) || 0,
-      unsupported_resource_count: asNumber(metrics.unsupported_resource_count) || 0,
-      coverage_ratio: asNumber(metrics.coverage_ratio),
-      failure_count: asNumber(metrics.failure_count) || 0,
-      retry_count: asNumber(metrics.retry_count) || 0,
-      materialized_resource_count: asNumber(metrics.materialized_resource_count) || 0,
-      unchanged_resource_count: asNumber(metrics.unchanged_resource_count) || 0,
-      unchanged_reuse_ratio: asNumber(metrics.unchanged_reuse_ratio),
+      discovered_resource_count: asOptionalNumber(metrics.discovered_resource_count) || 0,
+      covered_resource_count: asOptionalNumber(metrics.covered_resource_count) || 0,
+      unsupported_resource_count: asOptionalNumber(metrics.unsupported_resource_count) || 0,
+      coverage_ratio: asOptionalNumber(metrics.coverage_ratio),
+      failure_count: asOptionalNumber(metrics.failure_count) || 0,
+      retry_count: asOptionalNumber(metrics.retry_count) || 0,
+      materialized_resource_count: asOptionalNumber(metrics.materialized_resource_count) || 0,
+      unchanged_resource_count: asOptionalNumber(metrics.unchanged_resource_count) || 0,
+      unchanged_reuse_ratio: asOptionalNumber(metrics.unchanged_reuse_ratio),
       semantic_refresh_status: asString(metrics.semantic_refresh_status) || 'NOT_RECORDED',
-      semantic_event_count: asNumber(metrics.semantic_event_count) || 0,
-      semantic_changed_source_count: asNumber(metrics.semantic_changed_source_count) || 0,
+      semantic_event_count: asOptionalNumber(metrics.semantic_event_count) || 0,
+      semantic_changed_source_count: asOptionalNumber(metrics.semantic_changed_source_count) || 0,
       acl_propagation_status: asString(metrics.acl_propagation_status) || 'NOT_RECORDED',
     },
     evidence: {
@@ -837,7 +830,7 @@ function toWebhook(value: unknown): KnowledgeConnectorWebhook {
     policy: row.policy ? asRecord(row.policy) : undefined,
     state: state
       ? {
-        last_sequence: asNumber(state.last_sequence),
+        last_sequence: asOptionalNumber(state.last_sequence),
         last_event_timestamp_utc: asString(state.last_event_timestamp_utc) || undefined,
         calibration_required: asBoolean(state.calibration_required),
         last_success_event: state.last_success_event ? asRecord(state.last_success_event) : null,
@@ -883,7 +876,7 @@ function toOauth(value: unknown): KnowledgeConnectorOAuth {
       : null,
     last_authorized_at_utc: asString(row.last_authorized_at_utc) || undefined,
     last_failure: row.last_failure ? asRecord(row.last_failure) : null,
-    pending_transaction_count: asNumber(row.pending_transaction_count),
+    pending_transaction_count: asOptionalNumber(row.pending_transaction_count),
     source_identity_preserved: asBoolean(row.source_identity_preserved),
     checkpoint_preserved: asBoolean(row.checkpoint_preserved),
     remote_deletion_inferred: false,
@@ -906,15 +899,15 @@ function toSemanticRefresh(value: unknown): KnowledgeConnectorSemanticRefresh {
   return {
     status: asString(row.status) || 'NOT_RECORDED',
     sync_epoch_id: asString(row.sync_epoch_id) || undefined,
-    event_count: asNumber(row.event_count) || 0,
-    changed_source_count: asNumber(row.changed_source_count) || 0,
-    unchanged_source_count: asNumber(row.unchanged_source_count) || 0,
-    affected_content_blocks: asNumber(row.affected_content_blocks) || 0,
-    affected_facts: asNumber(row.affected_facts) || 0,
-    affected_entities: asNumber(row.affected_entities) || 0,
-    affected_behaviors: asNumber(row.affected_behaviors) || 0,
-    affected_scenarios: asNumber(row.affected_scenarios) || 0,
-    affected_regression_items: asNumber(row.affected_regression_items) || 0,
+    event_count: asOptionalNumber(row.event_count) || 0,
+    changed_source_count: asOptionalNumber(row.changed_source_count) || 0,
+    unchanged_source_count: asOptionalNumber(row.unchanged_source_count) || 0,
+    affected_content_blocks: asOptionalNumber(row.affected_content_blocks) || 0,
+    affected_facts: asOptionalNumber(row.affected_facts) || 0,
+    affected_entities: asOptionalNumber(row.affected_entities) || 0,
+    affected_behaviors: asOptionalNumber(row.affected_behaviors) || 0,
+    affected_scenarios: asOptionalNumber(row.affected_scenarios) || 0,
+    affected_regression_items: asOptionalNumber(row.affected_regression_items) || 0,
     downstream: asArray(row.downstream).map((stage) => {
       const item = asRecord(stage);
       return {
@@ -937,11 +930,11 @@ function toSyncImpact(value: unknown): KnowledgeConnectorSyncImpact {
     status: asString(row.status) || 'NOT_RECORDED',
     completed_at_utc: asString(row.completed_at_utc) || undefined,
     acl_propagation_status: asString(row.acl_propagation_status) || 'NOT_RECORDED',
-    acl_snapshot_count: asNumber(row.acl_snapshot_count) || 0,
-    acl_incomplete_count: asNumber(row.acl_incomplete_count) || 0,
+    acl_snapshot_count: asOptionalNumber(row.acl_snapshot_count) || 0,
+    acl_incomplete_count: asOptionalNumber(row.acl_incomplete_count) || 0,
     semantic_refresh_status: asString(row.semantic_refresh_status) || 'NOT_RECORDED',
-    semantic_event_count: asNumber(row.semantic_event_count) || 0,
-    semantic_changed_source_count: asNumber(row.semantic_changed_source_count) || 0,
+    semantic_event_count: asOptionalNumber(row.semantic_event_count) || 0,
+    semantic_changed_source_count: asOptionalNumber(row.semantic_changed_source_count) || 0,
     semantic_refresh: row.semantic_refresh ? toSemanticRefresh(row.semantic_refresh) : undefined,
     source_content_returned: false,
     remote_resource_identities_returned: false,
@@ -1042,7 +1035,7 @@ function toManifest(value: unknown): ConnectorManifest {
       ? {
         input_type: asString(asRecord(row.quick_connect_schema).input_type) || undefined,
         scope_field: asString(asRecord(row.quick_connect_schema).scope_field) || undefined,
-        priority: asNumber(asRecord(row.quick_connect_schema).priority),
+        priority: asOptionalNumber(asRecord(row.quick_connect_schema).priority),
       }
       : undefined,
     entrypoint_evidence: row.entrypoint_evidence
@@ -1097,18 +1090,18 @@ export async function listKnowledgeConnectors(projectId: string): Promise<Knowle
     project_id: asString(data.project_id) || projectId,
     connectors: asArray(data.connectors).map(toConnector).filter((item) => Boolean(item.connector_instance_id)),
     summary: {
-      connector_instance_count: asNumber(summary.connector_instance_count),
-      active_count: asNumber(summary.active_count),
-      running_count: asNumber(summary.running_count),
-      profile_count: asNumber(summary.profile_count),
-      credentials_configured_count: asNumber(summary.credentials_configured_count),
+      connector_instance_count: asOptionalNumber(summary.connector_instance_count),
+      active_count: asOptionalNumber(summary.active_count),
+      running_count: asOptionalNumber(summary.running_count),
+      profile_count: asOptionalNumber(summary.profile_count),
+      credentials_configured_count: asOptionalNumber(summary.credentials_configured_count),
       automatic_refresh_enabled: asBoolean(summary.automatic_refresh_enabled),
-      partial_coverage_connector_count: asNumber(summary.partial_coverage_connector_count),
-      unsupported_resource_count: asNumber(summary.unsupported_resource_count),
-      health_attention_connector_count: asNumber(summary.health_attention_connector_count),
-      remote_absent_resource_count: asNumber(summary.remote_absent_resource_count),
-      remote_unconfirmed_missing_resource_count: asNumber(summary.remote_unconfirmed_missing_resource_count),
-      remote_retired_resource_count: asNumber(summary.remote_retired_resource_count),
+      partial_coverage_connector_count: asOptionalNumber(summary.partial_coverage_connector_count),
+      unsupported_resource_count: asOptionalNumber(summary.unsupported_resource_count),
+      health_attention_connector_count: asOptionalNumber(summary.health_attention_connector_count),
+      remote_absent_resource_count: asOptionalNumber(summary.remote_absent_resource_count),
+      remote_unconfirmed_missing_resource_count: asOptionalNumber(summary.remote_unconfirmed_missing_resource_count),
+      remote_retired_resource_count: asOptionalNumber(summary.remote_retired_resource_count),
     },
     governance: asRecord(data.governance),
   };
@@ -1178,14 +1171,14 @@ export async function preflightConnectorSource(
         match_status: asString(row.match_status) || 'AVAILABLE',
         reason_code: asString(row.reason_code),
         evidence: asArray(row.evidence).map(asString).filter(Boolean),
-        priority: asNumber(row.priority) ?? 100,
+        priority: asOptionalNumber(row.priority) ?? 100,
         requires_user_confirmation: asBoolean(row.requires_user_confirmation),
       };
     }).filter((candidate) => Boolean(candidate.connector_type)),
     observation: {
-      http_status: asNumber(asRecord(data.observation).http_status) ?? 0,
+      http_status: asOptionalNumber(asRecord(data.observation).http_status) ?? 0,
       content_type: asString(asRecord(data.observation).content_type),
-      response_bytes_read: asNumber(asRecord(data.observation).response_bytes_read) ?? 0,
+      response_bytes_read: asOptionalNumber(asRecord(data.observation).response_bytes_read) ?? 0,
       response_fingerprint: asString(asRecord(data.observation).response_fingerprint),
       document_shapes: asArray(asRecord(data.observation).document_shapes)
         .map(asString)
@@ -1381,14 +1374,14 @@ export async function listConnectorResources(
     project_id: asString(data.project_id) || projectId,
     connector_instance_id: asString(data.connector_instance_id) || connector,
     status: asString(data.status) || 'NOT_AVAILABLE',
-    discovered_count: asNumber(data.discovered_count) || 0,
-    covered_count: asNumber(data.covered_count) || 0,
-    unsupported_count: asNumber(data.unsupported_count) || 0,
-    materialized_preview_count: asNumber(data.materialized_preview_count) || 0,
+    discovered_count: asOptionalNumber(data.discovered_count) || 0,
+    covered_count: asOptionalNumber(data.covered_count) || 0,
+    unsupported_count: asOptionalNumber(data.unsupported_count) || 0,
+    materialized_preview_count: asOptionalNumber(data.materialized_preview_count) || 0,
     resources: asArray(data.resources).map((value, index) => {
       const row = asRecord(value);
       return {
-        resource_index: asNumber(row.resource_index) ?? index,
+        resource_index: asOptionalNumber(row.resource_index) ?? index,
         display_title: asString(row.display_title) || undefined,
         resource_kind: asString(row.resource_kind) || undefined,
         remote_object_type: asString(row.remote_object_type) || undefined,
@@ -1445,14 +1438,14 @@ export async function listConnectorRuns(
         connector_instance_id: asString(row.connector_instance_id) || connector,
         sync_mode: asString(row.sync_mode) || undefined,
         status: asString(row.status) || undefined,
-        item_count: asNumber(row.item_count),
-        success_count: asNumber(row.success_count),
-        materialized_success_count: asNumber(row.materialized_success_count),
-        unchanged_success_count: asNumber(row.unchanged_success_count),
-        coverage_observation_count: asNumber(row.coverage_observation_count),
+        item_count: asOptionalNumber(row.item_count),
+        success_count: asOptionalNumber(row.success_count),
+        materialized_success_count: asOptionalNumber(row.materialized_success_count),
+        unchanged_success_count: asOptionalNumber(row.unchanged_success_count),
+        coverage_observation_count: asOptionalNumber(row.coverage_observation_count),
         knowledge_coverage_status: asString(row.knowledge_coverage_status) || undefined,
-        failure_count: asNumber(row.failure_count),
-        retired_count: asNumber(row.retired_count),
+        failure_count: asOptionalNumber(row.failure_count),
+        retired_count: asOptionalNumber(row.retired_count),
         cursor_checkpoint_committed: typeof row.cursor_checkpoint_committed === 'boolean'
           ? row.cursor_checkpoint_committed
           : undefined,

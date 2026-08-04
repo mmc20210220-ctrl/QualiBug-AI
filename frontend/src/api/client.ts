@@ -1,3 +1,5 @@
+import { asArray, asRecord, asString } from '../lib/value-guards';
+
 export const API_BASE = '/api';
 
 const API_V1_BASE = '/api/v1';
@@ -138,18 +140,6 @@ export type RegressionRunResult = {
   error?: string;
   message?: string;
 };
-
-function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asString(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
 
 function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === 'boolean' ? value : fallback;

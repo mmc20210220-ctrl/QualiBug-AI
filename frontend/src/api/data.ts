@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getFindings, getKnowledgeAsset, getProjects, type CustomerWorkspace } from './client';
 import type { CommercialAssets, Finding, KnowledgeSource, ReleaseCheck, TestTaskBoard, TestTaskSlice } from '../types';
 import { toWorkspaceOptions } from '../lib/customer';
+import { asArray, asNum, asRecord, asString } from '../lib/value-guards';
 
 const SCAN_COMPLETED_EVENT = 'qualibug:scan-completed';
 
@@ -10,9 +11,6 @@ type ScanCompletedDetail = { project: string };
 type ProjectSummary = { resolvedProjectId: string; projectName: string; findingsCount: number; currentDefectCount: number; clueCount: number; p0Count: number };
 type ReleaseOverall = 'pass' | 'fail' | 'pending';
 
-function asRecord(value: unknown): JsonRecord { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}; }
-function asArray(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
-function asString(value: unknown): string { return typeof value === 'string' ? value : ''; }
 function asBoolean(value: unknown): boolean {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
@@ -23,7 +21,6 @@ function asBoolean(value: unknown): boolean {
   }
   return false;
 }
-function asFiniteNumber(value: unknown, fallback = 0): number { const parsed = typeof value === 'number' ? value : Number(value); return Number.isFinite(parsed) ? parsed : fallback; }
 function firstFiniteNumber(...values: unknown[]): number { for (const value of values) { if (value === null || value === undefined || value === '') continue; const parsed = Number(value); if (Number.isFinite(parsed)) return parsed; } return 0; }
 function field(value: unknown, name: string): unknown { return asRecord(value)[name]; }
 function stripFixAdviceForCustomer(value: Finding): Finding {
@@ -76,9 +73,9 @@ function parseCommercialReleaseGate(raw: unknown): CommercialAssets['release_gat
   }).filter((item) => item.name || item.status || item.detail);
   return {
     overall_status: asString(gate.overall_status),
-    blocking_check_count: asFiniteNumber(gate.blocking_check_count),
-    pending_check_count: asFiniteNumber(gate.pending_check_count),
-    pass_check_count: asFiniteNumber(gate.pass_check_count),
+    blocking_check_count: asNum(gate.blocking_check_count),
+    pending_check_count: asNum(gate.pending_check_count),
+    pass_check_count: asNum(gate.pass_check_count),
     release_recommendation: asString(gate.release_recommendation),
     checks,
     honesty_rule: asString(gate.honesty_rule),
@@ -94,8 +91,8 @@ export function getCommercialAssets(raw: unknown): CommercialAssets | null {
   const refs = asRecord(assets.artifact_refs);
   return {
     status: asString(assets.status),
-    finding_count: asFiniteNumber(assets.finding_count),
-    customer_ready_reproduction_count: asFiniteNumber(assets.customer_ready_reproduction_count),
+    finding_count: asNum(assets.finding_count),
+    customer_ready_reproduction_count: asNum(assets.customer_ready_reproduction_count),
     release_gate_overall_status: asString(assets.release_gate_overall_status),
     release_recommendation: asString(assets.release_recommendation),
     release_gate_honesty_rule: asString(assets.release_gate_honesty_rule),
@@ -129,7 +126,7 @@ export function getCommercialAssets(raw: unknown): CommercialAssets | null {
   };
 }
 function getCompletedAt(raw: unknown): string { const record = asRecord(raw); return (asString(record.updatedAt) || asString(record.updated_at)).trim(); }
-function hasMaterializedFindingData(raw: unknown): boolean { const record = asRecord(raw); const executive = asRecord(record.executive_summary); const contract = asRecord(record.data_contract); return getReportFindings(raw).length > 0 || firstFiniteNumber(contract.materialized_risk_count, executive.materialized_findings, executive.total_findings) > 0 || asFiniteNumber(field(record.runtime_verification, 'confirmed')) > 0 || asFiniteNumber(field(record.db_verification, 'confirmed')) > 0; }
+function hasMaterializedFindingData(raw: unknown): boolean { const record = asRecord(raw); const executive = asRecord(record.executive_summary); const contract = asRecord(record.data_contract); return getReportFindings(raw).length > 0 || firstFiniteNumber(contract.materialized_risk_count, executive.materialized_findings, executive.total_findings) > 0 || asNum(field(record.runtime_verification, 'confirmed')) > 0 || asNum(field(record.db_verification, 'confirmed')) > 0; }
 function campaignFrom(raw: unknown): JsonRecord {
   const record = asRecord(raw);
   const continuous = asRecord(record.continuous_discovery_campaign || record.continuousDiscoveryCampaign);
@@ -186,8 +183,8 @@ function normalizeCampaignSnapshot(raw: unknown): JsonRecord {
     current_campaign_scope: currentCampaignScope,
     scan_meta: {
       ...existingScanMeta,
-      run_count: asFiniteNumber(campaign.round_count),
-      total_ms: asFiniteNumber(currentRun.duration_ms, asFiniteNumber(existingScanMeta.total_ms)),
+      run_count: asNum(campaign.round_count),
+      total_ms: asNum(currentRun.duration_ms, asNum(existingScanMeta.total_ms)),
       current_report_total_findings: currentScopeFindingCount,
       total_findings: firstFiniteNumber(existingScanMeta.total_findings, currentScopeFindingCount),
       current_report_customer_ready_defect_count: currentScopeDefectCount,
@@ -301,7 +298,7 @@ function parseKnowledgeSources(raw: unknown): KnowledgeSource[] {
       filename: asString(source.filename) || asString(source.original_name) || asString(source.name),
       source_type: asString(source.source_type) || asString(source.type),
       status: visibleStatus,
-      size_bytes: asFiniteNumber(source.size_bytes),
+      size_bytes: asNum(source.size_bytes),
       uploaded_at: asString(source.uploaded_at) || asString(source.created_at_utc) || asString(source.created_at),
       parser_status: parserStatus,
       parser_fidelity: asString(receipt.fidelity || parse.fidelity),
@@ -376,7 +373,7 @@ function parseReleaseChecks(raw: unknown): { overall: ReleaseOverall; checks: Re
   const p0 = findings.filter((finding) => finding.severity === 'P0').length;
   const security = findings.filter((finding) => finding.defect_family === 'security_boundary' || finding.defect_family === 'privacy_compliance').length;
   const integrity = findings.filter((finding) => finding.defect_family === 'data_integrity').length;
-  const dbConfirmed = asFiniteNumber(field(field(normalized, 'db_verification'), 'confirmed'));
+  const dbConfirmed = asNum(field(field(normalized, 'db_verification'), 'confirmed'));
   const campaignGate = campaignBlocksRelease(normalized);
   const campaignDetail = campaignGate.reason || (campaignGate.status === 'blocked' ? 'Campaign 缺少进入执行的必要合同' : campaignGate.status === 'coverage_deferred' ? '自动覆盖已递延到后续 Campaign' : 'Campaign 未报告阻断');
   const localChecks: ReleaseCheck[] = [
@@ -446,7 +443,7 @@ export function useTestTaskBoard(project: string) {
           entity: asString(record.entity),
           kind: asString(record.kind),
           status: (asString(record.status) || 'pending') as TestTaskSlice['status'],
-          priority: asFiniteNumber(record.priority),
+          priority: asNum(record.priority),
           endpoints: asArray(record.endpoints).map(asString).filter(Boolean),
           evidence_gaps: asArray(record.evidence_gaps).map(asString).filter(Boolean),
           _system_behavior_dimensions: dims.length > 0 ? dims : undefined,
@@ -455,9 +452,9 @@ export function useTestTaskBoard(project: string) {
           _system_behavior_required_assets: assets.length > 0 ? assets : undefined,
           _selection_family: asString(record._selection_family) || undefined,
           _selection_origin: asString(record._selection_origin) || undefined,
-          _coverage_steering_weight: asFiniteNumber(record._coverage_steering_weight) || undefined,
-          _learning_steering_weight: asFiniteNumber(record._learning_steering_weight) || undefined,
-          _historical_boundary_boost: asFiniteNumber(record._historical_boundary_boost) || undefined,
+          _coverage_steering_weight: asNum(record._coverage_steering_weight) || undefined,
+          _learning_steering_weight: asNum(record._learning_steering_weight) || undefined,
+          _historical_boundary_boost: asNum(record._historical_boundary_boost) || undefined,
           _historical_boundary_match: Object.keys(asRecord(record._historical_boundary_match)).length > 0 ? asRecord(record._historical_boundary_match) : undefined,
           source_refs: asArray(record.source_refs).map((r) => asRecord(r) as { source_type: string; locator: string; quote: string }),
           family: asString(record.family) || asString(record._selection_family) || undefined,
@@ -477,8 +474,8 @@ export function useTestTaskBoard(project: string) {
           source_snapshot_hash: asString(ledger.source_snapshot_hash),
         },
         slices,
-        execution: { production_data_blocked: asFiniteNumber(execution.production_data_blocked) },
-        evidence_chains_saved: asFiniteNumber(boardRaw.evidence_chains_saved),
+        execution: { production_data_blocked: asNum(execution.production_data_blocked) },
+        evidence_chains_saved: asNum(boardRaw.evidence_chains_saved),
       });
     }).catch((caught: unknown) => {
       setBoard(null); setObligationProjection({}); setError(caught instanceof Error ? caught.message : '加载失败');

@@ -1,13 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getHealth } from '../../api/client';
+import { asRecord } from '../../lib/value-guards';
 
 type HealthState = 'checking' | 'available' | 'unavailable';
-
-type RecordValue = Record<string, unknown>;
-
-function asRecord(value: unknown): RecordValue {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};
-}
 
 function isVerifiedApiHealth(payload: unknown): boolean {
   const root = asRecord(payload);

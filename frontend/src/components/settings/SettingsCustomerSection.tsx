@@ -6,6 +6,7 @@ import {
   type KnowledgeIngestResult,
 } from '../../api/knowledge-ingest';
 import { EnterpriseUnderstandingReceipt } from './EnterpriseUnderstandingReceipt';
+import { asArray, asRecord, asText } from '../../lib/value-guards';
 
 type WorkspaceOption = {
   id: string;
@@ -34,20 +35,6 @@ type SettingsCustomerSectionProps = {
   onImportIdChange: (value: string) => void;
   onCreateWorkspace: () => void;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
 
 function sourceTypeLabel(value: string): string {
   const labels: Record<string, string> = {

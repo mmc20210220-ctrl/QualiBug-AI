@@ -1,4 +1,5 @@
 import { currentToken, getSession } from './client';
+import { asArray, asRecord, asStrictNumber, asString } from '../lib/value-guards';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -87,15 +88,7 @@ export type ConnectorAcceptanceJob = {
   };
 };
 
-const asRecord = (value: unknown): JsonRecord => (
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonRecord
-    : {}
-);
-const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
-const asString = (value: unknown): string => typeof value === 'string' ? value : '';
 const asBoolean = (value: unknown): boolean => value === true;
-const asNumber = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? value : 0;
 
 function friendlyAcceptanceError(rawMessage: string, status: number): string {
   const message = rawMessage.toLowerCase();
@@ -161,13 +154,13 @@ function connectorPath(projectId: string, connectorId: string, suffix: string): 
 function toSummary(value: unknown): ConnectorAcceptanceSummary {
   const row = asRecord(value);
   return {
-    check_count: asNumber(row.check_count),
-    blocker_failure_count: asNumber(row.blocker_failure_count),
-    executed_run_count: asNumber(row.executed_run_count),
-    required_run_count: asNumber(row.required_run_count),
-    maximum_run_duration_seconds: asNumber(row.maximum_run_duration_seconds),
-    minimum_coverage_ratio: asNumber(row.minimum_coverage_ratio),
-    maximum_discovered_resource_count: asNumber(row.maximum_discovered_resource_count),
+    check_count: asStrictNumber(row.check_count),
+    blocker_failure_count: asStrictNumber(row.blocker_failure_count),
+    executed_run_count: asStrictNumber(row.executed_run_count),
+    required_run_count: asStrictNumber(row.required_run_count),
+    maximum_run_duration_seconds: asStrictNumber(row.maximum_run_duration_seconds),
+    minimum_coverage_ratio: asStrictNumber(row.minimum_coverage_ratio),
+    maximum_discovered_resource_count: asStrictNumber(row.maximum_discovered_resource_count),
   };
 }
 
@@ -301,9 +294,9 @@ export async function listConnectorAcceptanceReports(
     connector_instance_id: asString(data.connector_instance_id) || connectorId,
     reports: asArray(data.reports).map(toReportSummary).filter((item) => Boolean(item.report_id)),
     summary: {
-      report_count: asNumber(summary.report_count),
-      passing_report_count: asNumber(summary.passing_report_count),
-      failing_report_count: asNumber(summary.failing_report_count),
+      report_count: asStrictNumber(summary.report_count),
+      passing_report_count: asStrictNumber(summary.passing_report_count),
+      failing_report_count: asStrictNumber(summary.failing_report_count),
     },
   };
 }

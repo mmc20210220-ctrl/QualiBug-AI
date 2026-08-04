@@ -1,4 +1,5 @@
 import { currentToken } from './client';
+import { asNum, asRecord, asString } from '../lib/value-guards';
 
 export const VISUAL_BASELINES_CHANGED_EVENT = 'qualibug-visual-baselines-change';
 
@@ -57,21 +58,6 @@ type VisualBaselineEnvelope = {
   message?: string;
 };
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asString(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
-function asNumber(value: unknown): number {
-  const number = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(number) ? number : 0;
-}
-
 function asBoolean(value: unknown): boolean {
   return value === true;
 }
@@ -101,11 +87,11 @@ function toVisualBaselineRecord(value: unknown): VisualBaselineRecord | null {
     status: asString(row.status),
     authority: asString(row.authority),
     sha256,
-    size_bytes: asNumber(row.size_bytes),
-    image_width: asNumber(row.image_width),
-    image_height: asNumber(row.image_height),
-    viewport_width: asNumber(row.viewport_width),
-    viewport_height: asNumber(row.viewport_height),
+    size_bytes: asNum(row.size_bytes),
+    image_width: asNum(row.image_width),
+    image_height: asNum(row.image_height),
+    viewport_width: asNum(row.viewport_width),
+    viewport_height: asNum(row.viewport_height),
     full_page: asBoolean(row.full_page),
     renderer_profile: asString(row.renderer_profile),
     scroll_origin: asString(row.scroll_origin),
@@ -205,10 +191,10 @@ export async function listVisualBaselines(
     project_id: asString(data.project_id) || project,
     baselines,
     summary: {
-      active_count: asNumber(summary.active_count),
-      revoked_count: asNumber(summary.revoked_count),
-      source_registered_count: asNumber(summary.source_registered_count),
-      approved_copy_count: asNumber(summary.approved_copy_count),
+      active_count: asNum(summary.active_count),
+      revoked_count: asNum(summary.revoked_count),
+      source_registered_count: asNum(summary.source_registered_count),
+      approved_copy_count: asNum(summary.approved_copy_count),
     },
     raw_pixels_embedded: data.raw_pixels_embedded === true,
   };
@@ -285,7 +271,7 @@ export async function revokeVisualBaseline(
       .map(asString)
       .filter(Boolean)
     : [];
-  const declaredCount = Math.max(0, Math.trunc(asNumber(data.cascade_revoked_count)));
+  const declaredCount = Math.max(0, Math.trunc(asNum(data.cascade_revoked_count)));
   const cascadeRevokedCount = Math.max(
     declaredCount,
     cascadeRevokedBaselineIds.length,

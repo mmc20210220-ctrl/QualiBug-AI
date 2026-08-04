@@ -4,13 +4,10 @@ import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { TermHint } from '../components/TermHint';
 import { GLOSSARY } from '../lib/glossary';
+import { asRecord } from '../lib/value-guards';
 
 type GateCheck = { name: string; status: 'pass' | 'fail' | 'pending'; detail: string };
-type JsonRecord = Record<string, unknown>;
 
-function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }

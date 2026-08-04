@@ -6,21 +6,9 @@ import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
 import { TermHint } from '../components/TermHint';
 import { GLOSSARY } from '../lib/glossary';
+import { asNum, asRecord, asText } from '../lib/value-guards';
 
 type JsonRecord = Record<string, unknown>;
-
-function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function asNum(value: unknown, fallback = 0): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
 
 function pct(value: unknown): string {
   return `${Math.round(asNum(value) * 100)}%`;

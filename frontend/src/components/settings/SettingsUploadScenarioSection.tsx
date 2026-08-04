@@ -12,6 +12,7 @@ import {
   revokeUploadScenario,
   type UploadScenarioRecord,
 } from '../../api/ui-upload-scenarios';
+import { asArray, asRecord } from '../../lib/value-guards';
 
 type JsonRecord = Record<string, unknown>;
 type SourceOption = { source_id: string; label: string; source_type: string };
@@ -44,16 +45,6 @@ type UploadScenarioForm = {
 };
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-
-function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';

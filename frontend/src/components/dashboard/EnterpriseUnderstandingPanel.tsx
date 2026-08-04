@@ -1,3 +1,5 @@
+import { asArray, asNum, asRecord, asText } from '../../lib/value-guards';
+
 type JsonRecord = Record<string, unknown>;
 
 type Props = {
@@ -30,25 +32,6 @@ type BlockerReceiptView = {
   sourceBacked: boolean;
   sourceEvidence: SourceEvidenceView[];
 };
-
-function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function asNumber(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
 
 function asBoolean(value: unknown): boolean {
   return value === true;
@@ -165,11 +148,11 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
   const summary = asRecord(value);
   const modelId = asText(summary.enterprise_understanding_model_id);
   const understandingStatus = asText(summary.enterprise_understanding_status);
-  const businessObjectCount = asNumber(summary.understood_business_object_count);
-  const operationCount = asNumber(summary.understood_operation_count);
-  const scenarioCount = asNumber(summary.scenario_ir_count);
-  const runtimePlanCount = asNumber(summary.runtime_plan_count);
-  const runtimeMaterializationCount = asNumber(summary.runtime_materialization_count);
+  const businessObjectCount = asNum(summary.understood_business_object_count);
+  const operationCount = asNum(summary.understood_operation_count);
+  const scenarioCount = asNum(summary.scenario_ir_count);
+  const runtimePlanCount = asNum(summary.runtime_plan_count);
+  const runtimeMaterializationCount = asNum(summary.runtime_materialization_count);
   const available = Boolean(
     modelId
     || (understandingStatus && understandingStatus !== 'NOT_BUILT')
@@ -216,7 +199,7 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
           <span className="customer-value-kicker">理解与运行规模</span>
           <div className="customer-secondary-meta">
             <span><em>业务对象</em><b>{businessObjectCount}</b></span>
-            <span><em>角色</em><b>{asNumber(summary.understood_actor_count)}</b></span>
+            <span><em>角色</em><b>{asNum(summary.understood_actor_count)}</b></span>
             <span><em>业务操作</em><b>{operationCount}</b></span>
             <span><em>正式场景</em><b>{scenarioCount}</b></span>
             <span><em>运行模板</em><b>{runtimePlanCount}</b></span>
@@ -230,9 +213,9 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
             <span><em>来源可追溯度</em><b>{percent(summary.source_traceability_rate)}</b></span>
             <span><em>操作对象绑定</em><b>{percent(summary.operation_object_binding_rate)}</b></span>
             <span><em>生命周期完整度</em><b>{percent(summary.lifecycle_completeness)}</b></span>
-            <span><em>待关闭未知项</em><b>{asNumber(summary.enterprise_understanding_unknown_count)}</b></span>
-            <span><em>运行实例化缺口</em><b>{asNumber(summary.runtime_materialization_unknown_count)}</b></span>
-            <span><em>有资料定位的缺口</em><b>{asNumber(summary.understanding_source_receipt_count)}</b></span>
+            <span><em>待关闭未知项</em><b>{asNum(summary.enterprise_understanding_unknown_count)}</b></span>
+            <span><em>运行实例化缺口</em><b>{asNum(summary.runtime_materialization_unknown_count)}</b></span>
+            <span><em>有资料定位的缺口</em><b>{asNum(summary.understanding_source_receipt_count)}</b></span>
           </div>
         </article>
       </div>

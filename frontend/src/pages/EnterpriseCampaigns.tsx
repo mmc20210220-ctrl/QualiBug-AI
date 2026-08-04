@@ -20,15 +20,12 @@ import {
 import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
+import { asArray, asNum, asRecord, asText } from '../lib/value-guards';
 
 type JsonRecord = Record<string, unknown>;
 type SavedServiceConfig = { name?: string; base_url?: string; enabled?: boolean; auth?: JsonRecord; db?: JsonRecord };
 type SourceSummary = { source_id: string; filename: string; source_type: string; status: string };
 
-function asText(value: unknown): string { return typeof value === 'string' ? value.trim() : ''; }
-function asRecord(value: unknown): JsonRecord { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}; }
-function asArray(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
-function asNumber(value: unknown): number { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 0; }
 function textArray(value: unknown): string[] { return asArray(value).map(asText).filter(Boolean); }
 
 function sameIdentitySet(left: string[], right: string[]): boolean {
@@ -52,7 +49,7 @@ function harRequestLabel(entry: JsonRecord): string {
 
 function harStatusLabel(entry: JsonRecord): string {
   const response = asRecord(entry.response);
-  const status = asNumber(response.status) || asNumber(response.status_code) || asNumber(entry.status);
+  const status = asNum(response.status) || asNum(response.status_code) || asNum(entry.status);
   return status ? String(status) : '—';
 }
 
@@ -399,8 +396,8 @@ export function EnterpriseCampaigns() {
           <div className="settings-grid">
             <div><span className="muted">执行状态</span><p>{executionStatusLabel(asText(result.execution_status))}</p></div>
             <div><span className="muted">发现问题</span><p>{result.total_findings ?? 0}</p></div>
-            <div><span className="muted">耗时</span><p>{asNumber(result.total_ms)} ms</p></div>
-            <div><span className="muted">覆盖度</span><p>{asNumber(result.coverage)}</p></div>
+            <div><span className="muted">耗时</span><p>{asNum(result.total_ms)} ms</p></div>
+            <div><span className="muted">覆盖度</span><p>{asNum(result.coverage)}</p></div>
             <div><span className="muted">真实执行证据</span><p>{harEntries(result.auto_har).length} 条真实请求</p></div>
             <div><span className="muted">结果评级</span><p>{result.grade || '未评级'}</p></div>
             <div><span className="muted">审批上传场景</span><p>{runtimeScenarioRefs.length}/{lastRunScenarioRefs.length} 已注入</p></div>

@@ -3,6 +3,7 @@
  * Extracted from Dashboard.tsx for better maintainability.
  */
 import type { CommercialAssets, Finding } from '../types';
+import { asNum, asRecord, asText } from './value-guards';
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -33,19 +34,9 @@ export const FUNNEL_STAGE_LABELS: Record<string, string> = {
 };
 
 // ─── Generic helpers ─────────────────────────────────────────────────────────
+// 守卫实现统一收敛于 ./value-guards（全仓唯一来源），此处保留再导出兼容既有调用方。
 
-export function asRecord(value: unknown): JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}
-
-export function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-export function asNum(v: unknown, fallback = 0): number {
-  const p = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(p) ? p : fallback;
-}
+export { asRecord, asText, asNum } from './value-guards';
 
 export function firstNum(...values: unknown[]): number {
   for (const v of values) {

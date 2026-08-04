@@ -1,4 +1,5 @@
 import { currentToken } from './client';
+import { asArray, asRecord, asString } from '../lib/value-guards';
 
 export const AUTHORITY_DECISIONS_CHANGED_EVENT = 'qualibug-authority-decisions-change';
 
@@ -58,20 +59,6 @@ type AuthorityDecisionEnvelope = {
   error?: string;
   message?: string;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asString(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
 
 function asBoolean(value: unknown): boolean | null {
   if (value === true) return true;

@@ -27,9 +27,8 @@ import { ConnectorAcceptancePanel } from '../components/ConnectorAcceptancePanel
 import { ConnectorCoverage } from '../components/ConnectorCoverage';
 import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
+import { asArray, asOptionalNumber, asRecord, asString } from '../lib/value-guards';
 import './Materials.css';
-
-type JsonRecord = Record<string, unknown>;
 
 type KnowledgeSource = {
   source_id: string;
@@ -55,15 +54,6 @@ type QuickConnectResult = { values: ScopeValues; manifest: ConnectorManifest };
 const DEFAULT_CONNECTOR_ID = 'connector-main';
 const DEFAULT_CONNECTOR_NAME = '在线资料连接器';
 const EXECUTABLE_SOURCE_TYPES = new Set(['prd', 'openapi', 'database_schema', 'collaboration_document', 'historical_bug']);
-
-const asRecord = (value: unknown): JsonRecord => (
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonRecord
-    : {}
-);
-const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
-const asString = (value: unknown): string => typeof value === 'string' ? value : '';
-const asNumber = (value: unknown): number | undefined => typeof value === 'number' ? value : undefined;
 
 function sourcePermissionScope(value: unknown): ConnectorPermissionScope | undefined {
   const row = asRecord(value);
@@ -99,7 +89,7 @@ function sourceRows(payload: unknown): KnowledgeSource[] {
         source_type: asString(row.source_type),
         original_name: asString(row.original_name) || asString(row.filename),
         status: asString(row.status) || 'active',
-        version: asNumber(row.version) || asNumber(row.occurrence_version),
+        version: asOptionalNumber(row.version) || asOptionalNumber(row.occurrence_version),
         source_origin: asString(row.source_origin)
           || (asString(row.source_ref).startsWith('connector://') ? 'ONLINE_CONNECTOR' : 'DOCUMENT_REFERENCE'),
         source_identity_fingerprints: fingerprints,
@@ -298,8 +288,8 @@ function quickConnectManifests(manifests: ConnectorManifest[]): ConnectorManifes
       return asString(schema.input_type) === 'url' && Boolean(asString(schema.scope_field));
     })
     .sort((left, right) => {
-      const leftPriority = asNumber(asRecord(left.quick_connect_schema).priority) ?? 100;
-      const rightPriority = asNumber(asRecord(right.quick_connect_schema).priority) ?? 100;
+      const leftPriority = asOptionalNumber(asRecord(left.quick_connect_schema).priority) ?? 100;
+      const rightPriority = asOptionalNumber(asRecord(right.quick_connect_schema).priority) ?? 100;
       return leftPriority - rightPriority || left.display_name.localeCompare(right.display_name);
     });
 }
@@ -1361,8 +1351,8 @@ export function Materials() {
                       <input
                         className="form-input"
                         type={type === 'integer' || type === 'number' ? 'number' : format === 'uri' ? 'url' : 'text'}
-                        min={asNumber(property.minimum)}
-                        max={asNumber(property.maximum)}
+                        min={asOptionalNumber(property.minimum)}
+                        max={asOptionalNumber(property.maximum)}
                         step={type === 'integer' ? 1 : type === 'number' ? 'any' : undefined}
                         value={typeof value === 'number' ? value : asString(value)}
                         onChange={(event) => setValue(
