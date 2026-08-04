@@ -2246,6 +2246,18 @@ def execute_experiment_cleanup_compensation(
                                     pending_fixture_cleanups.append({
                                         "target": _new_identity,
                                         "value": _new_identity,
+                                        # Second-order cleanup compensates the
+                                        # compensating create itself, which is
+                                        # already counted as a cleanup write —
+                                        # never a non-cleanup experiment write.
+                                        # Stamping accepted_write_count=1 here
+                                        # inflates gate coverage past
+                                        # accepted_non_cleanup_write_count and
+                                        # falsely fails
+                                        # CLEANUP_WRITE_COVERAGE_MISMATCH
+                                        # (observed: covered 4 vs accepted 3
+                                        # on DELETE isolation experiments).
+                                        "compensates_cleanup_write": True,
                                         "cleanup": {
                                             "method": "DELETE",
                                             "path": _recreate_deletes[0].get("path")
@@ -2336,6 +2348,13 @@ def execute_experiment_cleanup_compensation(
                 "fixture_cleanup_seal",
                 f"fixture_cleanup_receipt_not_completed subject={fixture_subject}",
             )
+        # Second-order fixture cleanup (compensates a compensating create,
+        # not an experiment write) must contribute zero coverage so the gate
+        # equality covered == accepted_non_cleanup_write_count holds. The
+        # receipt stays visible for audit with its own cleanup_write_count.
+        _covers_experiment_write = not bool(
+            pending.get("compensates_cleanup_write")
+        )
         contract_evidence_receipts.append(build_contract_evidence_receipt(
             kind="cleanup",
             experiment_id=eid,
@@ -2349,7 +2368,7 @@ def execute_experiment_cleanup_compensation(
                 "path": cleanup_path,
                 "status_code": cleanup_status,
                 "operation_ref": _text(cleanup.get("operation_ref")),
-                "accepted_write_count": 1,
+                "accepted_write_count": 1 if _covers_experiment_write else 0,
                 "cleanup_write_count": 1 if governed_cleanup.get("accepted") is True else 0,
                 "restoration_verified": restoration_verified,
                 "state_unchanged": restoration_verified,
