@@ -428,6 +428,21 @@ Evolution Contract):
   resource, not permission to skip that read. Resolver failure, unresolved
   placeholders, sandbox denial, and read-only mode must stop target write
   transport.
+- Fixture create-body dependency resolution has three source-grounded legs,
+  in priority order: declared HTTP `GET`/`HEAD` list-reads, then a declared
+  database read (`adapter: db_sql`, `method: DB_READ`), then governed
+  disposable dependency create. The DB leg is only derivable when a
+  source-declared entity matches the placeholder stem by naming convention
+  AND declares both a physical storage table and an identity column — an
+  entity name alone never becomes a table name. Execution of the DB leg is
+  read-only, gated by `persistence_read_allowed` (declared non-production
+  environment), DSN-sourced from customer-declared `multi_service_config.json`,
+  and identifiers are validated against the introspected schema; every
+  refusal carries a named reason code and an empty observation never counts
+  as a resolved value. Implemented in
+  `runtime_binding_materializer_base.declared_persistence_resolver` /
+  `validated_runtime_resolvers_with_receipts` and
+  `experiment_fixture_materializer_core._run_declared_db_identity_read`.
 - Runtime execution must preserve source-declared request bodies exactly.
   Concurrency, capacity, quantity, stock, balance, quota, and similar
   semantics may be exercised only when an explicit source invariant and

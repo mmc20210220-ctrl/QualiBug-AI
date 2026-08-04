@@ -30,6 +30,9 @@ def _text(value: Any) -> str:
 _PATH_PARAMETER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
 _STATE_TARGET_PATH_RE = re.compile(r"^@state=([a-z0-9_]+)@(.*)$")
+# SQL identifiers must be bare names — the same shape the persistence
+# observer and the cleanup ladder allow before a name may reach a query.
+_DB_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 
 def _field_key(value: Any) -> str:
@@ -340,6 +343,39 @@ def validated_runtime_resolvers_with_receipts(
             })
             continue
         operation_ref = _text(raw.get("operation_ref"))
+        # ── Persistence read resolver (adapter db_sql) ──
+        # A source-declared database read is the fallback resolver for a
+        # create-body foreign key whose entity declares a storage table and
+        # identity column but no HTTP list-read. The execution side gates it
+        # on the declared non-production environment and on the introspected
+        # schema, so only the identifier shape is validated here.
+        if _text(raw.get("adapter")) == "db_sql":
+            db_table = _text(raw.get("table"))
+            db_column = _text(raw.get("identity_column"))
+            if _text(raw.get("method")).upper() != "DB_READ":
+                rejected.append({
+                    "rejection_code": RESOLVER_TARGET_UNSUPPORTED,
+                    "reason": f"db_resolver_non_read:{_text(raw.get('method'))}",
+                })
+                continue
+            if not (
+                _DB_IDENTIFIER_RE.match(db_table)
+                and _DB_IDENTIFIER_RE.match(db_column)
+            ):
+                rejected.append({
+                    "rejection_code": RESOLVER_CONTRACT_INVALID,
+                    "reason": "db_identifier_shape_refused",
+                })
+                continue
+            accepted.append({
+                "adapter": "db_sql",
+                "method": "DB_READ",
+                "table": db_table,
+                "identity_column": db_column,
+                "validation_status": "VALIDATED",
+                "validation_dimensions": "source_declared_entity_storage",
+            })
+            continue
         declared = operations.get(operation_ref) or {}
         method = _text(raw.get("method")).upper()
         path = normalize_path_placeholders(_text(raw.get("path")))
@@ -547,11 +583,81 @@ def _placeholder_rows_from_template(
     return rows
 
 
+def _persistence_entity_stems(field: str, token: str) -> list[str]:
+    """Entity-name candidates for a body placeholder, by naming convention.
+
+    The same convention ``body_field_collection_paths`` already applies to
+    HTTP collection paths: strip the trailing identity suffix from the
+    placeholder and derive plural forms. These are hypotheses only — they
+    must match a source-declared entity that declares a storage table, so
+    nothing is invented when the declaration is absent.
+    """
+    key = _field_key(field or token)
+    if key.endswith("id"):
+        key = key[:-2].rstrip("_")
+    if not key:
+        return []
+    candidates = [key, f"{key}s", f"{key}es"]
+    if key.endswith("y"):
+        candidates.append(f"{key[:-1]}ies")
+    return list(dict.fromkeys(candidates))
+
+
+def declared_persistence_resolver(
+    field: str,
+    token: str,
+    entities: list[Any] | None,
+) -> dict[str, str] | None:
+    """Source-declared database read resolver for one body placeholder.
+
+    Accepts the placeholder only when a declared entity's name matches the
+    conventional stem AND that entity declares both a physical storage table
+    and an identity column. An entity name alone never becomes a table name.
+    """
+    stems = _persistence_entity_stems(field, token)
+    if not stems or not _list(entities):
+        return None
+    by_name: dict[str, dict[str, Any]] = {}
+    for entity in entities:
+        row = _dict(entity)
+        name = _field_key(row.get("name") or row.get("id"))
+        if name and name not in by_name:
+            by_name[name] = row
+    for stem in stems:
+        entity = by_name.get(stem)
+        if not entity:
+            continue
+        # Explicit table declarations only. Falling back to the entity name
+        # would invent a table name, which the persistence contract forbids.
+        table = _text(
+            entity.get("table")
+            or entity.get("storage_table")
+            or entity.get("db_table")
+            or _dict(entity.get("storage")).get("table")
+        )
+        identity = _text((_list(entity.get("identity_fields")) or [""])[0])
+        if not (
+            table
+            and identity
+            and _DB_IDENTIFIER_RE.match(table)
+            and _DB_IDENTIFIER_RE.match(identity)
+        ):
+            continue
+        return {
+            "adapter": "db_sql",
+            "method": "DB_READ",
+            "table": table,
+            "identity_column": identity,
+        }
+    return None
+
+
 def _derive_body_bindings_from_template(
     body_template: dict[str, Any],
     *,
     operations: dict[str, dict[str, Any]],
     create_path: str,
+    entities: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     parts = [part for part in normalize_path_placeholders(create_path).split("/") if part]
     api_prefix = f"/{parts[0]}" if parts else "/api"
@@ -578,8 +684,17 @@ def _derive_body_bindings_from_template(
                     "method": _text(op.get("method")).upper(),
                     "path": op_path,
                 })
-        # No invented fallback: unresolved dependencies stay fail-closed
-        # so validated_fixture_setup rejects the create when no GET exists.
+        # Declared-database read fallback: a foreign key whose entity has a
+        # source-declared storage table but no declared HTTP list-read stays
+        # resolvable. HTTP resolvers keep priority; the DB leg runs last and
+        # is environment-gated at execution time. Without a declaration the
+        # dependency stays fail-closed — no invented fallback.
+        if not resolvers:
+            db_resolver = declared_persistence_resolver(
+                field or token, token, entities
+            )
+            if db_resolver:
+                resolvers.append(db_resolver)
         derived.append({
             "target": _text(row.get("target")),
             "template_token": token,
@@ -593,6 +708,7 @@ def validated_fixture_setup(
     binding: dict[str, Any],
     operations: dict[str, dict[str, Any]],
     actors: dict[str, dict[str, Any]],
+    entities: list[Any] | None = None,
 ) -> dict[str, Any]:
     setup = _dict(binding.get("fixture_setup"))
     operation_ref = _text(setup.get("operation_ref"))
@@ -637,6 +753,7 @@ def validated_fixture_setup(
             body_template,
             operations=operations,
             create_path=path,
+            entities=entities,
         )
     body_bindings: list[dict[str, Any]] = []
     for raw in raw_body_bindings:

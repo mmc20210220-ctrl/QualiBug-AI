@@ -107,6 +107,74 @@ def _validate_fixture_preconditions(
     return failures
 
 
+def _run_declared_db_identity_read(
+    *,
+    root: Path,
+    project: str,
+    runtime_contract: dict[str, Any],
+    resolver: dict[str, Any],
+) -> dict[str, Any]:
+    """Governed SELECT of a source-declared entity identity column.
+
+    Read-only and fail-closed: gated on the same declared non-production
+    environment as writes, identifiers validated against the introspected
+    schema by the persistence observer, and every refusal carries a named
+    reason code. Never invents a row — an empty table yields no value.
+    """
+    from .persistence_observer import (
+        PersistenceObserverError,
+        persistence_read_allowed,
+        read_declared_entity_state,
+        resolve_declared_data_sources,
+    )
+
+    table = _text(resolver.get("table"))
+    column = _text(resolver.get("identity_column"))
+    obs: dict[str, Any] = {
+        "adapter": "db_sql",
+        "method": "DB_READ",
+        "table": table,
+        "identity_column": column,
+        "status_code": 0,
+        "value": None,
+        "reason_code": "",
+        "row_count": 0,
+    }
+    allowed, reason = persistence_read_allowed(root, project, runtime_contract)
+    if not allowed:
+        obs["reason_code"] = f"persistence_read_not_permitted:{reason}"
+        return obs
+    try:
+        sources = resolve_declared_data_sources(root, project)
+    except PersistenceObserverError as exc:
+        obs["reason_code"] = f"persistence_config_invalid:{exc}"
+        return obs
+    if not sources:
+        obs["reason_code"] = "persistence_source_not_declared"
+        return obs
+    failures: list[str] = []
+    for source in sources:
+        try:
+            observed = read_declared_entity_state(
+                dsn=source["dsn"], table=table, fields=[column], max_rows=25
+            )
+        except PersistenceObserverError as exc:
+            failures.append(f"{_text(source.get('module')) or 'default'}:{exc}")
+            continue
+        obs["row_count"] = int(observed.get("row_count") or 0)
+        for row in _list(observed.get("rows")):
+            value = _dict(row).get(column)
+            if value not in (None, "", [], {}):
+                obs["status_code"] = 200
+                obs["value"] = value
+                obs["source_service"] = _text(source.get("service"))
+                return obs
+        obs["reason_code"] = "persistence_identity_not_observed"
+    if failures and not obs["status_code"]:
+        obs["reason_code"] = "persistence_read_failed:" + ";".join(failures)
+    return obs
+
+
 def _source_backed_dependency_fixture_setup(
     *,
     dependency_leaf: str,
@@ -159,7 +227,12 @@ def _source_backed_dependency_fixture_setup(
         )
         if auto_create:
             binding = {**binding, **auto_create}
-    return _validated_fixture_setup(binding, ops, actors)
+    return _validated_fixture_setup(
+        binding,
+        ops,
+        actors,
+        entities=_list(_dict(behavior_ir).get("entities")) or None,
+    )
 
 
 def _auto_fixture_create_for_binding_target(
@@ -616,7 +689,12 @@ def materialize_experiment_fixtures(
                 )
                 if auto_create:
                     binding = {**binding, **auto_create}
-                fixture_setup = _validated_fixture_setup(binding, ops, actors)
+                fixture_setup = _validated_fixture_setup(
+                    binding,
+                    ops,
+                    actors,
+                    entities=_list(_dict(behavior_ir).get("entities")) or None,
+                )
                 _fs_blocked = ""
                 if not fixture_setup:
                     # Distinguish missing cleanup / example from a blank gap so
@@ -723,6 +801,32 @@ def materialize_experiment_fixtures(
                         if dependency_value not in (None, "", [], {}):
                             break
                         if not isinstance(resolver, dict):
+                            continue
+                        # Source-declared database read resolver: an observed
+                        # identity value from the declared persistence surface,
+                        # environment-gated and receipted. Runs as one resolver
+                        # leg — a declined or empty read stays fail-closed.
+                        if _text(resolver.get("adapter")) == "db_sql":
+                            db_obs = _run_declared_db_identity_read(
+                                root=root,
+                                project=project,
+                                runtime_contract=runtime_contract,
+                                resolver=resolver,
+                            )
+                            db_obs.update({
+                                "phase": "binding_materialization_dependency",
+                                "step_id": (
+                                    f"bind:{target}:dependency:{dependency_token}"
+                                    f":{index}:db"
+                                ),
+                                "actor_ref": "",
+                                "operation_ref": "",
+                            })
+                            steps_out.append(db_obs)
+                            db_value = db_obs.get("value")
+                            if db_value not in (None, "", [], {}):
+                                dependency_value = db_value
+                                token_values[dependency_token] = dependency_value
                             continue
                         for _dep_idx, (_dep_actor, _dep_token) in enumerate(
                             _dependency_actor
