@@ -40,6 +40,7 @@ from .runtime_binding_materializer import (
     validated_runtime_resolvers as _validated_runtime_resolvers,
 )
 from .sandbox_write_executor import execute_governed_control_write
+from .cleanup_adapter_ladder import prefer_constructed_data
 
 
 def _validate_fixture_preconditions(
@@ -647,98 +648,162 @@ def materialize_experiment_fixtures(
             _actor_candidates: list[tuple[str, str]] = [
                 (_effective_resolver_actor, _effective_resolver_token)
             ]
-            for index, resolver in enumerate(resolvers):
-                for _fb_idx, (_fb_actor, _fb_token) in enumerate(_actor_candidates):
-                    obs = _run_http_step(
-                        base_url=base_url,
-                        method=resolver["method"],
-                        path=resolver["path"],
-                        token=_fb_token,
-                    )
-                    obs.update({
-                        "phase": "binding_materialization",
-                        "step_id": f"bind:{target}:{index}:actor{_fb_idx}",
-                        "actor_ref": _fb_actor,
-                        "operation_ref": resolver["operation_ref"],
-                    })
-                    steps_out.append(obs)
-                    receipt.update({
-                        "resolver_path": resolver["path"],
-                        "resolver_operation_ref": resolver["operation_ref"],
-                        "resolver_actor_ref": _fb_actor,
-                        "status_code": int(obs.get("status_code") or 0),
-                    })
-                    _sc = int(obs.get("status_code") or 0)
-                    if _sc == 0:
-                        break
-                    if not (200 <= _sc < 300):
-                        continue
-                    _projection_fields = [
-                        _text(field)
-                        for field in _list(binding.get("body_projection_fields"))
-                        if _text(field)
-                    ]
-                    if _projection_fields:
-                        # Observed write body: project the schema-declared
-                        # fields from one observed row (best field coverage
-                        # wins, keeping values mutually coherent). Empty
-                        # projection leaves the binding unresolved and the
-                        # standard fail-closed path reports the gap.
-                        _projected = project_observed_body(
-                            _runtime_entity_candidates(obs.get("body")),
-                            _projection_fields,
+            def _attempt_list_read_resolution() -> Any:
+                """Bind from the declared list-read resolvers (existing data).
+
+                Shared by the reuse-first path and by the reuse fallback after
+                a failed construction attempt. Returns the bound value or
+                None; receipts and runtime_bindings are updated on success.
+                """
+                nonlocal _identity_conflict
+                nonlocal _effective_resolver_actor, _effective_resolver_token
+                for index, resolver in enumerate(resolvers):
+                    for _fb_idx, (_fb_actor, _fb_token) in enumerate(_actor_candidates):
+                        obs = _run_http_step(
+                            base_url=base_url,
+                            method=resolver["method"],
+                            path=resolver["path"],
+                            token=_fb_token,
                         )
-                        value = _projected or None
-                    elif (
-                        _text(binding.get("identity_extraction"))
-                        == "owner_field_consensus"
-                    ):
-                        # Owner-identity bindings resolve only on owner-field
-                        # consensus across every observed row. Disagreement
-                        # means the collection mixes owners; picking any row
-                        # would arm the treatment step with another actor's
-                        # identity (cross-contamination), so fail closed and
-                        # skip both further resolvers and fixture fallback.
-                        _identity_value, _identity_status = consensus_identity_value(
-                            obs.get("body"), target,
-                        )
-                        if _identity_status == "conflicted":
-                            _identity_conflict = True
+                        obs.update({
+                            "phase": "binding_materialization",
+                            "step_id": f"bind:{target}:{index}:actor{_fb_idx}",
+                            "actor_ref": _fb_actor,
+                            "operation_ref": resolver["operation_ref"],
+                        })
+                        steps_out.append(obs)
+                        receipt.update({
+                            "resolver_path": resolver["path"],
+                            "resolver_operation_ref": resolver["operation_ref"],
+                            "resolver_actor_ref": _fb_actor,
+                            "status_code": int(obs.get("status_code") or 0),
+                        })
+                        _sc = int(obs.get("status_code") or 0)
+                        if _sc == 0:
                             break
-                        value = _identity_value or None
-                    else:
-                        extracted = _select_runtime_binding(
-                            obs.get("body"),
-                            target_path,
-                            preferred_body=preferred_binding_body,
-                        )
-                        value = extracted.get(target)
-                    if value in (None, "", [], {}):
-                        continue
-                    _effective_resolver_actor = _fb_actor
-                    _effective_resolver_token = _fb_token
-                    runtime_bindings[target] = value
-                    owner_actor_ref = _text(binding.get("fixture_owner_actor_ref"))
-                    ownership_required = force_fixture_setup and bool(owner_actor_ref)
-                    receipt.update({
-                        "status": "BOUND",
-                        "value_fingerprint": hashlib.sha256(
-                            str(value).encode("utf-8")
-                        ).hexdigest()[:12],
-                        "owner_actor_ref": owner_actor_ref,
-                        "ownership_proof_status": (
-                            "OBSERVED"
-                            if ownership_required
-                            and _effective_resolver_actor == owner_actor_ref
-                            else "NOT_REQUIRED"
-                            if not ownership_required
-                            else "INDETERMINATE"
-                        ),
-                        "ownership_proof_source": "source_actor_bound_read",
-                    })
-                    break
+                        if not (200 <= _sc < 300):
+                            continue
+                        _projection_fields = [
+                            _text(field)
+                            for field in _list(binding.get("body_projection_fields"))
+                            if _text(field)
+                        ]
+                        resolved_value: Any = None
+                        if _projection_fields:
+                            # Observed write body: project the schema-declared
+                            # fields from one observed row (best field coverage
+                            # wins, keeping values mutually coherent). Empty
+                            # projection leaves the binding unresolved and the
+                            # standard fail-closed path reports the gap.
+                            _projected = project_observed_body(
+                                _runtime_entity_candidates(obs.get("body")),
+                                _projection_fields,
+                            )
+                            resolved_value = _projected or None
+                        elif (
+                            _text(binding.get("identity_extraction"))
+                            == "owner_field_consensus"
+                        ):
+                            # Owner-identity bindings resolve only on owner-field
+                            # consensus across every observed row. Disagreement
+                            # means the collection mixes owners; picking any row
+                            # would arm the treatment step with another actor's
+                            # identity (cross-contamination), so fail closed and
+                            # skip both further resolvers and fixture fallback.
+                            _identity_value, _identity_status = consensus_identity_value(
+                                obs.get("body"), target,
+                            )
+                            if _identity_status == "conflicted":
+                                _identity_conflict = True
+                                return None
+                            resolved_value = _identity_value or None
+                        else:
+                            extracted = _select_runtime_binding(
+                                obs.get("body"),
+                                target_path,
+                                preferred_body=preferred_binding_body,
+                            )
+                            resolved_value = extracted.get(target)
+                        if resolved_value in (None, "", [], {}):
+                            continue
+                        _effective_resolver_actor = _fb_actor
+                        _effective_resolver_token = _fb_token
+                        runtime_bindings[target] = resolved_value
+                        owner_actor_ref = _text(binding.get("fixture_owner_actor_ref"))
+                        ownership_required = force_fixture_setup and bool(owner_actor_ref)
+                        receipt.update({
+                            "status": "BOUND",
+                            "value_fingerprint": hashlib.sha256(
+                                str(resolved_value).encode("utf-8")
+                            ).hexdigest()[:12],
+                            "owner_actor_ref": owner_actor_ref,
+                            "ownership_proof_status": (
+                                "OBSERVED"
+                                if ownership_required
+                                and _effective_resolver_actor == owner_actor_ref
+                                else "NOT_REQUIRED"
+                                if not ownership_required
+                                else "INDETERMINATE"
+                            ),
+                            "ownership_proof_source": "source_actor_bound_read",
+                        })
+                        return resolved_value
+                return None
+
+            # ── Construct-first / reuse-fallback (prefer_constructed_data) ──
+            # A run-constructed subject is disposable: its cleanup is the run's
+            # own responsibility and a failed assertion against it cannot
+            # damage anything the customer depends on. Existing test-system
+            # data is the documented fallback, used only when construction is
+            # unavailable or fails — and flagged non-disposable. Identity,
+            # observed-body, state-scoped, and internal ``__`` targets keep
+            # their dedicated semantics and never take this path.
+            _construct_first = False
+            _constructed_subject: Any = None
+            if (
+                _text(binding.get("status")) == "runtime_resolvable"
+                and not target.startswith("__")
+                and not force_fixture_setup
+                and not _text(binding.get("identity_extraction"))
+                and not _list(binding.get("body_projection_fields"))
+                and not _text(binding.get("selection_semantics"))
+                and not _text(binding.get("target_path")).startswith("@state=")
+                and resolvers
+            ):
+                if not binding.get("fixture_setup"):
+                    _ac = _auto_fixture_create_for_binding_target(
+                        target,
+                        binding,
+                        ops,
+                        binding_plan,
+                        actors=actors,
+                        behavior_ir=behavior_ir,
+                        accepted_residue_allowed=_accepted_residue_allowed,
+                    )
+                    if _ac:
+                        binding = {**binding, **_ac}
+                _construct_first = bool(
+                    _validated_fixture_setup(
+                        binding,
+                        ops,
+                        actors,
+                        entities=_list(_dict(behavior_ir).get("entities")) or None,
+                    )
+                )
+            if not _construct_first:
+                value = _attempt_list_read_resolution()
                 if value not in (None, "", [], {}):
-                    break
+                    _reuse_choice = prefer_constructed_data(existing=value)
+                    receipt["data_subject_source"] = _text(
+                        _reuse_choice.get("source")
+                    )
+                    receipt["data_subject_disposable"] = _reuse_choice.get(
+                        "disposable"
+                    )
+                    if _text(_reuse_choice.get("note")):
+                        receipt["data_subject_note"] = _text(
+                            _reuse_choice.get("note")
+                        )
             if value in (None, "", [], {}) and _identity_conflict:
                 # Owner-field disagreement across observed rows: the owned
                 # collection read mixes owners, so no observed value can be
@@ -1208,6 +1273,7 @@ def materialize_experiment_fixtures(
                                 "failures": _precond_failures,
                             })
                         else:
+                            _constructed_subject = value
                             receipt.update({
                                 "status": "BOUND",
                                 "source_priority": "experiment_setup_response",
@@ -1252,6 +1318,38 @@ def materialize_experiment_fixtures(
                                     _setup_residue
                                 )
                             pending_fixture_cleanups.append(_pending_entry)
+            if _constructed_subject is not None:
+                _constructed_choice = prefer_constructed_data(
+                    constructed=_constructed_subject
+                )
+                receipt["data_subject_source"] = _text(
+                    _constructed_choice.get("source")
+                )
+                receipt["data_subject_disposable"] = _constructed_choice.get(
+                    "disposable"
+                )
+            if (
+                value in (None, "", [], {})
+                and _construct_first
+                and not fixture_setup_accepted
+            ):
+                # Construction was preferred but produced no subject (no
+                # usable setup, or the create did not reach 2xx). Fall back
+                # to the environment's existing data — flagged non-disposable
+                # so the cleanup ladder treats it with full care.
+                value = _attempt_list_read_resolution()
+                if value not in (None, "", [], {}):
+                    _reuse_choice = prefer_constructed_data(existing=value)
+                    receipt["data_subject_source"] = _text(
+                        _reuse_choice.get("source")
+                    )
+                    receipt["data_subject_disposable"] = _reuse_choice.get(
+                        "disposable"
+                    )
+                    if _text(_reuse_choice.get("note")):
+                        receipt["data_subject_note"] = _text(
+                            _reuse_choice.get("note")
+                        )
             binding_materialization_receipts.append(receipt)
             if value in (None, "", [], {}):
                 if fixture_setup_accepted:

@@ -106,6 +106,18 @@ by replacing host methods:
   short-circuits all-residue cleanup contracts to `DELIVERABLE`. Residue
   is always declared and observable — never disguised as a real cleanup —
   and production/undeclared environments stay fail-closed at every layer.
+- Subject selection is construct-first / reuse-fallback
+  (`prefer_constructed_data`, wired in
+  `experiment_fixture_materializer_core.py`): when a binding can be
+  satisfied by a run-constructed fixture (declared or auto-discovered
+  create with a compensator or accepted residue), construction is
+  attempted before any list read, because a disposable subject can never
+  damage data the customer depends on. Existing test-system data is the
+  documented fallback — used when no construct option exists or the create
+  fails — and the binding receipt records `data_subject_source`
+  (`run_constructed` vs `existing_test_system_data`) with the disposable
+  flag. Owner-identity, observed-body, state-scoped, and internal `__`
+  targets keep their dedicated semantics and never take this path.
 
 ## Connector Event & Credential Boundaries
 
