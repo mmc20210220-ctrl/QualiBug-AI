@@ -431,11 +431,39 @@ def _build_state_bindings(ir: dict, ledger: BindingLedger, module: str) -> int:
 
         # Extract raw values
         raw_values = _list(state.get("values") or state.get("raw_values"))
+        state_name = _text(state.get("name") or state.get("semantic_name"))
+        source_refs = _list(state.get("source_refs"))
+
+        # Source locators of the form "<entity>:<value>" declare the runtime
+        # anchor of this state value. An exact entity:value anchor match is
+        # source-grounded evidence; comparing a state value name against the
+        # field name ("PAID" vs "status") is meaningless and would drag the
+        # composite confidence below every promotion threshold.
+        locator_values: list[str] = []
+        for row in source_refs:
+            if not isinstance(row, dict):
+                continue
+            locator = _text(row.get("locator"))
+            if ":" in locator:
+                locator_values.append(locator.split(":", 1)[1].strip())
+        anchor_value = next(
+            (
+                value
+                for value in locator_values
+                if state_name and value.casefold() == state_name.casefold()
+            ),
+            "",
+        )
 
         evidence = [
             collect_semantic_name_evidence(
-                ir_node_name=state_field,
-                runtime_target_name=state_field,
+                ir_node_name=state_name or state_field,
+                runtime_target_name=anchor_value or state_field,
+            ),
+            create_evidence(
+                dimension="source_consistency",
+                score=0.95 if anchor_value else (0.9 if source_refs else 0.4),
+                detail=f"source_refs_count:{len(source_refs)} anchor:{anchor_value or 'none'}",
             ),
             create_evidence(
                 dimension="entity_context",
@@ -443,10 +471,19 @@ def _build_state_bindings(ir: dict, ledger: BindingLedger, module: str) -> int:
                 detail=f"entity_ref:{entity_ref}",
             ),
         ]
+        if anchor_value:
+            evidence.append(
+                create_evidence(
+                    dimension="schema_relation",
+                    score=0.9,
+                    detail=f"source_locator_anchor:{entity_ref}:{anchor_value}",
+                )
+            )
 
         confidence = compute_composite_confidence(evidence)
 
         metadata = {
+            "state_name": state_name,
             "state_field_name": state_field,
             "entity_ref": entity_ref,
             "raw_values": raw_values,
@@ -455,15 +492,34 @@ def _build_state_bindings(ir: dict, ledger: BindingLedger, module: str) -> int:
             "terminal_values": _list(state.get("terminal") or state.get("terminal_values")),
         }
 
+        # The state value itself must be part of the binding identity: state
+        # obligations reference states by their declared value name
+        # (from_state="CANCELLED"), and a per-field target_key
+        # ("order:status") collapses every lifecycle value into one row that
+        # no name-form reference can ever resolve.
+        target_key = (
+            f"{entity_ref}:{state_field}:{state_name}"
+            if state_name
+            else f"{entity_ref}:{state_field}"
+        )
+
         binding = ledger.propose(
             binding_type="state",
             source_node_id=state_id,
-            target_key=f"{entity_ref}:{state_field}",
+            target_key=target_key,
             source_module=module,
             evidence=evidence,
             metadata=metadata,
         )
-        _auto_promote(ledger, binding, confidence)
+        # Source-declared state values are declared identities, not probe
+        # targets (same rationale as source-declared operation bindings).
+        # Inferred states stay at their evidence-driven confidence.
+        _auto_promote(
+            ledger,
+            binding,
+            confidence,
+            executable_without_probe=bool(source_refs),
+        )
         count += 1
 
     return count
@@ -573,6 +629,11 @@ def _build_scope_bindings(ir: dict, ledger: BindingLedger, module: str) -> int:
                     score=0.8,
                     detail=f"scope_type:{scope_type}",
                 ),
+                create_evidence(
+                    dimension="semantic_name",
+                    score=0.8,
+                    detail=f"declared_actor_scope:{scope_type}",
+                ),
             ]
 
             confidence = compute_composite_confidence(evidence)
@@ -592,7 +653,11 @@ def _build_scope_bindings(ir: dict, ledger: BindingLedger, module: str) -> int:
                 evidence=evidence,
                 metadata=metadata,
             )
-            _auto_promote(ledger, binding, confidence)
+            # A scope declared on a source actor is a declared isolation
+            # coordinate, not a probe target (same rationale as source-declared
+            # operation bindings). Undeclared scopes keep evidence-driven
+            # promotion.
+            _auto_promote(ledger, binding, confidence, executable_without_probe=True)
             count += 1
 
     # Extract scope from relations (scopes type)
@@ -709,7 +774,15 @@ def _build_fixture_bindings(ir: dict, ledger: BindingLedger, module: str) -> int
             evidence=evidence,
             metadata=metadata,
         )
-        _auto_promote(ledger, binding, confidence)
+        # A fixture whose create operation and body template are both
+        # source-declared is a declared creation path, not a probe target.
+        # Fixtures without a source-declared create stay evidence-driven.
+        _auto_promote(
+            ledger,
+            binding,
+            confidence,
+            executable_without_probe=bool(_list(create_op.get("source_refs"))),
+        )
         count += 1
 
     return count

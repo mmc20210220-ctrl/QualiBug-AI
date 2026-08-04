@@ -147,7 +147,9 @@ def _determine_required_dimensions(
     # binding identities. The experiment compiler already gates those.
 
     family = _text(obl.get("risk_family"))
-    if family == "state" and _text(prop.get("state_ref") or prop.get("from_state")):
+    if family == "state" and _text(
+        prop.get("state_ref") or prop.get("from_state_ref") or prop.get("from_state")
+    ):
         required.add("state")
 
     if family in ("isolation", "authorization") and _text(
@@ -213,6 +215,17 @@ def _check_dimension(
         # would block every isolation probe whose ownership field is a body
         # parameter rather than a relation-scoped node.
         if dimension == "scope" and not _is_ir_node_ref(ref):
+            if not executable:
+                missing.append(f"{ref}(no_binding)")
+            continue
+        # Business state literals (``PAID``, ``SHIPPED``, …) name the target
+        # value of a state transition, not an IR node identity. Exact ref
+        # matching would block every state-family probe because the literal
+        # never appears as a ``bir_`` node id in the entity-keyed ledger. Any
+        # executable state binding satisfies the dimension; reaching the
+        # concrete state value is a runtime binding concern validated at
+        # execution by the state handler, not a compile-time identity.
+        if dimension == "state" and not _is_ir_node_ref(ref):
             if not executable:
                 missing.append(f"{ref}(no_binding)")
             continue
@@ -287,8 +300,23 @@ def _get_needed_refs(
 
     if dimension == "state":
         prop = _dict(obl.get("property"))
-        state_ref = _text(prop.get("state_ref") or prop.get("from_state"))
-        return [state_ref] if state_ref else []
+        state_ref = _text(
+            prop.get("state_ref")
+            or prop.get("from_state_ref")
+            or prop.get("from_state")
+        )
+        if not state_ref:
+            return []
+        # Obligations reference states either by node id (bir_…) or by their
+        # declared value name (from_state="CANCELLED"). The binding ledger is
+        # keyed by state node identity, so resolve the value name through the
+        # Behavior IR state nodes before matching.
+        for st in _list(behavior_ir.get("states")):
+            if not isinstance(st, dict):
+                continue
+            if state_ref in (_text(st.get("id")), _text(st.get("name"))):
+                return [_text(st.get("id"))]
+        return [state_ref]
 
     if dimension == "scope":
         prop = _dict(obl.get("property"))
