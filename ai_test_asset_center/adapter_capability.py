@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -68,10 +69,32 @@ def _declared_config(root: Path, project: str) -> dict[str, Any]:
     return {}
 
 
+def operator_db_dsn_declared(env: Any = None) -> bool:
+    """An operator-supplied DB DSN is an explicit data-layer declaration.
+
+    The governed cleanup executor already resolves its database credential with
+    ``QUALIBUG_DB_DSN`` as the first authority ("operator override"). Compile
+    must answer with the same authority: when the operator hands the run a DSN,
+    the data-layer cleanup tier is declared. Without this, compile blocks a
+    write as non-reversible while the executor already holds the reversal key --
+    two authorities disagreeing about the same declaration.
+
+    ``env`` defaults to ``os.environ`` and may be injected for tests. An empty
+    or whitespace-only value is no declaration.
+    """
+    mapping = env if env is not None else os.environ
+    try:
+        value = mapping.get("QUALIBUG_DB_DSN")
+    except AttributeError:
+        return False
+    return bool(str(value or "").strip())
+
+
 def resolve_available_adapters(
     root: Path | str,
     project: str,
     runtime_contract: dict[str, Any] | None = None,
+    env: Any = None,
 ) -> frozenset[str]:
     """Adapters the target and governed executor may be observed through.
 
@@ -92,6 +115,9 @@ def resolve_available_adapters(
         _dict(_dict(service).get("db"))
         for service in _list(config.get("services"))
     ):
+        available.add("db_sql")
+
+    if operator_db_dsn_declared(env):
         available.add("db_sql")
 
     for name in _list(runtime.get("declared_adapters")):

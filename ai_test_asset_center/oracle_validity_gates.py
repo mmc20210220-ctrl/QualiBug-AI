@@ -621,6 +621,12 @@ def enforce_oracle_validity_gates(
             )
             if key in verdict
         }
+        # Erasure must stay traceable: capture the pre-validity finding identity
+        # BEFORE clearing it, so funnel accounting can count and attribute every
+        # finding the validity gate removes. A bare finding=None on an EXECUTED
+        # row was indistinguishable from "nothing was found" in downstream
+        # metrics.
+        erased_finding = _dict(output.get("finding"))
         output["oracle_verdict"] = {
             **verdict,
             "status": "INDETERMINATE",
@@ -635,6 +641,22 @@ def enforce_oracle_validity_gates(
             "effect_observation_graph_status": effect_graph.get("status"),
         }
         output["finding"] = None
+        if erased_finding:
+            output["oracle_validity_erased_finding"] = {
+                "finding_id": _text(
+                    erased_finding.get("finding_id")
+                    or erased_finding.get("id")
+                ),
+                "canonical_defect_id": _text(
+                    erased_finding.get("canonical_defect_id")
+                ),
+                "title": _text(erased_finding.get("title"))[:200],
+                "pre_validity_verdict_status": _text(
+                    original_verdict.get("status")
+                    or original_verdict.get("verdict")
+                ),
+                "oracle_validity_receipt_id": receipt["receipt_id"],
+            }
         if _text(output.get("status")) not in {"BLOCKED", "HARNESS_FAILURE"}:
             output["status"] = "EXECUTED"
         output["reason_code"] = "ORACLE_VALIDITY_INDETERMINATE"

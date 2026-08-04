@@ -442,10 +442,13 @@ def _validate_redacted_evaluation_submission(value: Any) -> None:
             raise CanonicalDefectRegistryError(
                 "persisted_submission_registry_copy_mismatch"
             )
-        if canonical_representative_findings(
-            registry,
-            deliverable_occurrences=delivery_occurrences,
-        ) != findings:
+        # Occurrence-scope envelope (commit 68fbc516 contract): the submission
+        # publishes every gate-passing occurrence as a finding; canonical
+        # de-duplication lives in the registry. A findings list that does not
+        # reproduce the registry's occurrence ids exactly is a scope drift.
+        if sorted(
+            _text(item.get("finding_id") or item.get("id")) for item in findings
+        ) != sorted(registry.get("delivery_occurrence_finding_ids") or []):
             raise CanonicalDefectRegistryError(
                 "persisted_submission_canonical_findings_mismatch"
             )
@@ -777,7 +780,13 @@ def build_evaluation_submission(root: Path, project_id: str, body: dict[str, Any
         "pipeline_health": pipeline_health,
         "operational_metrics": metrics,
         "scan_result": {
-            "findings": canonical_findings,
+            # Evaluator contract: findings are occurrence-level — every
+            # gate-passing occurrence is scored, and canonical deduplication
+            # lives in the registry. Publishing the canonical representatives
+            # here makes findings diverge from delivery_occurrences the moment
+            # one defect is observed more than once, and the envelope is
+            # rejected as normalized_canonical_findings_mismatch.
+            "findings": delivery_occurrences,
             "delivery_occurrences": delivery_occurrences,
             "candidate_findings": [],
             "obligation_attempt_ledger": validated_attempt_ledger,

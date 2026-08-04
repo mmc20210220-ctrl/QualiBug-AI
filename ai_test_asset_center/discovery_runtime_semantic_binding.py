@@ -42,6 +42,7 @@ from .formal_performance_attribution_guard import (
     install_formal_performance_attribution_guard,
 )
 from .formal_performance_surface import install_formal_performance_surface
+from .formal_stability_surface import install_formal_stability_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .job_async_protocol import register_job_async_protocol
@@ -198,6 +199,11 @@ install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
 install_formal_performance_surface()
 install_formal_performance_attribution_guard()
+# The stability installer was never invoked anywhere: its observer, assertion
+# kind and risk family stayed unregistered, so stability_reliability defects
+# were structurally unreachable even when a source stability contract existed.
+# Idempotent registration only; activation still requires the source contract.
+install_formal_stability_surface()
 install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
 install_source_ui_family_vector_compat()

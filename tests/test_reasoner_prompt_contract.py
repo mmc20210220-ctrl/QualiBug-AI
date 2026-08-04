@@ -1,5 +1,9 @@
 from ai_test_asset_center.reasoner_prompt import REASONER_SYSTEM_PROMPT
-from ai_test_asset_center.stage_reason_all_v2 import OUTPUT_HARD_LIMITS
+from ai_test_asset_center.stage_reason_all_v2 import (
+    MAX_HYPOTHESES,
+    OUTPUT_HARD_LIMITS,
+    _output_hard_limits,
+)
 
 
 def test_reasoner_prompt_requires_executable_verification_method():
@@ -24,6 +28,16 @@ def test_reasoner_prompt_rejects_vague_narrative_output():
 
 def test_reasoner_output_hard_limits_keep_json_and_count_contract():
     assert "Return exactly one top-level JSON object" in OUTPUT_HARD_LIMITS
-    assert "Return at most 15 hypotheses" in OUTPUT_HARD_LIMITS
+    # The prompt cap must be derived from the guarded runtime budget, never a
+    # stale literal: a fixed "15" here once silently capped engines at 15 while
+    # MAX_HYPOTHESES allowed 40.
+    assert f"Return at most {MAX_HYPOTHESES} hypotheses" in OUTPUT_HARD_LIMITS
     assert "Return JSON only" in OUTPUT_HARD_LIMITS
     assert "Do not include analysis, markdown, commentary, or code fences" in OUTPUT_HARD_LIMITS
+
+
+def test_output_hard_limits_track_live_hypothesis_cap(monkeypatch):
+    import ai_test_asset_center.stage_reason_all_v2 as stage
+
+    monkeypatch.setattr(stage, "MAX_HYPOTHESES", 7)
+    assert "Return at most 7 hypotheses" in _output_hard_limits()

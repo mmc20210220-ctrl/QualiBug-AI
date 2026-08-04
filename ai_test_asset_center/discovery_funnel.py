@@ -1767,7 +1767,7 @@ def _source_flow_projection(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": "qualibug.discovery-source-flow-receipt.v1",
         "authority": (
-            "enterprise_business_knowledge_asset -> enterprise_understanding_model "
+            "enterprise business knowledge asset -> enterprise understanding model "
             "-> Behavior IR -> formal obligations"
         ),
         "status": "NOT_MEASURED",
@@ -2913,7 +2913,7 @@ def _build_knowledge_source_flow_receipt(
     receipt: dict[str, Any] = {
         "schema_version": "qualibug.discovery-source-flow-receipt.v1",
         "authority": (
-            "enterprise_business_knowledge_asset -> enterprise_understanding_model "
+            "enterprise business knowledge asset -> enterprise understanding model "
             "-> Behavior IR -> formal obligations"
         ),
         "status": "NOT_MEASURED",

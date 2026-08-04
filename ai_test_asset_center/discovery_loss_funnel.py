@@ -245,6 +245,16 @@ def build_discovery_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
         if _text(attempt.get("terminal_status")).upper() != "DELIVERABLE"
         and _text(attempt.get("reason_code"))
     )
+    # Findings erased by the oracle-validity gate keep status EXECUTED with
+    # finding=None; without an explicit count they are indistinguishable from
+    # "nothing was found" between executed and deliverable stages.
+    oracle_validity_erased_rows = [
+        row
+        for row in execution_rows
+        if _text(row.get("reason_code")) == "ORACLE_VALIDITY_INDETERMINATE"
+        or _dict(row.get("oracle_validity_erased_finding"))
+    ]
+    oracle_validity_erased_count = len(oracle_validity_erased_rows)
     terminal_stage_counts = Counter(
         _text(attempt.get("terminal_stage")) or "unknown"
         for attempt in attempts
@@ -335,6 +345,20 @@ def build_discovery_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
             "blocked_risk_family_counts": dict(sorted(risk_family_block_counts.items())),
             "observer_status_counts": dict(sorted(observer_status_counts.items())),
             "observer_reason_counts": dict(sorted(observer_reason_counts.items())),
+            "oracle_validity_erased_count": oracle_validity_erased_count,
+            "oracle_validity_erased_finding_ids": [
+                _text(
+                    _dict(row.get("oracle_validity_erased_finding")).get(
+                        "finding_id"
+                    )
+                )
+                for row in oracle_validity_erased_rows
+                if _text(
+                    _dict(row.get("oracle_validity_erased_finding")).get(
+                        "finding_id"
+                    )
+                )
+            ][:50],
             "top_terminal_blockers": [
                 {"reason_code": reason, "count": count}
                 for reason, count in terminal_reason_counts.most_common(10)

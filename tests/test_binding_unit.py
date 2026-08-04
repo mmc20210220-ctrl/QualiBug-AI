@@ -369,6 +369,52 @@ class TestActorState:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STATE DIMENSION GATE TESTS — regression for business-state-literal blocking
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestStateDimensionGate:
+    """Regression: a business state literal (``confirmed``, ``PAID``, …) is a
+    transition *value*, not an IR node identity. The gate must not exact-match
+    it against ``bir_`` node ids, or every state-family obligation is blocked."""
+
+    @staticmethod
+    def _state_obligation(state_ref):
+        return {"risk_family": "state", "property": {"state_ref": state_ref}}
+
+    @staticmethod
+    def _insert_state_binding(ledger, status):
+        edge = create_binding_edge(
+            binding_type="state",
+            source_node_id="bir_state_order_status",
+            target_key="status",
+        )
+        edge["status"] = status
+        ledger.insert(edge)
+        return edge
+
+    def test_state_literal_with_executable_binding_passes(self, ledger):
+        """Executable state binding present → the literal passes the gate."""
+        self._insert_state_binding(ledger, BindingStatus.EXECUTABLE.value)
+        passed, reason = gate_or_block(
+            ledger,
+            obligation=self._state_obligation("confirmed"),
+            behavior_ir={"operations": [], "entities": [], "states": []},
+        )
+        assert passed, f"state dimension blocked unexpectedly: {reason}"
+
+    def test_state_literal_without_executable_binding_stays_blocked(self, ledger):
+        """Fail-closed: only a CANDIDATE (non-executable) binding → still blocks."""
+        self._insert_state_binding(ledger, BindingStatus.CANDIDATE.value)
+        passed, reason = gate_or_block(
+            ledger,
+            obligation=self._state_obligation("confirmed"),
+            behavior_ir={"operations": [], "entities": [], "states": []},
+        )
+        assert not passed
+        assert "BINDING_GATE_BLOCKED" in reason
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # FIXTURE & OBSERVER TESTS (5)
 # ═══════════════════════════════════════════════════════════════════════════════
 

@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 # Constants
 # ═══════════════════════════════════════════════════════════════════
 
-OUTPUT_HARD_LIMITS = (
+OUTPUT_HARD_LIMITS_TEMPLATE = (
     "\nOUTPUT HARD LIMITS:\n"
     "- Return exactly one top-level JSON object with this shape: {\"hypotheses\":[{...}]}.\n"
-    "- Return at most 15 hypotheses.\n"
+    "- Return at most {max_hypotheses} hypotheses.\n"
     "- Each hypothesis must be concise and no longer than 500 characters.\n"
     "- Return JSON only.\n"
     "- Use double-quoted JSON strings only; never use Python repr, single quotes, comments, or trailing commas.\n"
@@ -41,6 +41,25 @@ MIN_REASONER_TIMEOUT_SECONDS = 300
 MIN_REASONER_MAX_TOKENS = 32768
 MAX_REASONER_MAX_TOKENS = 100000
 MAX_HYPOTHESES_HARD_LIMIT = 40
+
+
+def _output_hard_limits() -> str:
+    """Output contract formatted with the LIVE per-engine hypothesis cap.
+
+    The cap is a guarded runtime value: ``policy_wiring`` re-enforces
+    ``MAX_HYPOTHESES`` on this module before reasoner budgets are resolved.
+    Baking a stale literal into the prompt silently capped every engine below
+    the configured budget (the historical "15 vs 40" contradiction).
+    """
+    return OUTPUT_HARD_LIMITS_TEMPLATE.replace(
+        "{max_hypotheses}", str(int(MAX_HYPOTHESES))
+    )
+
+
+# Import-time snapshot for back-compat consumers; prompt build uses the live
+# form so a policy-enforced cap change is reflected in every engine prompt.
+OUTPUT_HARD_LIMITS = _output_hard_limits()
+
 EXECUTABLE_QUALITY_REPORT_FIELDS = (
     "executable_hypotheses",
     "non_executable_hypotheses",
@@ -1190,7 +1209,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             prompt += chunk_evidence
         if learned_memory_block:
             prompt += learned_memory_block
-        engine_prompts[engine_name] = prompt + OUTPUT_HARD_LIMITS
+        engine_prompts[engine_name] = prompt + _output_hard_limits()
 
     # ── Parallel execution ──
     # Deep copy client config for each worker (prevents thread contamination)

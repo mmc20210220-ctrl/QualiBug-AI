@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -470,6 +471,150 @@ def build_discovery_plan(
             "conflict_obligations_added": 0,
             "conflict_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
+
+    # ── Mainline LLM Reasoner augmentation ──
+    # Comprehension is the measured bottleneck of the discovery harness: the
+    # deterministic obligation compiler only expresses what the Behavior IR
+    # already encodes. The 11-engine Reasoner (stage_reason_all_v2) was only
+    # reachable from side loops, so the mainline never consumed LLM business
+    # reasoning and discovery breadth was structurally capped.
+    #
+    # Wiring contract: hypotheses NEVER become obligations directly. They must
+    # bind to a documented endpoint and join the Behavior IR through exact
+    # source-declared relations (hypothesis_slice_bridge +
+    # obligation_source_adapter). Unbound hypotheses are dropped and counted
+    # in the receipt, so this path adds comprehension without weakening any
+    # source-grounding, fail-closed, or evidence rule.
+    mainline_reasoner_report: dict[str, Any] = {
+        "schema_version": "qualibug.mainline-reasoner-receipt.v1",
+        "status": "NOT_REQUESTED",
+        "hypotheses_generated": 0,
+        "obligations_added": 0,
+    }
+    mainline_reasoner_enabled = inputs.campaign_context.get(
+        "mainline_reasoner_enabled",
+        True,
+    )
+    if not isinstance(mainline_reasoner_enabled, bool):
+        raise MainlineContractError("mainline_reasoner_enabled_not_boolean")
+    if (
+        mainline_reasoner_enabled
+        and not str(
+            os.environ.get("QUALIBUG_MAINLINE_REASONER_DISABLED") or ""
+        ).strip().lower()
+        in {"1", "true", "yes"}
+    ):
+        try:
+            from .stage_reason_all_v2 import collect_reasoner_hypotheses
+
+            _reasoner_api_text = _text(
+                inputs.campaign_context.get("_source_verification_text")
+            ) or inputs.api_spec_text
+            _reasoner_start = time.perf_counter()
+            _reasoner_hypotheses, _reasoner_meta = collect_reasoner_hypotheses(
+                inputs.prd_text,
+                _reasoner_api_text,
+            )
+            mainline_reasoner_report = {
+                "schema_version": "qualibug.mainline-reasoner-receipt.v1",
+                "status": _text(_reasoner_meta.get("status")) or "empty",
+                "hypotheses_generated": len(_reasoner_hypotheses),
+                "provider_meta": {
+                    key: _reasoner_meta.get(key)
+                    for key in (
+                        "reason",
+                        "error_class",
+                        "error_code",
+                        "total_engines",
+                        "successful_engine_count",
+                        "failed_engine_count",
+                        "failed_engine_names",
+                        "engine_error_class_counts",
+                        "max_hypotheses_per_engine",
+                    )
+                    if key in _reasoner_meta
+                },
+                "elapsed_seconds": round(
+                    time.perf_counter() - _reasoner_start, 3
+                ),
+                "obligations_added": 0,
+                "bridge_funnel": {},
+            }
+            if _reasoner_hypotheses:
+                from .hypothesis_slice_bridge import hypotheses_to_obligations
+
+                _adapted, _bridge_funnel = hypotheses_to_obligations(
+                    _reasoner_hypotheses,
+                    api_endpoints=operations,
+                    behavior_ir=behavior_ir,
+                    origin="mainline_reasoner",
+                )
+                _existing_ids = {
+                    _text(o.get("obligation_id"))
+                    for o in obligations
+                    if isinstance(o, dict)
+                }
+                _reasoner_obligations = []
+                for _r_obl in _list(_adapted.get("obligations")):
+                    if not isinstance(_r_obl, dict):
+                        continue
+                    _r_obl = dict(_r_obl)
+                    _r_obl["derivation"] = "mainline_reasoner"
+                    if (
+                        _text(_r_obl.get("obligation_id"))
+                        and _text(_r_obl.get("obligation_id"))
+                        in _existing_ids
+                    ):
+                        continue
+                    _reasoner_obligations.append(_r_obl)
+                    _existing_ids.add(_text(_r_obl.get("obligation_id")))
+                obligations.extend(_reasoner_obligations)
+                mainline_reasoner_report["obligations_added"] = len(
+                    _reasoner_obligations
+                )
+                mainline_reasoner_report["bridge_funnel"] = {
+                    key: _bridge_funnel.get(key)
+                    for key in (
+                        "input",
+                        "bound",
+                        "dropped_no_endpoint",
+                        "adapted_obligation_count",
+                        "adapter_coverage_gap_count",
+                    )
+                    if key in _bridge_funnel
+                }
+                mainline_reasoner_report["adapter_coverage_gaps"] = [
+                    dict(gap)
+                    for gap in _list(_adapted.get("coverage_gaps"))[:50]
+                    if isinstance(gap, dict)
+                ]
+                mainline_reasoner_report[
+                    "total_obligations_after_reasoner"
+                ] = len(obligations)
+                _planning_logger.info(
+                    "mainline_reasoner_augmentation status=%s hypotheses=%s "
+                    "bound=%s obligations_added=%s",
+                    mainline_reasoner_report["status"],
+                    len(_reasoner_hypotheses),
+                    mainline_reasoner_report["bridge_funnel"].get("bound"),
+                    mainline_reasoner_report["obligations_added"],
+                )
+        except Exception as exc:
+            # Degradation is never silent: the FAILED receipt travels with the
+            # planning bundle into product artifacts and the error is logged
+            # with a traceback. The deterministic obligation pool remains.
+            _planning_logger.error(
+                "mainline_reasoner_augmentation_failed %s: %s",
+                type(exc).__name__,
+                str(exc)[:300],
+                exc_info=exc,
+            )
+            mainline_reasoner_report = {
+                "schema_version": "qualibug.mainline-reasoner-receipt.v1",
+                "status": "FAILED",
+                "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+                "obligations_added": 0,
+            }
 
     # Obligation identity is the planning SSOT. Several enrichments above add
     # rows after the compiler's own dedupe pass; leaving those rows in place
@@ -969,6 +1114,7 @@ def build_discovery_plan(
             "behavior_ir_coverage_report": coverage_report,
             "state_audit_report": state_audit_report,
             "conflict_report": conflict_report,
+            "mainline_reasoner_report": mainline_reasoner_report,
             "fact_ref_attach_receipt": _fact_ref_attach_receipt,
             "adapter_surface_install_receipt": adapter_surface_install_receipt,
         },

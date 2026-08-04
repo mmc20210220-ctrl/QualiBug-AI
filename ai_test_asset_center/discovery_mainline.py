@@ -81,6 +81,22 @@ def _plan_contract(plan: Any) -> MainlineRunContract:
     return validate_mainline_run_contract(value)
 
 
+def _public_planning_pack(pack: Any) -> dict[str, Any]:
+    """Project a planning pack for product output.
+
+    Underscore-prefixed keys are internal planning context (knowledge asset,
+    documented operations, runtime actors, budgets). They feed in-process
+    consumers that read the plan bundle directly and must never travel with
+    the serialized product result (scan_result.json / campaign artifacts).
+    """
+
+    if not isinstance(pack, dict):
+        return {}
+    return {
+        key: value for key, value in pack.items() if not str(key).startswith("_")
+    }
+
+
 def _plan_value(plan: Any, field: str) -> Any:
     return plan.get(field) if isinstance(plan, dict) else getattr(plan, field, None)
 
@@ -499,9 +515,9 @@ def run_discovery_mainline(
         fact_ledger = experiments_pack.get("fact_experimentability_ledger")
         if isinstance(fact_ledger, dict) and fact_ledger:
             result["fact_experimentability_ledger"] = fact_ledger
-        result.setdefault("experiments", experiments_pack)
+        result.setdefault("experiments", _public_planning_pack(experiments_pack))
     obligations_pack = _plan_value(plan, "obligations")
     if isinstance(obligations_pack, dict) and obligations_pack:
-        result.setdefault("obligations", obligations_pack)
+        result.setdefault("obligations", _public_planning_pack(obligations_pack))
     result["mainline_runner_receipt"] = receipt
     return result

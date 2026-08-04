@@ -62,6 +62,14 @@ def pytest_configure(config) -> None:
     # 1) Dev-only JWT secret default so import-time collection does not crash.
     os.environ.setdefault("QUALIBUG_JWT_SECRET", "dev-mode-only")
 
+    # 1b) Mainline LLM reasoner must stay out of the test suite by default.
+    # build_discovery_plan consumes the 11-engine Reasoner when enabled; with
+    # real provider credentials in .env that turns deterministic unit tests into
+    # live multi-engine LLM calls (minutes of latency, nondeterministic output).
+    # Tests that exercise the wiring patch the reasoner entry points and delete
+    # this variable explicitly. An explicit export always wins (setdefault).
+    os.environ.setdefault("QUALIBUG_MAINLINE_REASONER_DISABLED", "1")
+
     # 2) Unique per-session basetemp to avoid stale-dir safe-delete cascade.
     if config.option.basetemp:
         return

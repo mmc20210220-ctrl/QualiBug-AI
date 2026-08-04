@@ -19,6 +19,7 @@ from ai_test_asset_center.adapter_capability import (
     DECLARATION_REQUIRED,
     PRODUCT_OWNED_ADAPTERS,
     missing_declaration_reason,
+    operator_db_dsn_declared,
     resolve_available_adapters,
 )
 
@@ -139,6 +140,26 @@ def test_nothing_is_inferred_from_a_base_url(tmp_path: Path) -> None:
         }]},
     )
     assert resolve_available_adapters(tmp_path, "proj") == EXPECTED_DEFAULT_ADAPTERS
+
+
+def test_operator_dsn_is_a_data_layer_declaration(tmp_path: Path) -> None:
+    # The governed cleanup executor resolves its credential with QUALIBUG_DB_DSN
+    # as the first authority (operator override). Compile must answer with the
+    # same authority, or writes block as non-reversible while the executor
+    # already holds the reversal key.
+    env = {"QUALIBUG_DB_DSN": "postgresql://u:p@localhost:5432/app"}
+    assert operator_db_dsn_declared(env)
+    assert resolve_available_adapters(tmp_path, "absent_project", env=env) == (
+        EXPECTED_DEFAULT_ADAPTERS | {"db_sql"}
+    )
+
+
+def test_blank_or_missing_dsn_is_no_declaration(tmp_path: Path) -> None:
+    for env in ({}, {"QUALIBUG_DB_DSN": ""}, {"QUALIBUG_DB_DSN": "   "}):
+        assert not operator_db_dsn_declared(env)
+        assert resolve_available_adapters(
+            tmp_path, "absent_project", env=env
+        ) == EXPECTED_DEFAULT_ADAPTERS
 
 
 def test_refusal_reason_names_authority_source() -> None:
