@@ -45,6 +45,15 @@ jobs:
           set -euxo pipefail
           mkdir -p "$RUNNER_TEMP/payload-unpacked" "$RUNNER_TEMP/benchmark-target" "$RUNNER_TEMP/evaluator-private"
           echo "QUALIBUG_BENCHMARK_TARGET_ROOT=$RUNNER_TEMP/benchmark-target" >> "$GITHUB_ENV"
+          python - <<'PY'
+          from pathlib import Path
+          alphabet = set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+          for path in sorted(Path("_ci_eval").glob("payload.part.*")):
+              raw = path.read_bytes()
+              clean = b"".join(raw.split())
+              bad = [(index, byte) for index, byte in enumerate(clean) if byte not in alphabet]
+              print(f"PAYLOAD_PART {path.name} raw={len(raw)} clean={len(clean)} bad={bad[:20]}")
+          PY
           cat _ci_eval/payload.part.* | base64 --decode > "$RUNNER_TEMP/eval-payload.tar.gz"
           echo "f8b28895829727e57b289895013d269b4c1ee2c3a224d04275cbcc3ead902e79  $RUNNER_TEMP/eval-payload.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/eval-payload.tar.gz" -C "$RUNNER_TEMP/payload-unpacked"
