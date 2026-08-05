@@ -1,6 +1,10 @@
 name: One-time API contract and actorless issue delivery
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-time-api-contract-actorless-issue-delivery.yml'
   issues:
     types: [opened]
   schedule:
@@ -16,7 +20,7 @@ concurrency:
 
 jobs:
   deliver:
-    if: github.event_name == 'schedule' || github.event.issue.title == 'RUN_API_CONTRACT_ACTORLESS_DELIVERY_20260805'
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event.issue.title == 'RUN_API_CONTRACT_ACTORLESS_DELIVERY_20260805'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
