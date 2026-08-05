@@ -1,0 +1,13 @@
+name: Minimal Workflow Now
+
+on:
+  push:
+    branches: ["eval/real-runtime-20260805"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo MINIMAL_OK
