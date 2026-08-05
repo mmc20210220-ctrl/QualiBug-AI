@@ -5,6 +5,10 @@ on:
     branches: ["eval/real-runtime-20260805"]
     paths:
       - ".github/workflows/ci-runner-probe.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/ci-runner-probe.yml"
 
 permissions:
   contents: read
