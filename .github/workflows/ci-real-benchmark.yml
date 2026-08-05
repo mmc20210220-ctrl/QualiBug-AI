@@ -1,6 +1,11 @@
 name: Real 131 Bug Benchmark
 
 on:
+  push:
+    branches: ["eval/real-runtime-20260805"]
+    paths:
+      - "_ci_eval/**"
+      - ".github/workflows/ci-real-benchmark.yml"
   pull_request:
     branches: [main]
     paths:
