@@ -1,0 +1,1 @@
+trigger standalone benchmark v2 after removing legacy workflow
