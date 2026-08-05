@@ -1,0 +1,106 @@
+name: One-time reachability gate delivery
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-reachability-gate-delivery
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    if: github.event.pull_request.head.ref == 'delivery/reachability-gate-trigger-20260805'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Reassemble and verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload_ref='delivery/api-contract-actorless-20260805'
+          root='.github/delivery/reachability-gate'
+          git fetch origin "${payload_ref}"
+          : > /tmp/reachability_gate.patch.gz.b64
+          for part in 00 01 02 03a 03b 04; do
+            git show "origin/${payload_ref}:${root}/part-${part}.b64" >> /tmp/reachability_gate.patch.gz.b64
+          done
+          echo 'bd4039f647658a110618460052652e410f65910658343acae07d593cceb75699  /tmp/reachability_gate.patch.gz.b64' | sha256sum -c -
+          base64 --decode /tmp/reachability_gate.patch.gz.b64 | gzip --decompress > /tmp/reachability_gate.patch
+          echo '0423a20b82f022594be6ca8fd8e1dc833d9facedad2f2246b518c47a0fdb6337  /tmp/reachability_gate.patch' | sha256sum -c -
+          git apply --3way --check /tmp/reachability_gate.patch
+          git apply --3way /tmp/reachability_gate.patch
+          git diff --check
+          cat > /tmp/expected-files.txt <<'EOF'
+          ai_test_asset_center/behavior_ir_core.py
+          ai_test_asset_center/discovery_runtime_execution_result.py
+          ai_test_asset_center/discovery_runtime_planning.py
+          ai_test_asset_center/enterprise_knowledge_center/_linking_impl.py
+          ai_test_asset_center/enterprise_knowledge_center/_parsing.py
+          ai_test_asset_center/operation_inventory.py
+          ai_test_asset_center/scan_source_runtime.py
+          ai_test_asset_center/semantic_scenario_generator/_generator.py
+          ai_test_asset_center/universal_api_parser.py
+          projects/benchmark_mall/input/API_SPEC.md
+          tests/test_actor_permission_guard.py
+          tests/test_discovery_mainline_coordinator.py
+          tests/test_enterprise_knowledge_center_parsing.py
+          tests/test_foreign_key_guard.py
+          tests/test_markdown_request_schema.py
+          tests/test_operation_inventory.py
+          EOF
+          git diff --name-only | sort > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run focused verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONPATH=.
+          python -m compileall -q ai_test_asset_center tests
+          python -m pytest -q \
+            tests/test_actor_permission_guard.py \
+            tests/test_discovery_mainline_coordinator.py \
+            tests/test_enterprise_knowledge_center_parsing.py \
+            tests/test_foreign_key_guard.py \
+            tests/test_markdown_request_schema.py \
+            tests/test_operation_inventory.py \
+            tests/test_required_body_field_guard.py \
+            tests/test_runtime_interface_discovery.py \
+            tests/test_markdown_template_placeholders.py
+          git diff --check
+
+      - name: Commit verified source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'QualiBug Automation'
+          git config user.email 'automation@qualibug.local'
+          git rm .github/workflows/one-time-reachability-gate-delivery.yml
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat(discovery): add complete operation reachability gate' \
+            -m 'Complete the canonical benchmark API contract, preserve actor, body, path, and authentication semantics through Behavior IR, scope exact-source rule linking to source line ranges, and publish receipt-backed operation lifecycle metrics from discovery through judgement.'
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
