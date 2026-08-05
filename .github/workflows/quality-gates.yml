@@ -93,3 +93,11 @@ jobs:
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "repos/${REPOSITORY}/actions/workflows/one-time-lifecycle-root-fix.yml/dispatches" \
             -f ref=main
+
+  eval-runner-probe:
+    if: github.head_ref == 'eval/real-runtime-20260805'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enter evaluation runner
+        run: echo EVAL_RUNNER_OK
