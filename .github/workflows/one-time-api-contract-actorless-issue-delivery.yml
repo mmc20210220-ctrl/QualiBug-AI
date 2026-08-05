@@ -1,11 +1,13 @@
 name: One-time API contract and actorless issue delivery
-# delivery-trigger: 20260805-1
+# delivery-trigger: 20260805-2
 
 on:
   push:
     branches: [main]
     paths:
       - '.github/workflows/one-time-api-contract-actorless-issue-delivery.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
   issues:
     types: [opened]
   schedule:
@@ -14,6 +16,7 @@ on:
 permissions:
   contents: write
   issues: write
+  pull-requests: write
 
 concurrency:
   group: one-time-api-contract-actorless-issue-delivery
@@ -21,7 +24,7 @@ concurrency:
 
 jobs:
   deliver:
-    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event.issue.title == 'RUN_API_CONTRACT_ACTORLESS_DELIVERY_20260805'
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event.issue.title == 'RUN_API_CONTRACT_ACTORLESS_DELIVERY_20260805'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
