@@ -939,6 +939,11 @@ def materialize_experiment_fixtures(
                     _fs_diag["blocked_reason"] = "fixture_setup_no_actor"
                 token_values: dict[str, Any] = {}
                 dependency_blocked = False
+                # Environmental db-read failures (decrypt/gate/transport) must
+                # survive into the blocked detail. Without this, a missing
+                # credential key masquerades as a fixture-generation capability
+                # gap and sends diagnosis in the wrong direction.
+                _db_read_failures: list[str] = []
                 # Prefer the fixture actor, then other authenticated actors that
                 # may already own dependency rows (buyer addresses vs admin).
                 _dependency_actor: list[tuple[str, str]] = []
@@ -1006,6 +1011,17 @@ def materialize_experiment_fixtures(
                             if db_value not in (None, "", [], {}):
                                 dependency_value = db_value
                                 token_values[dependency_token] = dependency_value
+                            else:
+                                _db_reason = _text(db_obs.get("reason_code"))
+                                if _db_reason.startswith((
+                                    "persistence_config_invalid",
+                                    "persistence_read_not_permitted",
+                                    "persistence_source_not_declared",
+                                    "persistence_read_failed",
+                                )):
+                                    _db_read_failures.append(
+                                        f"{dependency_leaf}:{_db_reason}"
+                                    )
                             continue
                         for _dep_idx, (_dep_actor, _dep_token) in enumerate(
                             _dependency_actor
@@ -1175,10 +1191,25 @@ def materialize_experiment_fixtures(
                                     f"{dependency_leaf}"
                                 )
                             elif not dep_setup:
-                                _fs_diag["blocked_reason"] = (
-                                    f"dependency_fixture_setup_not_generated:"
-                                    f"{dependency_leaf}"
-                                )
+                                if _db_read_failures:
+                                    # The dependency rows may well exist; the
+                                    # declared-persistence read channel itself
+                                    # failed (decrypt/gate/transport). Name the
+                                    # environmental cause so this is never
+                                    # misread as a fixture-generation gap.
+                                    _fs_diag["blocked_reason"] = (
+                                        f"dependency_db_read_unavailable:"
+                                        f"{dependency_leaf}:"
+                                        f"{_db_read_failures[0].split(':', 1)[-1]}"
+                                    )
+                                    _fs_diag["db_read_failures"] = list(
+                                        _db_read_failures
+                                    )
+                                else:
+                                    _fs_diag["blocked_reason"] = (
+                                        f"dependency_fixture_setup_not_generated:"
+                                        f"{dependency_leaf}"
+                                    )
                     if dependency_value in (None, "", [], {}):
                         dependency_blocked = True
                         if not _text(_fs_diag.get("blocked_reason")).startswith(
@@ -1418,6 +1449,9 @@ def materialize_experiment_fixtures(
                     "fixture_setup_create_path": _fs_diag.get("create_path"),
                     "fixture_setup_create_status": _fs_diag.get("create_status"),
                     "fixture_setup_dependency": _fs_diag.get("dependency"),
+                    "dependency_db_read_failures": list(
+                        _fs_diag.get("db_read_failures") or []
+                    ),
                 })
                 # An unresolved binding must not be substituted with an invented
                 # identifier. Firing a manufactured id at the target yields an

@@ -519,6 +519,14 @@ Evolution Contract):
   `runtime_binding_materializer_base.declared_persistence_resolver` /
   `validated_runtime_resolvers_with_receipts` and
   `experiment_fixture_materializer_core._run_declared_db_identity_read`.
+  When the DB leg fails for environmental reasons
+  (`persistence_config_invalid` / `persistence_read_not_permitted` /
+  `persistence_source_not_declared` / `persistence_read_failed`) and the
+  dependency still cannot be resolved, the blocked detail must name
+  `dependency_db_read_unavailable:<leaf>:<reason>` (never
+  `dependency_fixture_setup_not_generated`) and the fixture receipt carries
+  `dependency_db_read_failures` — an environment fault must never masquerade
+  as a fixture-generation capability gap.
 - Runtime execution must preserve source-declared request bodies exactly.
   Concurrency, capacity, quantity, stock, balance, quota, and similar
   semantics may be exercised only when an explicit source invariant and
