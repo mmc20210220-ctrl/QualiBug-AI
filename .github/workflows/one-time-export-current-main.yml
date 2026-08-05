@@ -1,27 +1,44 @@
-name: One-time verified API contract delivery
+name: One-time export current main
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+    paths:
+      - ".github/source-export-trigger"
 
 permissions:
   contents: write
+  actions: write
+
+concurrency:
+  group: one-time-export-current-main
+  cancel-in-progress: false
 
 jobs:
-  deliver:
+  export:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact current main
+        uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+
       - name: Apply, test, commit, and clean up
-        run: python .github/verified_api_contract_delivery.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/verified_api_contract_delivery.py
