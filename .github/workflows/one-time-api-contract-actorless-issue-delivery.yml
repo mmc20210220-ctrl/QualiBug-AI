@@ -1,4 +1,5 @@
 name: One-time API contract and actorless issue delivery
+# delivery-trigger: 20260805-1
 
 on:
   push:
