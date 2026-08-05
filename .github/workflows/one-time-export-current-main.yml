@@ -1,60 +1,27 @@
-name: One-time export current main
+name: One-time verified API contract delivery
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/source-export-trigger"
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
-  actions: write
-
-concurrency:
-  group: one-time-export-current-main
-  cancel-in-progress: false
 
 jobs:
-  export:
+  deliver:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
-      - name: Checkout exact current main
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-
-      - name: Build source archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          git rev-parse HEAD > /tmp/exported-commit.txt
-          tar --exclude=.git --exclude='*.pyc' --exclude='__pycache__' -czf /tmp/qualibug-current-main.tar.gz .
-
-      - name: Upload current main source
-        uses: actions/upload-artifact@v4
+      - uses: actions/setup-python@v5
         with:
-          name: qualibug-current-main-${{ github.run_id }}
-          path: |
-            /tmp/qualibug-current-main.tar.gz
-            /tmp/exported-commit.txt
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Publish run id for retrieval
-        shell: bash
+          python-version: '3.11'
+      - name: Install dependencies
         run: |
-          set -euo pipefail
-          printf '%s\n' '${{ github.run_id }}' > .github/source-export-run-id
-          git config user.name "mmc20210220-ctrl"
-          git config user.email "mmc20210220@gmail.com"
-          git add .github/source-export-run-id
-          git commit -m "chore(ci): publish source export run id"
-          for attempt in 1 2 3 4 5; do
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            git pull --rebase origin main
-          done
-          exit 1
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Apply, test, commit, and clean up
+        run: python .github/verified_api_contract_delivery.py
