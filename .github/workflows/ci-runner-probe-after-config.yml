@@ -1,6 +1,10 @@
 name: Runner Probe After Config
 
 on:
+  push:
+    branches: ["eval/real-runtime-20260805"]
+    paths:
+      - ".github/workflows/ci-runner-probe-after-config.yml"
   pull_request:
     branches: [main]
     paths:
