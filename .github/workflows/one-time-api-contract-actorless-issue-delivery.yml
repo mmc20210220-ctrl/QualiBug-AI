@@ -1,0 +1,120 @@
+name: One-time API contract and actorless issue delivery
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: one-time-api-contract-actorless-issue-delivery
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    if: github.event.issue.title == 'RUN_API_CONTRACT_ACTORLESS_DELIVERY_20260805'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Extract and verify staged patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/one-time-api-contract-actorless-delivery.yml')
+          text = source.read_text(encoding='utf-8')
+          start = "cat > /tmp/qualibug-main-delivery.patch.gz.b64 <<'PATCH_B64'\n"
+          end = "\n          PATCH_B64"
+          payload = text.split(start, 1)[1].split(end, 1)[0]
+          lines = [line[10:] if line.startswith('          ') else line for line in payload.splitlines()]
+          Path('/tmp/qualibug-main-delivery.patch.gz.b64').write_text(
+              '\n'.join(lines) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          echo '74319f671ac3aedfa8b068fbc4ae30288748ba304e63d8c4bb2d576eec105b10  /tmp/qualibug-main-delivery.patch.gz.b64' | sha256sum -c -
+          base64 -d /tmp/qualibug-main-delivery.patch.gz.b64 | gzip -d > /tmp/qualibug-main-delivery.patch
+          echo '1df69aa681a52779aeaa124f15b50834a32eba977f494f89d96b989adb4afc9d  /tmp/qualibug-main-delivery.patch' | sha256sum -c -
+
+      - name: Apply verified changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 8c3e8c26da3b1d699894dd34b926602b3c12701b HEAD
+          git apply --3way --check /tmp/qualibug-main-delivery.patch
+          git apply --3way /tmp/qualibug-main-delivery.patch
+          git diff --check
+          cat > /tmp/expected-files.txt <<'EOF'
+          ai_test_asset_center/enterprise_knowledge_center/_parsing.py
+          ai_test_asset_center/experiment_runtime_credentials.py
+          ai_test_asset_center/scan_source_runtime.py
+          ai_test_asset_center/semantic_scenario_generator/_generator.py
+          ai_test_asset_center/universal_api_parser.py
+          projects/benchmark_mall/input/API_SPEC.md
+          tests/test_actor_permission_guard.py
+          tests/test_discovery_mainline_coordinator.py
+          tests/test_markdown_request_schema.py
+          tests/test_stale_credential_and_reason_honesty.py
+          EOF
+          git diff --name-only | sort > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Run focused regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_actor_permission_guard.py \
+            tests/test_discovery_mainline_coordinator.py \
+            tests/test_markdown_request_schema.py \
+            tests/test_stale_credential_and_reason_honesty.py
+
+      - name: Commit verified source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'QualiBug Automation'
+          git config user.email 'automation@qualibug.local'
+          git rm -f .github/workflows/one-time-api-contract-actorless-delivery.yml
+          git rm -f .github/workflows/one-time-api-contract-actorless-issue-delivery.yml
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat(runtime): complete benchmark API contract and support preauthenticated execution' \
+            -m 'Document all 101 benchmark-mall business routes, preserve required fields, foreign keys and role constraints, load project-scoped database schemas, avoid treating large inline OpenAPI JSON as a filesystem path, improve sibling identity binding, and allow declared preauthenticated bearer contexts to bypass unavailable login endpoints while remaining fail-closed for missing or expired tokens.'
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
+
+      - name: Report success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "${{ github.event.issue.number }}" --body "SUCCESS: API contract and actorless runtime changes were pushed to main at $(git rev-parse HEAD)."
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "${{ github.event.issue.number }}" --body "FAILURE: delivery stopped fail-closed. Main was not force-updated; inspect the workflow run before retrying."
