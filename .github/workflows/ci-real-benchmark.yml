@@ -60,6 +60,16 @@ jobs:
           git diff --check
           git diff --stat
 
+      - name: Seal product-visible evaluation inputs
+        run: |
+          set -euxo pipefail
+          rm -f _ci_eval/payload.part.*
+          rm -f "$RUNNER_TEMP/eval-payload.tar.gz"
+          rm -rf "$RUNNER_TEMP/payload-unpacked" "$RUNNER_TEMP/eval-assets"
+          test -z "$(find _ci_eval -maxdepth 1 -name 'payload.part.*' -print -quit)"
+          test ! -e "$RUNNER_TEMP/eval-assets"
+          test -f "$RUNNER_TEMP/evaluator-private/hidden_ground_truth/bugs.json"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
