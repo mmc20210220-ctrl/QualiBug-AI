@@ -15,6 +15,13 @@ from . import observer_contracts as _observers
 from . import _contract_oracles_mechanics as _core
 from ._contract_oracles_mechanics import *  # noqa: F401,F403
 
+from .accepted_residue_oracle import install_accepted_residue_oracle
+
+install_accepted_residue_oracle(_core)
+build_contract_oracle_activation_receipt = (
+    _core.build_contract_oracle_activation_receipt
+)
+
 _original_evaluate_contract_oracle = _core.evaluate_contract_oracle
 _original_validate_contract_oracle_receipt = _core.validate_contract_oracle_receipt
 
