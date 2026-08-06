@@ -21,7 +21,10 @@ from .actor_exploration import (
     _dict,
     _text,
 )
-from .behavior_ir_core import _infer_operation_effect
+from .behavior_ir_core import (
+    _infer_operation_effect,
+    _operation_has_semantic_marker,
+)
 from .experiment_compiler_support import _actor_is_executable
 
 
@@ -155,19 +158,17 @@ def _is_safe_read(operation: dict[str, Any]) -> bool:
 def _is_destructive(operation: dict[str, Any]) -> bool:
     if _method_of(operation) in _DESTRUCTIVE_METHODS:
         return True
-    combined = f"{_path_of(operation)} {_name_of(operation)}"
-    return any(pattern in combined for pattern in _IRREVERSIBLE_PATTERNS)
+    return _operation_has_semantic_marker(operation, _IRREVERSIBLE_PATTERNS)
 
 
 def _is_state_transition(operation: dict[str, Any]) -> bool:
-    combined = f"{_path_of(operation)} {_name_of(operation)}"
-    return any(
-        pattern in combined
-        for pattern in (
+    return _operation_has_semantic_marker(
+        operation,
+        frozenset({
             "approve", "submit", "cancel", "enable", "disable",
             "activate", "deactivate", "publish", "freeze", "status",
             "transition", "state",
-        )
+        }),
     )
 
 
