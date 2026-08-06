@@ -38,7 +38,7 @@ from .experiment_runtime_support import (
 )
 
 # ── V1.8: Runtime Actor Exploration ──
-from .actor_exploration import ActorSelectionMode
+from .actor_exploration import ActorAttemptOutcome, ActorSelectionMode
 from .actor_exploration_runtime import (
     classify_actor_attempt,
     log_exploration_attempted,
@@ -48,6 +48,13 @@ from .actor_exploration_runtime import (
     record_permission_observation,
     PermissionObservation,
     compute_observation_confidence,
+)
+from .actor_exploration_execution import (
+    apply_actor_execution_overlay,
+    exploration_execution_policy,
+    exploration_receipt,
+    extract_primary_http_attempt_evidence,
+    should_continue_actor_exploration,
 )
 
 
@@ -242,7 +249,6 @@ def execute_one_experiment(
         "runtime_contract": deepcopy(_dict(runtime_contract)),
     }
 
-    # ── V1.8: Extract exploration plan ──
     prop = _dict(exp.get("property"))
     exploration_plan_raw = _dict(prop.get("_actor_exploration_plan"))
     exploration_mode = _text(exploration_plan_raw.get("mode"))
@@ -256,7 +262,6 @@ def execute_one_experiment(
         and max_attempts > 0
     )
 
-    # ── Build behavior IR actor index for observation recording ──
     ir = _dict(behavior_ir)
     ir_actors = {
         _text(a.get("id") or a.get("actor_id")): a
@@ -277,7 +282,40 @@ def execute_one_experiment(
     )
     primary_op = ir_ops.get(primary_op_id, {})
 
-    # ── Single attempt for explicit-permission or non-exploration ──
+    if is_exploration:
+        policy_allowed, policy_max_attempts, policy_reason = (
+            exploration_execution_policy(
+                operation=primary_op,
+                experiment=exp,
+                requested_max_attempts=max_attempts,
+            )
+        )
+        if not policy_allowed:
+            blocked = {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": _text(exp.get("experiment_id")),
+                "obligation_id": obligation_id,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ACTOR",
+                "detail": (
+                    f"runtime_actor_exploration_not_allowed:"
+                    f"{primary_op_id}:{policy_reason}"
+                ),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_ACTOR",
+                    "detail": (
+                        f"runtime_actor_exploration_not_allowed:"
+                        f"{primary_op_id}:{policy_reason}"
+                    ),
+                },
+            }
+            return _finalize_result(
+                blocked, exp, behavior_ir, root, project, oracle_enabled=False
+            )
+        max_attempts = min(max_attempts, policy_max_attempts)
+
     if not is_exploration:
         result = _execute_one_governed(
             exp, behavior_ir=behavior_ir, root=root, project=project,
@@ -290,10 +328,6 @@ def execute_one_experiment(
             oracle_enabled=oracle_enabled,
         )
 
-    # ═══════════════════════════════════════════════════════════════
-    # ── PERMISSION_EXPLORATION: Multi-Candidate Loop (Step 7) ──
-    # ═══════════════════════════════════════════════════════════════
-
     log_exploration_started(
         obligation_id=obligation_id,
         operation_id=primary_op_id,
@@ -305,6 +339,9 @@ def execute_one_experiment(
     outcomes: dict[str, int] = {}
     last_result: dict[str, Any] | None = None
     discovered_actor_id: str = ""
+    attempt_receipts: list[dict[str, Any]] = []
+    terminal_exploration_reason = ""
+    primary_method = _text(primary_op.get("method")).upper()
 
     for attempt_index, candidate_id in enumerate(candidate_ids[:max_attempts]):
         candidate_actor = ir_actors.get(candidate_id, {})
@@ -314,16 +351,28 @@ def execute_one_experiment(
             or candidate_id
         )
 
-        # Update the experiment's actor_ref for this attempt
-        attempt_exp = deepcopy(exp)
-        attempt_prop = _dict(attempt_exp.get("property"))
-        attempt_prop["actor_ref"] = candidate_id
-        attempt_exp["property"] = attempt_prop
-        # Also update required_actors if present
-        if _list(attempt_exp.get("required_actors")):
-            attempt_exp["required_actors"] = [candidate_id]
+        try:
+            attempt_exp, overlay_receipt = apply_actor_execution_overlay(
+                exp, candidate_id
+            )
+        except ValueError as exc:
+            terminal_exploration_reason = str(exc)
+            last_result = {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": _text(exp.get("experiment_id")),
+                "obligation_id": obligation_id,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ACTOR",
+                "detail": terminal_exploration_reason,
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_ACTOR",
+                    "detail": terminal_exploration_reason,
+                },
+            }
+            break
 
-        # Execute with this candidate
         attempt_result = _execute_one_governed(
             attempt_exp,
             behavior_ir=behavior_ir,
@@ -336,68 +385,104 @@ def execute_one_experiment(
             actor_tokens=actor_tokens,
         )
 
-        # Classify the attempt
-        exec_receipt = _dict(attempt_result.get("execution_receipt"))
-        http_result = {
-            "status_code": int(
-                exec_receipt.get("status_code")
-                or exec_receipt.get("status")
-                or 0
-            ),
-        }
-        classification = classify_actor_attempt(http_result)
-        status_code = http_result["status_code"]
+        evidence = extract_primary_http_attempt_evidence(
+            attempt_result, primary_op_id
+        )
+        classification = classify_actor_attempt({
+            "status_code": evidence.status_code,
+            "business_layer_reached": evidence.business_layer_reached,
+        })
+        status_code = evidence.status_code
 
-        # Derive actual status from the result
+        if (
+            status_code in {400, 409, 422}
+            and not evidence.business_layer_reached
+        ):
+            classification = ActorAttemptOutcome.INCONCLUSIVE
+
         result_status = _text(attempt_result.get("status"))
-        if result_status == "BLOCKED":
-            # Use the reason_code to refine classification
+        if not status_code and result_status == "BLOCKED":
             reason = _text(attempt_result.get("reason_code") or "")
             detail = _text(attempt_result.get("detail") or "")
             combined = f"{reason}:{detail}".lower()
             if "401" in combined or "auth" in reason.lower():
-                classification = classify_actor_attempt({"status_code": 401})
+                classification = ActorAttemptOutcome.AUTHENTICATION_FAILED
                 status_code = 401
-            elif "403" in combined or "permission" in reason.lower() or "forbidden" in combined:
-                classification = classify_actor_attempt({"status_code": 403})
+            elif (
+                "403" in combined
+                or "permission" in reason.lower()
+                or "forbidden" in combined
+            ):
+                classification = ActorAttemptOutcome.PERMISSION_DENIED
                 status_code = 403
             elif "404" in combined or "not_found" in reason.lower():
-                classification = classify_actor_attempt({"status_code": 404})
+                classification = ActorAttemptOutcome.RESOURCE_NOT_VISIBLE
                 status_code = 404
 
-        # Log this attempt
+        effective_actor = _text(evidence.actor_ref)
+        if effective_actor != candidate_id:
+            classification = ActorAttemptOutcome.INCONCLUSIVE
+            terminal_exploration_reason = (
+                "runtime_actor_identity_unproven:"
+                f"planned={candidate_id}:effective={effective_actor or 'missing'}"
+            )
+
         log_exploration_attempted(
             actor_ref=candidate_ref,
             attempt_index=attempt_index,
-            score=0.0,  # score tracked in compile-time plan
+            score=0.0,
             score_reasons=[],
             status_code=status_code,
             outcome=classification.value,
         )
 
-        # Track outcomes
         outcome_key = classification.value
         outcomes[outcome_key] = outcomes.get(outcome_key, 0) + 1
 
-        # Record permission observation
         observation_outcome = _outcome_to_observation(classification)
         if observation_outcome:
             record_permission_observation(PermissionObservation(
                 actor_id=candidate_id,
                 role_ref=_text(candidate_actor.get("role")),
                 operation_id=primary_op_id,
-                evidence_ref=_text(attempt_result.get("experiment_id") or execution_id),
+                evidence_ref=_text(
+                    attempt_result.get("experiment_id") or execution_id
+                ),
                 outcome=observation_outcome,
                 status_code=status_code,
                 confidence=compute_observation_confidence(
                     outcome=observation_outcome,
-                    same_context_successes=outcomes.get("operation_executable", 0),
+                    same_context_successes=outcomes.get(
+                        "operation_executable", 0
+                    ),
                 ),
             ))
 
-        # Check if this actor is usable
-        if classification.value in ("operation_executable", "business_rejected"):
-            # ── Actor discovered! (Step 10) ──
+        discovered = classification in {
+            ActorAttemptOutcome.OPERATION_EXECUTABLE,
+            ActorAttemptOutcome.BUSINESS_REJECTED,
+        }
+        continue_allowed, continue_reason = should_continue_actor_exploration(
+            method=primary_method,
+            outcome=classification.value,
+            status_code=status_code,
+        )
+        if terminal_exploration_reason:
+            continue_allowed = False
+            continue_reason = terminal_exploration_reason
+
+        attempt_receipts.append(exploration_receipt(
+            attempt_index=attempt_index,
+            planned_actor_id=candidate_id,
+            overlay_receipt=overlay_receipt,
+            evidence=evidence,
+            outcome=classification.value,
+            continued=(not discovered and continue_allowed),
+            continue_reason=continue_reason,
+        ))
+
+        last_result = attempt_result
+        if discovered:
             discovered_actor_id = candidate_id
             log_exploration_discovered(
                 actor_ref=candidate_ref,
@@ -405,29 +490,17 @@ def execute_one_experiment(
                 binding_scope="scenario",
                 authorization_verdict="unknown_expectation",
             )
-            last_result = attempt_result
-
-            # Update the original experiment's property for the final result
+            exp = attempt_exp
             exp_prop = _dict(exp.get("property"))
-            exp_prop["actor_ref"] = candidate_id
             exp_prop["_actor_exploration_discovered"] = candidate_id
             exp["property"] = exp_prop
             break
 
-        if classification.value in (
-            "authentication_failed",
-            "permission_denied",
-            "resource_not_visible",
-            "infrastructure_failed",
-            "inconclusive",
-        ):
-            last_result = attempt_result
-            continue
+        if not continue_allowed:
+            if not terminal_exploration_reason:
+                terminal_exploration_reason = continue_reason
+            break
 
-        # Unknown classification — preserve result but don't break
-        last_result = attempt_result
-
-    # ── All candidates exhausted? ──
     if not discovered_actor_id:
         log_exploration_exhausted(
             attempted_actor_count=len(candidate_ids[:max_attempts]),
@@ -449,12 +522,16 @@ def execute_one_experiment(
                 },
             }
         else:
-            # Update reason on the last result
             last_result["status"] = "BLOCKED"
             last_result["reason_code"] = "BLOCKED_MISSING_ACTOR"
             last_result["detail"] = (
                 f"runtime_permitted_actor_not_discovered:{primary_op_id}:"
                 + ",".join(f"{k}={v}" for k, v in sorted(outcomes.items()))
+                + (
+                    f":terminal={terminal_exploration_reason}"
+                    if terminal_exploration_reason
+                    else ""
+                )
             )
             last_result["finding"] = None
             er = _dict(last_result.get("execution_receipt"))
@@ -462,17 +539,16 @@ def execute_one_experiment(
             er["reason_code"] = "BLOCKED_MISSING_ACTOR"
             last_result["execution_receipt"] = er
 
+        last_result["actor_exploration_receipts"] = list(attempt_receipts)
         return _finalize_result(
             last_result, exp, behavior_ir, root, project,
-            oracle_enabled=False,  # exploration mode: oracle OFF
+            oracle_enabled=False,
         )
 
-    # ── Actor discovered: continue original experiment (Step 10) ──
-    # The last_result already contains the full experiment execution
-    # with the discovered actor. Now apply post-execution gates.
+    last_result["actor_exploration_receipts"] = list(attempt_receipts)
     return _finalize_result(
         last_result, exp, behavior_ir, root, project,
-        oracle_enabled=False,  # exploration mode: oracle OFF (Step 9)
+        oracle_enabled=False,
     )
 
 
@@ -498,8 +574,8 @@ def _finalize_result(
 ) -> dict[str, Any]:
     """Post-execution gates: oracle causality, validity, delivery packaging.
 
-    V1.8: When *oracle_enabled* is False (exploration mode), the authorization
-    oracle is skipped and the verdict is set to UNKNOWN_EXPECTATION.
+    When authorization expectation is unknown, authorization causality is
+    skipped but the general Oracle Validity Gates still run.
     """
     exp = experiment
     try:
@@ -510,19 +586,20 @@ def _finalize_result(
             else result
         )
 
-        # ── V1.8: Oracle protection (Step 9) ──
         if not oracle_enabled:
-            # Exploration mode — no authorization verdict allowed
             governed = dict(prepared)
             governed["authorization_causality_receipt"] = {
                 "status": "NOT_APPLICABLE",
-                "reason": "exploration_mode_oracle_disabled",
+                "reason": "exploration_mode_authorization_expectation_unknown",
             }
             finding = _dict(governed.get("finding"))
             if finding:
                 finding["authorization_verdict"] = "UNKNOWN_EXPECTATION"
                 governed["finding"] = finding
-            return governed
+            return enforce_oracle_validity_gates(
+                result=governed,
+                experiment=exp,
+            )
 
         governed = enforce_authorization_oracle_causality(
             result=prepared,
@@ -530,7 +607,6 @@ def _finalize_result(
             behavior_ir=behavior_ir,
             account_rows=_governance._test_account_rows(root, project),
         )
-        # SPEC §7.6–7.7: Effect Observation Graph + Oracle Validity Gates
         governed = enforce_oracle_validity_gates(
             result=governed,
             experiment=exp,
