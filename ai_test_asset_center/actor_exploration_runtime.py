@@ -1,15 +1,13 @@
-"""Runtime actor exploration logic — Commit 2 + 3 per the implementation plan.
+"""Context-aware runtime actor exploration on the existing compiler/executor path.
 
-Functions:
-  - ``can_explore_actor``      → ExplorationDecision
-  - ``score_actor_candidate``   → ActorCandidate with composite score
-  - ``build_exploration_plan``  → ActorExecutionPlan for when permits are missing
-  - ``classify_actor_attempt``  → ActorAttemptOutcome from HTTP response
-  - ``record_permission_observation`` → store observed edge in scan-scoped store
+This module owns candidate scoring, operation safety, response classification
+and the campaign-scoped permission observation store. Runtime observations are
+selection evidence only; they never become authorization defects by themselves.
 """
-
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from typing import Any
 
@@ -20,39 +18,110 @@ from .actor_exploration import (
     ActorSelectionMode,
     ExplorationDecision,
     PermissionObservation,
-    _text,
     _dict,
+    _text,
 )
+from .experiment_compiler_support import _actor_is_executable
+
 
 logger = logging.getLogger(__name__)
 
-
-# ══════════════════════════════════════════════════════════════════════
-# Constants
-# ══════════════════════════════════════════════════════════════════════
-
-# Methods safe to attempt with multiple actors
 _SAFE_READ_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
-_QUERY_POST_PATTERNS: frozenset[str] = frozenset({"search", "query", "list", "find", "filter", "lookup"})
-
-# Methods that are high-risk for multi-actor exploration
+_QUERY_POST_PATTERNS: frozenset[str] = frozenset({
+    "search", "query", "list", "find", "filter", "lookup",
+})
 _DESTRUCTIVE_METHODS: frozenset[str] = frozenset({"DELETE"})
-
-# Irreversible state transitions (patterns in operation path or description)
 _IRREVERSIBLE_PATTERNS: frozenset[str] = frozenset({
     "refund", "payment", "pay", "transfer", "ship", "ban", "disable",
     "close", "freeze", "revoke", "destroy", "permanent",
 })
-
-# Default limits
 _DEFAULT_MAX_SAFE_ATTEMPTS = 3
 _DEFAULT_MAX_WRITE_ATTEMPTS = 2
-_DEFAULT_MAX_RISKY_ATTEMPTS = 1
+_CONFIDENCE_SINGLE_SUCCESS = 0.60
+_CONFIDENCE_TWO_SAME_CONTEXT = 0.75
+_CONFIDENCE_MULTI_INSTANCE = 0.85
+_CONFIDENCE_STATIC_SUPPORT_BONUS = 0.10
+_CONFIDENCE_REUSE_THRESHOLD = 0.80
+_MAX_OBSERVATIONS_PER_SCOPE = 512
+_MAX_OBSERVATION_SCOPES = 32
+_LEGACY_SCOPE = ("__legacy_project__", "__legacy_campaign__")
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Operation classification helpers
-# ══════════════════════════════════════════════════════════════════════
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _canonical(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def permission_context_fingerprint(runtime_context: dict[str, Any] | None) -> str:
+    """Hash only permission-relevant context; never raw business payloads."""
+
+    context = _dict(runtime_context)
+    payload = {
+        key: _text(context.get(key))
+        for key in (
+            "resource_type",
+            "resource_tenant_id",
+            "resource_owner_actor_id",
+            "resource_creator_actor_id",
+            "ownership",
+            "resource_state",
+        )
+        if _text(context.get(key))
+    }
+    if not payload:
+        return ""
+    return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
+
+
+def observation_context_compatible(
+    observation: PermissionObservation,
+    runtime_context: dict[str, Any] | None,
+) -> bool:
+    """Return whether an observation may influence this candidate ranking."""
+
+    context = _dict(runtime_context)
+    current_fingerprint = permission_context_fingerprint(context)
+    if (
+        observation.context_fingerprint
+        and current_fingerprint
+        and observation.context_fingerprint != current_fingerprint
+    ):
+        return False
+    current_tenant = _text(context.get("resource_tenant_id"))
+    if observation.tenant_id and current_tenant and observation.tenant_id != current_tenant:
+        return False
+    current_ownership = _text(context.get("ownership"))
+    if (
+        observation.ownership
+        and current_ownership
+        and observation.ownership != current_ownership
+    ):
+        return False
+    current_state = _text(context.get("resource_state"))
+    if (
+        observation.resource_state
+        and current_state
+        and observation.resource_state != current_state
+    ):
+        return False
+    current_resource = _text(context.get("resource_type"))
+    if (
+        observation.resource_type
+        and current_resource
+        and observation.resource_type != current_resource
+    ):
+        return False
+    return True
+
 
 def _method_of(operation: dict[str, Any]) -> str:
     return _text(operation.get("method")).upper()
@@ -76,23 +145,19 @@ def _is_safe_read(operation: dict[str, Any]) -> bool:
     if method in _SAFE_READ_METHODS:
         return True
     if method == "POST":
-        path = _path_of(operation)
-        name = _name_of(operation)
-        combined = f"{path} {name}"
+        combined = f"{_path_of(operation)} {_name_of(operation)}"
         return any(pattern in combined for pattern in _QUERY_POST_PATTERNS)
     return False
 
 
 def _is_destructive(operation: dict[str, Any]) -> bool:
-    method = _method_of(operation)
-    if method in _DESTRUCTIVE_METHODS:
+    if _method_of(operation) in _DESTRUCTIVE_METHODS:
         return True
     combined = f"{_path_of(operation)} {_name_of(operation)}"
     return any(pattern in combined for pattern in _IRREVERSIBLE_PATTERNS)
 
 
 def _is_state_transition(operation: dict[str, Any]) -> bool:
-    """Moderate-risk: approval, submission, status changes, enable/disable."""
     combined = f"{_path_of(operation)} {_name_of(operation)}"
     return any(
         pattern in combined
@@ -104,21 +169,19 @@ def _is_state_transition(operation: dict[str, Any]) -> bool:
     )
 
 
-def _has_compensation_plan(operation: dict[str, Any], obligation: dict[str, Any]) -> bool:
-    """Check if the operation has a declared compensation/cleanup plan."""
-    obl = _dict(obligation)
-    prop = _dict(obl.get("property"))
-    if _text(prop.get("compensates")) or _text(prop.get("cleanup_ref")):
-        return True
-    # Also check if the obligation has a compensates_create_operation
-    if _text(obl.get("compensates_operation_ref")):
-        return True
-    return False
+def _has_compensation_plan(
+    operation: dict[str, Any],
+    obligation: dict[str, Any],
+) -> bool:
+    del operation
+    obligation = _dict(obligation)
+    prop = _dict(obligation.get("property"))
+    return bool(
+        _text(prop.get("compensates") or prop.get("cleanup_ref"))
+        or _text(obligation.get("compensates_operation_ref"))
+        or _text(_dict(obligation.get("cleanup_requirement")).get("operation_ref"))
+    )
 
-
-# ══════════════════════════════════════════════════════════════════════
-# Exploration Decision (Step 4)
-# ══════════════════════════════════════════════════════════════════════
 
 def can_explore_actor(
     operation: dict[str, Any],
@@ -128,81 +191,25 @@ def can_explore_actor(
     max_safe_attempts: int = _DEFAULT_MAX_SAFE_ATTEMPTS,
     max_write_attempts: int = _DEFAULT_MAX_WRITE_ATTEMPTS,
 ) -> ExplorationDecision:
-    """Decide whether runtime actor exploration is permitted for this operation.
+    """Decide whether bounded actor exploration is safe for an operation."""
 
-    Priority order:
-      1. Safe reads (GET/HEAD/OPTIONS, query POSTs) → allowed, 3 attempts
-      2. Write operations with compensation plans → allowed, 2 attempts
-      3. Idempotent PATCH on test data → allowed, 2 attempts
-      4. State transitions → cautious, 1 attempt
-      5. Destructive (DELETE/refund/payment/transfer) → default blocked
-    """
     method = _method_of(operation)
-
-    # ── Safe reads ──
     if _is_safe_read(operation):
-        return ExplorationDecision(
-            allowed=True,
-            max_attempts=max_safe_attempts,
-            reason="safe_read",
-            requires_owner=False,
-        )
-
-    # ── Destructive operations ──
+        return ExplorationDecision(True, max_safe_attempts, "safe_read", False)
     if _is_destructive(operation) and not allow_destructive:
-        return ExplorationDecision(
-            allowed=False,
-            max_attempts=0,
-            reason="destructive_operation",
-            requires_owner=True,
-        )
-    if _is_destructive(operation) and allow_destructive:
-        return ExplorationDecision(
-            allowed=True,
-            max_attempts=1,
-            reason="destructive_operation_forced",
-            requires_owner=True,
-        )
-
-    # ── Operations with explicit compensation plan ──
+        return ExplorationDecision(False, 0, "destructive_operation", True)
+    if _is_destructive(operation):
+        return ExplorationDecision(True, 1, "destructive_operation_forced", True)
     if _has_compensation_plan(operation, obligation):
-        return ExplorationDecision(
-            allowed=True,
-            max_attempts=max_write_attempts,
-            reason="compensated_write",
-            requires_owner=False,
-        )
-
-    # ── State transitions ──
+        return ExplorationDecision(True, max_write_attempts, "compensated_write", False)
     if _is_state_transition(operation):
-        return ExplorationDecision(
-            allowed=True,
-            max_attempts=1,
-            reason="state_transition_cautious",
-            requires_owner=True,
-        )
-
-    # ── General writes (PUT, POST, PATCH) ──
+        return ExplorationDecision(True, 1, "state_transition_cautious", True)
     if method in {"PUT", "PATCH", "POST"}:
-        return ExplorationDecision(
-            allowed=True,
-            max_attempts=max_write_attempts,
-            reason="general_write",
-            requires_owner=False,
-        )
+        # Final runtime policy verifies the compiled cleanup contract before
+        # transport; compile cannot see the completed cleanup plan yet.
+        return ExplorationDecision(True, max_write_attempts, "general_write", False)
+    return ExplorationDecision(False, 0, "unknown_operation_risk", True)
 
-    # ── Unknown — default conservative: block ──
-    return ExplorationDecision(
-        allowed=False,
-        max_attempts=0,
-        reason="unknown_operation_risk",
-        requires_owner=True,
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Candidate Scoring (Step 5)
-# ══════════════════════════════════════════════════════════════════════
 
 def score_actor_candidate(
     actor: dict[str, Any],
@@ -212,25 +219,11 @@ def score_actor_candidate(
     runtime_context: dict[str, Any] | None = None,
     permission_observations: list[PermissionObservation] | None = None,
 ) -> ActorCandidate:
-    """Score an actor for candidate ranking.
+    """Score one executable actor using context before credential convenience."""
 
-    Scoring rules (additive):
-      +100  resource creator
-      +90   resource owner
-      +80   previous-step actor
-      +70   same tenant
-      +60   observed success on same operation
-      +40   observed success on same resource type
-      +20   account_ref present
-      +20   runtime_bound
-      +10   credential recently verified OK
-      -100  tenant conflict
-      -80   resource ownership conflict
-      -60   credential expired / auth failed
-    """
-    ctx = runtime_context or {}
-    observations = permission_observations or []
-
+    del obligation
+    context = _dict(runtime_context)
+    observations = list(permission_observations or [])
     actor_id = _text(actor.get("id") or actor.get("actor_id"))
     actor_ref = _text(actor.get("actor_ref") or actor.get("name") or actor_id)
     account_ref = _text(actor.get("account_ref") or actor.get("account_id")) or None
@@ -238,54 +231,79 @@ def score_actor_candidate(
     role_ref = _text(actor.get("role")) or None
     tenant_id = _text(actor.get("tenant_scope") or actor.get("tenant_id")) or None
     secret_ref = _text(
-        actor.get("credential_secret_ref")
-        or actor.get("secret_ref")
-        or ""
+        actor.get("credential_secret_ref") or actor.get("secret_ref")
     ) or None
-
     score = 0.0
     reasons: list[str] = []
 
-    # ── Positive signals ──
-
-    if actor_id and actor_id == _text(ctx.get("resource_creator_actor_id")):
+    if actor_id and actor_id == _text(context.get("resource_creator_actor_id")):
         score += 100
         reasons.append("resource_creator")
-
-    if actor_id and actor_id == _text(ctx.get("resource_owner_actor_id")):
+    if actor_id and actor_id == _text(context.get("resource_owner_actor_id")):
         score += 90
         reasons.append("resource_owner")
-
-    if actor_id and actor_id == _text(ctx.get("previous_step_actor_id")):
+    if actor_id and actor_id == _text(context.get("previous_step_actor_id")):
         score += 80
         reasons.append("previous_step_actor")
 
-    if tenant_id and tenant_id == _text(ctx.get("resource_tenant_id")):
-        score += 70
-        reasons.append("same_tenant")
+    current_tenant = _text(context.get("resource_tenant_id"))
+    if tenant_id and current_tenant:
+        if tenant_id == current_tenant:
+            score += 70
+            reasons.append("same_tenant")
+        else:
+            score -= 100
+            reasons.append("tenant_conflict")
 
-    # Observed success from same-scan permission store
-    op_id = _text(operation.get("id") or operation.get("operation_id")) if operation else ""
+    operation_id = _text(
+        _dict(operation).get("id") or _dict(operation).get("operation_id")
+    )
     resource_type = _text(
-        operation.get("resource_type")
-        or ctx.get("resource_type")
-    ) if operation else ""
-
-    same_op_successes = 0
-    same_resource_successes = 0
-    for obs in observations:
-        if obs.actor_id == actor_id and obs.outcome == "OBSERVED_ALLOWED":
-            if obs.operation_id == op_id:
-                same_op_successes += 1
-            if resource_type and obs.resource_type == resource_type:
-                same_resource_successes += 1
-
-    if same_op_successes > 0:
+        _dict(operation).get("resource_type") or context.get("resource_type")
+    )
+    compatible_allowed = [
+        observation
+        for observation in observations
+        if observation.actor_id == actor_id
+        and observation.outcome == "OBSERVED_ALLOWED"
+        and observation.confidence >= _CONFIDENCE_SINGLE_SUCCESS
+        and observation_context_compatible(observation, context)
+    ]
+    same_operation = [
+        observation
+        for observation in compatible_allowed
+        if observation.operation_id == operation_id
+    ]
+    same_resource = [
+        observation
+        for observation in compatible_allowed
+        if resource_type and observation.resource_type == resource_type
+    ]
+    if same_operation:
+        best = max(observation.confidence for observation in same_operation)
         score += 60
-        reasons.append(f"observed_operation_success_x{same_op_successes}")
-    elif same_resource_successes > 0:
+        reasons.append(
+            f"observed_operation_success_x{len(same_operation)}_confidence_{best:.2f}"
+        )
+    elif same_resource:
+        best = max(observation.confidence for observation in same_resource)
         score += 40
-        reasons.append(f"observed_resource_success_x{same_resource_successes}")
+        reasons.append(
+            f"observed_resource_success_x{len(same_resource)}_confidence_{best:.2f}"
+        )
+
+    compatible_denials = [
+        observation
+        for observation in observations
+        if observation.actor_id == actor_id
+        and observation.operation_id == operation_id
+        and observation.outcome == "OBSERVED_DENIED"
+        and observation.confidence >= 0.50
+        and observation_context_compatible(observation, context)
+    ]
+    if compatible_denials:
+        score -= 25
+        reasons.append(f"observed_operation_denial_x{len(compatible_denials)}")
 
     if account_ref:
         score += 20
@@ -293,26 +311,18 @@ def score_actor_candidate(
     if runtime_bound:
         score += 20
         reasons.append("runtime_bound")
-
-    # Credential recently verified
-    if _text(actor.get("last_auth_status") or "").lower() == "ok":
+    auth_status = _text(actor.get("last_auth_status")).lower()
+    if auth_status == "ok":
         score += 10
         reasons.append("credential_recently_ok")
-
-    # ── Negative signals ──
-
-    if tenant_id and _text(ctx.get("resource_tenant_id")) and tenant_id != _text(ctx.get("resource_tenant_id")):
-        score -= 100
-        reasons.append("tenant_conflict")
-
-    if actor_id and _text(ctx.get("resource_owner_actor_id")) and actor_id != _text(ctx.get("resource_owner_actor_id")):
-        if _text(ctx.get("ownership_required")) == "true":
-            score -= 80
-            reasons.append("ownership_conflict")
-
-    if _text(actor.get("last_auth_status") or "").lower() in ("failed", "expired", "revoked"):
+    elif auth_status in {"failed", "expired", "revoked"}:
         score -= 60
         reasons.append("credential_failed_or_expired")
+
+    owner = _text(context.get("resource_owner_actor_id"))
+    if owner and actor_id != owner and _text(context.get("ownership_required")) == "true":
+        score -= 80
+        reasons.append("ownership_conflict")
 
     return ActorCandidate(
         actor_id=actor_id,
@@ -329,27 +339,6 @@ def score_actor_candidate(
     )
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Candidate Ranking
-# ══════════════════════════════════════════════════════════════════════
-
-def _actor_is_executable(actor: dict[str, Any]) -> bool:
-    """Check if an actor has resolvable credentials.
-
-    Mirrors ``experiment_compiler_support._actor_is_executable``.
-    """
-    role = _text(actor.get("role")).lower()
-    if role in {"anonymous", "public"}:
-        return True
-    secret_ref = _text(
-        actor.get("credential_secret_ref")
-        or actor.get("secret_ref")
-    )
-    if not secret_ref:
-        return False
-    return not _text(secret_ref).lower().startswith("secret_ref:actor:")
-
-
 def build_executable_candidates(
     actors: dict[str, dict[str, Any]],
     *,
@@ -359,83 +348,51 @@ def build_executable_candidates(
     permission_observations: list[PermissionObservation] | None = None,
     permitted_actor_ids: set[str] | None = None,
 ) -> list[ActorCandidate]:
-    """Build and rank executable actor candidates.
+    """Filter through the shared executability authority and rank candidates."""
 
-    If *permitted_actor_ids* is provided, only those actors are considered
-    (explicit permits path).  Otherwise all executable actors are ranked.
-
-    Filtering:
-      1. Must be executable (_actor_is_executable).
-      2. Must have account_ref or be anonymous/public.
-      3. Must be runtime_bound unless anonymous/public.
-
-    Ranking: score descending, then actor_ref ascending (stable).
-    """
     candidates: list[ActorCandidate] = []
-
-    target_ids = permitted_actor_ids or set(actors.keys())
-
+    target_ids = (
+        set(permitted_actor_ids)
+        if permitted_actor_ids is not None
+        else set(actors)
+    )
     for actor_id, actor in actors.items():
-        if not isinstance(actor, dict):
+        if not isinstance(actor, dict) or actor_id not in target_ids:
             continue
-        if permitted_actor_ids is not None and actor_id not in target_ids:
-            continue
-
         if not _actor_is_executable(actor):
             continue
-
-        candidate = score_actor_candidate(
+        candidates.append(score_actor_candidate(
             actor,
             operation=operation,
             obligation=obligation,
             runtime_context=runtime_context,
             permission_observations=permission_observations,
-        )
-        candidates.append(candidate)
-
-    # Stable sort: highest score first, then by actor_ref for determinism
-    candidates.sort(key=lambda c: (-c.score, c.actor_ref))
+        ))
+    candidates.sort(key=lambda candidate: (-candidate.score, candidate.actor_ref))
     return candidates
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Response Classification (Step 8)
-# ══════════════════════════════════════════════════════════════════════
-
 def classify_actor_attempt(result: dict[str, Any]) -> ActorAttemptOutcome:
-    """Classify a single HTTP attempt result.
+    """Classify behavior without claiming an expected authorization verdict."""
 
-    Never interprets HTTP 200 as automatic privilege escalation.
-    Never interprets HTTP 403 as automatic product defect.
-    Never learns 401 as a permission denial.
-    """
-    status = int(result.get("status_code") or result.get("status") or 0)
-
+    try:
+        status = int(result.get("status_code") or result.get("status") or 0)
+    except (TypeError, ValueError):
+        status = 0
     if 200 <= status < 300:
         return ActorAttemptOutcome.OPERATION_EXECUTABLE
-
     if status == 401:
         return ActorAttemptOutcome.AUTHENTICATION_FAILED
-
     if status == 403:
         return ActorAttemptOutcome.PERMISSION_DENIED
-
     if status == 404:
         return ActorAttemptOutcome.RESOURCE_NOT_VISIBLE
-
     if status in {400, 409, 422}:
-        # Reached business validation layer — actor is likely authorized
         return ActorAttemptOutcome.BUSINESS_REJECTED
-
     if status >= 500 or status == 0:
         return ActorAttemptOutcome.INFRASTRUCTURE_FAILED
-
     return ActorAttemptOutcome.INCONCLUSIVE
 
-
-# ══════════════════════════════════════════════════════════════════════
-# Exploration Plan Builder (Step 6)
-# ══════════════════════════════════════════════════════════════════════
 
 def build_exploration_plan(
     *,
@@ -447,14 +404,8 @@ def build_exploration_plan(
     permission_observations: list[PermissionObservation] | None = None,
     allow_destructive: bool = False,
 ) -> ActorExecutionPlan | None:
-    """Build an ActorExecutionPlan, or return None if the obligation should remain blocked.
+    """Build explicit or exploratory candidates; never invent actor authority."""
 
-    Three paths:
-      1. Explicit permits exist → EXPLICIT_PERMISSION, 1 attempt, oracle ON.
-      2. No permits, exploration allowed → PERMISSION_EXPLORATION, N attempts, oracle OFF.
-      3. No permits, exploration denied → None (caller should block).
-    """
-    # ── Path 1: Explicit permits exist ──
     if permitted_actor_ids:
         candidates = build_executable_candidates(
             actors,
@@ -464,67 +415,87 @@ def build_exploration_plan(
             permission_observations=permission_observations,
             permitted_actor_ids=permitted_actor_ids,
         )
-        if candidates:
-            return ActorExecutionPlan(
-                mode=ActorSelectionMode.EXPLICIT_PERMISSION,
-                candidates=candidates,
-                authorization_oracle_enabled=True,
-                max_attempts=1,
-                reason="explicit_permits_edge",
-            )
-        # Explicit permits reference actors that are not executable → block
-        return None
+        if not candidates:
+            return None
+        return ActorExecutionPlan(
+            mode=ActorSelectionMode.EXPLICIT_PERMISSION,
+            candidates=candidates,
+            authorization_oracle_enabled=True,
+            max_attempts=1,
+            reason="explicit_permits_edge",
+        )
 
-    # ── Path 2: No permits — check exploration eligibility ──
     decision = can_explore_actor(
-        operation, obligation, allow_destructive=allow_destructive,
+        operation,
+        obligation,
+        allow_destructive=allow_destructive,
     )
-
     if not decision.allowed:
-        # Blocked — caller should emit runtime_actor_exploration_not_allowed
         return None
-
-    # Build ranked candidates from ALL executable actors
     candidates = build_executable_candidates(
         actors,
         operation=operation,
         obligation=obligation,
         runtime_context=runtime_context,
         permission_observations=permission_observations,
-        permitted_actor_ids=None,  # all actors
     )
-
     if not candidates:
-        # No executable actors at all
         return None
-
-    # Cap candidates at max_attempts
     limited = candidates[: decision.max_attempts]
-
+    reusable = any(
+        observation.actor_id == limited[0].actor_id
+        and observation.operation_id
+        == _text(operation.get("id") or operation.get("operation_id"))
+        and observation.outcome == "OBSERVED_ALLOWED"
+        and can_reuse_observation(observation.confidence)
+        and observation_context_compatible(observation, runtime_context)
+        for observation in list(permission_observations or [])
+    )
     return ActorExecutionPlan(
-        mode=ActorSelectionMode.PERMISSION_EXPLORATION,
+        mode=(
+            ActorSelectionMode.OBSERVED_PERMISSION
+            if reusable
+            else ActorSelectionMode.PERMISSION_EXPLORATION
+        ),
         candidates=limited,
         authorization_oracle_enabled=False,
         max_attempts=decision.max_attempts,
-        reason="permits_edge_missing_runtime_exploration",
+        reason=(
+            "context_compatible_observed_permission"
+            if reusable
+            else "permits_edge_missing_runtime_exploration"
+        ),
     )
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Permission Observation Store (Step 11)
-# ══════════════════════════════════════════════════════════════════════
+# Keyed by (project, campaign). The legacy bucket exists only for historical
+# tests/stored calls that cannot supply a real scan coordinate.
+_scan_observations: dict[tuple[str, str], list[PermissionObservation]] = {}
 
-# In-memory store scoped to current scan.  In production this would be
-# persisted alongside the scan ledger.
 
-_scan_observations: list[PermissionObservation] = []
+def _scope_key(
+    campaign_id: str | None,
+    project_id: str | None,
+) -> tuple[str, str]:
+    campaign = _text(campaign_id)
+    project = _text(project_id)
+    return (project, campaign) if project or campaign else _LEGACY_SCOPE
 
 
 def record_permission_observation(observation: PermissionObservation) -> None:
-    """Store a runtime permission observation (scan-scoped)."""
-    _scan_observations.append(observation)
+    """Store one observation inside its exact campaign/project boundary."""
+
+    key = _scope_key(observation.campaign_id, observation.project_id)
+    if key not in _scan_observations and len(_scan_observations) >= _MAX_OBSERVATION_SCOPES:
+        oldest = next(iter(_scan_observations))
+        _scan_observations.pop(oldest, None)
+    rows = _scan_observations.setdefault(key, [])
+    rows.append(observation)
+    if len(rows) > _MAX_OBSERVATIONS_PER_SCOPE:
+        del rows[:-_MAX_OBSERVATIONS_PER_SCOPE]
     logger.debug(
-        "permission_observation: actor=%s op=%s outcome=%s status=%d confidence=%.2f",
+        "permission_observation: scope=%s actor=%s op=%s outcome=%s status=%d confidence=%.2f",
+        key,
         observation.actor_id,
         observation.operation_id,
         observation.outcome,
@@ -539,24 +510,55 @@ def get_scan_observations(
     operation_id: str | None = None,
     outcome: str | None = None,
     min_confidence: float = 0.0,
+    campaign_id: str | None = None,
+    project_id: str | None = None,
+    environment_ref: str | None = None,
+    runtime_context: dict[str, Any] | None = None,
 ) -> list[PermissionObservation]:
-    """Query observed permission edges from the current scan."""
-    results = _scan_observations
+    """Query observations, optionally confined to one production scan scope."""
+
+    if campaign_id is not None or project_id is not None:
+        results = list(_scan_observations.get(
+            _scope_key(campaign_id, project_id), []
+        ))
+    else:
+        results = [
+            observation
+            for rows in _scan_observations.values()
+            for observation in rows
+        ]
     if actor_id:
-        results = [o for o in results if o.actor_id == actor_id]
+        results = [row for row in results if row.actor_id == actor_id]
     if operation_id:
-        results = [o for o in results if o.operation_id == operation_id]
+        results = [row for row in results if row.operation_id == operation_id]
     if outcome:
-        results = [o for o in results if o.outcome == outcome]
+        results = [row for row in results if row.outcome == outcome]
     if min_confidence > 0:
-        results = [o for o in results if o.confidence >= min_confidence]
+        results = [row for row in results if row.confidence >= min_confidence]
+    if environment_ref:
+        results = [
+            row for row in results
+            if not row.environment_ref or row.environment_ref == environment_ref
+        ]
+    if runtime_context:
+        results = [
+            row for row in results
+            if observation_context_compatible(row, runtime_context)
+        ]
     return results
 
 
-def clear_scan_observations() -> None:
-    """Reset the scan-scoped observation store (call at scan start)."""
-    global _scan_observations
-    _scan_observations = []
+def clear_scan_observations(
+    *,
+    campaign_id: str | None = None,
+    project_id: str | None = None,
+) -> None:
+    """Clear one scan scope, or all scopes for compatibility/test reset."""
+
+    if campaign_id is None and project_id is None:
+        _scan_observations.clear()
+        return
+    _scan_observations.pop(_scope_key(campaign_id, project_id), None)
 
 
 def has_observed_success(
@@ -564,28 +566,51 @@ def has_observed_success(
     actor_id: str,
     operation_id: str,
     min_confidence: float = 0.0,
+    campaign_id: str | None = None,
+    project_id: str | None = None,
+    runtime_context: dict[str, Any] | None = None,
 ) -> bool:
-    """Check if an actor has been observed succeeding on an operation."""
-    for obs in _scan_observations:
-        if (
-            obs.actor_id == actor_id
-            and obs.operation_id == operation_id
-            and obs.outcome == "OBSERVED_ALLOWED"
-            and obs.confidence >= min_confidence
-        ):
-            return True
-    return False
+    return bool(get_scan_observations(
+        actor_id=actor_id,
+        operation_id=operation_id,
+        outcome="OBSERVED_ALLOWED",
+        min_confidence=min_confidence,
+        campaign_id=campaign_id,
+        project_id=project_id,
+        runtime_context=runtime_context,
+    ))
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Confidence Rules (Step 12)
-# ══════════════════════════════════════════════════════════════════════
+def observation_success_counts(
+    *,
+    observations: list[PermissionObservation],
+    actor_id: str,
+    operation_id: str,
+    context_fingerprint: str = "",
+    resource_identity_fingerprint: str = "",
+) -> tuple[int, int]:
+    """Count corroboration for one actor/operation/context without guessing IDs."""
 
-_CONFIDENCE_SINGLE_SUCCESS = 0.60
-_CONFIDENCE_TWO_SAME_CONTEXT = 0.75
-_CONFIDENCE_MULTI_INSTANCE = 0.85
-_CONFIDENCE_STATIC_SUPPORT_BONUS = 0.10
-_CONFIDENCE_REUSE_THRESHOLD = 0.80
+    successful = [
+        row for row in observations
+        if row.actor_id == actor_id
+        and row.operation_id == operation_id
+        and row.outcome == "OBSERVED_ALLOWED"
+        and (
+            not context_fingerprint
+            or not row.context_fingerprint
+            or row.context_fingerprint == context_fingerprint
+        )
+    ]
+    same_context = len(successful)
+    different_instances = len({
+        _text(row.resource_identity_fingerprint)
+        for row in successful
+        if row.resource_identity_fingerprint
+        and resource_identity_fingerprint
+        and row.resource_identity_fingerprint != resource_identity_fingerprint
+    })
+    return same_context, different_instances
 
 
 def compute_observation_confidence(
@@ -597,27 +622,11 @@ def compute_observation_confidence(
     has_tenant_conflict: bool = False,
     has_ownership_conflict: bool = False,
 ) -> float:
-    """Compute confidence for a permission observation.
-
-    Rules:
-      Single 2xx                    → 0.60
-      Same context 2+ successes     → 0.75
-      Different resource instances  → 0.85
-      Static source support         → +0.10
-      Tenant/ownership conflict     → cannot generalize (0.0)
-
-    Only observations with confidence ≥ 0.80 should be reused in
-    subsequent obligations as preferred candidates.
-    """
     if outcome == "AUTHENTICATION_FAILED":
-        # Never learn authentication failure as a permission denial
         return 0.0
-
     if has_tenant_conflict or has_ownership_conflict:
-        return 0.0  # Cannot generalize
-
+        return 0.0
     confidence = 0.0
-
     if outcome == "OBSERVED_ALLOWED":
         if different_instance_successes > 0:
             confidence = _CONFIDENCE_MULTI_INSTANCE
@@ -625,25 +634,16 @@ def compute_observation_confidence(
             confidence = _CONFIDENCE_TWO_SAME_CONTEXT
         elif same_context_successes >= 1:
             confidence = _CONFIDENCE_SINGLE_SUCCESS
-        else:
-            confidence = 0.0
     elif outcome == "OBSERVED_DENIED":
-        confidence = 0.50  # Single denial is weaker evidence
-
+        confidence = 0.50
     if has_static_support:
         confidence = min(1.0, confidence + _CONFIDENCE_STATIC_SUPPORT_BONUS)
-
     return confidence
 
 
 def can_reuse_observation(confidence: float) -> bool:
-    """Check if an observation is confident enough for downstream reuse."""
     return confidence >= _CONFIDENCE_REUSE_THRESHOLD
 
-
-# ══════════════════════════════════════════════════════════════════════
-# Structural logging helpers (Step 14)
-# ══════════════════════════════════════════════════════════════════════
 
 def log_exploration_started(
     obligation_id: str,
@@ -717,11 +717,3 @@ def log_exploration_exhausted(
             "outcomes": outcomes,
         },
     )
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Utility for the missing _list helper
-# ══════════════════════════════════════════════════════════════════════
-
-def _list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
