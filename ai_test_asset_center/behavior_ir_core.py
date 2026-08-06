@@ -2915,6 +2915,56 @@ def _build_canonical_fields(
     return result
 
 
+# Modal words that introduce a governed action list in a rule statement
+# (不能支付、发货、确认收货). Generic Chinese business syntax — not
+# industry-specific vocabulary.
+_CJK_ACTION_MODAL_WORDS = (
+    "不能", "不得", "必须", "只能", "仅", "可以", "允许",
+    "应当", "需要", "禁止", "严禁", "不允许", "无权",
+)
+# Adverbial prefixes that may precede the core action verb inside a segment
+# (直接取消 / 发起退款 / 再次提交).
+_CJK_ACTION_PREFIX_MODIFIERS = (
+    "直接", "立即", "再次", "进行", "发起", "重新",
+    "自行", "手动", "自动", "继续", "予以",
+)
+
+
+def _extract_action_phrases(
+    statement: str, action_pattern: Any
+) -> list[str]:
+    """Extract the action phrases a rule statement governs.
+
+    Uses the rule's own syntax: the text after a modal word (不能/不得/
+    必须/只能/仅/…) is split on list separators (，,、；;。), and each
+    segment that contains an action verb becomes a phrase with leading
+    adverbial modifiers stripped (直接取消 → 取消). The phrases are matched
+    verbatim against operation summary titles, so 收货 inside 收货地址 never
+    binds address CRUD to a pay/ship/confirm rule. Returns [] when the
+    statement carries no modal-gated action list.
+    """
+    phrases: list[str] = []
+    for modal in _CJK_ACTION_MODAL_WORDS:
+        idx = statement.find(modal)
+        if idx < 0:
+            continue
+        tail = statement[idx + len(modal):]
+        for segment in re.split(r"[，,、；;。]", tail):
+            segment = segment.strip()
+            if not segment:
+                continue
+            if not action_pattern.search(segment):
+                continue
+            core = segment
+            for modifier in _CJK_ACTION_PREFIX_MODIFIERS:
+                if core.startswith(modifier):
+                    core = core[len(modifier):]
+                    break
+            if len(core) <= 6:
+                phrases.append(core)
+    return list(dict.fromkeys(phrases))
+
+
 def build_behavior_ir_from_knowledge_asset(
     asset: dict[str, Any] | None,
     *,
@@ -4571,6 +4621,68 @@ def build_behavior_ir_from_knowledge_asset(
             _inv_typed["field_ids"] = _inv_field_ids
         if _semantic_frame:
             _inv_typed["semantic_frame"] = _semantic_frame
+        # ── Action-word → operation binding ──
+        # A source rule names the operations it governs through its action
+        # verbs (已取消订单不能支付、发货、确认收货 → pay/ship/confirm).
+        # Operations carry the source documents' own Chinese summary
+        # (支付订单 / 订单发货 / 确认收货), so the rule's action phrases are
+        # matched against the operation's own source text — same-language
+        # substring evidence, never a translation table. Phrase extraction
+        # uses the rule's own structure: the segment after a modal word
+        # (不能/不得/必须/只能/仅/…) split by list separators yields the
+        # governed action list. A bare action-word match is deliberately not
+        # used — 收货 inside 收货地址 would bind address CRUD to a
+        # pay/ship/confirm rule. Binds only invariants that carry no explicit
+        # operation reference, so PRD rules that describe operations reach
+        # the obligation compiler instead of dying as
+        # BLOCKED_MISSING_IR_RELATION.
+        if not _inv_typed.get("operation_refs") and not _is_umbrella:
+            try:
+                from .enterprise_knowledge_center.enterprise_understanding.structured_fact_compiler import (
+                    _ACTION_PATTERN as _CJK_ACTION_PATTERN,
+                )
+                _action_phrases = _extract_action_phrases(
+                    statement, _CJK_ACTION_PATTERN
+                )
+                if _action_phrases:
+                    _action_bound_ops: list[str] = []
+                    for _op_row in _list(model.get("operations")):
+                        if not isinstance(_op_row, dict):
+                            continue
+                        _op_id = _text(_op_row.get("id"))
+                        if not _op_id:
+                            continue
+                        # A governed action is executed by a write operation;
+                        # read operations (查询/导出/health) observe data but
+                        # never perform the action the rule constrains.
+                        if _text(_op_row.get("method")).upper() not in {
+                            "POST", "PUT", "PATCH", "DELETE",
+                        }:
+                            continue
+                        # Match against the operation's summary title only:
+                        # the short source-declared heading (支付订单). The
+                        # long description carries permission/exception prose
+                        # that would over-match.
+                        _op_summary = _text(_op_row.get("summary"))
+                        if "—" in _op_summary:
+                            _op_title = _op_summary.split("—", 1)[-1].strip()
+                        elif " - " in _op_summary:
+                            _op_title = _op_summary.split(" - ", 1)[-1].strip()
+                        else:
+                            _op_title = _op_summary
+                        if any(
+                            _phrase in _op_title for _phrase in _action_phrases
+                        ):
+                            _action_bound_ops.append(_op_id)
+                    if _action_bound_ops:
+                        _inv_typed["operation_refs"] = list(
+                            dict.fromkeys(_action_bound_ops)
+                        )
+            except Exception:
+                # Action-word binding is a recovery convenience; its failure
+                # must never fail the IR build — the invariant simply stays
+                # unbound and the obligation compiler reports the gap.
+                pass
         if _is_umbrella:
             _inv_typed["binding_status"] = "umbrella_rule_excluded"
         model["invariants"].append(_fact_node(
