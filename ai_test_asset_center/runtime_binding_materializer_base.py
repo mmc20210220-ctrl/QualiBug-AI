@@ -538,6 +538,14 @@ def runtime_value_from_response(
     candidates = list(dict.fromkeys(fields.get(normalized) or []))
     if not candidates and normalized.endswith("id"):
         candidates = list(dict.fromkeys(fields.get("id") or []))
+    if not candidates:
+        # Final fallback: scan ALL field keys that end with the target
+        # or equal the normalized form (e.g., target="id" should match
+        # productId→productid, orderId→orderid, etc.)
+        for field_key, values in fields.items():
+            if field_key == normalized or field_key.endswith(normalized):
+                candidates = list(dict.fromkeys(values))
+                break
     return candidates[0] if len(candidates) == 1 else None
 
 

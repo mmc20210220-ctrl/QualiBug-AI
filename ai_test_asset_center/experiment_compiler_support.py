@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .behavior_ir_core import _singular_token
 from .real_id_resolver import collection_path, normalize_path_placeholders
 from .runtime_binding_graph import _declared_fixture_setup
 
@@ -534,6 +535,15 @@ def _owned_entity_identity_resolver(
     return candidates[0]
 
 
+# Generic lookup verbs that may close an entity-scoped read path
+# (GET /api/users/admin/search / export / check) without naming the entity in
+# the final segment. Universal system vocabulary — never industry terms.
+_LOOKUP_VERB_SEGMENTS = frozenset({
+    "search", "export", "check", "find", "list", "query", "lookup",
+    "validate", "info", "summary",
+})
+
+
 def _reference_field_resolver(
     *,
     behavior_ir: dict[str, Any],
@@ -573,6 +583,14 @@ def _reference_field_resolver(
         for alias in _list(entity.get("source_entity_names")):
             if _text(alias):
                 by_name.setdefault(_text(alias).lower(), entity)
+    # Singular-form aliases: a body field userId names entity ``user`` while
+    # the source entity may be declared as ``users``. The structural suffix
+    # rule (identity suffix + candidate) stays authoritative; this only adds
+    # the inflection-insensitive lookup (users -> user).
+    for key in list(by_name):
+        singular = _singular_token(key)
+        if singular and singular != key:
+            by_name.setdefault(singular, by_name[key])
     identity_suffixes = ("_id", "id", "_ref", "ref", "_uuid", "uuid", "_key", "key")
 
     resolved: dict[str, Any] = {}
@@ -597,7 +615,12 @@ def _reference_field_resolver(
         # whose final path segment names the entity itself (orders -> the
         # orders collection). Segment-identity keeps health/status/report
         # endpoints (which also observe the entity in the relation graph but
-        # return no entity rows) out of the resolver slot.
+        # return no entity rows) out of the resolver slot. Entity-scoped
+        # lookup verbs (GET /api/users/admin/search — the last ENTITY-NAMED
+        # segment is the collection, the final segment is a generic lookup
+        # verb) are equally valid row sources when they observe the entity:
+        # a target whose collection exposes only search/export/check reads
+        # would otherwise leave every reference field unresolved.
         ent_names = {
             _text(alias).lower()
             for alias in [
@@ -619,7 +642,16 @@ def _reference_field_resolver(
             if not path or "{" in path or ":" in path:
                 continue
             segments = [segment for segment in path.split("/") if segment]
-            if not segments or segments[-1].lower() not in ent_names:
+            if not segments:
+                continue
+            final_lower = segments[-1].lower()
+            if final_lower in ent_names:
+                pass  # exact collection read — the canonical slot
+            elif final_lower in _LOOKUP_VERB_SEGMENTS and any(
+                segment.lower() in ent_names for segment in segments[:-1]
+            ):
+                pass  # entity-scoped lookup read (users/admin/search)
+            else:
                 continue
             if not _list(op.get("source_refs")):
                 continue

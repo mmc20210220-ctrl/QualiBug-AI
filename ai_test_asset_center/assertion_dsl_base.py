@@ -1143,6 +1143,31 @@ def evaluate_assertion(
         for item in observer_receipts
         if _text(item.get("status")).upper() != "OBSERVED"
     ]
+    # V1.7 (mirror of the contract-oracle redundancy rule): when the
+    # authorization_comparison observer is OBSERVED with leak_detected=True,
+    # the authorization violation is already proven by status/effect
+    # comparison. Supplementary business_effect/entity_state receipts that
+    # could not observe a rejected write are redundant evidence for
+    # owner_tenant_visibility-family assertions — they cannot invalidate the
+    # proven leak and must not short-circuit the comparison verdict. The
+    # leak_detected=True condition keeps clean-system PASS claims fail-closed
+    # (a leak-free comparison still requires full supplementary evidence).
+    _comparison_rows = [
+        item
+        for item in observer_receipts
+        if _text(item.get("observer_id")) == "authorization_comparison"
+        and _text(item.get("status")).upper() == "OBSERVED"
+    ]
+    if (
+        _comparison_rows
+        and _dict(_comparison_rows[0].get("evidence")).get("leak_detected") is True
+        and KIND_ALIASES.get(kind, kind) == "owner_tenant_visibility"
+    ):
+        non_observed = [
+            item
+            for item in non_observed
+            if _text(item.get("observer_id")) not in {"business_effect", "entity_state"}
+        ]
     if non_observed:
         first = non_observed[0]
         observer_status = _text(first.get("status")).upper()

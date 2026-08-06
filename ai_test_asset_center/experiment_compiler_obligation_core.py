@@ -2969,6 +2969,32 @@ def compile_experiment_for_obligation(
     experiment["fixture_dependency_dag"] = v12_result.get("module_results", {}).get("fixture_dependency_dag")
     experiment["compensation_relation_plan"] = v12_result.get("module_results", {}).get("compensation_relation_plan")
 
+    # ── V1.2.2 §4b: unresolvable effect observation → NOT_APPLICABLE ──
+    # The effect observers (business_effect/entity_state/before_state/after_state)
+    # verify the write's effect on an entity via a source-declared identity
+    # read. When the observer resolution finds NO reliable read (AMBIGUOUS or
+    # BLOCKED — e.g. a token-issuance write whose effect lives in the response,
+    # or an entity with no declared read), requiring OBSERVED would block every
+    # experiment on that operation forever. The response observers already
+    # carry the verdict evidence; demote the unresolvable effect observers to
+    # NOT_APPLICABLE so the experiment executes, with the resolution plan
+    # keeping the visible AMBIGUOUS/BLOCKED status in the receipt. Resolved
+    # effect observations are never demoted.
+    _observer_resolution_status = _text(
+        _dict(experiment.get("observer_resolution_plan")).get("resolution_status")
+    )
+    if _observer_resolution_status in {"AMBIGUOUS", "BLOCKED"}:
+        _EFFECT_OBSERVER_IDS = {
+            "business_effect", "entity_state", "before_state", "after_state",
+        }
+        for _observer in _list(experiment.get("observers")):
+            if not isinstance(_observer, dict):
+                continue
+            if _text(_observer.get("observer_id")) not in _EFFECT_OBSERVER_IDS:
+                continue
+            _observer["required_status"] = "NOT_APPLICABLE"
+            _observer["resolution_status"] = _observer_resolution_status
+
     # ── V1.2.3: Attach Readback Contract for runtime receipt generation ──
     if _readback_contract:
         experiment["readback_contract"] = _readback_contract

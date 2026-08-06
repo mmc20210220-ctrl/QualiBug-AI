@@ -6,6 +6,22 @@ from typing import Any, Callable, Iterable
 QUALIBUG_UNRESOLVED_ID = "QUALIBUG_UNRESOLVED_ID"
 
 _LIST_FIELDS = ("records", "data", "items", "results", "list", "rows", "content")
+# Extended envelope keys for broader REST API surface coverage.
+# Priority-ordered: common keys first, rarer keys as fallback.
+_EXTENDED_LIST_FIELDS = (
+    "records", "data", "items", "results", "list", "rows", "content",
+    "orders", "products", "users", "accounts", "entities", "objects",
+    "payload", "body", "response", "resources", "members", "elements",
+    "collection", "documents", "nodes", "entries", "assets",
+)
+# Pagination wrappers that contain entity lists one level deeper.
+_PAGINATION_WRAPPERS = (
+    "data", "result", "payload", "body", "response",
+)
+# Second-level list keys commonly found inside pagination wrappers.
+_INNER_LIST_KEYS = (
+    "content", "items", "records", "list", "rows", "results", "data",
+)
 _PAGINATION_SUFFIXES = (
     "?page=1&size=1",
     "?pageNum=1&pageSize=1",
@@ -490,25 +506,60 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
                 ):
                     continue
                 value = source.get(field_name)
-                if value not in {None, ""}:
-                    text = str(value)
-                    bindings[param] = text
-                    bindings[field_name] = text
-                    if param.lower() in {"id", "sku", "code"} or field_name.lower() in {"id", "sku"}:
-                        bindings.setdefault("id", text)
-                    unmatched_params.discard(param)
-                    break
+                if isinstance(value, (dict, list, bool)) or value in {None, ""}:
+                    continue
+                text = str(value)
+                bindings[param] = text
+                bindings[field_name] = text
+                if param.lower() in {"id", "sku", "code"} or field_name.lower() in {"id", "sku"}:
+                    bindings.setdefault("id", text)
+                unmatched_params.discard(param)
+                break
             if param not in unmatched_params:
                 break
 
-    # Gather common identity fields from all entities
+    # Gather common identity fields from all entities (broader scan).
+    _identity_field_patterns = (
+        "id", "_id", "uuid", "uid", "key", "code", "sku", "no", "number",
+        "order_id", "orderId", "orderNo", "order_no",
+        "user_id", "userId", "product_id", "productId", "productSku", "product_sku",
+        "payment_id", "paymentId", "refund_id", "refundId",
+        "address_id", "addressId", "coupon_id", "couponId",
+        "tenant_id", "tenantId", "account_id", "accountId",
+    )
     for source in entities:
         if not isinstance(source, dict):
             continue
-        for field_name in ("id", "sku", "code", "order_id", "orderId", "user_id", "userId"):
-            value = source.get(field_name)
-            if value not in {None, ""}:
-                bindings.setdefault(field_name, str(value))
+        for field_name, field_value in source.items():
+            if isinstance(field_value, (dict, list, bool)) or field_value in {None, ""}:
+                continue
+            key = re.sub(r"[^a-z0-9]", "", str(field_name).lower())
+            for pattern in _identity_field_patterns:
+                if re.sub(r"[^a-z0-9]", "", pattern) == key:
+                    bindings.setdefault(field_name, str(field_value))
+                    break
+            # Also capture any field ending with "id" or "_id" or "Id"
+            if key.endswith("id") and key not in {"paid", "said", "avoid", "laid", "maid", "raid"}:
+                bindings.setdefault(field_name, str(field_value))
+    # Final-fallback: for any still-unmatched params, scan every entity
+    # field that looks like a valid non-empty identity value.
+    _still_unmatched = [p for p in params if bindings.get(p) in {None, ""}]
+    for param in _still_unmatched:
+        for source in entities:
+            if not isinstance(source, dict):
+                continue
+            for field_name, field_value in source.items():
+                if isinstance(field_value, (dict, list, bool)) or field_value in {None, ""}:
+                    continue
+                text = str(field_value)
+                key = re.sub(r"[^a-z0-9]", "", str(field_name).lower())
+                # Accept if the field key matches the param or is a known identity pattern
+                if key == re.sub(r"[^a-z0-9]", "", param.lower()):
+                    bindings[param] = text
+                    bindings[field_name] = text
+                    break
+            if bindings.get(param) not in {None, ""}:
+                break
     # Mirror ``id`` onto unresolved sibling identity params (e.g., orderId)
     # when ``id`` is an accepted candidate for them.
     primary = bindings.get("id")
@@ -556,18 +607,32 @@ def resolve_real_id_from_documented_list(
 
 
 def _extract_entity_candidates(body: Any) -> list[dict[str, Any]]:
+    """Extract entity objects from a response body.
+
+    Handles top-level arrays, envelope-wrapped lists, pagination wrappers
+    (``{"data": {"content": [...]}}``), and deeply nested structures.
+    Never returns pagination metadata, error objects, or statistics nodes.
+    """
     if isinstance(body, list):
         return [item for item in body if isinstance(item, dict)]
     if not isinstance(body, dict):
         return []
-    for field_name in _LIST_FIELDS:
+    # Phase 1: Try all extended envelope keys (common + domain-specific).
+    for field_name in _EXTENDED_LIST_FIELDS:
         value = body.get(field_name)
         if isinstance(value, list) and value and isinstance(value[0], dict):
             return [item for item in value if isinstance(item, dict)]
         if isinstance(value, dict):
+            # Check for pagination wrapper: {"data": {"content": [...]}}
+            if field_name in _PAGINATION_WRAPPERS:
+                for inner_key in _INNER_LIST_KEYS:
+                    inner = value.get(inner_key)
+                    if isinstance(inner, list) and inner and isinstance(inner[0], dict):
+                        return [item for item in inner if isinstance(item, dict)]
             nested = _extract_entity_candidates(value)
             if nested:
                 return nested
+    # Phase 2: Walk any list-of-dicts value not matched by Phase 1.
     for value in body.values():
         if isinstance(value, dict):
             nested = _extract_entity_candidates(value)

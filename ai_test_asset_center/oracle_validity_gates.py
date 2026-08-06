@@ -440,6 +440,25 @@ def _gate_evidence(
         }:
             required.append(observer_id)
 
+    # V1.7 (mirror of the contract-oracle redundancy rule): when the
+    # authorization_comparison observer is OBSERVED with leak_detected=True,
+    # the authorization violation is already proven by status/effect
+    # comparison. Supplementary business_effect/entity_state receipts that
+    # could not observe a rejected write are redundant evidence — they cannot
+    # invalidate the proven leak and must not fail the evidence gate.
+    _auth_rows = [
+        row
+        for row in _observer_rows(result, evidence)
+        if _text(row.get("observer_id")) == "authorization_comparison"
+        and _text(row.get("status")).upper() == "OBSERVED"
+    ]
+    if _auth_rows and _dict(_auth_rows[0].get("evidence")).get("leak_detected") is True:
+        required = [
+            observer_id
+            for observer_id in required
+            if observer_id not in {"business_effect", "entity_state"}
+        ]
+
     observed_ids = {
         _text(row.get("observer_id"))
         for row in _observer_rows(result, evidence)
