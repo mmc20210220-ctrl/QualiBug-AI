@@ -1855,16 +1855,43 @@ def compile_experiment_for_obligation(
                     # expansion matches write steps by that ref. Falling back to
                     # operation_ref (the create compensator) leaves source_step_id
                     # unbound → missing_cleanup_for_steps:control_1,treatment_1.
-                    cleanup_plan = [{
-                        "action": "reverse_order_compensation",
-                        "mode": cleanup_mode,
-                        "operation_ref": cleanup_op,
-                        "compensates_operation_ref": primary_op_id,
-                        "path": cleanup_path,
-                        "method": cleanup_method,
-                        "body": cleanup_body or None,
-                        "runtime_response_binding_required": "{" in cleanup_path,
-                    }]
+                    if not cleanup_body:
+                        # The recreate compensator's request body cannot be built
+                        # from any source example. Emitting it with an empty body
+                        # would reach the target as `{}` (NaN/500) and the cleanup
+                        # preflight would then block the whole write. On a declared
+                        # non-production target this is the same category as a
+                        # missing compensator: degrade to accepted residue so the
+                        # write is still tested and the leftover is surfaced for
+                        # environment reset. Production stays fail-closed.
+                        from .target_policy import is_nonproduction_environment
+
+                        if is_nonproduction_environment(environment_type):
+                            cleanup_plan = [{
+                                "action": "accepted_residue",
+                                "mode": "accepted_residue_no_cleanup",
+                                "compensates_operation_ref": primary_op_id,
+                                "residue_notice": (
+                                    f"recreate_body_unbuildable:{cleanup_op}"
+                                ),
+                            }]
+                        else:
+                            return blocked_experiment(
+                                oid,
+                                "BLOCKED_NON_REVERSIBLE_WRITE",
+                                f"cleanup_recreate_body_unbuildable:{cleanup_op}",
+                            )
+                    else:
+                        cleanup_plan = [{
+                            "action": "reverse_order_compensation",
+                            "mode": cleanup_mode,
+                            "operation_ref": cleanup_op,
+                            "compensates_operation_ref": primary_op_id,
+                            "path": cleanup_path,
+                            "method": cleanup_method,
+                            "body": cleanup_body,
+                            "runtime_response_binding_required": "{" in cleanup_path,
+                        }]
                 elif cleanup_method == "DELETE":
                     # Identity-bound create→DELETE: no cleanup body. Emit reverse-order
                     # DELETE so the executor binds each accepted create id and does not

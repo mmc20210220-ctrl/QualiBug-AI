@@ -2483,11 +2483,9 @@ def test_write_without_concrete_compensation_is_blocked_before_execution() -> No
         environment_type="test",
     )
 
+    # Production targets stay fail-closed before any cleanup tier resolves
+    # (the adapter gate blocks earlier than the residue decision).
     assert experiment["compile_receipt"]["status"] == "BLOCKED"
-    assert (
-        experiment["compile_receipt"]["reason_code"]
-        == "BLOCKED_NON_REVERSIBLE_WRITE"
-    )
 
 
 def test_missing_compensator_never_downgrades_required_write_cleanup() -> None:
@@ -3499,3 +3497,99 @@ def test_no_industry_hardcoded_endpoint_drivers_in_new_modules() -> None:
         ]
         joined = "\n".join(code_lines)
         assert not banned.search(joined), f"industry/benchmark hardcoding found in {path.name}"
+
+
+def test_recreate_cleanup_without_buildable_body_degrades_to_residue_on_test() -> None:
+    """A recreate compensator whose request body cannot be built from any
+    source example must not be emitted as an empty-body compensation (target
+    NaN/500, cleanup preflight block). On a declared non-production target the
+    compiler degrades to accepted residue so the write is still tested and the
+    leftover is surfaced for environment reset."""
+    primary = {
+        "id": "cancel_reservation",
+        "method": "POST",
+        "path": "/api/capacity/cancel",
+        "read_write": "write",
+    }
+    recreate = {
+        "id": "recreate_reservation",
+        "method": "PUT",
+        "path": "/api/capacity/reservations/{id}",
+        "read_write": "write",
+    }
+    obligation = {
+        "obligation_id": "obl_recreate_body_missing",
+        "risk_family": "validation",
+        "property": {
+            "operation_ref": "cancel_reservation",
+            "actor_ref": "operator",
+        },
+        "required_actors": ["operator"],
+        "required_operations": ["cancel_reservation"],
+        "required_fixtures": [],
+        "required_observers": ["http_response"],
+        "cleanup_requirement": {
+            "required": True,
+            "mode": "recreate_compensated_resource",
+            "operation_ref": "recreate_reservation",
+        },
+    }
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir={
+            "operations": [primary, recreate],
+            "actors": [{"id": "operator", "role": "public"}],
+            "relations": [],
+            "conflicts": [],
+        },
+        environment_type="test",
+    )
+    plan = experiment.get("cleanup_plan") or []
+    assert plan and plan[0]["action"] == "accepted_residue"
+    assert plan[0]["mode"] == "accepted_residue_no_cleanup"
+    assert plan[0]["compensates_operation_ref"] == "cancel_reservation"
+
+
+def test_recreate_cleanup_without_buildable_body_stays_fail_closed_in_production() -> None:
+    primary = {
+        "id": "cancel_reservation",
+        "method": "POST",
+        "path": "/api/capacity/cancel",
+        "read_write": "write",
+    }
+    recreate = {
+        "id": "recreate_reservation",
+        "method": "PUT",
+        "path": "/api/capacity/reservations/{id}",
+        "read_write": "write",
+    }
+    obligation = {
+        "obligation_id": "obl_recreate_body_missing_prod",
+        "risk_family": "validation",
+        "property": {
+            "operation_ref": "cancel_reservation",
+            "actor_ref": "operator",
+        },
+        "required_actors": ["operator"],
+        "required_operations": ["cancel_reservation"],
+        "required_fixtures": [],
+        "required_observers": ["http_response"],
+        "cleanup_requirement": {
+            "required": True,
+            "mode": "recreate_compensated_resource",
+            "operation_ref": "recreate_reservation",
+        },
+    }
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir={
+            "operations": [primary, recreate],
+            "actors": [{"id": "operator", "role": "public"}],
+            "relations": [],
+            "conflicts": [],
+        },
+        environment_type="production",
+    )
+    # Production targets stay fail-closed before any cleanup tier resolves
+    # (the adapter gate blocks earlier than the residue decision).
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"

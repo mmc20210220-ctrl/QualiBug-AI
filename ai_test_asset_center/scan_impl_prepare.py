@@ -38,6 +38,29 @@ from .scan_source_runtime import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _api_doc_parseable(text: str) -> bool:
+    """True when the text is a machine-parseable API contract with operations."""
+    from .universal_api_parser import parse_to_openapi
+
+    try:
+        parsed = parse_to_openapi(str(text or "").strip())
+    except Exception:
+        return False
+    return bool(parsed.get("paths"))
+
+
+def _project_openapi_doc_text(root: Path, project: str) -> str:
+    """Raw content of the first source-declared OpenAPI file in project inputs."""
+    from .api_doc_assets import _OPENAPI_FILENAMES, _project_api_input_dirs
+
+    for input_dir in _project_api_input_dirs(root, project):
+        for name in _OPENAPI_FILENAMES:
+            path = input_dir / name
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+    return ""
+
+
 def prepare_scan_before_pipeline(
     project: str,
     root: Optional[Path] = None,
@@ -170,6 +193,18 @@ def prepare_scan_before_pipeline(
     # catalog. Enrichment may add other registered documents for planning, but
     # it must never rewrite the primary source hash recorded by the customer.
     source_api_doc_text = api_doc_text
+    # A composed multi-document corpus is business knowledge, not a machine-
+    # parseable API contract: the universal parser classifies it "unknown" and
+    # the enriched markdown render drops request schemas and examples, so every
+    # PUT/PATCH obligation on those operations defers at compile time with
+    # source_declared_request_body_missing. When the project input declares an
+    # OpenAPI file, prefer its raw content for operation extraction (schemas
+    # and examples survive); the composed corpus stays as the verification
+    # text for source grounding below.
+    if source_api_doc_text and not _api_doc_parseable(source_api_doc_text):
+        _openapi_text = _project_openapi_doc_text(root, project)
+        if _openapi_text:
+            api_doc_text = _openapi_text
     try:
         from .api_doc_assets import enrich_api_spec_text
 
