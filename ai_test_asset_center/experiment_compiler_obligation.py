@@ -20,6 +20,8 @@ from . import experiment_compiler_obligation_core as _core
 
 FLOW_DATA_AUTHORITY = "flow_data_requirement"
 OBSERVER_SUBJECT_BINDING_SCHEMA = "qualibug.observer-subject-binding.v1"
+ACTOR_EXECUTION_PLAN_SCHEMA = "qualibug.actor-execution-plan.v1"
+_LEGACY_ACTOR_PLAN_KEY = "_actor_exploration_plan"
 _ORIGINAL_PROTOCOL_ATTR = "_qualibug_original_compile_family_protocol"
 _ORIGINAL_MAKE_EXPERIMENT_ATTR = "_qualibug_original_make_experiment"
 if not hasattr(_core, _ORIGINAL_PROTOCOL_ATTR):
@@ -90,6 +92,69 @@ def _plan_step_ids(rows: Any) -> list[str]:
             if isinstance(row, dict) and _text(row.get("step_id"))
         )
     )
+
+
+def _extract_actor_execution_plan(
+    assertions: Any,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Promote the compiler's actor plan out of assertion-local metadata.
+
+    The semantic compiler historically attached the plan to ``assertion.property``
+    while the runtime looked for an experiment-level contract.  This facade is the
+    established authority that seals final experiment contracts, so it normalizes
+    the plan once, removes the private assertion copy, and emits one immutable
+    top-level ``actor_execution_plan``.
+    """
+
+    normalized: list[dict[str, Any]] = []
+    raw_plans: list[dict[str, Any]] = []
+    for raw in _list(assertions):
+        if not isinstance(raw, dict):
+            continue
+        assertion = deepcopy(raw)
+        prop = dict(_dict(assertion.get("property")))
+        raw_plan = dict(_dict(prop.pop(_LEGACY_ACTOR_PLAN_KEY, None)))
+        if raw_plan:
+            raw_plans.append(raw_plan)
+        if "property" in assertion:
+            assertion["property"] = prop
+        normalized.append(assertion)
+
+    if not raw_plans:
+        return normalized, {}
+    if len({_stable_hash(plan) for plan in raw_plans}) != 1:
+        raise ValueError("actor_execution_plan_conflicting_assertion_metadata")
+
+    raw_plan = raw_plans[0]
+    mode = _text(raw_plan.get("mode"))
+    candidate_ids = list(
+        dict.fromkeys(
+            _text(value)
+            for value in _list(raw_plan.get("candidate_ids"))
+            if _text(value)
+        )
+    )
+    try:
+        max_attempts = int(raw_plan.get("max_attempts") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("actor_execution_plan_max_attempts_invalid") from exc
+    if not mode or not candidate_ids or max_attempts <= 0:
+        raise ValueError("actor_execution_plan_incomplete")
+
+    plan = {
+        "schema_version": ACTOR_EXECUTION_PLAN_SCHEMA,
+        "mode": mode,
+        "source_actor_id": candidate_ids[0],
+        "candidate_ids": candidate_ids,
+        "authorization_oracle_enabled": bool(
+            raw_plan.get("authorization_oracle_enabled", True)
+        ),
+        "max_attempts": min(max_attempts, len(candidate_ids)),
+        "reason": _text(raw_plan.get("reason")),
+        "authority": "compiled_actor_execution_plan",
+    }
+    plan["plan_hash"] = _stable_hash(plan)
+    return normalized, plan
 
 
 def _bind_observer_subjects(
@@ -189,6 +254,9 @@ def _subject_bound_make_experiment(
     *args: Any,
     **kwargs: Any,
 ) -> dict[str, Any]:
+    assertions, actor_execution_plan = _extract_actor_execution_plan(
+        kwargs.get("assertions")
+    )
     observers, binding_receipt = _bind_observer_subjects(
         observers=kwargs.get("observers"),
         control_plan=kwargs.get("control_plan"),
@@ -215,16 +283,33 @@ def _subject_bound_make_experiment(
                 ),
             }
         )
+    if actor_execution_plan:
+        compile_receipt.update(
+            {
+                "actor_execution_plan_schema_version": (
+                    ACTOR_EXECUTION_PLAN_SCHEMA
+                ),
+                "actor_execution_plan_mode": _text(
+                    actor_execution_plan.get("mode")
+                ),
+                "actor_execution_plan_hash": _text(
+                    actor_execution_plan.get("plan_hash")
+                ),
+            }
+        )
     result = _ORIGINAL_MAKE_EXPERIMENT(
         *args,
         **{
             **kwargs,
+            "assertions": assertions,
             "observers": observers,
             "compile_receipt": compile_receipt,
         },
     )
     if observers:
         result["observer_subject_binding_receipt"] = binding_receipt
+    if actor_execution_plan:
+        result["actor_execution_plan"] = actor_execution_plan
     return result
 
 
@@ -253,6 +338,43 @@ def _graph_cleanup_compatibility_protocol(**kwargs: Any) -> dict[str, Any]:
 def _install_core_hooks() -> None:
     _core.compile_family_protocol = _graph_cleanup_compatibility_protocol
     _core.make_experiment = _subject_bound_make_experiment
+
+
+def _persist_actor_selection_contract(
+    experiment: dict[str, Any],
+) -> dict[str, Any]:
+    """Align actor-selection audit metadata with the compiled execution plan."""
+
+    result = dict(experiment)
+    if _text(_dict(result.get("compile_receipt")).get("status")) != "COMPILED":
+        return result
+    plan = _dict(result.get("actor_execution_plan"))
+    if not plan:
+        return result
+    mode = _text(plan.get("mode"))
+    selection = dict(_dict(result.get("actor_selection_contract")))
+    selection.update(
+        {
+            "selection_mode": mode,
+            "source_actor_ref": _text(plan.get("source_actor_id")),
+            "candidate_actor_refs": [
+                _text(value)
+                for value in _list(plan.get("candidate_ids"))
+                if _text(value)
+            ],
+            "candidate_iteration_allowed": mode == "permission_exploration",
+            "max_attempts": int(plan.get("max_attempts") or 0),
+            "authorization_oracle_enabled": bool(
+                plan.get("authorization_oracle_enabled", True)
+            ),
+            "actor_execution_plan_hash": _text(plan.get("plan_hash")),
+            # Arbitrary actor substitution remains forbidden. Runtime may only
+            # iterate the exact compiler-sealed candidate set above.
+            "substitution_allowed": False,
+        }
+    )
+    result["actor_selection_contract"] = selection
+    return result
 
 
 def _persist_compiled_execution_graph(
@@ -316,6 +438,7 @@ def compile_experiment_for_obligation(
         policy_version=policy_version,
         available_adapters=available_adapters,
     )
+    compiled = _persist_actor_selection_contract(compiled)
     return _persist_compiled_execution_graph(compiled)
 
 
