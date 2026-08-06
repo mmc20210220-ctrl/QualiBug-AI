@@ -1020,19 +1020,42 @@ def _response_bound_observation_path(
 
 
 def _runtime_entity_candidates(value: Any) -> list[dict[str, Any]]:
-    """Extract source-observed entity rows without assuming a domain schema."""
+    """Extract source-observed entity rows without assuming a domain schema.
+
+    Reference reads must never bind the harness's own synthetic records
+    (qb-auto-*@qualibug.local — test artifacts with no business data), and
+    the remaining candidates are ordered by observable business-data richness
+    so the materializer picks a subject that actually carries the resource.
+    Mirrors the reference-extraction rules of ``real_id_resolver_base``.
+    """
     if isinstance(value, list):
-        return [row for row in value if isinstance(row, dict)]
-    if not isinstance(value, dict):
-        return []
-    rows: list[dict[str, Any]] = []
-    for key in ("data", "result", "items", "records", "results", "list", "rows", "content"):
-        child = value.get(key)
-        if isinstance(child, list):
-            rows.extend(row for row in child if isinstance(row, dict))
-        elif isinstance(child, dict):
-            rows.append(child)
-    return rows or [value]
+        rows = [row for row in value if isinstance(row, dict)]
+    elif isinstance(value, dict):
+        rows = []
+        for key in ("data", "result", "items", "records", "results", "list", "rows", "content"):
+            child = value.get(key)
+            if isinstance(child, list):
+                rows.extend(row for row in child if isinstance(row, dict))
+            elif isinstance(child, dict):
+                rows.append(child)
+        if not rows:
+            rows = [value]
+    else:
+        rows = []
+    try:
+        from .real_id_resolver_base import (
+            _business_data_richness,
+            _is_harness_disposable_record,
+        )
+        real_rows = [
+            row for row in rows if not _is_harness_disposable_record(row)
+        ]
+        if real_rows:
+            real_rows.sort(key=_business_data_richness, reverse=True)
+            return real_rows
+    except Exception:
+        pass
+    return rows
 
 
 def _select_runtime_binding(

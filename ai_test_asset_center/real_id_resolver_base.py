@@ -351,8 +351,17 @@ def alternate_collection_paths(path: str) -> list[str]:
 # Generic REST collection hints for body-field binding (not domain-specific values).
 # Prefer structural derivation via body_field_collection_paths(); this map only
 # covers common REST naming aliases that pluralization alone would miss.
-_BODY_FIELD_COLLECTION_SEGMENTS: dict[str, tuple[str, ...]] = {
-    "orderid": ("orders", "order"),
+# Generic lookup verbs that may close an entity-scoped read path
+# (GET /api/users/admin/search / export / check) without naming the entity in
+# the final segment. Universal system vocabulary — never industry terms.
+# Single source of truth shared by the reference resolver and the declared
+# read matcher (runtime_binding_graph).
+_LOOKUP_VERB_SEGMENTS = frozenset({
+    "search", "export", "check", "find", "list", "query", "lookup",
+    "validate", "info", "summary",
+})
+
+_BODY_FIELD_COLLECTION_SEGMENTS: dict[str, tuple[str, ...]] = {    "orderid": ("orders", "order"),
     "order_id": ("orders", "order"),
     "orderno": ("orders", "order"),
     "order_no": ("orders", "order"),

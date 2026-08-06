@@ -295,7 +295,10 @@ def _auto_fixture_create_for_binding_target(
         if op_path in candidate_paths or op_collection in candidate_paths:
             # Prefer identity-bound DELETE; otherwise accept a source-shaped
             # compensation action on the same collection (e.g. …/{id}/cancel).
-            from .runtime_binding_graph import _declared_cleanup_operations
+            from .runtime_binding_graph import (
+                _declared_cleanup_operations,
+                _request_example,
+            )
 
             source_ir = _dict(behavior_ir)
             if not source_ir:
@@ -332,6 +335,13 @@ def _auto_fixture_create_for_binding_target(
                 "operation_ref": op_id,
                 "method": "POST",
                 "path": op_path,
+                # Tokenized body template: placeholder identity literals
+                # (zero/near-nil UUIDs in the raw schema example) become
+                # {field} tokens so validated_fixture_setup can derive
+                # body_bindings and the runtime fills real references —
+                # sending the raw placeholder reaches the target as an
+                # invalid FK reference (500).
+                "body_template": _request_example(op),
                 "cleanup_operations": selected_cleanup,
                 "actor_refs": actor_refs,
             }

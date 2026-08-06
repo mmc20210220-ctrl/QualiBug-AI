@@ -670,6 +670,7 @@ def _derive_body_bindings_from_template(
     parts = [part for part in normalize_path_placeholders(create_path).split("/") if part]
     api_prefix = f"/{parts[0]}" if parts else "/api"
     derived: list[dict[str, Any]] = []
+    from .runtime_binding_graph import _declared_reads_for_paths
     for row in _placeholder_rows_from_template(body_template):
         field = _text(row.get("target")).split(".")[-1].split("[")[0]
         token = _text(row.get("template_token"))
@@ -677,21 +678,13 @@ def _derive_body_bindings_from_template(
             field or token,
             api_prefix=api_prefix,
         ) or body_field_collection_paths(token, api_prefix=api_prefix)
-        resolvers: list[dict[str, str]] = []
-        for op_id, op in operations.items():
-            if not isinstance(op, dict):
-                continue
-            if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
-                continue
-            op_path = normalize_path_placeholders(
-                _text(op.get("path") or op.get("raw_path"))
-            )
-            if op_path in candidate_paths and not path_has_placeholders(op_path):
-                resolvers.append({
-                    "operation_ref": op_id,
-                    "method": _text(op.get("method")).upper(),
-                    "path": op_path,
-                })
+        # Entity-scoped list reads (GET /api/users/admin/search) are valid
+        # row sources even without a bare collection path; the shared matcher
+        # also accepts lookup-verb tails and rejects health/status endpoints.
+        resolvers = _declared_reads_for_paths(
+            candidate_paths,
+            behavior_ir={"operations": list(operations.values())},
+        )
         # Declared-database read fallback: a foreign key whose entity has a
         # source-declared storage table but no declared HTTP list-read stays
         # resolvable. HTTP resolvers keep priority; the DB leg runs last and

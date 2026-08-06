@@ -335,7 +335,7 @@ def declared_effect_observers(
 def _request_example(operation: dict[str, Any], *, sibling_ops: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     direct = _dict(operation).get("request_example")
     if isinstance(direct, dict) and direct:
-        return dict(direct)
+        return _tokenize_placeholder_identity_values(dict(direct))
     request_schema = _dict(_dict(operation).get("request_schema"))
     content = _dict(request_schema.get("content"))
     for media in content.values():
@@ -343,13 +343,60 @@ def _request_example(operation: dict[str, Any], *, sibling_ops: list[dict[str, A
             continue
         example = media.get("example")
         if isinstance(example, dict) and example:
-            return dict(example)
+            return _tokenize_placeholder_identity_values(dict(example))
         examples = _dict(media.get("examples"))
         for row in examples.values():
             value = _dict(row).get("value")
             if isinstance(value, dict) and value:
-                return dict(value)
+                return _tokenize_placeholder_identity_values(dict(value))
     return {}
+
+
+# Placeholder-form identity literals found in documentation examples:
+# nil/near-nil UUIDs (all zero hex groups with at most one trailing digit)
+# and the explicit unresolved marker. Sending them to a real target yields
+# 500/404 (invalid reference), never a meaningful result.
+_ZERO_NIL_UUID_RE = re.compile(
+    r"^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$",
+    re.IGNORECASE,
+)
+
+
+def _is_placeholder_identity_literal(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text or text == "QUALIBUG_UNRESOLVED_ID":
+        return True
+    return bool(_ZERO_NIL_UUID_RE.match(text))
+
+
+def _tokenize_placeholder_identity_values(value: Any) -> Any:
+    """Turn placeholder identity literals in example bodies into ``{field}``
+    tokens so the runtime binding machinery resolves them from observed rows.
+
+    Only identity-shaped fields with a resolvable entity collection are
+    tokenized (userId -> users reads); a bare ``id``/``key`` with no entity
+    prefix stays literal — it names the resource the body itself creates or
+    issues (a JWT subject), not a foreign-key reference. Scalar business
+    values (amount, reason) also stay as documented. A token with no
+    resolvable read fails the binding gate visibly instead of reaching
+    transport as an invalid reference."""
+    from .real_id_resolver_base import body_field_collection_paths
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                f"{{{str(key)}}}"
+                if _field_token(key).endswith("id")
+                and _is_placeholder_identity_literal(child)
+                and bool(body_field_collection_paths(str(key)))
+                else _tokenize_placeholder_identity_values(child)
+            )
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_tokenize_placeholder_identity_values(child) for child in value]
+    return value
 
 
 def _body_placeholder_rows(value: Any, path: str = "") -> list[dict[str, str]]:
@@ -446,6 +493,7 @@ def _declared_reads_for_paths(
     ))
     resolvers: list[dict[str, str]] = []
     limit = max(1, min(int(max_candidates or 1), 5))
+    from .real_id_resolver_base import _LOOKUP_VERB_SEGMENTS
     for path in wanted:
         for operation in _list(_dict(behavior_ir).get("operations")):
             if not isinstance(operation, dict):
@@ -455,13 +503,25 @@ def _declared_reads_for_paths(
             )
             method = _text(operation.get("method")).upper()
             if (
-                declared_path != path
-                or method not in {"GET", "HEAD"}
+                method not in {"GET", "HEAD"}
                 or path_has_placeholders(normalize_path_placeholders(
                     _text(operation.get("path") or operation.get("raw_path"))
                 ))
                 or not _text(operation.get("id"))
             ):
+                continue
+            matches = declared_path == path
+            if not matches:
+                # Entity-scoped lookup reads: wanted=/api/users matches
+                # GET /api/users/admin/search — the trailing segments close
+                # with a generic lookup verb. Health/status endpoints (whose
+                # final segment is not a lookup verb) stay excluded: they do
+                # not return entity rows.
+                prefix = path.rstrip("/") + "/"
+                if declared_path.startswith(prefix):
+                    tail = declared_path[len(prefix):].strip("/").split("/")
+                    matches = bool(tail and tail[-1] in _LOOKUP_VERB_SEGMENTS)
+            if not matches:
                 continue
             resolvers.append({
                 "operation_ref": _text(operation.get("id")),

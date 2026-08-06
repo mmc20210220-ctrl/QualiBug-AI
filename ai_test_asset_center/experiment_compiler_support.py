@@ -10,6 +10,7 @@ from typing import Any
 
 from .behavior_ir_core import _singular_token
 from .real_id_resolver import collection_path, normalize_path_placeholders
+from .real_id_resolver_base import _LOOKUP_VERB_SEGMENTS
 from .runtime_binding_graph import _declared_fixture_setup
 
 
@@ -184,9 +185,10 @@ def _source_request_example(
     *,
     sibling_operations: list[Any] | None = None,
 ) -> dict[str, Any]:
+    from .runtime_binding_graph import _tokenize_placeholder_identity_values
     direct = _dict(operation).get("request_example")
     if isinstance(direct, dict) and direct:
-        return dict(direct)
+        return _tokenize_placeholder_identity_values(dict(direct))
     request_schema = _dict(_dict(operation).get("request_schema"))
     content = _dict(request_schema.get("content"))
     for media in content.values():
@@ -194,12 +196,12 @@ def _source_request_example(
             continue
         example = media.get("example")
         if isinstance(example, dict) and example:
-            return dict(example)
+            return _tokenize_placeholder_identity_values(dict(example))
         examples = _dict(media.get("examples"))
         for row in examples.values():
             value = _dict(row).get("value")
             if isinstance(value, dict) and value:
-                return dict(value)
+                return _tokenize_placeholder_identity_values(dict(value))
     # Fallback: unique sibling POST on the same collection that already carries
     # a source-attested example. PATCH/PUT docs often omit JSON while the
     # collection create POST documents fields. Ambiguous siblings stay empty.
@@ -538,10 +540,7 @@ def _owned_entity_identity_resolver(
 # Generic lookup verbs that may close an entity-scoped read path
 # (GET /api/users/admin/search / export / check) without naming the entity in
 # the final segment. Universal system vocabulary — never industry terms.
-_LOOKUP_VERB_SEGMENTS = frozenset({
-    "search", "export", "check", "find", "list", "query", "lookup",
-    "validate", "info", "summary",
-})
+# Single source of truth: real_id_resolver_base._LOOKUP_VERB_SEGMENTS.
 
 
 def _reference_field_resolver(
