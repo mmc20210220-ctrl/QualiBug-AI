@@ -145,3 +145,25 @@ def test_scan_context_rejects_invalid_runtime_discovery_budget(
         build_campaign_context_from_scan_body({
             "runtime_interface_discovery_budget": value,
         })
+
+
+def test_scan_context_defaults_discovery_on_for_approved_write_target() -> None:
+    """Without an explicit control, governed interface discovery follows the
+    execution mode: approved write on a declared non-production target enables
+    it by default (path placeholders must bind real ids), safe_read_only keeps
+    it off."""
+    context = build_campaign_context_from_scan_body({
+        "base_url": "http://127.0.0.1:8080",
+        "environment_type": "test",
+    })
+    assert context["execution_mode"] == "approved_sandbox_write"
+    assert context["runtime_interface_discovery_enabled"] is True
+
+
+def test_scan_context_defaults_discovery_off_for_read_only_mode() -> None:
+    context = build_campaign_context_from_scan_body({
+        "base_url": "http://127.0.0.1:8080",
+        "environment_type": "test",
+        "execution_mode": "safe_read_only",
+    })
+    assert context["runtime_interface_discovery_enabled"] is False

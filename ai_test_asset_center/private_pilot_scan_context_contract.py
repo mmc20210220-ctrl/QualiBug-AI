@@ -339,6 +339,18 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
             raise ValueError(f"{key}_not_boolean")
         context[key] = value
 
+    # Governed interface discovery (read-only GET probes that bind real path
+    # ids) is part of normal execution on a declared non-production target:
+    # without it, path placeholders like /orders/:id never bind a real id and
+    # every write obligation on that operation defers at compile time. Default
+    # it on when write execution is approved and the operator did not set the
+    # control explicitly. safe_read_only (the operator kill switch) and an
+    # explicit False both keep it off.
+    if "runtime_interface_discovery_enabled" not in context:
+        context["runtime_interface_discovery_enabled"] = (
+            context.get("execution_mode") == "approved_sandbox_write"
+        )
+
     if "runtime_interface_discovery_budget" in body:
         budget = body.get("runtime_interface_discovery_budget")
         if (
