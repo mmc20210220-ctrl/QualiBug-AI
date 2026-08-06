@@ -58,6 +58,10 @@ from .actor_exploration_execution import (
 )
 
 
+ACTOR_EXECUTION_PLAN_SCHEMA = "qualibug.actor-execution-plan.v1"
+_LEGACY_ACTOR_PLAN_KEY = "_actor_exploration_plan"
+
+
 for _name in dir(_governance):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_governance, _name)
@@ -119,6 +123,99 @@ def _canonical(value: Any) -> str:
         separators=(",", ":"),
         default=str,
     )
+
+
+def _experiment_property(experiment: dict[str, Any]) -> dict[str, Any]:
+    """Return the semantic property from its canonical assertion location."""
+
+    direct = _dict(_dict(experiment).get("property"))
+    if direct:
+        return direct
+    for assertion in _list(_dict(experiment).get("assertions")):
+        if not isinstance(assertion, dict):
+            continue
+        prop = _dict(assertion.get("property"))
+        if prop:
+            return prop
+    return {}
+
+
+def _actor_execution_plan(
+    experiment: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Read and verify the compiler-sealed actor plan.
+
+    Legacy assertion/property metadata is accepted read-only so stored pre-v1
+    experiments remain executable. New compiles must use the first-class top-level
+    contract and its hash is checked before any candidate reaches transport.
+    """
+
+    exp = _dict(experiment)
+    direct = dict(_dict(exp.get("actor_execution_plan")))
+    if direct:
+        if _text(direct.get("schema_version")) != ACTOR_EXECUTION_PLAN_SCHEMA:
+            return {}, "actor_execution_plan_schema_invalid"
+        expected_hash = _text(direct.get("plan_hash"))
+        hash_input = {
+            key: value for key, value in direct.items() if key != "plan_hash"
+        }
+        actual_hash = hashlib.sha256(
+            _canonical(hash_input).encode("utf-8")
+        ).hexdigest()
+        if not expected_hash or expected_hash != actual_hash:
+            return {}, "actor_execution_plan_hash_mismatch"
+        return direct, ""
+
+    legacy_locations = []
+    direct_property = _dict(exp.get("property"))
+    if direct_property:
+        legacy_locations.append(direct_property)
+    for assertion in _list(exp.get("assertions")):
+        if isinstance(assertion, dict):
+            legacy_locations.append(_dict(assertion.get("property")))
+    for prop in legacy_locations:
+        legacy = dict(_dict(prop.get(_LEGACY_ACTOR_PLAN_KEY)))
+        if not legacy:
+            continue
+        candidates = list(
+            dict.fromkeys(
+                _text(value)
+                for value in _list(legacy.get("candidate_ids"))
+                if _text(value)
+            )
+        )
+        if not _text(legacy.get("mode")) or not candidates:
+            return {}, "legacy_actor_execution_plan_incomplete"
+        return {
+            **legacy,
+            "source_actor_id": candidates[0],
+            "candidate_ids": candidates,
+            "authority": "legacy_assertion_metadata",
+        }, ""
+    return {}, ""
+
+
+def _primary_operation_ref(
+    experiment: dict[str, Any],
+    semantic_property: dict[str, Any],
+) -> str:
+    required = [
+        _text(value)
+        for value in _list(_dict(experiment).get("required_operations"))
+        if _text(value)
+    ]
+    if required:
+        return required[0]
+    property_ref = _text(semantic_property.get("operation_ref"))
+    if property_ref:
+        return property_ref
+    for step in [
+        *_list(_dict(experiment).get("treatment_plan")),
+        *_list(_dict(experiment).get("control_plan")),
+    ]:
+        if isinstance(step, dict) and _text(step.get("operation_ref")):
+            return _text(step.get("operation_ref"))
+    return ""
 
 
 def _authorization_binding_targets(
@@ -236,10 +333,9 @@ def execute_one_experiment(
 ) -> dict[str, Any]:
     """Execute through governance, causal validation, then delivery packaging.
 
-    V1.8: When the experiment carries a ``_actor_exploration_plan`` with
-    PERMISSION_EXPLORATION mode, the executor iterates through ranked
-    candidates, classifies each response, and binds the first usable actor.
-    The authorization oracle is disabled during exploration.
+    A compiler-sealed ``actor_execution_plan`` activates bounded candidate
+    iteration. The authorization oracle remains disabled while permission
+    expectation is unknown; all other validity gates continue to run.
     """
     _sync_governance_hooks()
     exp = dict(experiment)
@@ -249,15 +345,22 @@ def execute_one_experiment(
         "runtime_contract": deepcopy(_dict(runtime_contract)),
     }
 
-    prop = _dict(exp.get("property"))
-    exploration_plan_raw = _dict(prop.get("_actor_exploration_plan"))
+    semantic_property = _experiment_property(exp)
+    exploration_plan_raw, exploration_plan_error = _actor_execution_plan(exp)
     exploration_mode = _text(exploration_plan_raw.get("mode"))
     candidate_ids = _list(exploration_plan_raw.get("candidate_ids"))
-    max_attempts = int(exploration_plan_raw.get("max_attempts") or 0)
-    oracle_enabled = bool(exploration_plan_raw.get("authorization_oracle_enabled", True))
+    try:
+        max_attempts = int(exploration_plan_raw.get("max_attempts") or 0)
+    except (TypeError, ValueError):
+        max_attempts = 0
+        exploration_plan_error = "actor_execution_plan_max_attempts_invalid"
+    oracle_enabled = bool(
+        exploration_plan_raw.get("authorization_oracle_enabled", True)
+    )
 
     is_exploration = (
-        exploration_mode == ActorSelectionMode.PERMISSION_EXPLORATION.value
+        not exploration_plan_error
+        and exploration_mode == ActorSelectionMode.PERMISSION_EXPLORATION.value
         and len(candidate_ids) > 0
         and max_attempts > 0
     )
@@ -275,12 +378,27 @@ def execute_one_experiment(
     }
 
     obligation_id = _text(exp.get("obligation_id"))
-    primary_op_id = _text(
-        _list(exp.get("required_operations") or [])[0]
-        if _list(exp.get("required_operations"))
-        else prop.get("operation_ref") or ""
-    )
+    primary_op_id = _primary_operation_ref(exp, semantic_property)
     primary_op = ir_ops.get(primary_op_id, {})
+
+    if exploration_plan_error:
+        blocked = {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": _text(exp.get("experiment_id")),
+            "obligation_id": obligation_id,
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_MISSING_ACTOR",
+            "detail": exploration_plan_error,
+            "finding": None,
+            "execution_receipt": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ACTOR",
+                "detail": exploration_plan_error,
+            },
+        }
+        return _finalize_result(
+            blocked, exp, behavior_ir, root, project, oracle_enabled=False
+        )
 
     if is_exploration:
         policy_allowed, policy_max_attempts, policy_reason = (
@@ -491,9 +609,6 @@ def execute_one_experiment(
                 authorization_verdict="unknown_expectation",
             )
             exp = attempt_exp
-            exp_prop = _dict(exp.get("property"))
-            exp_prop["_actor_exploration_discovered"] = candidate_id
-            exp["property"] = exp_prop
             break
 
         if not continue_allowed:
@@ -503,7 +618,7 @@ def execute_one_experiment(
 
     if not discovered_actor_id:
         log_exploration_exhausted(
-            attempted_actor_count=len(candidate_ids[:max_attempts]),
+            attempted_actor_count=len(attempt_receipts),
             outcomes=outcomes,
         )
         if last_result is None:
@@ -540,12 +655,30 @@ def execute_one_experiment(
             last_result["execution_receipt"] = er
 
         last_result["actor_exploration_receipts"] = list(attempt_receipts)
+        last_result["actor_exploration_summary"] = {
+            "status": "EXHAUSTED",
+            "compiled_plan_hash": _text(
+                exploration_plan_raw.get("plan_hash")
+            ),
+            "attempted_actor_count": len(attempt_receipts),
+            "selected_actor_id": "",
+            "outcomes": dict(outcomes),
+            "terminal_reason": terminal_exploration_reason,
+        }
         return _finalize_result(
             last_result, exp, behavior_ir, root, project,
             oracle_enabled=False,
         )
 
     last_result["actor_exploration_receipts"] = list(attempt_receipts)
+    last_result["actor_exploration_summary"] = {
+        "status": "ACTOR_DISCOVERED",
+        "compiled_plan_hash": _text(exploration_plan_raw.get("plan_hash")),
+        "attempted_actor_count": len(attempt_receipts),
+        "selected_actor_id": discovered_actor_id,
+        "outcomes": dict(outcomes),
+        "terminal_reason": "",
+    }
     return _finalize_result(
         last_result, exp, behavior_ir, root, project,
         oracle_enabled=False,
