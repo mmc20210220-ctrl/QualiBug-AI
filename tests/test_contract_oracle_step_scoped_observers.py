@@ -160,3 +160,121 @@ def test_true_duplicate_same_step_scope_still_fails() -> None:
     assert "OBSERVER_RECEIPT_DUPLICATE:http_response" in activation.get(
         "reason_codes", []
     )
+
+
+def test_accepted_residue_cleanup_receipt_activates_experiment() -> None:
+    """A RESIDUE_ACCEPTED cleanup receipt is the environment-gated degradation
+    outcome, not a cleanup failure: the compiler emitted accepted_residue only
+    on a declared non-production target, the delivery gate short-circuits on
+    this status, and the oracle must not re-block with
+    CLEANUP_RESTORATION_NOT_PROVEN."""
+    experiment = _experiment()
+    experiment["cleanup_plan"] = [
+        {
+            "step_id": "cleanup_1",
+            "action": "accepted_residue",
+            "mode": "accepted_residue_no_cleanup",
+            "residue_notice": "no_source_compensator:op_order",
+        }
+    ]
+    evidence = _evidence(
+        [
+            _step_scoped_http_response("control_1"),
+            _step_scoped_http_response("treatment_1"),
+            build_observer_receipt(
+                observer_id="actor_identity",
+                status="OBSERVED",
+                evidence={"actor_ref_fingerprints": ["x"], "distinct_actor_count": 1},
+                campaign_id="CMP_scope",
+                execution_id="EXEC_scope",
+            ),
+        ]
+    )
+    evidence["contract_evidence_receipts"].append(
+        build_contract_evidence_receipt(
+            kind="cleanup",
+            experiment_id="exp_scope",
+            obligation_id="obl_scope",
+            campaign_id="CMP_scope",
+            execution_id="EXEC_scope",
+            subject_id="cleanup_1",
+            status="RESIDUE_ACCEPTED",
+            evidence={
+                "accepted_write_count": 1,
+                "cleanup_required_write_count": 1,
+                "cleanup_write_count": 0,
+                "state_unchanged": False,
+                "restoration_verified": False,
+                "audit_receipt_ids": [],
+                "reason_code": "ACCEPTED_RESIDUE_NO_CLEANUP",
+                "cleanup_mode": "accepted_residue_no_cleanup",
+                "residue": True,
+                "residue_notice": "no_source_compensator:op_order",
+                "compensates_operation_ref": "op_order",
+            },
+        )
+    )
+    activation = build_contract_oracle_activation_receipt(
+        experiment=experiment,
+        evidence=evidence,
+    )
+    assert "CLEANUP_RESTORATION_NOT_PROVEN:cleanup_1" not in (
+        activation.get("reason_codes") or []
+    )
+    # The residue receipt itself is accepted as the cleanup proof.
+    assert len(activation["verified_receipt_ids"]["cleanup"]) == 1
+    assert (
+        activation["verified_receipt_ids"]["cleanup"][0]
+        == evidence["contract_evidence_receipts"][-1]["receipt_id"]
+    )
+
+
+def test_residue_receipt_without_residue_flag_still_blocks_cleanup() -> None:
+    """RESIDUE_ACCEPTED without the residue evidence flag is not the accepted
+    degradation: it must keep blocking cleanup proof (mirrors the delivery
+    gate's fail-closed reading of the same status)."""
+    experiment = _experiment()
+    experiment["cleanup_plan"] = [
+        {
+            "step_id": "cleanup_1",
+            "action": "accepted_residue",
+            "mode": "accepted_residue_no_cleanup",
+        }
+    ]
+    evidence = _evidence(
+        [
+            _step_scoped_http_response("control_1"),
+            _step_scoped_http_response("treatment_1"),
+            build_observer_receipt(
+                observer_id="actor_identity",
+                status="OBSERVED",
+                evidence={"actor_ref_fingerprints": ["x"], "distinct_actor_count": 1},
+                campaign_id="CMP_scope",
+                execution_id="EXEC_scope",
+            ),
+        ]
+    )
+    evidence["contract_evidence_receipts"].append(
+        build_contract_evidence_receipt(
+            kind="cleanup",
+            experiment_id="exp_scope",
+            obligation_id="obl_scope",
+            campaign_id="CMP_scope",
+            execution_id="EXEC_scope",
+            subject_id="cleanup_1",
+            status="RESIDUE_ACCEPTED",
+            evidence={
+                "accepted_write_count": 1,
+                "cleanup_write_count": 0,
+                "reason_code": "ACCEPTED_RESIDUE_NO_CLEANUP",
+                # no "residue": True — status alone must not unlock the gate
+            },
+        )
+    )
+    activation = build_contract_oracle_activation_receipt(
+        experiment=experiment,
+        evidence=evidence,
+    )
+    assert "CLEANUP_RESTORATION_NOT_PROVEN:cleanup_1" in (
+        activation.get("reason_codes") or []
+    )

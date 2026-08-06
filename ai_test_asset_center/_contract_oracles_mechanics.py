@@ -503,7 +503,27 @@ def build_contract_oracle_activation_receipt(
                     # removed) into a fabricated cleanup failure.
                 )
                 not_required_with_proof = accepted_unchanged or rejected_unchanged
-                if completed_with_proof or completed_already_absent or not_required_with_proof:
+                # Accepted-residue degradation (declared non-production targets):
+                # the compiler emits an accepted_residue plan only when no
+                # compensator resolves on any declared surface and the target is
+                # a declared non-production environment; the executor then leaves
+                # the write deliberately uncleaned and surfaces the leftover in
+                # the receipt. The delivery gate short-circuits on this status
+                # (DELIVERABLE, RESIDUE_ACCEPTED); the oracle must treat it as the
+                # same environment-gated outcome instead of demanding a
+                # restoration that was never due.
+                residue_accepted = (
+                    receipt_status == "RESIDUE_ACCEPTED"
+                    and receipt_evidence.get("residue") is True
+                    and _text(receipt_evidence.get("reason_code"))
+                    == "ACCEPTED_RESIDUE_NO_CLEANUP"
+                )
+                if (
+                    completed_with_proof
+                    or completed_already_absent
+                    or not_required_with_proof
+                    or residue_accepted
+                ):
                     verified[kind].append(_text(receipt.get("receipt_id")))
                     continue
                 if receipt_status not in {"FAILED", "BLOCKED"}:
@@ -518,6 +538,20 @@ def build_contract_oracle_activation_receipt(
                         )
                 continue
             if receipt_status != "OBSERVED":
+                # Accepted-residue fixture receipts (declared non-production
+                # degradation): the fixture was created and deliberately left
+                # for a later environment reset. This is a valid setup outcome,
+                # not an observation failure; treatment proof is still gated
+                # separately below.
+                if (
+                    kind == "fixture"
+                    and receipt_status == "RESIDUE_ACCEPTED"
+                    and receipt_evidence.get("residue") is True
+                    and _text(receipt_evidence.get("reason_code"))
+                    == "ACCEPTED_RESIDUE_NO_CLEANUP"
+                ):
+                    verified[kind].append(_text(receipt.get("receipt_id")))
+                    continue
                 if receipt_status not in {"FAILED", "BLOCKED"}:
                     blockers.append(
                         f"{kind.upper()}_RECEIPT_NOT_SATISFIED:{subject}"
