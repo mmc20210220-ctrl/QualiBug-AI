@@ -262,20 +262,99 @@ def _field_variants(
     return variants, []
 
 
+def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> dict[str, Any]:
+    """Materialize explicit operation-local own-scope contracts as IR relations.
+
+    The operation must be a collection read, explicitly state caller ownership,
+    and declare an ownership identity parameter. This is source normalization,
+    not an inferred permission fallback: the existing isolation compiler and
+    Oracle remain the only obligation and verdict authorities.
+    """
+
+    ir = dict(_dict(behavior_ir))
+    operations = _pair._base._accepted(_list(ir.get("operations")))
+    relations = [
+        dict(row)
+        for row in _list(ir.get("relations"))
+        if isinstance(row, dict)
+    ]
+    existing_owned_operations = {
+        _text(row.get("operation_ref"))
+        for row in relations
+        if _text(row.get("relation_type")) == "owns"
+        and _text(row.get("status")) not in {"conflicting", "unsupported"}
+    }
+    actors = _pair._base._active_actors(
+        _pair._base._accepted(_list(ir.get("actors")))
+    )
+    changed = False
+    for operation in operations:
+        operation_ref = _text(operation.get("id"))
+        path = _text(operation.get("path") or operation.get("raw_path"))
+        is_read = _text(
+            operation.get("read_write") or operation.get("side_effect_class")
+        ) != "write"
+        source_declares_own_scope = bool(
+            is_read
+            and operation_ref
+            and operation_ref not in existing_owned_operations
+            and not _pair._base._path_has_resource_placeholder(path)
+            and _pair._base._operation_declares_ownership_language(operation)
+            and _pair._base._ownership_params_declared_on_operation(operation)
+        )
+        if not source_declares_own_scope:
+            continue
+        source_refs = _pair._base._combined_source_refs(operation)
+        for actor in actors:
+            actor_ref = _text(actor.get("id"))
+            if not actor_ref or not _text(actor.get("account_ref")):
+                continue
+            relation_material = "|".join([
+                "source_declared_owns", actor_ref, operation_ref,
+            ])
+            relations.append({
+                "id": "rel_" + hashlib.sha256(
+                    relation_material.encode("utf-8")
+                ).hexdigest()[:20],
+                "relation_type": "owns",
+                "from_ref": actor_ref,
+                "to_ref": operation_ref,
+                "operation_ref": operation_ref,
+                "actor_ref": actor_ref,
+                "preconditions": [{"scope": "own"}],
+                "effects": [],
+                "permission_decision": "",
+                "source_relationship_ref": "",
+                "source_refs": source_refs,
+                "confidence": min(
+                    float(operation.get("confidence") or 0.7),
+                    float(actor.get("confidence") or 0.7),
+                ),
+                "derivation": "explicit",
+                "status": "accepted",
+                "scope": "own",
+            })
+            changed = True
+    if changed:
+        ir["relations"] = relations
+    return ir
+
+
 def compile_obligations_from_behavior_ir(
     behavior_ir: dict[str, Any],
     *,
     root: str = "",
     project: str = "",
 ) -> dict[str, Any]:
+    normalized_ir = _with_source_declared_ownership_relations(behavior_ir)
     baseline_compile = _original_compile
     paired_result = _pair.compile_obligations_from_behavior_ir(
-        behavior_ir,
+        normalized_ir,
         base_compile=baseline_compile,
         root=root,
         project=project,
     )
-    original_result = baseline_compile(behavior_ir, root=root, project=project)
+    original_result = baseline_compile(normalized_ir, root=root, project=project)
     additions: list[dict[str, Any]] = []
     field_gaps: list[dict[str, Any]] = []
     expanded_keys: set[tuple[str, str]] = set()
@@ -294,7 +373,7 @@ def compile_obligations_from_behavior_ir(
             expanded_keys.add((_text(prop.get("invariant_ref")), operation_ref))
 
     output = dict(paired_result)
-    sod_obligations, sod_gaps = compile_sod_obligations(behavior_ir)
+    sod_obligations, sod_gaps = compile_sod_obligations(normalized_ir)
     obligations = _pair._base.dedupe_obligations([
         *[dict(item) for item in _list(output.get("obligations")) if isinstance(item, dict)],
         *additions,
