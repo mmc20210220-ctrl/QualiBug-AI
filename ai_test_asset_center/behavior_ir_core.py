@@ -4163,28 +4163,32 @@ def build_behavior_ir_from_knowledge_asset(
         # ── CJK validation term → field-name token binding ──
         # Many rule statements name the fields they govern through generic
         # business vocabulary ("必须校验状态、生效时间、失效时间、最低金额、
-        # 分类范围、使用次数和最大优惠") while the entity field names carry no
-        # Chinese description to match against. Bind such terms to fields via
-        # their structural name tokens. The vocabulary below is industry-
-        # neutral (state/timestamp/amount/scope/limit are universal business
-        # categories, not benchmark-specific), and tokens match field names on
-        # snake/token boundaries so "count" inside "discount" cannot satisfy
-        # a 使用次数 term.
-        _CJK_TERM_FIELD_TOKENS: tuple[tuple[str, tuple[str, ...]], ...] = (
-            ("状态", ("status", "state")),
-            ("生效时间", ("starts", "start", "begin", "effective")),
-            ("失效时间", ("expires", "expire", "valid_until", "end_at", "valid")),
-            ("最低金额", ("min_amount", "minimum_amount", "min_order_amount", "min")),
-            ("金额", ("amount", "price", "total", "fee", "cost")),
-            ("数量", ("quantity", "qty", "stock", "count")),
-            ("分类", ("categor", "scope", "type")),
-            ("范围", ("categor", "scope")),
-            ("使用次数", ("user_limit", "global_limit", "usage_limit", "limit")),
-            ("次数", ("user_limit", "global_limit", "usage_limit", "limit")),
-            ("最大优惠", ("max_discount", "discount_cap", "cap")),
+        # 分类范围、使用次数") while the entity field names carry no Chinese
+        # description to match against. Bind such terms to fields via their
+        # structural name tokens. The vocabulary below is industry-neutral —
+        # state/timestamp/amount/quantity/scope/limit are universal business
+        # categories present in every system's naming, matching the product's
+        # own English semantic token sets (_CF_STATE_TOKENS etc.). No
+        # industry-specific term (discount/coupon/inventory/balance/order)
+        # appears here: an industry term without a generic mapping simply
+        # leaves the field unbound (fail-safe), never wrongly bound. Tokens
+        # match field names on snake/token boundaries so "count" inside
+        # "discount" cannot satisfy a 使用次数 term.
+        _CJK_TERM_FIELD_TOKENS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+            (("状态",), ("status", "state")),
+            (("生效时间", "开始时间", "生效日"), ("starts", "start", "begin", "effective", "commence")),
+            (("失效时间", "截止时间", "失效日"), ("expires", "expire", "expiry", "valid_until", "end_at", "end_date", "end", "valid")),
+            (("最低金额", "最小金额"), ("min_amount", "minimum_amount", "min")),
+            (("金额",), ("amount", "price", "total", "fee", "cost")),
+            (("数量",), ("quantity", "qty", "count")),
+            (("分类",), ("categor", "type", "class")),
+            (("类型",), ("type", "kind", "categor")),
+            (("范围",), ("scope", "range")),
+            (("使用次数",), ("usage_limit", "usage_count", "uses", "limit")),
+            (("次数",), ("usage_limit", "usage_count", "uses", "limit")),
         )
-        for _term, _field_tokens in _CJK_TERM_FIELD_TOKENS:
-            if _term not in stmt:
+        for _terms, _field_tokens in _CJK_TERM_FIELD_TOKENS:
+            if not any(_term in stmt for _term in _terms):
                 continue
             for _ent_name, _ent_nodes in _ENTITY_FIELD_NODES.items():
                 for _fname_lower, _fnode in _ent_nodes.items():
@@ -4203,6 +4207,22 @@ def build_behavior_ir_from_knowledge_asset(
                         or _fnl.endswith("_" + _tok)
                         or _fnl.startswith(_tok + "_")
                         or ("_" + _tok + "_") in _fnl
+                        # Stem match: "categor" is the stem of category/
+                        # categories. Cover word-initial (category_scope),
+                        # word-final (process_category) and word-middle
+                        # (x_category_y) stems but require the stem to
+                        # continue into exactly the real tails (y/ies) so
+                        # classify_note/classroom can never match "class".
+                        or (
+                            _fnl.startswith(_tok)
+                            and _fnl[len(_tok):].startswith(("y", "ies"))
+                        )
+                        or (
+                            ("_" + _tok) in _fnl
+                            and _fnl[
+                                _fnl.index("_" + _tok) + len(_tok) + 1:
+                            ].startswith(("y", "ies"))
+                        )
                         for _tok in _field_tokens
                     ):
                         continue
@@ -4383,12 +4403,14 @@ def build_behavior_ir_from_knowledge_asset(
         _rule_equation: dict[str, Any] = _dict(rule.get("equation"))
         # For conservation/data_conservation/business amount-quantity rules
         # without explicit operands, extract field references from statement text.
-        # CJK validation vocabulary (状态/时间/金额/数量/分类/范围/次数/优惠) is
+        # CJK validation vocabulary (状态/时间/金额/数量/分类/范围/次数) is
         # industry-neutral business language; a statement carrying such terms
         # names fields it governs even when no ASCII identifier appears.
+        # Industry-specific terms (优惠/库存/余额/订单) are intentionally absent:
+        # they trigger no extraction on their own, so an industry term without
+        # a generic mapping never invents field bindings.
         _CJK_FIELD_SIGNAL_TERMS = (
-            "状态", "时间", "金额", "数量", "分类", "范围", "次数", "优惠",
-            "库存", "价格", "余额", "费用", "限额", "配额",
+            "状态", "时间", "金额", "数量", "分类", "范围", "次数",
         )
         if not _rule_operands and (
             any(
