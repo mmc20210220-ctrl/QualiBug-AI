@@ -2780,6 +2780,7 @@ def _build_canonical_fields(
     source_refs: list[Any] | None = None,
     field_dictionary: list[Any] | None = None,
     db_columns: dict[str, dict[str, Any]] | None = None,
+    model_enum_index: dict[tuple[str, str], list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Convert raw field names/dicts into structured canonical field dicts.
 
@@ -2844,6 +2845,21 @@ def _build_canonical_fields(
             for value in _list(fd_info.get("enum")) or _list(db_info.get("enum"))
             if _text(value)
         ))
+        # ── Data-model enum merge ──
+        # Request schemas often reference a model's value set by description
+        # (目标状态，取值见对应数据模型) instead of declaring it inline.
+        # The asset's interface technical declarations carry the model enums
+        # (Payment.status: [INIT, SUCCESS, FAILED, REFUNDED]); merge them into
+        # the entity field node so example-value validation and persistence
+        # assertions see the source-declared value set. Keyed by (model name,
+        # field name) — never by field name alone, because Order.status and
+        # Payment.status legitimately differ.
+        if not enum_values:
+            _model_enum = (model_enum_index or {}).get(
+                (entity_name.lower(), name_lower),
+            )
+            if _model_enum:
+                enum_values = list(_model_enum)
         # Source-declared numeric bounds, accepted from either the field
         # dictionary (explicit enterprise-material declaration) or an OpenAPI
         # schema minimum/maximum. Never inferred from storage precision or
@@ -2998,6 +3014,27 @@ def build_behavior_ir_from_knowledge_asset(
     """
     model = empty_behavior_ir(project_id=project_id, source_snapshot_hash=source_snapshot_hash)
     data = _dict(asset)
+    # ── Data-model enum index ──
+    # The asset's interface technical declarations carry the source data
+    # models' enums (Payment.status: [INIT, SUCCESS, FAILED, REFUNDED]) that
+    # request schemas reference by description rather than declaring inline.
+    # Keyed by (model name, field name) — never by field name alone, because
+    # Order.status and Payment.status legitimately differ.
+    _model_enum_index: dict[tuple[str, str], list[str]] = {}
+    for _iface_row in _list(data.get("interfaces")):
+        for _td in _list(_iface_row.get("technical_declarations")):
+            if not isinstance(_td, dict):
+                continue
+            _cons = _dict(_td.get("constraints"))
+            _enum = [
+                _text(value) for value in _list(_cons.get("enum")) if _text(value)
+            ]
+            _pp = _list(_td.get("property_path"))
+            if _enum and len(_pp) >= 2:
+                _model_enum_index.setdefault(
+                    (_text(_pp[0]).lower(), _text(_pp[-1]).lower()),
+                    list(dict.fromkeys(_enum)),
+                )
     if not data and not api_operations and not runtime_actors:
         model["coverage_gaps"].append(_fact_node(
             node_id=_stable_id("gap", "no_sources"),
@@ -3460,6 +3497,7 @@ def build_behavior_ir_from_knowledge_asset(
             source_refs=ent_source_refs,
             field_dictionary=fd_supplement,
             db_columns=db_cols,
+            model_enum_index=_model_enum_index,
         )
         if canonical:
             entity["fields"] = canonical

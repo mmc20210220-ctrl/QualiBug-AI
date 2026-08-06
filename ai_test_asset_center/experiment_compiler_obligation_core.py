@@ -721,6 +721,61 @@ def _entity_for_operation(
     return {}
 
 
+def _normalize_example_enum_scalars(
+    example: Any,
+    primary_op: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> Any:
+    """Replace example scalar values that contradict the source-declared enum.
+
+    A documented example is a fixture: its scalar values are trustworthy
+    only when they match the source contract. The data model declares the
+    legal value set (Payment.status: [INIT, SUCCESS, FAILED, REFUNDED]) and
+    the example may carry a value outside it (status: ACTIVE) — sending it
+    verbatim makes the target 5xx and kills the whole experiment. The value
+    is replaced with the first source-declared enum value. The enum comes
+    from the operation's entity fields (declared entity_refs, or the path
+    segment naming the entity: /api/payments/... → payment), never from a
+    translation table.
+    """
+    if not isinstance(example, dict):
+        return example
+    ir = _dict(behavior_ir)
+    entities = _list(ir.get("entities"))
+    by_id = {_text(e.get("id")): e for e in entities}
+    by_name = {_text(e.get("name")).lower(): e for e in entities}
+    op_entities: list[dict[str, Any]] = []
+    for ref in _list(primary_op.get("entity_refs")):
+        entity = by_id.get(_text(ref)) or by_name.get(_text(ref).lower())
+        if entity is not None:
+            op_entities.append(entity)
+    if not op_entities:
+        path = _text(primary_op.get("path") or primary_op.get("raw_path")).lower()
+        for segment in path.split("/"):
+            entity = by_name.get(segment) or by_name.get(segment.rstrip("s"))
+            if entity is not None:
+                op_entities.append(entity)
+    if not op_entities:
+        return example
+    field_enums: dict[str, list[str]] = {}
+    for entity in op_entities:
+        for field in _list(entity.get("fields")):
+            if not isinstance(field, dict):
+                continue
+            name = _text(field.get("name"))
+            values = _list(field.get("enum_values"))
+            if name and values:
+                field_enums.setdefault(name, list(values))
+    if not field_enums:
+        return example
+    out = dict(example)
+    for key, value in list(out.items()):
+        values = field_enums.get(key)
+        if values and isinstance(value, str) and value not in values:
+            out[key] = values[0]
+    return out
+
+
 def compile_experiment_for_obligation(
     obligation: dict[str, Any],
     *,
@@ -1015,6 +1070,13 @@ def compile_experiment_for_obligation(
     _primary_example = _source_request_example(
         primary_op,
         sibling_operations=list(ops.values()),
+    )
+    # V1.10: example scalars that contradict the source-declared enum would
+    # reach the target as invalid values (callback status ACTIVE → target
+    # 500) and kill the experiment before the rule is tested. Replace them
+    # with the first source-declared enum value.
+    _primary_example = _normalize_example_enum_scalars(
+        _primary_example, primary_op, ir
     )
     _schema_required = _request_schema_required_fields(primary_op)
     _observed_body_resolver: dict[str, Any] = {}
@@ -2208,6 +2270,20 @@ def compile_experiment_for_obligation(
         property_spec=prop,
         behavior_ir=ir,
     )
+    # V1.10: example scalars that contradict the source-declared enum (the
+    # data model's Payment.status: [INIT, SUCCESS, FAILED, REFUNDED] vs an
+    # example status ACTIVE) would reach the target as invalid values and
+    # kill the experiment before the rule is tested. Normalize every
+    # protocol-built body once here, so all families get the fix.
+    for _plan_name in ("control_plan", "treatment_plan"):
+        for _step in _list(protocol.get(_plan_name)):
+            if not isinstance(_step, dict):
+                continue
+            _step_body = _step.get("body")
+            if isinstance(_step_body, dict):
+                _step["body"] = _normalize_example_enum_scalars(
+                    _step_body, primary_op, ir
+                )
     # Merge protocol-level observers (e.g. before_state, after_state) before
     # attaching resolvers — otherwise they enter the experiment with no way to
     # read before/after state and finish INDETERMINATE.
