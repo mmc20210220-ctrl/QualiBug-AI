@@ -180,6 +180,121 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _source_rule_identity(exp: dict[str, Any]) -> dict[str, str]:
+    """Return the compiled source rule identity carried by one experiment.
+
+    The Contract Oracle deliberately derives canonical identity from receipts,
+    not titles.  Customer-visible findings still need the source business rule
+    that made the experiment meaningful; otherwise several distinct rules on
+    one endpoint collapse to the same generic ``kind + method + path`` wording.
+
+    Only compiler-carried rule identity plus grounded source references are
+    accepted.  No response text, runtime guess, or evaluator data participates.
+    """
+
+    source_refs = [
+        row
+        for row in _list(_dict(exp).get("source_refs"))
+        if isinstance(row, dict)
+        and _text(
+            row.get("locator")
+            or row.get("source_locator")
+            or row.get("source_id")
+            or row.get("id")
+        )
+    ]
+    if not source_refs:
+        return {}
+
+    for raw_assertion in _list(_dict(exp).get("assertions")):
+        assertion = _dict(raw_assertion)
+        prop = _dict(assertion.get("property"))
+        field_binding = _dict(prop.get("field_rule_binding"))
+        rule_ref = _text(
+            field_binding.get("rule_id")
+            or prop.get("invariant_ref")
+            or assertion.get("rule_id")
+            or assertion.get("invariant_ref")
+        )
+        expression = _dict(
+            prop.get("expression")
+            or field_binding.get("typed_expression")
+        )
+        statement = _text(
+            expression.get("raw")
+            or prop.get("description")
+            or assertion.get("description")
+        )
+        statement = " ".join(statement.split())[:240]
+        if rule_ref and statement:
+            return {
+                "source_rule_ref": rule_ref,
+                "source_rule_statement": statement,
+                "source_rule_identity_basis": (
+                    "compiled_property_expression_and_source_refs"
+                ),
+            }
+    return {}
+
+
+def _attach_source_rule_identity(
+    result: dict[str, Any],
+    exp: dict[str, Any],
+) -> dict[str, Any]:
+    """Project a grounded rule identity onto final finding occurrences.
+
+    This changes only customer-readable identity and evidence metadata.  Oracle
+    status, assertion receipts, canonical defect derivation, and delivery gates
+    remain untouched.
+    """
+
+    identity = _source_rule_identity(exp)
+    governed = dict(_dict(result))
+    if not identity:
+        return governed
+
+    findings = [
+        dict(row)
+        for row in _list(governed.get("findings"))
+        if isinstance(row, dict)
+    ]
+    if not findings and _dict(governed.get("finding")):
+        findings = [dict(_dict(governed.get("finding")))]
+    if not findings:
+        return governed
+
+    statement = identity["source_rule_statement"]
+    enriched: list[dict[str, Any]] = []
+    for raw_finding in findings:
+        finding = dict(raw_finding)
+        evidence = dict(_dict(finding.get("evidence")))
+        request = _text(evidence.get("request"))
+        category = _text(finding.get("category") or "contract")
+        technical_identity = " ".join(
+            value for value in (category, request) if value
+        )
+        finding.update(identity)
+        finding["title"] = (
+            f"[ContractOracle] {statement}: "
+            f"{technical_identity or identity['source_rule_ref']}"
+        )
+        existing_description = _text(finding.get("description"))
+        prefix = f"Source rule violated: {statement}."
+        finding["description"] = (
+            f"{prefix} {existing_description}"
+            if existing_description and not existing_description.startswith(prefix)
+            else existing_description or prefix
+        )
+        evidence.update(identity)
+        finding["evidence"] = evidence
+        enriched.append(finding)
+
+    governed["findings"] = enriched
+    if _dict(governed.get("finding")):
+        governed["finding"] = enriched[0]
+    return governed
+
+
 def _finding_for_assertion(
     base_finding: dict[str, Any],
     assertion: dict[str, Any],
@@ -431,7 +546,11 @@ def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
             *call_args,
             **call_kwargs,
         )
-        return _fanout_finding_outcomes(_dict(result))
+        governed = _fanout_finding_outcomes(_dict(result))
+        return _attach_source_rule_identity(
+            governed,
+            _dict(call_kwargs.get("exp")),
+        )
 
     return _run_finalizer_hooks(base_finalize, tuple(args), call_kwargs)
 
