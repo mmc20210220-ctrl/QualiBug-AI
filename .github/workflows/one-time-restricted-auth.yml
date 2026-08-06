@@ -7,6 +7,10 @@ on:
       - '.github/workflows/one-time-restricted-auth.yml'
 permissions:
   contents: write
+  statuses: write
+concurrency:
+  group: restricted-account-auth-fix
+  cancel-in-progress: true
 jobs:
   deliver:
     if: github.actor != 'github-actions[bot]'
@@ -20,4 +24,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: cat .github/delivery/restricted-auth/run-* > /tmp/run.sh && bash /tmp/run.sh
+      - name: Mark pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=pending -f context=qualibug/restricted-auth-fix -f description='Verified patch is running'
+      - name: Apply and verify
+        run: cat .github/delivery/restricted-auth/run-* > /tmp/run.sh && bash /tmp/run.sh
+      - name: Mark success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context=qualibug/restricted-auth-fix -f description='Verified patch pushed'
+      - name: Mark failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=failure -f context=qualibug/restricted-auth-fix -f description='Verified patch failed closed'
