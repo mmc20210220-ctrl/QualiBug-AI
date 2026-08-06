@@ -5,9 +5,12 @@ not perform transport and can therefore be tested without a target system.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any
+
+from .behavior_ir_core import _infer_operation_effect
 
 
 _ACTOR_SCALAR_KEYS = frozenset({
@@ -39,6 +42,10 @@ _DESTRUCTIVE_PATTERNS = frozenset({
 _RESIDUE_CLEANUP_ACTIONS = frozenset({"accepted_residue"})
 _RESIDUE_CLEANUP_MODES = frozenset({"accepted_residue_no_cleanup"})
 _RESIDUE_CLEANUP_AUTHORITIES = frozenset({"accepted_residue"})
+_ACTIVE_EXPLORATION_EFFECT: ContextVar[str] = ContextVar(
+    "qualibug_actor_exploration_operation_effect",
+    default="",
+)
 
 
 @dataclass(frozen=True)
@@ -89,6 +96,14 @@ def _status_code(value: Any) -> int:
         parsed = int(value.strip())
         return parsed if parsed > 0 else 0
     return 0
+
+
+def _operation_effect(operation: dict[str, Any], method: str = "") -> str:
+    """Resolve read/write semantics through the Behavior IR single authority."""
+
+    row = _dict(operation)
+    resolved_method = _text(method or row.get("method")).upper()
+    return _infer_operation_effect(row, resolved_method)
 
 
 def apply_actor_execution_overlay(
@@ -377,9 +392,16 @@ def exploration_execution_policy(
     experiment: dict[str, Any],
     requested_max_attempts: int,
 ) -> tuple[bool, int, str]:
-    """Apply the final runtime safety gate before any actor is attempted."""
+    """Apply the final runtime safety gate before any actor is attempted.
+
+    The Behavior IR effect classifier is the single read/write authority.  This
+    keeps declared read-like POST operations aligned with compile semantics and
+    ensures an explicit write declaration overrides a query-looking path.
+    """
     method = _text(operation.get("method")).upper()
-    if method in _SAFE_READ_METHODS:
+    effect = _operation_effect(operation, method)
+    _ACTIVE_EXPLORATION_EFFECT.set(effect)
+    if effect == "read":
         return True, max(1, int(requested_max_attempts or 1)), "safe_read"
 
     combined = " ".join(
@@ -422,16 +444,30 @@ def should_continue_actor_exploration(
     method: str,
     outcome: str,
     status_code: int,
+    operation: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
-    """Return whether a different actor may be attempted safely."""
+    """Return whether a different actor may be attempted safely.
+
+    Direct callers may pass the operation.  The executor uses the semantic
+    effect established by ``exploration_execution_policy`` in the same context,
+    so retry behavior cannot drift from the runtime admission decision.
+    """
     normalized_method = _text(method).upper()
     normalized_outcome = _text(outcome).lower()
     status = _status_code(status_code)
+    effect = (
+        _operation_effect(_dict(operation), normalized_method)
+        if isinstance(operation, dict)
+        else _ACTIVE_EXPLORATION_EFFECT.get()
+    )
+    safe_read = effect == "read" or (
+        not effect and normalized_method in _SAFE_READ_METHODS
+    )
 
     if status == 429:
         return False, "rate_limited"
 
-    if normalized_method in _SAFE_READ_METHODS:
+    if safe_read:
         if normalized_outcome in {
             "authentication_failed",
             "permission_denied",
