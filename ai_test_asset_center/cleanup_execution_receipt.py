@@ -93,6 +93,43 @@ def build_cleanup_execution_receipt(
         row for row in _list(adapter_cleanup_receipts) if isinstance(row, dict)
     ]
 
+    # ── Accepted-residue mode seals an explicit waiver, not a restoration ──
+    # A cleanup plan whose every entry is accepted_residue means the target's
+    # leftover is deliberately accepted (declared non-production, no source
+    # compensator) with an audit receipt for later environment reset. The
+    # equivalence gate must see the explicit waiver BEFORE the after-cleanup
+    # observation steps are mistaken for cleanup transports — observation
+    # GETs carry status 200 but no governance receipt, which would otherwise
+    # surface as a phantom cleanup_transport_failed and block the finding
+    # the accepted-residue design explicitly promises to reach the oracle.
+    if cleanup_plan and all(
+        _text(row.get("action")) == "accepted_residue"
+        or _text(row.get("mode")) == "accepted_residue_no_cleanup"
+        for row in cleanup_plan
+        if isinstance(row, dict)
+    ):
+        return _build_receipt(
+            experiment_id=experiment_id,
+            proof_id=proof_id,
+            cleanup_operation_ref=cleanup_operation_ref,
+            cleanup_authority=cleanup_authority
+            or "accepted_residue_no_cleanup",
+            attempted=False,
+            transport_reached=False,
+            method=_first_cleanup_method(cleanup_plan),
+            path_template=_first_cleanup_path(cleanup_plan),
+            materialized_path="",
+            request_body_fingerprint="",
+            identity_bindings={},
+            status_code=0,
+            response_body_fingerprint="",
+            succeeded=False,
+            status=STATUS_NOT_REQUIRED,
+            reason_code="ACCEPTED_RESIDUE_NO_CLEANUP",
+            detail="accepted_residue_explicit_waiver",
+            cleanup_mode="accepted_residue_no_cleanup",
+        )
+
     if not cleanup_plan:
         return _build_receipt(
             experiment_id=experiment_id,

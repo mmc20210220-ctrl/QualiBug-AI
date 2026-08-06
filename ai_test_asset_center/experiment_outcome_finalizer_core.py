@@ -107,6 +107,12 @@ def _cleanup_equivalence_gate(
         reason = _text(receipt.get("reason_code")).upper()
         if reason == "CLEANUP_NOT_REQUIRED":
             return "PASSED", ""
+        if reason == "ACCEPTED_RESIDUE":
+            # Declared non-production accepted-residue mode: the write's
+            # leftover is explicitly accepted with an audit receipt; the
+            # environment is reset externally. Restoration equivalence does
+            # not apply by contract.
+            return "PASSED", ""
         return (
             "BLOCKED",
             "BLOCKED_CLEANUP_EQUIVALENCE_NOT_APPLICABLE_UNPROVEN",

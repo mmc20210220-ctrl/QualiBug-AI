@@ -4314,6 +4314,23 @@ def build_behavior_ir_from_knowledge_asset(
             "source_grounded": True,
         }
 
+    # ── Risk-domain semantics index ──
+    # The knowledge asset's risk-domain layer already classifies each source
+    # rule into a structured semantic family (idempotency, state_machine,
+    # data_conservation, permission_boundary, concurrency, business_rule).
+    # That classification is source-grounded business understanding produced
+    # by asset construction; the IR consumes it so a classified rule is never
+    # mistaken for a broad umbrella overlay, and so idempotency rules carry
+    # the structured idempotency expression.
+    _risk_domain_by_rule: dict[str, str] = {}
+    for _risk_row in _list(data.get("risk_domains")):
+        if not isinstance(_risk_row, dict):
+            continue
+        _src_rule = _text(_risk_row.get("source_rule_id"))
+        _risk_type = _text(_risk_row.get("risk_type")).lower()
+        if _src_rule and _risk_type:
+            _risk_domain_by_rule.setdefault(_src_rule, _risk_type)
+
     for rule in _list(data.get("rule_library") or data.get("rules")):
         if not isinstance(rule, dict):
             continue
@@ -4353,6 +4370,22 @@ def build_behavior_ir_from_knowledge_asset(
 
         # ── Field-level grounding: extract structured operands from statement ──
         _rule_kind = _text(rule.get("kind") or rule.get("risk_type") or "business_rule")
+        _risk_type = _risk_domain_by_rule.get(rid) or _risk_domain_by_rule.get(
+            _text(rule.get("source_rule_id"))
+        )
+        # Idempotency/repetition vocabulary is generic technical semantics —
+        # not industry terms. A rule stating 重复/幂等/再次/二次 names a
+        # repeat-guard invariant (the same input executed twice must not
+        # apply its business effect twice), which is concrete even without
+        # field references. Asset risk-domain classification (idempotency)
+        # confirms the same structure. Both promote the rule to the
+        # structured idempotency family so it compiles an effect-cardinality
+        # experiment instead of dying as a broad overlay.
+        _has_idempotency_signal = any(
+            token in statement for token in ("重复", "幂等", "再次", "二次", "多次")
+        ) or _risk_type == "idempotency"
+        if _has_idempotency_signal and _rule_kind in {"business_rule", "business_logic"}:
+            _rule_kind = "idempotency"
         _rule_operands = _list(rule.get("operands"))
         _rule_equation: dict[str, Any] = _dict(rule.get("equation"))
         # For conservation/data_conservation/business amount-quantity rules
@@ -4420,6 +4453,12 @@ def build_behavior_ir_from_knowledge_asset(
                 and bool(_text(_op.get("field") or _op.get("field_id") or _op.get("entity_ref")))
                 for _op in _list(_rule_operands)
             )
+            # Asset-classified risk semantics and idempotency vocabulary are
+            # concrete rule evidence too: the asset's risk-domain layer already
+            # resolved the rule to a structured family (idempotency,
+            # state_machine, data_conservation, permission_boundary,
+            # concurrency), which a broad overlay statement can never carry.
+            _has_structured_risk_semantics = bool(_risk_type) or _has_idempotency_signal
             _has_entity_ref = bool(_text(rule.get("entity") or rule.get("object") or rule.get("business_object")))
             # A validated semantic frame is source-grounded structure, but it
             # is not an executable operation binding by itself.  Only an
@@ -4460,6 +4499,7 @@ def build_behavior_ir_from_knowledge_asset(
                     _has_source_grounded_semantics
                     and _has_authoritative_operation_link
                 )
+                and not _has_structured_risk_semantics
                 and len(statement) < 30
             ):
                 _is_umbrella = True
@@ -4467,12 +4507,31 @@ def build_behavior_ir_from_knowledge_asset(
         # the invariant node only — merging modality/polarity/condition/subject/
         # behavior into expression changes property fingerprints and silently
         # rotates stable obligation_id values (V1.6.2 Unlock Set underselection).
-        _expression: dict[str, Any] = {
-            "kind": _rule_kind,
-            "operator": _text(rule.get("operator") or "must_hold"),
-            "operands": _rule_operands,
-            "raw": statement,
-        }
+        # Idempotency rules carry the structured effect-cardinality
+        # expression (same as the implicit-rule path: the same business
+        # input must apply its effect exactly once), so the obligation
+        # compiler selects the idempotent_effect_cardinality protocol.
+        if _rule_kind == "idempotency":
+            if not _rule_operands:
+                _rule_operands = [
+                    {
+                        "operator": "business_effect_count",
+                        "expected_effect_count": 1,
+                    }
+                ]
+            _expression = {
+                "kind": _rule_kind,
+                "operator": "business_effect_count",
+                "operands": _rule_operands,
+                "raw": statement,
+            }
+        else:
+            _expression = {
+                "kind": _rule_kind,
+                "operator": _text(rule.get("operator") or "must_hold"),
+                "operands": _rule_operands,
+                "raw": statement,
+            }
         if _rule_equation:
             _expression["equation"] = _rule_equation
         # V1.4.0/V1.6.0: collect Canonical Field IDs (cf_*) when present; else names.

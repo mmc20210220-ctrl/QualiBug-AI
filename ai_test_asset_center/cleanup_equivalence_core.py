@@ -224,6 +224,29 @@ def evaluate_cleanup_equivalence(
     cleanup_receipt_status = _text(
         cleanup_execution_receipt.get("status")
     ).upper()
+    # Accepted-residue mode is an explicit non-production waiver: the target's
+    # leftover is deliberately accepted (audit receipt, no source compensator)
+    # instead of restored, so restoration equivalence does not apply. Unlike a
+    # bare NOT_REQUIRED it needs no sealed state-unchanged proof — the state
+    # is intentionally NOT restored, and the residue receipt is the contract.
+    if (
+        cleanup_receipt_status == "NOT_REQUIRED"
+        and _text(cleanup_execution_receipt.get("reason_code"))
+        == "ACCEPTED_RESIDUE_NO_CLEANUP"
+    ):
+        return _build_receipt(
+            proof_id=proof_id,
+            primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity,
+            before_obs=before_observation,
+            after_write_obs=after_write_observation,
+            after_cleanup_obs=after_cleanup_observation,
+            equivalence_status="NOT_APPLICABLE",
+            reason_code="ACCEPTED_RESIDUE",
+            detail="accepted_residue_explicit_waiver",
+            field_comparison={},
+            relation_comparison={},
+        )
     # Honest NOT_REQUIRED requires sealed state-unchanged evidence fingerprints.
     # A bare CER status must never waive restoration into NOT_APPLICABLE /
     # Finalizer PASSED — false NOT_REQUIRED (missed entity, short-id hole) stays
