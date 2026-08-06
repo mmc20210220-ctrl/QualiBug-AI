@@ -685,8 +685,26 @@ def execute_governed_control_write(
     # (qb-auto-…@qualibug.local). The seeded account stays untouched and the
     # write executes against a harness-owned disposable target; the rule under
     # test is still observed on the real response.
+    #
+    # Identity-CREATION writes (register/signup/enroll…) get the same
+    # materialization: the source example's seeded email/phone already exists
+    # in the target, so a control registration against it fails before the
+    # rule is tested (duplicate account). A disposable identity is exactly the
+    # fixture the creation needs — the created account is harness-owned.
     identity_target_is_disposable = False
-    if allowed and not restorable_identity_mutation and _looks_like_protected_identity_mutation(method, path, body):
+    _creation_path = bool(
+        _IDENTITY_CREATION_RE.search(
+            normalize_path_placeholders(_text(path)).lower()
+        )
+    )
+    if (
+        allowed
+        and not restorable_identity_mutation
+        and (
+            _looks_like_protected_identity_mutation(method, path, body)
+            or (_creation_path and _body_has_disposable_identity_anchor(body))
+        )
+    ):
         _disposable_body, _materialized_fields = materialize_disposable_identity_fields(
             body,
             disposable_identity_nonce("governed_control", method, path),
@@ -1053,6 +1071,28 @@ def _scenario_has_disposable_identity_fixture(scenario: Any) -> bool:
         path = _text(getattr(step, "api_path", "") or "").lower()
         if _IDENTITY_RESOURCE_RE.search(path) or _IDENTITY_CREATION_RE.search(path):
             return True
+    return False
+
+
+def _body_has_disposable_identity_anchor(value: Any) -> bool:
+    """True when the body carries an identity-creation anchor field.
+
+    Narrower than the generic disposable materializer: identity-CREATION
+    writes (register/signup) materialize only the fields that would collide
+    with existing accounts — email/phone/username/mobile. Reference-style
+    keys (account_id, user_id) are deliberately excluded: those name an
+    EXISTING entity and must stay verbatim.
+    """
+    _CREATION_ANCHOR_TOKENS = ("email", "phone", "mobile", "username", "login")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_l = re.sub(r"[^a-z0-9_]+", "", str(key).strip().lower())
+            if any(token in key_l for token in _CREATION_ANCHOR_TOKENS):
+                return True
+            if _body_has_disposable_identity_anchor(child):
+                return True
+    if isinstance(value, list):
+        return any(_body_has_disposable_identity_anchor(child) for child in value)
     return False
 
 

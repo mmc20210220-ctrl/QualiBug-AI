@@ -173,6 +173,35 @@ def _semantic_invalid_value(
 
     # String fields with semantic constraints
     if declared_type == "string":
+        # A restrictive rule naming an enum value as the ONLY allowed value
+        # (对外注册只能创建 buyer) forbids every other declared enum value.
+        # The treatment is another enum value — the target must reject it or
+        # ignore the client input. Only applies when the rule's allowed value
+        # IS in the enum; a rule that names no enum value (只能查看自己的订单)
+        # never mutates an unrelated enum field.
+        enum_values = [
+            _text(value)
+            for value in _list(property_schema.get("enum"))
+            if _text(value)
+        ]
+        if enum_values:
+            _restricted_match = re.search(
+                r"(?:只能|仅能|仅|必须|只)(?:创建|为|是|使用|设置|取)?"
+                r"\s*([A-Za-z_][A-Za-z0-9_-]*)",
+                combined,
+            )
+            _allowed_value = (
+                _text(_restricted_match.group(1)).lower()
+                if _restricted_match
+                else ""
+            )
+            if _allowed_value and any(
+                _text(value).lower() == _allowed_value
+                for value in enum_values
+            ):
+                for candidate in enum_values:
+                    if _text(candidate).lower() != _allowed_value:
+                        return candidate, f"semantic:enum_value_not_allowed:{candidate}"
         if _PASSWORD_FIELDS.search(combined):
             return "1", "semantic:weak_password"
         if _EMAIL_FIELDS.search(combined):
@@ -504,6 +533,44 @@ def _validation_protocol_material(
         *explicit_targets,
         *[str(f) for f in properties if str(f) not in explicit_targets],
     ]
+    # Strategy 0 pre-pass: an enum-restrictive rule names the ONLY allowed
+    # value (对外注册只能创建 buyer) — the field whose declared enum contains
+    # that value is the governed field, and any OTHER declared enum value is
+    # the mutation. This must run before the generic per-field heuristics:
+    # the rule's statement may omit the field name entirely (the field list
+    # lives in a following clause), so only the enum membership identifies
+    # the target field.
+    _restricted_value_match = re.search(
+        r"(?:只能|仅能|仅|必须|只)(?:创建|为|是|使用|设置|取)?"
+        r"\s*([A-Za-z_][A-Za-z0-9_-]*)",
+        semantic_text,
+    )
+    if _restricted_value_match:
+        _allowed_value = _text(_restricted_value_match.group(1)).lower()
+        for field in semantic_field_order:
+            if field not in control:
+                continue
+            raw_property = properties.get(field)
+            enum_values = [
+                _text(value)
+                for value in _list(_dict(raw_property).get("enum"))
+                if _text(value)
+            ]
+            if not any(
+                _text(value).lower() == _allowed_value
+                for value in enum_values
+            ):
+                continue
+            for candidate in enum_values:
+                if _text(candidate).lower() != _allowed_value:
+                    treatment = deepcopy(control)
+                    treatment[field] = candidate
+                    return control, treatment, {
+                        "json_path": f"$.{field}",
+                        "constraint": f"enum_value_not_allowed:{candidate}",
+                        "source": "request_schema",
+                    }
+            break
     for field in semantic_field_order:
         if field not in control:
             continue
