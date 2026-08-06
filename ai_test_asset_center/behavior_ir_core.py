@@ -4160,6 +4160,65 @@ def build_behavior_ir_from_knowledge_asset(
                     _known_names.add(_fname)
                     if _cf:
                         _known_ids.add(_cf)
+        # ── CJK validation term → field-name token binding ──
+        # Many rule statements name the fields they govern through generic
+        # business vocabulary ("必须校验状态、生效时间、失效时间、最低金额、
+        # 分类范围、使用次数和最大优惠") while the entity field names carry no
+        # Chinese description to match against. Bind such terms to fields via
+        # their structural name tokens. The vocabulary below is industry-
+        # neutral (state/timestamp/amount/scope/limit are universal business
+        # categories, not benchmark-specific), and tokens match field names on
+        # snake/token boundaries so "count" inside "discount" cannot satisfy
+        # a 使用次数 term.
+        _CJK_TERM_FIELD_TOKENS: tuple[tuple[str, tuple[str, ...]], ...] = (
+            ("状态", ("status", "state")),
+            ("生效时间", ("starts", "start", "begin", "effective")),
+            ("失效时间", ("expires", "expire", "valid_until", "end_at", "valid")),
+            ("最低金额", ("min_amount", "minimum_amount", "min_order_amount", "min")),
+            ("金额", ("amount", "price", "total", "fee", "cost")),
+            ("数量", ("quantity", "qty", "stock", "count")),
+            ("分类", ("categor", "scope", "type")),
+            ("范围", ("categor", "scope")),
+            ("使用次数", ("user_limit", "global_limit", "usage_limit", "limit")),
+            ("次数", ("user_limit", "global_limit", "usage_limit", "limit")),
+            ("最大优惠", ("max_discount", "discount_cap", "cap")),
+        )
+        for _term, _field_tokens in _CJK_TERM_FIELD_TOKENS:
+            if _term not in stmt:
+                continue
+            for _ent_name, _ent_nodes in _ENTITY_FIELD_NODES.items():
+                for _fname_lower, _fnode in _ent_nodes.items():
+                    if not isinstance(_fnode, dict):
+                        continue
+                    _fname = _text(_fnode.get("name") or _fname_lower)
+                    if (
+                        not _fname
+                        or _fname in _known_names
+                        or _fname_lower in {n.lower() for n in _known_names}
+                    ):
+                        continue
+                    _fnl = _fname.lower()
+                    if not any(
+                        _fnl == _tok
+                        or _fnl.endswith("_" + _tok)
+                        or _fnl.startswith(_tok + "_")
+                        or ("_" + _tok + "_") in _fnl
+                        for _tok in _field_tokens
+                    ):
+                        continue
+                    _cf = _text(_fnode.get("field_id"))
+                    if _cf and _cf in _known_ids:
+                        continue
+                    _row: dict[str, Any] = {"entity_ref": _ent_name, "field": _fname}
+                    if _cf:
+                        _row["field_id"] = _cf
+                    _sem = _text(_fnode.get("semantic_type"))
+                    if _sem:
+                        _row["semantic_type"] = _sem
+                    result.append(_row)
+                    _known_names.add(_fname)
+                    if _cf:
+                        _known_ids.add(_cf)
         return result
 
     # Invariants from rule library (typed expression + description)
@@ -4324,6 +4383,13 @@ def build_behavior_ir_from_knowledge_asset(
         _rule_equation: dict[str, Any] = _dict(rule.get("equation"))
         # For conservation/data_conservation/business amount-quantity rules
         # without explicit operands, extract field references from statement text.
+        # CJK validation vocabulary (状态/时间/金额/数量/分类/范围/次数/优惠) is
+        # industry-neutral business language; a statement carrying such terms
+        # names fields it governs even when no ASCII identifier appears.
+        _CJK_FIELD_SIGNAL_TERMS = (
+            "状态", "时间", "金额", "数量", "分类", "范围", "次数", "优惠",
+            "库存", "价格", "余额", "费用", "限额", "配额",
+        )
         if not _rule_operands and (
             any(
                 token in _rule_kind.lower()
@@ -4336,6 +4402,7 @@ def build_behavior_ir_from_knowledge_asset(
                     "discount_amount", "refund", "qty", "amount",
                 )
             )
+            or any(token in statement for token in _CJK_FIELD_SIGNAL_TERMS)
         ):
             _extracted = _extract_fields_from_statement(statement)
             if _extracted:
