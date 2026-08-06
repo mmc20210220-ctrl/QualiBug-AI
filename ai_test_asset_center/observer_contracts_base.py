@@ -1149,10 +1149,24 @@ def observe_authorization_comparison(
         _identity_fingerprints(control_row.get("body"), identity_keys)
         .intersection(_identity_fingerprints(treatment_row.get("body"), identity_keys))
     )
+    # V1.8: Aggregate documents (reports, totals, counts, configuration) carry
+    # no row identity — the document itself IS the resource. When both actors
+    # observe the byte-identical non-error document on the same path and no
+    # identity-bearing field exists anywhere in either body, equality proves
+    # the viewer received the owner's aggregate: identity-overlap is
+    # structurally impossible for aggregates and must not block the leak.
+    # Row-shaped bodies (any identity field present) keep the strict
+    # identity-overlap rule — equal payloads alone never prove resource
+    # identity for entity collections.
+    _aggregate_document = (
+        bodies_equal
+        and not _identity_fingerprints(control_row.get("body"), identity_keys)
+        and not _identity_fingerprints(treatment_row.get("body"), identity_keys)
+    )
     # Equal payloads alone are not resource identity: a shared login/error
     # document can be byte-identical for both actors. Require a structural
     # identity value from the observed JSON on the same requested path.
-    same_resource_proven = same_path and identity_overlap
+    same_resource_proven = same_path and (identity_overlap or _aggregate_document)
     if require_same_resource and not same_resource_proven:
         return _receipt(
             observer_id="authorization_comparison",
