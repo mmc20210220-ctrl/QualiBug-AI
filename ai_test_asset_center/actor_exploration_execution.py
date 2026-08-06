@@ -23,6 +23,10 @@ _ACTOR_SCALAR_KEYS = frozenset({
     "created_by_actor_ref",
 })
 _ACTOR_LIST_KEYS = frozenset({"required_actors", "actor_refs"})
+_IMMUTABLE_ACTOR_CONTRACT_PATHS = frozenset({
+    "actor_execution_plan",
+    "actor_selection_contract",
+})
 _SAFE_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _STATE_TRANSITION_PATTERNS = frozenset({
     "approve", "submit", "cancel", "enable", "disable", "activate",
@@ -56,6 +60,21 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _experiment_property(experiment: dict[str, Any]) -> dict[str, Any]:
+    """Return semantic property without assuming a non-canonical top-level copy."""
+
+    direct = _dict(_dict(experiment).get("property"))
+    if direct:
+        return direct
+    for assertion in _list(_dict(experiment).get("assertions")):
+        if not isinstance(assertion, dict):
+            continue
+        prop = _dict(assertion.get("property"))
+        if prop:
+            return prop
+    return {}
+
+
 def _status_code(value: Any) -> int:
     if isinstance(value, bool):
         return 0
@@ -73,25 +92,53 @@ def apply_actor_execution_overlay(
     experiment: dict[str, Any],
     candidate_actor_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Rebind every compiled reference to the selected exploration actor.
+    """Rebind every executable reference to one compiler-sealed candidate.
 
     Only references equal to the compiler-selected source actor are replaced;
-    unrelated fixture/dependency actors remain unchanged.
+    unrelated fixture/dependency actors remain unchanged. The immutable actor
+    execution/selection contracts are never rewritten by an attempt overlay.
     """
     candidate = _text(candidate_actor_id)
     if not candidate:
         raise ValueError("candidate_actor_id_required")
 
     governed = deepcopy(_dict(experiment))
-    prop = _dict(governed.get("property"))
-    required = [_text(v) for v in _list(governed.get("required_actors")) if _text(v)]
-    source_actor = _text(prop.get("actor_ref")) or (required[0] if required else "")
+    plan = _dict(governed.get("actor_execution_plan"))
+    prop = _experiment_property(governed)
+    required = [
+        _text(value)
+        for value in _list(governed.get("required_actors"))
+        if _text(value)
+    ]
+    planned_actor_refs = [
+        _text(step.get("actor_ref"))
+        for step in [
+            *_list(governed.get("control_plan")),
+            *_list(governed.get("treatment_plan")),
+        ]
+        if isinstance(step, dict) and _text(step.get("actor_ref"))
+    ]
+    source_actor = (
+        _text(plan.get("source_actor_id"))
+        or _text(prop.get("actor_ref"))
+        or (required[0] if required else "")
+        or (planned_actor_refs[0] if planned_actor_refs else "")
+    )
     if not source_actor:
         raise ValueError("exploration_source_actor_missing")
+    sealed_candidates = {
+        _text(value)
+        for value in _list(plan.get("candidate_ids"))
+        if _text(value)
+    }
+    if sealed_candidates and candidate not in sealed_candidates:
+        raise ValueError(f"candidate_actor_not_in_compiled_plan:{candidate}")
 
     changed_paths: list[str] = []
 
     def visit(value: Any, path: str) -> Any:
+        if path in _IMMUTABLE_ACTOR_CONTRACT_PATHS:
+            return deepcopy(value)
         if isinstance(value, dict):
             output: dict[str, Any] = {}
             for key, raw in value.items():
@@ -115,9 +162,10 @@ def apply_actor_execution_overlay(
         return value
 
     governed = visit(governed, "")
-    governed_prop = _dict(governed.get("property"))
-    governed_prop["actor_ref"] = candidate
-    governed["property"] = governed_prop
+    if "property" in governed:
+        governed_prop = dict(_dict(governed.get("property")))
+        governed_prop["actor_ref"] = candidate
+        governed["property"] = governed_prop
     if required:
         governed["required_actors"] = [
             candidate if actor_id == source_actor else actor_id
@@ -128,6 +176,8 @@ def apply_actor_execution_overlay(
     effective_actor_refs: set[str] = set()
 
     def inspect(value: Any, path: str) -> None:
+        if path in _IMMUTABLE_ACTOR_CONTRACT_PATHS:
+            return
         if isinstance(value, dict):
             for key, raw in value.items():
                 child_path = f"{path}.{key}" if path else key
@@ -156,7 +206,17 @@ def apply_actor_execution_overlay(
 
     receipt = {
         "source_actor_id": source_actor,
+        "source_actor_basis": (
+            "actor_execution_plan"
+            if _text(plan.get("source_actor_id"))
+            else "semantic_property"
+            if _text(prop.get("actor_ref"))
+            else "required_actors"
+            if required
+            else "compiled_plan_step"
+        ),
         "candidate_actor_id": candidate,
+        "compiled_plan_hash": _text(plan.get("plan_hash")),
         "changed_paths": changed_paths,
         "effective_actor_refs": sorted(effective_actor_refs),
         "status": "APPLIED",
@@ -285,7 +345,7 @@ def exploration_execution_policy(
         return False, 0, "write_without_cleanup_proof"
 
     if any(token in combined for token in _STATE_TRANSITION_PATTERNS):
-        prop = _dict(_dict(experiment).get("property"))
+        prop = _experiment_property(_dict(experiment))
         owner_evidence = any(
             _text(prop.get(key))
             for key in (
