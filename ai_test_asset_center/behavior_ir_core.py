@@ -4040,17 +4040,25 @@ def build_behavior_ir_from_knowledge_asset(
     for _op in _list(model.get("operations")):
         _op_ents = [_text(e).lower() for e in _list(_op.get("entity_refs")) if _text(e)]
         _schema_fields: list[str] = []
+        _schema_field_nodes: dict[str, dict[str, Any]] = {}
         _req_schema = _dict(_op.get("request_schema") or _op.get("requestBody"))
         _content = _dict(_req_schema.get("content"))
         _json_media = _dict(_content.get("application/json"))
         _schema_props = _dict(_dict(_json_media.get("schema")).get("properties"))
-        _schema_fields.extend(_schema_props.keys())
+        for _sf_name, _sf_schema in _schema_props.items():
+            _schema_fields.append(_sf_name)
+            _node = dict(_sf_schema) if isinstance(_sf_schema, dict) else {}
+            _node.setdefault("name", _sf_name)
+            _schema_field_nodes[_sf_name.lower()] = _node
         _example = _dict(_json_media.get("example"))
         _schema_fields.extend(k for k in _example.keys() if isinstance(_example.get(k), (int, float)))
         _field_dict = _list(_op.get("field_dictionary"))
         for _fd in _field_dict:
             if isinstance(_fd, dict):
-                _schema_fields.append(_text(_fd.get("name") or _fd.get("field")))
+                _fd_name = _text(_fd.get("name") or _fd.get("field"))
+                _schema_fields.append(_fd_name)
+                if _fd_name:
+                    _schema_field_nodes.setdefault(_fd_name.lower(), dict(_fd))
             elif isinstance(_fd, str):
                 _schema_fields.append(_fd)
         for _ent_name in _op_ents:
@@ -4058,6 +4066,24 @@ def build_behavior_ir_from_knowledge_asset(
             for sf in _schema_fields:
                 if sf and sf not in existing:
                     existing.append(sf)
+            # Operation schema fields carry source descriptions (e.g. openapi
+            # "description": "金额") that rule statements may reference through
+            # CJK terms ("支付金额"). Keep the nodes so semantic term matching
+            # can bind rule language to request fields without hardcoding any
+            # field name.
+            ent_nodes = _ENTITY_FIELD_NODES.setdefault(_ent_name, {})
+            for _sf_name, _sf_node in _schema_field_nodes.items():
+                _existing_node = ent_nodes.get(_sf_name)
+                if _existing_node is None:
+                    ent_nodes[_sf_name] = dict(_sf_node)
+                elif (
+                    not _text(_existing_node.get("description"))
+                    and _text(_sf_node.get("description"))
+                ):
+                    # Operation schema prose is the richer description source;
+                    # merge it into the entity node so CJK term matching can
+                    # bind "支付金额" to the request field amount (desc 金额).
+                    ent_nodes[_sf_name] = {**_existing_node, **_sf_node}
 
     def _extract_fields_from_statement(stmt: str) -> list[dict[str, str]]:
         """Extract field references from a rule statement using schema evidence."""
@@ -4097,6 +4123,43 @@ def build_behavior_ir_from_knowledge_asset(
             if _sem:
                 row["semantic_type"] = _sem
             result.append(row)
+        # ── CJK term → field semantic binding ──
+        # Rule statements written in Chinese reference fields through their
+        # source descriptions, not the ASCII identifier ("支付金额必须等于订单
+        # 应付金额" mentions 应付金额, which is the description of
+        # ``payable_amount``; 支付金额 is the description of the request field
+        # ``amount``). Bind those terms to fields via description evidence so
+        # conservation equations keep both sides. Matching is conservative:
+        # a description must appear verbatim in the statement, or the statement
+        # must end with it (term = qualifier + description), so a bare 金额
+        # tail cannot grab every X金额 field.
+        _known_names = {row.get("field") for row in result if row.get("field")}
+        _known_ids = {row.get("field_id") for row in result if row.get("field_id")}
+        for _ent_name, _ent_nodes in _ENTITY_FIELD_NODES.items():
+            for _fname_lower, _fnode in _ent_nodes.items():
+                if not isinstance(_fnode, dict):
+                    continue
+                _fname = _text(_fnode.get("name") or _fname_lower)
+                if not _fname or _fname in _known_names or _fname_lower in {n.lower() for n in _known_names}:
+                    continue
+                _fdesc = _text(_fnode.get("description"))
+                if not _fdesc or len(_fdesc) < 2:
+                    continue
+                _fdesc = _fdesc.strip()
+                if _fdesc in stmt or stmt.endswith(_fdesc):
+                    _cf = _text(_fnode.get("field_id"))
+                    if _cf and _cf in _known_ids:
+                        continue
+                    _row: dict[str, Any] = {"entity_ref": _ent_name, "field": _fname}
+                    if _cf:
+                        _row["field_id"] = _cf
+                    _sem = _text(_fnode.get("semantic_type"))
+                    if _sem:
+                        _row["semantic_type"] = _sem
+                    result.append(_row)
+                    _known_names.add(_fname)
+                    if _cf:
+                        _known_ids.add(_cf)
         return result
 
     # Invariants from rule library (typed expression + description)
