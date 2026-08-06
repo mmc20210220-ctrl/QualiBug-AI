@@ -397,6 +397,10 @@ def exploration_execution_policy(
     The Behavior IR effect classifier is the single read/write authority.  This
     keeps declared read-like POST operations aligned with compile semantics and
     ensures an explicit write declaration overrides a query-looking path.
+
+    Risky verbs are evaluated only after a real WriteReversibilityProof exists.
+    This aligns runtime with the compiler without weakening safety: residue is
+    rejected, ambiguous write outcomes never retry, and DELETE stays blocked.
     """
     method = _text(operation.get("method")).upper()
     effect = _operation_effect(operation, method)
@@ -408,7 +412,7 @@ def exploration_execution_policy(
         _text(operation.get(key)).lower()
         for key in ("path", "raw_path", "name", "operation_id", "summary")
     )
-    if method == "DELETE" or any(token in combined for token in _DESTRUCTIVE_PATTERNS):
+    if method == "DELETE":
         return False, 0, "destructive_operation"
 
     reversible, reversibility_reason = _write_reversibility_gate(experiment)
@@ -436,7 +440,10 @@ def exploration_execution_policy(
             return False, 0, "state_transition_owner_unproven"
         return True, 1, "state_transition_owner_proven"
 
-    return True, min(max(1, int(requested_max_attempts or 1)), 2), "compensated_write"
+    max_attempts = min(max(1, int(requested_max_attempts or 1)), 2)
+    if any(token in combined for token in _DESTRUCTIVE_PATTERNS):
+        return True, max_attempts, "compensated_destructive_write"
+    return True, max_attempts, "compensated_write"
 
 
 def should_continue_actor_exploration(
