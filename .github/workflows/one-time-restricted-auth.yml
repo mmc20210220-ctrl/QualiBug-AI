@@ -15,13 +15,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout latest main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Checkout latest main without external actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=200 origin main
+          git checkout -B main FETCH_HEAD
       - name: Apply verified patch and deliver
-        run: cat .github/delivery/restricted-auth/run-* > /tmp/run.sh && bash /tmp/run.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/delivery/restricted-auth/run-* > /tmp/run.sh
+          bash /tmp/run.sh
