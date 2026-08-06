@@ -4647,6 +4647,22 @@ def build_behavior_ir_from_knowledge_asset(
                     for field in ("subject", "condition", "behavior")
                 )
             )
+            # A rule whose OWN source span is the operation's interface prose
+            # (the rule is documented inside the operation's summary or
+            # description, e.g. 权限：管理员 / 仅 ACTIVE 用户可登录) is
+            # operation-scoped by construction — its grounding is the
+            # interface attachment itself, not a parser frame. Such a short
+            # rule governs exactly the operation it is documented at and must
+            # not be umbrella-excluded: an operation-attached access/state
+            # constraint without this carve-out would never compile an
+            # obligation and the defect it describes would stay invisible.
+            _has_operation_attached_source = bool(
+                re.search(r"#interface=", _text(rule.get("source_locator")))
+            ) or any(
+                isinstance(span, dict)
+                and _text(span.get("attachment")) == "openapi_interface_prose"
+                for span in _list(_dict(rule.get("semantic_contract")).get("source_spans"))
+            )
             _has_explicit_operation_ref = bool(
                 _text(rule.get("operation_ref") or rule.get("operation_id"))
                 or any(_text(value) for value in _list(rule.get("operation_refs")))
@@ -4669,7 +4685,7 @@ def build_behavior_ir_from_knowledge_asset(
                 not _has_concrete_field
                 and not _has_entity_ref
                 and not (
-                    _has_source_grounded_semantics
+                    (_has_source_grounded_semantics or _has_operation_attached_source)
                     and _has_authoritative_operation_link
                 )
                 and not _has_structured_risk_semantics

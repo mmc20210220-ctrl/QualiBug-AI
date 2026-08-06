@@ -137,6 +137,91 @@ def _unresolved_body_placeholders(
     return unresolved
 
 
+_SECRET_REF_TEST_ACCOUNTS_RE = re.compile(
+    r"^secret_ref:test_accounts:([^:\s]+)$"
+)
+
+
+def _resolve_body_credential_refs(
+    value: Any,
+    *,
+    root: Any,
+    project: str,
+) -> Any:
+    """Resolve the product's own credential references in request bodies.
+
+    An account-state precondition treatment (仅 ACTIVE 用户可登录) marks the
+    rejection arm's password with ``secret_ref:test_accounts:<email>`` — the
+    same secret-reference convention the runtime actor catalog uses. The
+    governed executor resolves the reference to the declared credential
+    before transport, so the probe exercises the real non-ACTIVE account
+    instead of a guessed password. Unresolvable references stay verbatim (the
+    target then rejects them like any invalid credential); they are never
+    replaced with fabricated values.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _resolve_body_credential_refs(child, root=root, project=project)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _resolve_body_credential_refs(child, root=root, project=project)
+            for child in value
+        ]
+    if not isinstance(value, str):
+        return value
+    match = _SECRET_REF_TEST_ACCOUNTS_RE.match(value.strip())
+    if not match:
+        return value
+    account_ref = _text(match.group(1))
+    try:
+        from .experiment_runtime_credentials import _parse_test_accounts_md
+
+        rows: list[dict[str, Any]] = []
+        catalog_path = (
+            Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
+        )
+        if catalog_path.exists():
+            try:
+                payload = json.loads(catalog_path.read_text(encoding="utf-8") or "{}")
+            except (OSError, ValueError):
+                payload = {}
+            if isinstance(payload, dict):
+                rows = list(
+                    payload.get("accounts")
+                    or payload.get("actors")
+                    or payload.get("users")
+                    or []
+                )
+                if not rows:
+                    rows = [
+                        {
+                            **(child if isinstance(child, dict) else {}),
+                            "account_ref": key,
+                        }
+                        for key, child in payload.items()
+                        if isinstance(child, dict)
+                        and key not in {"schema", "schema_version", "meta"}
+                    ]
+            elif isinstance(payload, list):
+                rows = [row for row in payload if isinstance(row, dict)]
+        if not rows:
+            rows = [dict(row) for row in _parse_test_accounts_md(root, project)]
+    except Exception:
+        return value
+    for row in rows:
+        if _text(row.get("account_ref") or row.get("email")) != account_ref:
+            continue
+        credential = _text(
+            row.get("password") or row.get("pass") or row.get("credential")
+        )
+        if credential:
+            return credential
+        break
+    return value
+
+
 def _missing_required_body_fields(
     request_body: Any,
     operation: dict[str, Any],

@@ -30,6 +30,7 @@ from .experiment_runtime_support import (
     _missing_required_body_fields,
     _foreign_key_violations,
     _unauthorized_actor_role,
+    _resolve_body_credential_refs,
 )
 from .real_id_resolver import (
     infer_path_params,
@@ -364,6 +365,11 @@ def execute_non_barrier_plans(
             request_body = _materialize_body_template(
                 request_body,
                 runtime_bindings,
+            )
+            request_body = _resolve_body_credential_refs(
+                request_body,
+                root=root,
+                project=project,
             )
             unresolved_body_tokens = _unresolved_body_placeholders(
                 request_body,

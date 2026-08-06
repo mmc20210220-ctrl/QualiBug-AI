@@ -269,12 +269,118 @@ def _extract_forbidden_response_fields(
     return list(dict.fromkeys([*fields, *family])), bool(family)
 
 
+# Generic account-state precondition vocabulary: a rule like 仅 ACTIVE 用户
+# 可登录 / 禁用用户不得登录 states an ACCOUNT-STATE precondition on an
+# identity operation. The experiment must then exercise a NON-ACTIVE account
+# from the runtime catalog — the target must reject its login. The vocabulary
+# is generic system/account terminology, never an industry term.
+_ACCOUNT_STATE_PRECONDITION_TERMS = (
+    "ACTIVE", "active", "禁用", "锁定", "停用", "封禁", "冻结",
+    "inactive", "disabled", "locked", "suspended", "status", "状态",
+)
+_ACCOUNT_STATE_RESTRICTIVE_MODALS = ("仅", "只能", "必须", "不得", "不能", "只有")
+_IDENTITY_LOCATOR_KEYS = ("email", "phone", "mobile", "username", "login", "account", "user_id", "userid")
+
+
+def _non_active_account_treatment(
+    control: dict[str, Any],
+    semantic_text: str,
+    actor_catalog: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, str]] | None:
+    """Build the rejection-arm body for an account-state precondition rule.
+
+    A rule naming an account state (仅 ACTIVE 用户可登录) forbids non-ACTIVE
+    identities from the operation. The treatment replaces the identity
+    locator with a runtime account whose status is not ACTIVE and marks its
+    password with the product's own secret reference (secret_ref:test_accounts:
+    <email>); the governed executor resolves the credential before transport.
+    Returns (treatment, mutation evidence) or None when the rule is not a
+    state precondition or no non-ACTIVE account is declared.
+    """
+    if not any(term in semantic_text for term in _ACCOUNT_STATE_PRECONDITION_TERMS):
+        return None
+    if not any(modal in semantic_text for modal in _ACCOUNT_STATE_RESTRICTIVE_MODALS):
+        return None
+    if not isinstance(control, dict) or not isinstance(actor_catalog, list):
+        return None
+    identity_key = next(
+        (
+            key
+            for key in control
+            if any(token in str(key).lower() for token in _IDENTITY_LOCATOR_KEYS)
+        ),
+        "",
+    )
+    if not identity_key:
+        return None
+    non_active = next(
+        (
+            actor
+            for actor in actor_catalog
+            if isinstance(actor, dict)
+            and _text(actor.get("account_ref") or actor.get("account"))
+            and _text(actor.get("account_status") or actor.get("status")).upper()
+            not in {"ACTIVE", "ACTIVATED", "ENABLED", ""}
+        ),
+        None,
+    )
+    if not non_active:
+        return None
+    account_email = _text(
+        non_active.get("account_ref") or non_active.get("account")
+    )
+    password_key = next(
+        (
+            key
+            for key in control
+            if "password" in str(key).lower() or "passwd" in str(key).lower()
+        ),
+        "",
+    )
+    treatment = deepcopy(control)
+    treatment[identity_key] = account_email
+    if password_key:
+        treatment[password_key] = (
+            f"secret_ref:test_accounts:{account_email}"
+        )
+    return treatment, {
+        "json_path": f"$.{identity_key}",
+        "constraint": f"account_state_not_active:{account_email}",
+        "source": "account_state_precondition",
+    }
+
+
 def _validation_protocol_material(
     operation: dict[str, Any],
     property_spec: dict[str, Any],
+    actor_catalog: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
     control = source_request_example(operation)
     schema = _request_body_schema(operation)
+    if not control and schema:
+        control = _generate_minimal_body_from_schema(schema)
+    # ── Account-state precondition arm ──
+    # A rule naming an account state (仅 ACTIVE 用户可登录) is not tested by
+    # an invalid-format mutation: the property under test is that a non-ACTIVE
+    # account's credential is REJECTED. Build that treatment before the
+    # generic mutation strategies when the runtime catalog declares such an
+    # account.
+    if control and isinstance(control, dict):
+        _semantic_text_pre = "\n".join(
+            _text(value)
+            for value in (
+                _dict(property_spec.get("expression")).get("raw"),
+                property_spec.get("source_intent"),
+                property_spec.get("description"),
+            )
+            if _text(value)
+        )
+        _state_treatment = _non_active_account_treatment(
+            control, _semantic_text_pre, list(actor_catalog or [])
+        )
+        if _state_treatment:
+            treatment, mutation = _state_treatment
+            return control, treatment, mutation
     if not schema:
         # No request body schema — but if we have a control body from
         # request_example, apply semantic invalid values using inferred types.
@@ -881,6 +987,7 @@ def compile_family_protocol(
         control_body, treatment_body, mutation = _validation_protocol_material(
             operation,
             property_spec,
+            actor_catalog=_list(_dict(behavior_ir).get("actors")),
         )
         if not mutation:
             return {
