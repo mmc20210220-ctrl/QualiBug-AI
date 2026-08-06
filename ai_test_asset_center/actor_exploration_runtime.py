@@ -21,15 +21,12 @@ from .actor_exploration import (
     _dict,
     _text,
 )
+from .behavior_ir_core import _infer_operation_effect
 from .experiment_compiler_support import _actor_is_executable
 
 
 logger = logging.getLogger(__name__)
 
-_SAFE_READ_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
-_QUERY_POST_PATTERNS: frozenset[str] = frozenset({
-    "search", "query", "list", "find", "filter", "lookup",
-})
 _DESTRUCTIVE_METHODS: frozenset[str] = frozenset({"DELETE"})
 _IRREVERSIBLE_PATTERNS: frozenset[str] = frozenset({
     "refund", "payment", "pay", "transfer", "ship", "ban", "disable",
@@ -150,13 +147,9 @@ def _name_of(operation: dict[str, Any]) -> str:
 
 
 def _is_safe_read(operation: dict[str, Any]) -> bool:
-    method = _method_of(operation)
-    if method in _SAFE_READ_METHODS:
-        return True
-    if method == "POST":
-        combined = f"{_path_of(operation)} {_name_of(operation)}"
-        return any(pattern in combined for pattern in _QUERY_POST_PATTERNS)
-    return False
+    """Use the Behavior IR effect classifier as the sole read/write authority."""
+
+    return _infer_operation_effect(operation, _method_of(operation)) == "read"
 
 
 def _is_destructive(operation: dict[str, Any]) -> bool:
