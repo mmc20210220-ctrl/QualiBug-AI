@@ -319,6 +319,10 @@ SUPPORTED_KINDS = {
     "field_delta",
     "cross_entity_consistency",
     "limit_constraint",
+    # Response-side constraint: a source rule forbids a field in the
+    # response (导出结果禁止包含 password) — the field must be absent from
+    # the observed body, not merely differ between arms.
+    "response_field_absent",
 }
 
 
@@ -935,6 +939,27 @@ def _typed_observer_receipts(
     return [by_id[key] for key in sorted(by_id)]
 
 
+def _body_contains_field(body: Any, field: str) -> bool:
+    """True when the named field appears as a key at any depth of body.
+
+    Used by the response_field_absent assertion: the forbidden field may sit
+    at the top level (rows carry password) or nested (data.user.password) —
+    the source rule forbids it at any depth.
+    """
+    key = _text(field).lower()
+    if not key:
+        return False
+    if isinstance(body, dict):
+        for name, value in body.items():
+            if _text(name).lower() == key:
+                return True
+            if _body_contains_field(value, field):
+                return True
+    elif isinstance(body, list):
+        return any(_body_contains_field(item, field) for item in body)
+    return False
+
+
 def _json_path(data: Any, path: str) -> Any:
     """Minimal JSON path: $.a.b[0] style without eval."""
 
@@ -1237,6 +1262,29 @@ def evaluate_assertion(
                 except (KeyError, IndexError, TypeError):
                     actual = None
                     passed = False
+        elif effective_kind == "response_field_absent":
+            # Source rule: the response must NOT carry the named field(s)
+            # (导出结果禁止包含 password). The field is forbidden at any
+            # depth of the response body. expected=True means "absent".
+            expected = True
+            if "body" not in obs:
+                reason_code = "HTTP_BODY_EVIDENCE_MISSING"
+            else:
+                fields = [
+                    _text(value)
+                    for value in _list(spec.get("fields"))
+                    if _text(value)
+                ] or ([_text(spec.get("field"))] if _text(spec.get("field")) else [])
+                if not fields:
+                    reason_code = "RESPONSE_FIELD_ABSENT_FIELD_MISSING"
+                else:
+                    found = [
+                        field
+                        for field in fields
+                        if _body_contains_field(obs["body"], field)
+                    ]
+                    actual = found
+                    passed = not found
         elif effective_kind == "json_path_type":
             expected_type = _text(
                 spec.get("expected")

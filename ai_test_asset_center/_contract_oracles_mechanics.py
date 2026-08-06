@@ -382,7 +382,16 @@ def build_contract_oracle_activation_receipt(
         if not _any_assertion_has_template(exp, "permitted_operation_invocation"):
             blockers.append("CONTROL_PLAN_MISSING")
     if not required["treatment"]:
-        blockers.append("TREATMENT_PLAN_MISSING")
+        # Single-arm response-side observation: a response_field_absent
+        # assertion consumes only the control read's body (导出结果禁止包含
+        # password), so an empty treatment plan is not an input gap.
+        _requires_treatment = not any(
+            _text(_dict(assertion).get("kind")) == "response_field_absent"
+            for assertion in _list(exp.get("assertions"))
+            if isinstance(assertion, dict)
+        )
+        if _requires_treatment:
+            blockers.append("TREATMENT_PLAN_MISSING")
     if not any(isinstance(item, dict) for item in _list(exp.get("assertions"))):
         blockers.append("TYPED_ASSERTION_MISSING")
     if ev.get("harness_error"):

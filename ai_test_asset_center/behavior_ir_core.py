@@ -2928,6 +2928,12 @@ _CJK_ACTION_PREFIX_MODIFIERS = (
     "直接", "立即", "再次", "进行", "发起", "重新",
     "自行", "手动", "自动", "继续", "予以",
 )
+# Transfer/data-output actions that bind READ operations (导出用户数据).
+# A rule governing them constrains response content, not a write body —
+# the response-side protocol asserts forbidden fields on the read response.
+_CJK_TRANSFER_ACTIONS = (
+    "导出", "导入", "下载", "上传", "打印", "备份", "恢复", "复制",
+)
 
 
 def _extract_action_phrases(
@@ -2938,10 +2944,13 @@ def _extract_action_phrases(
     Uses the rule's own syntax: the text after a modal word (不能/不得/
     必须/只能/仅/…) is split on list separators (，,、；;。), and each
     segment that contains an action verb becomes a phrase with leading
-    adverbial modifiers stripped (直接取消 → 取消). The phrases are matched
-    verbatim against operation summary titles, so 收货 inside 收货地址 never
-    binds address CRUD to a pay/ship/confirm rule. Returns [] when the
-    statement carries no modal-gated action list.
+    adverbial modifiers stripped (直接取消 → 取消). Transfer actions
+    (导出/下载/…) are appended regardless of modal position: a rule like
+    导出结果禁止包含 password constrains the export's response without a
+    modal-gated action list. The phrases are matched verbatim against
+    operation summary titles, so 收货 inside 收货地址 never binds address
+    CRUD to a pay/ship/confirm rule. Returns [] when the statement carries
+    no governed action at all.
     """
     phrases: list[str] = []
     for modal in _CJK_ACTION_MODAL_WORDS:
@@ -2962,6 +2971,9 @@ def _extract_action_phrases(
                     break
             if len(core) <= 6:
                 phrases.append(core)
+    for action in _CJK_TRANSFER_ACTIONS:
+        if action in statement and action not in phrases:
+            phrases.append(action)
     return list(dict.fromkeys(phrases))
 
 
@@ -4630,13 +4642,14 @@ def build_behavior_ir_from_knowledge_asset(
         # substring evidence, never a translation table. Phrase extraction
         # uses the rule's own structure: the segment after a modal word
         # (不能/不得/必须/只能/仅/…) split by list separators yields the
-        # governed action list. A bare action-word match is deliberately not
-        # used — 收货 inside 收货地址 would bind address CRUD to a
-        # pay/ship/confirm rule. Binds only invariants that carry no explicit
-        # operation reference, so PRD rules that describe operations reach
-        # the obligation compiler instead of dying as
-        # BLOCKED_MISSING_IR_RELATION.
-        if not _inv_typed.get("operation_refs") and not _is_umbrella:
+        # governed action list, plus transfer actions (导出/下载/…) that
+        # govern read operations. A bare action-word match is deliberately
+        # not used — 收货 inside 收货地址 would bind address CRUD to a
+        # pay/ship/confirm rule. Binds even when the rule carries explicit
+        # operation refs: those may be wrong (auth endpoints bound to an
+        # export rule), and the action evidence appends the operations the
+        # rule actually governs.
+        if not _is_umbrella:
             try:
                 from .enterprise_knowledge_center.enterprise_understanding.structured_fact_compiler import (
                     _ACTION_PATTERN as _CJK_ACTION_PATTERN,
@@ -4645,6 +4658,13 @@ def build_behavior_ir_from_knowledge_asset(
                     statement, _CJK_ACTION_PATTERN
                 )
                 if _action_phrases:
+                    # Response-side rules (导出结果禁止包含 password) govern
+                    # the CONTENT of read operations; write-side rules govern
+                    # the action a write operation executes.
+                    _is_response_side = any(
+                        _signal in statement
+                        for _signal in ("导出", "结果", "响应", "返回", "输出")
+                    )
                     _action_bound_ops: list[str] = []
                     for _op_row in _list(model.get("operations")):
                         if not isinstance(_op_row, dict):
@@ -4652,10 +4672,11 @@ def build_behavior_ir_from_knowledge_asset(
                         _op_id = _text(_op_row.get("id"))
                         if not _op_id:
                             continue
-                        # A governed action is executed by a write operation;
-                        # read operations (查询/导出/health) observe data but
-                        # never perform the action the rule constrains.
-                        if _text(_op_row.get("method")).upper() not in {
+                        _op_method_upper = _text(_op_row.get("method")).upper()
+                        if _is_response_side:
+                            if _op_method_upper not in {"GET", "HEAD"}:
+                                continue
+                        elif _op_method_upper not in {
                             "POST", "PUT", "PATCH", "DELETE",
                         }:
                             continue
@@ -4675,8 +4696,13 @@ def build_behavior_ir_from_knowledge_asset(
                         ):
                             _action_bound_ops.append(_op_id)
                     if _action_bound_ops:
+                        _existing_ops = [
+                            _text(value)
+                            for value in _list(_inv_typed.get("operation_refs"))
+                            if _text(value)
+                        ]
                         _inv_typed["operation_refs"] = list(
-                            dict.fromkeys(_action_bound_ops)
+                            dict.fromkeys([*_existing_ops, *_action_bound_ops])
                         )
             except Exception:
                 # Action-word binding is a recovery convenience; its failure

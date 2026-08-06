@@ -192,6 +192,44 @@ def _semantic_invalid_value(
     return None
 
 
+# Response-side constraint signals: the rule constrains what a response may
+# carry (导出结果禁止包含 password) rather than a request body mutation.
+# Generic Chinese business syntax — not industry-specific vocabulary.
+_RESPONSE_SIDE_SIGNALS = ("导出", "结果", "响应", "返回", "输出")
+_RESPONSE_FORBID_FIELD_RE = re.compile(
+    r"(?:禁止|不得|不能|不允许|不可|不应)[^，,。；;\n]{0,20}?"
+    r"([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def _extract_forbidden_response_fields(property_spec: dict[str, Any]) -> list[str]:
+    """Extract ASCII fields a response-side rule forbids in its output.
+
+    A rule like 导出结果禁止包含 password 或其他认证凭据 names the forbidden
+    field after a prohibition word; the identifier is source material, never
+    a hardcoded name. Returns [] when the rule is not response-side (no
+    export/result/response/return/output signal), so write-side validation
+    keeps its existing body-mutation protocol.
+    """
+    expression = _dict(property_spec.get("expression"))
+    raw = "\n".join(
+        _text(value)
+        for value in (
+            expression.get("raw"),
+            property_spec.get("source_intent"),
+            property_spec.get("description"),
+        )
+        if _text(value)
+    )
+    if not raw or not any(signal in raw for signal in _RESPONSE_SIDE_SIGNALS):
+        return []
+    fields = [
+        match.group(1)
+        for match in _RESPONSE_FORBID_FIELD_RE.finditer(raw)
+    ]
+    return list(dict.fromkeys(fields))
+
+
 def _validation_protocol_material(
     operation: dict[str, Any],
     property_spec: dict[str, Any],
@@ -727,6 +765,30 @@ def compile_family_protocol(
         }
 
     if family == "validation":
+        # ── Response-side constraint protocol ──
+        # A source rule constraining RESPONSE content (导出结果禁止包含
+        # password 或其他认证凭据) binds a read operation and asserts the
+        # forbidden field is absent from the observed body — a single-arm
+        # observation, never a write mutation. The forbidden fields come
+        # from the rule's own text (ASCII identifiers after a prohibition
+        # word), so the protocol is language- and industry-neutral.
+        _forbidden_fields = _extract_forbidden_response_fields(property_spec)
+        if _forbidden_fields and method in {"GET", "HEAD"}:
+            return {
+                "status": "COMPILED",
+                "control_plan": [{
+                    "step_id": "control_1",
+                    "actor_ref": control_actor_ref,
+                    "operation_ref": operation_ref,
+                    "intent": "response_side_constraint_observation",
+                    "protocol_step": "positive_control",
+                }],
+                "treatment_plan": [],
+                "assertion": {
+                    "kind": "response_field_absent",
+                    "fields": _forbidden_fields,
+                },
+            }
         parameter_location = _text(property_spec.get("parameter_location")).lower()
         tokens = property_spec.get("field_tokens")
         if (

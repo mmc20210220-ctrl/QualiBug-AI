@@ -924,6 +924,14 @@ def execute_non_barrier_plans(
                 if 200 <= int(obs.get("status_code") or 0) < 300:
                     observations["control_succeeded"] = True
                     observations["authorized_control"] = True
+                # Single-arm experiments (response-side constraint rules like
+                # 导出结果禁止包含 password) have no treatment step, so the
+                # control response must fill the top-level evidence slots
+                # that assertions read (body/status_code); otherwise every
+                # assertion reports HTTP_*_EVIDENCE_MISSING.
+                if not treatment_plan:
+                    observations["status_code"] = obs.get("status_code")
+                    observations["body"] = obs.get("body")
             if phase == "treatment":
                 observations["treatment_observation"] = obs
                 observations["treatment_result"] = obs
