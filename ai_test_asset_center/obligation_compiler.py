@@ -263,48 +263,90 @@ def _field_variants(
 
 
 def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> dict[str, Any]:
-    """Materialize explicit operation-local own-scope contracts as IR relations.
+    """Normalize source-declared ownership into the existing IR relation graph.
 
-    The operation must be a collection read, explicitly state caller ownership,
-    and declare an ownership identity parameter. This is source normalization,
-    not an inferred permission fallback: the existing isolation compiler and
-    Oracle remain the only obligation and verdict authorities.
+    Operation-local own-scope collection reads become standard ``owns``
+    relations. The same source authority is also carried to collection writes
+    that produce/consume the same entity only when the write contract does not
+    declare the ownership identity as client-controlled input. This exposes
+    undocumented ownership mass-assignment through the existing isolation
+    compiler and Oracle; it does not create a second detection path.
     """
 
     ir = dict(_dict(behavior_ir))
     operations = _pair._base._accepted(_list(ir.get("operations")))
+    entities = {
+        _text(row.get("id"))
+        for row in _pair._base._accepted(_list(ir.get("entities")))
+        if _text(row.get("id"))
+    }
     relations = [
         dict(row)
         for row in _list(ir.get("relations"))
         if isinstance(row, dict)
     ]
+    actors = _pair._base._active_actors(
+        _pair._base._accepted(_list(ir.get("actors")))
+    )
+    operations_by_id = {
+        _text(row.get("id")): row
+        for row in operations
+        if _text(row.get("id"))
+    }
     existing_owned_operations = {
         _text(row.get("operation_ref"))
         for row in relations
         if _text(row.get("relation_type")) == "owns"
         and _text(row.get("status")) not in {"conflicting", "unsupported"}
     }
-    actors = _pair._base._active_actors(
-        _pair._base._accepted(_list(ir.get("actors")))
-    )
-    changed = False
-    for operation in operations:
-        operation_ref = _text(operation.get("id"))
-        path = _text(operation.get("path") or operation.get("raw_path"))
-        is_read = _text(
-            operation.get("read_write") or operation.get("side_effect_class")
-        ) != "write"
-        source_declares_own_scope = bool(
-            is_read
-            and operation_ref
-            and operation_ref not in existing_owned_operations
-            and not _pair._base._path_has_resource_placeholder(path)
-            and _pair._base._operation_declares_ownership_language(operation)
-            and _pair._base._ownership_params_declared_on_operation(operation)
+
+    def _entity_refs(operation_ref: str, relation_types: set[str]) -> set[str]:
+        refs: set[str] = set()
+        for relation in relations:
+            if _text(relation.get("status")) in {"conflicting", "unsupported"}:
+                continue
+            if _text(relation.get("operation_ref")) != operation_ref:
+                continue
+            if _text(relation.get("relation_type")) not in relation_types:
+                continue
+            for key in ("from_ref", "to_ref"):
+                ref = _text(relation.get(key))
+                if ref in entities:
+                    refs.add(ref)
+        return refs
+
+    def _relation_sources(
+        operation_refs: set[str],
+        entity_refs: set[str],
+    ) -> list[dict[str, Any]]:
+        rows = [
+            relation
+            for relation in relations
+            if _text(relation.get("operation_ref")) in operation_refs
+            and bool(entity_refs.intersection({
+                _text(relation.get("from_ref")),
+                _text(relation.get("to_ref")),
+            }))
+        ]
+        return _pair._base._combined_source_refs(
+            *[
+                operations_by_id[ref]
+                for ref in sorted(operation_refs)
+                if ref in operations_by_id
+            ],
+            *rows,
         )
-        if not source_declares_own_scope:
-            continue
-        source_refs = _pair._base._combined_source_refs(operation)
+
+    def _append_owns(
+        *,
+        operation_ref: str,
+        source_refs: list[dict[str, Any]],
+        derivation: str,
+        preconditions: list[dict[str, Any]],
+    ) -> None:
+        nonlocal changed
+        if operation_ref in existing_owned_operations:
+            return
         for actor in actors:
             actor_ref = _text(actor.get("id"))
             if not actor_ref or not _text(actor.get("account_ref")):
@@ -321,20 +363,111 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
                 "to_ref": operation_ref,
                 "operation_ref": operation_ref,
                 "actor_ref": actor_ref,
-                "preconditions": [{"scope": "own"}],
+                "preconditions": preconditions,
                 "effects": [],
                 "permission_decision": "",
                 "source_relationship_ref": "",
                 "source_refs": source_refs,
                 "confidence": min(
-                    float(operation.get("confidence") or 0.7),
+                    float(
+                        operations_by_id[operation_ref].get("confidence") or 0.7
+                    ),
                     float(actor.get("confidence") or 0.7),
                 ),
-                "derivation": "explicit",
+                "derivation": derivation,
                 "status": "accepted",
                 "scope": "own",
             })
             changed = True
+        existing_owned_operations.add(operation_ref)
+
+    changed = False
+    owned_reads: list[tuple[dict[str, Any], set[str], list[str]]] = []
+    for operation in operations:
+        operation_ref = _text(operation.get("id"))
+        path = _text(operation.get("path") or operation.get("raw_path"))
+        is_read = _text(
+            operation.get("read_write") or operation.get("side_effect_class")
+        ) != "write"
+        ownership_params = (
+            _pair._base._ownership_params_declared_on_operation(operation)
+        )
+        source_declares_own_scope = bool(
+            is_read
+            and operation_ref
+            and not _pair._base._path_has_resource_placeholder(path)
+            and _pair._base._operation_declares_ownership_language(operation)
+            and ownership_params
+        )
+        if not source_declares_own_scope:
+            continue
+        entity_refs = _entity_refs(
+            operation_ref,
+            {"observes", "consumes", "scopes"},
+        )
+        owned_reads.append((operation, entity_refs, ownership_params))
+        _append_owns(
+            operation_ref=operation_ref,
+            source_refs=_pair._base._combined_source_refs(operation),
+            derivation="explicit",
+            preconditions=[{"scope": "own"}],
+        )
+
+    for read_operation, owned_entities, ownership_params in owned_reads:
+        if not owned_entities:
+            continue
+        read_ref = _text(read_operation.get("id"))
+        ownership_keys = {
+            _pair._base._param_key(name)
+            for name in ownership_params
+        }
+        for operation in operations:
+            operation_ref = _text(operation.get("id"))
+            method = _text(operation.get("method")).upper()
+            path = _text(operation.get("path") or operation.get("raw_path"))
+            if (
+                operation_ref in existing_owned_operations
+                or method not in {"POST", "PUT", "PATCH"}
+                or _text(
+                    operation.get("read_write")
+                    or operation.get("side_effect_class")
+                ) != "write"
+                or _pair._base._path_has_resource_placeholder(path)
+            ):
+                continue
+            write_entities = _entity_refs(
+                operation_ref,
+                {"produces", "consumes", "transitions", "scopes"},
+            )
+            shared_entities = owned_entities.intersection(write_entities)
+            if not shared_entities:
+                continue
+            declared_write_params = {
+                _pair._base._param_key(name)
+                for name in (
+                    _pair._base._ownership_params_declared_on_operation(operation)
+                )
+            }
+            if ownership_keys.intersection(declared_write_params):
+                # The source explicitly exposes owner assignment as write input;
+                # do not reinterpret an intentional delegation contract as an
+                # own-scope invariant.
+                continue
+            _append_owns(
+                operation_ref=operation_ref,
+                source_refs=_relation_sources(
+                    {read_ref, operation_ref},
+                    shared_entities,
+                ),
+                derivation="schema-derived",
+                preconditions=[{
+                    "scope": "own",
+                    "source_operation_ref": read_ref,
+                    "entity_refs": sorted(shared_entities),
+                    "ownership_input": "server_controlled",
+                }],
+            )
+
     if changed:
         ir["relations"] = relations
     return ir
