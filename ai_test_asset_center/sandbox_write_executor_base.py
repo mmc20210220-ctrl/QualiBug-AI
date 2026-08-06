@@ -26,6 +26,10 @@ from typing import Any, Callable
 
 from .enterprise_project_config import match_production_data_exclusion
 from .behavior_ir_core import _is_ephemeral_session_path
+from .disposable_identity_materializer import (
+    disposable_identity_nonce,
+    materialize_disposable_identity_fields,
+)
 from .real_id_resolver import collection_path as documented_collection_path
 from .real_id_resolver import (
     normalize_path_placeholders,
@@ -669,6 +673,27 @@ def execute_governed_control_write(
         actor_token=actor_token,
         actor_identity=actor_identity,
     )
+    # ── Disposable identity materialization ──
+    # A protected identity-mutation write (password reset / status / role …)
+    # whose body names a seeded runtime account must never mutate that account.
+    # Blocking is not the answer either: every body shape then fails (seeded
+    # identity → protected, concrete identity → disposable fixture required,
+    # empty body → required-field gate), so the authz gap stays invisible —
+    # exactly the failure the guard comment warns about. The harness instead
+    # supplies the disposable fixture the guard demands: identity locator
+    # values in the body are replaced with generated disposable identities
+    # (qb-auto-…@qualibug.local). The seeded account stays untouched and the
+    # write executes against a harness-owned disposable target; the rule under
+    # test is still observed on the real response.
+    identity_target_is_disposable = False
+    if allowed and not restorable_identity_mutation and _looks_like_protected_identity_mutation(method, path, body):
+        _disposable_body, _materialized_fields = materialize_disposable_identity_fields(
+            body,
+            disposable_identity_nonce("governed_control", method, path),
+        )
+        if _materialized_fields:
+            body = _disposable_body
+            identity_target_is_disposable = True
     if allowed and not restorable_identity_mutation:
         # Same protected-identity guard ``execute_with_sandbox_write`` applies before
         # its primary write. A governed control write (fixture setup/cleanup) is a
@@ -683,6 +708,7 @@ def execute_governed_control_write(
             method=method,
             path=path,
             body=body,
+            identity_target_is_disposable=identity_target_is_disposable,
         )
         if identity_block_reason:
             allowed = False
@@ -819,7 +845,7 @@ def execute_governed_control_write(
         "write_request_attempt_count": 1 if allowed else 0,
         "production_http_requests": 0,
     }
-    if runtime_body_receipt:
+    if runtime_body_receipt or identity_target_is_disposable:
         result["materialized_request_body"] = body
         result["runtime_body_receipt"] = runtime_body_receipt
     return result
@@ -1038,6 +1064,7 @@ def _protected_runtime_identity_write_block_reason(
     method: str,
     path: str,
     body: Any,
+    identity_target_is_disposable: bool = False,
 ) -> str:
     if not _looks_like_protected_identity_mutation(method, path, body):
         return ""
@@ -1050,8 +1077,15 @@ def _protected_runtime_identity_write_block_reason(
     # Concrete identity locators (email/user id/...) still require a disposable
     # fixture so seeded accounts are not mutated. Empty/unbound probe bodies do
     # not — otherwise selected routes like POST /api/auth/password/reset never
-    # reach HTTP and authz gaps stay invisible.
-    if _body_has_concrete_identity_target(body) and not _scenario_has_disposable_identity_fixture(scenario):
+    # reach HTTP and authz gaps stay invisible. A body whose identity locators
+    # were already materialized to generated disposable identities (governed
+    # control writes) IS that disposable fixture: the write targets a
+    # harness-owned account, never a real one.
+    if (
+        _body_has_concrete_identity_target(body)
+        and not identity_target_is_disposable
+        and not _scenario_has_disposable_identity_fixture(scenario)
+    ):
         return "identity_mutation_requires_disposable_fixture"
     return ""
 
