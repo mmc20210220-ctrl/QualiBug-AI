@@ -1,47 +1,27 @@
 name: One-time restricted-account auth fix
 on:
-  push:
+  pull_request:
     branches: [main]
     paths:
-      - '.github/delivery/restricted-auth/**'
-      - '.github/workflows/one-time-restricted-auth.yml'
-  schedule:
-    - cron: '*/5 * * * *'
+      - '.github/restricted-auth-trigger'
   workflow_dispatch:
-  issues:
-    types: [opened]
 permissions:
   contents: write
-  statuses: write
 concurrency:
   group: restricted-account-auth-fix
   cancel-in-progress: true
 jobs:
   deliver:
-    if: github.actor != 'github-actions[bot]' && (github.event_name != 'issues' || github.event.issue.title == '[internal] apply restricted-auth fix')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout latest main
+        uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Mark pending
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=pending -f context=qualibug/restricted-auth-fix -f description='Verified patch is running'
-      - name: Apply and verify
+      - name: Apply verified patch and deliver
         run: cat .github/delivery/restricted-auth/run-* > /tmp/run.sh && bash /tmp/run.sh
-      - name: Mark success
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context=qualibug/restricted-auth-fix -f description='Verified patch pushed'
-      - name: Mark failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=failure -f context=qualibug/restricted-auth-fix -f description='Verified patch failed closed'
