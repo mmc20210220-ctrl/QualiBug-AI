@@ -1371,7 +1371,26 @@ def _fact_from_unit(
     critical = bool(_CRITICAL_SIGNAL_RE.search(raw))
     if critical and not entities and re.search(r"该|本|其|上述|前述|对应|相关", raw) and "COREFERENCE_UNRESOLVED" not in ambiguities:
         ambiguities.append("BUSINESS_SUBJECT_UNRESOLVED")
-    if modality in {"MUST_NOT", "ONLY_IF"} and not action and not states:
+    # A MUST_NOT/ONLY_IF rule without a parsed action is ambiguous only when
+    # it actually governs an action. Value-constraint rules ("金额不得超过
+    # 实际支付金额", "退款金额不能大于实际支付金额") are numeric relations,
+    # not actions: their semantics live in the comparison operator, which
+    # _QUANTITY_RE already recognises (超过/大于/小于/等于/不少于/至多...).
+    # Demanding an action here silently drops every Chinese MUST_NOT value
+    # constraint to PENDING while the identical MUST form ("必须等于") is
+    # accepted — an asymmetry that loses whole rule families.
+    _has_comparison_constraint = bool(
+        re.search(
+            r"超过|大于|小于|等于|不少于|不大于|不低于|不超过|至少|至多|最多|最少|不得高于|不得低于|不得大于|不得小于",
+            raw,
+        )
+    )
+    if (
+        modality in {"MUST_NOT", "ONLY_IF"}
+        and not action
+        and not states
+        and not _has_comparison_constraint
+    ):
         ambiguities.append("CRITICAL_ACTION_UNRESOLVED")
     if exceptions and len(_split_rule_units(raw)) == 1 and not conditions and not re.match(r"^(?:除[^，,；;。]+外|但|但是|不过|然而)", raw):
         if exception_scopes:
