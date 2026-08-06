@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from pathlib import Path
@@ -30,6 +31,85 @@ from .target_policy import build_target_policy_decision
 _scan_logger = logging.getLogger("qualibug.scan")
 _SCAN_ROLES = {"project_owner", "qa_lead", "testops_admin", "admin"}
 _DESTRUCTIVE_REGRESSION_ROLES = {"project_owner", "testops_admin", "admin"}
+
+
+def _finalization_event(
+    scan_id: str,
+    phase: str,
+    *,
+    elapsed_ms: int = 0,
+    detail: Any = None,
+) -> None:
+    """Structured scan finalization lifecycle telemetry (one event per phase).
+
+    Every phase between pipeline completion and the HTTP response is logged so
+    a hung finalization can be attributed to the exact step that never
+    completed. This is observability only; it never changes control flow.
+    """
+    import threading as _threading
+
+    # WARNING level on purpose: the product logging root sits at WARNING, so
+    # INFO records are dropped and the lifecycle timeline would be invisible
+    # exactly when a finalization hangs. Lifecycle telemetry must survive.
+    _scan_logger.warning(
+        "scan.finalization.phase",
+        extra={
+            "context": {
+                "event": "scan.finalization.phase",
+                "scan_id": str(scan_id or "")[:64],
+                "phase": str(phase),
+                "thread_id": _threading.get_ident(),
+                "process_id": os.getpid(),
+                "elapsed_ms": int(elapsed_ms),
+                "detail": detail,
+            }
+        },
+    )
+
+
+def _response_stall_watchdog(scan_id: str, stall_seconds: int = 120) -> Any:
+    """Diagnostic-only watchdog: if the finalization response has not been
+    written within stall_seconds, log where the thread is stuck.
+
+    This never changes control flow and never masks the hang; it exists so the
+    exact finalization phase can be attributed when the response fails to
+    close. The daemon exits with the process, and the last observed phase is
+    reported when the watchdog fires.
+    """
+    import threading as _threading
+
+    last_phase: dict[str, str] = {}
+    _written = _threading.Event()
+
+    def _watch() -> None:
+        if _written.wait(stall_seconds):
+            return  # response written; nothing to report
+        _scan_logger.warning(
+            "scan.finalization.stalled",
+            extra={
+                "context": {
+                    "event": "scan.finalization.stalled",
+                    "scan_id": str(scan_id or "")[:64],
+                    "stall_seconds": int(stall_seconds),
+                    "thread_id": _threading.get_ident(),
+                    "process_id": os.getpid(),
+                    "last_phase": str(last_phase.get("phase") or "response_not_started"),
+                }
+            },
+        )
+
+    def _mark(phase: str) -> None:
+        last_phase["phase"] = phase
+        if phase == "response_written":
+            _written.set()
+
+    watchdog = _threading.Thread(
+        target=_watch,
+        name=f"scan-finalize-watchdog-{str(scan_id or '')[:12]}",
+        daemon=True,
+    )
+    watchdog.start()
+    return {"mark": _mark, "thread": watchdog}
 
 
 def _text(value: Any) -> str:
@@ -383,8 +463,22 @@ class ScanHandlersMixin:
         root: Path,
         result: dict[str, Any],
     ) -> dict[str, Any]:
+        scan_id = _text(result.get("scan_id"))
+        _step_started = time.perf_counter()
+
+        def _step(phase: str, detail: Any = None) -> None:
+            _finalization_event(
+                scan_id,
+                phase,
+                elapsed_ms=int((time.perf_counter() - _step_started) * 1000),
+                detail=detail,
+            )
+
+        _step("persist_started")
         report, report_binding = self._bound_scan_report(project, root, result)
+        _step("persist_bound_report")
         findings = _collect_findings(result, report)
+        _step("persist_collect_findings", {"count": len(findings)})
         tenant_id = self._request_tenant()
         enriched = dict(result)
         enriched["findings"] = findings
@@ -395,6 +489,7 @@ class ScanHandlersMixin:
             project,
             enriched,
         )
+        _step("persist_save_scan", {"scan_record_id": scan_record_id})
         cumulative = db_persist.merge_findings_cumulative(
             root,
             tenant_id,
@@ -402,11 +497,13 @@ class ScanHandlersMixin:
             scan_record_id,
             findings,
         )
+        _step("persist_merge_cumulative", dict(cumulative))
         projection_errors: list[dict[str, str]] = []
         try:
             increment_scan_counter(
                 root / "platform_outputs" / project / "scan_counter.json"
             )
+            _step("persist_scan_counter")
         except Exception as exc:
             projection_errors.append(
                 {
@@ -424,6 +521,7 @@ class ScanHandlersMixin:
                     / "spectrum_result.json"
                 )
                 _write_json_object_atomic(spectrum_path, dict(result["spectrum"]))
+                _step("persist_spectrum")
             except Exception as exc:
                 projection_errors.append(
                     {
@@ -433,6 +531,7 @@ class ScanHandlersMixin:
                 )
         try:
             _update_continuous_state(root, project, result)
+            _step("persist_continuous_state")
         except Exception as exc:
             projection_errors.append(
                 {
@@ -440,6 +539,7 @@ class ScanHandlersMixin:
                     "error": f"{type(exc).__name__}: {exc}"[:300],
                 }
             )
+        _step("persist_done")
         return {
             "scan_record_id": scan_record_id,
             **cumulative,
@@ -484,6 +584,8 @@ class ScanHandlersMixin:
                 },
                 409,
             )
+        finally:
+            _finalization_event("", "lease_released", detail={"project": project})
 
     def _execute_v12_scan(
         self,
@@ -649,7 +751,14 @@ class ScanHandlersMixin:
                     500,
                 )
 
-            return self._json(
+            _finalization_event(
+                _text(result.get("scan_id")),
+                "response_building",
+                detail={"cumulative": dict(cumulative)},
+            )
+            _response_started = time.perf_counter()
+            _watchdog = _response_stall_watchdog(_text(result.get("scan_id")))
+            response = self._json(
                 {
                     "ok": True,
                     "scan_id": result.get("scan_id", ""),
@@ -677,6 +786,13 @@ class ScanHandlersMixin:
                     "implicit_retry_performed": False,
                 }
             )
+            _watchdog["mark"]("response_written")
+            _finalization_event(
+                _text(result.get("scan_id")),
+                "response_written",
+                elapsed_ms=int((time.perf_counter() - _response_started) * 1000),
+            )
+            return response
         except Exception as exc:
             _scan_logger.exception(
                 "scan request failed",
