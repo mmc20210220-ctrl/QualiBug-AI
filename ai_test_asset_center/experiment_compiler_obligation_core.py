@@ -83,6 +83,13 @@ from .experiment_compiler_support import (
     _state_semantic_value,
 )
 
+# ── Runtime Actor Exploration (V1.8) ──
+from .actor_exploration import (
+    ActorExecutionPlan,
+    ActorSelectionMode,
+)
+from .actor_exploration_runtime import build_exploration_plan
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -829,28 +836,66 @@ def compile_experiment_for_obligation(
             and _text(relation.get("status")) == "accepted"
             and _text(relation.get("actor_ref") or relation.get("from_ref"))
         }
-        ranked_actors = sorted(
-            (
-                (
-                    0 if _text(actors[actor_id].get("account_ref")) else 1,
-                    0 if actors[actor_id].get("runtime_bound") is True else 1,
-                    actor_id,
-                )
-                for actor_id in permitted_actor_ids
-                if actor_id in actors and _actor_is_executable(actors[actor_id])
-            )
+
+        primary_op = ops.get(primary_op_id, {})
+
+        # ── V1.8: Runtime Actor Exploration ──
+        # Build a structured ActorExecutionPlan instead of picking one actor
+        # and blocking when no permits edge exists.  The plan tells the
+        # executor whether to try candidates, how many, and whether the
+        # authorization oracle may issue verdicts.
+        actor_plan = build_exploration_plan(
+            operation=primary_op,
+            obligation=obl,
+            actors=actors,
+            permitted_actor_ids=permitted_actor_ids,
         )
-        if not ranked_actors:
-            return blocked_experiment(
-                oid,
-                "BLOCKED_MISSING_ACTOR",
-                f"source_permitted_actor_missing:{primary_op_id}",
-            )
-        required_actors = [ranked_actors[0][2]]
-        prop = {
-            **prop,
-            "actor_ref": required_actors[0],
-        }
+
+        if actor_plan is not None and actor_plan.candidates:
+            # Plan exists — use the top candidate for compilation.
+            # For EXPLICIT_PERMISSION mode this is the only candidate.
+            # For PERMISSION_EXPLORATION mode the executor will try
+            # additional candidates if the first one fails.
+            required_actors = [actor_plan.candidates[0].actor_id]
+            prop = {
+                **prop,
+                "actor_ref": required_actors[0],
+                # Attach the exploration plan so the executor can iterate
+                "_actor_exploration_plan": {
+                    "mode": actor_plan.mode.value,
+                    "candidate_ids": [c.actor_id for c in actor_plan.candidates],
+                    "authorization_oracle_enabled": actor_plan.authorization_oracle_enabled,
+                    "max_attempts": actor_plan.max_attempts,
+                    "reason": actor_plan.reason,
+                },
+            }
+        elif actor_plan is not None:
+            # Plan without candidates — cannot execute
+            required_actors = []
+        else:
+            # No plan at all — use new fine-grained blocking reasons (Step 13)
+            if permitted_actor_ids:
+                # Explicit permits reference actors that are non-executable
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_ACTOR",
+                    f"source_permitted_actor_missing:{primary_op_id}",
+                )
+            # Check whether exploration was blocked or just no candidates
+            from .actor_exploration_runtime import can_explore_actor
+            decision = can_explore_actor(primary_op, obl)
+            if not decision.allowed:
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_ACTOR",
+                    f"runtime_actor_exploration_not_allowed:{primary_op_id}:{decision.reason}",
+                )
+            else:
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_ACTOR",
+                    f"runtime_actor_candidate_missing:{primary_op_id}",
+                )
     for actor_id in required_actors:
         if actor_id not in actors:
             return blocked_experiment(oid, "BLOCKED_MISSING_ACTOR", actor_id)

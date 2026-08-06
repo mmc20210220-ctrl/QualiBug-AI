@@ -37,6 +37,19 @@ from .experiment_runtime_support import (
     load_actor_tokens as _runtime_load_actor_tokens,
 )
 
+# ── V1.8: Runtime Actor Exploration ──
+from .actor_exploration import ActorSelectionMode
+from .actor_exploration_runtime import (
+    classify_actor_attempt,
+    log_exploration_attempted,
+    log_exploration_discovered,
+    log_exploration_exhausted,
+    log_exploration_started,
+    record_permission_observation,
+    PermissionObservation,
+    compute_observation_confidence,
+)
+
 
 for _name in dir(_governance):
     if not _name.startswith("__"):
@@ -214,30 +227,281 @@ def execute_one_experiment(
     execution_id: str,
     actor_tokens: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Execute through governance, causal validation, then delivery packaging."""
+    """Execute through governance, causal validation, then delivery packaging.
+
+    V1.8: When the experiment carries a ``_actor_exploration_plan`` with
+    PERMISSION_EXPLORATION mode, the executor iterates through ranked
+    candidates, classifies each response, and binds the first usable actor.
+    The authorization oracle is disabled during exploration.
+    """
     _sync_governance_hooks()
-    # First-class runtime context for registered observers (event/UI surfaces).
-    # A compiled experiment never carries workspace identity; observers that need
-    # root / project / runtime_contract receive it here, in the mainline, instead
-    # of via a wrapper around this function. The copy keeps the compiled
-    # experiment immutable; the private key is excluded from product artifacts.
     exp = dict(experiment)
     exp["_observer_runtime_context"] = {
         "root": str(root),
         "project": _text(project),
         "runtime_contract": deepcopy(_dict(runtime_contract)),
     }
-    result = _execute_one_governed(
-        exp,
-        behavior_ir=behavior_ir,
-        root=root,
-        project=project,
-        base_url=base_url,
-        runtime_contract=runtime_contract,
-        campaign_id=campaign_id,
-        execution_id=execution_id,
-        actor_tokens=actor_tokens,
+
+    # ── V1.8: Extract exploration plan ──
+    prop = _dict(exp.get("property"))
+    exploration_plan_raw = _dict(prop.get("_actor_exploration_plan"))
+    exploration_mode = _text(exploration_plan_raw.get("mode"))
+    candidate_ids = _list(exploration_plan_raw.get("candidate_ids"))
+    max_attempts = int(exploration_plan_raw.get("max_attempts") or 0)
+    oracle_enabled = bool(exploration_plan_raw.get("authorization_oracle_enabled", True))
+
+    is_exploration = (
+        exploration_mode == ActorSelectionMode.PERMISSION_EXPLORATION.value
+        and len(candidate_ids) > 0
+        and max_attempts > 0
     )
+
+    # ── Build behavior IR actor index for observation recording ──
+    ir = _dict(behavior_ir)
+    ir_actors = {
+        _text(a.get("id") or a.get("actor_id")): a
+        for a in _list(ir.get("actors"))
+        if isinstance(a, dict)
+    }
+    ir_ops = {
+        _text(o.get("id") or o.get("operation_id")): o
+        for o in _list(ir.get("operations"))
+        if isinstance(o, dict)
+    }
+
+    obligation_id = _text(exp.get("obligation_id"))
+    primary_op_id = _text(
+        _list(exp.get("required_operations") or [])[0]
+        if _list(exp.get("required_operations"))
+        else prop.get("operation_ref") or ""
+    )
+    primary_op = ir_ops.get(primary_op_id, {})
+
+    # ── Single attempt for explicit-permission or non-exploration ──
+    if not is_exploration:
+        result = _execute_one_governed(
+            exp, behavior_ir=behavior_ir, root=root, project=project,
+            base_url=base_url, runtime_contract=runtime_contract,
+            campaign_id=campaign_id, execution_id=execution_id,
+            actor_tokens=actor_tokens,
+        )
+        return _finalize_result(
+            result, exp, behavior_ir, root, project,
+            oracle_enabled=oracle_enabled,
+        )
+
+    # ═══════════════════════════════════════════════════════════════
+    # ── PERMISSION_EXPLORATION: Multi-Candidate Loop (Step 7) ──
+    # ═══════════════════════════════════════════════════════════════
+
+    log_exploration_started(
+        obligation_id=obligation_id,
+        operation_id=primary_op_id,
+        candidate_count=len(candidate_ids),
+        max_attempts=max_attempts,
+        authorization_oracle_enabled=False,
+    )
+
+    outcomes: dict[str, int] = {}
+    last_result: dict[str, Any] | None = None
+    discovered_actor_id: str = ""
+
+    for attempt_index, candidate_id in enumerate(candidate_ids[:max_attempts]):
+        candidate_actor = ir_actors.get(candidate_id, {})
+        candidate_ref = _text(
+            candidate_actor.get("actor_ref")
+            or candidate_actor.get("name")
+            or candidate_id
+        )
+
+        # Update the experiment's actor_ref for this attempt
+        attempt_exp = deepcopy(exp)
+        attempt_prop = _dict(attempt_exp.get("property"))
+        attempt_prop["actor_ref"] = candidate_id
+        attempt_exp["property"] = attempt_prop
+        # Also update required_actors if present
+        if _list(attempt_exp.get("required_actors")):
+            attempt_exp["required_actors"] = [candidate_id]
+
+        # Execute with this candidate
+        attempt_result = _execute_one_governed(
+            attempt_exp,
+            behavior_ir=behavior_ir,
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+            campaign_id=campaign_id,
+            execution_id=f"{execution_id}_a{attempt_index}",
+            actor_tokens=actor_tokens,
+        )
+
+        # Classify the attempt
+        exec_receipt = _dict(attempt_result.get("execution_receipt"))
+        http_result = {
+            "status_code": int(
+                exec_receipt.get("status_code")
+                or exec_receipt.get("status")
+                or 0
+            ),
+        }
+        classification = classify_actor_attempt(http_result)
+        status_code = http_result["status_code"]
+
+        # Derive actual status from the result
+        result_status = _text(attempt_result.get("status"))
+        if result_status == "BLOCKED":
+            # Use the reason_code to refine classification
+            reason = _text(attempt_result.get("reason_code") or "")
+            detail = _text(attempt_result.get("detail") or "")
+            combined = f"{reason}:{detail}".lower()
+            if "401" in combined or "auth" in reason.lower():
+                classification = classify_actor_attempt({"status_code": 401})
+                status_code = 401
+            elif "403" in combined or "permission" in reason.lower() or "forbidden" in combined:
+                classification = classify_actor_attempt({"status_code": 403})
+                status_code = 403
+            elif "404" in combined or "not_found" in reason.lower():
+                classification = classify_actor_attempt({"status_code": 404})
+                status_code = 404
+
+        # Log this attempt
+        log_exploration_attempted(
+            actor_ref=candidate_ref,
+            attempt_index=attempt_index,
+            score=0.0,  # score tracked in compile-time plan
+            score_reasons=[],
+            status_code=status_code,
+            outcome=classification.value,
+        )
+
+        # Track outcomes
+        outcome_key = classification.value
+        outcomes[outcome_key] = outcomes.get(outcome_key, 0) + 1
+
+        # Record permission observation
+        observation_outcome = _outcome_to_observation(classification)
+        if observation_outcome:
+            record_permission_observation(PermissionObservation(
+                actor_id=candidate_id,
+                role_ref=_text(candidate_actor.get("role")),
+                operation_id=primary_op_id,
+                evidence_ref=_text(attempt_result.get("experiment_id") or execution_id),
+                outcome=observation_outcome,
+                status_code=status_code,
+                confidence=compute_observation_confidence(
+                    outcome=observation_outcome,
+                    same_context_successes=outcomes.get("operation_executable", 0),
+                ),
+            ))
+
+        # Check if this actor is usable
+        if classification.value in ("operation_executable", "business_rejected"):
+            # ── Actor discovered! (Step 10) ──
+            discovered_actor_id = candidate_id
+            log_exploration_discovered(
+                actor_ref=candidate_ref,
+                status_code=status_code,
+                binding_scope="scenario",
+                authorization_verdict="unknown_expectation",
+            )
+            last_result = attempt_result
+
+            # Update the original experiment's property for the final result
+            exp_prop = _dict(exp.get("property"))
+            exp_prop["actor_ref"] = candidate_id
+            exp_prop["_actor_exploration_discovered"] = candidate_id
+            exp["property"] = exp_prop
+            break
+
+        if classification.value in (
+            "authentication_failed",
+            "permission_denied",
+            "resource_not_visible",
+            "infrastructure_failed",
+            "inconclusive",
+        ):
+            last_result = attempt_result
+            continue
+
+        # Unknown classification — preserve result but don't break
+        last_result = attempt_result
+
+    # ── All candidates exhausted? ──
+    if not discovered_actor_id:
+        log_exploration_exhausted(
+            attempted_actor_count=len(candidate_ids[:max_attempts]),
+            outcomes=outcomes,
+        )
+        if last_result is None:
+            last_result = {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": _text(exp.get("experiment_id")),
+                "obligation_id": obligation_id,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ACTOR",
+                "detail": f"runtime_permitted_actor_not_discovered:{primary_op_id}",
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_ACTOR",
+                    "detail": f"runtime_permitted_actor_not_discovered:{primary_op_id}",
+                },
+            }
+        else:
+            # Update reason on the last result
+            last_result["status"] = "BLOCKED"
+            last_result["reason_code"] = "BLOCKED_MISSING_ACTOR"
+            last_result["detail"] = (
+                f"runtime_permitted_actor_not_discovered:{primary_op_id}:"
+                + ",".join(f"{k}={v}" for k, v in sorted(outcomes.items()))
+            )
+            last_result["finding"] = None
+            er = _dict(last_result.get("execution_receipt"))
+            er["status"] = "BLOCKED"
+            er["reason_code"] = "BLOCKED_MISSING_ACTOR"
+            last_result["execution_receipt"] = er
+
+        return _finalize_result(
+            last_result, exp, behavior_ir, root, project,
+            oracle_enabled=False,  # exploration mode: oracle OFF
+        )
+
+    # ── Actor discovered: continue original experiment (Step 10) ──
+    # The last_result already contains the full experiment execution
+    # with the discovered actor. Now apply post-execution gates.
+    return _finalize_result(
+        last_result, exp, behavior_ir, root, project,
+        oracle_enabled=False,  # exploration mode: oracle OFF (Step 9)
+    )
+
+
+def _outcome_to_observation(classification: Any) -> str | None:
+    """Map ActorAttemptOutcome to PermissionObservation outcome string."""
+    mapping = {
+        "operation_executable": "OBSERVED_ALLOWED",
+        "permission_denied": "OBSERVED_DENIED",
+        "authentication_failed": "AUTHENTICATION_FAILED",
+    }
+    value = getattr(classification, "value", str(classification))
+    return mapping.get(value)
+
+
+def _finalize_result(
+    result: dict[str, Any],
+    experiment: dict[str, Any],
+    behavior_ir: dict[str, Any],
+    root: Path,
+    project: str,
+    *,
+    oracle_enabled: bool = True,
+) -> dict[str, Any]:
+    """Post-execution gates: oracle causality, validity, delivery packaging.
+
+    V1.8: When *oracle_enabled* is False (exploration mode), the authorization
+    oracle is skipped and the verdict is set to UNKNOWN_EXPECTATION.
+    """
+    exp = experiment
     try:
         targets = _authorization_binding_targets(exp)
         prepared = (
@@ -245,15 +509,28 @@ def execute_one_experiment(
             if _dict(exp.get("authorization_comparison_contract"))
             else result
         )
+
+        # ── V1.8: Oracle protection (Step 9) ──
+        if not oracle_enabled:
+            # Exploration mode — no authorization verdict allowed
+            governed = dict(prepared)
+            governed["authorization_causality_receipt"] = {
+                "status": "NOT_APPLICABLE",
+                "reason": "exploration_mode_oracle_disabled",
+            }
+            finding = _dict(governed.get("finding"))
+            if finding:
+                finding["authorization_verdict"] = "UNKNOWN_EXPECTATION"
+                governed["finding"] = finding
+            return governed
+
         governed = enforce_authorization_oracle_causality(
             result=prepared,
             experiment=exp,
             behavior_ir=behavior_ir,
             account_rows=_governance._test_account_rows(root, project),
         )
-        # SPEC §7.6–7.7: Effect Observation Graph + Oracle Validity Gates demote
-        # PROPERTY_HELD/VIOLATION when identity/contrast/preconditions/causal/
-        # evidence are incomplete. Never upgrades a verdict.
+        # SPEC §7.6–7.7: Effect Observation Graph + Oracle Validity Gates
         governed = enforce_oracle_validity_gates(
             result=governed,
             experiment=exp,
@@ -267,9 +544,6 @@ def execute_one_experiment(
             == "PASSED"
         )
         if causal_passed and targets:
-            # V1.7: When the authorization_comparison observer has already proven
-            # same_resource_proven=True, runtime binding identity receipts are
-            # redundant — the observer is the authoritative same-resource proof.
             _observer_proved = any(
                 isinstance(_obs, dict)
                 and _text(_obs.get("observer_id")) == "authorization_comparison"
