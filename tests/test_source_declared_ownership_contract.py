@@ -106,7 +106,11 @@ def test_source_owned_read_reaches_existing_finding_mainline_without_owns_edge(
         ("actor-member-a", "actor-member-b"),
         ("actor-member-b", "actor-member-a"),
     }
-    assert all(row["relation_refs"] == [] for row in obligations)
+    assert all(len(row["relation_refs"]) == 2 for row in obligations)
+    assert all(
+        all(ref.startswith("rel_") for ref in row["relation_refs"])
+        for row in obligations
+    )
 
     obligation = next(
         row
