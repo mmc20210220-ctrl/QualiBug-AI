@@ -9,6 +9,10 @@ from ._common import *  # noqa: F401,F403
 from ._utils import *  # noqa: F401,F403
 from ._utils import _csv_rows  # noqa: F401
 from ._parsing import *  # noqa: F401,F403
+from . import _parsing as _parsing_authority
+from .semantic_rule_frame_guard import install_semantic_rule_frame_guard
+
+install_semantic_rule_frame_guard(_parsing_authority)
 from ._crud import *  # noqa: F401,F403
 from ._linking import *  # noqa: F401,F403
 from ._api import *  # noqa: F401,F403
