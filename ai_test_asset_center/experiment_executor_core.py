@@ -798,6 +798,17 @@ def execute_one_experiment(
         )
         control_plan = _list(exp.get("control_plan"))
         treatment_plan = _list(exp.get("treatment_plan"))
+        # Authorization-comparison experiments deliberately execute a
+        # non-permitted actor on the treatment arm and ASSERT its rejection
+        # (assert_authorization / assert_*_visibility + 4xx expectation). The
+        # pre-transport role gate must not block that step — the rejection
+        # observation IS the experiment. The gate stays active for every other
+        # family, where a 403 would be misread as a finding.
+        observations["_experiment_expects_authorization_rejection"] = any(
+            _text(_dict(assertion).get("kind"))
+            in {"authorization", "visibility", "isolation", "owner_tenant_visibility"}
+            for assertion in _list(exp.get("assertions"))
+        )
         plan_result = execute_non_barrier_plans(
             control_plan=control_plan,
             treatment_plan=treatment_plan,

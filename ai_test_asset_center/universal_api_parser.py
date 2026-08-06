@@ -183,6 +183,16 @@ def build_api_operations_from_text(
                 }:
                     continue
                 operation = raw_operation if isinstance(raw_operation, dict) else {}
+                # The operation's access contract: source-declared required
+                # roles (x-required-roles, the OpenAPI vendor extension the
+                # contract authors use for 权限：管理员 declarations). Roles
+                # stay exactly as declared — the parser never translates
+                # them; the role vocabulary is the source's own.
+                required_roles = [
+                    str(role).strip()
+                    for role in (operation.get("x-required-roles") or [])
+                    if str(role or "").strip()
+                ]
                 operations.append({
                     "method": normalized_method,
                     "path": str(path or "").strip(),
@@ -196,6 +206,7 @@ def build_api_operations_from_text(
                     "description": str(operation.get("description") or "").strip(),
                     "tags": list(operation.get("tags") or []),
                     "parameters": list(operation.get("parameters") or []),
+                    "required_roles": required_roles,
                     "request_schema": (
                         operation.get("requestBody")
                         if isinstance(operation.get("requestBody"), dict)

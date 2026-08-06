@@ -1582,6 +1582,63 @@ def _derive_permission_relations(
                     derivation="explicit",
                     status="conflicting",
                 ))
+    # ── Operation access contract (per-operation role declaration) ──
+    # An operation that DECLARES its required roles (x-required-roles /
+    # 权限：管理员) carries its own closed access contract: the declared roles
+    # are PERMITTED, every other declared runtime role is DENIED. The
+    # permission matrix rows above only cover resource-scoped narratives; an
+    # operation-scoped declaration is explicit source evidence and must create
+    # the permit/deny pair itself — otherwise a role-restricted operation with
+    # no matrix rows compiles no authorization comparison and its role-check
+    # defect stays invisible. Roles are matched case-insensitively against the
+    # declared vocabulary only; no role is ever translated or invented.
+    declared_roles_by_op: dict[str, set[str]] = {}
+    for operation in _list(model.get("operations")):
+        if not isinstance(operation, dict):
+            continue
+        declared = {
+            _text(role).lower()
+            for role in _list(operation.get("required_roles"))
+            if _text(role)
+        }
+        if declared:
+            declared_roles_by_op[_text(operation.get("id"))] = declared
+    for operation in _list(model.get("operations")):
+        if not isinstance(operation, dict):
+            continue
+        operation_id = _text(operation.get("id"))
+        declared = declared_roles_by_op.get(operation_id)
+        if not declared:
+            continue
+        source_refs = [_source_ref(
+            _text(operation.get("source_id")) or "api_spec",
+            locator=f"{_text(operation.get('method')).upper()} {_text(operation.get('path'))}",
+            kind="operation_role_declaration",
+        )]
+        for role_key, actors in actors_by_role.items():
+            for actor in actors:
+                actor_ref = _text(actor.get("id"))
+                if not actor_ref:
+                    continue
+                relation_type = (
+                    "permits" if role_key in declared else "denies"
+                )
+                decision = "PERMIT" if role_key in declared else "DENY"
+                relations.append(_relation_node(
+                    relation_type=relation_type,
+                    from_ref=actor_ref,
+                    to_ref=operation_id,
+                    operation_ref=operation_id,
+                    actor_ref=actor_ref,
+                    preconditions=[],
+                    effects=[{"allowed_actions": ["*"]}] if decision == "PERMIT" else [],
+                    source_refs=[dict(row) for row in source_refs],
+                    confidence=0.9,
+                    derivation="explicit",
+                    status="accepted",
+                    permission_decision=decision,
+                    scope="unspecified",
+                ))
     return relations
 
 
@@ -3140,6 +3197,11 @@ def build_behavior_ir_from_knowledge_asset(
                 "summary": _text(op.get("summary") or op.get("title")),
                 "description": _text(op.get("description")),
                 "tags": _list(op.get("tags")),
+                "required_roles": _merge_unique_sorted(
+                    _list(op.get("required_roles")),
+                    _list(op.get("x-required-roles")),
+                    _list(op.get("allowed_roles")),
+                ),
                 "side_effect_class": side_effect,
                 "read_write": side_effect,
                 "entity_refs": [_text(x) for x in _list(op.get("entity_refs")) if _text(x)],

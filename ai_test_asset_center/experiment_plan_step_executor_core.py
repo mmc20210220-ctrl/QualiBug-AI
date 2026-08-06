@@ -436,7 +436,14 @@ def execute_non_barrier_plans(
             # permitted on the target operation. The contract declares the
             # required roles; block before transport instead of letting the
             # target return 403 (which the funnel would misread as a finding).
-            unauth_role = _unauthorized_actor_role(op, actor)
+            # Exception: an authorization-comparison experiment executes its
+            # treatment arm with a deliberately non-permitted actor and asserts
+            # the rejection — blocking pre-transport would hide the very
+            # observation (a missing role check returns 2xx) the experiment
+            # exists to make.
+            unauth_role = None
+            if not observations.get("_experiment_expects_authorization_rejection"):
+                unauth_role = _unauthorized_actor_role(op, actor)
             if unauth_role is not None:
                 required_roles = [
                     str(r).lower()
