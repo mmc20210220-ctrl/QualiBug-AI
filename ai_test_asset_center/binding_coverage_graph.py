@@ -40,6 +40,11 @@ ALLOWED_SOURCE_KINDS = frozenset({
     "CONTROL_RESPONSE",
     "READ_OPERATION_RESPONSE",
     "ENVIRONMENT_CONFIG",
+    # The observed-write-body projection: a runtime resolver reads a
+    # source-declared collection with the writer's credentials and projects
+    # a real observed row into the write body. The value is the environment's
+    # own data — a legitimate, evidence-backed binding source.
+    "OBSERVED_ENTITY_WRITE_BODY",
 })
 
 FORBIDDEN_SOURCE_KINDS = frozenset({
@@ -103,6 +108,7 @@ def _determine_producer_stage(source_kind: str) -> str:
         "PRIMARY_REQUEST": "PRIMARY_EXECUTION",
         "PRIMARY_RESPONSE": "PRIMARY_EXECUTION",
         "READ_OPERATION_RESPONSE": "AFTER_WRITE_OBSERVATION",
+        "OBSERVED_ENTITY_WRITE_BODY": "FIXTURE_SETUP",
     }
     return mapping.get(source_kind, "COMPILE_STATIC")
 
@@ -291,6 +297,24 @@ def build_binding_coverage_graph(
             _add_node(param, f"cleanup.path.{param}")
         for param in _extract_body_bindings(step.get("body")):
             _add_node(param, f"cleanup.body.{param}")
+
+    # ── Scan binding_plan runtime-resolvable entries ──
+    # The observed-write-body projection (and other runtime resolvers) binds
+    # a value that no step path/body placeholder names: the write body arrives
+    # at runtime from the environment's own observed data. Such targets must
+    # be declared in the coverage graph or the runtime provenance gate
+    # rejects them as undeclared_runtime_binding.
+    for binding in _list(exp.get("binding_plan")):
+        if not isinstance(binding, dict):
+            continue
+        if (
+            _text(binding.get("status")) == "runtime_resolvable"
+            and _text(binding.get("target"))
+        ):
+            _add_node(
+                _text(binding.get("target")),
+                f"binding_plan.{_text(binding.get('target'))}",
+            )
 
     # ── Scan observer plans ──
     for obs in _list(exp.get("observers")):

@@ -518,12 +518,157 @@ def _owned_entity_identity_resolver(
     return candidates[0]
 
 
+def _reference_field_resolver(
+    *,
+    behavior_ir: dict[str, Any],
+    reference_fields: list[Any],
+) -> dict[str, Any]:
+    """Resolve foreign-key reference body fields from the referenced
+    entity's own caller-scoped collection read.
+
+    A documented request example is a documentation fixture: its scalar
+    values are trustworthy, but its reference values (``orderId``,
+    ``paymentId``) point at entities that may not exist in the environment
+    and are never reliable on a live target. Each reference field names an
+    entity structurally (``orderId`` -> entity ``order``); a source-declared
+    collection ``GET`` on that entity's collection returns real rows of
+    that entity, and the runtime projects the row's identity field into the
+    body field (``orderId`` <- ``id``).
+
+    Entity resolution is purely structural — the body field name must start
+    with the entity name (case-insensitive) and end in an identity suffix
+    (``id``/``ref``/``uuid``/``key``); the identity field comes from the
+    entity's own declared identity/IDENTITY-typed field. No industry terms
+    and no field-name translation tables are involved, so any system whose
+    source material declares an entity and a collection read binds the same
+    way. Every validation dimension is fail-closed: a field whose entity
+    cannot be resolved, or whose entity has no source-declared collection
+    read, contributes no binding and the caller keeps its visible block.
+    """
+    ir = _dict(behavior_ir)
+    entities = _list(ir.get("entities"))
+    by_name: dict[str, dict[str, Any]] = {}
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        ent_name = _text(entity.get("name"))
+        if ent_name:
+            by_name.setdefault(ent_name.lower(), entity)
+        for alias in _list(entity.get("source_entity_names")):
+            if _text(alias):
+                by_name.setdefault(_text(alias).lower(), entity)
+    identity_suffixes = ("_id", "id", "_ref", "ref", "_uuid", "uuid", "_key", "key")
+
+    resolved: dict[str, Any] = {}
+    for field in reference_fields:
+        key = _text(field).lower()
+        candidate = ""
+        suffix = ""
+        for s in identity_suffixes:
+            if key.endswith(s) and len(key) > len(s):
+                candidate = key[: -len(s)].rstrip("_")
+                suffix = s
+                break
+        if not suffix or not candidate:
+            continue
+        entity = by_name.get(candidate)
+        if entity is None:
+            continue
+        ent_id = _text(entity.get("id"))
+        if not ent_id:
+            continue
+        # The referenced entity's collection read: a source-declared GET/HEAD
+        # whose final path segment names the entity itself (orders -> the
+        # orders collection). Segment-identity keeps health/status/report
+        # endpoints (which also observe the entity in the relation graph but
+        # return no entity rows) out of the resolver slot.
+        ent_names = {
+            _text(alias).lower()
+            for alias in [
+                *_list(entity.get("source_entity_names")),
+                _text(entity.get("name")),
+            ]
+            if _text(alias)
+        }
+        resolver_op: dict[str, Any] = {}
+        for op in _list(ir.get("operations")):
+            if not isinstance(op, dict):
+                continue
+            method = _text(op.get("method")).upper()
+            if method not in {"GET", "HEAD"}:
+                continue
+            path = normalize_path_placeholders(
+                _text(op.get("path") or op.get("raw_path"))
+            ).rstrip("/")
+            if not path or "{" in path or ":" in path:
+                continue
+            segments = [segment for segment in path.split("/") if segment]
+            if not segments or segments[-1].lower() not in ent_names:
+                continue
+            if not _list(op.get("source_refs")):
+                continue
+            op_id = _text(op.get("id"))
+            read_entities = _operation_entity_refs(
+                behavior_ir=ir,
+                operation_ref=op_id,
+                relation_types={"observes", "scopes"},
+            )
+            if ent_id not in read_entities and _text(entity.get("name")) not in read_entities:
+                continue
+            resolver_op = {
+                "operation_ref": op_id,
+                "method": method,
+                "path": path,
+            }
+            break
+        if not resolver_op:
+            continue
+        # Identity field of the entity: a declared identity field first
+        # (id/order_no), then the first IDENTITY-typed field, else ``id``.
+        identity = ""
+        for f in _list(entity.get("fields")):
+            if not isinstance(f, dict):
+                continue
+            fname = _text(f.get("name"))
+            if fname and _field_key(fname) == "id":
+                identity = fname
+                break
+        if not identity:
+            for f in _list(entity.get("fields")):
+                if isinstance(f, dict) and _text(f.get("semantic_type")) == "IDENTITY":
+                    identity = _text(f.get("name"))
+                    if identity:
+                        break
+        if not identity:
+            identity = "id"
+        resolved[field] = {
+            "entity_ref": ent_id,
+            "source_field": identity,
+        }
+        # One resolver read serves one entity; first declared wins.
+        if len(resolved) == 1:
+            resolved["_resolver"] = resolver_op
+    if not resolved or "_resolver" not in resolved:
+        return {}
+    resolver_op = resolved.pop("_resolver")
+    mapped_fields = sorted(resolved.keys())
+    return {
+        "operation_ref": _text(resolver_op.get("operation_ref")),
+        "method": _text(resolver_op.get("method")),
+        "path": _text(resolver_op.get("path")),
+        "binding_semantics": "caller_scoped",
+        "projection_fields": mapped_fields,
+        "reference_mapping": resolved,
+    }
+
+
 def _observed_write_body_resolver(
     *,
     operation: dict[str, Any],
     behavior_ir: dict[str, Any],
     required_fields: list[Any],
     projection_fields: list[Any],
+    reference_fields: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve a write-body template from a caller-scoped collection read.
 
@@ -546,6 +691,21 @@ def _observed_write_body_resolver(
        gate anyway, so the block stays compile-time and honest).
     """
     fields = [_text(field) for field in projection_fields if _text(field)]
+    # Reference-field path first: when the documented example carries a
+    # foreign-key reference (orderId) the write's own collection may have no
+    # plain collection read at all (refund-service has none) — the reference
+    # target's collection is the only source of a real identity value. This
+    # path runs before the schema-property gate: reference fields are named
+    # by the example itself, which exists even when the schema declares no
+    # properties.
+    reference_fields = [_text(field) for field in _list(reference_fields) if _text(field)]
+    if reference_fields:
+        referenced = _reference_field_resolver(
+            behavior_ir=behavior_ir,
+            reference_fields=reference_fields,
+        )
+        if referenced:
+            return referenced
     if not fields:
         return {}
     required_keys = {

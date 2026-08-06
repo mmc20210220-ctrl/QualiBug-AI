@@ -4133,14 +4133,22 @@ def build_behavior_ir_from_knowledge_asset(
         # a description must appear verbatim in the statement, or the statement
         # must end with it (term = qualifier + description), so a bare 金额
         # tail cannot grab every X金额 field.
-        _known_names = {row.get("field") for row in result if row.get("field")}
+        # Dedup is per (entity_ref, field): the same field name in different
+        # entities is a DIFFERENT field. Name-only dedup silently collapsed
+        # e.g. refund.amount/payment.amount under the first-registered
+        # coupon.amount, so a refund rule never bound the refund entity.
+        _known_field_keys = {
+            (_text(row.get("entity_ref") or "").lower(), _text(row.get("field") or "").lower())
+            for row in result
+            if _text(row.get("field"))
+        }
         _known_ids = {row.get("field_id") for row in result if row.get("field_id")}
         for _ent_name, _ent_nodes in _ENTITY_FIELD_NODES.items():
             for _fname_lower, _fnode in _ent_nodes.items():
                 if not isinstance(_fnode, dict):
                     continue
                 _fname = _text(_fnode.get("name") or _fname_lower)
-                if not _fname or _fname in _known_names or _fname_lower in {n.lower() for n in _known_names}:
+                if not _fname or (_text(_ent_name).lower(), _fname_lower) in _known_field_keys:
                     continue
                 _fdesc = _text(_fnode.get("description"))
                 if not _fdesc or len(_fdesc) < 2:
@@ -4157,7 +4165,7 @@ def build_behavior_ir_from_knowledge_asset(
                     if _sem:
                         _row["semantic_type"] = _sem
                     result.append(_row)
-                    _known_names.add(_fname)
+                    _known_field_keys.add((_text(_ent_name).lower(), _fname_lower))
                     if _cf:
                         _known_ids.add(_cf)
         # ── CJK validation term → field-name token binding ──
@@ -4197,8 +4205,7 @@ def build_behavior_ir_from_knowledge_asset(
                     _fname = _text(_fnode.get("name") or _fname_lower)
                     if (
                         not _fname
-                        or _fname in _known_names
-                        or _fname_lower in {n.lower() for n in _known_names}
+                        or (_text(_ent_name).lower(), _fname_lower) in _known_field_keys
                     ):
                         continue
                     _fnl = _fname.lower()
@@ -4236,7 +4243,7 @@ def build_behavior_ir_from_knowledge_asset(
                     if _sem:
                         _row["semantic_type"] = _sem
                     result.append(_row)
-                    _known_names.add(_fname)
+                    _known_field_keys.add((_text(_ent_name).lower(), _fname_lower))
                     if _cf:
                         _known_ids.add(_cf)
         return result
@@ -4344,6 +4351,56 @@ def build_behavior_ir_from_knowledge_asset(
             continue
         _semantic_frame = _validated_semantic_frame(rule, statement)
 
+        # ── Field-level grounding: extract structured operands from statement ──
+        _rule_kind = _text(rule.get("kind") or rule.get("risk_type") or "business_rule")
+        _rule_operands = _list(rule.get("operands"))
+        _rule_equation: dict[str, Any] = _dict(rule.get("equation"))
+        # For conservation/data_conservation/business amount-quantity rules
+        # without explicit operands, extract field references from statement text.
+        # CJK validation vocabulary (状态/时间/金额/数量/分类/范围/次数) is
+        # industry-neutral business language; a statement carrying such terms
+        # names fields it governs even when no ASCII identifier appears.
+        # Industry-specific terms (优惠/库存/余额/订单) are intentionally absent:
+        # they trigger no extraction on their own, so an industry term without
+        # a generic mapping never invents field bindings.
+        _CJK_FIELD_SIGNAL_TERMS = (
+            "状态", "时间", "金额", "数量", "分类", "范围", "次数",
+        )
+        # Hoisted before the umbrella decision: the extraction result is the
+        # ground truth for "does this statement name concrete fields". A rule
+        # whose CJK terms bind real entity fields governs specific fields and
+        # must not be treated as a broad overlay just because it carries no
+        # ASCII identifier.
+        _extracted_fields: list[dict[str, str]] = []
+        if not _rule_operands and (
+            any(
+                token in _rule_kind.lower()
+                for token in ("conserv", "data_conservation", "balance", "amount", "quantity")
+            )
+            or any(
+                token in statement.lower()
+                for token in (
+                    "available_qty", "locked_qty", "payable_amount", "total_amount",
+                    "discount_amount", "refund", "qty", "amount",
+                )
+            )
+            or any(token in statement for token in _CJK_FIELD_SIGNAL_TERMS)
+        ):
+            _extracted_fields = _extract_fields_from_statement(statement)
+            if _extracted_fields:
+                _rule_operands = _extracted_fields
+                # Build conservation equation terms from extracted fields
+                _terms = [
+                    _text(f.get("field_id") or f.get("field"))
+                    for f in _extracted_fields
+                    if f.get("field") or f.get("field_id")
+                ]
+                if _terms and not _rule_equation:
+                    _rule_equation = {
+                        "operator": "unchanged_sum",
+                        "terms": _terms,
+                    }
+
         # V1.4.0: Detect Umbrella Rules — broad statements without concrete
         # entity/field references that cannot produce testable experiments.
         _stmt_lower = statement.lower()
@@ -4353,6 +4410,15 @@ def build_behavior_ir_from_knowledge_asset(
             _has_concrete_field = bool(re.findall(r"`[a-zA-Z_][a-zA-Z0-9_]*`", statement))
             _has_concrete_field = _has_concrete_field or bool(
                 re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", _stmt_lower)
+            )
+            # CJK/description field extraction and rule-declared operands are
+            # concrete field evidence: the statement names the fields it
+            # governs (退款金额→amount, 实付金额→payable_amount) even though
+            # no ASCII identifier appears in the text.
+            _has_concrete_field = _has_concrete_field or bool(_extracted_fields) or any(
+                isinstance(_op, dict)
+                and bool(_text(_op.get("field") or _op.get("field_id") or _op.get("entity_ref")))
+                for _op in _list(_rule_operands)
             )
             _has_entity_ref = bool(_text(rule.get("entity") or rule.get("object") or rule.get("business_object")))
             # A validated semantic frame is source-grounded structure, but it
@@ -4397,49 +4463,6 @@ def build_behavior_ir_from_knowledge_asset(
                 and len(statement) < 30
             ):
                 _is_umbrella = True
-        # ── Field-level grounding: extract structured operands from statement ──
-        _rule_kind = _text(rule.get("kind") or rule.get("risk_type") or "business_rule")
-        _rule_operands = _list(rule.get("operands"))
-        _rule_equation: dict[str, Any] = _dict(rule.get("equation"))
-        # For conservation/data_conservation/business amount-quantity rules
-        # without explicit operands, extract field references from statement text.
-        # CJK validation vocabulary (状态/时间/金额/数量/分类/范围/次数) is
-        # industry-neutral business language; a statement carrying such terms
-        # names fields it governs even when no ASCII identifier appears.
-        # Industry-specific terms (优惠/库存/余额/订单) are intentionally absent:
-        # they trigger no extraction on their own, so an industry term without
-        # a generic mapping never invents field bindings.
-        _CJK_FIELD_SIGNAL_TERMS = (
-            "状态", "时间", "金额", "数量", "分类", "范围", "次数",
-        )
-        if not _rule_operands and (
-            any(
-                token in _rule_kind.lower()
-                for token in ("conserv", "data_conservation", "balance", "amount", "quantity")
-            )
-            or any(
-                token in statement.lower()
-                for token in (
-                    "available_qty", "locked_qty", "payable_amount", "total_amount",
-                    "discount_amount", "refund", "qty", "amount",
-                )
-            )
-            or any(token in statement for token in _CJK_FIELD_SIGNAL_TERMS)
-        ):
-            _extracted = _extract_fields_from_statement(statement)
-            if _extracted:
-                _rule_operands = _extracted
-                # Build conservation equation terms from extracted fields
-                _terms = [
-                    _text(f.get("field_id") or f.get("field"))
-                    for f in _extracted
-                    if f.get("field") or f.get("field_id")
-                ]
-                if _terms and not _rule_equation:
-                    _rule_equation = {
-                        "operator": "unchanged_sum",
-                        "terms": _terms,
-                    }
         # Keep expression identity-stable. Semantic-frame enrichment is recorded on
         # the invariant node only — merging modality/polarity/condition/subject/
         # behavior into expression changes property fingerprints and silently

@@ -1013,7 +1013,11 @@ def _select_runtime_binding(
     return default
 
 
-def project_observed_body(rows: Any, projection_fields: list[Any]) -> dict[str, Any]:
+def project_observed_body(
+    rows: Any,
+    projection_fields: list[Any],
+    reference_mapping: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Project source-observed entity field values into a write body template.
 
     When a write operation declares a request schema but no request example,
@@ -1025,6 +1029,12 @@ def project_observed_body(rows: Any, projection_fields: list[Any]) -> dict[str, 
     names. Every value comes from the environment's own observed data;
     nothing is synthesized.
 
+    ``reference_mapping`` maps body fields onto the row fields of a
+    REFERENCED entity: ``{"orderId": {"source_field": "id"}}`` fills the
+    body's foreign-key field from the referenced row's identity field,
+    which normalized-key equality could never match (``orderid`` vs
+    ``id``). Scalar schema fields still bind by normalized key equality.
+
     Returns {} when no row carries any projection field (the caller treats
     the binding as unresolved and fails closed). Missing required fields are
     caught downstream by the pre-transport required-field gate, which keeps
@@ -1033,11 +1043,26 @@ def project_observed_body(rows: Any, projection_fields: list[Any]) -> dict[str, 
     fields = [str(field).strip() for field in _list(projection_fields) if str(field or "").strip()]
     if not fields:
         return {}
+    mapping = _dict(reference_mapping) if isinstance(reference_mapping, dict) else {}
     candidates = [row for row in _list(rows) if isinstance(row, dict)]
     best: dict[str, Any] = {}
     for row in candidates:
         projected: dict[str, Any] = {}
         for field in fields:
+            ref = mapping.get(field)
+            source_field = ""
+            if isinstance(ref, dict):
+                source_field = _text(ref.get("source_field"))
+            if source_field:
+                source_key = re.sub(r"[^a-z0-9]+", "", source_field.lower())
+                for row_key, row_value in row.items():
+                    if re.sub(r"[^a-z0-9]+", "", str(row_key).lower()) != source_key:
+                        continue
+                    if row_value in (None, ""):
+                        continue
+                    projected[field] = row_value
+                    break
+                continue
             field_key = re.sub(r"[^a-z0-9]+", "", field.lower())
             if not field_key:
                 continue

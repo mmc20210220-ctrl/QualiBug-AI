@@ -692,12 +692,17 @@ def materialize_experiment_fixtures(
                         if _projection_fields:
                             # Observed write body: project the schema-declared
                             # fields from one observed row (best field coverage
-                            # wins, keeping values mutually coherent). Empty
+                            # wins, keeping values mutually coherent). Reference
+                            # fields (orderId) resolve through reference_mapping
+                            # onto the referenced row's identity field. Empty
                             # projection leaves the binding unresolved and the
                             # standard fail-closed path reports the gap.
                             _projected = project_observed_body(
                                 _runtime_entity_candidates(obs.get("body")),
                                 _projection_fields,
+                                reference_mapping=_dict(
+                                    binding.get("reference_mapping")
+                                ),
                             )
                             resolved_value = _projected or None
                         elif (
@@ -725,6 +730,23 @@ def materialize_experiment_fixtures(
                             )
                             resolved_value = extracted.get(target)
                         if resolved_value in (None, "", [], {}):
+                            # ── Extraction failed despite HTTP 2xx — record
+                            # diagnostics so the caller can distinguish "empty
+                            # collection" from "entity found but ID field
+                            # unrecognized" (SPEC §20 failure classification).
+                            _body_sample = obs.get("body")
+                            _candidates = _runtime_entity_candidates(_body_sample)
+                            _diag = {
+                                "candidate_count": len(_candidates),
+                                "entity_keys": (
+                                    list(_candidates[0].keys())[:10]
+                                    if _candidates and isinstance(_candidates[0], dict)
+                                    else []
+                                ),
+                                "response_type": type(_body_sample).__name__,
+                                "target": target,
+                            }
+                            receipt.setdefault("extraction_diagnostics", []).append(_diag)
                             continue
                         _effective_resolver_actor = _fb_actor
                         _effective_resolver_token = _fb_token
@@ -1425,6 +1447,23 @@ def materialize_experiment_fixtures(
                         _empty_reason = _text(_fs_diag.get("blocked_reason")) or (
                             "empty_collection"
                         )
+                        # ── Enrich with extraction diagnostics (SPEC §20) ──
+                        _extract_diags = _list(receipt.get("extraction_diagnostics"))
+                        if _extract_diags and _empty_reason == "empty_collection":
+                            _last_diag = _extract_diags[-1]
+                            _cand_count = _last_diag.get("candidate_count", 0)
+                            _entity_keys = _last_diag.get("entity_keys", [])
+                            if _cand_count > 0:
+                                _empty_reason = (
+                                    f"entities_found_{_cand_count}_"
+                                    f"target_{target}_not_in_"
+                                    f"{'_'.join(str(k) for k in _entity_keys[:5])}"
+                                )
+                            elif _entity_keys:
+                                _empty_reason = (
+                                    f"no_entity_candidates_keys_"
+                                    f"{'_'.join(str(k) for k in _entity_keys[:5])}"
+                                )
                         _bind_detail = (
                             f"runtime_read_binding_unresolved:{target}:"
                             f"resolver_status_{_resolver_status}_"

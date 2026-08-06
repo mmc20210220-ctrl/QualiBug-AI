@@ -1018,34 +1018,87 @@ def compile_experiment_for_obligation(
     )
     _schema_required = _request_schema_required_fields(primary_op)
     _observed_body_resolver: dict[str, Any] = {}
-    if (
-        is_write
-        and not _primary_example
-        and (
-            _op_method_upper in {"PUT", "PATCH"}
-            # POST with a source-declared required body and no example must not
-            # reach transport as `{}` — that yields target 5xx and misleading
-            # CONTROL_SUCCESS_NOT_PROVEN instead of a compile-time gap.
-            or (_op_method_upper == "POST" and _schema_required)
+    # V1.9c+ : resolve the write body from observed data when the documented
+    # example cannot stand alone on the live target. A request example is a
+    # documentation fixture: its scalar values are trustworthy (amount,
+    # channel), but its foreign-key reference fields (``orderId``, ``*_id``)
+    # point at entities that may not exist in the environment. Sending the
+    # example verbatim then fails the control arm (CONTROL_SUCCESS_NOT_PROVEN
+    # on "order not found") and the whole experiment dies before the rule is
+    # ever tested. When the example carries such a reference field, defer the
+    # body to the observed-entity projection so the runtime reuses a real row
+    # of the same collection — the environment's own test data, never
+    # synthesized placeholders.
+    def _is_reference_field(field: Any) -> bool:
+        """True when a body field name is a foreign-key reference slot.
+
+        Matches snake_case (``order_id``, ``refund_id``), camelCase
+        (``orderId``, ``paymentId``) and plain identity names (``id``,
+        ``uuid``) via an identity suffix at a word boundary. Word-boundary
+        matching keeps value fields like ``paid``/``valid`` (which merely
+        end in "id") out of the reference set.
+        """
+        name = _text(field)
+        if not name:
+            return False
+        if re.search(r"(?:^|_)(?:id|ref|uuid|key)$", name, re.IGNORECASE):
+            return True
+        snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
+        return bool(
+            re.search(r"(?:^|_)(?:id|ref|uuid|key)$", snake, re.IGNORECASE)
         )
-    ):
+
+    _example_reference_fields = [
+        _text(field)
+        for field in (_primary_example.keys() if isinstance(_primary_example, dict) else [])
+        if _is_reference_field(field)
+    ]
+    _needs_observed_body = (
+        is_write
+        and (
+            (
+                not _primary_example
+                and (
+                    _op_method_upper in {"PUT", "PATCH"}
+                    # POST with a source-declared required body and no example must not
+                    # reach transport as `{}` — that yields target 5xx and misleading
+                    # CONTROL_SUCCESS_NOT_PROVEN instead of a compile-time gap.
+                    or (_op_method_upper == "POST" and _schema_required)
+                )
+            )
+            # Reference-field deferral: the documented example's scalar values
+            # are trustworthy, but its reference values (orderId) point at
+            # entities that may not exist in the environment. Defer the body
+            # to the observed-entity projection so the runtime reuses a real
+            # row of the referenced entity's collection. Triggers on the
+            # example itself — no request schema properties required.
+            or bool(_example_reference_fields)
+        )
+    )
+    if _needs_observed_body:
         # V1.9c: Before blocking, try to source the body from observed data:
         # a caller-scoped collection GET on the write's own collection whose
         # observed entity covers the required fields lets the runtime project
         # real field values into the body (the environment's own test data),
-        # which is evidence reuse — never synthesized placeholders.
+        # which is evidence reuse — never synthesized placeholders. Reference
+        # fields resolve through the referenced entity's collection instead.
         _observed_body_resolver = _observed_write_body_resolver(
             operation=primary_op,
             behavior_ir=ir,
             required_fields=_schema_required,
             projection_fields=_request_schema_property_fields(primary_op),
+            reference_fields=_example_reference_fields,
         )
         if not _observed_body_resolver:
-            return blocked_experiment(
-                oid,
-                "BLOCKED_MISSING_BINDING",
-                f"source_declared_request_body_missing:{primary_op_id}",
-            )
+            # With a standalone example that carries no entity reference the
+            # example itself is the body (scalar validation only). Block only
+            # when there is neither example nor observed source.
+            if not _primary_example:
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_BINDING",
+                    f"source_declared_request_body_missing:{primary_op_id}",
+                )
     write_observers = (
         declared_effect_observers(primary_op, behavior_ir=ir)
         if is_write
@@ -1203,6 +1256,13 @@ def compile_experiment_for_obligation(
             ),
             "body_projection_fields": _list(
                 _observed_body_resolver.get("projection_fields")
+            ),
+            # Reference-field projection: body_field -> {entity_ref,
+            # source_field} so the runtime maps a row of the referenced
+            # entity's collection onto the body's foreign-key field
+            # (orderId <- order row id) instead of normalized-key equality.
+            "reference_mapping": _dict(
+                _observed_body_resolver.get("reference_mapping")
             ),
             "value_fingerprint": "",
         })
@@ -2859,6 +2919,69 @@ def compile_experiment_for_obligation(
         experiment["compile_receipt"]["fixture_dag_status"] = _text(
             _fixture_dag.get("status")
         )
+
+    # ── V1.9c+: Merge runtime-read-binding nodes into the fixture DAG ──
+    # The v12 fixture DAG covers disposable fixture contracts only. Runtime
+    # read bindings (the observed-write-body projection, ownership reads)
+    # carry their own resolver operations and must be materialized by the
+    # runtime, so their nodes join both the DAG node table and the execution
+    # order. The materializer looks nodes up in ``fixture_dag.nodes`` and
+    # walks ``fixture_dependency_dag.execution_order``, so both structures
+    # receive the binding nodes.
+    try:
+        from .fixture_dag import build_fixture_dag_for_experiment as _build_binding_dag
+        _binding_dag = _build_binding_dag(experiment, behavior_ir=ir)
+    except Exception as _bd_exc:
+        logger.warning(
+            "binding fixture DAG build failed for %s: %s: %s",
+            oid,
+            type(_bd_exc).__name__,
+            str(_bd_exc)[:200],
+            exc_info=_bd_exc,
+        )
+        _binding_dag = {}
+    _binding_nodes = [
+        dict(node)
+        for node in _list(_binding_dag.get("nodes"))
+        if isinstance(node, dict) and _text(node.get("node_id"))
+    ]
+    if _binding_nodes:
+        _merge_dag = _dict(experiment.get("fixture_dag"))
+        if _merge_dag.get("nodes"):
+            _existing_ids = {
+                _text(node.get("node_id"))
+                for node in _list(_merge_dag.get("nodes"))
+                if isinstance(node, dict)
+            }
+            for _node in _binding_nodes:
+                if _text(_node.get("node_id")) not in _existing_ids:
+                    _merge_dag.setdefault("nodes", []).append(_node)
+                    _existing_ids.add(_text(_node.get("node_id")))
+            _merge_dag["setup_order"] = [
+                *[_text(nid) for nid in _list(_merge_dag.get("setup_order")) if _text(nid)],
+                *[_text(_node.get("node_id")) for _node in _binding_nodes],
+            ]
+            experiment["fixture_dag"] = _merge_dag
+        else:
+            experiment["fixture_dag"] = _binding_dag
+        _v12_dag = _dict(experiment.get("fixture_dependency_dag"))
+        if _v12_dag.get("nodes"):
+            _v12_ids = {
+                _text(node.get("node_id"))
+                for node in _list(_v12_dag.get("nodes"))
+                if isinstance(node, dict)
+            }
+            for _node in _binding_nodes:
+                if _text(_node.get("node_id")) not in _v12_ids:
+                    _v12_dag.setdefault("nodes", []).append(_node)
+                    _v12_ids.add(_text(_node.get("node_id")))
+            _v12_dag["execution_order"] = [
+                *[_text(nid) for nid in _list(
+                    _v12_dag.get("execution_order")
+                ) or _list(_v12_dag.get("topological_order")) if _text(nid)],
+                *[_text(_node.get("node_id")) for _node in _binding_nodes],
+            ]
+            experiment["fixture_dependency_dag"] = _v12_dag
 
     # ── SPEC v1.1 §9: Pass cleanup exemption contract from obligation ──
     cleanup_exemption = _dict(obl.get("cleanup_exemption_contract"))

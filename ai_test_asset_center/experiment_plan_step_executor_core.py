@@ -344,16 +344,21 @@ def execute_non_barrier_plans(
             if method in _WRITE_METHODS:
                 # V1.9c: The compiler may defer the write body to a runtime
                 # projection of a source-observed entity row (the operation
-                # declares a schema but no request example). The projected
-                # body is real environment data, never synthesized values;
-                # the required-field gate below still fail-closes visibly
-                # when the observed row cannot satisfy the schema. Step-
-                # compiled fields (e.g. an ownership override) win on
-                # conflict; observed values only fill the gaps.
+                # declares a schema but no request example, or its documented
+                # example carries foreign-key reference fields that only the
+                # environment can satisfy). The projected body is real
+                # environment data, never synthesized values; the required-
+                # field gate below still fail-closes visibly when the observed
+                # row cannot satisfy the schema. Observed values win over the
+                # documentation example: reference fields (orderId) must name
+                # a real row of the referenced entity, while the example's
+                # scalar values (amount, reason) remain the documented body
+                # and are kept wherever the observed projection does not
+                # cover them.
                 _observed_body = runtime_bindings.get("__observed_body")
                 if isinstance(_observed_body, dict) and _observed_body:
                     if isinstance(request_body, dict) and request_body:
-                        request_body = {**_observed_body, **request_body}
+                        request_body = {**request_body, **_observed_body}
                     elif request_body in (None, {}, []):
                         request_body = deepcopy(_observed_body)
             request_body = _materialize_body_template(
