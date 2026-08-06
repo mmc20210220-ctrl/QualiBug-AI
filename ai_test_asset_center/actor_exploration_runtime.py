@@ -185,10 +185,17 @@ def _has_compensation_plan(
     del operation
     obligation = _dict(obligation)
     prop = _dict(obligation.get("property"))
+    # A ``cleanup_requirement`` with a bound operation OR a bare ``required``
+    # flag is the obligation compiler's declaration that this write is
+    # governed by a reverse-order compensation plan. Both forms are
+    # source-declared compensation evidence, equivalent to an explicit
+    # ``compensates``/``cleanup_ref`` field.
+    cleanup_requirement = _dict(obligation.get("cleanup_requirement"))
     return bool(
         _text(prop.get("compensates") or prop.get("cleanup_ref"))
         or _text(obligation.get("compensates_operation_ref"))
-        or _text(_dict(obligation.get("cleanup_requirement")).get("operation_ref"))
+        or _text(cleanup_requirement.get("operation_ref"))
+        or cleanup_requirement.get("required") is True
     )
 
 
@@ -205,12 +212,18 @@ def can_explore_actor(
     method = _method_of(operation)
     if _is_safe_read(operation):
         return ExplorationDecision(True, max_safe_attempts, "safe_read", False)
+    # A governed write with a mandated cleanup path is not an uncontrolled
+    # destructive action: every write runs through the sandbox executor with
+    # before/after observation and cleanup receipts. Evaluate compensation
+    # before the destructive gate so declared-reversible writes are not
+    # silently misclassified as irreversible (matches the documented priority:
+    # compensation plans rank above the destructive default).
+    if _has_compensation_plan(operation, obligation):
+        return ExplorationDecision(True, max_write_attempts, "compensated_write", False)
     if _is_destructive(operation) and not allow_destructive:
         return ExplorationDecision(False, 0, "destructive_operation", True)
     if _is_destructive(operation):
         return ExplorationDecision(True, 1, "destructive_operation_forced", True)
-    if _has_compensation_plan(operation, obligation):
-        return ExplorationDecision(True, max_write_attempts, "compensated_write", False)
     if _is_state_transition(operation):
         return ExplorationDecision(True, 1, "state_transition_cautious", True)
     if method in {"PUT", "PATCH", "POST"}:
@@ -424,15 +437,20 @@ def build_exploration_plan(
             permission_observations=permission_observations,
             permitted_actor_ids=permitted_actor_ids,
         )
-        if not candidates:
-            return None
-        return ActorExecutionPlan(
-            mode=ActorSelectionMode.EXPLICIT_PERMISSION,
-            candidates=candidates,
-            authorization_oracle_enabled=True,
-            max_attempts=1,
-            reason="explicit_permits_edge",
-        )
+        if candidates:
+            return ActorExecutionPlan(
+                mode=ActorSelectionMode.EXPLICIT_PERMISSION,
+                candidates=candidates,
+                authorization_oracle_enabled=True,
+                max_attempts=1,
+                reason="explicit_permits_edge",
+            )
+        # Permits reference only placeholder/non-executable actors (role
+        # declarations without account credentials). That is not evidence
+        # that the operation is untestable — executable accounts declared in
+        # runtime test data may still exercise it. Fall through to the
+        # exploration path instead of blocking, so a source-declared permit
+        # on a role is honored with a real account that holds it.
 
     decision = can_explore_actor(
         operation,
