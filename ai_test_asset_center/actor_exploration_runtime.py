@@ -37,6 +37,11 @@ _IRREVERSIBLE_PATTERNS: frozenset[str] = frozenset({
 })
 _DEFAULT_MAX_SAFE_ATTEMPTS = 3
 _DEFAULT_MAX_WRITE_ATTEMPTS = 2
+# Compile seals a bounded candidate pool, not the attempt list. Context such as
+# owner, tenant and prior runtime evidence exists only at execution time, so
+# truncating to two or three candidates before that context is known permanently
+# discards valid actors. Runtime still enforces the smaller attempt budget.
+_MAX_SEALED_CANDIDATE_POOL = 16
 _CONFIDENCE_SINGLE_SUCCESS = 0.60
 _CONFIDENCE_TWO_SAME_CONTEXT = 0.75
 _CONFIDENCE_MULTI_INSTANCE = 0.85
@@ -86,15 +91,19 @@ def observation_context_compatible(
     observation: PermissionObservation,
     runtime_context: dict[str, Any] | None,
 ) -> bool:
-    """Return whether an observation may influence this candidate ranking."""
+    """Return whether an observation may influence this candidate ranking.
+
+    Context fingerprints fail closed. A historical observation with no context
+    cannot be generalized into a context-bearing selection merely because its
+    actor and operation happen to match.
+    """
 
     context = _dict(runtime_context)
     current_fingerprint = permission_context_fingerprint(context)
-    if (
-        observation.context_fingerprint
-        and current_fingerprint
-        and observation.context_fingerprint != current_fingerprint
-    ):
+    if current_fingerprint:
+        if observation.context_fingerprint != current_fingerprint:
+            return False
+    elif observation.context_fingerprint:
         return False
     current_tenant = _text(context.get("resource_tenant_id"))
     if observation.tenant_id and current_tenant and observation.tenant_id != current_tenant:
@@ -404,7 +413,7 @@ def build_exploration_plan(
     permission_observations: list[PermissionObservation] | None = None,
     allow_destructive: bool = False,
 ) -> ActorExecutionPlan | None:
-    """Build explicit or exploratory candidates; never invent actor authority."""
+    """Seal a bounded candidate pool; runtime owns contextual attempt ordering."""
 
     if permitted_actor_ids:
         candidates = build_executable_candidates(
@@ -441,9 +450,9 @@ def build_exploration_plan(
     )
     if not candidates:
         return None
-    limited = candidates[: decision.max_attempts]
+    sealed_pool = candidates[:_MAX_SEALED_CANDIDATE_POOL]
     reusable = any(
-        observation.actor_id == limited[0].actor_id
+        observation.actor_id == sealed_pool[0].actor_id
         and observation.operation_id
         == _text(operation.get("id") or operation.get("operation_id"))
         and observation.outcome == "OBSERVED_ALLOWED"
@@ -457,9 +466,9 @@ def build_exploration_plan(
             if reusable
             else ActorSelectionMode.PERMISSION_EXPLORATION
         ),
-        candidates=limited,
+        candidates=sealed_pool,
         authorization_oracle_enabled=False,
-        max_attempts=decision.max_attempts,
+        max_attempts=min(decision.max_attempts, len(sealed_pool)),
         reason=(
             "context_compatible_observed_permission"
             if reusable
@@ -589,7 +598,7 @@ def observation_success_counts(
     context_fingerprint: str = "",
     resource_identity_fingerprint: str = "",
 ) -> tuple[int, int]:
-    """Count corroboration for one actor/operation/context without guessing IDs."""
+    """Count corroboration for one exact actor/operation/context."""
 
     successful = [
         row for row in observations
@@ -597,9 +606,9 @@ def observation_success_counts(
         and row.operation_id == operation_id
         and row.outcome == "OBSERVED_ALLOWED"
         and (
-            not context_fingerprint
-            or not row.context_fingerprint
-            or row.context_fingerprint == context_fingerprint
+            row.context_fingerprint == context_fingerprint
+            if context_fingerprint
+            else not row.context_fingerprint
         )
     ]
     same_context = len(successful)
