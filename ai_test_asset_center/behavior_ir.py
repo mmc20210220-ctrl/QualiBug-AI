@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import behavior_ir_core as _core
+from .runtime_actor_role_identity import resolve_runtime_actor_roles
 
 for _name, _value in vars(_core).items():
     if _name.startswith("__") or _name == "build_behavior_ir_from_knowledge_asset":
@@ -76,7 +77,10 @@ def build_behavior_ir_from_knowledge_asset(
     runtime_actors: list[dict[str, Any]] | None = None,
     available_surfaces: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
-    prepared, projection = _runtime_actor_coordinates(runtime_actors)
+    role_bound_actors, role_identity_receipt = resolve_runtime_actor_roles(
+        asset, runtime_actors
+    )
+    prepared, projection = _runtime_actor_coordinates(role_bound_actors)
     model = _original_build_behavior_ir(
         asset,
         project_id=project_id,
@@ -85,8 +89,6 @@ def build_behavior_ir_from_knowledge_asset(
         runtime_actors=prepared,
         available_surfaces=available_surfaces,
     )
-    if not projection:
-        return model
     for actor in _list(model.get("actors")):
         if not isinstance(actor, dict):
             continue
@@ -103,6 +105,8 @@ def build_behavior_ir_from_knowledge_asset(
             "role_assignment", account.casefold(), role_key
         )
         actor["account_role_count"] = int(coordinate["account_role_count"])
+    if role_identity_receipt.get("actor_count"):
+        model["runtime_actor_role_identity_receipt"] = role_identity_receipt
     model["model_id"] = _core._content_addressed_id(model)
     return model
 
