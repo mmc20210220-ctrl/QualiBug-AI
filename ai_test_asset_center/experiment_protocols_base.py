@@ -248,6 +248,24 @@ _SECRET_FAMILY_CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("password", ("password",)),
     ("credential", ("credential",)),
 )
+# Generic account/entity field concepts a response-side rule may forbid
+# (响应不得泄露完整手机号、用户状态或角色). These are universal account
+# record fields — phone/status/role/email — never industry terms; the
+# matchers scan response field names the same way the secret family does.
+_ACCOUNT_FIELD_CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("手机号", ("phone", "mobile")),
+    ("手机", ("phone", "mobile")),
+    ("电话", ("phone", "mobile")),
+    ("mobile", ("mobile",)),
+    ("phone", ("phone",)),
+    ("状态", ("status",)),
+    ("status", ("status",)),
+    ("角色", ("role",)),
+    ("role", ("role",)),
+    ("邮箱", ("email",)),
+    ("邮件", ("email",)),
+    ("email", ("email",)),
+)
 # Identifier compounds that legitimately embed a key matcher without being
 # credential material (idempotency_key, correlation_key, …). Generic
 # enterprise-technical vocabulary; keeps the family matcher honest on
@@ -290,7 +308,7 @@ def _extract_forbidden_response_fields(
         for match in _RESPONSE_FORBID_FIELD_RE.finditer(raw)
     ]
     family: list[str] = []
-    for concept, matchers in _SECRET_FAMILY_CONCEPTS:
+    for concept, matchers in [*_SECRET_FAMILY_CONCEPTS, *_ACCOUNT_FIELD_CONCEPTS]:
         if concept in raw:
             for matcher in matchers:
                 if matcher not in family:
@@ -991,15 +1009,38 @@ def compile_family_protocol(
         # only observes the response content.
         _forbidden_fields, _family_match = _extract_forbidden_response_fields(property_spec)
         if _forbidden_fields:
+            # A single-arm response observation on a GET/HEAD needs the
+            # operation's declared query parameters to be a real request
+            # (GET /api/auth/otp/send?email=…): without them the target
+            # rejects the request before the response content exists.
+            _query: dict[str, Any] = {}
+            for _param in _list(operation.get("parameters")):
+                if not isinstance(_param, dict):
+                    continue
+                if _text(_param.get("in")).lower() != "query":
+                    continue
+                _param_name = _text(_param.get("name"))
+                if not _param_name:
+                    continue
+                _param_value = (
+                    _param.get("example")
+                    or _dict(_param.get("schema")).get("example")
+                    or _param.get("default")
+                )
+                if _param_value is not None:
+                    _query[_param_name] = _param_value
+            _control_step: dict[str, Any] = {
+                "step_id": "control_1",
+                "actor_ref": control_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "response_side_constraint_observation",
+                "protocol_step": "positive_control",
+            }
+            if _query:
+                _control_step["query"] = _query
             return {
                 "status": "COMPILED",
-                "control_plan": [{
-                    "step_id": "control_1",
-                    "actor_ref": control_actor_ref,
-                    "operation_ref": operation_ref,
-                    "intent": "response_side_constraint_observation",
-                    "protocol_step": "positive_control",
-                }],
+                "control_plan": [_control_step],
                 "treatment_plan": [],
                 "assertion": {
                     "kind": "response_field_absent",
