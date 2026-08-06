@@ -416,6 +416,18 @@ def exploration_execution_policy(
 
     reversible, reversibility_reason = _write_reversibility_gate(experiment)
     if not reversible:
+        # Anonymous-executable operations (explicitly declared empty security
+        # scheme) carry no identity: exploration yields a single
+        # unauthenticated candidate, so the accepted-residue concern
+        # (repeating an unknown write under several actors) cannot arise —
+        # the residue belongs to no actor and matches the source-declared
+        # anonymous contract. A missing security field is not anonymity.
+        if (
+            reversibility_reason == "accepted_residue_is_not_reversible"
+            and _dict(operation).get("security") is not None
+            and not _list(_dict(operation).get("security"))
+        ):
+            return True, 1, "anonymous_accepted_residue_write"
         return False, 0, reversibility_reason
 
     if _operation_has_semantic_marker(operation, _STATE_TRANSITION_PATTERNS):

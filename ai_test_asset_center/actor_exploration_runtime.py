@@ -384,6 +384,33 @@ def build_executable_candidates(
             runtime_context=runtime_context,
             permission_observations=permission_observations,
         ))
+    # Anonymous-executable operations (explicitly declared empty security
+    # scheme) carry no identity: the source contract itself declares the
+    # endpoint callable without credentials, so exploration may exercise it
+    # unauthenticated. Without this candidate the exploration plan stays
+    # empty and the write is never tested even though the source declares it
+    # anonymous. A MISSING security field is not anonymity — only an
+    # explicitly declared empty list is.
+    if operation is not None and (
+        _dict(operation).get("security") is not None
+        and not _list(_dict(operation).get("security"))
+    ):
+        if "anonymous" not in target_ids and not any(
+            _text(candidate.actor_id) == "anonymous" for candidate in candidates
+        ):
+            candidates.append(score_actor_candidate(
+                {
+                    "id": "anonymous",
+                    "name": "anonymous",
+                    "role": "anonymous",
+                    "credential_secret_ref": "",
+                    "runtime_bound": True,
+                },
+                operation=operation,
+                obligation=obligation,
+                runtime_context=runtime_context,
+                permission_observations=permission_observations,
+            ))
     candidates.sort(key=lambda candidate: (-candidate.score, candidate.actor_ref))
     return candidates
 

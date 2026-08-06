@@ -33,7 +33,23 @@ def _index_by_id(nodes: list[Any]) -> dict[str, dict[str, Any]]:
 
 
 def _is_unresolvable_actor_secret_ref(secret_ref: str) -> bool:
-    return _text(secret_ref).lower().startswith("secret_ref:actor:")
+    ref = _text(secret_ref).lower()
+    if ref.startswith("secret_ref:actor:"):
+        return True
+    # secret_ref:test_accounts:<X> resolves only when X is a real account
+    # key. A placeholder actor id (the product stable-id form bir_<hex>)
+    # has no credential anywhere; real account keys (emails, user names)
+    # contain non-hex characters. Treating the stable-id form as
+    # unresolvable keeps permission-matrix actors from being planned for
+    # execution and then failing at token resolution.
+    if ref.startswith("secret_ref:test_accounts:"):
+        account_key = ref[len("secret_ref:test_accounts:"):]
+        stripped = re.sub(
+            r"^(?:bir_|cf_|obl_|fix_|rel_|node_|sess_)", "", account_key
+        )
+        if stripped and re.fullmatch(r"[0-9a-f]+", stripped):
+            return True
+    return False
 
 
 def _actor_is_executable(actor: dict[str, Any]) -> bool:
