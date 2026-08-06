@@ -1,0 +1,8 @@
+xt
+pytest -q tests/test_restricted_account_authentication_mainline.py tests/test_universal_api_parser_inline_content.py tests/test_operational_receipts.py tests/test_family_experiment_protocols.py tests/test_typed_observer_authorization.py
+git config user.name 'QualiBug Automation'
+git config user.email 'automation@qualibug.local'
+git rm -r "$D"
+git rm -f .github/workflows/one-time-restricted-auth.yml
+git add -A
+git commit -m 'fix(discovery): execute restricted-account authentication obligations

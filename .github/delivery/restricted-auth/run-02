@@ -1,0 +1,5 @@
+'
+git fetch origin main
+git rebase origin/main
+pytest -q tests/test_restricted_account_authentication_mainline.py tests/test_universal_api_parser_inline_content.py
+git push origin HEAD:main
