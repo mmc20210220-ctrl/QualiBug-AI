@@ -606,7 +606,7 @@ def resolve_real_id_from_documented_list(
     return QUALIBUG_UNRESOLVED_ID
 
 
-def _extract_entity_candidates(body: Any) -> list[dict[str, Any]]:
+def _extract_raw_entity_candidates(body: Any) -> list[dict[str, Any]]:
     """Extract entity objects from a response body.
 
     Handles top-level arrays, envelope-wrapped lists, pagination wrappers
@@ -629,15 +629,87 @@ def _extract_entity_candidates(body: Any) -> list[dict[str, Any]]:
                     inner = value.get(inner_key)
                     if isinstance(inner, list) and inner and isinstance(inner[0], dict):
                         return [item for item in inner if isinstance(item, dict)]
-            nested = _extract_entity_candidates(value)
+            nested = _extract_raw_entity_candidates(value)
             if nested:
                 return nested
     # Phase 2: Walk any list-of-dicts value not matched by Phase 1.
     for value in body.values():
         if isinstance(value, dict):
-            nested = _extract_entity_candidates(value)
+            nested = _extract_raw_entity_candidates(value)
             if nested:
                 return nested
         elif isinstance(value, list) and value and isinstance(value[0], dict):
             return [item for item in value if isinstance(item, dict)]
     return []
+
+
+def _is_harness_disposable_record(item: dict[str, Any]) -> bool:
+    """True when the record carries the governed executor's own synthetic
+    identity markers (``qb-auto-*@qualibug.local`` / ``qb_auto_*``). Those
+    records are test artifacts created by write probes — they hold no real
+    business data and must never be selected as reference targets while real
+    records exist."""
+    for value in item.values():
+        if isinstance(value, str) and (
+            "@qualibug.local" in value
+            or value.startswith("qb-auto-")
+            or value.startswith("qb_auto_")
+        ):
+            return True
+    return False
+
+
+def _business_data_richness(item: Any) -> int:
+    """Count scalar numeric fields with non-zero values anywhere in the
+    record. Zero for identity-only/empty records; positive for records that
+    carry observable business activity (balances, quantities, amounts,
+    counts). Universal vocabulary-free signal for choosing a reference
+    subject that actually owns the resource under test."""
+    if isinstance(item, dict):
+        total = 0
+        for key, child in item.items():
+            if isinstance(child, bool):
+                continue
+            if isinstance(child, (int, float)):
+                if child != 0:
+                    total += 1
+            elif isinstance(child, str) and child.strip():
+                # Numeric strings ("10000.00") carry the same activity signal
+                # as numbers — many APIs render amounts as strings.
+                try:
+                    if float(child) != 0:
+                        total += 1
+                except ValueError:
+                    pass
+            elif isinstance(child, (dict, list)):
+                total += _business_data_richness(child)
+        return total
+    if isinstance(item, list):
+        return sum(_business_data_richness(child) for child in item)
+    return 0
+
+
+def _extract_entity_candidates(body: Any) -> list[dict[str, Any]]:
+    """Reference-read entity extraction.
+
+    Same extraction as :func:`_extract_raw_entity_candidates`, plus two
+    reference-selection rules: harness-disposable records are excluded while
+    real records exist (synthetic test artifacts are not business
+    references), and the remaining candidates are stable-sorted by
+    business-data richness so the first record — which downstream binding
+    picks — is one that actually carries the resource (an empty/zeroed
+    subject would leave every resource-scoped experiment with empty
+    evidence). When every candidate is a harness record (e.g. a read-back
+    of a record this run created), the raw order is preserved unchanged.
+    """
+    candidates = _extract_raw_entity_candidates(body)
+    if not candidates:
+        return []
+    real_records = [
+        item for item in candidates if not _is_harness_disposable_record(item)
+    ]
+    if not real_records:
+        return candidates
+    real_records.sort(key=_business_data_richness, reverse=True)
+    return real_records
+

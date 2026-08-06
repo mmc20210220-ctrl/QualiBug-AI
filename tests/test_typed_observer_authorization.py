@@ -356,8 +356,15 @@ def test_executor_does_not_emit_finding_for_empty_2xx_pair(
         lambda *_args, **_kwargs: next(responses),
     )
 
+    experiment = _authorization_experiment()
+    # Owner-partitioned resource: an empty 2xx pair cannot prove the viewer
+    # saw the owner's data (it may be the viewer's own empty partition), so
+    # the comparison must stay INDETERMINATE and never emit a finding.
+    experiment["assertions"][0]["property"] = {
+        "comparison_dimension": "OWNERSHIP_RELATION",
+    }
     result = execute_one_experiment(
-        _authorization_experiment(),
+        experiment,
         behavior_ir=_behavior_ir(),
         root=tmp_path,
         project="project",
@@ -389,6 +396,71 @@ def test_executor_does_not_emit_finding_for_empty_2xx_pair(
         if receipt["observer_id"] == "authorization_comparison"
     )
     assert comparison["status"] == "INDETERMINATE"
+
+
+def test_executor_emits_role_permission_finding_for_empty_2xx_pair(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Role-permission comparisons gate the OPERATION itself: a role gate
+    # returns 403 for denied roles regardless of response content, so an
+    # empty 2xx pair on the same path proves the gate is absent — mirroring
+    # the write branch's dual-accepted-write proof.
+    responses = iter([
+        {"status": 200, "body": {}, "headers": {"content-type": "application/json"}},
+        {"status": 200, "body": {}, "headers": {"content-type": "application/json"}},
+    ])
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_plan_executor._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_credentials._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
+
+    experiment = _authorization_experiment()
+    experiment["assertions"][0]["property"] = {
+        "comparison_dimension": "ROLE_PERMISSION",
+    }
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=_behavior_ir(),
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={
+            "environment_type": "test",
+            "environment_ref": "test-env",
+            "execution_mode": "approved_sandbox_write",
+            "approved_base_url": "http://target.invalid",
+            "status": "approved",
+        },
+        campaign_id="campaign",
+        execution_id="execution-role-empty-2xx",
+        actor_tokens={
+            "secret_ref:test_accounts:owner": "owner-token",
+            "secret_ref:test_accounts:restricted": "restricted-token",
+        },
+    )
+
+    assert result["status"] == "EXECUTED", json.dumps(result, default=str, indent=2)
+    comparison = next(
+        receipt
+        for receipt in result["observer_receipts"]
+        if receipt["observer_id"] == "authorization_comparison"
+    )
+    assert comparison["status"] == "OBSERVED"
+    assert comparison["evidence"]["leak_detected"] is True
+    assert comparison["evidence"]["viewer_can_access"] is True
 
 
 def test_runtime_preflight_rejects_authorization_without_comparison_observer() -> None:

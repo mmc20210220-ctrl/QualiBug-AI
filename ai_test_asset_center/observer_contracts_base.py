@@ -935,12 +935,17 @@ def observe_authorization_comparison(
     business_effect: dict[str, Any] | None = None,
     binding_materialization_receipts: list[dict[str, Any]] | None = None,
     identity_keys: Iterable[str] | None = None,
+    comparison_dimension: str = "",
 ) -> dict[str, Any]:
     """Compare authorized and restricted observations without status-only proof.
 
     ``identity_keys`` carries the source-declared primary/unique key names for
     the entity being addressed, so resource identity is decided by what the
     source says identifies a row rather than by field-name vocabulary.
+    ``comparison_dimension`` (ROLE_PERMISSION / OWNERSHIP_RELATION /
+    TENANT_SCOPE) declares whether the gate under test restricts the operation
+    itself (status equality is decisive) or partitions per-owner resources
+    (body evidence is required).
     """
 
     control_row = _dict(control)
@@ -1065,6 +1070,33 @@ def observe_authorization_comparison(
             observer_id="authorization_comparison",
             status="INDETERMINATE",
             reason_code="WRITE_EFFECT_EVIDENCE_REQUIRED",
+            evidence=base_evidence,
+        )
+    # V1.8: Role-permission comparisons gate the OPERATION itself, not a
+    # user-partitioned row set. A role gate returns 403 for denied roles
+    # regardless of response content — so control 2xx + treatment 2xx on the
+    # same path proves the gate is absent even when both bodies are empty or
+    # byte-identical (empty audit logs, zeroed aggregates). This mirrors the
+    # write branch's dual-accepted-write proof; owner/tenant comparisons keep
+    # the strict body-evidence path below.
+    if (
+        _text(comparison_dimension).upper() == "ROLE_PERMISSION"
+        and _is_success(treatment_row)
+        and (
+            _text(control_row.get("path")).split("?", 1)[0]
+            == _text(treatment_row.get("path")).split("?", 1)[0]
+        )
+    ):
+        base_evidence.update({
+            "same_resource_proven": True,
+            "resource_match_basis": "role_permission_dual_success_status_comparison",
+            "owner_can_access": True,
+            "viewer_can_access": True,
+            "leak_detected": True,
+        })
+        return _receipt(
+            observer_id="authorization_comparison",
+            status="OBSERVED",
             evidence=base_evidence,
         )
     if not _meaningful_resource_body(control_row):
@@ -2383,6 +2415,7 @@ def observe_experiment_requirements(
                 ),
             )
         elif observer_id == "authorization_comparison":
+            from .authorization_comparison_contract import resolve_comparison_dimension
             receipt = observe_authorization_comparison(
                 control=control,
                 treatment=treatment,
@@ -2398,6 +2431,10 @@ def observe_experiment_requirements(
                     for name in _list(exp.get("source_identity_fields"))
                     if _text(name)
                 ],
+                comparison_dimension=resolve_comparison_dimension(
+                    _text(prop.get("risk_family") or exp.get("risk_family")),
+                    prop,
+                ),
             )
         elif observer_id == "business_effect":
             receipt = business_effect_receipt
@@ -2566,6 +2603,7 @@ def observe_authorization_comparison(
     business_effect: dict[str, Any] | None = None,
     binding_materialization_receipts: list[dict[str, Any]] | None = None,
     identity_keys: Iterable[str] | None = None,
+    comparison_dimension: str = "",
 ) -> dict[str, Any]:
     baseline = _original_authorization_comparison(
         control=control,
@@ -2574,6 +2612,7 @@ def observe_authorization_comparison(
         business_effect=business_effect,
         binding_materialization_receipts=binding_materialization_receipts,
         identity_keys=identity_keys,
+        comparison_dimension=comparison_dimension,
     )
     control_row = _dict_obs(control)
     treatment_row = _dict_obs(treatment)

@@ -117,6 +117,18 @@ def _dimension(family: str, prop: dict[str, Any]) -> str:
     return "ROLE_PERMISSION"
 
 
+def resolve_comparison_dimension(family: str, prop: dict[str, Any]) -> str:
+    """Public accessor for the comparison identity dimension.
+
+    Observers and gates use the dimension to decide how much resource
+    evidence a comparison verdict requires: ROLE_PERMISSION gates the
+    operation itself (status equality is decisive), while
+    OWNERSHIP_RELATION/TENANT_SCOPE partition per-owner resources and
+    require body evidence that the viewer saw the owner's data.
+    """
+    return _dimension(family, prop)
+
+
 def _request_shape(step: dict[str, Any]) -> dict[str, Any]:
     shape = {
         "path": deepcopy(step.get("path")),

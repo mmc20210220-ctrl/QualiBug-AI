@@ -46,6 +46,7 @@ def observe_authorization_comparison(
     business_effect: dict[str, Any] | None = None,
     binding_materialization_receipts: list[dict[str, Any]] | None = None,
     identity_keys: Iterable[str] | None = None,
+    comparison_dimension: str = "",
 ) -> dict[str, Any]:
     baseline = _original_authorization_comparison(
         control=control,
@@ -54,6 +55,7 @@ def observe_authorization_comparison(
         business_effect=business_effect,
         binding_materialization_receipts=binding_materialization_receipts,
         identity_keys=identity_keys,
+        comparison_dimension=comparison_dimension,
     )
     control_row = _dict(control)
     treatment_row = _dict(treatment)
