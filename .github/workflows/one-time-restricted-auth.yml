@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/delivery/restricted-auth/**'
       - '.github/workflows/one-time-restricted-auth.yml'
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 permissions:
   contents: write
   statuses: write
