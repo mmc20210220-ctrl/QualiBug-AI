@@ -26,6 +26,8 @@ from typing import Any
 
 from . import discovery_runtime_planning as _planning
 from .agent_semantic_linker_authority import (
+    AgentSemanticLinkerError,
+    RECEIPT_SCHEMA as AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
     enrich_knowledge_asset_with_agent_relationships as _governed_agent_semantic_linker,
 )
 from .behavior_ir_surface_reconciliation import (
@@ -46,6 +48,7 @@ from .formal_stability_surface import install_formal_stability_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .job_async_protocol import register_job_async_protocol
+from .llm_reasoning import ReasoningConfig
 from .non_http_observers import install_non_http_observers
 from .professional_ui_accessibility_contract_guard import (
     install_professional_ui_accessibility_contract_guard,
@@ -149,12 +152,6 @@ from .source_ui_obligation_compat import install_source_ui_family_vector_compat
 _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
-# Planning resolves this symbol from module globals at execution time. Reuse the mature
-# linker while ensuring only governed existing relationships can suppress a new edge.
-_planning.enrich_knowledge_asset_with_agent_relationships = (
-    _governed_agent_semantic_linker
-)
-
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
 # read-only assertions, responsive configuration, conservative accessibility rule governance,
@@ -240,9 +237,96 @@ def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _semantic_provider_availability() -> tuple[bool, str]:
+    """Return whether the configured reasoning provider can serve semantic links.
+
+    Availability is configuration-only; no provider request is issued here. An
+    invalid local provider configuration fails safe to disabled and remains
+    visible through the campaign-context basis field.
+    """
+    try:
+        config = ReasoningConfig.from_env()
+    except (OSError, TypeError, ValueError) as exc:
+        return False, f"provider_config_invalid:{type(exc).__name__}"
+    if config.enabled:
+        return True, "configured_provider"
+    return False, "provider_not_configured"
+
+
+def _agent_semantic_linker_with_visible_failure(
+    knowledge_asset: dict[str, Any],
+    *,
+    client: Any | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the single governed linker and preserve provider failures as data.
+
+    Source-integrity failures still raise: evaluator-private content, duplicate
+    rule/interface identities and malformed knowledge assets must never be
+    converted into a normal degraded scan. Provider unavailability and model
+    output failures keep the source-only plan alive with an explicit receipt.
+    """
+    try:
+        return _governed_agent_semantic_linker(
+            knowledge_asset,
+            client=client,
+        )
+    except AgentSemanticLinkerError as exc:
+        detail = str(exc)
+        fatal_prefixes = (
+            "evaluator_private_context_forbidden",
+            "agent_semantic_duplicate_identity",
+            "knowledge_asset_not_object",
+        )
+        if detail.startswith(fatal_prefixes):
+            raise
+        status = (
+            "NOT_APPLICABLE"
+            if detail.startswith("agent_semantic_inputs_empty")
+            else "FAILED"
+        )
+        reason_code = (
+            "agent_semantic_inputs_empty"
+            if status == "NOT_APPLICABLE"
+            else "agent_semantic_linking_failed"
+        )
+        logger = getattr(_planning, "_planning_logger", None)
+        if logger is not None:
+            log = logger.warning if status == "NOT_APPLICABLE" else logger.error
+            log(
+                "agent_semantic_linking_%s %s: %s",
+                status.lower(),
+                type(exc).__name__,
+                detail[:300],
+                exc_info=exc if status == "FAILED" else None,
+            )
+        receipt = {
+            "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+            "status": status,
+            "reason_code": reason_code,
+            "error_class": type(exc).__name__,
+            "error": detail[:300],
+            "accepted_relationship_count": 0,
+            "source_asset_preserved": True,
+            "semantic_linking_degraded_to_source_only": True,
+            "parallel_semantic_linker_created": False,
+        }
+        preserved = dict(knowledge_asset) if isinstance(knowledge_asset, dict) else {}
+        preserved["agent_semantic_link_receipt"] = receipt
+        return preserved, receipt
+
+
+# Planning resolves this symbol from module globals at execution time. Reuse the
+# mature linker and keep provider/model failures visible without creating a
+# second semantic mapping authority.
+_planning.enrich_knowledge_asset_with_agent_relationships = (
+    _agent_semantic_linker_with_visible_failure
+)
+
+
 def _planning_inputs_with_declared_adapters(inputs: Any) -> Any:
-    """Give planning one adapter declaration regardless of which public entry called it."""
-    context = dict(_dict(getattr(inputs, "campaign_context", {})))
+    """Give planning one adapter declaration and one semantic-link policy."""
+    original_context = _dict(getattr(inputs, "campaign_context", {}))
+    context = dict(original_context)
     submitted = [
         _text(value)
         for value in _list(context.get("declared_adapters"))
@@ -258,7 +342,29 @@ def _planning_inputs_with_declared_adapters(inputs: Any) -> Any:
     if merged or "declared_adapters" in context or "declared_adapters" in runtime:
         runtime["declared_adapters"] = merged
         context["_runtime_contract"] = runtime
-    if context == _dict(getattr(inputs, "campaign_context", {})):
+
+    if "agent_semantic_linking_enabled" not in context:
+        provider_available, provider_basis = _semantic_provider_availability()
+        approved_deep_scan = (
+            _text(context.get("execution_mode")) == "approved_sandbox_write"
+        )
+        context["agent_semantic_linking_enabled"] = bool(
+            provider_available and approved_deep_scan
+        )
+        context["agent_semantic_linking_enablement_basis"] = (
+            "auto_enabled_configured_provider_approved_sandbox"
+            if provider_available and approved_deep_scan
+            else "execution_mode_not_approved_sandbox"
+            if provider_available
+            else provider_basis
+        )
+    elif isinstance(context.get("agent_semantic_linking_enabled"), bool):
+        context.setdefault(
+            "agent_semantic_linking_enablement_basis",
+            "explicit_scan_control",
+        )
+
+    if context == original_context:
         return inputs
     return replace(inputs, campaign_context=context)
 
