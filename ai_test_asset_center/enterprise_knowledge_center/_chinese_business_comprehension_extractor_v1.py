@@ -616,13 +616,30 @@ def _find_mentions(text: str, known: Iterable[str], fallback: re.Pattern[str]) -
     known_values = [name for name in known if name]
     mentions = [name for name in known_values if name in text]
     if not mentions:
-        for width in (4, 3, 2):
+        # Suffix fallback exists for Chinese role/entity names whose governing
+        # text drops the leading qualifier (e.g. 仓库管理员 mentioned as 管理员).
+        # A 2-char suffix has no discriminative power: it matches arbitrary
+        # substrings of unrelated tokens (merchant[-2:] == "nt" collides with
+        # payable_amount), which promotes phantom actors into rule subjects and
+        # silently reclassifies conservation/business rules as authorization.
+        # Non-CJK suffixes additionally require word boundaries, because a
+        # Latin suffix is not a meaningful term fragment the way 管理员 is.
+        for width in (4, 3):
             suffix_matches: dict[str, list[str]] = {}
             for name in known_values:
                 if len(name) >= width:
                     suffix_matches.setdefault(name[-width:], []).append(name)
             for suffix, candidates in suffix_matches.items():
-                if suffix in text and len(candidates) == 1:
+                if len(candidates) != 1:
+                    continue
+                if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", suffix):
+                    matched = suffix in text
+                else:
+                    matched = re.search(
+                        rf"(?<![A-Za-z0-9_]){re.escape(suffix)}(?![A-Za-z0-9_])",
+                        text,
+                    ) is not None
+                if matched:
                     mentions.append(candidates[0])
     if mentions:
         return sorted(set(mentions), key=lambda item: (text.find(item), -len(item), item))
