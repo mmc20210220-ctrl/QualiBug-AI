@@ -120,6 +120,11 @@ def _step_signature(step: dict[str, Any]) -> dict[str, str]:
             or evidence.get("credential_fingerprint")
             or evidence.get("actor_token_fingerprint")
         ),
+        # Protocol steps carry the semantic contrast for same-request arms:
+        # idempotency repeats the identical write (initial_write vs
+        # repeat_write) and concurrency barriers distinguish participants —
+        # the request identity is equal by design, the protocol role differs.
+        "protocol_step": _text(step.get("protocol_step") or step.get("intent")),
     }
 
 
@@ -131,6 +136,7 @@ def _contrast_fields() -> tuple[str, ...]:
         "method",
         "body_fingerprint",
         "operation_ref",
+        "protocol_step",
     )
 
 
