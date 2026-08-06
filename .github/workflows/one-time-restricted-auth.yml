@@ -1,33 +1,12 @@
-name: One-time restricted-account auth fix
+name: Restricted auth workflow startup probe
 on:
   pull_request:
     branches: [main]
     paths:
       - '.github/restricted-auth-trigger'
-  workflow_dispatch:
-permissions:
-  contents: write
-concurrency:
-  group: restricted-account-auth-fix
-  cancel-in-progress: true
 jobs:
-  deliver:
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
-      - name: Checkout latest main without external actions
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          git init .
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=200 origin main
-          git checkout -B main FETCH_HEAD
-      - name: Apply verified patch and deliver
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat .github/delivery/restricted-auth/run-* > /tmp/run.sh
-          bash /tmp/run.sh
+      - name: Probe runner startup
+        run: echo restricted-auth-workflow-started
