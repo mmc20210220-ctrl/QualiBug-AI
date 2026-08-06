@@ -36,6 +36,9 @@ _DESTRUCTIVE_PATTERNS = frozenset({
     "delete", "refund", "payment", "pay", "transfer", "ship", "ban",
     "close", "revoke", "destroy", "permanent",
 })
+_RESIDUE_CLEANUP_ACTIONS = frozenset({"accepted_residue"})
+_RESIDUE_CLEANUP_MODES = frozenset({"accepted_residue_no_cleanup"})
+_RESIDUE_CLEANUP_AUTHORITIES = frozenset({"accepted_residue"})
 
 
 @dataclass(frozen=True)
@@ -319,6 +322,55 @@ def extract_primary_http_attempt_evidence(
     )
 
 
+def _write_reversibility_gate(
+    experiment: dict[str, Any],
+) -> tuple[bool, str]:
+    """Require a real reversible cleanup authority for write exploration.
+
+    ``accepted_residue`` is a deliberate non-production coverage tradeoff: it
+    records that no cleanup will run.  It may be a valid experiment policy, but
+    it is never permission to repeat the same unknown write under several
+    actors.  Multi-candidate exploration therefore requires a compiled PROVEN
+    WriteReversibilityProof whose authority is not residue.
+    """
+
+    exp = _dict(experiment)
+    cleanup_plan = [
+        row for row in _list(exp.get("cleanup_plan"))
+        if isinstance(row, dict)
+    ]
+    if not cleanup_plan:
+        return False, "write_without_cleanup_proof"
+
+    residue_plan = any(
+        _text(row.get("action")).lower() in _RESIDUE_CLEANUP_ACTIONS
+        or _text(row.get("mode")).lower() in _RESIDUE_CLEANUP_MODES
+        or row.get("residue") is True
+        for row in cleanup_plan
+    )
+    if residue_plan:
+        return False, "accepted_residue_is_not_reversible"
+
+    proof = _dict(exp.get("write_reversibility_proof"))
+    if not proof:
+        return False, "write_reversibility_proof_missing"
+    if _text(proof.get("proof_status")).upper() != "PROVEN":
+        return False, "write_reversibility_not_proven"
+
+    proof_kind = _text(proof.get("proof_kind")).lower()
+    authority_kind = _text(
+        _dict(proof.get("cleanup_authority")).get("kind")
+    ).lower()
+    reversibility = _text(proof.get("reversibility")).lower()
+    if (
+        proof_kind in _RESIDUE_CLEANUP_AUTHORITIES
+        or authority_kind in _RESIDUE_CLEANUP_AUTHORITIES
+        or reversibility == "none"
+    ):
+        return False, "accepted_residue_is_not_reversible"
+    return True, ""
+
+
 def exploration_execution_policy(
     *,
     operation: dict[str, Any],
@@ -337,12 +389,9 @@ def exploration_execution_policy(
     if method == "DELETE" or any(token in combined for token in _DESTRUCTIVE_PATTERNS):
         return False, 0, "destructive_operation"
 
-    cleanup_plan = [
-        row for row in _list(_dict(experiment).get("cleanup_plan"))
-        if isinstance(row, dict)
-    ]
-    if not cleanup_plan:
-        return False, 0, "write_without_cleanup_proof"
+    reversible, reversibility_reason = _write_reversibility_gate(experiment)
+    if not reversible:
+        return False, 0, reversibility_reason
 
     if any(token in combined for token in _STATE_TRANSITION_PATTERNS):
         prop = _experiment_property(_dict(experiment))
