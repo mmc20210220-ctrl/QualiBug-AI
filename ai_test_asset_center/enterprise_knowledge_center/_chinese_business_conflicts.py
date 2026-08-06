@@ -324,7 +324,25 @@ def reconcile_chinese_business_fact_conflicts(
 
     conflicts: list[dict[str, Any]] = []
     conflicting_ids: set[str] = set()
-    for group in by_rule_key.values():
+    for key, group in by_rule_key.items():
+        # A modality contradiction requires the two rules to govern the SAME
+        # business object. The action slot alone is not object evidence —
+        # the extractor normalizes the same verb across unrelated rules
+        # (支付幂等键 and 响应不得返回支付密钥 both canonicalize to 付款), so
+        # action-only grouping would freeze real constraints against
+        # unrelated rules and drop them from discovery. At least one object
+        # dimension (entity/actor/condition/scope) must be shared, else the
+        # pair cannot be proven contradictory — fail-safe, no conflict.
+        _has_object_evidence = any(
+            (
+                (isinstance(part, (list, tuple)) and bool(part))
+                or (isinstance(part, str) and part.strip())
+            )
+            for index, part in enumerate(key)
+            if index != 2  # the action slot is not object evidence
+        )
+        if not _has_object_evidence:
+            continue
         for left, right in _pairs(group):
             modalities = frozenset({_text(left.get("modality")), _text(right.get("modality"))})
             if modalities not in _CONFLICTING_MODALITIES:
@@ -363,6 +381,9 @@ def reconcile_chinese_business_fact_conflicts(
                 conflicting_ids.add(fact_id)
 
     conflicts = list({_text(row.get("conflict_id")): row for row in conflicts}.values())
+    current_conflict_ids = {
+        _text(row.get("conflict_id")) for row in conflicts if _text(row.get("conflict_id"))
+    }
     refs: dict[str, list[str]] = {}
     for conflict in conflicts:
         for row in _list(conflict.get("facts")):
@@ -380,6 +401,26 @@ def reconcile_chinese_business_fact_conflicts(
                     "formal_promotion_allowed": False,
                 }
             )
+        elif (
+            _text(fact.get("status")) == "CONFLICTING"
+            and _text(fact.get("kind")) in {"RULE", "STATE_TRANSITION"}
+            and not any(
+                ref in current_conflict_ids
+                for ref in _list(fact.get("conflict_refs"))
+            )
+        ):
+            # No longer involved in any detected conflict: the previous
+            # CONFLICTING mark was an artifact of an outdated detection
+            # (e.g. action-only modality pairing). Restore promotability —
+            # silently keeping the frozen mark would drop a real constraint
+            # from discovery.
+            fact.update(
+                {
+                    "status": "ACCEPTED",
+                    "formal_promotion_allowed": True,
+                }
+            )
+            fact.pop("conflict_refs", None)
     ledger.update(
         {
             "items": facts,

@@ -129,6 +129,21 @@ def _links_by_overlap(left: Iterable[dict[str, Any]], right: Iterable[dict[str, 
 _CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
+def _prose_identity(text: str) -> str:
+    """Collapse whitespace and literal escape sequences into one comparison key.
+
+    The same source prose can surface in two encodings: the raw document text
+    may carry literal ``\\n`` escapes while the parsed interface description
+    carries real newlines. Verbatim containment across the two forms would
+    silently miss a rule documented inside its own operation's description,
+    so exact-source matching compares the whitespace/escape-collapsed prose.
+    """
+    value = str(text or "")
+    for sequence in ("\\n", "\\r", "\\t"):
+        value = value.replace(sequence, "")
+    return re.sub(r"\s+", "", value)
+
+
 def _statement_eligible_for_exact_source_section(statement: str) -> bool:
     """ASCII prose keeps the historical 8-char floor; short CJK rules stay eligible.
 
@@ -166,9 +181,12 @@ def _links_by_exact_source_section(
         rule_id = str(rule.get("rule_id") or "").strip()
         if not statement or not rule_id or not _statement_eligible_for_exact_source_section(statement):
             continue
+        statement_key = _prose_identity(statement)
+        if not statement_key:
+            continue
         for interface in interface_rows:
             excerpt = str(interface.get("source_excerpt") or "")
-            if statement not in excerpt:
+            if statement_key not in _prose_identity(excerpt):
                 continue
             interface_id = str(interface.get("interface_id") or "").strip()
             if not interface_id:

@@ -1843,6 +1843,33 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
     subject = _dict(fact.get("subject"))
     action = _dict(fact.get("action"))
     spans = [row for row in _list(fact.get("source_spans")) if isinstance(row, dict)]
+    # Operation identity: a fact extracted from an interface's own
+    # summary/description carries the owning operation (interface_id on the
+    # fact or on its openapi_interface_prose span). That identity is explicit
+    # source evidence — the rule is documented AT the operation — and must
+    # survive into the promoted rule so the IR invariant binds the operation.
+    fact_interface_id = _text(fact.get("interface_id"))
+    if not fact_interface_id:
+        fact_interface_id = _text(
+            next(
+                (
+                    row.get("interface_id")
+                    for row in spans
+                    if _text(row.get("interface_id"))
+                ),
+                "",
+            )
+        )
+    # Prefer the operation-attached span for evidence: it is the exact
+    # interface attachment, not the coarse document locator.
+    interface_span = next(
+        (
+            row
+            for row in spans
+            if _text(row.get("attachment")) == "openapi_interface_prose"
+        ),
+        None,
+    )
     # Prefer the structure-aligned span so rule evidence does not silently keep only
     # the coarse text locator after Document IR attachment.
     preferred_span = next(
@@ -1854,7 +1881,7 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         ),
         None,
     )
-    span = preferred_span or (_dict(spans[0]) if spans else {})
+    span = interface_span or preferred_span or (_dict(spans[0]) if spans else {})
     attachment = _dict(fact.get("structural_span_attachment"))
     alignment = _dict(fact.get("document_structure_alignment"))
     modality = _text(fact.get("modality"))
@@ -1879,6 +1906,7 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         "semantic_contract": fact,
         "actor_refs": _list(subject.get("actor_refs")),
         "entity_refs": _list(subject.get("entity_refs")),
+        "operation_refs": [fact_interface_id] if fact_interface_id else [],
         "action": action.get("canonical") or action.get("raw"),
         "modality": modality,
         "conditions": _list(fact.get("conditions")),
@@ -2079,12 +2107,38 @@ def build_chinese_first_comprehension(asset: dict[str, Any], parsed_sources: Ite
     existing_rule_ids = {_text(row.get("rule_id")) for row in existing_rules}
     existing_statements = {(_text(row.get("source_id")), re.sub(r"\s+", "", _text(row.get("statement")))) for row in existing_rules}
     promoted_rules: list[dict[str, Any]] = []
+    # Group promotable facts by statement identity first: the same rule text
+    # may surface both as a plain document paragraph and inside an interface's
+    # own summary/description. The interface-attached fact carries the owning
+    # operation (interface_id / openapi_interface_prose span) — strictly more
+    # evidence than the document fact. Promote the operation-bound fact when
+    # present, never the first-encountered document fact.
+    _facts_by_identity: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for fact in all_facts:
         rule = _rule_from_fact(fact)
         if not rule:
             continue
         identity = (_text(rule.get("source_id")), re.sub(r"\s+", "", _text(rule.get("statement"))))
         if _text(rule.get("rule_id")) in existing_rule_ids or identity in existing_statements:
+            continue
+        _facts_by_identity.setdefault(identity, []).append(fact)
+
+    def _fact_operation_identity(fact: dict[str, Any]) -> str:
+        if _text(fact.get("interface_id")):
+            return _text(fact.get("interface_id"))
+        for span in _list(fact.get("source_spans")):
+            if isinstance(span, dict) and _text(span.get("interface_id")):
+                return _text(span.get("interface_id"))
+        return ""
+
+    for identity, candidates in _facts_by_identity.items():
+        candidates.sort(key=lambda fact: (
+            not bool(_fact_operation_identity(fact)),
+            -len(_list(fact.get("source_spans"))),
+        ))
+        fact = candidates[0]
+        rule = _rule_from_fact(fact)
+        if not rule:
             continue
         existing_rule_ids.add(_text(rule.get("rule_id")))
         existing_statements.add(identity)

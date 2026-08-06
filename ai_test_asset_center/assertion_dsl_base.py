@@ -960,6 +960,41 @@ def _body_contains_field(body: Any, field: str) -> bool:
     return False
 
 
+_KEY_MATCHER_IDENTIFIER_COMPOUNDS = (
+    "idempotency", "correlation", "primary", "foreign", "reference",
+    "unique", "dedupe", "dedup", "event", "transaction_ref", "request_ref",
+)
+
+
+def _body_contains_family_field(body: Any, matchers: list[str]) -> list[str]:
+    """Field names carrying a secret-family matcher at any depth of body.
+
+    Used by the response_field_absent family match: a rule like 响应不得返回
+    支付密钥 names a generic credential concept (密钥/密码/凭据/secret/…)
+    rather than one ASCII identifier, so the evaluator scans response field
+    names for the canonical matchers (case-insensitive substring). Matchers
+    like "key" skip identifier compounds (idempotency_key, correlation_key)
+    that legitimately embed the term without being credential material.
+    Returns the matched field names as evidence.
+    """
+    terms = [str(matcher).lower() for matcher in matchers if str(matcher).strip()]
+    if not terms:
+        return []
+    found: list[str] = []
+    if isinstance(body, dict):
+        for name, value in body.items():
+            lowered = _text(name).lower()
+            if any(term in lowered for term in terms) and not any(
+                compound in lowered for compound in _KEY_MATCHER_IDENTIFIER_COMPOUNDS
+            ):
+                found.append(_text(name))
+            found.extend(_body_contains_family_field(value, matchers))
+    elif isinstance(body, list):
+        for item in body:
+            found.extend(_body_contains_family_field(item, matchers))
+    return list(dict.fromkeys(found))
+
+
 def _json_path(data: Any, path: str) -> Any:
     """Minimal JSON path: $.a.b[0] style without eval."""
 
@@ -1266,6 +1301,9 @@ def evaluate_assertion(
             # Source rule: the response must NOT carry the named field(s)
             # (导出结果禁止包含 password). The field is forbidden at any
             # depth of the response body. expected=True means "absent".
+            # family_match=True turns the fields into credential-family
+            # matchers scanned as substrings of field names (响应不得返回
+            # 支付密钥 → secret/key).
             expected = True
             if "body" not in obs:
                 reason_code = "HTTP_BODY_EVIDENCE_MISSING"
@@ -1277,6 +1315,10 @@ def evaluate_assertion(
                 ] or ([_text(spec.get("field"))] if _text(spec.get("field")) else [])
                 if not fields:
                     reason_code = "RESPONSE_FIELD_ABSENT_FIELD_MISSING"
+                elif spec.get("family_match"):
+                    found = _body_contains_family_field(obs["body"], fields)
+                    actual = found
+                    passed = not found
                 else:
                     found = [
                         field

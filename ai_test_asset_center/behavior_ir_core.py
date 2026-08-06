@@ -98,6 +98,17 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _summary_title(operation: dict[str, Any]) -> str:
+    """Operation short heading: the source-declared summary stripped of any
+    permission/exception prose after '—' or ' - ' (支付订单 — 仅限管理员)."""
+    summary = _text(operation.get("summary"))
+    if "—" in summary:
+        return summary.split("—", 1)[-1].strip()
+    if " - " in summary:
+        return summary.split(" - ", 1)[-1].strip()
+    return summary
+
+
 def normalize_relation(value: dict[str, Any]) -> dict[str, Any]:
     """Normalize one typed relation without inventing missing join targets."""
 
@@ -4698,7 +4709,11 @@ def build_behavior_ir_from_knowledge_asset(
                 if _action_phrases:
                     # Response-side rules (导出结果禁止包含 password) govern
                     # the CONTENT of read operations; write-side rules govern
-                    # the action a write operation executes.
+                    # the action a write operation executes. Rules that name
+                    # no action phrase (响应不得返回支付密钥) are not bound
+                    # heuristically — their operation identity comes from the
+                    # source-identity path (interface-attached span → rule
+                    # operation_refs → invariant), never from a guess.
                     _is_response_side = any(
                         _signal in statement
                         for _signal in ("导出", "结果", "响应", "返回", "输出")
@@ -4722,13 +4737,7 @@ def build_behavior_ir_from_knowledge_asset(
                         # the short source-declared heading (支付订单). The
                         # long description carries permission/exception prose
                         # that would over-match.
-                        _op_summary = _text(_op_row.get("summary"))
-                        if "—" in _op_summary:
-                            _op_title = _op_summary.split("—", 1)[-1].strip()
-                        elif " - " in _op_summary:
-                            _op_title = _op_summary.split(" - ", 1)[-1].strip()
-                        else:
-                            _op_title = _op_summary
+                        _op_title = _summary_title(_op_row)
                         if any(
                             _phrase in _op_title for _phrase in _action_phrases
                         ):

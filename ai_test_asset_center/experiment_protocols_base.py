@@ -201,15 +201,48 @@ _RESPONSE_FORBID_FIELD_RE = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*)"
 )
 
+# Generic secret-material concepts a response-side rule may forbid by its
+# common name (响应不得返回支付密钥、签名密钥或完整敏感配置) instead of an
+# ASCII identifier. Each maps to canonical ASCII matchers that the evaluator
+# matches as substrings of response field names. This is generic credential
+# vocabulary (密钥/密码/凭据/secret/password/credential/…), never an
+# industry term, so the protocol stays language- and industry-neutral.
+_SECRET_FAMILY_CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("敏感配置", ("secret", "credential", "password")),
+    ("敏感信息", ("secret", "credential", "password")),
+    ("密钥", ("secret", "key")),
+    ("密码", ("password", "pwd")),
+    ("口令", ("password", "pwd")),
+    ("凭据", ("credential",)),
+    ("token", ("token",)),
+    ("secret", ("secret",)),
+    ("password", ("password",)),
+    ("credential", ("credential",)),
+)
+# Identifier compounds that legitimately embed a key matcher without being
+# credential material (idempotency_key, correlation_key, …). Generic
+# enterprise-technical vocabulary; keeps the family matcher honest on
+# responses that carry tracking identifiers next to real secrets.
+_KEY_MATCHER_IDENTIFIER_COMPOUNDS = (
+    "idempotency", "correlation", "primary", "foreign", "reference",
+    "unique", "dedupe", "dedup", "event", "transaction_ref", "request_ref",
+)
 
-def _extract_forbidden_response_fields(property_spec: dict[str, Any]) -> list[str]:
-    """Extract ASCII fields a response-side rule forbids in its output.
+
+def _extract_forbidden_response_fields(
+    property_spec: dict[str, Any],
+) -> tuple[list[str], bool]:
+    """Extract fields a response-side rule forbids in its output.
 
     A rule like 导出结果禁止包含 password 或其他认证凭据 names the forbidden
     field after a prohibition word; the identifier is source material, never
-    a hardcoded name. Returns [] when the rule is not response-side (no
-    export/result/response/return/output signal), so write-side validation
-    keeps its existing body-mutation protocol.
+    a hardcoded name. A rule like 响应不得返回支付密钥、签名密钥或完整敏感
+    配置 names generic secret concepts (密钥/密码/凭据/…) rather than ASCII
+    identifiers — those map to the canonical secret-family matchers with
+    ``family_match=True`` so the evaluator scans response field names for
+    credential vocabulary. Returns ([], False) when the rule is not
+    response-side (no export/result/response/return/output signal), so
+    write-side validation keeps its existing body-mutation protocol.
     """
     expression = _dict(property_spec.get("expression"))
     raw = "\n".join(
@@ -222,12 +255,18 @@ def _extract_forbidden_response_fields(property_spec: dict[str, Any]) -> list[st
         if _text(value)
     )
     if not raw or not any(signal in raw for signal in _RESPONSE_SIDE_SIGNALS):
-        return []
+        return [], False
     fields = [
         match.group(1)
         for match in _RESPONSE_FORBID_FIELD_RE.finditer(raw)
     ]
-    return list(dict.fromkeys(fields))
+    family: list[str] = []
+    for concept, matchers in _SECRET_FAMILY_CONCEPTS:
+        if concept in raw:
+            for matcher in matchers:
+                if matcher not in family:
+                    family.append(matcher)
+    return list(dict.fromkeys([*fields, *family])), bool(family)
 
 
 def _validation_protocol_material(
@@ -767,13 +806,18 @@ def compile_family_protocol(
     if family == "validation":
         # ── Response-side constraint protocol ──
         # A source rule constraining RESPONSE content (导出结果禁止包含
-        # password 或其他认证凭据) binds a read operation and asserts the
-        # forbidden field is absent from the observed body — a single-arm
-        # observation, never a write mutation. The forbidden fields come
-        # from the rule's own text (ASCII identifiers after a prohibition
-        # word), so the protocol is language- and industry-neutral.
-        _forbidden_fields = _extract_forbidden_response_fields(property_spec)
-        if _forbidden_fields and method in {"GET", "HEAD"}:
+        # password 或其他认证凭据 / 响应不得返回支付密钥、签名密钥或完整
+        # 敏感配置) asserts the forbidden material is absent from the observed
+        # body — a single-arm observation, never a write mutation. The
+        # forbidden fields come from the rule's own text: ASCII identifiers
+        # after a prohibition word, or generic secret-family concepts
+        # (密钥/密码/凭据/…) mapped to canonical credential matchers. The
+        # observation is allowed on any method the source binds (a write
+        # operation whose own description documents the constraint); the
+        # governed executor decides write safety and cleanup, the protocol
+        # only observes the response content.
+        _forbidden_fields, _family_match = _extract_forbidden_response_fields(property_spec)
+        if _forbidden_fields:
             return {
                 "status": "COMPILED",
                 "control_plan": [{
@@ -787,6 +831,7 @@ def compile_family_protocol(
                 "assertion": {
                     "kind": "response_field_absent",
                     "fields": _forbidden_fields,
+                    "family_match": _family_match,
                 },
             }
         parameter_location = _text(property_spec.get("parameter_location")).lower()

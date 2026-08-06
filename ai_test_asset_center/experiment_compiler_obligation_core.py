@@ -2724,9 +2724,13 @@ def compile_experiment_for_obligation(
     # obligations (readonly_audit_*) execute a GET and judge the response
     # content — a 4xx-expecting rejection assertion there would assert the
     # audit READ itself must be refused, which is meaningless and would turn
-    # every successful read into a defect.
+    # every successful read into a defect. Response-side observations
+    # (response_field_absent: 响应不得返回支付密钥) are the same shape: the
+    # single control call is a legitimate source-valid request and 2xx is the
+    # expected outcome, so the rejection assertion must not be paired.
     _is_readonly_audit = _text(prop.get("template")).startswith("readonly_audit")
-    if family == "validation" and not _is_readonly_audit:
+    _is_response_side_observation = assertion_kind == "response_field_absent"
+    if family == "validation" and not _is_readonly_audit and not _is_response_side_observation:
         assertions.append({
             "assertion_id": "assert_validation_strict_reject",
             "kind": "http_status_class",
