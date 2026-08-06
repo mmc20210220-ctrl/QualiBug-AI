@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import pytest
@@ -166,7 +167,10 @@ def test_source_integrity_failures_still_fail_fast(
 
     monkeypatch.setattr(binding, "_governed_agent_semantic_linker", _fatal)
 
-    with pytest.raises(binding.AgentSemanticLinkerError, match="^" + detail):
+    with pytest.raises(
+        binding.AgentSemanticLinkerError,
+        match="^" + re.escape(detail) + "$",
+    ):
         binding._agent_semantic_linker_with_visible_failure({})
 
 
