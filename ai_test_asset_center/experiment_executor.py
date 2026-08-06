@@ -37,17 +37,20 @@ from .experiment_runtime_support import (
     load_actor_tokens as _runtime_load_actor_tokens,
 )
 
-# ── V1.8: Runtime Actor Exploration ──
 from .actor_exploration import ActorAttemptOutcome, ActorSelectionMode
 from .actor_exploration_runtime import (
+    PermissionObservation,
+    build_executable_candidates,
     classify_actor_attempt,
+    compute_observation_confidence,
+    get_scan_observations,
     log_exploration_attempted,
     log_exploration_discovered,
     log_exploration_exhausted,
     log_exploration_started,
+    observation_success_counts,
+    permission_context_fingerprint,
     record_permission_observation,
-    PermissionObservation,
-    compute_observation_confidence,
 )
 from .actor_exploration_execution import (
     apply_actor_execution_overlay,
@@ -69,9 +72,6 @@ for _name in dir(_governance):
 
 _execute_one_governed = _governance.execute_one_experiment
 _governed_load_actor_tokens = _governance._identity_safe_load_actor_tokens
-
-# Preserve the historical public identity required by architecture contracts.
-# The governed delegate still uses its account-safe loader by default.
 load_actor_tokens = _runtime_load_actor_tokens
 
 _HOOK_NAMES = (
@@ -126,29 +126,19 @@ def _canonical(value: Any) -> str:
 
 
 def _experiment_property(experiment: dict[str, Any]) -> dict[str, Any]:
-    """Return the semantic property from its canonical assertion location."""
-
     direct = _dict(_dict(experiment).get("property"))
     if direct:
         return direct
     for assertion in _list(_dict(experiment).get("assertions")):
-        if not isinstance(assertion, dict):
-            continue
-        prop = _dict(assertion.get("property"))
-        if prop:
-            return prop
+        if isinstance(assertion, dict) and _dict(assertion.get("property")):
+            return _dict(assertion.get("property"))
     return {}
 
 
 def _actor_execution_plan(
     experiment: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
-    """Read and verify the compiler-sealed actor plan.
-
-    Legacy assertion/property metadata is accepted read-only so stored pre-v1
-    experiments remain executable. New compiles must use the first-class top-level
-    contract and its hash is checked before any candidate reaches transport.
-    """
+    """Read and verify the compiler-sealed actor plan."""
 
     exp = _dict(experiment)
     direct = dict(_dict(exp.get("actor_execution_plan")))
@@ -177,13 +167,11 @@ def _actor_execution_plan(
         legacy = dict(_dict(prop.get(_LEGACY_ACTOR_PLAN_KEY)))
         if not legacy:
             continue
-        candidates = list(
-            dict.fromkeys(
-                _text(value)
-                for value in _list(legacy.get("candidate_ids"))
-                if _text(value)
-            )
-        )
+        candidates = list(dict.fromkeys(
+            _text(value)
+            for value in _list(legacy.get("candidate_ids"))
+            if _text(value)
+        ))
         if not _text(legacy.get("mode")) or not candidates:
             return {}, "legacy_actor_execution_plan_incomplete"
         return {
@@ -218,6 +206,92 @@ def _primary_operation_ref(
     return ""
 
 
+def _actor_runtime_context(
+    experiment: dict[str, Any],
+    operation: dict[str, Any],
+    semantic_property: dict[str, Any],
+) -> dict[str, Any]:
+    """Project source/fixture context into the existing candidate scorer."""
+
+    prop = _dict(semantic_property)
+    owner = _text(
+        prop.get("resource_owner_actor_id")
+        or prop.get("owner_actor_ref")
+        or prop.get("control_actor_ref")
+    )
+    creator = _text(
+        prop.get("resource_creator_actor_id")
+        or prop.get("created_by_actor_ref")
+    )
+    for binding in _list(_dict(experiment).get("binding_plan")):
+        if not isinstance(binding, dict):
+            continue
+        owner = owner or _text(
+            binding.get("owner_actor_ref")
+            or binding.get("fixture_owner_actor_ref")
+        )
+        creator = creator or _text(binding.get("created_by_actor_ref"))
+    previous_actor = ""
+    for step in reversed(_list(_dict(experiment).get("precondition_plan"))):
+        if isinstance(step, dict) and _text(step.get("actor_ref")):
+            previous_actor = _text(step.get("actor_ref"))
+            break
+    entity_refs = [
+        _text(value)
+        for value in _list(_dict(operation).get("entity_refs"))
+        if _text(value)
+    ]
+    resource_type = _text(operation.get("resource_type")) or (
+        entity_refs[0] if entity_refs else ""
+    )
+    return {
+        "resource_creator_actor_id": creator,
+        "resource_owner_actor_id": owner,
+        "previous_step_actor_id": previous_actor,
+        "resource_tenant_id": _text(
+            prop.get("resource_tenant_id")
+            or prop.get("tenant_id")
+            or prop.get("tenant_scope")
+        ),
+        "resource_type": resource_type,
+        "resource_state": _text(
+            prop.get("resource_state")
+            or prop.get("from_state")
+            or prop.get("from_state_ref")
+        ),
+        "ownership_required": "true" if owner else "false",
+    }
+
+
+def _resource_identity_fingerprint(result: dict[str, Any]) -> str:
+    """Derive a non-secret resource identity proof from existing receipt hashes."""
+
+    fingerprints: list[str] = []
+    for key in (
+        "binding_materialization_receipts",
+        "fixture_receipts",
+        "contract_evidence_receipts",
+    ):
+        for raw in _list(_dict(result).get(key)):
+            if not isinstance(raw, dict):
+                continue
+            for field in (
+                "resource_identity_fingerprint",
+                "binding_identity_fingerprint",
+                "identity_fingerprint",
+                "value_fingerprint",
+                "created_identity_fingerprint",
+            ):
+                value = _text(raw.get(field))
+                if value:
+                    fingerprints.append(value)
+    if not fingerprints:
+        return ""
+    return hashlib.sha256(
+        _canonical(sorted(set(fingerprints))).encode("utf-8")
+    ).hexdigest()
+
+
 def _authorization_binding_targets(
     experiment: dict[str, Any],
 ) -> list[str]:
@@ -233,7 +307,6 @@ def _verify_authorization_compile_identity(
     result: dict[str, Any],
     experiment: dict[str, Any],
 ) -> None:
-    """Prove the causal receipt was built against the current compiled contract."""
     receipt = _dict(result.get("authorization_causality_receipt"))
     contract = _dict(experiment.get("authorization_comparison_contract"))
     if not receipt or not contract or _text(receipt.get("status")).upper() != "PASSED":
@@ -261,19 +334,13 @@ def _verify_authorization_compile_identity(
 def _seal_authorization_finding_lineage(
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Bind the finding to the exact causal campaign/experiment execution."""
     receipt = _dict(result.get("authorization_causality_receipt"))
     finding = _dict(result.get("finding"))
     if _text(receipt.get("status")).upper() != "PASSED" or not finding:
         return result
     output = dict(result)
     sealed = dict(finding)
-    for field in (
-        "campaign_id",
-        "obligation_id",
-        "experiment_id",
-        "execution_id",
-    ):
+    for field in ("campaign_id", "obligation_id", "experiment_id", "execution_id"):
         expected = _text(receipt.get(field))
         current = _text(sealed.get(field))
         if not expected:
@@ -293,13 +360,9 @@ def _authorization_delivery_failure(
     result: dict[str, Any],
     exc: Exception,
 ) -> dict[str, Any]:
-    """Preserve execution fact while removing an unpublishable finding."""
     blocked = dict(result)
     blocked["finding"] = None
-    if _text(blocked.get("status")).upper() not in {
-        "BLOCKED",
-        "HARNESS_FAILURE",
-    }:
+    if _text(blocked.get("status")).upper() not in {"BLOCKED", "HARNESS_FAILURE"}:
         blocked["status"] = "EXECUTED"
     blocked["reason_code"] = "AUTHORIZATION_DELIVERY_EVIDENCE_INVALID"
     blocked["detail"] = str(exc)
@@ -331,12 +394,8 @@ def execute_one_experiment(
     execution_id: str,
     actor_tokens: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Execute through governance, causal validation, then delivery packaging.
+    """Execute one compiler-sealed plan through bounded contextual exploration."""
 
-    A compiler-sealed ``actor_execution_plan`` activates bounded candidate
-    iteration. The authorization oracle remains disabled while permission
-    expectation is unknown; all other validity gates continue to run.
-    """
     _sync_governance_hooks()
     exp = dict(experiment)
     exp["_observer_runtime_context"] = {
@@ -348,7 +407,11 @@ def execute_one_experiment(
     semantic_property = _experiment_property(exp)
     exploration_plan_raw, exploration_plan_error = _actor_execution_plan(exp)
     exploration_mode = _text(exploration_plan_raw.get("mode"))
-    candidate_ids = _list(exploration_plan_raw.get("candidate_ids"))
+    candidate_ids = [
+        _text(value)
+        for value in _list(exploration_plan_raw.get("candidate_ids"))
+        if _text(value)
+    ]
     try:
         max_attempts = int(exploration_plan_raw.get("max_attempts") or 0)
     except (TypeError, ValueError):
@@ -357,26 +420,28 @@ def execute_one_experiment(
     oracle_enabled = bool(
         exploration_plan_raw.get("authorization_oracle_enabled", True)
     )
-
+    exploratory_modes = {
+        ActorSelectionMode.PERMISSION_EXPLORATION.value,
+        ActorSelectionMode.OBSERVED_PERMISSION.value,
+    }
     is_exploration = (
         not exploration_plan_error
-        and exploration_mode == ActorSelectionMode.PERMISSION_EXPLORATION.value
-        and len(candidate_ids) > 0
+        and exploration_mode in exploratory_modes
+        and bool(candidate_ids)
         and max_attempts > 0
     )
 
     ir = _dict(behavior_ir)
     ir_actors = {
-        _text(a.get("id") or a.get("actor_id")): a
-        for a in _list(ir.get("actors"))
-        if isinstance(a, dict)
+        _text(actor.get("id") or actor.get("actor_id")): actor
+        for actor in _list(ir.get("actors"))
+        if isinstance(actor, dict)
     }
     ir_ops = {
-        _text(o.get("id") or o.get("operation_id")): o
-        for o in _list(ir.get("operations"))
-        if isinstance(o, dict)
+        _text(operation.get("id") or operation.get("operation_id")): operation
+        for operation in _list(ir.get("operations"))
+        if isinstance(operation, dict)
     }
-
     obligation_id = _text(exp.get("obligation_id"))
     primary_op_id = _primary_operation_ref(exp, semantic_property)
     primary_op = ir_ops.get(primary_op_id, {})
@@ -400,34 +465,93 @@ def execute_one_experiment(
             blocked, exp, behavior_ir, root, project, oracle_enabled=False
         )
 
+    runtime_context = _actor_runtime_context(exp, primary_op, semantic_property)
+    context_fingerprint = permission_context_fingerprint(runtime_context)
+    scoped_observations: list[PermissionObservation] = []
+    ranking_rows: list[dict[str, Any]] = []
+    ranking_by_actor: dict[str, Any] = {}
+
     if is_exploration:
-        policy_allowed, policy_max_attempts, policy_reason = (
-            exploration_execution_policy(
-                operation=primary_op,
-                experiment=exp,
-                requested_max_attempts=max_attempts,
-            )
+        scoped_observations = get_scan_observations(
+            campaign_id=campaign_id,
+            project_id=project,
+            environment_ref=base_url,
+            runtime_context=runtime_context,
+        )
+        candidate_actor_map = {
+            actor_id: ir_actors[actor_id]
+            for actor_id in candidate_ids
+            if actor_id in ir_actors
+        }
+        ranked = build_executable_candidates(
+            candidate_actor_map,
+            operation=primary_op,
+            runtime_context=runtime_context,
+            permission_observations=scoped_observations,
+            permitted_actor_ids=set(candidate_ids),
+        )
+        candidate_ids = [candidate.actor_id for candidate in ranked]
+        ranking_by_actor = {
+            candidate.actor_id: candidate for candidate in ranked
+        }
+        ranking_rows = [
+            {
+                "actor_id": candidate.actor_id,
+                "score": candidate.score,
+                "score_reasons": list(candidate.score_reasons),
+            }
+            for candidate in ranked
+        ]
+        if not candidate_ids:
+            exploration_plan_error = "runtime_actor_candidate_missing"
+        else:
+            max_attempts = min(max_attempts, len(candidate_ids))
+
+    if exploration_plan_error:
+        blocked = {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": _text(exp.get("experiment_id")),
+            "obligation_id": obligation_id,
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_MISSING_ACTOR",
+            "detail": exploration_plan_error,
+            "finding": None,
+            "execution_receipt": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ACTOR",
+                "detail": exploration_plan_error,
+            },
+            "actor_exploration_ranking": ranking_rows,
+        }
+        return _finalize_result(
+            blocked, exp, behavior_ir, root, project, oracle_enabled=False
+        )
+
+    if is_exploration:
+        policy_allowed, policy_max_attempts, policy_reason = exploration_execution_policy(
+            operation=primary_op,
+            experiment=exp,
+            requested_max_attempts=max_attempts,
         )
         if not policy_allowed:
+            detail = (
+                f"runtime_actor_exploration_not_allowed:"
+                f"{primary_op_id}:{policy_reason}"
+            )
             blocked = {
                 "schema_version": "qualibug.experiment-execution.v1",
                 "experiment_id": _text(exp.get("experiment_id")),
                 "obligation_id": obligation_id,
                 "status": "BLOCKED",
                 "reason_code": "BLOCKED_MISSING_ACTOR",
-                "detail": (
-                    f"runtime_actor_exploration_not_allowed:"
-                    f"{primary_op_id}:{policy_reason}"
-                ),
+                "detail": detail,
                 "finding": None,
                 "execution_receipt": {
                     "status": "BLOCKED",
                     "reason_code": "BLOCKED_MISSING_ACTOR",
-                    "detail": (
-                        f"runtime_actor_exploration_not_allowed:"
-                        f"{primary_op_id}:{policy_reason}"
-                    ),
+                    "detail": detail,
                 },
+                "actor_exploration_ranking": ranking_rows,
             }
             return _finalize_result(
                 blocked, exp, behavior_ir, root, project, oracle_enabled=False
@@ -456,7 +580,7 @@ def execute_one_experiment(
 
     outcomes: dict[str, int] = {}
     last_result: dict[str, Any] | None = None
-    discovered_actor_id: str = ""
+    discovered_actor_id = ""
     attempt_receipts: list[dict[str, Any]] = []
     terminal_exploration_reason = ""
     primary_method = _text(primary_op.get("method")).upper()
@@ -468,11 +592,14 @@ def execute_one_experiment(
             or candidate_actor.get("name")
             or candidate_id
         )
+        candidate_rank = ranking_by_actor.get(candidate_id)
+        candidate_score = float(getattr(candidate_rank, "score", 0.0) or 0.0)
+        candidate_score_reasons = list(
+            getattr(candidate_rank, "score_reasons", []) or []
+        )
 
         try:
-            attempt_exp, overlay_receipt = apply_actor_execution_overlay(
-                exp, candidate_id
-            )
+            attempt_exp, overlay_receipt = apply_actor_execution_overlay(exp, candidate_id)
         except ValueError as exc:
             terminal_exploration_reason = str(exc)
             last_result = {
@@ -502,35 +629,24 @@ def execute_one_experiment(
             execution_id=f"{execution_id}_a{attempt_index}",
             actor_tokens=actor_tokens,
         )
-
-        evidence = extract_primary_http_attempt_evidence(
-            attempt_result, primary_op_id
-        )
+        evidence = extract_primary_http_attempt_evidence(attempt_result, primary_op_id)
         classification = classify_actor_attempt({
             "status_code": evidence.status_code,
             "business_layer_reached": evidence.business_layer_reached,
         })
         status_code = evidence.status_code
-
-        if (
-            status_code in {400, 409, 422}
-            and not evidence.business_layer_reached
-        ):
+        if status_code in {400, 409, 422} and not evidence.business_layer_reached:
             classification = ActorAttemptOutcome.INCONCLUSIVE
 
         result_status = _text(attempt_result.get("status"))
         if not status_code and result_status == "BLOCKED":
-            reason = _text(attempt_result.get("reason_code") or "")
-            detail = _text(attempt_result.get("detail") or "")
+            reason = _text(attempt_result.get("reason_code"))
+            detail = _text(attempt_result.get("detail"))
             combined = f"{reason}:{detail}".lower()
             if "401" in combined or "auth" in reason.lower():
                 classification = ActorAttemptOutcome.AUTHENTICATION_FAILED
                 status_code = 401
-            elif (
-                "403" in combined
-                or "permission" in reason.lower()
-                or "forbidden" in combined
-            ):
+            elif "403" in combined or "permission" in reason.lower() or "forbidden" in combined:
                 classification = ActorAttemptOutcome.PERMISSION_DENIED
                 status_code = 403
             elif "404" in combined or "not_found" in reason.lower():
@@ -548,33 +664,58 @@ def execute_one_experiment(
         log_exploration_attempted(
             actor_ref=candidate_ref,
             attempt_index=attempt_index,
-            score=0.0,
-            score_reasons=[],
+            score=candidate_score,
+            score_reasons=candidate_score_reasons,
             status_code=status_code,
             outcome=classification.value,
         )
-
         outcome_key = classification.value
         outcomes[outcome_key] = outcomes.get(outcome_key, 0) + 1
 
+        resource_identity = _resource_identity_fingerprint(attempt_result)
         observation_outcome = _outcome_to_observation(classification)
         if observation_outcome:
-            record_permission_observation(PermissionObservation(
+            prior_same, prior_different = observation_success_counts(
+                observations=scoped_observations,
+                actor_id=candidate_id,
+                operation_id=primary_op_id,
+                context_fingerprint=context_fingerprint,
+                resource_identity_fingerprint=resource_identity,
+            )
+            current_success = observation_outcome == "OBSERVED_ALLOWED"
+            owner_id = _text(runtime_context.get("resource_owner_actor_id"))
+            observation = PermissionObservation(
                 actor_id=candidate_id,
                 role_ref=_text(candidate_actor.get("role")),
                 operation_id=primary_op_id,
                 evidence_ref=_text(
-                    attempt_result.get("experiment_id") or execution_id
+                    attempt_result.get("experiment_id")
+                    or attempt_result.get("execution_id")
+                    or execution_id
                 ),
                 outcome=observation_outcome,
+                campaign_id=_text(campaign_id),
+                project_id=_text(project),
+                environment_ref=_text(base_url),
+                context_fingerprint=context_fingerprint,
+                resource_identity_fingerprint=resource_identity or None,
+                resource_type=_text(runtime_context.get("resource_type")) or None,
+                tenant_id=_text(runtime_context.get("resource_tenant_id")) or None,
+                ownership=(
+                    "owner" if owner_id and candidate_id == owner_id
+                    else "non_owner" if owner_id
+                    else None
+                ),
+                resource_state=_text(runtime_context.get("resource_state")) or None,
                 status_code=status_code,
                 confidence=compute_observation_confidence(
                     outcome=observation_outcome,
-                    same_context_successes=outcomes.get(
-                        "operation_executable", 0
-                    ),
+                    same_context_successes=prior_same + (1 if current_success else 0),
+                    different_instance_successes=prior_different,
                 ),
-            ))
+            )
+            record_permission_observation(observation)
+            scoped_observations.append(observation)
 
         discovered = classification in {
             ActorAttemptOutcome.OPERATION_EXECUTABLE,
@@ -589,7 +730,7 @@ def execute_one_experiment(
             continue_allowed = False
             continue_reason = terminal_exploration_reason
 
-        attempt_receipts.append(exploration_receipt(
+        attempt_receipt = exploration_receipt(
             attempt_index=attempt_index,
             planned_actor_id=candidate_id,
             overlay_receipt=overlay_receipt,
@@ -597,30 +738,45 @@ def execute_one_experiment(
             outcome=classification.value,
             continued=(not discovered and continue_allowed),
             continue_reason=continue_reason,
-        ))
-
+        )
+        attempt_receipt.update({
+            "candidate_score": candidate_score,
+            "candidate_score_reasons": candidate_score_reasons,
+            "selection_context_fingerprint": context_fingerprint,
+        })
+        attempt_receipts.append(attempt_receipt)
         last_result = attempt_result
+
         if discovered:
             discovered_actor_id = candidate_id
             log_exploration_discovered(
                 actor_ref=candidate_ref,
                 status_code=status_code,
-                binding_scope="scenario",
+                binding_scope="campaign_context",
                 authorization_verdict="unknown_expectation",
             )
             exp = attempt_exp
             break
-
         if not continue_allowed:
-            if not terminal_exploration_reason:
-                terminal_exploration_reason = continue_reason
+            terminal_exploration_reason = terminal_exploration_reason or continue_reason
             break
 
+    summary_base = {
+        "compiled_plan_hash": _text(exploration_plan_raw.get("plan_hash")),
+        "compiled_mode": exploration_mode,
+        "runtime_candidate_ranking": ranking_rows,
+        "selection_context_fingerprint": context_fingerprint,
+        "observation_scope": {
+            "project_id": _text(project),
+            "campaign_id": _text(campaign_id),
+            "environment_ref": _text(base_url),
+        },
+        "attempted_actor_count": len(attempt_receipts),
+        "outcomes": dict(outcomes),
+    }
+
     if not discovered_actor_id:
-        log_exploration_exhausted(
-            attempted_actor_count=len(attempt_receipts),
-            outcomes=outcomes,
-        )
+        log_exploration_exhausted(len(attempt_receipts), outcomes)
         if last_result is None:
             last_result = {
                 "schema_version": "qualibug.experiment-execution.v1",
@@ -641,59 +797,48 @@ def execute_one_experiment(
             last_result["reason_code"] = "BLOCKED_MISSING_ACTOR"
             last_result["detail"] = (
                 f"runtime_permitted_actor_not_discovered:{primary_op_id}:"
-                + ",".join(f"{k}={v}" for k, v in sorted(outcomes.items()))
-                + (
-                    f":terminal={terminal_exploration_reason}"
-                    if terminal_exploration_reason
-                    else ""
-                )
+                + ",".join(f"{key}={value}" for key, value in sorted(outcomes.items()))
+                + (f":terminal={terminal_exploration_reason}" if terminal_exploration_reason else "")
             )
             last_result["finding"] = None
-            er = _dict(last_result.get("execution_receipt"))
-            er["status"] = "BLOCKED"
-            er["reason_code"] = "BLOCKED_MISSING_ACTOR"
-            last_result["execution_receipt"] = er
-
+            execution_receipt = dict(_dict(last_result.get("execution_receipt")))
+            execution_receipt.update({
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ACTOR",
+                "detail": last_result["detail"],
+            })
+            last_result["execution_receipt"] = execution_receipt
         last_result["actor_exploration_receipts"] = list(attempt_receipts)
         last_result["actor_exploration_summary"] = {
+            **summary_base,
             "status": "EXHAUSTED",
-            "compiled_plan_hash": _text(
-                exploration_plan_raw.get("plan_hash")
-            ),
-            "attempted_actor_count": len(attempt_receipts),
             "selected_actor_id": "",
-            "outcomes": dict(outcomes),
             "terminal_reason": terminal_exploration_reason,
         }
         return _finalize_result(
-            last_result, exp, behavior_ir, root, project,
-            oracle_enabled=False,
+            last_result, exp, behavior_ir, root, project, oracle_enabled=False
         )
 
     last_result["actor_exploration_receipts"] = list(attempt_receipts)
     last_result["actor_exploration_summary"] = {
+        **summary_base,
         "status": "ACTOR_DISCOVERED",
-        "compiled_plan_hash": _text(exploration_plan_raw.get("plan_hash")),
-        "attempted_actor_count": len(attempt_receipts),
         "selected_actor_id": discovered_actor_id,
-        "outcomes": dict(outcomes),
         "terminal_reason": "",
     }
     return _finalize_result(
-        last_result, exp, behavior_ir, root, project,
-        oracle_enabled=False,
+        last_result, exp, behavior_ir, root, project, oracle_enabled=False
     )
 
 
 def _outcome_to_observation(classification: Any) -> str | None:
-    """Map ActorAttemptOutcome to PermissionObservation outcome string."""
     mapping = {
         "operation_executable": "OBSERVED_ALLOWED",
+        "business_rejected": "OBSERVED_ALLOWED",
         "permission_denied": "OBSERVED_DENIED",
         "authentication_failed": "AUTHENTICATION_FAILED",
     }
-    value = getattr(classification, "value", str(classification))
-    return mapping.get(value)
+    return mapping.get(getattr(classification, "value", str(classification)))
 
 
 def _finalize_result(
@@ -705,11 +850,8 @@ def _finalize_result(
     *,
     oracle_enabled: bool = True,
 ) -> dict[str, Any]:
-    """Post-execution gates: oracle causality, validity, delivery packaging.
+    """Run normal validity gates while suppressing unknown auth expectations."""
 
-    When authorization expectation is unknown, authorization causality is
-    skipped but the general Oracle Validity Gates still run.
-    """
     exp = experiment
     try:
         targets = _authorization_binding_targets(exp)
@@ -718,7 +860,6 @@ def _finalize_result(
             if _dict(exp.get("authorization_comparison_contract"))
             else result
         )
-
         if not oracle_enabled:
             governed = dict(prepared)
             governed["authorization_causality_receipt"] = {
@@ -745,21 +886,17 @@ def _finalize_result(
             experiment=exp,
         )
         causal_passed = (
-            _text(
-                _dict(governed.get("authorization_causality_receipt")).get(
-                    "status"
-                )
-            ).upper()
+            _text(_dict(governed.get("authorization_causality_receipt")).get("status")).upper()
             == "PASSED"
         )
         if causal_passed and targets:
-            _observer_proved = any(
-                isinstance(_obs, dict)
-                and _text(_obs.get("observer_id")) == "authorization_comparison"
-                and _dict(_obs.get("evidence")).get("same_resource_proven") is True
-                for _obs in _list(governed.get("observer_receipts"))
+            observer_proved = any(
+                isinstance(observation, dict)
+                and _text(observation.get("observer_id")) == "authorization_comparison"
+                and _dict(observation.get("evidence")).get("same_resource_proven") is True
+                for observation in _list(governed.get("observer_receipts"))
             )
-            if not _observer_proved:
+            if not observer_proved:
                 binding_identity_proofs_for_targets(
                     _list(governed.get("binding_materialization_receipts")),
                     targets,
@@ -770,10 +907,7 @@ def _finalize_result(
             experiment=exp,
         )
         return _seal_authorization_finding_lineage(packaged)
-    except (
-        AuthorizationDeliveryGateError,
-        BindingMaterializationIdentityError,
-    ) as exc:
+    except (AuthorizationDeliveryGateError, BindingMaterializationIdentityError) as exc:
         return _authorization_delivery_failure(result, exc)
 
 
@@ -781,8 +915,7 @@ __all__ = sorted(
     name
     for name in globals()
     if not name.startswith("__")
-    and name
-    not in {
+    and name not in {
         "_governance",
         "_name",
         "_execute_one_governed",
