@@ -416,10 +416,28 @@ def _governed_write_attempts_with_step_identity(
 def _governed_write_changed_state_with_adapter_requirement(
     attempt: dict[str, Any],
 ) -> bool:
-    """Treat an exact accepted create binding as cleanup-required, not unchanged."""
+    """Treat accepted creates with observed identity as cleanup-required.
+
+    Collection snapshots can stay unchanged for the writing actor when a broken
+    cross-owner write creates the row in another principal's scope. A successful
+    POST response carrying one concrete resource identity is direct write-effect
+    evidence and must not be downgraded to state-unchanged before cleanup.
+    """
     if _ORIGINAL_GOVERNED_WRITE_CHANGED_STATE(attempt):
         return True
     row = _dict(attempt)
+    write = _dict(row.get("write"))
+    response_identities = _core._primary_resource_identity_candidates(
+        write.get("body")
+    )
+    if (
+        row.get("accepted") is True
+        and _text(row.get("method")).upper() == "POST"
+        and 200 <= _status_code(write) < 300
+        and len(response_identities) == 1
+        and not _list(row.get(_RUNTIME_IDENTITY_CONFLICTS))
+    ):
+        return True
     marker = _dict(row.get(_ADAPTER_BINDING_MARKER))
     return bool(
         marker.get("schema_version") == _ADAPTER_BINDING_SCHEMA
