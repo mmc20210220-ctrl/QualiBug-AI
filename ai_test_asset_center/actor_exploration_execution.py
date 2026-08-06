@@ -10,7 +10,10 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from .behavior_ir_core import _infer_operation_effect
+from .behavior_ir_core import (
+    _infer_operation_effect,
+    _operation_has_semantic_marker,
+)
 
 
 _ACTOR_SCALAR_KEYS = frozenset({
@@ -408,10 +411,6 @@ def exploration_execution_policy(
     if effect == "read":
         return True, max(1, int(requested_max_attempts or 1)), "safe_read"
 
-    combined = " ".join(
-        _text(operation.get(key)).lower()
-        for key in ("path", "raw_path", "name", "operation_id", "summary")
-    )
     if method == "DELETE":
         return False, 0, "destructive_operation"
 
@@ -419,7 +418,7 @@ def exploration_execution_policy(
     if not reversible:
         return False, 0, reversibility_reason
 
-    if any(token in combined for token in _STATE_TRANSITION_PATTERNS):
+    if _operation_has_semantic_marker(operation, _STATE_TRANSITION_PATTERNS):
         prop = _experiment_property(_dict(experiment))
         owner_evidence = any(
             _text(prop.get(key))
@@ -441,7 +440,7 @@ def exploration_execution_policy(
         return True, 1, "state_transition_owner_proven"
 
     max_attempts = min(max(1, int(requested_max_attempts or 1)), 2)
-    if any(token in combined for token in _DESTRUCTIVE_PATTERNS):
+    if _operation_has_semantic_marker(operation, _DESTRUCTIVE_PATTERNS):
         return True, max_attempts, "compensated_destructive_write"
     return True, max_attempts, "compensated_write"
 
