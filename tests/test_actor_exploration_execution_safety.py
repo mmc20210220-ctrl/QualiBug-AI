@@ -51,6 +51,17 @@ def _experiment(method="GET", path="/api/items", cleanup=False):
             if cleanup
             else []
         ),
+        "write_reversibility_proof": (
+            {
+                "proof_status": "PROVEN",
+                "proof_kind": "field_snapshot_restore",
+                "cleanup_authority": {
+                    "kind": "field_snapshot_restore",
+                },
+            }
+            if cleanup
+            else {}
+        ),
     }
     behavior_ir = {
         "actors": [
@@ -138,10 +149,49 @@ def test_runtime_policy_blocks_uncompensated_or_unowned_writes():
     ) == (False, 0, "write_without_cleanup_proof")
 
     assert exploration_execution_policy(
-        operation={"method": "POST", "path": "/api/orders/{id}/submit"},
+        operation={"method": "PATCH", "path": "/api/items/{id}"},
         experiment={"cleanup_plan": [{"action": "restore"}]},
         requested_max_attempts=2,
+    ) == (False, 0, "write_reversibility_proof_missing")
+
+    assert exploration_execution_policy(
+        operation={"method": "POST", "path": "/api/orders/{id}/submit"},
+        experiment={
+            "cleanup_plan": [{"action": "restore"}],
+            "write_reversibility_proof": {
+                "proof_status": "PROVEN",
+                "proof_kind": "field_snapshot_restore",
+                "cleanup_authority": {
+                    "kind": "field_snapshot_restore",
+                },
+            },
+        },
+        requested_max_attempts=2,
     ) == (False, 0, "state_transition_owner_unproven")
+
+
+def test_runtime_policy_rejects_accepted_residue_as_reversibility():
+    assert exploration_execution_policy(
+        operation={"method": "POST", "path": "/api/items"},
+        experiment={
+            "cleanup_plan": [
+                {
+                    "action": "accepted_residue",
+                    "mode": "accepted_residue_no_cleanup",
+                    "residue": True,
+                }
+            ],
+            "write_reversibility_proof": {
+                "proof_status": "PROVEN",
+                "proof_kind": "accepted_residue",
+                "reversibility": "none",
+                "cleanup_authority": {
+                    "kind": "accepted_residue",
+                },
+            },
+        },
+        requested_max_attempts=2,
+    ) == (False, 0, "accepted_residue_is_not_reversible")
 
 
 def test_executor_really_switches_step_actor(monkeypatch):
