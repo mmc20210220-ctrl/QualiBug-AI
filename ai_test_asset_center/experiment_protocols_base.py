@@ -166,6 +166,14 @@ def _semantic_invalid_value(
 
     Returns (invalid_value, constraint_description) or None if no heuristic applies.
     Industry-neutral: uses common field-name patterns, never benchmark-specific values.
+
+    The rule's ``semantic_text`` describes the whole contract (必须校验状态、
+    生效时间、分类范围…) and may mention any dimension word, so field-CLASS
+    heuristics (password/email/phone/date) key off the field name only — a
+    coupon ``code`` must never mutate into an invalid date just because the
+    contract says 校验时间. Numeric/amount heuristics keep the statement
+    context: a neutral-named amount field (value/adjustment) governed by a
+    rule naming 金额 is genuinely the amount the rule governs.
     """
     combined = f"{field_name} {semantic_text}".lower()
 
@@ -212,13 +220,13 @@ def _semantic_invalid_value(
                 for candidate in enum_values:
                     if _text(candidate).lower() != _allowed_value:
                         return candidate, f"semantic:enum_value_not_allowed:{candidate}"
-        if _PASSWORD_FIELDS.search(combined):
+        if _PASSWORD_FIELDS.search(field_name):
             return "1", "semantic:weak_password"
-        if _EMAIL_FIELDS.search(combined):
+        if _EMAIL_FIELDS.search(field_name):
             return "not-an-email", "semantic:invalid_email_format"
-        if _PHONE_FIELDS.search(combined):
+        if _PHONE_FIELDS.search(field_name):
             return "0", "semantic:invalid_phone_format"
-        if _DATE_FIELDS.search(combined):
+        if _DATE_FIELDS.search(field_name):
             return "1900-13-99", "semantic:invalid_date"
         # Check for minLength constraint
         min_length = property_schema.get("minLength")

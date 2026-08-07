@@ -4893,6 +4893,22 @@ def build_behavior_ir_from_knowledge_asset(
             _record_fallback("IDEMPOTENCY_TOKEN_CANDIDATE", 1)
         if _has_idempotency_signal and _rule_kind in {"business_rule", "business_logic"}:
             _rule_kind = "idempotency"
+        # Interface validation-contract normalization: a rule extracted from an
+        # interface's own 业务约束 declaration (必须校验状态、生效时间、分类范围…)
+        # names the validation dimensions the operation must check — it is a
+        # validation contract, not a state-transition machine. The 校验状态
+        # phrasing makes the 状态 token misclassify it as state_machine, and
+        # the state family deliberately excludes entity-co-reference binding
+        # (only transition operations may test a state invariant), so the
+        # invariant stays permanently unbound and the declared contract is
+        # never exercised. 校验/验证 are generic technical verbs (any industry
+        # documents 校验 X / 验证 X), never industry terms.
+        if (
+            _rule_kind in {"state_machine", "state"}
+            and any(token in statement for token in ("校验", "验证"))
+        ):
+            _rule_kind = "validation"
+            _record_fallback("INTERFACE_VALIDATION_CONTRACT_REKIND", 1)
         _rule_operands = _list(rule.get("operands"))
         _rule_equation: dict[str, Any] = _dict(rule.get("equation"))
         # For conservation/data_conservation/business amount-quantity rules
@@ -5169,6 +5185,32 @@ def build_behavior_ir_from_knowledge_asset(
                 _action_phrases = _extract_action_phrases(
                     statement, _CJK_ACTION_PATTERN
                 )
+                if not _action_phrases and any(
+                    token in statement for token in ("校验", "验证")
+                ):
+                    # Validation-contract fallback: a rule declaring 必须校验
+                    # 状态、生效时间、分类范围… constrains the validation
+                    # operation itself (the interface that performs 校验).
+                    # The action-verb table has no 校验/验证 entry, so phrase
+                    # extraction returns nothing and the whole contract would
+                    # stay unbound. 校验 is a generic technical verb — it only
+                    # matches operation titles that contain 校验 (校验优惠券 /
+                    # 批量校验), never 验证码-style titles, and any industry's
+                    # validation interface documents the same verb. The
+                    # fallback requires the statement to enumerate multiple
+                    # comma-separated validation dimensions after 必须校验
+                    # (状态、生效时间、最低金额、分类范围…) — a single-object
+                    # 校验 (校验角色 / 校验身份 / 校验并扣减) constrains
+                    # authorization/authentication/atomic actions, and binding
+                    # it to the validation interface would be a wrong
+                    # attribution.
+                    if sum(
+                        1
+                        for _sep in ("，", "、", ",")
+                        for _ in re.finditer(re.escape(_sep), statement)
+                    ) >= 2:
+                        _action_phrases = ["校验"]
+                        _record_fallback("VALIDATION_CONTRACT_PHRASE_FALLBACK", 1)
                 if _action_phrases:
                     # Response-side rules (导出结果禁止包含 password) govern
                     # the CONTENT of read operations; write-side rules govern

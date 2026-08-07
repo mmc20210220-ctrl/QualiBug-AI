@@ -604,21 +604,6 @@ def _identity_scoped_entity_observation(write_path: str, observation_path: str) 
 _DECLARED_UNIQUE_FIELDS_CACHE: dict[tuple[str, str], set[str]] = {}
 
 
-def _body_has_batch_create_array(body: Any) -> bool:
-    """True when the body carries a batch-create array (top-level list field).
-
-    Batch-create shapes ({products: [...]}, {items: [...]}) introduce new rows,
-    so their unique-key literals may be safely suffixed. Action-style bodies
-    (claim/approve referencing an existing key) never look like this.
-    """
-    if not isinstance(body, dict):
-        return False
-    return any(
-        isinstance(child, list) and any(isinstance(item, dict) for item in child)
-        for child in body.values()
-    )
-
-
 def _load_declared_unique_fields(root: Any, project: str) -> set[str]:
     """Load UNIQUE business keys declared in the target's DB schema.
 
@@ -775,16 +760,22 @@ def execute_governed_control_write(
         # target's DB schema) may already exist from earlier runs — the target
         # then rejects the write before the rule under test is observed. Unique
         # key literals get a per-call suffix so every run creates fresh rows.
-        # The materialization is gated on creation semantics (a creation verb
-        # in the path, or a batch-create array body): action-style POSTs such
-        # as claim/approve reference existing unique keys and must never be
-        # rewritten. Identity anchors (email/phone/username) stay with the
-        # disposable channel above; numeric unique keys are never touched.
+        # The materialization is gated on the path's own creation semantics
+        # (register/signup/create/invite/enroll/import/add/new/bulk):
+        # action-style POSTs such as claim/approve/validate reference existing
+        # unique keys and must never be rewritten. A body-array shape is not a
+        # creation signal: business-detail arrays (order items, validate line
+        # items) are the normal shape of action POSTs, and treating them as
+        # batch-create objects suffixed every referenced unique key (coupon
+        # code, SKU) into a nonexistent value — the write then failed with
+        # 404/validation errors before the rule under test was observed.
+        # Identity anchors (email/phone/username) stay with the disposable
+        # channel above; numeric unique keys are never touched.
         _creation_semantics = bool(
             _IDENTITY_CREATION_RE.search(
                 normalize_path_placeholders(_text(path)).lower()
             )
-        ) or _body_has_batch_create_array(body)
+        )
         if _creation_semantics:
             _unique_fields = _load_declared_unique_fields(root, project)
             if _unique_fields:
