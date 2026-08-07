@@ -172,29 +172,61 @@ def evaluate_assertion(
             error=_text(probe.get("error")),
         )
     if _text(probe.get("status")) == "VIOLATION":
-        # 2xx soft business reject still counts as a validation rejection miss
-        # when transport looked successful but the body denied the write.
-        if (
-            expected_class == 4
-            and int(obs.get("status_code") or 0) // 100 == 2
-            and (
-                obs.get("business_rejected") is True
-                or _dict(obs.get("business_outcome")).get("business_rejected") is True
-                or obs.get("zero_effect_on_accepted_write") is True
-            )
-        ):
+        # The target's own transport semantics decide the rejection shape:
+        # - 2xx + explicit business rejection (success:false / reject tokens)
+        #   is the target DECLARING the validation enforced — the malformed
+        #   write was refused at the business layer. Treating it as a
+        #   validation miss would report clean systems as defective.
+        # - 2xx + real effect means the malformed input was accepted — the
+        #   validation gate is genuinely missing (violation).
+        # - 2xx + accepted write with zero effect and no explicit rejection
+        #   signal cannot distinguish silent rejection from silent swallow —
+        #   indeterminate, never a fabricated violation.
+        # - 5xx refuses the input through the server-error path; not a
+        #   validation miss (no write went through), not a clean pass (the
+        #   target mishandled the rejection) — indeterminate.
+        status_code = int(obs.get("status_code") or 0)
+        status_class = status_code // 100 if status_code else 0
+        business_rejected = (
+            obs.get("business_rejected") is True
+            or _dict(obs.get("business_outcome")).get("business_rejected") is True
+        )
+        if expected_class == 4 and status_class == 2:
+            if business_rejected:
+                # Explicit business-layer rejection: validation enforced.
+                return _validation_receipt(
+                    status_probe=probe,
+                    status="PASS",
+                    reason_code="VALIDATION_BUSINESS_REJECTED",
+                    expected=expected,
+                    actual={**actual, "business_rejected": True},
+                )
+            if obs.get("zero_effect_on_accepted_write") is True:
+                return _validation_receipt(
+                    status_probe=probe,
+                    status="INDETERMINATE",
+                    reason_code="VALIDATION_EFFECT_AMBIGUOUS",
+                    expected=expected,
+                    actual={
+                        **actual,
+                        "zero_effect_on_accepted_write": True,
+                    },
+                )
+            # 2xx with a real effect: malformed input accepted.
             return _validation_receipt(
                 status_probe=probe,
                 status="VIOLATION",
-                reason_code="VALIDATION_SOFT_FAIL_ACCEPTED",
+                reason_code="VALIDATION_REJECTION_NOT_ENFORCED",
                 expected=expected,
-                actual={
-                    **actual,
-                    "business_rejected": True,
-                    "zero_effect_on_accepted_write": obs.get(
-                        "zero_effect_on_accepted_write"
-                    ),
-                },
+                actual=actual,
+            )
+        if expected_class == 4 and status_class == 5:
+            return _validation_receipt(
+                status_probe=probe,
+                status="INDETERMINATE",
+                reason_code="VALIDATION_SERVER_ERROR_RESPONSE",
+                expected=expected,
+                actual=actual,
             )
         return _validation_receipt(
             status_probe=probe,
