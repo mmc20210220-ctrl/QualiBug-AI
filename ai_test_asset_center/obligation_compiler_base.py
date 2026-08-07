@@ -24,6 +24,60 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+# P0-E phase-3: structured frame_type → risk family mapping (Chinese
+# Semantic Frame SSOT schema types — industry-neutral structured evidence).
+# When a rule's frame is grounded, its frame_type decides the obligation
+# family; legacy CJK kind tokens (库存/金额/隐私/过期/可见/状态/因果/后置) are
+# demoted to an observable fallback.
+_FRAME_TYPE_FAMILY = {
+    "TIME_WINDOW_CONSTRAINT": "temporal",
+    "QUANTITY_CONSTRAINT": "conservation",
+    "FORMULA_CONSTRAINT": "conservation",
+    "VALIDATION_RULE": "validation",
+    "UNIQUENESS_CONSTRAINT": "validation",
+    "CARDINALITY_CONSTRAINT": "validation",
+    "PERMISSION_RULE": "visibility",
+    "OWNERSHIP_RULE": "visibility",
+    "SCOPE_RULE": "visibility",
+    "DATA_VISIBILITY_RULE": "visibility",
+    "STATE_TRANSITION": "state",
+    "COMPENSATION_RULE": "state",
+    "PROCESS_ORDERING": "state",
+}
+
+_CJK_FAMILY_TOKENS = (
+    "库存", "金额", "隐私", "过期", "可见", "状态", "因果", "后置",
+)
+
+_CJK_OWNERSHIP_LANGUAGE_MARKERS = (
+    "自己的", "本人", "归属", "只能查询",
+)
+
+
+def _legacy_fallback_kind_counts(ir: dict[str, Any]) -> dict[str, int] | None:
+    """P0-E: the legacy fallback receipt's kind_counts, but only when a frame
+    ledger exists — without an SSOT, legacy CJK parsing is the plain legacy
+    semantics, not a demotion worth counting. None disables counting."""
+    receipt = _dict(ir.get("legacy_semantic_fallback_receipt"))
+    if receipt.get("frame_ledger_present") is not True:
+        return None
+    counts = receipt.get("kind_counts")
+    if not isinstance(counts, dict):
+        counts = {}
+        receipt["kind_counts"] = counts
+    return counts
+
+
+def _count_legacy_cjk_kind(
+    counts: dict[str, int] | None,
+    kind: str,
+    amount: int = 1,
+) -> None:
+    if counts is None or amount <= 0:
+        return
+    counts[kind] = counts.get(kind, 0) + amount
+
+
 def _postcondition_has_bound_effect(expression: dict[str, Any]) -> bool:
     """Return whether a postcondition names an observable field or create effect."""
 
@@ -755,6 +809,24 @@ def compile_obligations_from_behavior_ir(
     write_ops = [op for op in operations if _text(op.get("read_write") or op.get("side_effect_class")) == "write"]
     read_ops = [op for op in operations if _text(op.get("read_write") or op.get("side_effect_class")) != "write"]
 
+    # P0-E phase-3: operation-level CJK ownership language markers
+    # (自己的/本人/归属/只能查询) are legacy candidate hints — the frame
+    # channel's structured ownership (IR owns relations) is the ownership
+    # SSOT. Counted only when a frame ledger exists.
+    _ownership_kind_counts = _legacy_fallback_kind_counts(ir)
+    if _ownership_kind_counts is not None:
+        _cjk_ownership_hits = 0
+        for _op_row in operations:
+            _op_corpus = " ".join((
+                _text(_op_row.get("summary")),
+                _text(_op_row.get("description")),
+            ))
+            if any(_m in _op_corpus for _m in _CJK_OWNERSHIP_LANGUAGE_MARKERS):
+                _cjk_ownership_hits += 1
+        _count_legacy_cjk_kind(
+            _ownership_kind_counts, "OWNERSHIP_LANGUAGE_CJK_CANDIDATE", _cjk_ownership_hits
+        )
+
     active_actors = _active_actors(actors)
     active_actors_by_id = {
         _text(actor.get("id")): actor
@@ -1125,47 +1197,66 @@ def compile_obligations_from_behavior_ir(
             )
             continue
         family = "validation"
-        if any(token in kind for token in ("idempot", "exactly_once", "deduplic")):
-            family = "idempotency"
-        elif any(token in kind for token in ("concurr", "race", "atomic")):
-            family = "concurrency"
-        elif any(
-            token in kind
-            for token in (
-                "conserv",
-                "data_conservation",
-                "balance",
-                "amount",
-                "quantity",
-                "库存",
-                "金额",
-            )
-        ):
-            family = "conservation"
-        elif any(token in kind for token in ("privacy", "pii", "mask", "隐私")):
-            family = "privacy"
-        elif any(token in kind for token in ("time", "expir", "temporal", "过期")):
-            family = "temporal"
-        elif any(
-            token in kind
-            for token in (
-                "permission",
-                "access_control",
-                "authorization",
-                "authorisation",
-                "authz",
-                "acl",
-                "rbac",
-                "visib",
-                "scope",
-                "可见",
-            )
-        ):
-            family = "visibility"
-        elif any(token in kind for token in ("state_machine", "state", "状态", "status_")):
-            family = "state"
-        elif any(token in kind for token in ("postcondition", "must_become", "must_create", "因果", "后置")):
-            family = "state"
+        # P0-E phase-3 frame-confirmation: a grounded frame's structured
+        # frame_type is the SSOT family signal. Only when no grounded frame
+        # family evidence exists does the legacy kind-token detection run —
+        # CJK token hits there are counted as observable fallback.
+        _frame_family = _dict(inv.get("frame_family_evidence"))
+        _frame_family_type = (
+            _text(_frame_family.get("frame_type"))
+            if _frame_family.get("grounded") is True
+            else ""
+        )
+        _mapped_family = _FRAME_TYPE_FAMILY.get(_frame_family_type) if _frame_family_type else ""
+        if _mapped_family:
+            family = _mapped_family
+        else:
+            _cjk_family_hit = any(token in kind for token in _CJK_FAMILY_TOKENS)
+            if any(token in kind for token in ("idempot", "exactly_once", "deduplic")):
+                family = "idempotency"
+            elif any(token in kind for token in ("concurr", "race", "atomic")):
+                family = "concurrency"
+            elif any(
+                token in kind
+                for token in (
+                    "conserv",
+                    "data_conservation",
+                    "balance",
+                    "amount",
+                    "quantity",
+                    "库存",
+                    "金额",
+                )
+            ):
+                family = "conservation"
+            elif any(token in kind for token in ("privacy", "pii", "mask", "隐私")):
+                family = "privacy"
+            elif any(token in kind for token in ("time", "expir", "temporal", "过期")):
+                family = "temporal"
+            elif any(
+                token in kind
+                for token in (
+                    "permission",
+                    "access_control",
+                    "authorization",
+                    "authorisation",
+                    "authz",
+                    "acl",
+                    "rbac",
+                    "visib",
+                    "scope",
+                    "可见",
+                )
+            ):
+                family = "visibility"
+            elif any(token in kind for token in ("state_machine", "state", "状态", "status_")):
+                family = "state"
+            elif any(token in kind for token in ("postcondition", "must_become", "must_create", "因果", "后置")):
+                family = "state"
+            if _cjk_family_hit:
+                _count_legacy_cjk_kind(
+                    _legacy_fallback_kind_counts(ir), "CJK_FAMILY_TOKEN_FALLBACK"
+                )
         relation_types = {
             "idempotency": {"observes", "produces", "consumes", "transitions"},
             "concurrency": {"observes", "produces", "consumes", "transitions"},

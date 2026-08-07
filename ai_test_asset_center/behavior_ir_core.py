@@ -5131,6 +5131,20 @@ def build_behavior_ir_from_knowledge_asset(
             _inv_typed["frame_confirmation_reason"] = _text(
                 rule.get("frame_confirmation_reason") or ""
             )
+        # P0-E phase-3: frame family evidence — when this rule's frame is
+        # grounded, its structured frame_type is the SSOT risk-family signal
+        # for the obligation compiler (legacy CJK family tokens 库存/金额/
+        # 隐私/过期/可见/状态 are demoted to observable fallback).  No
+        # ledger / no frame → no evidence field (compat path unchanged).
+        _family_frame = (
+            _frame_for_rule(rid, statement) if _frame_ledger_present else {}
+        )
+        if _family_frame and _frame_is_grounded(_family_frame):
+            _inv_typed["frame_family_evidence"] = {
+                "frame_id": _text(_family_frame.get("frame_id")),
+                "frame_type": _text(_family_frame.get("frame_type")),
+                "grounded": True,
+            }
         # ── Action-word → operation binding ──
         # A source rule names the operations it governs through its action
         # verbs (已取消订单不能支付、发货、确认收货 → pay/ship/confirm).

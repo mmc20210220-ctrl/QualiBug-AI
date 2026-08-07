@@ -19,6 +19,42 @@ from .obligation_compiler_base import *  # noqa: F401,F403
 _original_compile = _base.compile_obligations_from_behavior_ir
 _PAIR_FAMILIES = frozenset({"privacy", "visibility"})
 
+# P0-E phase-3: CJK privacy policy markers (从 obligation_compiler 的
+# _ABSENT_MARKERS/_MASK_MARKERS 中文项派生——SSOT 单一词表，不重复定义)
+# 是 legacy 候选提示；frame 通道尚无隐私策略粒度（登记扩展点），计数使
+# 降级可观测。
+_CJK_PRIVACY_POLICY_MARKERS = ()
+
+
+def _count_cjk_privacy_policy_markers(behavior_ir: dict[str, Any]) -> None:
+    counts = _base._legacy_fallback_kind_counts(behavior_ir)
+    if counts is None:
+        return
+    global _CJK_PRIVACY_POLICY_MARKERS
+    if not _CJK_PRIVACY_POLICY_MARKERS:
+        from .obligation_compiler import (
+            _ABSENT_MARKERS as _ABSENT_MARKERS_SRC,
+            _MASK_MARKERS as _MASK_MARKERS_SRC,
+        )
+
+        def _cjk_only(markers: tuple) -> tuple:
+            return tuple(
+                m for m in markers
+                if any("一" <= ch <= "鿿" for ch in m)
+            )
+
+        _CJK_PRIVACY_POLICY_MARKERS = (
+            _cjk_only(_ABSENT_MARKERS_SRC) + _cjk_only(_MASK_MARKERS_SRC)
+        )
+    hits = 0
+    for inv in _list(behavior_ir.get("invariants")):
+        if not isinstance(inv, dict):
+            continue
+        raw = _text(_dict(inv.get("expression")).get("raw"))
+        if any(marker in raw for marker in _CJK_PRIVACY_POLICY_MARKERS):
+            hits += 1
+    _base._count_legacy_cjk_kind(counts, "PRIVACY_POLICY_CJK_CANDIDATE", hits)
+
 
 def __getattr__(name: str) -> Any:
     return getattr(_base, name)
@@ -287,11 +323,14 @@ def compile_obligations_from_behavior_ir(
     if root or project:
         # Forwarded only when the caller actually has a workspace identity; a
         # base_compile that predates the parameters still works on plain IR.
-        return _pair_obligations(
+        result = _pair_obligations(
             compiler(behavior_ir, root=root, project=project),
             behavior_ir,
         )
-    return _pair_obligations(
-        compiler(behavior_ir),
-        behavior_ir,
-    )
+    else:
+        result = _pair_obligations(
+            compiler(behavior_ir),
+            behavior_ir,
+        )
+    _count_cjk_privacy_policy_markers(behavior_ir)
+    return result
