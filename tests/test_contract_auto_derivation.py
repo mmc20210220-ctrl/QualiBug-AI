@@ -244,15 +244,38 @@ def test_disabled_and_empty_operation_cases() -> None:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: derive -> Behavior IR invariant -> obligation
+# End-to-end: derive -> Behavior IR invariant -> obligation -> experiment
 # ---------------------------------------------------------------------------
 
 
-def test_derived_contract_binds_into_ir_and_compiles_obligation() -> None:
+def _compile_to_experiments(ir: dict, *, adapters: set[str]) -> dict:
+    from ai_test_asset_center.experiment_compiler import compile_experiments
+    from ai_test_asset_center.obligation_compiler import compile_obligations_from_behavior_ir
+
+    obligations = compile_obligations_from_behavior_ir(ir, root=str(ROOT), project="auto-derivation-e2e")
+    rows = [o for o in obligations.get("obligations", []) if isinstance(o, dict)]
+    return compile_experiments(
+        rows,
+        behavior_ir=ir,
+        environment_type="test",
+        policy_version="",
+        available_adapters=adapters,
+        planning_context={
+            "root": str(ROOT),
+            "project": "auto-derivation-e2e",
+            "base_url": "http://target.test",
+            "campaign_id": "c1",
+            "available_adapters": adapters,
+            "environment_type": "test",
+            "runtime_contract": {"status": "approved"},
+        },
+    )
+
+
+def test_derived_contracts_close_the_chain_to_experiments() -> None:
     from ai_test_asset_center.discovery_runtime_semantic_binding import (
         build_behavior_ir_with_semantic_operation_bindings,
     )
-    from ai_test_asset_center.obligation_compiler import compile_obligations_from_behavior_ir
 
     asset, receipt = _derive()
     assert receipt["status"] == "CONSUMED"
@@ -262,28 +285,57 @@ def test_derived_contract_binds_into_ir_and_compiles_obligation() -> None:
         project_id="auto-derivation-e2e",
         api_operations=_OPS,
         runtime_actors=[_ACTOR],
+        available_surfaces={"http_api": True, "event_observer_http": True},
+    )
+    pack = _compile_to_experiments(ir, adapters={"http_api", "event_observer_http"})
+    compiled = [
+        row
+        for row in pack.get("experiments", [])
+        if isinstance(row, dict) and row.get("risk_family")
+    ]
+    families = {row.get("risk_family") for row in compiled}
+    assert "performance_latency" in families
+    assert "stability_reliability" in families
+    assert "event_delivery_consistency" in families
+    event = next(row for row in compiled if row.get("risk_family") == "event_delivery_consistency")
+    assert [o.get("observer_id") for o in event.get("observers", [])] == [
+        "source_event_delivery_reader"
+    ]
+    assert event.get("treatment_plan")  # trigger step compiled
+    blocked = [
+        row
+        for row in pack.get("blocked_experiments", [])
+        if isinstance(row, dict)
+    ]
+    assert not blocked, [row.get("compile_receipt") for row in blocked]
+
+
+def test_event_experiment_requires_declared_event_observer_adapter() -> None:
+    """Event execution is gated on the operator-declared adapter — the same
+    fail-closed gate as every explicitly declared event contract; the adapter
+    is never inferred from text or URL shape."""
+    from ai_test_asset_center.discovery_runtime_semantic_binding import (
+        build_behavior_ir_with_semantic_operation_bindings,
+    )
+
+    asset, receipt = _derive()
+    ir = build_behavior_ir_with_semantic_operation_bindings(
+        asset,
+        project_id="auto-derivation-e2e",
+        api_operations=_OPS,
+        runtime_actors=[_ACTOR],
         available_surfaces={"http_api": True},
     )
-    invariants = [row for row in ir.get("invariants", []) if isinstance(row, dict)]
-    kinds = {str(row.get("expression", {}).get("kind")) for row in invariants}
-    assert "latency_budget_contract" in kinds
-    assert "read_stability_contract" in kinds
-    assert "event_delivery_contract" in kinds
-    bound = [
-        row for row in invariants
-        if str(row.get("expression", {}).get("kind")) == "latency_budget_contract"
-        and row.get("binding_status") == "source_identity_bound"
-    ]
-    assert bound, "derived performance contract must bind with source identity"
-
-    obligations = compile_obligations_from_behavior_ir(
-        ir,
-        root=str(ROOT),
-        project="auto-derivation-e2e",
-    )
-    families = {
-        str(row.get("risk_family"))
-        for row in obligations.get("obligations", [])
+    pack = _compile_to_experiments(ir, adapters={"http_api"})
+    blocked = [
+        row
+        for row in pack.get("blocked_experiments", [])
         if isinstance(row, dict)
-    }
-    assert "performance_latency" in families
+    ]
+    event_blocked = [
+        row
+        for row in blocked
+        if (row.get("compile_receipt") or {}).get("detail") == "event_observer_http"
+    ]
+    assert event_blocked, blocked
+    assert (event_blocked[0]["compile_receipt"] or {}).get("reason_code") == "BLOCKED_UNSUPPORTED_ADAPTER"
