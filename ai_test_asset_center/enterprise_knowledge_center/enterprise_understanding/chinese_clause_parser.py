@@ -48,7 +48,7 @@ CHINESE_CLAUSE_TREE_LEDGER_SCHEMA = "qualibug.chinese-clause-tree-ledger.v1"
 # ── Language function words (SPEC §9.1 / §9.3 / §9.4) ──
 _MODAL_PROHIBITED = re.compile(r"不得|严禁|禁止|不允许|不可|不能|无权|不许")
 _MODAL_REQUIRED = re.compile(r"必须|应当|务必|需要|需(?=[由在对将把于])")
-_MODAL_MAY = re.compile(r"可以|允许|有权")
+_MODAL_MAY = re.compile(r"可以|允许|有权|方可")
 _MODAL_ONLY_IF_DIRECT = ("只能", "仅能")
 _UNTIL_RE = re.compile(r"除非(?P<cond>[^，,；;。]+?)(?:，|,|；|;|$)")
 
@@ -58,7 +58,7 @@ _CONDITION_WHEN_HEAD = re.compile(
     r"当(?!前|期|日|月|年|次|笔|个|下|中)(?P<v>[^，,；;。]+?)(?:时|则|，|,|；|;|$)"
 )
 _CONDITION_TIME = re.compile(
-    r"(?P<v>[^，,；;。]{1,60}?(?:之前|以前|之后|以后|后))(?=自动|必须|应当|则|，|,|$)"
+    r"(?P<v>[^，,；;。]{1,60}?(?:之前|以前|之后|以后|后))(?=自动|必须|应当|方可|则|，|,|$)"
 )
 _CONDITION_STATE = re.compile(
     r"(?P<v>(?:已|未|待|处于)[^，,；;。]{1,32}?)"

@@ -266,11 +266,37 @@ def _enrich_frame_structure(
                 )
             frame["conditions"] = conditions
 
-    # ── 3. clause tree structure: enumeration mentions + exceptions ──
+    # ── 3. clause tree structure: conditions, enumeration, exceptions ──
     from .chinese_clause_parser import clause_tree_for_block
 
     tree = clause_tree_for_block(asset, _text(block.get("block_id")))
     if tree:
+        # The frame's own block conditions merge (never override fact-derived
+        # conditions; the parser's leaf split only ADDS what the fact missed).
+        conditions = frame["conditions"]
+        existing_raws = {_norm(row.get("raw")) for row in conditions}
+        for row in _list(tree.get("conditions")):
+            if not isinstance(row, dict):
+                continue
+            raw = _norm(row.get("raw"))
+            if not raw or raw in existing_raws:
+                continue
+            conditions.append(
+                {
+                    "condition_id": _next_condition_id(conditions),
+                    "raw": raw,
+                    "subject_concept_ref": "",
+                    "field_concept_ref": "",
+                    "operator": "",
+                    "value_concept_ref": "",
+                    "logic_group": _norm(row.get("logic_group")) or "main",
+                    "origin": "clause_parser",
+                    "resolution_status": "RESOLVED",
+                    "evidence": [],
+                }
+            )
+            existing_raws.add(raw)
+        frame["conditions"] = conditions
         enumeration = dict(_dict(tree.get("enumeration")))
         structure["enumeration"] = {
             "joiner": _text(enumeration.get("joiner")),

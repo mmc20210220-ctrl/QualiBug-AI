@@ -24,6 +24,9 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.c
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.chinese_context_envelope import (
     build_chinese_semantic_context_envelopes,
 )
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.chinese_context_resolver import (
+    resolve_chinese_semantic_context,
+)
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.chinese_semantic_frame_compiler import (
     enrich_frames_with_clause_structure,
 )
@@ -144,6 +147,7 @@ def test_p0b_stages_are_closed_loop_on_the_asset() -> None:
     asset = build_chinese_semantic_context_envelopes(asset)
     asset = parse_chinese_clause_trees(asset)
     asset = enrich_frames_with_clause_structure(asset)
+    asset = resolve_chinese_semantic_context(asset)
 
     assert asset["chinese_semantic_context_envelopes"]["schema"] == (
         "qualibug.chinese-semantic-context-envelope.v1"
@@ -152,12 +156,16 @@ def test_p0b_stages_are_closed_loop_on_the_asset() -> None:
     frames = asset["chinese_semantic_frame_ledger"]["items"]
     assert frames
     assert all("clause_structure" in row for row in frames)
+    assert all("context_resolution" in row for row in frames)
     receipt = asset["chinese_semantic_frame_ledger"]["enrichment_receipt"]
     assert receipt["enriched_count"] >= 1
+    assert asset["chinese_semantic_context_resolution_ledger"]["receipt"][
+        "raw_text_never_rewritten"
+    ] is True
 
 
 def test_behavior_ir_equivalence_with_and_without_p0b_layers() -> None:
-    # Zero-regression contract: the P0-B layers only enrich frames; while
+    # Zero-regression contract: the P0-B/P0-C layers only enrich frames; while
     # frames stay ungrounded the Behavior IR must be bit-identical.
     asset_plain = _base_compiled_asset()
     asset_p0b = _base_compiled_asset()
@@ -165,6 +173,7 @@ def test_behavior_ir_equivalence_with_and_without_p0b_layers() -> None:
     asset_p0b = build_chinese_semantic_context_envelopes(asset_p0b)
     asset_p0b = parse_chinese_clause_trees(asset_p0b)
     asset_p0b = enrich_frames_with_clause_structure(asset_p0b)
+    asset_p0b = resolve_chinese_semantic_context(asset_p0b)
 
     ir_plain = build_behavior_ir_from_knowledge_asset(asset_plain)
     ir_p0b = build_behavior_ir_from_knowledge_asset(asset_p0b)
@@ -185,4 +194,5 @@ def test_composition_root_wires_p0b_stages() -> None:
     assert callable(module.build_chinese_semantic_context_envelopes)
     assert callable(module.parse_chinese_clause_trees)
     assert callable(module.enrich_frames_with_clause_structure)
+    assert callable(module.resolve_chinese_semantic_context)
     assert callable(build_enterprise_business_knowledge_asset)

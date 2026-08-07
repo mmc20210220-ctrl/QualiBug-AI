@@ -96,6 +96,9 @@ from .enterprise_understanding.chinese_clause_parser import (
 from .enterprise_understanding.chinese_semantic_frame_compiler import (
     enrich_frames_with_clause_structure,
 )
+from .enterprise_understanding.chinese_context_resolver import (
+    resolve_chinese_semantic_context,
+)
 from .job_asset_pipeline import enrich_job_assets_with_governance
 from .job_behavior_projection import refresh_job_behavior_projection
 from .openapi_schema_fact_asset_projection import enrich_asset_with_openapi_schema_facts
@@ -1676,6 +1679,7 @@ def refresh_enterprise_business_knowledge_asset_incremental(
         asset = build_chinese_semantic_context_envelopes(asset)
         asset = parse_chinese_clause_trees(asset)
         asset = enrich_frames_with_clause_structure(asset)
+        asset = resolve_chinese_semantic_context(asset)
         asset, _discarded = _downstream.refresh_chinese_business_downstream(
             asset,
             max_probe_count=0,
@@ -2200,6 +2204,13 @@ def build_enterprise_business_knowledge_asset(
     asset = build_chinese_semantic_context_envelopes(asset)
     asset = parse_chinese_clause_trees(asset)
     asset = enrich_frames_with_clause_structure(asset)
+
+    # P0-C: frame-level context resolution — omitted actors are recovered only
+    # from unique evidence (only-if subject, unique prior frame in the same
+    # section, unique section heading), coreference stays mention-level, and
+    # anything unresolvable keeps its explicit UNKNOWN status + reason code.
+    # Raw text is never rewritten.
+    asset = resolve_chinese_semantic_context(asset)
 
     # Downstream rule/oracle projection is still needed before Job projection, but
     # Probe compilation remains deferred to the final stage.

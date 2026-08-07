@@ -28,6 +28,10 @@ from .chinese_context_envelope import (
     build_chinese_semantic_context_envelopes,
     locate_unique_block,
 )
+from .chinese_context_resolver import (
+    CHINESE_SEMANTIC_CONTEXT_RESOLUTION_SCHEMA,
+    resolve_chinese_semantic_context,
+)
 from .chinese_semantic_behavior_ir_adapter import (
     apply_semantic_frames_to_behavior_ir,
     project_semantic_frames_to_behavior_ir,
@@ -208,6 +212,7 @@ __all__ = [
     "CHINESE_SEMANTIC_FRAME_SCHEMA",
     "CHINESE_SEMANTIC_RECEIPT_SCHEMA",
     "CHINESE_SEMANTIC_CONTEXT_ENVELOPE_SCHEMA",
+    "CHINESE_SEMANTIC_CONTEXT_RESOLUTION_SCHEMA",
     "CHINESE_CLAUSE_TREE_SCHEMA",
     "CHINESE_CLAUSE_TREE_LEDGER_SCHEMA",
     "FRAME_TYPES",
@@ -227,6 +232,7 @@ __all__ = [
     "build_chinese_semantic_context_envelopes",
     "block_context_for",
     "locate_unique_block",
+    "resolve_chinese_semantic_context",
     "parse_chinese_clause_trees",
     "parse_block_text",
     "clause_tree_for_block",
