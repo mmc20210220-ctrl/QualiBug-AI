@@ -7,6 +7,7 @@ control/treatment plans run. Never invents identifiers.
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -99,6 +100,9 @@ def _validate_fixture_preconditions(
                     precondition_fields.add(key)
 
     # Validate each precondition field exists in fixture response
+    def _identity_key(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", "", _text(value).lower())
+
     for field in sorted(precondition_fields):
         # Check top-level and nested (one level deep)
         found = field in body
@@ -109,6 +113,25 @@ def _validate_fixture_preconditions(
                 if isinstance(nested, dict) and field in nested:
                     found = True
                     break
+        if not found and (
+            _identity_key(field).endswith("id")
+            or _identity_key(field).endswith("ref")
+            or _identity_key(field).endswith("uuid")
+        ):
+            # Identity-shaped precondition fields (addressId, orderId, …) map
+            # onto the created row's own identity field (``id``) — the same
+            # structural mapping the observed-body projection applies. A
+            # fixture create returning ``{id: …}`` satisfies an addressId
+            # precondition; the runtime projects the row identity into the
+            # body slot at send time. Field-name literal equality alone would
+            # false-block every create whose response names the identity
+            # ``id`` while the request body names it ``<entity>Id``.
+            found = (
+                _runtime_value_from_response(
+                    body, field, f"/{{{field}}}"
+                )
+                not in (None, "", [], {})
+            )
         if not found:
             failures.append({
                 "field": field,
