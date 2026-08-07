@@ -1458,6 +1458,16 @@ def compile_obligations_from_behavior_ir(
                 "operation_ref": operation_ref,
                 "operation_path_prefix": _operation_path_prefix(op),
             }
+            # Subject-entity binding identity (用户端不展示下架商品 → product):
+            # carried through so the validation protocol can resolve the
+            # entity's status-carrying list read for state-violation arms.
+            _subject_entities = [
+                _text(value)
+                for value in _list(inv.get("subject_entity_refs"))
+                if _text(value)
+            ]
+            if _subject_entities:
+                property_spec["subject_entity_refs"] = _subject_entities
             # V1.6.1: Rule Runtime Payload — preserve rule identity + fields through
             # obligation → experiment without a parallel rule engine.
             _field_ids = [

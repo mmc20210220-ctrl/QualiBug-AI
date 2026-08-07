@@ -23,6 +23,7 @@ from .experiment_runtime_support import (
     _resolve_token,
     _response_bound_observation_path,
     _run_http_step,
+    _runtime_entity_candidates,
     _sha256,
     _text,
     _unresolved_body_placeholders,
@@ -372,6 +373,68 @@ def execute_non_barrier_plans(
                 root=root,
                 project=project,
             )
+            # ── Runtime entity-state violation arm ──
+            # Entity-state isolation rules (用户端不展示下架商品、草稿商品、内部
+            # 商品) demand a treatment that references an entity the
+            # environment really has in a non-public state. The compile-time
+            # mutation descriptor names the status-carrying list read; here we
+            # execute it with the step's own credentials and replace the
+            # identity field with a non-public-state entity. Statuses are
+            # classified by their own English meaning (ON_SALE/ACTIVE/ENABLED/
+            # PUBLISHED/… are public; DRAFT/OFF_SALE/DISABLED/EXPIRED/DELETED
+            # are not) — generic status vocabulary, never industry terms.
+            _mutation_runtime = _dict(step.get("mutation"))
+            if (
+                _text(_mutation_runtime.get("class"))
+                == "runtime_entity_state_violation"
+                and isinstance(request_body, dict)
+                and phase == "treatment"
+            ):
+                _identity_field = _text(_mutation_runtime.get("identity_field"))
+                _status_field = _text(
+                    _mutation_runtime.get("status_field") or "status"
+                )
+                _resolvers = _list(_mutation_runtime.get("resolver_operations"))
+                if _identity_field and _resolvers:
+                    _resolver = _dict(_resolvers[0])
+                    _resolver_path = _text(_resolver.get("path"))
+                    if _resolver_path:
+                        _list_resp = _run_http_step(
+                            base_url=base_url,
+                            method="GET",
+                            path=_resolver_path,
+                            token=_resolve_token(actor, tokens),
+                        )
+                        if (
+                            200
+                            <= int(_list_resp.get("status_code") or 0)
+                            < 300
+                        ):
+                            _PUBLIC_STATUSES = {
+                                "on_sale", "active", "enabled", "published",
+                                "available", "open", "normal", "listed",
+                                "in_stock", "activated",
+                            }
+                            _violating = next(
+                                (
+                                    row
+                                    for row in _runtime_entity_candidates(
+                                        _list_resp.get("body")
+                                    )
+                                    if isinstance(row, dict)
+                                    and str(
+                                        row.get(_status_field) or ""
+                                    ).lower()
+                                    not in _PUBLIC_STATUSES
+                                    and row.get(_identity_field) not in (None, "")
+                                ),
+                                None,
+                            )
+                            if _violating is not None:
+                                request_body = {
+                                    **request_body,
+                                    _identity_field: _violating[_identity_field],
+                                }
             unresolved_body_tokens = _unresolved_body_placeholders(
                 request_body,
                 runtime_bindings,

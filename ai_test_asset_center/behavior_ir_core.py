@@ -5456,6 +5456,9 @@ def build_behavior_ir_from_knowledge_asset(
                                 _record_fallback(
                                     "SUBJECT_ENTITY_BINDING", len(_subject_bound_ops)
                                 )
+                                _inv_typed["subject_entity_refs"] = sorted(
+                                    _subject_objects
+                                )
                                 _existing_ops = [
                                     _text(value)
                                     for value in _list(_inv_typed.get("operation_refs"))

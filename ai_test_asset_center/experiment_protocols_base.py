@@ -555,6 +555,110 @@ _ACCOUNT_STATE_PRECONDITION_TERMS = (
 _ACCOUNT_STATE_RESTRICTIVE_MODALS = ("仅", "只能", "必须", "不得", "不能", "只有")
 _IDENTITY_LOCATOR_KEYS = ("email", "phone", "mobile", "username", "login", "account", "user_id", "userid")
 
+# Entity identity fields a business-object reference may carry in a request
+# body (SKU / code / key / no / ref — generic relational identifiers, never
+# industry vocabulary).
+_ENTITY_IDENTITY_FIELD_RE = re.compile(r"(?:sku|code|key|no|ref)$", re.I)
+
+# Public/sellable state names: a state outside this set is non-public by its
+# own English meaning (DRAFT = unpublished, OFF_SALE = delisted,
+# DISABLED = deactivated, EXPIRED = past validity, DELETED = removed). The
+# set is generic status vocabulary, not industry terms.
+_PUBLIC_ENTITY_STATUSES = frozenset({
+    "on_sale", "active", "enabled", "published", "available",
+    "open", "normal", "listed", "in_stock", "activated",
+})
+
+# Entity-state isolation signals: rules that forbid user-facing surfaces
+# from exposing entities in non-public states (用户端不展示下架商品、草稿商品、
+# 内部商品). 展示/提供/可见/开放 are generic exposure verbs; the state words
+# (下架/草稿/停用/过期/禁用/删除/内部) name the non-public states.
+_ENTITY_STATE_EXPOSURE_VERBS = ("不展示", "不提供", "不可见", "不开放", "不得展示", "禁止展示", "不显示")
+_ENTITY_STATE_VIOLATION_WORDS = ("下架", "草稿", "停用", "过期", "禁用", "删除", "内部", "归档")
+
+
+def _non_public_entity_treatment(
+    control: dict[str, Any],
+    semantic_text: str,
+    behavior_ir: dict[str, Any],
+    property_spec: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Build the rejection-arm body for an entity-state isolation rule.
+
+    A rule like 用户端不展示下架商品、草稿商品、内部商品 forbids user-facing
+    surfaces from exposing entities in non-public states. The treatment must
+    reference an entity that actually IS in such a state — resolved at
+    runtime from the environment's own collection read (the entity's list
+    GET, identified by the subject-entity binding recorded at IR build time),
+    never guessed. Returns (treatment, mutation evidence) with a
+    runtime-resolved mutation descriptor, or None when the rule is not an
+    entity-state isolation rule or no entity list read exists.
+    """
+    if not any(v in semantic_text for v in _ENTITY_STATE_EXPOSURE_VERBS):
+        return None
+    if not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
+        return None
+    if not isinstance(control, dict) or not isinstance(behavior_ir, dict):
+        return None
+    identity_field = next(
+        (
+            key
+            for key in control
+            if _ENTITY_IDENTITY_FIELD_RE.search(str(key))
+        ),
+        "",
+    )
+    if not identity_field:
+        return None
+    subject_entities = [
+        _text(value).lower()
+        for value in _list(_dict(property_spec).get("subject_entity_refs"))
+        if _text(value)
+    ]
+    # The entity list read: a GET whose path names the subject entity
+    # (products ↔ product from the IR subject-entity binding). Only such a
+    # read lists the entity's rows with their status field — an identity-only
+    # read (cart lines) cannot name a non-public entity.
+    resolver = None
+    for op in _list(behavior_ir.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
+            continue
+        if re.search(r"(?:^|/)(?:health)(?:/|$)", _text(op.get("path")).lower()):
+            continue
+        _path_segments = [
+            seg
+            for seg in _text(op.get("path") or op.get("raw_path"))
+            .lower()
+            .strip("/")
+            .split("/")
+            if seg and seg not in {"api", "health", "v1"}
+        ]
+        if subject_entities and not any(
+            _seg.startswith(_obj) or _obj.startswith(_seg)
+            for _seg in _path_segments
+            for _obj in subject_entities
+        ):
+            continue
+        resolver = {
+            "operation_ref": _text(op.get("id")),
+            "method": "GET",
+            "path": _text(op.get("path") or op.get("raw_path")),
+        }
+        break
+    if not resolver:
+        return None
+    treatment = deepcopy(control)
+    mutation = {
+        "class": "runtime_entity_state_violation",
+        "json_path": f"$.{identity_field}",
+        "resolver_operations": [resolver],
+        "identity_field": identity_field,
+        "status_field": "status",
+    }
+    return treatment, mutation
+
 
 def _non_active_account_treatment(
     control: dict[str, Any],
@@ -645,6 +749,7 @@ def _validation_protocol_material(
     operation: dict[str, Any],
     property_spec: dict[str, Any],
     actor_catalog: list[dict[str, Any]] | None = None,
+    behavior_ir: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
     control = source_request_example(operation)
     schema = _request_body_schema(operation)
@@ -671,6 +776,20 @@ def _validation_protocol_material(
         )
         if _state_treatment:
             treatment, mutation = _state_treatment
+            return control, treatment, mutation
+        # ── Entity-state isolation arm ──
+        # 用户端不展示下架商品、草稿商品、内部商品 forbids user-facing
+        # surfaces from exposing non-public-state entities. The treatment
+        # references an entity the environment actually has in such a state,
+        # resolved at runtime through the status-carrying list read (the
+        # response schema names both the identity field and status). The
+        # mutation descriptor is runtime-resolved — the body value cannot be
+        # known at compile time.
+        _entity_state_treatment = _non_public_entity_treatment(
+            control, _semantic_text_pre, _dict(behavior_ir), property_spec,
+        )
+        if _entity_state_treatment:
+            treatment, mutation = _entity_state_treatment
             return control, treatment, mutation
     if not schema:
         # No request body schema — but if we have a control body from
@@ -1373,6 +1492,7 @@ def compile_family_protocol(
             operation,
             property_spec,
             actor_catalog=_list(_dict(behavior_ir).get("actors")),
+            behavior_ir=_dict(behavior_ir),
         )
         if not mutation:
             return {
