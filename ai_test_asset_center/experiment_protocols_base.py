@@ -600,14 +600,41 @@ def _non_public_entity_treatment(
         return None
     if not isinstance(control, dict) or not isinstance(behavior_ir, dict):
         return None
-    identity_field = next(
-        (
-            key
-            for key in control
-            if _ENTITY_IDENTITY_FIELD_RE.search(str(key))
-        ),
-        "",
-    )
+    identity_field = ""
+    identity_path = ""
+    # Business-line bodies carry the entity identity inside a detail array
+    # (items[].sku / lines[].code); the treatment must replace the element's
+    # identity field and the json_path records the nested location. Detail
+    # arrays take priority over top-level identity-like fields: a top-level
+    # couponCode names a REFERENCED entity (a coupon), not the business line's
+    # entity, and would mis-target the state substitution.
+    for _body_key, _body_value in control.items():
+        if (
+            isinstance(_body_value, list)
+            and _body_value
+            and isinstance(_body_value[0], dict)
+        ):
+            _inner_field = next(
+                (
+                    key
+                    for key in _body_value[0]
+                    if _ENTITY_IDENTITY_FIELD_RE.search(str(key))
+                ),
+                "",
+            )
+            if _inner_field:
+                identity_field = _inner_field
+                identity_path = f"$.{_body_key}[0].{_inner_field}"
+                break
+    if not identity_field:
+        identity_field = next(
+            (
+                key
+                for key in control
+                if _ENTITY_IDENTITY_FIELD_RE.search(str(key))
+            ),
+            "",
+        )
     if not identity_field:
         return None
     subject_entities = [
@@ -652,7 +679,7 @@ def _non_public_entity_treatment(
     treatment = deepcopy(control)
     mutation = {
         "class": "runtime_entity_state_violation",
-        "json_path": f"$.{identity_field}",
+        "json_path": identity_path or f"$.{identity_field}",
         "resolver_operations": [resolver],
         "identity_field": identity_field,
         "status_field": "status",

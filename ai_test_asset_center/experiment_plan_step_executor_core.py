@@ -431,10 +431,39 @@ def execute_non_barrier_plans(
                                 None,
                             )
                             if _violating is not None:
-                                request_body = {
-                                    **request_body,
-                                    _identity_field: _violating[_identity_field],
-                                }
+                                _json_path = _text(
+                                    _mutation_runtime.get("json_path") or ""
+                                )
+                                _nested_match = re.match(
+                                    r"^\$\.([A-Za-z_]\w*)\[0\]\.([A-Za-z_]\w*)$",
+                                    _json_path,
+                                )
+                                if _nested_match:
+                                    _list_key, _elem_key = _nested_match.groups()
+                                    _list_value = request_body.get(_list_key)
+                                    if (
+                                        isinstance(_list_value, list)
+                                        and _list_value
+                                        and isinstance(_list_value[0], dict)
+                                    ):
+                                        _first = dict(_list_value[0])
+                                        _first[_elem_key] = _violating[
+                                            _identity_field
+                                        ]
+                                        request_body = {
+                                            **request_body,
+                                            _list_key: [
+                                                _first,
+                                                *_list_value[1:],
+                                            ],
+                                        }
+                                else:
+                                    request_body = {
+                                        **request_body,
+                                        _identity_field: _violating[
+                                            _identity_field
+                                        ],
+                                    }
             unresolved_body_tokens = _unresolved_body_placeholders(
                 request_body,
                 runtime_bindings,
