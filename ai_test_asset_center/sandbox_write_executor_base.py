@@ -27,8 +27,10 @@ from typing import Any, Callable
 from .enterprise_project_config import match_production_data_exclusion
 from .behavior_ir_core import _is_ephemeral_session_path
 from .disposable_identity_materializer import (
+    declared_unique_fields,
     disposable_identity_nonce,
     materialize_disposable_identity_fields,
+    materialize_unique_create_fields,
 )
 from .real_id_resolver import collection_path as documented_collection_path
 from .real_id_resolver import (
@@ -599,6 +601,56 @@ def _identity_scoped_entity_observation(write_path: str, observation_path: str) 
     return _is_bound_identity_segment(observe_segs[-1], opaque_required=True)
 
 
+_DECLARED_UNIQUE_FIELDS_CACHE: dict[tuple[str, str], set[str]] = {}
+
+
+def _body_has_batch_create_array(body: Any) -> bool:
+    """True when the body carries a batch-create array (top-level list field).
+
+    Batch-create shapes ({products: [...]}, {items: [...]}) introduce new rows,
+    so their unique-key literals may be safely suffixed. Action-style bodies
+    (claim/approve referencing an existing key) never look like this.
+    """
+    if not isinstance(body, dict):
+        return False
+    return any(
+        isinstance(child, list) and any(isinstance(item, dict) for item in child)
+        for child in body.values()
+    )
+
+
+def _load_declared_unique_fields(root: Any, project: str) -> set[str]:
+    """Load UNIQUE business keys declared in the target's DB schema.
+
+    The declared schema (``platform_workspace/<project>/input/schema.sql`` or
+    ``platform_inputs/<project>/schema.sql``) is visible surface material: its
+    UNIQUE constraints name the business keys a creation write must not reuse
+    across runs. Parsing them keeps the harness industry-neutral — no customer
+    vocabulary is hard-coded; the field set is data-driven. Result is cached
+    per (root, project) because the schema does not change mid-run.
+    """
+    key = (str(root or ""), str(project or ""))
+    cached = _DECLARED_UNIQUE_FIELDS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    candidates = [
+        Path(root) / "platform_workspace" / str(project) / "input" / "schema.sql",
+        Path(root) / "platform_inputs" / str(project) / "schema.sql",
+    ]
+    fields: set[str] = set()
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                fields = declared_unique_fields(
+                    candidate.read_text(encoding="utf-8")
+                )
+                break
+        except OSError:
+            continue
+    _DECLARED_UNIQUE_FIELDS_CACHE[key] = fields
+    return fields
+
+
 def execute_governed_control_write(
     *,
     root: Path,
@@ -712,6 +764,37 @@ def execute_governed_control_write(
         if _materialized_fields:
             body = _disposable_body
             identity_target_is_disposable = True
+    if (
+        allowed
+        and not restorable_identity_mutation
+        and method == "POST"
+    ):
+        # ── Schema-declared unique-key materialization ──
+        # A creation write (single-entity POST or batch-import array) replays a
+        # documented example whose UNIQUE business keys (declared in the
+        # target's DB schema) may already exist from earlier runs — the target
+        # then rejects the write before the rule under test is observed. Unique
+        # key literals get a per-call suffix so every run creates fresh rows.
+        # The materialization is gated on creation semantics (a creation verb
+        # in the path, or a batch-create array body): action-style POSTs such
+        # as claim/approve reference existing unique keys and must never be
+        # rewritten. Identity anchors (email/phone/username) stay with the
+        # disposable channel above; numeric unique keys are never touched.
+        _creation_semantics = bool(
+            _IDENTITY_CREATION_RE.search(
+                normalize_path_placeholders(_text(path)).lower()
+            )
+        ) or _body_has_batch_create_array(body)
+        if _creation_semantics:
+            _unique_fields = _load_declared_unique_fields(root, project)
+            if _unique_fields:
+                _unique_body, _unique_materialized = materialize_unique_create_fields(
+                    body,
+                    disposable_identity_nonce("schema_unique", method, path),
+                    _unique_fields,
+                )
+                if _unique_materialized:
+                    body = _unique_body
     if allowed and not restorable_identity_mutation:
         # Same protected-identity guard ``execute_with_sandbox_write`` applies before
         # its primary write. A governed control write (fixture setup/cleanup) is a
@@ -895,7 +978,7 @@ _PROTECTED_IDENTITY_MUTATION_RE = re.compile(
     re.I,
 )
 _IDENTITY_CREATION_RE = re.compile(
-    r"(?:^|/|_|-)(?:register|signup|sign-up|create|invite|enroll)(?:/|_|-|$)",
+    r"(?:^|/|_|-)(?:register|signup|sign-up|create|invite|enroll|import|add|new|bulk)(?:/|_|-|$)",
     re.I,
 )
 _PROTECTED_IDENTITY_BODY_KEYS = frozenset({
