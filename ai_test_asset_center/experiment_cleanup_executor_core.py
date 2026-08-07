@@ -2427,8 +2427,18 @@ def execute_experiment_cleanup_compensation(
             # updated by later compensating creates (recreate writes bind a
             # fresh id into the shared binding map), and setdefault would
             # silently DELETE the wrong resource — the same id twice, while
-            # the fixture's own row was never touched.
-            cleanup_bindings[cleanup_placeholders[0]] = pending.get("value")
+            # the fixture's own row was never touched. When the pending entry
+            # carries an exact cleanup-identity projection (placeholder ←
+            # create response), that is authoritative: a dependency leaf
+            # (sellerId) must never fill a different cleanup placeholder
+            # ({sku}) with its own value, or the compensation deletes an
+            # unrelated id and the created row is left behind.
+            _cleanup_identity = _dict(pending.get("cleanup_identity"))
+            _ph_value = _cleanup_identity.get(cleanup_placeholders[0])
+            if _ph_value not in (None, "", [], {}):
+                cleanup_bindings[cleanup_placeholders[0]] = _ph_value
+            else:
+                cleanup_bindings[cleanup_placeholders[0]] = pending.get("value")
         cleanup_path = _materialize_path(_text(cleanup.get("path")), cleanup_bindings)
         governed_cleanup = execute_governed_control_write(
             root=root,

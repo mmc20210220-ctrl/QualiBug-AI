@@ -145,7 +145,7 @@ def _normalize_path(value: str) -> str:
 # hard-coded industry term.
 
 _CREATE_TABLE_BLOCK_RE = re.compile(
-    r"CREATE\s+TABLE\s+(?:\w+\.)?\w+\s*\((.*?)\)\s*;",
+    r"CREATE\s+TABLE\s+(?:\w+\.)?(\w+)\s*\((.*?)\)\s*;",
     re.S | re.I,
 )
 _UNIQUE_COLUMN_RE = re.compile(
@@ -160,6 +160,87 @@ _INDEX_UNIQUE_RE = re.compile(
     r"CREATE\s+UNIQUE\s+INDEX[^;]*?\bON\b\s+(?:\w+\.)?\w+\s*\(\s*([^)]+?)\s*\)",
     re.I,
 )
+
+
+_CHECK_ENUM_RE = re.compile(
+    r"CHECK\s*\(\s*(\w+)\s+IN\s*\(([^)]*)\)",
+    re.I,
+)
+
+
+def declared_check_enum_values(schema_text: str) -> dict[str, dict[str, list[str]]]:
+    """Parse CHECK (field IN ('a','b')) constraints from a target DB schema.
+
+    Maps table -> constrained field (normalized) -> declared legal values.
+    Industry-neutral: CHECK-IN constraints are standard SQL present in every
+    enterprise target's schema. Values are lowercased for comparison.
+    """
+    enums: dict[str, dict[str, list[str]]] = {}
+    if not isinstance(schema_text, str) or not schema_text.strip():
+        return enums
+    for block in _CREATE_TABLE_BLOCK_RE.finditer(schema_text):
+        table = _normalize_key(block.group(1))
+        if not table:
+            continue
+        table_enums: dict[str, list[str]] = {}
+        for m in _CHECK_ENUM_RE.finditer(block.group(2)):
+            field = _normalize_key(m.group(1))
+            if not field:
+                continue
+            values = [
+                v.strip().strip("'").strip('"')
+                for v in m.group(2).split(",")
+                if v.strip()
+            ]
+            if values:
+                table_enums[field] = list(dict.fromkeys(values))
+        if table_enums:
+            enums[table] = table_enums
+    return enums
+
+
+def align_body_enums_with_declared_schema(
+    body: Any,
+    enums_by_table: dict[str, dict[str, list[str]]],
+    *,
+    table_hint: str = "",
+) -> tuple[Any, list[str]]:
+    """Replace body values that violate the hinted table's CHECK-IN enum.
+
+    A documented create example can drift from the target's schema (e.g. a
+    product example carrying the users-table status literal ACTIVE while the
+    products status CHECK only allows DRAFT/ON_SALE/OFF_SALE/DELETED). The
+    target then rejects the fixture create with 500 before the rule under
+    test is observed. Replacing the offending literal with the first legal
+    value (verbatim case) of the create's own table keeps the fixture
+    constructible. The
+    table is derived from the create path's collection segment (the standard
+    /api/<table> convention); without a table match the body is left alone
+    rather than guessing. Only string values are touched.
+    """
+    if not enums_by_table or not isinstance(body, dict):
+        return body, []
+    table_key = _normalize_key(table_hint)
+    table_enums = enums_by_table.get(table_key)
+    if not table_enums:
+        return body, []
+    aligned: list[str] = []
+    fixed_body = dict(body)
+    for key, child in body.items():
+        if not isinstance(child, str):
+            continue
+        key_l = _normalize_key(str(key))
+        values = table_enums.get(key_l)
+        if not values:
+            continue
+        lowered = child.lower()
+        if lowered in [v.lower() for v in values]:
+            continue
+        # Constraints are case-sensitive in the target (CHECK IN ('DRAFT',
+        # 'ON_SALE', ...)): replace with the first declared literal verbatim.
+        fixed_body[key] = values[0]
+        aligned.append(str(key))
+    return fixed_body, aligned
 
 
 def _is_identity_anchor_field(field: str) -> bool:
@@ -185,7 +266,7 @@ def declared_unique_fields(schema_text: str) -> set[str]:
     if not isinstance(schema_text, str) or not schema_text.strip():
         return fields
     for block in _CREATE_TABLE_BLOCK_RE.finditer(schema_text):
-        for col in _UNIQUE_COLUMN_RE.finditer(block.group(1)):
+        for col in _UNIQUE_COLUMN_RE.finditer(block.group(2)):
             fields.add(_normalize_key(col.group(1)))
     for m in _TABLE_UNIQUE_RE.finditer(schema_text):
         columns = [c.strip().strip('"') for c in m.group(1).split(",")]
@@ -247,86 +328,6 @@ def materialize_unique_create_fields(
 # is industry-neutral — every enterprise target has one — and keeps the
 # harness out of customer vocabulary: the field set is data-driven, never a
 # hard-coded industry term.
-
-_CREATE_TABLE_BLOCK_RE = re.compile(
-    r"CREATE\s+TABLE\s+(?:\w+\.)?\w+\s*\((.*?)\)\s*;",
-    re.S | re.I,
-)
-
-
-def _is_identity_anchor_field(field: str) -> bool:
-    """True when the unique field is already handled by the disposable channel."""
-    key_l = _normalize_key(field)
-    if not key_l:
-        return True
-    if "password" in key_l or "credential" in key_l or "secret" in key_l:
-        return True
-    return any(token in key_l for token in _IDENTITY_ANCHOR_TOKENS)
-
-
-def declared_unique_fields(schema_text: str) -> set[str]:
-    """Parse UNIQUE business-key columns from a target DB schema.
-
-    Accepts column-level ``UNIQUE`` inside CREATE TABLE blocks, table-level
-    ``UNIQUE(col)`` constraints, and ``CREATE UNIQUE INDEX ... ON t(col)``.
-    Composite constraints are skipped (a single-column suffix cannot keep a
-    multi-column key unique). Identity-anchor fields are excluded because the
-    disposable-identity channel already makes them unique per call.
-    """
-    fields: set[str] = set()
-    if not isinstance(schema_text, str) or not schema_text.strip():
-        return fields
-    for block in _CREATE_TABLE_BLOCK_RE.finditer(schema_text):
-        for col in _UNIQUE_COLUMN_RE.finditer(block.group(1)):
-            fields.add(_normalize_key(col.group(1)))
-    for m in _TABLE_UNIQUE_RE.finditer(schema_text):
-        columns = [c.strip().strip('"') for c in m.group(1).split(",")]
-        if len(columns) == 1:
-            fields.add(_normalize_key(columns[0]))
-    for m in _INDEX_UNIQUE_RE.finditer(schema_text):
-        columns = [c.strip().strip('"') for c in m.group(1).split(",")]
-        if len(columns) == 1:
-            fields.add(_normalize_key(columns[0]))
-    return {f for f in fields if f and not _is_identity_anchor_field(f)}
-
-
-def materialize_unique_create_fields(
-    value: Any,
-    nonce: str,
-    unique_fields: set[str],
-) -> tuple[Any, list[str]]:
-    """Append a per-call nonce to schema-declared unique key literals.
-
-    Applies to creation bodies: single-entity POST bodies whose top-level
-    fields are unique keys, and batch-create arrays (``{products: [...]}``)
-    whose element fields are unique keys. Only string values are touched —
-    numeric unique keys are left alone. Returns the new body and the list of
-    materialized field paths for audit visibility.
-    """
-    if not unique_fields or not isinstance(value, dict):
-        return value, []
-    normalized = {_normalize_key(f) for f in unique_fields}
-    materialized: list[str] = []
-
-    def _unique_replace(item: dict[str, Any], path: str) -> None:
-        for key, child in item.items():
-            key_l = _normalize_key(str(key))
-            if key_l in normalized and isinstance(child, str) and child.strip():
-                item[key] = f"{child}-{nonce}"
-                materialized.append(f"{path}.{key}")
-
-    for key, child in value.items():
-        if isinstance(child, list):
-            for index, element in enumerate(child):
-                if isinstance(element, dict):
-                    _unique_replace(element, f"{key}[{index}]")
-        elif isinstance(child, str):
-            key_l = _normalize_key(str(key))
-            if key_l in normalized and child.strip():
-                value[key] = f"{child}-{nonce}"
-                materialized.append(str(key))
-    return value, materialized
-
 
 
 def _should_skip_materialization(path: str, key: str, skipped: set[str]) -> bool:

@@ -57,6 +57,8 @@ _PARAM_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "order_id": ("order_id", "orderId", "id", "uuid", "order_no", "orderNo"),
     "userid": ("userId", "user_id", "uid", "id"),
     "user_id": ("user_id", "userId", "uid", "id"),
+    "sellerid": ("sellerId", "seller_id", "uid", "id"),
+    "seller_id": ("seller_id", "sellerId", "uid", "id"),
     "addressid": ("addressId", "address_id", "id"),
     "address_id": ("address_id", "addressId", "id"),
     "paymentid": ("paymentId", "payment_id", "id"),
@@ -504,6 +506,10 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
 
     # Scan all entities for each unmatched param
     for param in list(unmatched_params):
+        _explicit_entity_id = (
+            param.lower() not in {"id", "uuid", "pk", "key", "code", "sku"}
+            and param.lower().endswith("id")
+        )
         for source in entities:
             if not isinstance(source, dict):
                 continue
@@ -513,6 +519,19 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
                     and field_name.lower() in generic_identity_fallbacks
                     and param.lower() not in generic_identity_fallbacks
                 ):
+                    continue
+                if (
+                    _explicit_entity_id
+                    and field_name.lower() in {"code", "sku", "business_no"}
+                ):
+                    # An explicit entity-id placeholder (sellerId, orderId,
+                    # addressId, …) must never bind another entity's business
+                    # key (sku/code/business_no): a list row whose id is
+                    # hidden (public view) would otherwise bind its sku into
+                    # the seller path and the target rejects the read with
+                    # 500. Generic identity fields (id/uuid/pk) stay valid
+                    # fallbacks — orderId legitimately binds the order row's
+                    # own id.
                     continue
                 value = source.get(field_name)
                 if isinstance(value, (dict, list, bool)) or value in {None, ""}:

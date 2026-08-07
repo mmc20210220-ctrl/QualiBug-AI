@@ -32,7 +32,15 @@ from .real_id_resolver import (
     normalize_path_placeholders,
     path_has_placeholders,
 )
+from .disposable_identity_materializer import (
+    align_body_enums_with_declared_schema as _align_body_enums_with_declared_schema,
+    declared_check_enum_values as _declared_check_enum_values,
+    declared_unique_fields as _declared_unique_fields,
+    disposable_identity_nonce as _disposable_identity_nonce,
+    materialize_unique_create_fields as _materialize_unique_create_fields,
+)
 from .runtime_binding_materializer import (
+    drop_unresolved_placeholder_fields as _drop_unresolved_placeholder_fields,
     materialize_body_template as _materialize_body_template,
     runtime_setup_value_from_response as _runtime_setup_value_from_response,
     runtime_value_from_response as _runtime_value_from_response,
@@ -241,6 +249,33 @@ def _source_backed_dependency_fixture_setup(
     )
 
 
+_SCHEMA_TEXT_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _load_declared_schema_text(root: Any, project: str) -> str:
+    """Read the target's declared DB schema (visible surface material).
+
+    Cached per (root, project) because the schema does not change mid-run.
+    """
+    key = (str(root or ""), str(project or ""))
+    cached = _SCHEMA_TEXT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    text = ""
+    for candidate in (
+        Path(root) / "platform_workspace" / str(project) / "input" / "schema.sql",
+        Path(root) / "platform_inputs" / str(project) / "schema.sql",
+    ):
+        try:
+            if candidate.is_file():
+                text = candidate.read_text(encoding="utf-8")
+                break
+        except OSError:
+            continue
+    _SCHEMA_TEXT_CACHE[key] = text
+    return text
+
+
 def _auto_fixture_create_for_binding_target(
     target: str,
     binding: dict[str, Any],
@@ -282,6 +317,7 @@ def _auto_fixture_create_for_binding_target(
     if not candidate_paths:
         return None
 
+    matched_op = None
     for op_id, op in operations.items():
         if not isinstance(op, dict):
             continue
@@ -293,77 +329,93 @@ def _auto_fixture_create_for_binding_target(
         )
         op_collection = normalize_path_placeholders(_collection_path(op_path))
         if op_path in candidate_paths or op_collection in candidate_paths:
-            # Prefer identity-bound DELETE; otherwise accept a source-shaped
-            # compensation action on the same collection (e.g. …/{id}/cancel).
-            from .runtime_binding_graph import (
-                _declared_cleanup_operations,
-                _request_example,
-            )
-
-            source_ir = _dict(behavior_ir)
-            if not source_ir:
-                source_ir = {"operations": list(operations.values())}
-            selected_cleanup = _declared_cleanup_operations(
-                op_collection,
-                behavior_ir=source_ir,
-            )
-            if not selected_cleanup and not accepted_residue_allowed:
-                # Without a source-declared compensator the fixture create is
-                # refused unless the environment gate above explicitly allows
-                # accepted residue (declared non-production targets only).
+            matched_op = (op_id, op, op_path, op_collection)
+            break
+        # Direct sub-collection create: a create at /api/products/admin is a
+        # create ON the /api/products collection (one extra segment). Deeper
+        # nested paths (…/{sku}/status) act on an existing entity and must
+        # never serve as the create fixture.
+        for cp in candidate_paths:
+            base = normalize_path_placeholders(_text(cp)).rstrip("/")
+            if not base:
                 continue
-            owner = _text(binding.get("fixture_owner_actor_ref"))
-            actor_refs = [owner] if owner else []
-            # Auto-create has no permits-bound owner. The runtime actor picker
-            # (_select_fixture_actor) prefers the control/treatment plan actors
-            # and only falls back to another executable declared actor, so the
-            # candidate pool may safely contain every non-anonymous campaign
-            # actor: the created disposable resource stays plan-visible while
-            # the final identity is still plan-aligned. Anonymous/public actors
-            # cannot own a resource, so they are excluded.
-            if not actor_refs and actors:
-                actor_refs = [
-                    candidate_ref
-                    for candidate_ref, candidate in actors.items()
-                    if isinstance(candidate, dict)
-                    and _text(candidate.get("role")).lower()
-                    not in {"anonymous", "public"}
-                ]
-            if not actor_refs:
-                continue
-            fixture_setup: dict[str, Any] = {
-                "operation_ref": op_id,
-                "method": "POST",
-                "path": op_path,
-                # Tokenized body template: placeholder identity literals
-                # (zero/near-nil UUIDs in the raw schema example) become
-                # {field} tokens so validated_fixture_setup can derive
-                # body_bindings and the runtime fills real references —
-                # sending the raw placeholder reaches the target as an
-                # invalid FK reference (500).
-                "body_template": _request_example(op),
-                "cleanup_operations": selected_cleanup,
-                "actor_refs": actor_refs,
-            }
-            if not selected_cleanup:
-                # Accepted residue: the run leaves the created resource behind
-                # on a declared non-production target. The cleanup phase emits
-                # a RESIDUE_ACCEPTED receipt so the leftover stays visible —
-                # never disguised as a real cleanup.
-                fixture_setup["accepted_residue"] = {
-                    "mode": "accepted_residue_no_cleanup",
-                    "residue_notice": f"no_source_compensator:{op_id}",
-                }
-            return {
-                "fixture_setup": fixture_setup,
-                "force_fixture_setup": True,
-                "create_operation_ref": op_id,
-                "create_path": op_path,
-                "create_method": "POST",
-                "synthetic_value": None,
-            }
+            if op_collection.startswith(base + "/") and "/" not in op_collection[len(base) + 1:]:
+                matched_op = (op_id, op, op_path, op_collection)
+                break
+        if matched_op:
+            break
+    if matched_op is None:
+        return None
+    op_id, op, op_path, op_collection = matched_op
+    # Prefer identity-bound DELETE; otherwise accept a source-shaped
+    # compensation action on the same collection (e.g. …/{id}/cancel).
+    from .runtime_binding_graph import (
+        _declared_cleanup_operations,
+        _request_example,
+    )
 
-    return None
+    source_ir = _dict(behavior_ir)
+    if not source_ir:
+        source_ir = {"operations": list(operations.values())}
+    selected_cleanup = _declared_cleanup_operations(
+        op_collection,
+        behavior_ir=source_ir,
+    )
+    if not selected_cleanup and not accepted_residue_allowed:
+        # Without a source-declared compensator the fixture create is
+        # refused unless the environment gate above explicitly allows
+        # accepted residue (declared non-production targets only).
+        return None
+    owner = _text(binding.get("fixture_owner_actor_ref"))
+    actor_refs = [owner] if owner else []
+    # Auto-create has no permits-bound owner. The runtime actor picker
+    # (_select_fixture_actor) prefers the control/treatment plan actors
+    # and only falls back to another executable declared actor, so the
+    # candidate pool may safely contain every non-anonymous campaign
+    # actor: the created disposable resource stays plan-visible while
+    # the final identity is still plan-aligned. Anonymous/public actors
+    # cannot own a resource, so they are excluded.
+    if not actor_refs and actors:
+        actor_refs = [
+            candidate_ref
+            for candidate_ref, candidate in actors.items()
+            if isinstance(candidate, dict)
+            and _text(candidate.get("role")).lower()
+            not in {"anonymous", "public"}
+        ]
+    if not actor_refs:
+        return None
+    fixture_setup: dict[str, Any] = {
+        "operation_ref": op_id,
+        "method": "POST",
+        "path": op_path,
+        # Tokenized body template: placeholder identity literals
+        # (zero/near-nil UUIDs in the raw schema example) become
+        # {field} tokens so validated_fixture_setup can derive
+        # body_bindings and the runtime fills real references —
+        # sending the raw placeholder reaches the target as an
+        # invalid FK reference (500).
+        "body_template": _request_example(op),
+        "cleanup_operations": selected_cleanup,
+        "actor_refs": actor_refs,
+    }
+    if not selected_cleanup:
+        # Accepted residue: the run leaves the created resource behind
+        # on a declared non-production target. The cleanup phase emits
+        # a RESIDUE_ACCEPTED receipt so the leftover stays visible —
+        # never disguised as a real cleanup.
+        fixture_setup["accepted_residue"] = {
+            "mode": "accepted_residue_no_cleanup",
+            "residue_notice": f"no_source_compensator:{op_id}",
+        }
+    return {
+        "fixture_setup": fixture_setup,
+        "force_fixture_setup": True,
+        "create_operation_ref": op_id,
+        "create_path": op_path,
+        "create_method": "POST",
+        "synthetic_value": None,
+    }
 
 
 def materialize_experiment_fixtures(
@@ -1146,9 +1198,11 @@ def materialize_experiment_fixtures(
                                 actor_token=dep_token,
                                 method=_text(dep_setup.get("method")).upper(),
                                 path=_text(dep_setup.get("path")),
-                                body=_materialize_body_template(
-                                    dep_setup.get("body_template"),
-                                    {},
+                                body=_drop_unresolved_placeholder_fields(
+                                    _materialize_body_template(
+                                        dep_setup.get("body_template"),
+                                        {},
+                                    )
                                 ),
                                 observation_path=dep_observation
                                 or _text(dep_setup.get("path")),
@@ -1186,9 +1240,32 @@ def materialize_experiment_fixtures(
                                     if _dep_cleanup_ops
                                     else {}
                                 )
+                                # The cleanup route may carry a placeholder that
+                                # differs from the dependency leaf (a sellerId
+                                # binding whose DELETE compensator deletes by
+                                # {sku}). Resolve each cleanup placeholder from
+                                # the create response itself, so the compensation
+                                # targets the exact created row instead of
+                                # reusing the dependency value (which would
+                                # DELETE an unrelated id and leave the created
+                                # row behind, failing restoration).
+                                _dep_cleanup_identity: dict[str, Any] = {}
+                                if isinstance(_dep_first_cleanup, dict):
+                                    from .real_id_resolver import infer_path_params as _infer_path_params
+                                    for _ph in _infer_path_params(
+                                        _text(_dep_first_cleanup.get("path"))
+                                    ):
+                                        _ph_val = _runtime_value_from_response(
+                                            dep_write.get("body"),
+                                            _ph,
+                                            f"/{{{_ph}}}",
+                                        )
+                                        if _ph_val not in (None, "", [], {}):
+                                            _dep_cleanup_identity[_ph] = _ph_val
                                 _dep_pending_entry: dict[str, Any] = {
                                     "target": dependency_leaf,
                                     "value": dependency_value,
+                                    "cleanup_identity": _dep_cleanup_identity,
                                     "observation_path": dep_observation
                                     or _text(dep_setup.get("path")),
                                     "cleanup": dict(_dep_first_cleanup)
@@ -1252,10 +1329,50 @@ def materialize_experiment_fixtures(
                             )
                         _fs_diag["dependency"] = dependency_leaf
                 if fixture_setup and not dependency_blocked:
-                    setup_body = _materialize_body_template(
-                        fixture_setup.get("body_template"),
-                        token_values,
+                    setup_body = _drop_unresolved_placeholder_fields(
+                        _materialize_body_template(
+                            fixture_setup.get("body_template"),
+                            token_values,
+                        )
                     )
+                    # A documented create example can drift from the target's
+                    # schema CHECK-IN enums (e.g. a product example carrying
+                    # the users-table status literal). Align those literals to
+                    # the create's own table so the fixture write is accepted
+                    # instead of rejected with 500 before the rule under test
+                    # is observed. The table comes from the create path's
+                    # collection segment; no table match means no alignment.
+                    _schema_enums = _declared_check_enum_values(
+                        _load_declared_schema_text(root, project)
+                    )
+                    if _schema_enums:
+                        _hint_table = _text(fixture_setup.get("path")).strip("/").split("/")[1:2]
+                        _hint_table = _hint_table[0] if _hint_table else ""
+                        setup_body, _aligned_enums = _align_body_enums_with_declared_schema(
+                            setup_body,
+                            _schema_enums,
+                            table_hint=_hint_table,
+                        )
+                    # A fixture create is creation by definition: schema-declared
+                    # unique key literals (sku, code, order_no, …) get a per-run
+                    # suffix so repeated campaigns never collide with rows left
+                    # by earlier runs. Experiment writes keep their own channel
+                    # (verb/array-gated in the governed writer); this layer
+                    # cannot misclassify action-style POSTs because it only
+                    # runs for fixture setup bodies.
+                    _fixture_unique_fields = _declared_unique_fields(
+                        _load_declared_schema_text(root, project)
+                    )
+                    if _fixture_unique_fields:
+                        setup_body, _uniq_fields = _materialize_unique_create_fields(
+                            setup_body,
+                            _disposable_identity_nonce(
+                                "fixture_unique",
+                                _text(fixture_setup.get("method")),
+                                _text(fixture_setup.get("path")),
+                            ),
+                            _fixture_unique_fields,
+                        )
 
                     # Fixture create-only plans have no list-read resolver.
                     # Observe the create collection itself (no placeholders) so
@@ -1360,9 +1477,32 @@ def materialize_experiment_fixtures(
                             })
                             _cleanup_ops = _list(fixture_setup.get("cleanup_operations"))
                             _first_cleanup = _cleanup_ops[0] if len(_cleanup_ops) > 0 else {}
+                            # The cleanup route may carry a placeholder that
+                            # differs from the binding target (a sellerId
+                            # binding whose DELETE compensator deletes by
+                            # {sku}). Project each cleanup placeholder from the
+                            # create response itself so the compensation hits
+                            # the exact created row; the binding value (seller
+                            # id) must never fill a different placeholder.
+                            _cleanup_identity: dict[str, Any] = {}
+                            if isinstance(_first_cleanup, dict):
+                                from .real_id_resolver import (
+                                    infer_path_params as _infer_path_params,
+                                )
+                                for _ph in _infer_path_params(
+                                    _text(_first_cleanup.get("path"))
+                                ):
+                                    _ph_val = _runtime_value_from_response(
+                                        setup_write.get("body"),
+                                        _ph,
+                                        f"/{{{_ph}}}",
+                                    )
+                                    if _ph_val not in (None, "", [], {}):
+                                        _cleanup_identity[_ph] = _ph_val
                             _pending_entry: dict[str, Any] = {
                                 "target": target,
                                 "value": value,
+                                "cleanup_identity": _cleanup_identity,
                                 "observation_path": observation_path,
                                 "cleanup": dict(_first_cleanup) if isinstance(_first_cleanup, dict) else {},
                                 "receipt": receipt,

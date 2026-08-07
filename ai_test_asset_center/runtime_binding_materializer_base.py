@@ -487,6 +487,34 @@ def materialize_path(path: str, bindings: dict[str, Any]) -> str:
     return materialized
 
 
+def drop_unresolved_placeholder_fields(value: Any) -> Any:
+    """Drop body fields whose template placeholder never resolved.
+
+    A fixture create may carry server-assigned identity placeholders
+    (sellerId on product create) that no declared list-read can supply — the
+    target assigns them from the authenticated actor. Sending the raw
+    "{field}" literal makes the target reject the create (invalid reference)
+    and the binding fails before the rule under test is observed. Dropping
+    the field lets the target default it; a genuinely required field fails
+    the create and the binding blocks honestly instead.
+    """
+    if isinstance(value, dict):
+        return {
+            key: drop_unresolved_placeholder_fields(child)
+            for key, child in value.items()
+            if not (
+                isinstance(child, str)
+                and _BODY_PLACEHOLDER_RE.match(child)
+            )
+        }
+    if isinstance(value, list):
+        return [
+            drop_unresolved_placeholder_fields(child)
+            for child in value
+        ]
+    return value
+
+
 def materialize_body_template(
     value: Any,
     token_values: dict[str, Any],
@@ -696,6 +724,15 @@ def _derive_body_bindings_from_template(
             )
             if db_resolver:
                 resolvers.append(db_resolver)
+        if not resolvers:
+            # A placeholder with no declared resolver is a server-assigned
+            # identity: the target derives it from the authenticated actor
+            # (e.g. sellerId on product create). It is not a resolvable
+            # dependency — the create drops the field from the request body
+            # and the target fills it. Without this, a create whose example
+            # carries such a field fails validation and the binding can never
+            # be constructed.
+            continue
         derived.append({
             "target": _text(row.get("target")),
             "template_token": token,
