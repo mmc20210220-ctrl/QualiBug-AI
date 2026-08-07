@@ -5120,6 +5120,17 @@ def build_behavior_ir_from_knowledge_asset(
             _inv_typed["field_ids"] = _inv_field_ids
         if _semantic_frame:
             _inv_typed["semantic_frame"] = _semantic_frame
+        # P0-E phase 2: the v1 extractor confirmation gate (composition,
+        # apply_v1_extractor_frame_confirmation) marks legacy regex-candidate
+        # rules CONFIRMED / FALLBACK_UNGROUNDED / UNCONFIRMED_NO_FRAME.
+        # Carry the status onto the invariant so the demotion is observable
+        # end-to-end. Rules without the status (ledger-less assets, non-v1
+        # rules) are untouched and stay byte-identical.
+        if _text(rule.get("frame_confirmation")):
+            _inv_typed["frame_confirmation"] = _text(rule.get("frame_confirmation"))
+            _inv_typed["frame_confirmation_reason"] = _text(
+                rule.get("frame_confirmation_reason") or ""
+            )
         # ── Action-word → operation binding ──
         # A source rule names the operations it governs through its action
         # verbs (已取消订单不能支付、发货、确认收货 → pay/ship/confirm).

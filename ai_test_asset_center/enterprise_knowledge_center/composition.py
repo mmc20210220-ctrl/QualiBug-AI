@@ -54,6 +54,7 @@ from .database_table_source_alignment import (
 )
 from ._chinese_business_comprehension import (
     analyze_chinese_business_source,
+    apply_v1_extractor_frame_confirmation,
     close_state_guard_coordinates,
     synchronize_rule_library_from_facts,
 )
@@ -1684,6 +1685,10 @@ def refresh_enterprise_business_knowledge_asset_incremental(
         asset = enrich_frames_with_clause_structure(asset)
         asset = resolve_chinese_semantic_context(asset)
         asset = ground_semantic_frames(asset)
+        # P0-E phase 2: v1 regex-candidate rules are decided against the
+        # grounded frame SSOT (CONFIRMED / FALLBACK_UNGROUNDED /
+        # UNCONFIRMED_NO_FRAME) with an observable receipt.
+        asset = apply_v1_extractor_frame_confirmation(asset)
         asset, _discarded = _downstream.refresh_chinese_business_downstream(
             asset,
             max_probe_count=0,
@@ -2221,6 +2226,11 @@ def build_enterprise_business_knowledge_asset(
     # channel: grounded frames now contribute owns/permits/denies relations
     # (deduped against legacy by canonical node ids and permission-row scope).
     asset = ground_semantic_frames(asset)
+
+    # P0-E phase 2: v1 regex-candidate rules are decided against the
+    # grounded frame SSOT (CONFIRMED / FALLBACK_UNGROUNDED /
+    # UNCONFIRMED_NO_FRAME) with an observable receipt.
+    asset = apply_v1_extractor_frame_confirmation(asset)
 
     # Downstream rule/oracle projection is still needed before Job projection, but
     # Probe compilation remains deferred to the final stage.

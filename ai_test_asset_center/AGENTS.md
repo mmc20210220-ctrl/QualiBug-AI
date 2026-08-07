@@ -197,7 +197,7 @@ by replacing host methods:
 | Chinese clause structure (P0-B) | `enterprise_understanding/chinese_context_envelope.py` (block coordinates over `document_structure_assets`: section paths, list-stack ancestor chains, table row/column headers, unique quote lookup — structure only, zero business inference) + `chinese_clause_parser.py` (atomic clause trees `qualibug.chinese-clause-tree.v1`: enumeration action candidates, negation scope, condition leaves, exception nodes; language-function words only, no industry vocabulary) + `chinese_semantic_frame_compiler.py` (frame enrichment: list-parent condition inheritance, table header mention injection, enumeration mentions, exception merge; signature recomputed; idempotent) |
 | Chinese context resolution (P0-C) | `enterprise_understanding/chinese_context_resolver.py` (frame-level omitted-actor recovery from unique evidence — only-if subject, unique prior frame in the same section, unique section heading; mention-level coreference: 该X/本X/此X explicit same-sentence nouns, bare pronouns need exactly one candidate; `document_context` section/list/neighbor population; UNKNOWN never force-bound; raw text never rewritten) |
 | Concept & grounding (P0-D) | `enterprise_understanding/business_concept_registry.py` (explicit-evidence concept layer: label→canonical with priority understanding_model > identity_registry > permission_matrix > data_tables; similarity never merges) + `chinese_semantic_grounding.py` (evidence chains per SPEC §12.2: actor = permission matrix > roles > UI contract > concept registry; operation = rule ref > summary verbatim > description > rule_to_interface > formal UI contract > structural entity+CRUD; entity = declared object labels/aliases; state = field-description enum / state machines; scope = ownership phrases → structured OWN; every binding has a typed GROUNDED/AMBIGUOUS/UNKNOWN receipt) |
-| Legacy Chinese parse demotion (P0-E) | `behavior_ir_core.py` `build_behavior_ir_from_knowledge_asset` (frame-confirmation gate over the six legacy Chinese-text parse products + `model["legacy_semantic_fallback_receipt"]`) |
+| Legacy Chinese parse demotion (P0-E) | `behavior_ir_core.py` `build_behavior_ir_from_knowledge_asset` (frame-confirmation gate over the six legacy Chinese-text parse products + `model["legacy_semantic_fallback_receipt"]`) + `_chinese_business_comprehension_extractor_v1.py` (candidate marking) + `_chinese_business_comprehension/__init__.py` `apply_v1_extractor_frame_confirmation` (phase-2 rule confirmation gate + `asset["v1_extractor_demotion_receipt"]`) |
 
 Chinese semantic frame contract (P0-A): the frame ledger is projected in
 `composition.py` after the second cognition pass (both full and incremental
@@ -309,15 +309,42 @@ makes the frame channel the Chinese-semantics SSOT per parse product:
   builds; their receipt records only NO_FRAME_LEDGER-style counts (nothing
   else is a "fallback" when no SSOT exists). `validate_behavior_ir` does not
   see the receipt (it is not part of the behavior model).
+V1 extractor regex demotion (P0-E phase 2): the legacy fixed-vocabulary
+regex extractor (`_chinese_business_comprehension_extractor_v1.py`) is a
+candidate discovery layer, never a self-asserted fact authority:
+- Every fact it produces (`analyze_chinese_business_source` document path
+  and `project_openapi_interface_chinese_spans` OpenAPI prose path) carries
+  `semantic_candidate=True` + `candidate_reason=legacy_regex_vocabulary_hit`
+  (TERM_ALIAS glossary rows are dictionaries, not business rules);
+  `_rule_from_fact` rules inherit the marker. The marker survives the
+  structure-first compiler's same-signature merge (`_atomize_existing_fact`
+  preserves unknown fields) — it states the rule text's legacy regex origin.
+- `apply_v1_extractor_frame_confirmation` (in
+  `_chinese_business_comprehension/__init__.py`) runs in `composition.py`
+  right after `ground_semantic_frames` on BOTH the full and incremental
+  paths. It decides each candidate rule against the frame SSOT with the same
+  identity and groundedness semantics as the P0-E behavior-IR gate (origin
+  fact id ↔ `zh_business:<fact tail>`, then statement text; grounded =
+  technical_grounding op/actor/entity refs resolved): frame grounded →
+  `frame_confirmation=CONFIRMED` (FRAME_GROUNDED); frame ungrounded →
+  FALLBACK_UNGROUNDED (FRAME_UNGROUNDED); no frame → UNCONFIRMED_NO_FRAME
+  (NO_FRAME_FOR_RULE). The decision rides on the rule and is receipted in
+  `asset["v1_extractor_demotion_receipt"]`
+  (`qualibug.v1-extractor-demotion-receipt.v1`: frame_ledger_present,
+  candidate_rule_count, confirmed_count, kind_counts,
+  reason_codes=[V1_EXTRACTOR_CANDIDATE_DEMOTION]).
+- `behavior_ir_core` carries `frame_confirmation` + reason onto the invariant
+  (transparent pass — rules without the status gain nothing), so the
+  demotion is observable end-to-end. Assets without a frame ledger are
+  untouched: no `frame_confirmation` field, receipt records only
+  V1_EXTRACTOR_NO_FRAME_LEDGER, and the Behavior IR stays byte-identical.
 - Not migrated here (P0-E follow-up increments, registered): obligation
   compiler family Chinese tokens (库存/金额/隐私/过期/可见/状态,
   _OWNERSHIP_LANGUAGE_MARKERS, _ABSENT/_MASK_MARKERS) — migrate after the IR
   carries structured frame family evidence; `behavior_semantic_mapper`
   finding-enrichment dictionaries (PAGE_MAP/ROLE_ACTIONS/RISK_IMPACT/
-  SQL_HINTS); the v1 extractor's hit-is-fact path
-  (`_chinese_business_comprehension_extractor_v1.py`) — second phase of
-  P0-E. The 131-bug benchmark re-run remains the activation verification
-  gate and is executed separately from the unit/CI gates.
+  SQL_HINTS). The 131-bug benchmark re-run remains the activation
+  verification gate and is executed separately from the unit/CI gates.
 
 
 Side-effect-free import rule: importing `ai_test_asset_center` must be

@@ -138,3 +138,147 @@ def build_chinese_first_comprehension(
     materialize_role_inheritance_contracts(enriched, sources)
     materialize_sod_contracts(enriched, sources)
     return materialize_fact_permission_matrix(enriched)
+
+
+V1_EXTRACTOR_DEMOTION_RECEIPT_SCHEMA = "qualibug.v1-extractor-demotion-receipt.v1"
+
+_FRAME_CONFIRMATION_REASONS = frozenset(
+    {
+        "FRAME_GROUNDED",
+        "FRAME_UNGROUNDED",
+        "NO_FRAME_FOR_RULE",
+    }
+)
+
+
+def _v1_frame_grounded(frame: dict[str, Any]) -> bool:
+    """A frame is grounded when the P0-D grounding engine resolved at least
+    one technical ref the frame channel can emit relations from
+    (GROUNDED/PARTIAL status; PENDING frames are not grounded). Mirrors
+    behavior_ir_core's P0-E gate exactly."""
+    if not isinstance(frame, dict):
+        return False
+    grounding = _dict(frame.get("technical_grounding"))
+    return bool(
+        _list(grounding.get("operation_refs"))
+        or _list(grounding.get("actor_refs"))
+        or _list(grounding.get("entity_refs"))
+    )
+
+
+def _v1_frame_for_rule(
+    rule_id: str,
+    statement: str,
+    frames: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Locate the frame for a rule (identity mirrors
+    chinese_semantic_grounding._find_rule: origin fact id ↔
+    zh_business:<fact tail>, then statement text)."""
+    by_fact_id: dict[str, dict[str, Any]] = {}
+    by_fact_tail: dict[str, dict[str, Any]] = {}
+    by_statement: dict[str, dict[str, Any]] = {}
+    for frame in frames:
+        fact_id = _text(_dict(frame.get("origin")).get("origin_fact_id"))
+        if fact_id:
+            by_fact_id.setdefault(fact_id, frame)
+            tail = fact_id.split(":", 1)[-1]
+            if tail:
+                by_fact_tail.setdefault(tail, frame)
+        quote = _text(_dict(frame.get("source_span")).get("quote")).strip()
+        if quote:
+            by_statement.setdefault(quote, frame)
+    if not rule_id and not statement:
+        return {}
+    frame = by_fact_id.get(rule_id)
+    if frame:
+        return frame
+    if rule_id.startswith("zh_business:"):
+        tail = rule_id.split(":", 1)[-1]
+        frame = by_fact_tail.get(tail) or by_fact_tail.get(tail[-20:])
+        if frame:
+            return frame
+    return by_statement.get(_text(statement).strip(), {})
+
+
+def apply_v1_extractor_frame_confirmation(asset: dict[str, Any]) -> dict[str, Any]:
+    """P0-E phase 2 confirmation gate over v1 extractor candidate rules.
+
+    Every rule the legacy fixed-vocabulary regex extractor produced
+    (semantic_candidate=True) is decided against the Chinese Semantic Frame
+    SSOT after P0-D grounding:
+    - frame grounded → CONFIRMED (SSOT wins; FRAME_GROUNDED)
+    - frame exists but ungrounded → FALLBACK_UNGROUNDED (legacy fallback,
+      receipted)
+    - no frame for the rule → UNCONFIRMED_NO_FRAME (legacy fallback,
+      receipted)
+    - no frame ledger → compat path: rules are untouched (no
+      frame_confirmation field) and the receipt only records
+      V1_EXTRACTOR_NO_FRAME_LEDGER.
+
+    The confirmation status rides on the rule (asset layer) and is carried
+    onto the Behavior IR invariant (behavior_ir_core transparent pass), so
+    the demotion is observable end-to-end and the ledger-less assets stay
+    byte-identical. Returns the receipt.
+    """
+    ledger = _dict(asset.get("chinese_semantic_frame_ledger"))
+    frames = [
+        row for row in _list(ledger.get("items")) if isinstance(row, dict)
+    ]
+    frame_ledger_present = bool(frames)
+    kind_counts: dict[str, int] = {}
+    candidate_rule_count = 0
+    confirmed_count = 0
+
+    for rule in _list(asset.get("rule_library")):
+        if not isinstance(rule, dict) or rule.get("semantic_candidate") is not True:
+            continue
+        candidate_rule_count += 1
+        if not frame_ledger_present:
+            # Compat path: no SSOT exists, so nothing is a fallback.
+            continue
+        rule_id = _text(rule.get("rule_id"))
+        statement = _text(rule.get("statement"))
+        frame = _v1_frame_for_rule(rule_id, statement, frames)
+        if frame and _v1_frame_grounded(frame):
+            rule["frame_confirmation"] = "CONFIRMED"
+            rule["frame_confirmation_reason"] = "FRAME_GROUNDED"
+            kind_counts["V1_CANDIDATE_CONFIRMED_BY_FRAME"] = (
+                kind_counts.get("V1_CANDIDATE_CONFIRMED_BY_FRAME", 0) + 1
+            )
+            confirmed_count += 1
+        elif frame:
+            rule["frame_confirmation"] = "FALLBACK_UNGROUNDED"
+            rule["frame_confirmation_reason"] = "FRAME_UNGROUNDED"
+            kind_counts["V1_CANDIDATE_FRAME_UNGROUNDED_FALLBACK"] = (
+                kind_counts.get("V1_CANDIDATE_FRAME_UNGROUNDED_FALLBACK", 0) + 1
+            )
+        else:
+            rule["frame_confirmation"] = "UNCONFIRMED_NO_FRAME"
+            rule["frame_confirmation_reason"] = "NO_FRAME_FOR_RULE"
+            kind_counts["V1_CANDIDATE_NO_FRAME_FOR_RULE"] = (
+                kind_counts.get("V1_CANDIDATE_NO_FRAME_FOR_RULE", 0) + 1
+            )
+
+    if not frame_ledger_present:
+        kind_counts["V1_EXTRACTOR_NO_FRAME_LEDGER"] = candidate_rule_count
+
+    receipt = {
+        "schema": V1_EXTRACTOR_DEMOTION_RECEIPT_SCHEMA,
+        "frame_ledger_present": frame_ledger_present,
+        "candidate_rule_count": candidate_rule_count,
+        "confirmed_count": confirmed_count,
+        "kind_counts": dict(sorted(kind_counts.items())),
+        "reason_codes": (
+            ["V1_EXTRACTOR_CANDIDATE_DEMOTION"]
+            if frame_ledger_present and kind_counts
+            else []
+        ),
+        "contract": {
+            "gate": "v1_extractor_frame_confirmation",
+            "frame_grounded_wins": True,
+            "legacy_fallback_observable": True,
+            "no_ledger_behavior_unchanged": True,
+        },
+    }
+    asset["v1_extractor_demotion_receipt"] = receipt
+    return receipt

@@ -1655,7 +1655,25 @@ def project_openapi_interface_chinese_spans(
                 }
             )
             facts.extend(chunk_facts)
+    _mark_legacy_regex_candidate(facts)
     return coverage, facts
+
+
+def _mark_legacy_regex_candidate(facts: list[dict[str, Any]]) -> None:
+    """P0-E phase 2: every v1 extractor product is a legacy fixed-vocabulary
+    regex hit — a candidate hint, never a self-asserted final fact. The frame
+    confirmation gate (apply_v1_extractor_frame_confirmation) decides the
+    rule's final status against the Chinese Semantic Frame SSOT."""
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        if _text(fact.get("fact_type") or fact.get("kind")) == "TERM_ALIAS":
+            # Glossary alias rows are dictionaries, not business-rule facts.
+            continue
+        if fact.get("semantic_candidate") is True:
+            continue
+        fact["semantic_candidate"] = True
+        fact["candidate_reason"] = "legacy_regex_vocabulary_hit"
 
 
 def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1834,6 +1852,7 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
             "ambiguities": sorted(set(chunk_ambiguities)),
             "source_locator": locator,
         })
+    _mark_legacy_regex_candidate(facts)
     return coverage, facts, glossary
 
 
@@ -1927,6 +1946,8 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         "authorization_delegation": _dict(fact.get("authorization_delegation")),
         "confidence": fact.get("confidence"),
         "derivation": "chinese_first_business_comprehension",
+        "semantic_candidate": bool(fact.get("semantic_candidate")),
+        "candidate_reason": _text(fact.get("candidate_reason") or ""),
         "document_block_id": _text(
             span.get("document_block_id")
             or attachment.get("document_block_id")
