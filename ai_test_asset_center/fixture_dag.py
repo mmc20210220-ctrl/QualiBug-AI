@@ -114,6 +114,25 @@ def build_fixture_dag_for_experiment(
                     "reason_code": "BLOCKED_MISSING_BINDING",
                     "detail": f"runtime resolver invalid for {target}",
                 })
+        elif (
+            status == "bound"
+            and _text(item.get("source_priority")) == "source_declared_path_example"
+            and item.get("materialized_value") not in (None, "")
+        ):
+            # Source-declared path example binding: the operation's own
+            # documented parameter example is the value — no resolver read or
+            # fixture creation is needed, so the node is constructible with no
+            # read proof.
+            nodes.append({
+                "node_id": nid,
+                "kind": "runtime_read_binding",
+                "target": target,
+                "source_priority": "source_declared_path_example",
+                "resolver_operations": [],
+                "materialized_value": str(item.get("materialized_value")),
+                "requires_read_proof": False,
+                "constructible": True,
+            })
         elif status == "fixture_proof":
             create_path = _text(item.get("create_path"))
             owner_actor_ref = _text(item.get("owner_actor_ref"))

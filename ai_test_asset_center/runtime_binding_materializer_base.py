@@ -469,6 +469,16 @@ def runtime_binding_contract_ready(
                 == "runtime_resolvable"
                 and bool(_dict(_dict(bindings.get(target)).get("fixture_setup")))
             )
+            # source_declared_path_example: the operation's own documented
+            # parameter example is the value — bound at compile, no resolver
+            # or fixture required at runtime.
+            or (
+                _text(_dict(bindings.get(target)).get("status")) == "bound"
+                and _text(_dict(bindings.get(target)).get("source_priority"))
+                == "source_declared_path_example"
+                and _dict(bindings.get(target)).get("materialized_value")
+                not in (None, "")
+            )
         )
         for target in targets
     )

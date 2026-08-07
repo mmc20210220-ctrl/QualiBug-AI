@@ -231,12 +231,21 @@ def _rescue_binding_for_response_only_family(
         and ":" not in _text(row.get("path"))
     ]
     fixture = {} if resolvers else _find_collection_create_fixture(primary_op, behavior_ir)
-    if not resolvers and not fixture:
-        return False
     _primary_path = normalize_path_placeholders(
         _text(primary_op.get("path") or primary_op.get("raw_path"))
     )
     _primary_params = set(infer_path_params(_primary_path))
+    _example_bindings: dict[str, Any] = {}
+    if not resolvers and not fixture:
+        # No collection resolver and no create fixture: the operation's own
+        # source-declared path-parameter examples are the final source-grounded
+        # fallback. A blocked target without an example stays blocked.
+        _example_bindings = (
+            _source_declared_path_example_bindings(primary_op, sorted(_primary_params))
+            or {}
+        )
+        if not _example_bindings:
+            return False
     rescued = False
     for entry in binding_plan:
         if not isinstance(entry, dict):
@@ -255,6 +264,19 @@ def _rescue_binding_for_response_only_family(
             or _entry_target not in _primary_params
         ):
             continue
+        # Source-declared example fallback: no resolver and no fixture — the
+        # operation's own path-parameter example is the last source-grounded
+        # value (part of the declared contract, never an invented id).
+        if not resolvers and not entry.get("fixture_setup"):
+            example_entry = _example_bindings.get(_entry_target)
+            if not example_entry:
+                continue
+            entry["status"] = example_entry["status"]
+            entry["materialized_value"] = example_entry["materialized_value"]
+            entry["source_priority"] = example_entry["source_priority"]
+            entry.pop("blocked_reason", None)
+            rescued = True
+            continue
         entry["status"] = "runtime_resolvable"
         entry.pop("blocked_reason", None)
         if resolvers:
@@ -268,6 +290,56 @@ def _rescue_binding_for_response_only_family(
     return rescued
 
 
+def _source_declared_path_example_bindings(
+    primary_op: dict[str, Any],
+    unresolved: list[str],
+) -> dict[str, Any] | None:
+    """Source-declared example fallback for unresolved path placeholders.
+
+    When neither a collection GET resolver nor a create fixture exists for a
+    placeholder, the operation's own path-parameter ``example`` is the last
+    source-grounded value available: it is part of the operation contract the
+    customer declared, not an invented id. Binding it keeps the probe
+    compilable — the target's answer to the documented example resource is a
+    legitimate observation (2xx on an unauthorized actor is the leak
+    evidence; 404 means the role check passed and the resource is absent,
+    which the 4xx-class assertion reads correctly under HTTP semantics).
+    Returns a target→binding map, or None when the operation declares no
+    example for any unresolved placeholder (the probe stays a visible
+    BLOCKED rather than guessing).
+    """
+    parameters = _list(primary_op.get("parameters"))
+    examples: dict[str, Any] = {}
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
+        if _text(parameter.get("in")).lower() != "path":
+            continue
+        name = _text(parameter.get("name"))
+        value = (
+            parameter.get("example")
+            or _dict(parameter.get("schema")).get("example")
+            or parameter.get("default")
+        )
+        if name and value not in (None, ""):
+            examples[name] = value
+    if not examples:
+        return None
+    bindings: dict[str, Any] = {}
+    for name in unresolved:
+        if name not in examples:
+            continue
+        bindings[name] = {
+            "target": name,
+            "target_path": f"/{{{name}}}",
+            "status": "bound",
+            "materialized_value": str(examples[name]),
+            "source_priority": "source_declared_path_example",
+            "value_fingerprint": "",
+        }
+    return bindings or None
+
+
 def _rescue_unresolved_for_response_only_family(
     binding_plan: list[dict[str, Any]],
     primary_op: dict[str, Any],
@@ -278,12 +350,22 @@ def _rescue_unresolved_for_response_only_family(
 
     Appends new runtime_resolvable binding entries for placeholders that
     have no binding at all, using collection GET resolvers or POST create
-    fixture. Returns True if at least one placeholder was rescued.
+    fixture. Returns True if at least one placeholder was rescued. When no
+    resolver or fixture exists, the operation's own source-declared path
+    parameter examples are the final source-grounded fallback; a placeholder
+    without one stays unresolved (visible BLOCKED, never a guess).
     """
     resolvers = _find_collection_get_resolvers(primary_op, behavior_ir)
     fixture = {} if resolvers else _find_collection_create_fixture(primary_op, behavior_ir)
     if not resolvers and not fixture:
-        return False
+        example_bindings = _source_declared_path_example_bindings(
+            primary_op, unresolved
+        )
+        if not example_bindings:
+            return False
+        for name, entry in example_bindings.items():
+            binding_plan.append(entry)
+        return True
     rescued = False
     for name in unresolved:
         entry: dict[str, Any] = {

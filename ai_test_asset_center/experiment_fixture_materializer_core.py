@@ -495,6 +495,37 @@ def materialize_experiment_fixtures(
         elif kind == "runtime_read_binding":
             target = _text(_dict(node).get("target"))
             binding = binding_plan.get(target) or {}
+            # ── Source-declared path example binding ──
+            # The operation's own path-parameter example (source_declared_path_
+            # example) is part of the declared contract: the value is the
+            # customer's documented sample resource id, so it needs no
+            # identity-read proof — binding it straight is provenance-clean.
+            # The target's answer to the documented example is the observation.
+            if (
+                binding.get("materialized_value") not in (None, "")
+                and _text(binding.get("status")) == "bound"
+                and _text(binding.get("source_priority")) == "source_declared_path_example"
+            ):
+                runtime_bindings[target] = str(binding["materialized_value"])
+                fixture_receipts.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "status": "resolved",
+                    "target": target,
+                    "value": binding["materialized_value"],
+                    "value_fingerprint": hashlib.sha256(
+                        str(binding["materialized_value"]).encode("utf-8")
+                    ).hexdigest()[:12],
+                    "source": "source_declared_path_example",
+                })
+                binding_materialization_receipts.append({
+                    "target": target,
+                    "source_priority": "source_declared_path_example",
+                    "status": "bound",
+                    "value": binding["materialized_value"],
+                    "operation_ref": _text(binding.get("operation_ref")),
+                })
+                continue
             # ── Shortcut: source-observed, pre-materialized binding ──
             # Batch pre-resolution may supply a value, but only after a source
             # identity GET proves that value is observable on THIS binding's
