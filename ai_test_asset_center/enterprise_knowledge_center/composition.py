@@ -99,6 +99,9 @@ from .enterprise_understanding.chinese_semantic_frame_compiler import (
 from .enterprise_understanding.chinese_context_resolver import (
     resolve_chinese_semantic_context,
 )
+from .enterprise_understanding.chinese_semantic_grounding import (
+    ground_semantic_frames,
+)
 from .job_asset_pipeline import enrich_job_assets_with_governance
 from .job_behavior_projection import refresh_job_behavior_projection
 from .openapi_schema_fact_asset_projection import enrich_asset_with_openapi_schema_facts
@@ -1680,6 +1683,7 @@ def refresh_enterprise_business_knowledge_asset_incremental(
         asset = parse_chinese_clause_trees(asset)
         asset = enrich_frames_with_clause_structure(asset)
         asset = resolve_chinese_semantic_context(asset)
+        asset = ground_semantic_frames(asset)
         asset, _discarded = _downstream.refresh_chinese_business_downstream(
             asset,
             max_probe_count=0,
@@ -2211,6 +2215,12 @@ def build_enterprise_business_knowledge_asset(
     # anything unresolvable keeps its explicit UNKNOWN status + reason code.
     # Raw text is never rewritten.
     asset = resolve_chinese_semantic_context(asset)
+
+    # P0-D: evidence-driven technical grounding — actor/operation/entity/state/
+    # scope bindings with typed receipts. This ACTIVATES the P0-A Behavior IR
+    # channel: grounded frames now contribute owns/permits/denies relations
+    # (deduped against legacy by canonical node ids and permission-row scope).
+    asset = ground_semantic_frames(asset)
 
     # Downstream rule/oracle projection is still needed before Job projection, but
     # Probe compilation remains deferred to the final stage.

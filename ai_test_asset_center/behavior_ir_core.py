@@ -5543,12 +5543,23 @@ def build_behavior_ir_from_knowledge_asset(
         )
 
         def _frame_relation_builder(contribution: dict[str, Any]) -> dict[str, Any]:
+            # Resolve frame endpoints through the node reference index FIRST:
+            # frame refs are declared labels (role names / METHOD:path), while
+            # legacy relations use canonical node ids. Canonicalizing here
+            # makes frame relations dedup against legacy ones instead of
+            # creating parallel duplicates with identical endpoints.
+            def _resolve(ref: str) -> str:
+                value = _text(ref)
+                if not value:
+                    return ""
+                return _frame_index.get(value.lower(), value)
+
             return _relation_node(
                 relation_type=_text(contribution.get("relation_type")),
-                from_ref=_text(contribution.get("from_ref")),
-                to_ref=_text(contribution.get("to_ref")),
-                operation_ref=_text(contribution.get("operation_ref")),
-                actor_ref=_text(contribution.get("actor_ref")),
+                from_ref=_resolve(_text(contribution.get("from_ref"))),
+                to_ref=_resolve(_text(contribution.get("to_ref"))),
+                operation_ref=_resolve(_text(contribution.get("operation_ref"))),
+                actor_ref=_resolve(_text(contribution.get("actor_ref"))),
                 scope=_text(contribution.get("scope")),
                 source_refs=_list(contribution.get("source_refs")),
                 confidence=0.8,

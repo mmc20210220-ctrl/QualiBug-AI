@@ -160,6 +160,13 @@ def project_semantic_frames_to_behavior_ir(
                 "quote": _text(_dict(frame.get("source_span")).get("quote")),
             }
         ]
+        # Permission-row scope alignment (P0-D): legacy permission/ownership
+        # relations carry the permission row's scope in their node id, so the
+        # frame channel emits the same scope to dedup against them instead of
+        # creating parallel duplicates with identical endpoints.
+        relation_scope = _text(
+            _dict(frame.get("technical_grounding")).get("permission_scope")
+        )
         actor_ref = _first_grounded(actor, "grounded_actor_refs")
         entity_ref = _first_grounded(obj, "grounded_entity_refs")
         operation_ref = _first_grounded(action, "grounded_operation_refs")
@@ -202,7 +209,7 @@ def project_semantic_frames_to_behavior_ir(
                         "to_ref": entity_ref,
                         "actor_ref": actor_ref,
                         "operation_ref": "",
-                        "scope": _text(scope.get("scope_type")),
+                        "scope": relation_scope,
                         "frame_id": frame_id,
                         "source_refs": source_refs,
                     }
@@ -253,7 +260,7 @@ def project_semantic_frames_to_behavior_ir(
                             "to_ref": operation_ref,
                             "actor_ref": actor_ref,
                             "operation_ref": operation_ref,
-                            "scope": _text(scope.get("scope_type")),
+                            "scope": relation_scope,
                             "frame_id": frame_id,
                             "source_refs": source_refs,
                         }

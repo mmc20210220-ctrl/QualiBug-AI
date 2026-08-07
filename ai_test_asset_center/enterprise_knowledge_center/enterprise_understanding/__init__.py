@@ -36,6 +36,15 @@ from .chinese_semantic_behavior_ir_adapter import (
     apply_semantic_frames_to_behavior_ir,
     project_semantic_frames_to_behavior_ir,
 )
+from .business_concept_registry import (
+    CHINESE_BUSINESS_CONCEPT_REGISTRY_SCHEMA,
+    build_business_concept_registry,
+    concept_lookup,
+)
+from .chinese_semantic_grounding import (
+    CHINESE_SEMANTIC_GROUNDING_SCHEMA,
+    ground_semantic_frames,
+)
 from .chinese_semantic_frame_compiler import (
     enrich_frames_with_clause_structure,
 )
@@ -213,6 +222,8 @@ __all__ = [
     "CHINESE_SEMANTIC_RECEIPT_SCHEMA",
     "CHINESE_SEMANTIC_CONTEXT_ENVELOPE_SCHEMA",
     "CHINESE_SEMANTIC_CONTEXT_RESOLUTION_SCHEMA",
+    "CHINESE_BUSINESS_CONCEPT_REGISTRY_SCHEMA",
+    "CHINESE_SEMANTIC_GROUNDING_SCHEMA",
     "CHINESE_CLAUSE_TREE_SCHEMA",
     "CHINESE_CLAUSE_TREE_LEDGER_SCHEMA",
     "FRAME_TYPES",
@@ -233,6 +244,9 @@ __all__ = [
     "block_context_for",
     "locate_unique_block",
     "resolve_chinese_semantic_context",
+    "build_business_concept_registry",
+    "concept_lookup",
+    "ground_semantic_frames",
     "parse_chinese_clause_trees",
     "parse_block_text",
     "clause_tree_for_block",

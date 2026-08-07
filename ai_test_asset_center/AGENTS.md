@@ -196,6 +196,7 @@ by replacing host methods:
 | Chinese semantic frame SSOT (P0-A) | `enterprise_understanding/chinese_semantic_schema.py` (frame schema `qualibug.chinese-semantic-frame.v1`, slot statuses, reason codes, semantic signature) + `chinese_semantic_receipts.py` (typed content-addressed receipts) + `chinese_semantic_ledger_adapter.py` (fact → frame projection, `qualibug.chinese-semantic-frame-ledger.v1`) + `chinese_semantic_behavior_ir_adapter.py` (frame → Behavior IR projection) |
 | Chinese clause structure (P0-B) | `enterprise_understanding/chinese_context_envelope.py` (block coordinates over `document_structure_assets`: section paths, list-stack ancestor chains, table row/column headers, unique quote lookup — structure only, zero business inference) + `chinese_clause_parser.py` (atomic clause trees `qualibug.chinese-clause-tree.v1`: enumeration action candidates, negation scope, condition leaves, exception nodes; language-function words only, no industry vocabulary) + `chinese_semantic_frame_compiler.py` (frame enrichment: list-parent condition inheritance, table header mention injection, enumeration mentions, exception merge; signature recomputed; idempotent) |
 | Chinese context resolution (P0-C) | `enterprise_understanding/chinese_context_resolver.py` (frame-level omitted-actor recovery from unique evidence — only-if subject, unique prior frame in the same section, unique section heading; mention-level coreference: 该X/本X/此X explicit same-sentence nouns, bare pronouns need exactly one candidate; `document_context` section/list/neighbor population; UNKNOWN never force-bound; raw text never rewritten) |
+| Concept & grounding (P0-D) | `enterprise_understanding/business_concept_registry.py` (explicit-evidence concept layer: label→canonical with priority understanding_model > identity_registry > permission_matrix > data_tables; similarity never merges) + `chinese_semantic_grounding.py` (evidence chains per SPEC §12.2: actor = permission matrix > roles > UI contract > concept registry; operation = rule ref > summary verbatim > description > rule_to_interface > formal UI contract > structural entity+CRUD; entity = declared object labels/aliases; state = field-description enum / state machines; scope = ownership phrases → structured OWN; every binding has a typed GROUNDED/AMBIGUOUS/UNKNOWN receipt) |
 
 Chinese semantic frame contract (P0-A): the frame ledger is projected in
 `composition.py` after the second cognition pass (both full and incremental
@@ -243,6 +244,25 @@ OMITTED with `OMITTED_ACTOR_UNRESOLVED`. Coreference stays mention-level:
 bare pronouns (其/上述/…) resolve only with exactly one frame mention, else
 `COREFERENCE_UNRESOLVED`. Actor mentions are NOT part of the semantic
 signature, so P0-C never changes signatures or the Behavior IR channel.
+
+Concept & grounding contract (P0-D): `ground_semantic_frames` runs in
+`composition.py` right after context resolution (full and incremental paths).
+It ACTIVATES the P0-A Behavior IR channel: grounded frames now contribute
+owns/permits/denies relations. Grounded refs are emitted in IR-resolvable
+forms — actor role names, `METHOD:path` operation forms (interface ids
+converted), declared entity labels/aliases (the IR builder keeps ASCII entity
+names only; Chinese mentions resolve only through the operator-declared
+lexicon alias groups). Frame relations canonicalize endpoints through the
+node reference index and carry the permission-row scope, so they dedup
+against legacy relations instead of duplicating them; genuinely new grounded
+relations (e.g., ownership the legacy field phrases missed) are added with
+full grounding receipts in source_refs. Multiple candidates are AMBIGUOUS
+with MULTIPLE_*_CANDIDATES (never first-item picks); word-list guessing
+(CJK field tokens, semantic classification tables, containment scoring)
+never grounds anything. The semantic signature is recomputed after scope
+structuring; frames stay fail-closed valid. The 131-bug benchmark re-run is
+the required verification gate for this activation and is executed
+separately from the unit/CI gates.
 
 
 Side-effect-free import rule: importing `ai_test_asset_center` must be
