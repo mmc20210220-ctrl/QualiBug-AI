@@ -14,6 +14,30 @@ from .behavior_ir_governance import build_governed_business_behavior_ir
 from .behavior_ir_logic_gate import build_business_behavior_ir_v1
 from .builder import build_enterprise_understanding_model
 from .business_world_model import build_business_world_model, project_business_world_model
+from .chinese_semantic_behavior_ir_adapter import (
+    apply_semantic_frames_to_behavior_ir,
+    project_semantic_frames_to_behavior_ir,
+)
+from .chinese_semantic_ledger_adapter import (
+    frames_from_asset,
+    project_business_facts_to_semantic_frames,
+    project_fact_to_semantic_frame,
+)
+from .chinese_semantic_receipts import (
+    CHINESE_SEMANTIC_RECEIPT_SCHEMA,
+    build_receipt,
+    validate_receipt,
+)
+from .chinese_semantic_schema import (
+    CHINESE_SEMANTIC_FRAME_SCHEMA,
+    FRAME_TYPES,
+    REASON_CODES,
+    SLOT_STATUSES,
+    empty_frame,
+    semantic_signature,
+    semantic_structure_payload,
+    validate_semantic_frame,
+)
 from .business_world_model_schema import (
     BUSINESS_WORLD_MODEL_GATE_SCHEMA,
     BUSINESS_WORLD_MODEL_SCHEMA,
@@ -164,6 +188,22 @@ __all__ = [
     "probe_generation_allowed",
     "probe_generation_block_reason",
     "build_enterprise_understanding_model",
+    "CHINESE_SEMANTIC_FRAME_SCHEMA",
+    "CHINESE_SEMANTIC_RECEIPT_SCHEMA",
+    "FRAME_TYPES",
+    "REASON_CODES",
+    "SLOT_STATUSES",
+    "empty_frame",
+    "semantic_signature",
+    "semantic_structure_payload",
+    "validate_semantic_frame",
+    "build_receipt",
+    "validate_receipt",
+    "project_business_facts_to_semantic_frames",
+    "project_fact_to_semantic_frame",
+    "frames_from_asset",
+    "apply_semantic_frames_to_behavior_ir",
+    "project_semantic_frames_to_behavior_ir",
     "BUSINESS_WORLD_MODEL_SCHEMA",
     "BUSINESS_WORLD_MODEL_GATE_SCHEMA",
     "empty_business_world_model",

@@ -112,3 +112,8 @@ tests/test_semantic_operation_relationship_authority.py
 tests/test_agent_semantic_existing_relationship_authority.py
 tests/test_business_world_model.py
 tests/test_business_world_model_gate.py
+tests/test_chinese_semantic_frame_schema.py
+tests/test_chinese_semantic_receipts.py
+tests/test_chinese_semantic_ledger_adapter.py
+tests/test_chinese_semantic_behavior_ir_adapter.py
+tests/test_chinese_semantic_mainline_wiring.py

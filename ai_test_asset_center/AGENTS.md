@@ -193,6 +193,23 @@ by replacing host methods:
 | Scan-envelope account ownership (workspace reconciliation) | `db_persistence.py` (`ensure_workspace_owned_project`) + `private_pilot_scan_handlers.py` (`_handle_v12_scan`) |
 | Completion & funnel SSOT | `qualibug.obligation-attempt-ledger.v1` (sealed by the discovery mainline) |
 | Discovery funnel closure | `discovery_funnel.py` |
+| Chinese semantic frame SSOT (P0-A) | `enterprise_understanding/chinese_semantic_schema.py` (frame schema `qualibug.chinese-semantic-frame.v1`, slot statuses, reason codes, semantic signature) + `chinese_semantic_receipts.py` (typed content-addressed receipts) + `chinese_semantic_ledger_adapter.py` (fact → frame projection, `qualibug.chinese-semantic-frame-ledger.v1`) + `chinese_semantic_behavior_ir_adapter.py` (frame → Behavior IR projection) |
+
+Chinese semantic frame contract (P0-A): the frame ledger is projected in
+`composition.py` after the second cognition pass (both full and incremental
+paths), so actor/entity registries are final before exact-match grounding.
+`behavior_ir_core.build_behavior_ir_from_knowledge_asset` consumes the frame
+ledger as an advisory channel: only GROUNDED frame slots may contribute
+relations, contributions merge by deterministic node id (legacy relations are
+never overwritten), provenance rides in `source_refs`
+(kind=`chinese_semantic_frame`), and the projection receipt is stored as
+`model["semantic_frame_projection_receipt"]`. In P0-A production frames are
+ungrounded (`TECHNICAL_GROUNDING_PENDING`), so the channel adds nothing; the
+grounding engine (P0-D) activates it. P0-A adds no Chinese vocabulary: no
+word lists, role tables or action patterns; slot mapping is typed-only, and
+the raw ownership phrase is preserved as evidence but excluded from the
+semantic signature. Legacy Chinese parsing remains authoritative until P0-E.
+
 
 Side-effect-free import rule: importing `ai_test_asset_center` must be
 side-effect free. Runtime scenario contracts are validated and explicitly

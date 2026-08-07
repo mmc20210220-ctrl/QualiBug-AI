@@ -5524,6 +5524,60 @@ def build_behavior_ir_from_knowledge_asset(
     model["relations"] = [normalize_relation(row) for row in _dedupe_nodes(model["relations"])]
     model["coverage_gaps"] = _dedupe_nodes(model["coverage_gaps"])
     model["conflicts"] = _dedupe_nodes(model["conflicts"])
+
+    # ── Chinese Semantic Frame channel (P0-A) ──
+    # The asset's frame ledger (qualibug.chinese-semantic-frame-ledger.v1) is
+    # the Chinese-semantics SSOT projection. Only GROUNDED frame slots may
+    # contribute relations; every contribution is merged by deterministic node
+    # id (dedup against legacy relations, never overwriting), provenance rides
+    # in source_refs, and the projection receipt is stored on the model.
+    # Ungrounded frames (TECHNICAL_GROUNDING_PENDING) contribute nothing — the
+    # receipt records the skip instead of guessing.
+    _frame_ledger = _dict(data.get("chinese_semantic_frame_ledger"))
+    _frames = [
+        row for row in _list(_frame_ledger.get("items")) if isinstance(row, dict)
+    ]
+    if _frames:
+        from .enterprise_knowledge_center.enterprise_understanding.chinese_semantic_behavior_ir_adapter import (
+            apply_semantic_frames_to_behavior_ir,
+        )
+
+        def _frame_relation_builder(contribution: dict[str, Any]) -> dict[str, Any]:
+            return _relation_node(
+                relation_type=_text(contribution.get("relation_type")),
+                from_ref=_text(contribution.get("from_ref")),
+                to_ref=_text(contribution.get("to_ref")),
+                operation_ref=_text(contribution.get("operation_ref")),
+                actor_ref=_text(contribution.get("actor_ref")),
+                scope=_text(contribution.get("scope")),
+                source_refs=_list(contribution.get("source_refs")),
+                confidence=0.8,
+                derivation="schema-derived",
+                status="accepted",
+            )
+
+        _frame_index = _node_reference_index(model)
+        _frame_node_ids = {
+            _text(row.get("id"))
+            for collection in ("entities", "operations", "actors", "states")
+            for row in _list(model.get(collection))
+            if isinstance(row, dict) and _text(row.get("id"))
+        }
+
+        def _frame_ref_resolver(kind: str, ref: str) -> bool:
+            lowered = _text(ref).lower()
+            return lowered in _frame_index or _text(ref) in _frame_node_ids
+
+        apply_semantic_frames_to_behavior_ir(
+            model,
+            _frames,
+            relation_builder=_frame_relation_builder,
+            ref_resolver=_frame_ref_resolver,
+        )
+        model["relations"] = [
+            normalize_relation(row) for row in _dedupe_nodes(model["relations"])
+        ]
+
     model["model_id"] = _content_addressed_id(model)
     return model
 

@@ -84,6 +84,9 @@ from .enterprise_understanding.semantic_lexicon_contract import (
 from .enterprise_understanding.structured_fact_compiler import (
     compile_structure_first_business_facts,
 )
+from .enterprise_understanding.chinese_semantic_ledger_adapter import (
+    project_business_facts_to_semantic_frames,
+)
 from .job_asset_pipeline import enrich_job_assets_with_governance
 from .job_behavior_projection import refresh_job_behavior_projection
 from .openapi_schema_fact_asset_projection import enrich_asset_with_openapi_schema_facts
@@ -1660,6 +1663,7 @@ def refresh_enterprise_business_knowledge_asset_incremental(
             asset,
             parsed_sources=None,
         )
+        asset = project_business_facts_to_semantic_frames(asset)
         asset, _discarded = _downstream.refresh_chinese_business_downstream(
             asset,
             max_probe_count=0,
@@ -2167,6 +2171,13 @@ def build_enterprise_business_knowledge_asset(
         asset, previous_finalized_governance, pass_name="compiled_fact_pass"
     )
     asset = enrich_asset_with_enterprise_understanding(asset, parsed_sources=None)
+
+    # Project the compiled fact ledger into the Chinese Semantic Frame SSOT
+    # (P0-A). Runs after the second cognition pass so actor/entity registries
+    # are final; frames carry exact source spans, slot resolution statuses and
+    # the semantic signature. This is a pure projection of typed fact slots —
+    # no Chinese text is re-parsed and no vocabulary is added.
+    asset = project_business_facts_to_semantic_frames(asset)
 
     # Downstream rule/oracle projection is still needed before Job projection, but
     # Probe compilation remains deferred to the final stage.
