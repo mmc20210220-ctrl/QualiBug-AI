@@ -125,3 +125,4 @@ tests/test_chinese_semantic_context_resolver.py
 tests/test_business_concept_registry.py
 tests/test_chinese_semantic_grounding.py
 tests/test_chinese_semantic_p0d_mainline.py
+tests/test_behavior_ir_legacy_demotion.py

@@ -13,7 +13,7 @@ import logging
 import re
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -1687,6 +1687,8 @@ _FIELD_OWNERSHIP_PHRASES = (
 def _derive_field_level_ownership_relations(
     model: dict[str, Any],
     data: dict[str, Any],
+    *,
+    frame_confirm: Callable[[str, str, str], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Field-level ownership declarations → ``owns`` relations.
 
@@ -1782,6 +1784,14 @@ def _derive_field_level_ownership_relations(
                     # subject — the ownership rule is role-vacuous here.
                     continue
                 if (actor_ref, operation_id) in seen:
+                    continue
+                if (
+                    frame_confirm is not None
+                    and not frame_confirm(role_key, operation_id, interface_id)
+                ):
+                    # P0-E frame-confirmation gate: the frame channel is the
+                    # Chinese-semantics SSOT.  An unconfirmed legacy ownership
+                    # candidate is demoted to a hint — never final ownership.
                     continue
                 seen.add((actor_ref, operation_id))
                 relations.append(_relation_node(
@@ -3275,6 +3285,157 @@ def build_behavior_ir_from_knowledge_asset(
         model["model_id"] = _content_addressed_id(model)
         return model
 
+    # ── Chinese Semantic Frame confirmation gate (P0-E) ──
+    # The frame ledger is the Chinese-semantics SSOT.  When an asset carries
+    # one, GROUNDED frames confirm legacy Chinese-text parse products before
+    # they may act as final semantics; unconfirmed legacy candidates are
+    # demoted to candidate hints (still computed, never final).  Every
+    # demotion/skip/fallback is receipted on the model
+    # (legacy_semantic_fallback_receipt) so legacy use is observable and
+    # never silent.  Assets without a frame ledger keep the legacy behavior
+    # byte-for-byte (their receipt reports frame_ledger_present=False).
+    _frame_ledger = _dict(data.get("chinese_semantic_frame_ledger"))
+    _frames = [
+        row for row in _list(_frame_ledger.get("items")) if isinstance(row, dict)
+    ]
+    _frame_ledger_present = bool(_frames)
+    _fallback_kind_counts: dict[str, int] = {}
+
+    def _record_fallback(kind: str, count: int = 1) -> None:
+        if count <= 0:
+            return
+        if not _frame_ledger_present and kind != "ACTION_PHRASE_BINDING_NO_FRAME_LEDGER":
+            # Compat path: without a frame ledger every legacy parse product is
+            # the plain legacy semantics, not a fallback — only the
+            # NO_FRAME_LEDGER marker is recorded so the receipt stays
+            # `只记录 NO_FRAME_LEDGER` for ledger-less assets.
+            return
+        _fallback_kind_counts[kind] = _fallback_kind_counts.get(kind, 0) + count
+
+    def _norm_text(value: Any) -> str:
+        return _text(value).strip().replace("\u3000", " ")
+
+    # Frame identity index: the grounding engine links a frame to its source
+    # rule through the origin fact id (rule id `zh_business:<fact tail>`);
+    # statement text is the second identity channel.  All lookups mirror
+    # chinese_semantic_grounding._find_rule exactly.
+    _frame_by_fact_id: dict[str, dict[str, Any]] = {}
+    _frame_by_fact_tail: dict[str, dict[str, Any]] = {}
+    _frame_by_statement: dict[str, dict[str, Any]] = {}
+    for _frow in _frames:
+        _fid = _text(_dict(_frow.get("origin")).get("origin_fact_id"))
+        if _fid:
+            _frame_by_fact_id.setdefault(_fid, _frow)
+            _tail = _fid.split(":", 1)[-1]
+            if _tail:
+                _frame_by_fact_tail.setdefault(_tail, _frow)
+        _fs = _norm_text(_dict(_frow.get("source_span")).get("quote"))
+        if _fs:
+            _frame_by_statement.setdefault(_fs, _frow)
+
+    def _frame_for_rule(rule_id: str, statement: str) -> dict[str, Any]:
+        if not rule_id and not statement:
+            return {}
+        _frame = _frame_by_fact_id.get(rule_id)
+        if _frame:
+            return _frame
+        if rule_id.startswith("zh_business:"):
+            _tail = rule_id.split(":", 1)[-1]
+            _frame = (
+                _frame_by_fact_tail.get(_tail)
+                or _frame_by_fact_tail.get(_tail[-20:])
+            )
+            if _frame:
+                return _frame
+        _fs = _norm_text(statement)
+        if _fs:
+            return _frame_by_statement.get(_fs, {})
+        return {}
+
+    def _frame_grounded_ops(frame: dict[str, Any]) -> set[str]:
+        """Grounded operation refs (METHOD:path forms) of a frame."""
+        refs: set[str] = set()
+        _tg = _dict(frame.get("technical_grounding"))
+        for _r in _list(_tg.get("operation_refs")):
+            if _text(_r):
+                refs.add(_text(_r))
+        for _r in _list(_dict(frame.get("action")).get("grounded_operation_refs")):
+            if _text(_r):
+                refs.add(_text(_r))
+        return refs
+
+    def _frame_grounded_actor_roles(frame: dict[str, Any]) -> set[str]:
+        """Grounded actor role labels of a frame."""
+        refs: set[str] = set()
+        _tg = _dict(frame.get("technical_grounding"))
+        for _r in _list(_tg.get("actor_refs")):
+            if _text(_r):
+                refs.add(_text(_r))
+        for _r in _list(_dict(frame.get("actor")).get("grounded_actor_refs")):
+            if _text(_r):
+                refs.add(_text(_r))
+        return refs
+
+    # Frame types whose scope.ownership_relation (non-raw keys) is structured
+    # ownership evidence — the same set the frame→IR adapter emits owns from.
+    _OWNERSHIP_EVIDENCE_FRAME_TYPES = frozenset({
+        "OWNERSHIP_RULE", "PERMISSION_RULE", "SCOPE_RULE", "DATA_VISIBILITY_RULE",
+    })
+
+    def _frame_has_structured_ownership(frame: dict[str, Any]) -> bool:
+        _ownership = _dict(_dict(frame.get("scope")).get("ownership_relation"))
+        return bool(
+            _text(frame.get("frame_type")) in _OWNERSHIP_EVIDENCE_FRAME_TYPES
+            and any(_text(key) != "raw" for key in _ownership)
+        )
+
+    def _frame_is_grounded(frame: dict[str, Any]) -> bool:
+        """A frame is grounded when the P0-D grounding engine resolved at
+        least one technical ref the frame channel can emit relations from
+        (GROUNDED/PARTIAL status; PENDING frames are not grounded)."""
+        if not frame:
+            return False
+        _tg = _dict(frame.get("technical_grounding"))
+        return bool(
+            _list(_tg.get("operation_refs"))
+            or _list(_tg.get("actor_refs"))
+            or _list(_tg.get("entity_refs"))
+        )
+
+    # Frame-confirmation for legacy field-level ownership candidates
+    # (migration point 2).  An (role_key, operation) candidate survives only
+    # when some grounded frame declares structured ownership for the same
+    # actor role on the same METHOD:path operation; everything else is
+    # demoted to a hint and receipted.
+    def _field_ownership_confirm(role_key: str, operation_id: str, interface_id: str) -> bool:
+        _op_row = {}
+        for _row in _list(model.get("operations")):
+            if isinstance(_row, dict) and _text(_row.get("id")) == operation_id:
+                _op_row = _row
+                break
+        _mid = _text(_op_row.get("method")).upper()
+        _pth = _text(_op_row.get("path") or _op_row.get("raw_path"))
+        if not _mid or not _pth:
+            _record_fallback("FIELD_OWNERSHIP_UNCONFIRMED_SKIPPED", 1)
+            return False
+        _mtp = f"{_mid}:{_pth}".lower()
+        _role_terms = dict(_SUBJECT_ROLE_TERMS).get(role_key, ())
+        for _frow in _frames:
+            if not _frame_has_structured_ownership(_frow):
+                continue
+            _roles = {_text(r).lower() for r in _frame_grounded_actor_roles(_frow)}
+            if (
+                role_key not in _roles
+                and not any(_text(t).lower() in _roles for t in _role_terms)
+            ):
+                continue
+            _ops = {_text(o).lower() for o in _frame_grounded_ops(_frow)}
+            if _mtp not in _ops:
+                continue
+            return True
+        _record_fallback("FIELD_OWNERSHIP_UNCONFIRMED_SKIPPED", 1)
+        return False
+
     # Sources
     for src in _list(data.get("sources") or data.get("source_inventory")):
         if not isinstance(src, dict):
@@ -4529,6 +4690,7 @@ def build_behavior_ir_from_knowledge_asset(
             (("使用次数",), ("usage_limit", "usage_count", "uses", "limit")),
             (("次数",), ("usage_limit", "usage_count", "uses", "limit")),
         )
+        _cjk_rows_before = len(result)
         for _terms, _field_tokens in _CJK_TERM_FIELD_TOKENS:
             if not any(_term in stmt for _term in _terms):
                 continue
@@ -4580,6 +4742,11 @@ def build_behavior_ir_from_knowledge_asset(
                     _known_field_keys.add((_text(_ent_name).lower(), _fname_lower))
                     if _cf:
                         _known_ids.add(_cf)
+        _cjk_rows_after = len(result)
+        if _cjk_rows_after > _cjk_rows_before:
+            # P0-E: fixed-vocabulary CJK field-token binding is a legacy
+            # candidate hint — counted, never silent.
+            _record_fallback("CJK_FIELD_TOKEN_EXTRACTION", _cjk_rows_after - _cjk_rows_before)
         return result
 
     # Invariants from rule library (typed expression + description)
@@ -4715,9 +4882,15 @@ def build_behavior_ir_from_knowledge_asset(
         # confirms the same structure. Both promote the rule to the
         # structured idempotency family so it compiles an effect-cardinality
         # experiment instead of dying as a broad overlay.
-        _has_idempotency_signal = any(
+        _has_idempotency_token = any(
             token in statement for token in ("重复", "幂等", "再次", "二次", "多次")
-        ) or _risk_type == "idempotency"
+        )
+        _has_idempotency_signal = _has_idempotency_token or _risk_type == "idempotency"
+        if _has_idempotency_token and _risk_type != "idempotency":
+            # P0-E: token-promoted idempotency is a legacy candidate hint —
+            # only the risk-domain classification (or a grounded frame) is
+            # structured idempotency evidence.
+            _record_fallback("IDEMPOTENCY_TOKEN_CANDIDATE", 1)
         if _has_idempotency_signal and _rule_kind in {"business_rule", "business_logic"}:
             _rule_kind = "idempotency"
         _rule_operands = _list(rule.get("operands"))
@@ -4772,6 +4945,19 @@ def build_behavior_ir_from_knowledge_asset(
         # entity/field references that cannot produce testable experiments.
         _stmt_lower = statement.lower()
         _is_umbrella = any(p in _stmt_lower for p in _UMBRELLA_PATTERNS)
+        if _is_umbrella:
+            # P0-E: a grounded frame is structured technical evidence — the
+            # frame channel grounded this rule to real objects, so the legacy
+            # umbrella overlay must not exclude it.  An absent/ungrounded
+            # frame keeps the legacy exclusion (receipted).
+            _rule_frame_for_umbrella = (
+                _frame_for_rule(rid, statement) if _frame_ledger_present else {}
+            )
+            if _rule_frame_for_umbrella and _frame_is_grounded(_rule_frame_for_umbrella):
+                _is_umbrella = False
+                _record_fallback("UMBRELLA_PATTERN_OVERRIDDEN_BY_GROUNDED_FRAME", 1)
+            else:
+                _record_fallback("UMBRELLA_PATTERN_FALLBACK", 1)
         # Also detect: no backtick fields, no snake_case fields, no specific entity
         if not _is_umbrella:
             _has_concrete_field = bool(re.findall(r"`[a-zA-Z_][a-zA-Z0-9_]*`", statement))
@@ -4792,7 +4978,20 @@ def build_behavior_ir_from_knowledge_asset(
             # resolved the rule to a structured family (idempotency,
             # state_machine, data_conservation, permission_boundary,
             # concurrency), which a broad overlay statement can never carry.
-            _has_structured_risk_semantics = bool(_risk_type) or _has_idempotency_signal
+            # A grounded frame is the same kind of structured evidence
+            # (P0-E): the frame channel grounded this rule to real technical
+            # objects, so it is not a vague overlay.
+            _rule_frame_for_concreteness = (
+                _frame_for_rule(rid, statement) if _frame_ledger_present else {}
+            )
+            _has_structured_risk_semantics = (
+                bool(_risk_type)
+                or _has_idempotency_signal
+                or bool(
+                    _rule_frame_for_concreteness
+                    and _frame_is_grounded(_rule_frame_for_concreteness)
+                )
+            )
             _has_entity_ref = bool(_text(rule.get("entity") or rule.get("object") or rule.get("business_object")))
             # A validated semantic frame is source-grounded structure, but it
             # is not an executable operation binding by itself.  Only an
@@ -4958,6 +5157,28 @@ def build_behavior_ir_from_knowledge_asset(
                         for _signal in ("导出", "结果", "响应", "返回", "输出")
                     )
                     _action_bound_ops: list[str] = []
+                    # P0-E frame-confirmation gate: when this rule's frame is
+                    # grounded, only operations the frame grounded
+                    # (METHOD:path) may be bound — unconfirmed legacy
+                    # candidates are demoted to hints and skipped.  A rule
+                    # without a frame, or with an ungrounded frame, keeps the
+                    # legacy binding as an observable fallback.
+                    _binding_frame = (
+                        _frame_for_rule(rid, statement) if _frame_ledger_present else {}
+                    )
+                    if not _frame_ledger_present:
+                        _record_fallback("ACTION_PHRASE_BINDING_NO_FRAME_LEDGER", 1)
+                    elif not _binding_frame:
+                        _record_fallback("ACTION_PHRASE_BINDING_NO_FRAME_FOR_RULE", 1)
+                    elif not _frame_is_grounded(_binding_frame):
+                        _record_fallback("ACTION_PHRASE_BINDING_FALLBACK_WHEN_UNGROUNDED", 1)
+                    _binding_grounded_ops = (
+                        {_text(o).lower() for o in _frame_grounded_ops(_binding_frame)}
+                        if _frame_ledger_present
+                        and _binding_frame
+                        and _frame_is_grounded(_binding_frame)
+                        else None
+                    )
                     for _op_row in _list(model.get("operations")):
                         if not isinstance(_op_row, dict):
                             continue
@@ -4980,7 +5201,19 @@ def build_behavior_ir_from_knowledge_asset(
                         if any(
                             _phrase in _op_title for _phrase in _action_phrases
                         ):
-                            _action_bound_ops.append(_op_id)
+                            if _binding_grounded_ops is None:
+                                _action_bound_ops.append(_op_id)
+                            else:
+                                _mtp = (
+                                    f"{_op_method_upper}:"
+                                    f"{_text(_op_row.get('path') or _op_row.get('raw_path'))}"
+                                ).lower()
+                                if _mtp in _binding_grounded_ops:
+                                    _action_bound_ops.append(_op_id)
+                                else:
+                                    _record_fallback(
+                                        "ACTION_PHRASE_BINDING_SKIPPED_WHEN_GROUNDED", 1
+                                    )
                     if _action_bound_ops:
                         _existing_ops = [
                             _text(value)
@@ -5022,6 +5255,9 @@ def build_behavior_ir_from_knowledge_asset(
             and any(token in _rule_kind.lower() for token in ("conserv", "data_conservation", "balance", "amount", "quantity"))
             and any(token in statement.lower() for token in _CAUSAL_DELTA_TOKENS)
         ):
+            # P0-E: causal-delta postcondition derivation from statement
+            # tokens is a legacy candidate hint (counted, never silent).
+            _record_fallback("CAUSAL_DELTA_TOKEN_EXTRACTION", 1)
             # Build field_delta operands from extracted fields
             _delta_operands: list[dict[str, Any]] = []
             for _op in _rule_operands:
@@ -5247,7 +5483,13 @@ def build_behavior_ir_from_knowledge_asset(
         permission_rows,
         closed_world=permission_matrix_complete,
     ))
-    model["relations"].extend(_derive_field_level_ownership_relations(model, data))
+    model["relations"].extend(_derive_field_level_ownership_relations(
+        model,
+        data,
+        frame_confirm=(
+            _field_ownership_confirm if _frame_ledger_present else None
+        ),
+    ))
     model["relations"].extend(_derive_source_role_restriction_relations(model))
     model["relations"].extend(_derive_operation_entity_relations(model))
     model["relations"].extend(_derive_state_transition_relations(model, data))
@@ -5590,6 +5832,27 @@ def build_behavior_ir_from_knowledge_asset(
         ]
 
     model["model_id"] = _content_addressed_id(model)
+    # ── P0-E legacy-semantic-fallback receipt ──
+    # Every legacy Chinese-text parse product that ran (or was demoted by the
+    # frame-confirmation gate) is counted here, so legacy fallback is always
+    # observable, never silent.  Attached AFTER the content address so the
+    # receipt never rotates model_id — assets without a frame ledger stay
+    # byte-identical (compat path; kind_counts only carry NO_FRAME_LEDGER).
+    model["legacy_semantic_fallback_receipt"] = {
+        "schema": "qualibug.legacy-semantic-fallback-receipt.v1",
+        "frame_ledger_present": _frame_ledger_present,
+        "used": bool(_fallback_kind_counts),
+        "kind_counts": dict(sorted(_fallback_kind_counts.items())),
+        "reason_codes": (
+            ["LEGACY_FALLBACK_USED"] if _fallback_kind_counts else []
+        ),
+        "contract": {
+            "gate": "frame_confirmation",
+            "frame_grounded_wins": True,
+            "legacy_fallback_observable": True,
+            "no_ledger_behavior_unchanged": True,
+        },
+    }
     return model
 
 

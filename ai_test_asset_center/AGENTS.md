@@ -197,6 +197,7 @@ by replacing host methods:
 | Chinese clause structure (P0-B) | `enterprise_understanding/chinese_context_envelope.py` (block coordinates over `document_structure_assets`: section paths, list-stack ancestor chains, table row/column headers, unique quote lookup — structure only, zero business inference) + `chinese_clause_parser.py` (atomic clause trees `qualibug.chinese-clause-tree.v1`: enumeration action candidates, negation scope, condition leaves, exception nodes; language-function words only, no industry vocabulary) + `chinese_semantic_frame_compiler.py` (frame enrichment: list-parent condition inheritance, table header mention injection, enumeration mentions, exception merge; signature recomputed; idempotent) |
 | Chinese context resolution (P0-C) | `enterprise_understanding/chinese_context_resolver.py` (frame-level omitted-actor recovery from unique evidence — only-if subject, unique prior frame in the same section, unique section heading; mention-level coreference: 该X/本X/此X explicit same-sentence nouns, bare pronouns need exactly one candidate; `document_context` section/list/neighbor population; UNKNOWN never force-bound; raw text never rewritten) |
 | Concept & grounding (P0-D) | `enterprise_understanding/business_concept_registry.py` (explicit-evidence concept layer: label→canonical with priority understanding_model > identity_registry > permission_matrix > data_tables; similarity never merges) + `chinese_semantic_grounding.py` (evidence chains per SPEC §12.2: actor = permission matrix > roles > UI contract > concept registry; operation = rule ref > summary verbatim > description > rule_to_interface > formal UI contract > structural entity+CRUD; entity = declared object labels/aliases; state = field-description enum / state machines; scope = ownership phrases → structured OWN; every binding has a typed GROUNDED/AMBIGUOUS/UNKNOWN receipt) |
+| Legacy Chinese parse demotion (P0-E) | `behavior_ir_core.py` `build_behavior_ir_from_knowledge_asset` (frame-confirmation gate over the six legacy Chinese-text parse products + `model["legacy_semantic_fallback_receipt"]`) |
 
 Chinese semantic frame contract (P0-A): the frame ledger is projected in
 `composition.py` after the second cognition pass (both full and incremental
@@ -211,7 +212,7 @@ ungrounded (`TECHNICAL_GROUNDING_PENDING`), so the channel adds nothing; the
 grounding engine (P0-D) activates it. P0-A adds no Chinese vocabulary: no
 word lists, role tables or action patterns; slot mapping is typed-only, and
 the raw ownership phrase is preserved as evidence but excluded from the
-semantic signature. Legacy Chinese parsing remains authoritative until P0-E.
+semantic signature. Legacy Chinese parsing is demoted to observable candidate hints behind the P0-E frame-confirmation gate (see P0-E contract below).
 
 Chinese clause structure contract (P0-B): the three stages run in
 `composition.py` right after the frame projection (full and incremental
@@ -263,6 +264,60 @@ never grounds anything. The semantic signature is recomputed after scope
 structuring; frames stay fail-closed valid. The 131-bug benchmark re-run is
 the required verification gate for this activation and is executed
 separately from the unit/CI gates.
+
+Legacy Chinese parse demotion contract (P0-E): `behavior_ir_core` no longer
+treats fixed-vocabulary Chinese-text parsing as final semantics when the
+asset carries a Chinese Semantic Frame ledger. The frame-confirmation gate
+makes the frame channel the Chinese-semantics SSOT per parse product:
+
+- Frame identity: the rule's frame is located exactly like
+  `chinese_semantic_grounding._find_rule` — origin fact id (rule id
+  `zh_business:<fact tail>`, last-20-chars identity) then statement text;
+  a frame is "grounded" when the P0-D grounding engine resolved at least one
+  technical ref the frame channel can emit relations from
+  (GROUNDED/PARTIAL; PENDING is not grounded).
+- Migration points (all inside `build_behavior_ir_from_knowledge_asset`):
+  1. action→summary binding — a grounded rule frame binds only operations it
+     grounded (`METHOD:path`); unconfirmed candidates are demoted and
+     skipped. Absent frame / ungrounded frame keep the legacy binding as an
+     observable fallback (NO_FRAME_FOR_RULE / FALLBACK_WHEN_UNGROUNDED);
+     no ledger keeps the legacy binding byte-for-byte (NO_FRAME_LEDGER).
+  2. field-level ownership — each legacy candidate survives only when some
+     grounded frame declares structured ownership
+     (`scope.ownership_relation` non-raw key on an ownership frame type) for
+     the same actor role on the same `METHOD:path` operation; everything
+     else is demoted (FIELD_OWNERSHIP_UNCONFIRMED_SKIPPED).
+  3. fixed-vocabulary CJK field-token binding is a counted candidate hint
+     (CJK_FIELD_TOKEN_EXTRACTION) — the frame field grounding is its
+     replacement, never both.
+  4. causal-delta postcondition derivation from statement tokens is a
+     counted candidate hint (CAUSAL_DELTA_TOKEN_EXTRACTION).
+  5. umbrella exclusion — a grounded frame is structured evidence: the rule
+     is never umbrella-excluded (UMBRELLA_PATTERN_OVERRIDDEN_BY_GROUNDED_FRAME);
+     absent/ungrounded frames keep the legacy exclusion, receipted
+     (UMBRELLA_PATTERN_FALLBACK).
+  6. token-promoted idempotency (重复/幂等/… without risk-domain
+     classification) is a counted candidate hint
+     (IDEMPOTENCY_TOKEN_CANDIDATE); the risk-domain classification remains
+     structured evidence.
+- Every fallback/demotion is counted in
+  `model["legacy_semantic_fallback_receipt"]`
+  (`qualibug.legacy-semantic-fallback-receipt.v1`: frame_ledger_present,
+  used, kind_counts, reason_codes=[LEGACY_FALLBACK_USED], contract). The
+  receipt is attached AFTER the content address so it never rotates
+  model_id. Assets without a frame ledger are byte-identical to pre-P0-E
+  builds; their receipt records only NO_FRAME_LEDGER-style counts (nothing
+  else is a "fallback" when no SSOT exists). `validate_behavior_ir` does not
+  see the receipt (it is not part of the behavior model).
+- Not migrated here (P0-E follow-up increments, registered): obligation
+  compiler family Chinese tokens (库存/金额/隐私/过期/可见/状态,
+  _OWNERSHIP_LANGUAGE_MARKERS, _ABSENT/_MASK_MARKERS) — migrate after the IR
+  carries structured frame family evidence; `behavior_semantic_mapper`
+  finding-enrichment dictionaries (PAGE_MAP/ROLE_ACTIONS/RISK_IMPACT/
+  SQL_HINTS); the v1 extractor's hit-is-fact path
+  (`_chinese_business_comprehension_extractor_v1.py`) — second phase of
+  P0-E. The 131-bug benchmark re-run remains the activation verification
+  gate and is executed separately from the unit/CI gates.
 
 
 Side-effect-free import rule: importing `ai_test_asset_center` must be
