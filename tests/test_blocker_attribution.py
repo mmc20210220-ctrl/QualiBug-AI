@@ -22,10 +22,19 @@ def _make_blocked_experiment(oid="obl_1", reason="BLOCKED_MISSING_OBSERVER", det
 
 class TestAttributionCategories:
     def test_all_categories_defined(self):
-        assert len(ATTRIBUTION_CATEGORIES) == 13
+        # Category set is intentionally additive: the chain-positioning
+        # extension registered hypothesis-stage families (LLM_PROVIDER_GAP,
+        # HYPOTHESIS_GENERATION_GAP, CONTRACT_DERIVATION_GAP,
+        # EMBEDDING_CAPABILITY_GAP, LEARNING_FEEDBACK_GAP) plus the
+        # non-blocking families the registry already used (PERMISSION_GAP,
+        # NORMAL_OUTCOME, DISCOVERY_DIAGNOSTIC, EXECUTION_BUDGET,
+        # PLANNING_DEFERRED, UNREGISTERED).
         assert "SOURCE_GAP" in ATTRIBUTION_CATEGORIES
         assert "COMPILER_GAP" in ATTRIBUTION_CATEGORIES
         assert "UNKNOWN" in ATTRIBUTION_CATEGORIES
+        assert "LLM_PROVIDER_GAP" in ATTRIBUTION_CATEGORIES
+        assert "HYPOTHESIS_GENERATION_GAP" in ATTRIBUTION_CATEGORIES
+        assert "CONTRACT_DERIVATION_GAP" in ATTRIBUTION_CATEGORIES
 
     def test_recoverability_values(self):
         assert "RECOVERABLE" in RECOVERABILITY_VALUES

@@ -843,6 +843,21 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         result,
         funnel=_as_dict(result.get("discovery_funnel")),
     )
+    # Chain positioning: one view answering 走到哪/卡在哪/损失在哪一步. Pure
+    # projection of the receipts above; diagnostic guidance is synthetic and
+    # never satisfies the delivery gate. Fail-soft: any missing receipt
+    # degrades a stage with a visible note instead of failing the run.
+    try:
+        from .chain_positioning import build_chain_positioning
+
+        result["discovery_chain_positioning"] = build_chain_positioning(result)
+    except Exception as _chain_exc:
+        result["discovery_chain_positioning"] = {
+            "schema_version": "qualibug.discovery-chain-positioning.v1",
+            "status": "FAILED",
+            "reason": f"{type(_chain_exc).__name__}:{str(_chain_exc)[:160]}",
+            "stages": [],
+        }
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"

@@ -16,6 +16,7 @@ import { EnterpriseUnderstandingPanel } from '../components/dashboard/Enterprise
 import { JourneyStrip } from '../components/dashboard/JourneyStrip';
 import { TrustPanel, type TrustSignal } from '../components/dashboard/TrustPanel';
 import { DiscoveryFunnelPanel } from '../components/dashboard/DiscoveryFunnelPanel';
+import { ChainPositioningPanel } from '../components/dashboard/ChainPositioningPanel';
 import { MainChainContractPanel } from '../components/dashboard/MainChainContractPanel';
 import { RegressionClosurePanel } from '../components/dashboard/RegressionClosurePanel';
 import { RegressionGateBanner } from '../components/dashboard/RegressionGateBanner';
@@ -244,6 +245,8 @@ export function Dashboard() {
       />
 
       <DiscoveryFunnelPanel funnel={record.discovery_funnel} report={record.discovery_funnel_report} />
+
+      <ChainPositioningPanel positioning={record.discovery_chain_positioning} />
 
       {/* 交付口径 — 后端正式记账数字与内部原始 finding 的边界 */}
       <section className="customer-secondary-grid" aria-label="交付口径">
