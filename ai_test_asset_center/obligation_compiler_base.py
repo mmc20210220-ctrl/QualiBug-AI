@@ -558,39 +558,53 @@ def _cleanup_requirement(
             requirement["mode"] = "restore_deleted_resource"
             return requirement
 
-    restore_refs = {
-        _text(relation.get("to_ref"))
-        for relation in relations
-        if _text(relation.get("relation_type")) == "compensates"
-        and _text(relation.get("operation_ref") or relation.get("from_ref")) == op_id
-        and _text(relation.get("to_ref")) in operation_ids
-        and _text(relation.get("to_ref")) != op_id
-    }
-    if len(restore_refs) > 1:
-        post_restores = {
-            ref
-            for ref in restore_refs
-            if _text(_dict(operations_by_id.get(ref)).get("method")).upper() == "POST"
+        # Recreate-from-compensated-create is a DELETE-only compensation: a
+        # DELETE removes the resource, so recreating the create it compensates
+        # restores existence. A state-changing POST (cancel/close/approve/…)
+        # leaves the resource in place; recreating its create would produce a
+        # SECOND resource, not a rollback. The relation "X compensates create
+        # C" therefore proves recreate authority only when X is a DELETE.
+        restore_refs = {
+            _text(relation.get("to_ref"))
+            for relation in relations
+            if _text(relation.get("relation_type")) == "compensates"
+            and _text(relation.get("operation_ref") or relation.get("from_ref")) == op_id
+            and _text(relation.get("to_ref")) in operation_ids
+            and _text(relation.get("to_ref")) != op_id
         }
-        if len(post_restores) == 1:
-            restore_refs = post_restores
-    if len(restore_refs) == 1:
-        requirement["operation_ref"] = next(iter(restore_refs))
-        requirement["mode"] = "recreate_compensated_resource"
-        return requirement
+        if len(restore_refs) > 1:
+            post_restores = {
+                ref
+                for ref in restore_refs
+                if _text(_dict(operations_by_id.get(ref)).get("method")).upper() == "POST"
+            }
+            if len(post_restores) == 1:
+                restore_refs = post_restores
+        if len(restore_refs) == 1:
+            requirement["operation_ref"] = next(iter(restore_refs))
+            requirement["mode"] = "recreate_compensated_resource"
+            return requirement
 
-    method = _text(op.get("method")).upper()
     if method in {"PUT", "PATCH"}:
         requirement["mode"] = "snapshot_restore"
         return requirement
 
     # A create route may use only an exact identity-bound DELETE on the same
     # collection. DELETE-to-POST recreation requires an explicit relation.
+    # Identity-bound POSTs (/api/products/admin/{sku}/status, …/{id}/default)
+    # are state-changing actions on an existing resource, never collection
+    # creates: a DELETE derived for them would remove the resource the action
+    # merely mutated, so the derivation is restricted to placeholder-free
+    # collection POSTs.
     raw_path = normalize_path_placeholders(
         _text(op.get("path") or op.get("raw_path"))
     )
     op_collection = normalize_path_placeholders(collection_path(raw_path))
-    if method == "POST" and op_collection.startswith("/"):
+    if (
+        method == "POST"
+        and "{" not in raw_path
+        and op_collection.startswith("/")
+    ):
         delete_candidates: list[str] = []
         for cand_id, cand_op in operations_by_id.items():
             if cand_id == op_id:
