@@ -124,13 +124,7 @@ def score_obligation(
     hist = _dict(historical_yield)
     hist_risk = hist.get(f"risk:{family}")
     if hist_risk is None:
-        # Cold-start Multi-User Replay bias: mild lift so isolation is not
-        # starved by abundant authorization twins (ranking only; no budget raise).
         base_priority = _num(obl.get("risk_priority"), 1.0)
-        if family == "isolation":
-            base_priority = max(base_priority, 1.25)
-            if _text(_dict(obl.get("property")).get("ownership_param")):
-                base_priority = max(base_priority, 1.4)
     else:
         base_priority = _num(hist_risk, 1.0)
     risk_priority = min(2.0, max(0.05, base_priority))
@@ -390,7 +384,6 @@ def plan_obligation_round(
         candidates = uncovered_by_prefix[prefix]
         candidates.sort(
             key=lambda row: (
-                0 if row["risk_family"] == "isolation" else 1,
                 -float(row["score"]),
                 row["obligation_id"],
             )
