@@ -37,30 +37,37 @@ STAGE_ORDER = (
     "delivery_gate",
 )
 
-# Terminal statuses that mean "execution completed toward a verdict".
-_EXECUTED_TERMINAL_STATUSES = frozenset({
-    "EXECUTED",
-    "DELIVERABLE",
-    "CANDIDATE",
-    "REJECTED",
-    "OBSERVED",
+# Classification is derived from the SSOT registries, never from closed local
+# lists: terminal statuses come from the obligation-attempt ledger, blocking
+# semantics come from the reason-code registry (blocker_attribution).  Any
+# future status / reason code emitted by any target system or future runner
+# is therefore classified by the same rules — nothing here is a hardcoded
+# enumeration that silently drops unknown values.
+try:
+    from ._obligation_attempt_ledger_single_occurrence_mechanics import (  # noqa: E402
+        TERMINAL_STATUSES as _LEDGER_TERMINAL_STATUSES,
+    )
+except Exception:  # pragma: no cover - degrade visibly if the ledger moves
+    _LEDGER_TERMINAL_STATUSES = frozenset({
+        "DELIVERABLE", "REJECTED", "BLOCKED", "DEFERRED", "HARNESS_FAILED",
+    })
+
+# Terminal verdicts: execution completed and the oracle produced a decision.
+_COMPLETED_TERMINAL_STATUSES = frozenset({
+    status for status in _LEDGER_TERMINAL_STATUSES
+    if status not in {"BLOCKED", "DEFERRED", "HARNESS_FAILED"}
 })
-# Terminal statuses that mean "blocked before/at execution".
-_BLOCKED_TERMINAL_STATUSES = frozenset({
-    "BLOCKED",
-    "DEFERRED",
-    "HARNESS_FAILED",
-    "HARNESS_CLEANUP_FAILED",
-})
-# Reason codes that indicate the observation stage itself is the loss point.
-_OBSERVER_FAMILY_CODES = frozenset({
-    "BLOCKED_MISSING_OBSERVER",
-    "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE",
-    "BLOCKED_OBSERVER_CONTRACT_DRIFT",
-    "BLOCKED_OBSERVER_RESOLUTION_FAILED",
-    "EXECUTION_OBSERVABILITY_GAP",
-    "BLOCKED_STEP_EVIDENCE_UNOBSERVABLE",
-})
+# Terminal blockers: execution did not complete toward a verdict.
+_BLOCKED_TERMINAL_STATUSES = _LEDGER_TERMINAL_STATUSES - _COMPLETED_TERMINAL_STATUSES
+
+
+def _is_blocking_reason(code: str) -> bool:
+    """Blocking semantics from the registry SSOT; unknown codes stay visible."""
+    return bool(profile_reason_code(code).get("is_blocking", True))
+
+
+def _reason_family(code: str) -> str:
+    return str(profile_reason_code(code).get("reason_family") or "UNREGISTERED")
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -266,47 +273,62 @@ def build_chain_positioning(result: dict[str, Any] | None) -> dict[str, Any]:
     except Exception as exc:
         ledger_note = f"attempt_ledger_unavailable:{type(exc).__name__}"
 
+    # Runtime stages count only attempts that reached execution or gate;
+    # compile-stage terminal attempts belong to the compile stage (the plan
+    # bundle's blocked_experiments already account for them) — counting them
+    # here too would double-report the same loss.
+    runtime_attempts = [
+        row for row in attempts
+        if _text(row.get("terminal_stage")) in {"execution", "gate"}
+    ]
+    compile_stage_attempts = [
+        row for row in attempts
+        if _text(row.get("terminal_stage")) == "compile"
+    ]
+
     selected_count = _int(_dict(ledger).get("selected_count")) if ledger_note == "" else 0
-    terminal_statuses = Counter(_text(row.get("terminal_status")).upper() for row in attempts)
-    executed_terminal = sum(
+    terminal_statuses = Counter(_text(row.get("terminal_status")).upper() for row in runtime_attempts)
+    completed_terminal = sum(
         count for status, count in terminal_statuses.items()
-        if status in _EXECUTED_TERMINAL_STATUSES
+        if status in _COMPLETED_TERMINAL_STATUSES
     )
     blocked_terminal = sum(
         count for status, count in terminal_statuses.items()
         if status in _BLOCKED_TERMINAL_STATUSES
     )
-    attempt_reason_codes = _counter(attempts, "reason_code")
+    attempt_reason_codes = _counter(runtime_attempts, "reason_code")
+    blocking_reason_codes = {
+        code: count for code, count in attempt_reason_codes.items()
+        if _is_blocking_reason(code)
+    }
     stages.append(_stage(
         "execution",
         input_count=selected_count,
-        output_count=executed_terminal + blocked_terminal,
+        output_count=completed_terminal + blocked_terminal,
         blocked_count=blocked_terminal,
-        reason_codes={
-            code: count for code, count in attempt_reason_codes.items()
-            if code in _BLOCKED_TERMINAL_STATUSES
-            or code in {
-                "non_production_environment_required",
-                "HARNESS_FAILURE",
-                "HARNESS_CLEANUP_FAILED",
-                "BLOCKED_EXECUTION",
-            }
-        } or None,
+        reason_codes=blocking_reason_codes or None,
         key_receipts=["obligation_attempt_ledger", "execution_operational_receipts"],
-        note=ledger_note,
+        note=(
+            ledger_note
+            or (
+                f"compile_stage_terminal_attempts={len(compile_stage_attempts)}"
+                if compile_stage_attempts
+                else ""
+            )
+        ),
     ))
 
     observed_attempts = [
-        row for row in attempts
+        row for row in runtime_attempts
         if _list(row.get("observation_receipt_ids"))
     ]
     observer_blocked = [
-        row for row in attempts
-        if _text(row.get("reason_code")) in _OBSERVER_FAMILY_CODES
+        row for row in runtime_attempts
+        if _reason_family(_text(row.get("reason_code"))) == "OBSERVER_CAPABILITY_GAP"
     ]
     stages.append(_stage(
         "observation",
-        input_count=executed_terminal,
+        input_count=completed_terminal,
         output_count=len(observed_attempts),
         blocked_count=len(observer_blocked),
         reason_codes=_counter(observer_blocked, "reason_code") or None,
@@ -314,21 +336,18 @@ def build_chain_positioning(result: dict[str, Any] | None) -> dict[str, Any]:
     ))
 
     verdict_attempts = [
-        row for row in attempts
+        row for row in runtime_attempts
         if _text(row.get("oracle_reason_code"))
-        or _text(row.get("terminal_status")).upper() in _EXECUTED_TERMINAL_STATUSES
+        or _text(row.get("terminal_status")).upper() in _COMPLETED_TERMINAL_STATUSES
     ]
     indeterminate_attempts = [
         row for row in verdict_attempts
-        if _text(row.get("oracle_reason_code")).upper() in {
-            "ASSERTION_INDETERMINATE",
-            "INDETERMINATE",
-        }
-        or _text(row.get("terminal_status")).upper() in {"INDETERMINATE", "NOT_PROVEN"}
+        if _reason_family(_text(row.get("oracle_reason_code"))) == "ORACLE_INPUT_GAP"
+        or _text(row.get("terminal_status")).upper() not in _COMPLETED_TERMINAL_STATUSES
     ]
     stages.append(_stage(
         "verdict",
-        input_count=len(observed_attempts) or executed_terminal,
+        input_count=len(observed_attempts) or completed_terminal,
         output_count=len(verdict_attempts) - len(indeterminate_attempts),
         blocked_count=len(indeterminate_attempts),
         reason_codes=_counter(indeterminate_attempts, "oracle_reason_code") or None,
