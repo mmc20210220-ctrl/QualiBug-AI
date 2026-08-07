@@ -21,6 +21,8 @@ BINDING_PRIORITY = (
     "runtime_actor_secret_ref",
     "disposable_fixture_receipt",
     "api_doc_example",
+    "source_declared_path_example",
+    "source_declared_body_example",
 )
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -427,6 +429,74 @@ def _body_placeholder_rows(value: Any, path: str = "") -> list[dict[str, str]]:
 def _is_credential_field_token(name: str) -> bool:
     token = _field_token(name)
     return token in _CREDENTIAL_FIELD_TOKENS or token.endswith("password")
+
+
+def _source_declared_body_example_bindings(
+    operation: dict[str, Any],
+    unresolved: list[str],
+    body_placeholder_paths: dict[str, list[str]],
+) -> dict[str, Any] | None:
+    """Source-declared example fallback for unresolved body placeholders.
+
+    Mirrors the path-parameter example fallback (7ed1d394): when neither a
+    read resolver, a fixture, nor a credential source exists for a body
+    placeholder, the operation's own request-body schema property
+    ``example``/``default`` is the last source-grounded value available — it
+    is part of the operation contract the customer declared, never an
+    invented id. A blocked placeholder without a declared example stays
+    visibly BLOCKED.
+    """
+    examples: dict[str, Any] = {}
+    request_schema = _dict(operation.get("request_schema"))
+    content = _dict(request_schema.get("content"))
+    schema = _dict(_dict(content.get("application/json") or {}).get("schema"))
+    if not schema:
+        for media in content.values():
+            candidate = _dict(_dict(media).get("schema"))
+            if candidate:
+                schema = candidate
+                break
+    properties = _dict(schema.get("properties"))
+
+    def _walk(props: dict[str, Any]) -> None:
+        for field_name, field_schema in props.items():
+            field = _dict(field_schema)
+            value = field.get("example") or field.get("default")
+            if value not in (None, ""):
+                examples[_field_token(field_name)] = value
+            nested = _dict(field.get("properties"))
+            if nested:
+                _walk(nested)
+            items = _dict(field.get("items"))
+            nested_items = _dict(items.get("properties"))
+            if nested_items:
+                _walk(nested_items)
+
+    _walk(properties)
+    if not examples:
+        return None
+    bindings: dict[str, Any] = {}
+    for name in unresolved:
+        leafs = {_field_token(name)}
+        for body_path in body_placeholder_paths.get(name, []):
+            leaf = body_path.split(".")[-1].split("[")[0]
+            if leaf:
+                leafs.add(_field_token(leaf))
+        hit = next(
+            (examples[key] for key in leafs if key in examples),
+            None,
+        )
+        if hit is None:
+            continue
+        bindings[name] = {
+            "target": name,
+            "target_path": f"/{{{name}}}",
+            "status": "bound",
+            "materialized_value": str(hit),
+            "source_priority": "source_declared_body_example",
+            "value_fingerprint": "",
+        }
+    return bindings or None
 
 
 def _api_prefix(path: str) -> str:
@@ -1015,6 +1085,19 @@ def build_binding_plan(
                         "value_fingerprint": "",
                     })
                     continue
+            # Source-declared body example fallback (mirrors the path-parameter
+            # example fallback): no resolver, fixture, or credential source —
+            # the operation's own request-body schema example/default is the
+            # last source-grounded value. Without one the placeholder stays
+            # visibly blocked; never invent enterprise data.
+            _body_example_bindings = _source_declared_body_example_bindings(
+                op,
+                [name],
+                body_placeholder_paths,
+            )
+            if _body_example_bindings and name in _body_example_bindings:
+                plan.append(_body_example_bindings[name])
+                continue
             # An unbound placeholder is never a license to invent enterprise
             # data. Both path and body values must remain visibly blocked.
             is_path_param = name in path_placeholders
@@ -1161,6 +1244,11 @@ def unresolved_placeholders(operation: dict[str, Any], plan: list[dict[str, Any]
             and (
                 bool(_list(item.get("resolver_operations")))
                 or bool(_dict(item.get("fixture_setup")))
+                # ownership_identity_param: body ownership identity fields
+                # (fromUserId/ownerId/…) resolve through the isolation/
+                # validation identity-binding stage from runtime-observed
+                # actor identities, not through a list read.
+                or _text(item.get("source_priority")) == "ownership_identity_param"
             )
         )
     }
