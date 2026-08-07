@@ -1624,6 +1624,25 @@ def _derive_permission_relations(
                     "permits" if role_key in declared else "denies"
                 )
                 decision = "PERMIT" if role_key in declared else "DENY"
+                if relation_type == "denies":
+                    # The operation's own role declaration (x-required-roles /
+                    # 权限 description) is authoritative over narrative
+                    # permission-matrix rows. A matrix grant for a role the
+                    # operation itself declares restricted (e.g. "买家可申请
+                    # 退款" linked onto a finance/admin-only quick-refund)
+                    # must not survive: it would arm unexecutable control
+                    # arms the runtime role gate blocks pre-transport.
+                    # Revoke both the grant and its derived ownership link.
+                    relations[:] = [
+                        row
+                        for row in relations
+                        if not (
+                            _text(row.get("from_ref")) == actor_ref
+                            and _text(row.get("to_ref")) == operation_id
+                            and _text(row.get("relation_type"))
+                            in {"permits", "owns"}
+                        )
+                    ]
                 relations.append(_relation_node(
                     relation_type=relation_type,
                     from_ref=actor_ref,

@@ -1157,6 +1157,23 @@ def project_observed_body(
     for row in candidates:
         projected: dict[str, Any] = {}
         for field in fields:
+            field_key = re.sub(r"[^a-z0-9]+", "", field.lower())
+            # Natural FK column first: a body field userId matches the row's
+            # own user_id column. The observed row's FK value IS the
+            # reference — prefer it over the mapping, which points at the
+            # referenced ENTITY's identity field (users.id) and would
+            # mis-bind onto a colliding column of the observed row (an order
+            # row's id) when both keys normalize differently.
+            if field_key:
+                for row_key, row_value in row.items():
+                    if re.sub(r"[^a-z0-9]+", "", str(row_key).lower()) != field_key:
+                        continue
+                    if row_value in (None, ""):
+                        continue
+                    projected[field] = row_value
+                    break
+            if field in projected:
+                continue
             ref = mapping.get(field)
             source_field = ""
             if isinstance(ref, dict):
@@ -1171,16 +1188,6 @@ def project_observed_body(
                     projected[field] = row_value
                     break
                 continue
-            field_key = re.sub(r"[^a-z0-9]+", "", field.lower())
-            if not field_key:
-                continue
-            for row_key, row_value in row.items():
-                if re.sub(r"[^a-z0-9]+", "", str(row_key).lower()) != field_key:
-                    continue
-                if row_value in (None, ""):
-                    continue
-                projected[field] = row_value
-                break
         if len(projected) > len(best):
             best = projected
     return best
