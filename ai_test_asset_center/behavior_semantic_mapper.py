@@ -77,43 +77,6 @@ def extract_trace_id(headers: dict[str, str] | None, body: dict[str, Any] | None
 
 # ── Knowledge bases ────────────────────────────────────────
 
-# API path → frontend page mapping
-PAGE_MAP: dict[str, str] = {
-    "/api/orders": "订单管理",
-    "/api/orders/{id}/detail": "订单详情",
-    "/api/orders/{id}/pay": "订单支付",
-    "/api/orders/{id}/refund": "订单退款",
-    "/api/orders/{id}/approve": "订单审批",
-    "/api/orders/{id}/close": "订单关闭",
-    "/api/orders/{id}/dispatch": "订单发货",
-    "/api/orders/{id}/assign": "订单分配",
-    "/api/orders/{id}/archive": "订单归档",
-    "/api/knowledge/ingest": "企业资料上传",
-    "/api/knowledge/delete": "企业资料管理",
-    "/api/knowledge/reanalyze": "知识库重建",
-    "/api/scan/run": "扫描引擎",
-    "/api/settings/save": "系统设置",
-    "/api/connectors/register": "集成连接器",
-    "/api/pilot/tasks": "任务管理",
-    "/api/pilot/tasks/approve": "任务审批",
-    "/api/pilot/tasks/run-next": "任务执行",
-    "/api/environment/config": "环境配置",
-    "/api/run-scenario": "测试场景",
-    "/api/health": "系统健康",
-}
-
-# Role mapping
-ROLE_ACTIONS: dict[str, str] = {
-    "游客": "以游客身份访问系统",
-    "买家": "以买家身份登录",
-    "商家运营": "以商家运营身份登录",
-    "客服": "以客服身份登录",
-    "财务": "以财务身份登录",
-    "平台管理员": "以平台管理员身份登录",
-    "operator": "以操作员身份登录",
-    "admin": "以管理员身份登录",
-}
-
 # Risk → business impact language
 RISK_IMPACT: dict[str, str] = {
     "permission_boundary": "未授权用户可访问或操作敏感功能，存在越权风险",
@@ -126,19 +89,11 @@ RISK_IMPACT: dict[str, str] = {
     "async_observability_gap": "异步操作缺少进度反馈，用户无法获知操作状态",
     "unreachable": "服务端点不可达，影响系统可用性",
     "db_verified": "数据库数据存在不一致，可能导致业务判断错误",
-    "conservation": "业务守恒规则被违反，可能导致库存/资金异常",
+    "conservation": "业务守恒规则被违反，可能导致核心业务数据异常",
     "causality_coverage": "因果约束缺失，状态变更可能产生未预期的副作用",
     "idempotent_side_effect": "幂等性保障缺失，重复操作可产生业务副作用",
 }
 
-# Category → SQL template for investigation
-SQL_HINTS: dict[str, str] = {
-    "库存": "SELECT * FROM inventory WHERE quantity < 0",
-    "bom": "SELECT b.*, m.status FROM bom_line b LEFT JOIN material m ON b.material_code = m.code WHERE m.code IS NULL",
-    "订单": "SELECT * FROM orders WHERE status IN ('approved_after_closed', 'paid', 'refunding') AND created_at > datetime('now', '-7 days')",
-    "幂等": "SELECT business_no, COUNT(*) cnt FROM orders GROUP BY business_no HAVING cnt > 1",
-    "流水": "SELECT txn_type, ref_no, COUNT(*) cnt FROM inventory_ledger GROUP BY txn_type, ref_no HAVING cnt > 1",
-}
 
 
 def enrich_finding(finding: dict[str, Any]) -> dict[str, Any]:
@@ -212,11 +167,11 @@ def _build_evidence_hint(finding: dict, title: str, method: str, path: str, cate
     if source_entity:
         parts.append(f"数据表: {source_entity}")
 
-    # SQL hint
-    for kw, sql in SQL_HINTS.items():
-        if kw in title:
-            parts.append(f"SQL: {sql}")
-            break
+    # SQL hint: generated from the finding's own declared source_entity
+    # (never a built-in table name or schema guess).
+    sql_hint = _find_sql_hint(title, source_entity)
+    if sql_hint:
+        parts.append(f"SQL: {sql_hint}")
 
     if not parts and trace_id:
         parts.append(f"日志关键词: {trace_id}")
@@ -254,7 +209,7 @@ def _build_investigation_guidance(finding: dict, title: str, method: str, path: 
         "relevant_apis": [f"{method} {path}"] if path else [],
         "relevant_tables": [source_entity] if source_entity else [],
         "log_search": log_search,
-        "sql_verify": _find_sql_hint(title),
+        "sql_verify": _find_sql_hint(title, source_entity),
         "trace_id": task_id,
     }
 
@@ -283,19 +238,13 @@ def _build_business_steps(finding: dict, title: str, method: str, path: str) -> 
             return ["打开一条待审批记录点击审批通过", "快速再次点击审批按钮（模拟网络重试）", "预期提示已审批，不应重复生成审批记录"]
         return ["在对应功能页面执行一次写操作", "快速重复提交（双击按钮或网络重试）", "预期只产生一条业务记录"]
 
-    # DB verified
-    if "db verified" in t or "库存" in t or "负" in t:
-        return ["进入库存管理页面查看物料库存列表", "筛选可用量为负数的物料记录", "记录异常物料编码，登录数据库进一步验证"]
-    if "bom" in t:
-        return ["打开物料清单(BOM)管理页面", "选择一个产品查看其组成物料", "检查物料用量、精度与 PRD 计算规则是否一致"]
+    # DB verified (generic: data-integrity reproduction, no industry terms)
+    if "db verified" in t or "负" in t:
+        return ["进入对应数据管理页面查看相关记录", "筛选异常数据记录", "记录异常数据标识，登录数据库进一步验证"]
 
-    # Payment / refund
-    if "pay" in t or "支付" in t or "refund" in t or "退款" in t:
-        return ["以买家身份登录进入下单页面", "选择商品填写地址选择支付方式后提交订单", "在订单详情页检查支付状态和金额是否正确"]
-
-    # Order
-    if "订单" in t or "order" in t:
-        return ["以对应角色登录进入订单管理页面", "选择一条订单记录进行查看或操作", "观察订单状态变更是否和 PRD 描述一致"]
+    # Payment / refund / order (generic business write reproduction)
+    if "pay" in t or "支付" in t or "refund" in t or "退款" in t or "订单" in t or "order" in t:
+        return ["以对应业务角色登录系统", "在相关业务页面执行一次写操作", "观察业务状态与金额是否与 PRD 描述一致"]
 
     # Generic by page
     page = _path_to_page(path)
@@ -304,14 +253,15 @@ def _build_business_steps(finding: dict, title: str, method: str, path: str) -> 
 
 def _guess_module(title: str) -> str:
     """Guess which business module the finding belongs to."""
+    # Generic system concepts only — industry modules (orders/payments/
+    # inventory/materials/refunds) are customer business and must come from
+    # declared sources, never from a built-in mapping.
     mapping = [
-        ("订单|order", "订单管理"), ("支付|payment|pay", "支付模块"),
-        ("库存|inventory|stock", "库存管理"), ("bom|物料|material", "物料管理"),
         ("用户|user|auth|登录|认证|授权|permission", "用户与权限"),
         ("审批|approve|approval", "审批流程"), ("通知|notif", "通知服务"),
         ("知识|knowledge|ingest|文档|upload", "企业资料"), ("配置|config|settings|环境", "系统配置"),
         ("扫描|scan|pilot|任务|task", "测试引擎"), ("连接器|connector|集成|integrat", "集成对接"),
-        ("健康|health", "系统监控"), ("退款|refund", "退款管理"),
+        ("健康|health", "系统监控"),
     ]
     for pattern, module in mapping:
         if any(word in title.lower() for word in pattern.split("|")):
@@ -320,15 +270,17 @@ def _guess_module(title: str) -> str:
 
 
 def _path_to_page(path: str) -> str:
-    """Map API path to frontend page name."""
-    for api_path, page in PAGE_MAP.items():
-        if api_path in path:
-            return page
+    """Map API path to a generic page label.
+
+    Frontend page names are customer declarations; without a declared
+    route table only generic system concepts are named (approvals, data,
+    knowledge, tasks, scan, settings, connectors, sync, cache, import) and
+    everything else falls back to a neutral label. Industry pages
+    (orders/payments/contracts) are never invented here.
+    """
     parts = path.strip("/").split("/")
     if "approvals" in parts:
         return "审批流程"
-    if "orders" in parts:
-        return "订单管理"
     if "data" in parts:
         return "数据管理"
     if "knowledge" in parts:
@@ -347,19 +299,19 @@ def _path_to_page(path: str) -> str:
         return "数据同步"
     if "cache" in parts:
         return "缓存管理"
-    if "contracts" in parts:
-        return "合同管理"
     if "concurrent" in parts or "import" in parts:
         return "系统管理"
     return "系统功能"
 
 
-def _find_sql_hint(title: str) -> str:
-    """Try to generate a relevant SQL verification query."""
-    for kw, sql in SQL_HINTS.items():
-        if kw in title:
-            return sql
-    return ""
+def _find_sql_hint(title: str, source_entity: str = "") -> str:
+    """Generate a SQL verification query from the finding declared
+    source_entity only — no built-in table names, no schema guesses.
+    Without a declared entity the hint stays empty (fail-safe)."""
+    entity = str(source_entity or "").strip()
+    if not entity:
+        return ""
+    return f"SELECT * FROM {entity}"
 
 
 def _guess_trace_header_name(headers: dict[str, str]) -> str:
