@@ -358,6 +358,38 @@ def _unique_collection_create_ref(
     return create_refs[0] if len(create_refs) == 1 else ""
 
 
+def _same_path_restore_ref(
+    *,
+    primary_op_id: str,
+    primary_path: str,
+    ops: dict[str, dict[str, Any]],
+) -> tuple[str, str]:
+    """Return the unique same-path restore write (PATCH/PUT) for a DELETE.
+
+    A DELETE may be a soft delete: the row stays in the target and recreating
+    it through the collection POST collides with the row's unique key (the
+    recreate then fails with a server 5xx). The only compensation that works
+    on both soft-delete and hard-delete targets is a restore write declared on
+    the deleted resource itself — the harness restores state when the row
+    still exists and falls back to the collection recreate when the row is
+    gone. Only a source-declared request body makes the restore writable; the
+    harness never invents fields for a restore it cannot ground.
+    """
+    target_path = normalize_path_placeholders(primary_path)
+    candidates = [
+        (cand_id, _text(cand_op.get("method")).upper())
+        for cand_id, cand_op in ops.items()
+        if cand_id != primary_op_id
+        and isinstance(cand_op, dict)
+        and _text(cand_op.get("method")).upper() in {"PATCH", "PUT"}
+        and normalize_path_placeholders(
+            _text(cand_op.get("path") or cand_op.get("raw_path"))
+        ) == target_path
+        and _source_request_example(cand_op)
+    ]
+    return candidates[0] if len(candidates) == 1 else ("", "")
+
+
 # Action-verb terminal segments: POST endpoints ending in these are semantically
 # read-only operations (validation, computation, query) that do not create a
 # durable entity requiring effect-read observation.
@@ -1816,17 +1848,40 @@ def compile_experiment_for_obligation(
                         }
             # else: leave unresolved → BLOCKED_NON_REVERSIBLE_WRITE below
         elif (
-            # DELETE: unique collection POST create may recreate the resource.
+            # DELETE: prefer a same-path restore write (PATCH/PUT declared on
+            # the deleted resource — soft-delete targets keep the row, so the
+            # only safe compensation is restoring its state; a recreate would
+            # collide with the row's unique key). Fall back to a unique
+            # collection POST create for hard-delete targets. The restore
+            # carries the recreate as its runtime fallback: when the restore
+            # write answers 404 the row is gone and the create restores it.
             primary_method == "DELETE"
             and primary_path.startswith("/")
             and not cleanup_op
         ):
+            restore_ref, restore_method = _same_path_restore_ref(
+                primary_op_id=primary_op_id,
+                primary_path=primary_path,
+                ops=ops,
+            )
             create_ref = _unique_collection_create_ref(
                 primary_op_id=primary_op_id,
                 primary_path=primary_path,
                 ops=ops,
             )
-            if create_ref:
+            if restore_ref:
+                cleanup_op = restore_ref
+                cleanup_req = {
+                    **cleanup_req,
+                    "operation_ref": cleanup_op,
+                    "required": True,
+                    "mode": "restore_deleted_resource",
+                    "path": primary_path,
+                    "method": restore_method,
+                    "body": _source_request_example(ops[restore_ref]),
+                    "recreate_fallback_ref": create_ref,
+                }
+            elif create_ref:
                 cleanup_op = create_ref
                 cleanup_req = {
                     **cleanup_req,
@@ -2015,6 +2070,50 @@ def compile_experiment_for_obligation(
                         "body_from_original_request": True,
                         "runtime_response_binding_required": "{" in cleanup_path,
                     }]
+                elif cleanup_mode == "restore_deleted_resource":
+                    # Soft-delete compensation: restore the deleted row
+                    # through the same-path restore write (PATCH/PUT) the
+                    # source declares on the deleted resource. The executor
+                    # falls back to the collection recreate when the restore
+                    # answers non-2xx (hard-delete target, row gone).
+                    if not cleanup_body:
+                        from .target_policy import is_nonproduction_environment
+
+                        if is_nonproduction_environment(environment_type):
+                            cleanup_plan = [{
+                                "action": "accepted_residue",
+                                "mode": "accepted_residue_no_cleanup",
+                                "compensates_operation_ref": primary_op_id,
+                                "residue_notice": (
+                                    f"restore_body_unbuildable:{cleanup_op}"
+                                ),
+                            }]
+                        else:
+                            return blocked_experiment(
+                                oid,
+                                "BLOCKED_NON_REVERSIBLE_WRITE",
+                                f"cleanup_restore_body_unbuildable:{cleanup_op}",
+                            )
+                    else:
+                        cleanup_plan = [{
+                            "action": "reverse_order_compensation",
+                            "mode": cleanup_mode,
+                            "operation_ref": cleanup_op,
+                            "compensates_operation_ref": primary_op_id,
+                            "path": cleanup_path,
+                            "method": cleanup_method,
+                            "body": cleanup_body,
+                            "recreate_fallback_ref": (
+                                _unique_collection_create_ref(
+                                    primary_op_id=primary_op_id,
+                                    primary_path=primary_path,
+                                    ops=ops,
+                                )
+                            ),
+                            "runtime_response_binding_required": (
+                                "{" in cleanup_path
+                            ),
+                        }]
                 elif cleanup_mode == "recreate_compensated_resource":
                     # DELETE/empty-body primary: recreate from the create operation's
                     # source example; executor must materialize runtime tokens.

@@ -481,6 +481,13 @@ class TestWriteReversibilityProof:
             "inverse_delta", "exact_recreate", "verified_environment_reset",
             # V1.6.1: required so RESOLVED field-oracle write experiments can compile.
             "declared_adapter_cleanup",
+            # accepted_residue: coverage-over-cleanup on a declared
+            # non-production target with no resolvable compensator.
+            "accepted_residue",
+            # restore_deleted_resource: same-path PATCH/PUT restore of a
+            # soft-deleted row (identity preserved, source-declared body),
+            # with collection-recreate fallback for hard-delete targets.
+            "restore_deleted_resource",
         }
         from ai_test_asset_center.write_reversibility_contract import (
             ADAPTER_CLEANUP_AUTHORITY,

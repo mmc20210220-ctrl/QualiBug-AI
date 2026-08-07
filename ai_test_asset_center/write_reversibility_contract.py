@@ -42,6 +42,11 @@ CLEANUP_AUTHORITIES = frozenset({
     # write rules compile to unknown_cleanup_authority and never reach Field
     # Oracle Trace — the V1.6.0 Stage B breakpoint.
     "declared_adapter_cleanup",
+    # restore_deleted_resource: same-path PATCH/PUT restore of a soft-deleted
+    # row. Identity is preserved (same row), the restore body is source-declared
+    # (_validate_restore_deleted_resource), and the executor falls back to the
+    # collection recreate when the row is gone.
+    "restore_deleted_resource",
     # accepted_residue: the write is NOT reversed. Admitted only for a target the
     # operator explicitly declared non-production AND when no real compensator
     # (API/DB/UI) resolved. It is a coverage-over-cleanup decision, never a claim
@@ -360,6 +365,17 @@ def _classify_cleanup_authority_v11(
     # ── exact_recreate (SPEC §7.5) ──
     if mode == "recreate_compensated_resource":
         return _validate_exact_recreate(
+            primary_method=primary_method,
+            primary_path=primary_path,
+            cleanup_op_ref=cleanup_op_ref,
+            cleanup_op=cleanup_op,
+            experiment=experiment,
+            ops=ops,
+        )
+
+    # ── restore_deleted_resource (soft-delete compensation) ──
+    if mode == "restore_deleted_resource":
+        return _validate_restore_deleted_resource(
             primary_method=primary_method,
             primary_path=primary_path,
             cleanup_op_ref=cleanup_op_ref,
@@ -1101,6 +1117,85 @@ def _validate_environment_reset(*, experiment: dict[str, Any]) -> dict[str, Any]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _validate_restore_deleted_resource(
+    *,
+    primary_method: str,
+    primary_path: str,
+    cleanup_op_ref: str,
+    cleanup_op: dict[str, Any],
+    experiment: dict[str, Any],
+    ops: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """restore_deleted_resource — same-path restore write on the deleted row.
+
+    A soft delete keeps the row in the target: the compensation is the
+    source-declared PATCH/PUT on the deleted resource itself, which restores
+    the row in place (identity preserved — unlike a recreate, which produces
+    a new row). The restore body must come from the source example; the
+    harness never invents fields for a restore it cannot ground.
+    """
+    if primary_method != "DELETE":
+        return {"kind": "none", "detail": "restore_deleted_primary_not_delete"}
+    restore_op = _dict(cleanup_op) or _dict(ops.get(cleanup_op_ref))
+    restore_method = _text(restore_op.get("method")).upper()
+    if restore_method not in {"PATCH", "PUT"}:
+        return {
+            "kind": "none",
+            "detail": "restore_deleted_compensator_not_restore_write",
+        }
+    if not _source_declared_writable_fields(restore_op, ops=ops):
+        return {
+            "kind": "none",
+            "detail": "restore_deleted_body_not_source_declared",
+        }
+    authority_block = {
+        "kind": "restore_deleted_resource",
+        "operation_ref": cleanup_op_ref,
+        "method": restore_method,
+        "path": _text(restore_op.get("path") or restore_op.get("raw_path")),
+        "source_refs": _list(restore_op.get("source_refs")),
+        "authority_relation_ref": "",
+    }
+    return {
+        "kind": "restore_deleted_resource",
+        "detail": "",
+        "authority_block": authority_block,
+        "identity_contract": {
+            "identity_fields": [],
+            "primary_identity_source": "cleanup_path_binding",
+            "cleanup_identity_targets": [],
+            "same_entity_required": True,
+            "identity_preservation_required": True,
+        },
+        "before_observation_contract": {
+            "required": True,
+            "observer_kind": "entity_read",
+            "proof_semantics": "full_entity_snapshot",
+        },
+        "after_write_observation_contract": {
+            "required": True,
+            "observer_kind": "entity_read",
+            "proof_semantics": "entity_absent",
+        },
+        "after_cleanup_observation_contract": {
+            "required": True,
+            "observer_kind": "entity_read",
+            "proof_semantics": "entity_restored",
+        },
+        "cleanup_request_contract": {
+            "body_strategy": "source_example_restore",
+            "allowed_fields": [],
+            "required_bindings": [],
+        },
+        "equivalence_contract": {
+            "mode": "full_entity_comparison",
+            "identity_required": True,
+            "compared_fields": [],
+            "ignored_server_fields": sorted(SERVER_MANAGED_FIELDS),
+        },
+    }
 
 
 def _nr_reason_detail(method: str, path: str, cleanup_plan: list[dict[str, Any]]) -> str:

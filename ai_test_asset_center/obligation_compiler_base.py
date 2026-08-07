@@ -528,6 +528,36 @@ def _cleanup_requirement(
         requirement["operation_ref"] = next(iter(compensation_refs))
         return requirement
 
+    method = _text(op.get("method")).upper()
+    if method == "DELETE":
+        # A DELETE may be a soft delete: the row stays in the target, so a
+        # collection recreate collides with the row's unique key (the server
+        # answers 5xx on the unique constraint). When the source declares a
+        # same-path restore write (PATCH/PUT on the deleted resource with a
+        # request body), prefer it: the executor restores state when the row
+        # still exists and falls back to the collection recreate when it is
+        # gone. Without a source body the restore is not writable and the
+        # regular compensator resolution below applies.
+        raw_path = normalize_path_placeholders(
+            _text(op.get("path") or op.get("raw_path"))
+        )
+        restore_writes = [
+            cand_id
+            for cand_id, cand_op in operations_by_id.items()
+            if cand_id != op_id
+            and isinstance(cand_op, dict)
+            and _text(cand_op.get("method")).upper() in {"PATCH", "PUT"}
+            and normalize_path_placeholders(
+                _text(cand_op.get("path") or cand_op.get("raw_path"))
+            ) == raw_path
+            and isinstance(_dict(cand_op.get("request_example")), dict)
+            and _dict(cand_op.get("request_example"))
+        ]
+        if len(restore_writes) == 1:
+            requirement["operation_ref"] = restore_writes[0]
+            requirement["mode"] = "restore_deleted_resource"
+            return requirement
+
     restore_refs = {
         _text(relation.get("to_ref"))
         for relation in relations

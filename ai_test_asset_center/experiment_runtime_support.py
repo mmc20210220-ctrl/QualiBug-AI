@@ -432,10 +432,28 @@ def _cleanup_body_preflight_error(experiment: dict[str, Any]) -> str:
             {**declared_bindings, **response_bindings},
         )
         if unresolved:
-            return (
-                "cleanup_preflight_body_placeholder_unresolved:"
-                + ",".join(sorted(unresolved))
+            # Placeholders with no declared source are server-assigned
+            # identity fields (e.g. sellerId on product create): the target
+            # derives them from the authenticated actor and the cleanup
+            # writer drops them from the request body before transport. A
+            # genuinely required unresolved field fails the compensation
+            # visibly at runtime; treating these as compile-time blockers
+            # makes every DELETE-with-recreate on such collections
+            # non-reversible by construction.
+            from .runtime_binding_materializer import (
+                drop_unresolved_placeholder_fields as _drop_ph,
             )
+
+            dropped = _drop_ph(body)
+            unresolved_after = _unresolved_body_placeholders(
+                dropped,
+                {**declared_bindings, **response_bindings},
+            )
+            if unresolved_after:
+                return (
+                    "cleanup_preflight_body_placeholder_unresolved:"
+                    + ",".join(sorted(unresolved_after))
+                )
     return ""
 
 

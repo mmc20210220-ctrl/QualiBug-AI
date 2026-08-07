@@ -1530,6 +1530,7 @@ def validate_customer_delivery_gate_receipt_v2(
         if adjudication != expected_adjudication or adjudication["cleanup"] not in {
             "COMPLETED",
             "NOT_REQUIRED",
+            "RESIDUE_ACCEPTED",
         }:
             raise DeliveryGateV2Error("deliverable_gate_adjudication_invalid")
     cost_status = _text(row.get("cost_coverage_status"))

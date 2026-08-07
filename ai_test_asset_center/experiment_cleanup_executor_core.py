@@ -8,6 +8,7 @@ so observers / oracle evaluation can proceed. Predicate helpers remain in
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from .experiment_cleanup import (
     _governed_write_attempts,
     _governed_write_changed_state,
     _governed_write_reached_transport,
+    _normalized_field_key,
     _primary_resource_identity_candidates,
     _rejected_writes_left_state_unchanged,
 )
@@ -39,8 +41,16 @@ from .real_id_resolver import (
     normalize_path_placeholders,
     path_has_placeholders,
 )
-from .runtime_binding_graph import _declared_cleanup_operations
+from .runtime_binding_graph import (
+    _declared_cleanup_operations,
+    _request_example,
+)
+from .disposable_identity_materializer import (
+    align_body_enums_with_declared_schema as _align_body_enums_with_declared_schema,
+    declared_check_enum_values as _declared_check_enum_values,
+)
 from .runtime_binding_materializer import (
+    drop_unresolved_placeholder_fields as _drop_unresolved_placeholder_fields,
     materialize_body_template as _materialize_body_template,
     materialize_path as _materialize_path,
     runtime_cleanup_paths as _runtime_cleanup_paths,
@@ -901,6 +911,164 @@ def _execute_adapter_cleanup_step(
     return summary
 
 
+_CLEANUP_SCHEMA_TEXT_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _load_cleanup_schema_text(root: Any, project: str) -> str:
+    """Read the target's declared DB schema (visible surface material)."""
+    key = (str(root or ""), str(project or ""))
+    cached = _CLEANUP_SCHEMA_TEXT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    text = ""
+    for candidate in (
+        Path(root) / "platform_workspace" / str(project) / "input" / "schema.sql",
+        Path(root) / "platform_inputs" / str(project) / "schema.sql",
+    ):
+        try:
+            if candidate.is_file():
+                text = candidate.read_text(encoding="utf-8")
+                break
+        except OSError:
+            continue
+    _CLEANUP_SCHEMA_TEXT_CACHE[key] = text
+    return text
+
+
+def _restore_cleanup_identity_fields(
+    cleanup_body: Any,
+    cleanup_bindings: dict[str, Any],
+    path: str,
+) -> Any:
+    """Restore the deleted identity on recreate-compensation bodies.
+
+    A recreate that compensates a DELETE must recreate the deleted resource
+    itself: body fields sharing the cleanup path placeholder name (sku on
+    /api/products/admin/{sku}) take the bound value (the deleted row's own
+    sku), never the documented example literal. Without this the recreate
+    collides on the unique key (the example sku already exists) or
+    resurrects a different row, and restoration cannot be proven.
+    """
+    if not isinstance(cleanup_body, dict):
+        return cleanup_body
+    fixed = dict(cleanup_body)
+    for key, value in cleanup_body.items():
+        if not isinstance(value, str) or not value.strip():
+            continue
+        key_l = _normalized_field_key(str(key))
+        for bound_key, bound_value in cleanup_bindings.items():
+            if _normalized_field_key(str(bound_key)) != key_l:
+                continue
+            if bound_value in (None, "", [], {}):
+                continue
+            if _text(bound_value) == _text(value):
+                break
+            # The bound value is the concrete identity of the row being
+            # compensated (the deleted resource's own sku); the recreate
+            # must carry it, never the documented example literal, or it
+            # collides on the unique key / resurrects a different row.
+            fixed[key] = bound_value
+            break
+    return fixed
+
+
+def _align_cleanup_body_enums(
+    cleanup_body: Any,
+    root: Any,
+    project: str,
+    path: str,
+) -> Any:
+    """Align a compensation-create body against the target's CHECK-IN enums.
+
+    The same documented-example drift that breaks fixture creates (product
+    example carrying the users-table status literal) breaks the recreate that
+    compensates a DELETE. Aligning the compensation body to the create's own
+    table keeps the write reversible instead of failing with 500.
+    """
+    _enums = _declared_check_enum_values(
+        _load_cleanup_schema_text(root, project)
+    )
+    if not _enums:
+        return cleanup_body
+    _hint = _text(path).strip("/").split("/")[1:2]
+    _hint = _hint[0] if _hint else ""
+    if not _hint:
+        return cleanup_body
+    _aligned, _ = _align_body_enums_with_declared_schema(
+        cleanup_body, _enums, table_hint=_hint
+    )
+    return _aligned
+
+
+def _register_recreate_cleanup(
+    *,
+    pending_fixture_cleanups: list[dict[str, Any]],
+    cleanup_write: dict[str, Any],
+    path: str,
+    actor_ref: str,
+    actor: dict[str, Any],
+    token: str,
+    observation_path: str,
+    governed_cleanup: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> None:
+    """Register a compensating create's NEW resource for governed cleanup.
+
+    A compensating create (recreate_compensated_resource or the restore
+    fallback) introduces a NEW resource whose identity differs from the one
+    it compensates. Without registration every DELETE-compensation leaks one
+    residue row (measured: fixture_cleanup RESTORATION failures after
+    control/treatment consumed the fixture resource and the recreate left a
+    new cart item behind). A restore write (restore_deleted_resource) touches
+    the compensated row itself and must never be registered here — deleting
+    it again would re-soft-delete the row the restore just brought back.
+    """
+    _new_identities = _primary_resource_identity_candidates(
+        cleanup_write.get("body")
+    )
+    if not _new_identities:
+        return
+    _new_identity = next(iter(sorted(_new_identities)), "")
+    if not _new_identity:
+        return
+    _recreate_collection = normalize_path_placeholders(collection_path(path))
+    _recreate_deletes = [
+        row
+        for row in _declared_cleanup_operations(
+            _recreate_collection,
+            behavior_ir=behavior_ir,
+        )
+        if _text(row.get("method")).upper() == "DELETE"
+    ]
+    if not _recreate_deletes:
+        return
+    pending_fixture_cleanups.append({
+        "target": _new_identity,
+        "value": _new_identity,
+        # Second-order cleanup compensates the compensating create itself,
+        # which is already counted as a cleanup write — never a non-cleanup
+        # experiment write. Stamping accepted_write_count=1 here inflates
+        # gate coverage past accepted_non_cleanup_write_count and falsely
+        # fails CLEANUP_WRITE_COVERAGE_MISMATCH (observed: covered 4 vs
+        # accepted 3 on DELETE isolation experiments).
+        "compensates_cleanup_write": True,
+        "cleanup": {
+            "method": "DELETE",
+            "path": _recreate_deletes[0].get("path")
+            or f"/{_recreate_collection.strip('/')}/{{id}}",
+            "operation_ref": _text(_recreate_deletes[0].get("operation_ref")),
+        },
+        "actor_identity": _text(actor.get("role") or actor_ref),
+        "actor_token": token,
+        "observation_path": observation_path,
+        "governed_setup": governed_cleanup,
+        "receipt": {
+            "kind": "fixture_cleanup",
+            "target": _new_identity,
+        },
+    })
+
+
 def execute_experiment_cleanup_compensation(
     *,
     exp: dict[str, Any],
@@ -1731,6 +1899,30 @@ def execute_experiment_cleanup_compensation(
                             cleanup_bindings,
                         )
                         if unresolved_cleanup_tokens:
+                            # Server-assigned identity placeholders (sellerId
+                            # on product recreate) have no declared source:
+                            # the target derives them from the authenticated
+                            # actor. Drop those fields; a genuinely required
+                            # unresolved field fails the compensation visibly.
+                            _dropped_body = _drop_unresolved_placeholder_fields(
+                                cleanup_body
+                            )
+                            if not _unresolved_body_placeholders(
+                                _dropped_body, cleanup_bindings
+                            ):
+                                cleanup_body = _dropped_body
+                                unresolved_cleanup_tokens = []
+                        # identity_bound_delete branch: `method` is the
+                        # bound cleanup method derived above (cleanup_method
+                        # is defined only in the recreate branch below).
+                        if method in {"POST", "PUT", "PATCH"}:
+                            cleanup_body = _align_cleanup_body_enums(
+                                cleanup_body, root, project, path
+                            )
+                            cleanup_body = _restore_cleanup_identity_fields(
+                                cleanup_body, cleanup_bindings, path_template
+                            )
+                        if unresolved_cleanup_tokens:
                             _fail_cleanup(
                                 "identity_bound_delete_tokens",
                                 "cleanup_body_placeholder_unresolved:"
@@ -2221,6 +2413,27 @@ def execute_experiment_cleanup_compensation(
                         cleanup_bindings,
                     )
                     if unresolved_cleanup_tokens:
+                        # Server-assigned identity placeholders (sellerId on
+                        # product recreate) have no declared source: the
+                        # target derives them from the authenticated actor.
+                        # Drop those fields; a genuinely required unresolved
+                        # field fails the compensation visibly.
+                        _dropped_body = _drop_unresolved_placeholder_fields(
+                            cleanup_body
+                        )
+                        if not _unresolved_body_placeholders(
+                            _dropped_body, cleanup_bindings
+                        ):
+                            cleanup_body = _dropped_body
+                            unresolved_cleanup_tokens = []
+                    if cleanup_method in {"POST", "PUT", "PATCH"}:
+                        cleanup_body = _align_cleanup_body_enums(
+                            cleanup_body, root, project, path
+                        )
+                        cleanup_body = _restore_cleanup_identity_fields(
+                            cleanup_body, cleanup_bindings, path_template
+                        )
+                    if unresolved_cleanup_tokens:
                         _fail_cleanup(
                             "cleanup_plan_tokens",
                             "cleanup_body_placeholder_unresolved:"
@@ -2275,12 +2488,167 @@ def execute_experiment_cleanup_compensation(
                     "actor_ref": actor_ref,
                     "compensates_step_id": _text(source_step.get("step_id")),
                 })
+                restore_mode = (
+                    _text(_dict(cleanup).get("mode"))
+                    == "restore_deleted_resource"
+                )
                 if not (200 <= int(cobs.get("status_code") or 0) < 300):
-                    _fail_cleanup(
-                        "cleanup_plan_request",
-                        f"non_2xx_status={int(cobs.get('status_code') or 0)}",
-                    )
-                    observations["cleanup_status"] = "failed"
+                    if not restore_mode:
+                        _fail_cleanup(
+                            "cleanup_plan_request",
+                            f"non_2xx_status={int(cobs.get('status_code') or 0)}",
+                        )
+                        observations["cleanup_status"] = "failed"
+                    else:
+                        # A soft-delete row answers the restore write 2xx; a
+                        # hard-delete target (row gone) answers 404/5xx. Fall
+                        # back to the collection recreate carried by the
+                        # cleanup plan — the recreate introduces a NEW
+                        # resource and is registered for second-order cleanup
+                        # exactly like a directly-compiled recreate.
+                        _fallback_ref = _text(
+                            _dict(cleanup).get("recreate_fallback_ref")
+                        )
+                        _fallback_op = ops.get(_fallback_ref) or {}
+                        if not _fallback_op:
+                            _fail_cleanup(
+                                "cleanup_plan_request",
+                                f"non_2xx_status={int(cobs.get('status_code') or 0)}",
+                            )
+                            observations["cleanup_status"] = "failed"
+                        else:
+                            _fallback_path_template = _text(
+                                _fallback_op.get("path")
+                                or _fallback_op.get("raw_path")
+                            )
+                            _fallback_path = _materialize_path(
+                                _fallback_path_template, cleanup_bindings
+                            )
+                            if (
+                                not _fallback_path.startswith("/")
+                                or path_has_placeholders(_fallback_path)
+                            ):
+                                _fail_cleanup(
+                                    "cleanup_plan_request",
+                                    f"non_2xx_status={int(cobs.get('status_code') or 0)}",
+                                )
+                                observations["cleanup_status"] = "failed"
+                            else:
+                                _fallback_body = _materialize_body_template(
+                                    _request_example(_fallback_op),
+                                    cleanup_bindings,
+                                )
+                                _fallback_tokens = _unresolved_body_placeholders(
+                                    _fallback_body, cleanup_bindings
+                                )
+                                if _fallback_tokens:
+                                    _dropped_fallback = (
+                                        _drop_unresolved_placeholder_fields(
+                                            _fallback_body
+                                        )
+                                    )
+                                    if not _unresolved_body_placeholders(
+                                        _dropped_fallback, cleanup_bindings
+                                    ):
+                                        _fallback_body = _dropped_fallback
+                                        _fallback_tokens = []
+                                if _fallback_tokens:
+                                    _fail_cleanup(
+                                        "cleanup_plan_tokens",
+                                        "cleanup_body_placeholder_unresolved:"
+                                        + ",".join(_fallback_tokens),
+                                    )
+                                    observations["cleanup_status"] = "failed"
+                                else:
+                                    _fallback_body = _align_cleanup_body_enums(
+                                        _fallback_body,
+                                        root,
+                                        project,
+                                        _fallback_path,
+                                    )
+                                    _fallback_body = (
+                                        _restore_cleanup_identity_fields(
+                                            _fallback_body,
+                                            cleanup_bindings,
+                                            _fallback_path_template,
+                                        )
+                                    )
+                                    _fallback_obs = _declared_observation_path(
+                                        _fallback_path_template,
+                                        ops,
+                                        runtime_bindings=cleanup_bindings,
+                                        request_body=_fallback_body,
+                                    )
+                                    _fallback_cleanup = (
+                                        execute_governed_control_write(
+                                            root=root,
+                                            project=project,
+                                            base_url=base_url,
+                                            runtime_contract=runtime_contract,
+                                            campaign_id=campaign_id,
+                                            operation_phase="experiment_cleanup",
+                                            actor_identity=_text(
+                                                actor.get("role") or actor_ref
+                                            ),
+                                            actor_token=token,
+                                            method="POST",
+                                            path=_fallback_path,
+                                            body=_fallback_body,
+                                            observation_path=_fallback_obs
+                                            or observation_path,
+                                            restorable_identity_mutation=True,
+                                        )
+                                    )
+                                    _fallback_write = _dict(
+                                        _fallback_cleanup.get("write")
+                                    )
+                                    _fallback_rc = int(
+                                        _fallback_write.get("status") or 0
+                                    )
+                                    steps_out.append({
+                                        "method": "POST",
+                                        "path": _fallback_path,
+                                        "status_code": _fallback_rc,
+                                        "body": _fallback_write.get("body"),
+                                        "headers": _fallback_write.get("headers")
+                                        or {},
+                                        "duration_ms": _fallback_write.get(
+                                            "duration_ms"
+                                        ),
+                                        "error": _fallback_write.get("error")
+                                        or _fallback_cleanup.get("reason")
+                                        or "",
+                                        "governance_receipt": _fallback_cleanup,
+                                        "phase": "cleanup",
+                                        "operation_ref": _fallback_ref,
+                                        "cleanup_subject_id": cleanup_subject_id,
+                                        "compensates_step_id": _text(
+                                            source_step.get("step_id")
+                                        ),
+                                        "actor_ref": actor_ref,
+                                    })
+                                    if not (200 <= _fallback_rc < 300):
+                                        _fail_cleanup(
+                                            "cleanup_plan_request",
+                                            f"non_2xx_status={_fallback_rc}",
+                                        )
+                                        observations["cleanup_status"] = "failed"
+                                    elif not cleanup_failures:
+                                        observations["cleanup_status"] = "completed"
+                                        _register_recreate_cleanup(
+                                            pending_fixture_cleanups=(
+                                                pending_fixture_cleanups
+                                            ),
+                                            cleanup_write=_fallback_write,
+                                            path=_fallback_path,
+                                            actor_ref=actor_ref,
+                                            actor=actor,
+                                            token=token,
+                                            observation_path=_fallback_obs
+                                            or observation_path,
+                                            governed_cleanup=_fallback_cleanup,
+                                            behavior_ir=_cleanup_behavior_ir,
+                                        )
                 elif not cleanup_failures:
                     observations["cleanup_status"] = "completed"
                     # A compensating create (recreate_compensated_resource /
@@ -2290,62 +2658,22 @@ def execute_experiment_cleanup_compensation(
                     # DELETE-compensation leaks one residue row (measured:
                     # fixture_cleanup RESTORATION failures after control/treatment
                     # consumed the fixture resource and the recreate left a new
-                    # cart item behind).
-                    if cleanup_method in {"POST", "PUT", "PATCH"}:
-                        _new_identities = _primary_resource_identity_candidates(
-                            cleanup_write.get("body")
+                    # cart item behind). A restore write touches the compensated
+                    # row itself: its response identity is the same row, and
+                    # registering it would DELETE the row the restore just
+                    # brought back.
+                    if not restore_mode:
+                        _register_recreate_cleanup(
+                            pending_fixture_cleanups=pending_fixture_cleanups,
+                            cleanup_write=cleanup_write,
+                            path=path,
+                            actor_ref=actor_ref,
+                            actor=actor,
+                            token=token,
+                            observation_path=observation_path,
+                            governed_cleanup=governed_cleanup,
+                            behavior_ir=_cleanup_behavior_ir,
                         )
-                        if _new_identities:
-                            _new_identity = next(
-                                iter(sorted(_new_identities)), ""
-                            )
-                            if _new_identity:
-                                _recreate_collection = normalize_path_placeholders(
-                                    collection_path(path)
-                                )
-                                _recreate_deletes = [
-                                    row
-                                    for row in _declared_cleanup_operations(
-                                        _recreate_collection,
-                                        behavior_ir=_cleanup_behavior_ir,
-                                    )
-                                    if _text(row.get("method")).upper() == "DELETE"
-                                ]
-                                if _recreate_deletes:
-                                    pending_fixture_cleanups.append({
-                                        "target": _new_identity,
-                                        "value": _new_identity,
-                                        # Second-order cleanup compensates the
-                                        # compensating create itself, which is
-                                        # already counted as a cleanup write —
-                                        # never a non-cleanup experiment write.
-                                        # Stamping accepted_write_count=1 here
-                                        # inflates gate coverage past
-                                        # accepted_non_cleanup_write_count and
-                                        # falsely fails
-                                        # CLEANUP_WRITE_COVERAGE_MISMATCH
-                                        # (observed: covered 4 vs accepted 3
-                                        # on DELETE isolation experiments).
-                                        "compensates_cleanup_write": True,
-                                        "cleanup": {
-                                            "method": "DELETE",
-                                            "path": _recreate_deletes[0].get("path")
-                                            or f"/{_recreate_collection.strip('/')}/{{id}}",
-                                            "operation_ref": _text(
-                                                _recreate_deletes[0].get("operation_ref")
-                                            ),
-                                        },
-                                        "actor_identity": _text(
-                                            actor.get("role") or actor_ref
-                                        ),
-                                        "actor_token": token,
-                                        "observation_path": observation_path,
-                                        "governed_setup": governed_cleanup,
-                                        "receipt": {
-                                            "kind": "fixture_cleanup",
-                                            "target": _new_identity,
-                                        },
-                                    })
 
     # Fixture setup precedes experiment writes, so its compensation must run
     # after every experiment-write compensation to preserve global reverse

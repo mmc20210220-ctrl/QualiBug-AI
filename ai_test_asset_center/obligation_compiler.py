@@ -470,6 +470,27 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
 
     if changed:
         ir["relations"] = relations
+        # Single-source-of-truth write-back: the synthetic source-declared
+        # owns relations must be visible to every downstream consumer of the
+        # canonical IR (planning validation, experiment compilation, executor,
+        # oracle) — not only this compiler's private copy. Otherwise compiled
+        # obligations reference relation IDs that the planning authority
+        # rejects as ``behavior_ir_reference_invalid`` and the whole pipeline
+        # dies with zero findings. Append only newly created relations so the
+        # original graph's entries are preserved and repeated calls stay
+        # idempotent (the existing_owned_operations guard already skips ops
+        # whose owns relation is present on a later call).
+        original_relations = _list(behavior_ir.get("relations"))
+        existing_ids = {
+            _text(row.get("id"))
+            for row in original_relations
+            if isinstance(row, dict)
+        }
+        behavior_ir["relations"] = list(original_relations) + [
+            row
+            for row in relations
+            if isinstance(row, dict) and _text(row.get("id")) not in existing_ids
+        ]
     return ir
 
 
