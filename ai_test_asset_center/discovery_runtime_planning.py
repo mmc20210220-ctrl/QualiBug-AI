@@ -210,6 +210,40 @@ def build_discovery_plan(
         inputs.project,
         inputs.campaign_context,
     )
+
+    # ── Source-contract auto-derivation (four-link breadth closure) ──
+    # Detect explicit latency / stability / event contracts that already exist
+    # in the source material (operation descriptions, PRD/API text) and bind
+    # them verbatim into the asset, so performance/stability/event defect
+    # classes become reachable without a manually declared JSON contract.
+    # Derivation is extraction only: every contract is anchored to an exact
+    # verbatim statement and an exact operation + actor identity; anything
+    # unprovable is skipped with a receipt entry.  Never invents budgets,
+    # fields, or claims the source does not state.  Execution still requires
+    # the operator-declared adapter and approved runtime contract.
+    contract_derivation_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.contract-auto-derivation.v1",
+        "status": "SKIPPED",
+        "reason": "derivation_not_run",
+    }
+    try:
+        from .contract_auto_derivation import derive_source_contracts
+
+        asset, contract_derivation_receipt = derive_source_contracts(
+            asset,
+            prd_text=inputs.prd_text,
+            api_spec_text=_text(
+                inputs.campaign_context.get("_source_verification_text")
+            ) or inputs.api_spec_text,
+            operations=operations,
+            runtime_actors=runtime_actors,
+        )
+    except Exception as exc:
+        contract_derivation_receipt = {
+            "schema_version": "qualibug.contract-auto-derivation.v1",
+            "status": "FAILED",
+            "reason": f"{type(exc).__name__}:{str(exc)[:160]}",
+        }
     # Resolve adapter capability BEFORE the IR is built, so the IR's observation
     # surfaces and the experiment compiler's adapter set come from one computation.
     # They used to disagree: the IR hardcoded db_snapshot as unavailable while this
@@ -1147,6 +1181,7 @@ def build_discovery_plan(
                 _dict(asset.get("runtime_source_overlay"))
             ),
             "behavior_ir_input_receipt": behavior_ir_input_receipt,
+            "contract_derivation_receipt": contract_derivation_receipt,
             "runtime_interface_discovery_enabled": (
                 runtime_interface_discovery_enabled
             ),
