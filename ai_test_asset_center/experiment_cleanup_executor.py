@@ -15,6 +15,7 @@ from typing import Any
 
 from . import experiment_cleanup_executor_core as _core
 from . import experiment_cleanup_lifecycle_adapter as _adapter
+from .experiment_cleanup import _single_entity_for_restoration
 
 
 _ADAPTER_BINDING_SCHEMA = "qualibug.declared-adapter-cleanup-runtime-binding.v1"
@@ -437,7 +438,18 @@ def _governed_write_changed_state_with_adapter_requirement(
         and len(response_identities) == 1
         and not _list(row.get(_RUNTIME_IDENTITY_CONFLICTS))
     ):
-        return True
+        # Only a CREATE-shaped POST may prove write effect through the
+        # response identity: the carried id must be absent from the pre-write
+        # observation. Action-style POSTs (POST /{id}/status, /{id}/amount)
+        # echo the pre-existing resource's own id, which was already visible
+        # before the write — that identity is not evidence of a state change,
+        # so the write falls back to business-state comparison and may be
+        # declared state-unchanged (no cleanup required).
+        if not _single_entity_for_restoration(
+            _dict(row.get("before")).get("body"),
+            response_identities,
+        ):
+            return True
     marker = _dict(row.get(_ADAPTER_BINDING_MARKER))
     return bool(
         marker.get("schema_version") == _ADAPTER_BINDING_SCHEMA

@@ -1908,6 +1908,30 @@ def execute_experiment_cleanup_compensation(
                         _scoped_accepted_count = _scoped_accepted_write_count_for_cleanup(
                             cleanup, accepted_governed_writes
                         )
+                        # The waived write was still governed and audited: its
+                        # audit receipt proves the write reached the target and
+                        # was accepted, which is the proof basis for declaring
+                        # it state-unchanged and cleanup not required. Without
+                        # these ids the contract oracle cannot accept
+                        # NOT_REQUIRED (ACCEPTED_WRITE_STATE_UNCHANGED) and
+                        # blocks the experiment.
+                        _scoped_audit_ids = sorted({
+                            receipt_id
+                            for receipt_id in (
+                                _governance_audit_receipt_id(
+                                    _dict(step.get("governance_receipt"))
+                                )
+                                for step in steps_out
+                                if _text(_dict(step).get("phase"))
+                                in {"control", "treatment"}
+                                and _text(_dict(step).get("step_id"))
+                                == _source_step_id
+                                and _dict(
+                                    step.get("governance_receipt")
+                                ).get("accepted") is True
+                            )
+                            if receipt_id
+                        })
                         contract_evidence_receipts.append(
                             build_contract_evidence_receipt(
                                 kind="cleanup",
@@ -1923,7 +1947,7 @@ def execute_experiment_cleanup_compensation(
                                     "cleanup_write_count": 0,
                                     "state_unchanged": True,
                                     "restoration_verified": True,
-                                    "audit_receipt_ids": [],
+                                    "audit_receipt_ids": _scoped_audit_ids,
                                     "reason_code": "ACCEPTED_WRITE_STATE_UNCHANGED",
                                     "cleanup_mode": _text(_dict(cleanup).get("mode"))
                                     or "delta_inverse",
@@ -2560,6 +2584,7 @@ def execute_experiment_cleanup_compensation(
                     cleanup_path_template=cleanup_path_template,
                 )
             ]
+
         else:
             # Legacy cleanup plans without source_step_id have no safe per-step
             # identity. Preserve their historical whole-plan scope explicitly;
@@ -2572,6 +2597,7 @@ def execute_experiment_cleanup_compensation(
             step for step in steps_out
             if _text(_dict(step).get("cleanup_subject_id")) == cleanup_subject
         ]
+
         if source_step_id:
             source_scoped_matching_steps = [
                 step

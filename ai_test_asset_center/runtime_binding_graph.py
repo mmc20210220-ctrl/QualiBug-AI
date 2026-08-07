@@ -352,12 +352,14 @@ def _request_example(operation: dict[str, Any], *, sibling_ops: list[dict[str, A
     return {}
 
 
-# Placeholder-form identity literals found in documentation examples:
-# nil/near-nil UUIDs (all zero hex groups with at most one trailing digit)
-# and the explicit unresolved marker. Sending them to a real target yields
-# 500/404 (invalid reference), never a meaningful result.
+# Placeholder-form identity literals found in documentation examples: UUIDs
+# whose first four groups are all zero and whose last group starts with zero
+# (00000000-0000-0000-0000-000000001002 and nil/near-nil variants) plus the
+# explicit unresolved marker. Legal UUIDs carry nonzero version/variant bits
+# in groups 3-4, so this shape is unambiguous example filler. Sending it to a
+# real target yields 500/404 (invalid reference), never a meaningful result.
 _ZERO_NIL_UUID_RE = re.compile(
-    r"^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$",
+    r"^0{8}-0{4}-0{4}-0{4}-0[0-9a-f]{11}$",
     re.IGNORECASE,
 )
 
