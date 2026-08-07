@@ -5290,6 +5290,180 @@ def build_behavior_ir_from_knowledge_asset(
                         _inv_typed["operation_refs"] = list(
                             dict.fromkeys([*_existing_ops, *_action_bound_ops])
                         )
+                else:
+                    # ── Subject-entity binding fallback ──
+                    # Rules that name the governed OBJECT entity without an
+                    # action verb (用户端不展示下架商品、草稿商品、内部商品 —
+                    # 展示 is not an action-table verb) bind through the
+                    # asset's business-object aliases and the schema-declared
+                    # foreign-key graph: a rule token matching an object alias
+                    # (商品 → product) resolves the object's tables
+                    # (products); the declared foreign keys (order_items.sku →
+                    # products.sku, cart_items.sku → products.sku) resolve the
+                    # consumer tables; and operations whose entity_refs name
+                    # those tables are the rule's governed surface. Fully
+                    # source-driven (business-object aliases and schema FK
+                    # constraints are visible enterprise material), never an
+                    # industry-term table. State-machine rules stay out —
+                    # their binding comes from declared transitions, and
+                    # entity binding would attach every state rule to the
+                    # entity's collection CRUD. Permission/ownership rules
+                    # (只能操作自己的订单) keep their isolation/visibility
+                    # channel through declared relations; operation-level
+                    # binding would compile availability obligations that
+                    # test the operation itself, not the ownership the rule
+                    # states. The fallback fires only for rules that carry
+                    # no operation binding at all.
+                    if (
+                        _rule_kind
+                        not in {
+                            "state_machine", "state",
+                            "permission_boundary", "permission",
+                            "access_control",
+                        }
+                        and not _list(_inv_typed.get("operation_refs"))
+                    ):
+                        _subject_bound_ops: list[str] = []
+                        _rule_tokens = {
+                            _text(t) for t in _list(rule.get("tokens")) if _text(t)
+                        }
+                        _subject_objects: set[str] = set()
+                        for _bo in _list(data.get("business_objects")):
+                            if not isinstance(_bo, dict):
+                                continue
+                            _obj_name = _text(_bo.get("object"))
+                            _aliases = {
+                                _text(a).lower()
+                                for a in _list(_bo.get("aliases"))
+                                if _text(a)
+                            }
+                            if _obj_name and any(
+                                _text(t).lower() in _aliases for t in _rule_tokens
+                            ):
+                                _subject_objects.add(_obj_name.lower())
+                        if _subject_objects:
+                            _tables: dict[str, set[str]] = {}
+                            _fk_by_table: dict[str, set[str]] = {}
+                            for _t in _list(data.get("data_tables")):
+                                if not isinstance(_t, dict):
+                                    continue
+                                _tname = _text(_t.get("name"))
+                                if _tname:
+                                    _tables[_tname] = set()
+                                    _fk_by_table[_tname] = {
+                                        _text(f)
+                                        for f in _list(_t.get("foreign_keys"))
+                                        if _text(f)
+                                    }
+                            _entity_tables: set[str] = set()
+                            for _obj in _subject_objects:
+                                for _tname in _tables:
+                                    _tl = _tname.lower()
+                                    if (
+                                        _tl == _obj
+                                        or _tl.startswith(_obj)
+                                        or _obj.startswith(_tl)
+                                    ):
+                                        _entity_tables.add(_tname)
+                            # One-hop FK propagation: tables whose declared
+                            # foreign keys reference the object's tables
+                            # (order_items → products) are the consumers.
+                            # Parent tables are reached through the consumer's
+                            # own FK list via entity_refs prefix matching
+                            # below (order ⊂ order_items), so no further hops
+                            # are needed and unrelated FK hops (users) stay
+                            # out of the surface. Technical bookkeeping tables
+                            # (lock/log/audit/record/history/event suffixes)
+                            # reference the object without consuming it — an
+                            # inventory lock row names a SKU but locking
+                            # inventory is not a product-consumption surface.
+                            # Attribute tables (inventory mirrors products.sku
+                            # without being a business line) are excluded the
+                            # same way: only business-detail tables (item/line/
+                            # entry/row/detail — generic relational naming, not
+                            # industry vocabulary) carry the object into a
+                            # user-facing business flow.
+                            _TECH_TABLE_SUFFIXES = (
+                                "lock", "locks", "log", "logs", "audit",
+                                "record", "records", "history", "event",
+                                "events",
+                            )
+                            _DETAIL_TABLE_STEMS = (
+                                "item", "line", "entry", "row", "detail",
+                            )
+                            for _tname, _fks in _fk_by_table.items():
+                                if not (_fks & _entity_tables):
+                                    continue
+                                if any(
+                                    _tname.endswith(_suf)
+                                    for _suf in _TECH_TABLE_SUFFIXES
+                                ):
+                                    continue
+                                if not any(
+                                    _tname == _stem
+                                    or _tname.endswith(_stem)
+                                    or _tname.endswith(_stem + "s")
+                                    for _stem in _DETAIL_TABLE_STEMS
+                                ):
+                                    continue
+                                _entity_tables.add(_tname)
+                            _user_facing_only = "用户端" in statement
+                            for _op_row in _list(model.get("operations")):
+                                if not isinstance(_op_row, dict):
+                                    continue
+                                _op_id = _text(_op_row.get("id"))
+                                if not _op_id:
+                                    continue
+                                _op_path = _text(
+                                    _op_row.get("path") or _op_row.get("raw_path")
+                                )
+                                if _user_facing_only and re.search(
+                                    r"(?:^|/)(?:admin|manage|management)(?:/|$)",
+                                    _op_path.lower(),
+                                ):
+                                    continue
+                                if re.search(
+                                    r"(?:^|/)(?:health)(?:/|$)", _op_path.lower()
+                                ):
+                                    continue
+                                _op_ents = {
+                                    _text(e).lower()
+                                    for e in _list(_op_row.get("entity_refs"))
+                                    if _text(e)
+                                }
+                                # Read operations often carry no entity_refs
+                                # (GET /api/products exposes the object without
+                                # declaring an entity), so a path segment
+                                # matching the object name (products ↔ product)
+                                # is the display-surface signal. Health probes
+                                # are never the governed surface.
+                                _path_segments = [
+                                    seg
+                                    for seg in _op_path.lower().strip("/").split("/")
+                                    if seg and seg not in {"api", "health", "v1"}
+                                ]
+                                if any(
+                                    _oe and (_oe in _tl or _tl.startswith(_oe))
+                                    for _oe in _op_ents
+                                    for _tl in _entity_tables
+                                ) or any(
+                                    _seg.startswith(_obj) or _obj.startswith(_seg)
+                                    for _seg in _path_segments
+                                    for _obj in _subject_objects
+                                ):
+                                    _subject_bound_ops.append(_op_id)
+                            if _subject_bound_ops:
+                                _record_fallback(
+                                    "SUBJECT_ENTITY_BINDING", len(_subject_bound_ops)
+                                )
+                                _existing_ops = [
+                                    _text(value)
+                                    for value in _list(_inv_typed.get("operation_refs"))
+                                    if _text(value)
+                                ]
+                                _inv_typed["operation_refs"] = list(
+                                    dict.fromkeys([*_existing_ops, *_subject_bound_ops])
+                                )
             except Exception:
                 # Action-word binding is a recovery convenience; its failure
                 # must never fail the IR build — the invariant simply stays
