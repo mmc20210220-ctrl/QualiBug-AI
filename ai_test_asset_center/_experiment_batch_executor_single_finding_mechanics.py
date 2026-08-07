@@ -30,6 +30,36 @@ from .operational_receipts import build_execution_operational_receipt
 from .sandbox_write_executor_base import evaluator_request_trace
 
 
+def _deliverable_dedupe_key(finding: dict[str, Any]) -> str:
+    """Collapse repeated deliveries of one operation-level property.
+
+    One authorization/validation property (e.g. "this endpoint has no role
+    gate") is compiled into multiple obligations — one per (control,
+    treatment) actor pair — and each independently executes and reaches the
+    delivery gate. Every pair reports the same operation-level violation, so
+    N pairs produce N deliverable findings for one real defect. The
+    evaluator's GT dedupe then keeps a single true positive and scores the
+    other N-1 as false positives, cratering precision without adding
+    discovery value.
+
+    This key groups findings by (assertion kind, HTTP method, path) so only
+    the first delivery of a property is kept; later duplicates are marked
+    ``duplicate_of`` and counted, never delivered twice.
+    """
+    title = _text(finding.get("title"))
+    import re as _re
+
+    match = _re.search(
+        r"\[ContractOracle\]\s+([A-Za-z0-9_]+):\s+\S+\s+(GET|POST|PUT|PATCH|DELETE)\s+(/api/[^\s]+)",
+        title,
+    )
+    if not match:
+        return ""
+    kind, method, path = match.groups()
+    path = path.split("?", 1)[0].rstrip("/")
+    return f"{kind}:{method}:{path}"
+
+
 # ── P0-7: Parameter binding validation ──
 import re as _re_bindings
 
@@ -265,6 +295,8 @@ def execute_selected_experiments(
 
     results: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
+    delivered_finding_ids: dict[str, dict[str, Any]] = {}
+    duplicate_delivery_count = 0
     blocked = 0
     executed = 0
     harness = 0
@@ -805,7 +837,33 @@ def execute_selected_experiments(
                 execution_results[oid]["finding"] = dict(finding)
         cleanup_failures += outcome_cleanup_failures
         if status in ("EXECUTED", "DELIVERABLE") and isinstance(outcome.get("finding"), dict):
-            findings.append(outcome["finding"])
+            finding = outcome["finding"]
+            dedupe_key = _deliverable_dedupe_key(finding)
+            if dedupe_key and dedupe_key in delivered_finding_ids:
+                # Same operation-level property already delivered: keep the
+                # traceable reference and fold this variant's actor/evidence
+                # into the first finding so the delivered report still proves
+                # the property for every tried actor pair — never deliver a
+                # second copy of the same property.
+                duplicate_delivery_count += 1
+                first = delivered_finding_ids[dedupe_key]
+                variants = _list(first.get("duplicate_variants"))
+                variant_note = _text(finding.get("title")) or dedupe_key
+                if variant_note not in variants:
+                    variants.append(variant_note)
+                first["duplicate_variants"] = variants
+                description = _text(first.get("description"))
+                suffix = "；同一属性对以下角色组合同样成立：" + "、".join(variants)
+                if suffix not in description:
+                    first["description"] = description + suffix
+                finding["duplicate_of"] = (
+                    _text(first.get("finding_id") or first.get("id")) or dedupe_key
+                )
+                outcome["finding"] = finding
+            else:
+                if dedupe_key:
+                    delivered_finding_ids[dedupe_key] = finding
+                findings.append(finding)
     # ── Build validation gate summary ──
     from .small_scale_validation_gate import check_validation_gate
     _batch_result = {
@@ -818,6 +876,7 @@ def execute_selected_experiments(
         "budget_exceeded_count": budget_exceeded,
         "budget_deferred": budget_deferred,
         "experiment_budget": _budget,
+        "duplicate_delivery_count": duplicate_delivery_count,
         "validation_phase": _phase,
         "findings": findings,
         "results": results,
