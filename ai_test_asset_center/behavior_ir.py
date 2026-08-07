@@ -105,6 +105,29 @@ def build_behavior_ir_from_knowledge_asset(
             "role_assignment", account.casefold(), role_key
         )
         actor["account_role_count"] = int(coordinate["account_role_count"])
+    # Runtime-observed identity ids survive the actor projection. The core
+    # builder keeps role/account coordinates; bearer-token identity claims
+    # (account_id) are runtime-observed material that read-side ownership
+    # protocols bind "own identity" parameters from. Matched by account_ref —
+    # structural, never guessed. Part of the runtime input, so the content
+    # address legitimately reflects it.
+    _runtime_account_ids = {
+        _text(
+            item.get("account_ref") or item.get("email") or item.get("username")
+        ).casefold(): _text(item.get("account_id"))
+        for item in _list(runtime_actors)
+        if isinstance(item, dict) and _text(item.get("account_id"))
+    }
+    if _runtime_account_ids:
+        for actor in _list(model.get("actors")):
+            if not isinstance(actor, dict) or _text(actor.get("account_id")):
+                continue
+            _ref = _text(
+                actor.get("account_ref") or actor.get("email") or actor.get("username")
+            )
+            _identity = _runtime_account_ids.get(_ref.casefold())
+            if _identity:
+                actor["account_id"] = _identity
     if role_identity_receipt.get("actor_count"):
         model["runtime_actor_role_identity_receipt"] = role_identity_receipt
     model["model_id"] = _core._content_addressed_id(model)

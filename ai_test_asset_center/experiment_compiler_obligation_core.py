@@ -2829,7 +2829,18 @@ def compile_experiment_for_obligation(
     # expected outcome, so the rejection assertion must not be paired.
     _is_readonly_audit = _text(prop.get("template")).startswith("readonly_audit")
     _is_response_side_observation = assertion_kind == "response_field_absent"
-    if family == "validation" and not _is_readonly_audit and not _is_response_side_observation:
+    # Owned-scope read arms (owned_read_scope) are the same shape: the
+    # treatment is a legitimate peer-identity read whose rejection (4xx) OR
+    # a caller-scoped 2xx body both satisfy the rule. A blanket 4xx-expecting
+    # rejection assertion would turn a compliant ignore-parameter
+    # implementation into a defect.
+    _is_owned_scope_observation = assertion_kind == "owned_read_scope"
+    if (
+        family == "validation"
+        and not _is_readonly_audit
+        and not _is_response_side_observation
+        and not _is_owned_scope_observation
+    ):
         assertions.append({
             "assertion_id": "assert_validation_strict_reject",
             "kind": "http_status_class",

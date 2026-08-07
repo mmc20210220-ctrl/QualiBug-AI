@@ -12,6 +12,16 @@ from typing import Any
 
 from .oracle_expression_resolver import resolve_expression_from_invariant
 
+# Read-side owned-scope protocol (additive): registers the owned_read_scope
+# assertion kind once per process. Idempotent; the compile chain always passes
+# through this module, so the evaluator exists before any experiment executes.
+from .validation_read_side_protocol import (
+    install_owned_read_scope_protocol,
+    is_ownership_key as _is_ownership_key_read_side,
+)
+
+install_owned_read_scope_protocol()
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -314,6 +324,149 @@ def _extract_forbidden_response_fields(
                 if matcher not in family:
                     family.append(matcher)
     return list(dict.fromkeys([*fields, *family])), bool(family)
+
+
+# Generic ownership-modal vocabulary for read-side caller-scope declarations
+# (只能…自己的/仅限本人/own/self). Ownership modality, not an industry term.
+_OWNERSHIP_MODAL_TERMS = ("自己的", "本人", "own", "self")
+_OWNERSHIP_RESTRICTIVE_MODALS = ("只能", "仅限", "仅允许", "only", "must")
+
+
+def _read_side_owned_scope_projection(
+    *,
+    operation: dict[str, Any],
+    operation_ref: str,
+    property_spec: dict[str, Any],
+    control_actor_ref: str,
+    treatment_actor_ref: str,
+    behavior_ir: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Compile the two-arm owned-scope read when structured material allows.
+
+    Returns a COMPILED protocol dict, or None when the rule is not a
+    caller-scoped ownership read (the caller then falls through to the
+    existing validation chain). Every material input is source-declared:
+
+    * the operation's ownership query parameter (normalized structural name
+      match, e.g. ``userId``) whose description states the caller-scoped
+      constraint (只能…自己的/仅限本人);
+    * the bound actor's runtime-observed identity id (``account_id`` from its
+      bearer token) for the control arm;
+    * a second account-bound actor of the same role with an observed identity
+      id for the treatment arm — the peer whose data must not leak.
+
+    The verdict is sealed by the ``owned_read_scope`` evaluator: an explicit
+    rejection (4xx) passes, a body whose ownership fields all name the caller
+    passes, any row carrying a foreign identity is a VIOLATION, and missing
+    evidence stays INDETERMINATE.
+    """
+    method = _text(operation.get("method")).upper()
+    if method not in {"GET", "HEAD"}:
+        return None
+    expression = _dict(property_spec.get("expression"))
+    raw = "\n".join(
+        _text(value)
+        for value in (
+            expression.get("raw"),
+            property_spec.get("source_intent"),
+            property_spec.get("description"),
+        )
+        if _text(value)
+    )
+    # The rule must be an ownership-read constraint: the parameter itself is
+    # the source declaration, and the rule text must not be a response-side
+    # rule (those already took the forbidden-field branch above).
+    if any(signal in raw for signal in _RESPONSE_SIDE_SIGNALS):
+        return None
+    # The rule must itself be an ownership-read constraint. The parameter's
+    # description declares the caller-scoped contract, but the RULE TEXT must
+    # state the same modality — otherwise an unrelated rule bound to the same
+    # operation (管理员代查必须记录审计) would be silently recompiled into an
+    # ownership test it never declared. Rules whose text lacks the modality
+    # stay visible gaps.
+    if not (
+        any(term in raw for term in _OWNERSHIP_MODAL_TERMS)
+        and any(modal in raw for modal in _OWNERSHIP_RESTRICTIVE_MODALS)
+    ):
+        return None
+    owner_param: dict[str, Any] | None = None
+    for _param in _list(operation.get("parameters")):
+        if not isinstance(_param, dict):
+            continue
+        if _text(_param.get("in")).lower() != "query":
+            continue
+        if not _is_ownership_key_read_side(_text(_param.get("name"))):
+            continue
+        _declaration = _text(_param.get("description"))
+        if not any(term in _declaration for term in _OWNERSHIP_MODAL_TERMS):
+            continue
+        owner_param = _param
+        break
+    if owner_param is None:
+        return None
+    _param_name = _text(owner_param.get("name"))
+    actor_ref = _text(
+        treatment_actor_ref or control_actor_ref or property_spec.get("actor_ref")
+    )
+    actor_catalog = [
+        item
+        for item in _list(_dict(behavior_ir).get("actors"))
+        if isinstance(item, dict)
+    ]
+    actors_by_ref = {_text(item.get("id")): item for item in actor_catalog}
+    actor = actors_by_ref.get(actor_ref)
+    if not actor:
+        return None
+    own_identity = _text(actor.get("account_id"))
+    if not own_identity:
+        return None
+    role = _text(actor.get("role") or actor.get("role_key"))
+    peer = next(
+        (
+            item
+            for item in actor_catalog
+            if _text(item.get("id")) != actor_ref
+            and _text(item.get("role") or item.get("role_key")) == role
+            and _text(item.get("account_id"))
+            and _text(item.get("account_id")) != own_identity
+        ),
+        None,
+    )
+    if peer is None:
+        # No same-role peer with an observed identity: the two-arm read has
+        # no "someone else's identity" to aim at. Stay a visible gap.
+        return None
+    peer_identity = _text(peer.get("account_id"))
+    return {
+        "status": "COMPILED",
+        "control_plan": [{
+            "step_id": "control_1",
+            "actor_ref": actor_ref,
+            "operation_ref": operation_ref,
+            "intent": "owned_scope_own_identity_read",
+            "protocol_step": "positive_control",
+            "query": {_param_name: own_identity},
+            "property_template": _text(property_spec.get("template")),
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "actor_ref": actor_ref,
+            "operation_ref": operation_ref,
+            "intent": "owned_scope_peer_identity_read",
+            "protocol_step": "single_observation",
+            "query": {_param_name: peer_identity},
+            "property_template": _text(property_spec.get("template")),
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        }],
+        "observers": [{"observer_id": "http_response"}],
+        "assertion": {
+            "kind": "owned_read_scope",
+            "owner_identity": own_identity,
+            "query_parameter": _param_name,
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        },
+    }
 
 
 # Generic account-state precondition vocabulary: a rule like 仅 ACTIVE 用户
@@ -1065,6 +1218,30 @@ def compile_family_protocol(
                     "family_match": _family_match,
                 },
             }
+        # ── Read-side owned-scope projection ──
+        # A source rule constraining a GET/HEAD ownership read (普通用户只能
+        # 读取自己的地址) has no request body to mutate; historically every
+        # such obligation died below as validation_body_protocol_requires_
+        # write_operation — a structural break in the four-link reachability
+        # chain, not a data problem. When the operation declares an ownership
+        # query parameter whose own description states the caller-scoped
+        # constraint, and the runtime catalogue holds two account-bound
+        # actors of the same role with runtime-observed identity ids, the
+        # protocol compiles a two-arm read (own identity vs peer identity)
+        # sealed by the owned_read_scope evaluator. A rule without that
+        # structured material stays a visible BLOCKED below — it must never
+        # silently degrade into a vacuous 2xx observation.
+        if method in {"GET", "HEAD"}:
+            _read_projection = _read_side_owned_scope_projection(
+                operation=operation,
+                operation_ref=operation_ref,
+                property_spec=property_spec,
+                control_actor_ref=control_actor_ref,
+                treatment_actor_ref=treatment_actor_ref,
+                behavior_ir=behavior_ir,
+            )
+            if _read_projection is not None:
+                return _read_projection
         parameter_location = _text(property_spec.get("parameter_location")).lower()
         tokens = property_spec.get("field_tokens")
         if (
@@ -1079,10 +1256,19 @@ def compile_family_protocol(
         if method not in {"POST", "PUT", "PATCH", "DELETE"} and not (
             allows_non_body and method in {"GET", "HEAD"}
         ):
+            # A GET/HEAD rule that reached this point has no forbidden
+            # response field, no ownership binding material and no declared
+            # parameter location: there is no decidable assertion projection
+            # for it, so it stays a visible BLOCKED. Silent degradation into
+            # a bare status probe would fabricate verdicts from noise.
             return {
                 "status": "BLOCKED",
                 "reason_code": "BLOCKED_MISSING_OPERATION",
-                "detail": "validation_body_protocol_requires_write_operation",
+                "detail": (
+                    "validation_body_protocol_requires_write_operation"
+                    if method in {"POST", "PUT", "PATCH", "DELETE"}
+                    else "read_side_rule_lacks_decidable_assertion"
+                ),
             }
         if allows_non_body and method in {"GET", "HEAD"}:
             # Parameter-only mutations compile through the privacy facade; emit a
