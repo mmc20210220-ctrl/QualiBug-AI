@@ -194,6 +194,7 @@ by replacing host methods:
 | Completion & funnel SSOT | `qualibug.obligation-attempt-ledger.v1` (sealed by the discovery mainline) |
 | Discovery funnel closure | `discovery_funnel.py` |
 | Chinese semantic frame SSOT (P0-A) | `enterprise_understanding/chinese_semantic_schema.py` (frame schema `qualibug.chinese-semantic-frame.v1`, slot statuses, reason codes, semantic signature) + `chinese_semantic_receipts.py` (typed content-addressed receipts) + `chinese_semantic_ledger_adapter.py` (fact → frame projection, `qualibug.chinese-semantic-frame-ledger.v1`) + `chinese_semantic_behavior_ir_adapter.py` (frame → Behavior IR projection) |
+| Chinese clause structure (P0-B) | `enterprise_understanding/chinese_context_envelope.py` (block coordinates over `document_structure_assets`: section paths, list-stack ancestor chains, table row/column headers, unique quote lookup — structure only, zero business inference) + `chinese_clause_parser.py` (atomic clause trees `qualibug.chinese-clause-tree.v1`: enumeration action candidates, negation scope, condition leaves, exception nodes; language-function words only, no industry vocabulary) + `chinese_semantic_frame_compiler.py` (frame enrichment: list-parent condition inheritance, table header mention injection, enumeration mentions, exception merge; signature recomputed; idempotent) |
 
 Chinese semantic frame contract (P0-A): the frame ledger is projected in
 `composition.py` after the second cognition pass (both full and incremental
@@ -209,6 +210,23 @@ grounding engine (P0-D) activates it. P0-A adds no Chinese vocabulary: no
 word lists, role tables or action patterns; slot mapping is typed-only, and
 the raw ownership phrase is preserved as evidence but excluded from the
 semantic signature. Legacy Chinese parsing remains authoritative until P0-E.
+
+Chinese clause structure contract (P0-B): the three stages run in
+`composition.py` right after the frame projection (full and incremental
+paths): envelope → clause trees → frame enrichment. They are CANDIDATE
+layers — they add structure the facts missed (inherited conditions, table
+header mentions, enumeration action candidates, exception nodes) but never
+override fact-derived slots and never bind semantics to technical objects
+(that is P0-D grounding). Only language function words (modality, negation,
+enumeration, condition/exception markers per SPEC §9.1/§9.4) are used; no
+industry terms, role names or benchmark vocabulary. Ambiguity is explicit:
+`CLAUSE_SEGMENTATION_AMBIGUOUS` / `NEGATION_SCOPE_AMBIGUOUS` /
+`CONDITION_SCOPE_AMBIGUOUS` / `EXCEPTION_SCOPE_UNRESOLVED`, never a forced
+guess; "未发货"-style state negations are conditions, never prohibitions.
+The frame semantic signature is recomputed after enrichment (conditions and
+actor mentions are typed slots), keeping frames fail-closed valid; the
+Behavior IR channel is untouched, so P0-B introduces zero production
+behavior change until grounding activates the frame channel.
 
 
 Side-effect-free import rule: importing `ai_test_asset_center` must be

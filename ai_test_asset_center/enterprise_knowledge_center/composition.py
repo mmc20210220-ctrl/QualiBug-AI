@@ -87,6 +87,15 @@ from .enterprise_understanding.structured_fact_compiler import (
 from .enterprise_understanding.chinese_semantic_ledger_adapter import (
     project_business_facts_to_semantic_frames,
 )
+from .enterprise_understanding.chinese_context_envelope import (
+    build_chinese_semantic_context_envelopes,
+)
+from .enterprise_understanding.chinese_clause_parser import (
+    parse_chinese_clause_trees,
+)
+from .enterprise_understanding.chinese_semantic_frame_compiler import (
+    enrich_frames_with_clause_structure,
+)
 from .job_asset_pipeline import enrich_job_assets_with_governance
 from .job_behavior_projection import refresh_job_behavior_projection
 from .openapi_schema_fact_asset_projection import enrich_asset_with_openapi_schema_facts
@@ -1664,6 +1673,9 @@ def refresh_enterprise_business_knowledge_asset_incremental(
             parsed_sources=None,
         )
         asset = project_business_facts_to_semantic_frames(asset)
+        asset = build_chinese_semantic_context_envelopes(asset)
+        asset = parse_chinese_clause_trees(asset)
+        asset = enrich_frames_with_clause_structure(asset)
         asset, _discarded = _downstream.refresh_chinese_business_downstream(
             asset,
             max_probe_count=0,
@@ -2178,6 +2190,16 @@ def build_enterprise_business_knowledge_asset(
     # the semantic signature. This is a pure projection of typed fact slots —
     # no Chinese text is re-parsed and no vocabulary is added.
     asset = project_business_facts_to_semantic_frames(asset)
+
+    # P0-B: document-structure context envelope → atomic clause trees → frame
+    # enrichment. List children inherit their list parent's conditions, table
+    # cells receive row/column header mention candidates, and enumeration
+    # action candidates are added to frame mentions. All three stages are
+    # candidate layers: they add structure the fact missed, never override the
+    # fact-derived slots, and never bind semantics to technical objects.
+    asset = build_chinese_semantic_context_envelopes(asset)
+    asset = parse_chinese_clause_trees(asset)
+    asset = enrich_frames_with_clause_structure(asset)
 
     # Downstream rule/oracle projection is still needed before Job projection, but
     # Probe compilation remains deferred to the final stage.

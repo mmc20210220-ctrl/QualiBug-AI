@@ -117,3 +117,7 @@ tests/test_chinese_semantic_receipts.py
 tests/test_chinese_semantic_ledger_adapter.py
 tests/test_chinese_semantic_behavior_ir_adapter.py
 tests/test_chinese_semantic_mainline_wiring.py
+tests/test_chinese_context_envelope.py
+tests/test_chinese_clause_parser.py
+tests/test_chinese_semantic_frame_compiler.py
+tests/test_chinese_semantic_p0b_mainline.py

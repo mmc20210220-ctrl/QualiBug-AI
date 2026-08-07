@@ -14,9 +14,26 @@ from .behavior_ir_governance import build_governed_business_behavior_ir
 from .behavior_ir_logic_gate import build_business_behavior_ir_v1
 from .builder import build_enterprise_understanding_model
 from .business_world_model import build_business_world_model, project_business_world_model
+from .chinese_clause_parser import (
+    CHINESE_CLAUSE_TREE_LEDGER_SCHEMA,
+    CHINESE_CLAUSE_TREE_SCHEMA,
+    clause_tree_for_block,
+    parse_block_text,
+    parse_chinese_clause_trees,
+    validate_clause_tree,
+)
+from .chinese_context_envelope import (
+    CHINESE_SEMANTIC_CONTEXT_ENVELOPE_SCHEMA,
+    block_context_for,
+    build_chinese_semantic_context_envelopes,
+    locate_unique_block,
+)
 from .chinese_semantic_behavior_ir_adapter import (
     apply_semantic_frames_to_behavior_ir,
     project_semantic_frames_to_behavior_ir,
+)
+from .chinese_semantic_frame_compiler import (
+    enrich_frames_with_clause_structure,
 )
 from .chinese_semantic_ledger_adapter import (
     frames_from_asset,
@@ -190,6 +207,9 @@ __all__ = [
     "build_enterprise_understanding_model",
     "CHINESE_SEMANTIC_FRAME_SCHEMA",
     "CHINESE_SEMANTIC_RECEIPT_SCHEMA",
+    "CHINESE_SEMANTIC_CONTEXT_ENVELOPE_SCHEMA",
+    "CHINESE_CLAUSE_TREE_SCHEMA",
+    "CHINESE_CLAUSE_TREE_LEDGER_SCHEMA",
     "FRAME_TYPES",
     "REASON_CODES",
     "SLOT_STATUSES",
@@ -204,6 +224,14 @@ __all__ = [
     "frames_from_asset",
     "apply_semantic_frames_to_behavior_ir",
     "project_semantic_frames_to_behavior_ir",
+    "build_chinese_semantic_context_envelopes",
+    "block_context_for",
+    "locate_unique_block",
+    "parse_chinese_clause_trees",
+    "parse_block_text",
+    "clause_tree_for_block",
+    "validate_clause_tree",
+    "enrich_frames_with_clause_structure",
     "BUSINESS_WORLD_MODEL_SCHEMA",
     "BUSINESS_WORLD_MODEL_GATE_SCHEMA",
     "empty_business_world_model",
