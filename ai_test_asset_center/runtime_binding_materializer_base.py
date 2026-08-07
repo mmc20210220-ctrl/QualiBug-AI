@@ -469,13 +469,17 @@ def runtime_binding_contract_ready(
                 == "runtime_resolvable"
                 and bool(_dict(_dict(bindings.get(target)).get("fixture_setup")))
             )
-            # source_declared_path_example: the operation's own documented
-            # parameter example is the value — bound at compile, no resolver
-            # or fixture required at runtime.
+            # source_declared_path_example / owner_identity_runtime_observed:
+            # the value is source-grounded at compile time (the operation's
+            # own documented parameter example, or the arm owner's login-
+            # observed identity) — no resolver or fixture required at runtime.
             or (
                 _text(_dict(bindings.get(target)).get("status")) == "bound"
                 and _text(_dict(bindings.get(target)).get("source_priority"))
-                == "source_declared_path_example"
+                in (
+                    "source_declared_path_example",
+                    "owner_identity_runtime_observed",
+                )
                 and _dict(bindings.get(target)).get("materialized_value")
                 not in (None, "")
             )

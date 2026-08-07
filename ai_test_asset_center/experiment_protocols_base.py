@@ -332,6 +332,72 @@ _OWNERSHIP_MODAL_TERMS = ("自己的", "本人", "own", "self")
 _OWNERSHIP_RESTRICTIVE_MODALS = ("只能", "仅限", "仅允许", "only", "must")
 
 
+def _concrete_ownership_body_values(
+    *,
+    operation: dict[str, Any],
+    control_actor_ref: str,
+    treatment_actor_ref: str,
+    behavior_ir: dict[str, Any] | None,
+    ownership_param: str,
+    control_body: dict[str, Any],
+    treatment_body: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Concretize body ownership identity params from runtime-observed ids.
+
+    Write-side ownership arms (merge fromUserId/toUserId, product sellerId…)
+    test that the ownership binder cannot be pointed at someone else's
+    identity. The arm values are the actors' login-observed identities
+    (account_id) — the same material a /me read would return, so no list
+    read is needed. Control arm: every ownership param is the owner's own
+    identity. Treatment arm: the ownership binder carries the OWNER's
+    identity (the viewer attempts to touch the owner's resource), while the
+    other ownership params stay the viewer's own identity.
+
+    Returns concrete bodies, or None when no ownership param is declared or
+    an arm identity is missing (callers keep the placeholder template path).
+    """
+    schema = _dict(operation.get("request_schema"))
+    media = _dict(_dict(schema.get("content")).get("application/json"))
+    props = _dict(_dict(media.get("schema")).get("properties"))
+    if not isinstance(props, dict) or not props:
+        return None
+    ownership_params = [
+        str(name)
+        for name in props
+        if _is_ownership_key_read_side(str(name))
+    ]
+    if not ownership_params:
+        return None
+    actors = {
+        _text(actor.get("id")): actor
+        for actor in _list(_dict(behavior_ir).get("actors"))
+        if isinstance(actor, dict)
+    }
+    control_actor = actors.get(control_actor_ref) or {}
+    treatment_actor = actors.get(treatment_actor_ref) or {}
+    control_id = _text(control_actor.get("account_id"))
+    treatment_id = _text(treatment_actor.get("account_id"))
+    if not control_id or not treatment_id:
+        return None
+
+    def _param_key(name: str) -> str:
+        return re.sub(r"[^a-z0-9_]+", "", _text(name).lower())
+
+    binder_key = _param_key(ownership_param)
+    control = deepcopy(control_body)
+    for name in ownership_params:
+        if name in control and isinstance(control[name], str):
+            control[name] = control_id
+    treatment = deepcopy(treatment_body)
+    for name in ownership_params:
+        if name not in treatment or not isinstance(treatment[name], str):
+            continue
+        treatment[name] = (
+            control_id if _param_key(name) == binder_key else treatment_id
+        )
+    return {"control": control, "treatment": treatment}
+
+
 def _read_side_owned_scope_projection(
     *,
     operation: dict[str, Any],
@@ -1539,6 +1605,28 @@ def compile_family_protocol(
             body = dict(_dict(treatment_step.get("body")))
             body[ownership_param] = placeholder
             treatment_step["body"] = body
+        # ── Write-side ownership identity concretization ──
+        # The arm bodies carry the runtime-observed actor identities when
+        # available (account_id from login tokens): control = owner's own
+        # identity on every ownership param, treatment = owner's identity on
+        # the ownership binder (the viewer attempts to touch the owner's
+        # resource) and the viewer's own identity on the remaining ownership
+        # params. Without observed identities the placeholder template stays.
+        _concrete = _concrete_ownership_body_values(
+            operation=operation,
+            control_actor_ref=control_actor_ref,
+            treatment_actor_ref=treatment_actor_ref,
+            behavior_ir=behavior_ir,
+            ownership_param=ownership_param,
+            control_body=(
+                _dict(control_step.get("body")) if control_plan else {}
+            ),
+            treatment_body=_dict(treatment_step.get("body")),
+        )
+        if _concrete:
+            if control_plan:
+                control_step["body"] = _concrete["control"]
+            treatment_step["body"] = _concrete["treatment"]
     return {
         "status": "COMPILED",
         "control_plan": control_plan,

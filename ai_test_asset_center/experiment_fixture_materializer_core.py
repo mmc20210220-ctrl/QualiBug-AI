@@ -495,16 +495,18 @@ def materialize_experiment_fixtures(
         elif kind == "runtime_read_binding":
             target = _text(_dict(node).get("target"))
             binding = binding_plan.get(target) or {}
-            # ── Source-declared path example binding ──
-            # The operation's own path-parameter example (source_declared_path_
-            # example) is part of the declared contract: the value is the
-            # customer's documented sample resource id, so it needs no
-            # identity-read proof — binding it straight is provenance-clean.
-            # The target's answer to the documented example is the observation.
+            # ── Source-grounded pre-materialized binding ──
+            # source_declared_path_example: the operation's own path-parameter
+            # example (part of the declared contract). owner_identity_runtime_
+            # observed: the arm owner's login-observed identity (account_id).
+            # Both carry the value from compile time, so no identity-read proof
+            # is needed — binding them straight is provenance-clean. The
+            # target's answer to the documented value is the observation.
             if (
                 binding.get("materialized_value") not in (None, "")
                 and _text(binding.get("status")) == "bound"
-                and _text(binding.get("source_priority")) == "source_declared_path_example"
+                and _text(binding.get("source_priority"))
+                in ("source_declared_path_example", "owner_identity_runtime_observed")
             ):
                 runtime_bindings[target] = str(binding["materialized_value"])
                 fixture_receipts.append({
@@ -516,11 +518,11 @@ def materialize_experiment_fixtures(
                     "value_fingerprint": hashlib.sha256(
                         str(binding["materialized_value"]).encode("utf-8")
                     ).hexdigest()[:12],
-                    "source": "source_declared_path_example",
+                    "source": _text(binding.get("source_priority")),
                 })
                 binding_materialization_receipts.append({
                     "target": target,
-                    "source_priority": "source_declared_path_example",
+                    "source_priority": _text(binding.get("source_priority")),
                     "status": "bound",
                     "value": binding["materialized_value"],
                     "operation_ref": _text(binding.get("operation_ref")),
@@ -662,6 +664,28 @@ def materialize_experiment_fixtures(
                     })
                     continue
                 # Fall through to path-scoped resolvers when identity proof fails.
+            # ── Protocol-supplied ownership identity binding ──
+            # Body ownership identity params (fromUserId/toUserId/ownerId…)
+            # carry the arm actors' login-observed account identities, which
+            # the isolation/validation protocol compiler concretized into the
+            # step bodies at compile time. A list read cannot supply them (a
+            # merge's fromUserId is a user identity, not a cart row), so the
+            # binding resolves without a runtime read — the target's response
+            # to the concrete body is the observation. No value is invented
+            # here; the step bodies already hold the concrete identity.
+            if (
+                _text(binding.get("source_priority"))
+                == "ownership_identity_param"
+            ):
+                fixture_receipts.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "status": "resolved",
+                    "target": target,
+                    "source": "ownership_identity_param",
+                    "supplied_by": "protocol_compiler",
+                })
+                continue
             # Invented identifiers are forbidden. A synthetic_value without a
             # source-declared GET/HEAD resolver or fixture setup remains blocked.
             # Before blocking, try to auto-discover a create operation on the

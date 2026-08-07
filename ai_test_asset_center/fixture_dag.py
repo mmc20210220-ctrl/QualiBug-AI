@@ -100,6 +100,25 @@ def build_fixture_dag_for_experiment(
             # synthetic_value alone is never constructible — invented ids forbidden
             if not constructible and item.get("fixture_setup"):
                 constructible = True
+            if (
+                _text(item.get("source_priority"))
+                == "ownership_identity_param"
+            ):
+                # Body ownership identity fields (fromUserId/toUserId/ownerId…)
+                # resolve from the arm actor's own runtime-observed identity
+                # (its login token) — never from a list read of another
+                # entity's collection. No resolver read or fixture creation
+                # is needed, so the node is constructible without read proof.
+                nodes.append({
+                    "node_id": nid,
+                    "kind": "runtime_read_binding",
+                    "target": target,
+                    "source_priority": "ownership_identity_param",
+                    "resolver_operations": [],
+                    "requires_read_proof": False,
+                    "constructible": True,
+                })
+                continue
             nodes.append({
                 "node_id": nid,
                 "kind": "runtime_read_binding",
@@ -116,18 +135,22 @@ def build_fixture_dag_for_experiment(
                 })
         elif (
             status == "bound"
-            and _text(item.get("source_priority")) == "source_declared_path_example"
+            and _text(item.get("source_priority"))
+            in (
+                "source_declared_path_example",
+                "owner_identity_runtime_observed",
+            )
             and item.get("materialized_value") not in (None, "")
         ):
-            # Source-declared path example binding: the operation's own
-            # documented parameter example is the value — no resolver read or
-            # fixture creation is needed, so the node is constructible with no
-            # read proof.
+            # Source-grounded pre-materialized binding: the operation's own
+            # documented parameter example, or the arm owner's login-observed
+            # identity — no resolver read or fixture creation is needed, so
+            # the node is constructible with no read proof.
             nodes.append({
                 "node_id": nid,
                 "kind": "runtime_read_binding",
                 "target": target,
-                "source_priority": "source_declared_path_example",
+                "source_priority": _text(item.get("source_priority")),
                 "resolver_operations": [],
                 "materialized_value": str(item.get("materialized_value")),
                 "requires_read_proof": False,

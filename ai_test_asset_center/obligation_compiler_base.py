@@ -10,6 +10,7 @@ from .behavior_ir import BehaviorIRError, SCHEMA_VERSION as BEHAVIOR_IR_SCHEMA, 
 from .real_id_resolver import collection_path, normalize_path_placeholders
 from .real_id_resolver_base import path_has_placeholders
 from .test_obligation import RISK_FAMILIES, dedupe_obligations, make_obligation
+from .validation_read_side_protocol import is_ownership_key
 
 
 def _list(value: Any) -> list[Any]:
@@ -147,14 +148,6 @@ def _relation_actor_ref(relation: dict[str, Any]) -> str:
     return _text(relation.get("actor_ref") or relation.get("from_ref"))
 
 
-_OWNERSHIP_PARAM_NAMES = frozenset({
-    "userid",
-    "user_id",
-    "ownerid",
-    "owner_id",
-    "accountid",
-    "account_id",
-})
 _OWNERSHIP_LANGUAGE_MARKERS = (
     "自己的",
     "本人",
@@ -171,7 +164,11 @@ def _param_key(name: str) -> str:
 
 
 def _is_ownership_param_name(name: str) -> bool:
-    return _param_key(name) in _OWNERSHIP_PARAM_NAMES
+    # Ownership-key vocabulary is a single SSOT: the read-side protocol's
+    # suffix matcher (fromUserId/toUserId/ownerId/… all end with an owner
+    # key). An exact-set membership test here would silently miss every
+    # scoped body field and fall back to a corpus-wide phantom binder.
+    return is_ownership_key(name)
 
 
 def _path_has_resource_placeholder(path: str) -> bool:
@@ -188,7 +185,7 @@ def _ownership_params_declared_on_operation(operation: dict[str, Any]) -> list[s
     def _add(name: str) -> None:
         text = _text(name)
         key = _param_key(text)
-        if not text or key not in _OWNERSHIP_PARAM_NAMES or key in seen:
+        if not text or not _is_ownership_param_name(text) or key in seen:
             return
         seen.add(key)
         found.append(text)

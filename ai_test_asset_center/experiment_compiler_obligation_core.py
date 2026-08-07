@@ -18,6 +18,7 @@ from .behavior_ir import source_identity_fields_for_operation
 from .behavior_ir_core import _infer_operation_effect, _is_ephemeral_session_path
 from .experiment_protocols import compile_family_protocol
 from .observer_contracts_base import compile_observer_requirements
+from .validation_read_side_protocol import is_ownership_key as _is_ownership_identity_param
 from .real_id_resolver import (
     collection_path,
     infer_path_params,
@@ -236,15 +237,29 @@ def _rescue_binding_for_response_only_family(
     )
     _primary_params = set(infer_path_params(_primary_path))
     _example_bindings: dict[str, Any] = {}
+    _has_body_ownership = False
     if not resolvers and not fixture:
         # No collection resolver and no create fixture: the operation's own
         # source-declared path-parameter examples are the final source-grounded
-        # fallback. A blocked target without an example stays blocked.
+        # fallback for path placeholders, and body ownership identity
+        # parameters (fromUserId/ownerId/…) are handled inside the loop below.
+        # Only when neither exists is there nothing left to rescue.
         _example_bindings = (
             _source_declared_path_example_bindings(primary_op, sorted(_primary_params))
             or {}
         )
-        if not _example_bindings:
+        _has_body_ownership = any(
+            isinstance(entry, dict)
+            and _text(entry.get("status")) == "blocked"
+            and (
+                _list(entry.get("body_template_paths"))
+                or _text(entry.get("source_priority"))
+                == "body_placeholder_unresolvable"
+            )
+            and _is_ownership_identity_param(_text(entry.get("target")))
+            for entry in binding_plan
+        )
+        if not _example_bindings and not _has_body_ownership:
             return False
     rescued = False
     for entry in binding_plan:
@@ -253,6 +268,25 @@ def _rescue_binding_for_response_only_family(
         if _text(entry.get("status")) != "blocked":
             continue
         _entry_target = _text(entry.get("target"))
+        # Body ownership identity parameters (fromUserId/ownerId/sellerId/…)
+        # resolve from runtime-observed actor identities, never from a list
+        # read of another entity's collection (a cart's fromUserId is a user,
+        # not a cart). Mark them for the isolation/validation identity-binding
+        # stage, which fills the arm's own account identity.
+        if (
+            (
+                _list(entry.get("body_template_paths"))
+                or _text(entry.get("source_priority"))
+                == "body_placeholder_unresolvable"
+            )
+            and _is_ownership_identity_param(_entry_target)
+        ):
+            entry["status"] = "runtime_resolvable"
+            entry["source_priority"] = "ownership_identity_param"
+            entry["identity_binding_target"] = "user_id"
+            entry.pop("blocked_reason", None)
+            rescued = True
+            continue
         # Body field placeholders (e.g. an order body's addressId) belong to
         # the field's own entity, never to the write operation's collection.
         # Binding them from GET /api/orders would cross-bind a cart/address id
@@ -1584,11 +1618,31 @@ def compile_experiment_for_obligation(
                         },
                     })
                 else:
-                    return blocked_experiment(
-                        oid,
-                        "BLOCKED_MISSING_BINDING",
-                        f"owner_identity_resolver_missing:{identity_target}",
-                    )
+                    # Runtime-observed identity fallback: the owner's login-
+                    # observed identity (account_id from the bearer token) is
+                    # the same material a /me read or an owned-entity read
+                    # would return. When the target exposes neither surface,
+                    # the observed identity is still source-grounded runtime
+                    # material — bind it directly instead of failing the whole
+                    # isolation arm. No observed identity stays a visible gap.
+                    _owner_actor = actors.get(control_actor_ref or "") or {}
+                    _owner_identity = _text(_owner_actor.get("account_id"))
+                    if _owner_identity:
+                        binding_plan.append({
+                            "target": identity_target,
+                            "target_path": "/{" + identity_target + "}",
+                            "status": "bound",
+                            "source_priority": "owner_identity_runtime_observed",
+                            "resolver_operations": [],
+                            "materialized_value": _owner_identity,
+                            "value_fingerprint": "",
+                        })
+                    else:
+                        return blocked_experiment(
+                            oid,
+                            "BLOCKED_MISSING_BINDING",
+                            f"owner_identity_resolver_missing:{identity_target}",
+                        )
             else:
                 # /me exists in IR but no obligation-declared arm actor is
                 # present in the actor registry - fail closed with a distinct
