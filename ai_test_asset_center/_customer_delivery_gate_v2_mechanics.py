@@ -67,6 +67,8 @@ _DERIVED_FINDING_FIELDS = frozenset({
     "delivery_gate_receipt",
     "delivery_gate_receipt_id",
     "delivery_track",
+    "duplicate_of",
+    "duplicate_variants",
     "finding_class",
     "gate_passed",
     "semantic_delivery_gate_status",

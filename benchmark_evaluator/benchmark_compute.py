@@ -91,6 +91,14 @@ def _finding_text_blob(finding: dict[str, Any]) -> str:
         finding.get("title"), finding.get("description"), finding.get("summary"),
         finding.get("category"), finding.get("defect_family"), finding.get("risk_type"),
         finding.get("expected"), finding.get("actual"),
+        # Folding metadata: one operation-level property is delivered once,
+        # with every tried actor pair recorded in duplicate_variants. The
+        # blob must include those variant titles so the evidence text covers
+        # all roles the property was proven against (e.g. a GT keyword that
+        # names a specific treatment role).
+        " ".join(
+            str(value or "") for value in finding.get("duplicate_variants") or []
+        ),
     ]
     repro = finding.get("reproduction") if isinstance(finding.get("reproduction"), dict) else {}
     parts.extend([repro.get("method"), repro.get("path")])

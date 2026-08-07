@@ -841,10 +841,12 @@ def execute_selected_experiments(
             dedupe_key = _deliverable_dedupe_key(finding)
             if dedupe_key and dedupe_key in delivered_finding_ids:
                 # Same operation-level property already delivered: keep the
-                # traceable reference and fold this variant's actor/evidence
-                # into the first finding so the delivered report still proves
-                # the property for every tried actor pair — never deliver a
-                # second copy of the same property.
+                # traceable reference and fold this variant's actor into the
+                # first finding's derived duplicate_variants field (exempt
+                # from the payload fingerprint) so the delivered report still
+                # proves the property for every tried actor pair — never
+                # deliver a second copy of the same property, and never mutate
+                # a sealed payload field (description) after gate build.
                 duplicate_delivery_count += 1
                 first = delivered_finding_ids[dedupe_key]
                 variants = _list(first.get("duplicate_variants"))
@@ -852,10 +854,6 @@ def execute_selected_experiments(
                 if variant_note not in variants:
                     variants.append(variant_note)
                 first["duplicate_variants"] = variants
-                description = _text(first.get("description"))
-                suffix = "；同一属性对以下角色组合同样成立：" + "、".join(variants)
-                if suffix not in description:
-                    first["description"] = description + suffix
                 finding["duplicate_of"] = (
                     _text(first.get("finding_id") or first.get("id")) or dedupe_key
                 )
