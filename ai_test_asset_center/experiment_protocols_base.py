@@ -397,6 +397,23 @@ def _non_active_account_treatment(
     }
 
 
+def _mutation_required_field_removals(mutation: dict[str, Any]) -> list[str]:
+    """Fields a single-constraint mutation deliberately removes from the body.
+
+    A ``constraint: required`` mutation omits a declared required field to
+    test whether the target rejects the malformed write. Compile time reads
+    the descriptor and stamps the removed fields on the step as an explicit
+    runtime contract — the descriptor itself stays inert at runtime.
+    """
+    if _text(mutation.get("constraint")).lower() != "required":
+        return []
+    path = _text(mutation.get("json_path"))
+    if not path:
+        return []
+    leaf = path.rsplit(".", 1)[-1].strip("[]")
+    return [leaf] if leaf else []
+
+
 def _validation_protocol_material(
     operation: dict[str, Any],
     property_spec: dict[str, Any],
@@ -1121,6 +1138,13 @@ def compile_family_protocol(
                 "protocol_step": "single_mutation",
                 "body": deepcopy(treatment_body),
                 "mutation": mutation,
+                # Explicit runtime contract for required-field-removal arms:
+                # the pre-transport required-field gate must exempt exactly
+                # these fields so the malformed write reaches the target.
+                # The mutation descriptor itself stays compile-time inert.
+                "required_field_removal": _mutation_required_field_removals(
+                    mutation
+                ),
             }],
             "assertion": {
                 "kind": "http_status_class",

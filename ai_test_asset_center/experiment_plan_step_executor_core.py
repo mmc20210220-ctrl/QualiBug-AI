@@ -28,6 +28,7 @@ from .experiment_runtime_support import (
     _unresolved_body_placeholders,
     _unresolved_path_placeholders,
     _missing_required_body_fields,
+    _declared_required_field_removals,
     _foreign_key_violations,
     _unauthorized_actor_role,
     _resolve_body_credential_refs,
@@ -399,6 +400,21 @@ def execute_non_barrier_plans(
                 # target 500s on a not-null constraint like `sku`), block here
                 # with a visible reason instead of letting the target error.
                 missing_required = _missing_required_body_fields(request_body, op)
+                if missing_required:
+                    # Required-field-removal mutations deliberately omit a
+                    # declared required field (single_constraint_mutation with
+                    # constraint=required) to test whether the target rejects
+                    # the malformed write. Blocking pre-transport would hide
+                    # the very observation the protocol exists to make — a
+                    # leaky target accepts the write (2xx) while a clean one
+                    # rejects (4xx). Exempt the mutated field only.
+                    _mutated_required = _declared_required_field_removals(step)
+                    if _mutated_required:
+                        missing_required = [
+                            field
+                            for field in missing_required
+                            if field not in _mutated_required
+                        ]
                 if missing_required:
                     results.append({
                         "phase": phase,

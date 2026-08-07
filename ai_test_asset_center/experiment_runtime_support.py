@@ -255,6 +255,22 @@ def _missing_required_body_fields(
     return missing
 
 
+def _declared_required_field_removals(step: dict[str, Any]) -> set[str]:
+    """Fields a single-constraint mutation deliberately removes from the body.
+
+    The compiler stamps ``required_field_removal`` on required-field-removal
+    arms (the write is sent missing that field to test whether the target
+    rejects it). The pre-transport required-field gate must exempt exactly
+    those fields so the malformed write reaches the target. The mutation
+    descriptor itself stays compile-time inert — never read at runtime.
+    """
+    return {
+        _text(value)
+        for value in _list(step.get("required_field_removal"))
+        if _text(value)
+    }
+
+
 # A foreign-key value that is one of these literals (case-insensitive) cannot
 # reference a real entity: it is a placeholder/sentinel or a fabricated default
 # that the target would reject with 500/404. Used by the FK guard.

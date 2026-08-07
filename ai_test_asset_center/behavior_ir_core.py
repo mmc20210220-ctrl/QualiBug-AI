@@ -1661,6 +1661,148 @@ def _derive_permission_relations(
     return relations
 
 
+# Generic Chinese role-category vocabulary for field-level ownership rules
+# ("普通用户只能使用自己的 ID"). Universal business-role categories — never
+# industry- or benchmark-specific terms.
+_SUBJECT_ROLE_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("buyer", ("普通用户", "普通买家", "买家", "客户", "顾客", "消费者")),
+    ("seller", ("商家", "卖家", "商户", "供应商")),
+    ("admin", ("管理员", "运营")),
+    ("finance", ("财务", "出纳")),
+    ("warehouse", ("仓库", "仓管")),
+    ("auditor", ("审计", "审计员")),
+)
+
+# Ownership-restriction phrases in request-body property descriptions.
+_FIELD_OWNERSHIP_PHRASES = (
+    "只能使用自己的",
+    "只能操作自己的",
+    "只能填写自己的",
+    "仅本人",
+    "只能本人",
+    "只允许本人",
+)
+
+
+def _derive_field_level_ownership_relations(
+    model: dict[str, Any],
+    data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Field-level ownership declarations → ``owns`` relations.
+
+    OpenAPI request-body property descriptions such as "目标用户 ID；普通用户
+    只能使用自己的 ID" declare an ownership constraint on an identity field.
+    When the rule's subject role is already permitted for the operation (the
+    operation's own role declaration or permission matrix), the constraint
+    becomes an ``owns`` relation that drives owner/viewer isolation
+    comparisons. Subjects whose role the operation does NOT permit (e.g. a
+    buyer-owned rule on an admin-only endpoint) derive nothing — the
+    operation's role contract wins and no unexecutable control arm is armed.
+    """
+    relations: list[dict[str, Any]] = []
+    operations = {_text(op.get("id")): op for op in _list(model.get("operations")) if isinstance(op, dict)}
+    ops_by_interface: dict[str, str] = {}
+    for op in _list(model.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        interface_id = _text(op.get("interface_id"))
+        if not interface_id:
+            method = _text(op.get("method")).upper()
+            path = _text(op.get("path") or op.get("raw_path"))
+            if method and path:
+                interface_id = f"api:{method}:{path}"
+        if interface_id:
+            ops_by_interface[interface_id] = _text(op.get("id"))
+    actors_by_id = {
+        _text(actor.get("id")): actor
+        for actor in _list(model.get("actors"))
+        if isinstance(actor, dict) and _text(actor.get("id"))
+    }
+    existing_owns = {
+        (
+            _text(rel.get("actor_ref")),
+            _text(rel.get("operation_ref")),
+        )
+        for rel in _list(model.get("relations"))
+        if _text(rel.get("relation_type")) == "owns"
+        and _text(rel.get("actor_ref"))
+        and _text(rel.get("operation_ref"))
+    }
+    permitted = {
+        (
+            _text(rel.get("actor_ref")),
+            _text(rel.get("operation_ref")),
+        )
+        for rel in _list(model.get("relations"))
+        if _text(rel.get("relation_type")) == "permits"
+        and _text(rel.get("actor_ref"))
+        and _text(rel.get("operation_ref"))
+    }
+    seen: set[tuple[str, str]] = set()
+    for interface in _list(data.get("interfaces")):
+        if not isinstance(interface, dict):
+            continue
+        interface_id = _text(interface.get("interface_id"))
+        operation_id = ops_by_interface.get(interface_id)
+        if not operation_id:
+            continue
+        subject_roles: set[str] = set()
+        declared_field = False
+        for declaration in _list(interface.get("technical_declarations")):
+            if not isinstance(declaration, dict):
+                continue
+            if _text(declaration.get("node_kind")) != "OPENAPI_SCHEMA_PROPERTY":
+                continue
+            description = _text(declaration.get("description"))
+            if not any(phrase in description for phrase in _FIELD_OWNERSHIP_PHRASES):
+                continue
+            property_name = _text(declaration.get("property_name"))
+            if not re.sub(r"[^a-z0-9]+", "", property_name.lower()).endswith("id"):
+                continue
+            declared_field = True
+            for role_key, terms in _SUBJECT_ROLE_TERMS:
+                if any(term in description for term in terms):
+                    subject_roles.add(role_key)
+        if not declared_field or not subject_roles:
+            continue
+        for role_key in subject_roles:
+            for actor in _list(model.get("actors")):
+                if not isinstance(actor, dict):
+                    continue
+                actor_ref = _text(actor.get("id"))
+                if not actor_ref:
+                    continue
+                actor_role = _text(actor.get("role_key") or actor.get("role")).lower()
+                if actor_role != role_key:
+                    continue
+                if (actor_ref, operation_id) in existing_owns:
+                    continue
+                if (actor_ref, operation_id) not in permitted:
+                    # The operation's role contract does not permit this
+                    # subject — the ownership rule is role-vacuous here.
+                    continue
+                if (actor_ref, operation_id) in seen:
+                    continue
+                seen.add((actor_ref, operation_id))
+                relations.append(_relation_node(
+                    relation_type="owns",
+                    from_ref=actor_ref,
+                    to_ref=operation_id,
+                    operation_ref=operation_id,
+                    actor_ref=actor_ref,
+                    preconditions=[{"scope": "own"}],
+                    source_refs=[_source_ref(
+                        _text(interface.get("source_id")) or "openapi_schema",
+                        locator=_text(interface.get("interface_id")),
+                        kind="openapi_schema_property",
+                    )],
+                    confidence=0.78,
+                    derivation="explicit",
+                    scope="own",
+                ))
+    return relations
+
+
 def _role_terms(actor: dict[str, Any]) -> list[str]:
     terms: list[str] = []
     for raw in (actor.get("role_key"), actor.get("role")):
@@ -5105,6 +5247,7 @@ def build_behavior_ir_from_knowledge_asset(
         permission_rows,
         closed_world=permission_matrix_complete,
     ))
+    model["relations"].extend(_derive_field_level_ownership_relations(model, data))
     model["relations"].extend(_derive_source_role_restriction_relations(model))
     model["relations"].extend(_derive_operation_entity_relations(model))
     model["relations"].extend(_derive_state_transition_relations(model, data))
