@@ -57,6 +57,23 @@ def build_closed_loop_context(
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     confirmed = [f for f in findings if is_customer_deliverable_defect(f)]
+
+    # Engine-level attention attribution (comprehension layer): attribute
+    # confirmed defects to the reasoner engine family that produced them so
+    # the next scan can prioritize proven engines.  Product-owned data only;
+    # failures stay visible and never block the closed loop.
+    try:
+        from .engine_feedback import record_confirmed_engine_attribution
+
+        engine_attention = record_confirmed_engine_attribution(
+            confirmed, project=project, root=root
+        )
+    except Exception as exc:
+        engine_attention = {
+            "status": "FAILED",
+            "reason": f"{type(exc).__name__}:{str(exc)[:120]}",
+            "engines_updated": 0,
+        }
     
     new_patterns = 0
     confirmed_this_scan_keys: set[str] = set()
@@ -155,7 +172,8 @@ def build_closed_loop_context(
             "legacy_migrated": migrated_count,
             "non_reinforced_decayed": decayed_count,
             "storage_type": "SQLite_enterprise"
-        }
+        },
+        "engine_attention": engine_attention,
     }
 
 

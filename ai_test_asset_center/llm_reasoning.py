@@ -21,6 +21,7 @@ Architecture:
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -73,11 +74,13 @@ class ReasoningConfig:
     base_url: str = ""
     api_key: str = ""
     model: str = ""
+    model_light: str = ""
     temperature: float = 0.1
     timeout_seconds: int = 120
     max_tokens: int = 4096
     thinking_mode: str = ""
     response_format: str = ""
+    embedding_model: str = ""
 
     @classmethod
     def from_env(cls) -> "ReasoningConfig":
@@ -92,11 +95,13 @@ class ReasoningConfig:
             base_url=os.getenv("LLM_BASE_URL", "").rstrip("/"),
             api_key=os.getenv("LLM_API_KEY", ""),
             model=os.getenv("LLM_MODEL", ""),
+            model_light=os.getenv("LLM_MODEL_LIGHT", "").strip(),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
             timeout_seconds=int(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
             thinking_mode=thinking_mode,
             response_format=response_format,
+            embedding_model=os.getenv("LLM_EMBEDDING_MODEL", "").strip(),
         )
 
     @property
@@ -131,6 +136,8 @@ Rules:
 from .reader_prompt import READER_SYSTEM_PROMPT, READER_PROMPTS
 from .reasoner_prompt import REASONER_SYSTEM_PROMPT, REASONER_PROMPTS
 from .verifier_prompt import VERIFIER_SYSTEM_PROMPT, VERIFIER_PROMPTS
+
+from .reasoning_fact_retrieval import FACT_BLOCK_HEADER
 
 # Layer-aware system prompts
 LAYERED_SYSTEM_PROMPTS = {
@@ -952,6 +959,34 @@ REASONER_ENGINES = {
 
 
 # ---------------------------------------------------------------------------
+# Model routing (tier-aware)
+# ---------------------------------------------------------------------------
+#
+# Extraction/classification tasks route to the light tier (LLM_MODEL_LIGHT)
+# when configured; deep reasoning engines stay on the primary LLM_MODEL.
+# Routing is a pure cost optimization: when LLM_MODEL_LIGHT is unset every
+# tier resolves to the primary model, so behavior never changes and routing
+# can never become a capability requirement.
+
+LIGHT_TIER_ENGINES: frozenset[str] = frozenset({"defect_classification"})
+DEFAULT_TIER = "strong"
+LIGHT_TIER = "light"
+
+
+def resolve_model_for_tier(config: "ReasoningConfig", tier: str) -> str:
+    """Resolve the concrete model for a routing tier.
+
+    ``light`` uses LLM_MODEL_LIGHT when configured, otherwise falls back to
+    the primary model; ``strong`` (default) always uses the primary model.
+    Unknown tiers fail safe to the primary model.
+    """
+    tier = str(tier or "").strip().lower()
+    if tier == LIGHT_TIER and getattr(config, "model_light", ""):
+        return config.model_light
+    return config.model
+
+
+# ---------------------------------------------------------------------------
 # Core reasoning client
 # ---------------------------------------------------------------------------
 
@@ -1014,7 +1049,12 @@ class ReasoningClient:
         LLM is unavailable (caller should fall back to heuristic path).
         
         If use_layered=True, uses the three-layer prompt architecture
-        (Reader/Reasoner/Verifier) with layer-specific system prompts."""
+        (Reader/Reasoner/Verifier) with layer-specific system prompts.
+
+        Model routing: extraction/classification engine types resolve to the
+        light tier (LLM_MODEL_LIGHT when configured); deep reasoning engines
+        stay on the primary LLM_MODEL.
+        """
         if not self.config.enabled:
             return None
         if engine_type not in PROMPTS:
@@ -1025,6 +1065,10 @@ class ReasoningClient:
         # Choose system prompt based on engine layer
         layer = ENGINE_LAYER.get(engine_type, "reasoner")
         system_prompt = LAYERED_SYSTEM_PROMPTS.get(layer, SYSTEM_PROMPT)
+        model = resolve_model_for_tier(
+            self.config,
+            LIGHT_TIER if engine_type in LIGHT_TIER_ENGINES else DEFAULT_TIER,
+        )
         
         try:
             user_prompt = template.format(**{
@@ -1036,15 +1080,25 @@ class ReasoningClient:
                 f"Missing context field '{exc.args[0]}' for engine '{engine_type}'"
             ) from exc
 
+        # Reasoner toolization hook: engines that already hold a structured
+        # knowledge payload may pass "_retrieved_facts" (a bounded,
+        # source-anchored fact block from reasoning_fact_retrieval) which is
+        # appended verbatim.  Advisory only — never inferred here, and absent
+        # keys change nothing for existing callers.
+        retrieved_facts = context.get("_retrieved_facts")
+        if retrieved_facts:
+            user_prompt += FACT_BLOCK_HEADER + str(retrieved_facts)[:3000]
+
         try:
-            response_text = self._chat(user_prompt, system_prompt=system_prompt)
+            response_text = self._chat(user_prompt, system_prompt=system_prompt, model=model)
             return self._parse_json(response_text)
         except Exception:
             return None
 
-    def _chat(self, user_prompt: str, *, system_prompt: str | None = None) -> str:
+    def _chat(self, user_prompt: str, *, system_prompt: str | None = None, model: str | None = None) -> str:
+        resolved_model = model or self.config.model
         payload = {
-            "model": self.config.model,
+            "model": resolved_model,
             "messages": [
                 {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -1079,9 +1133,9 @@ class ReasoningClient:
                 _elapsed_ms = int((time.time() - _llm_start) * 1000)
                 self._record_usage(response_text)
                 _llm_logger.info(
-                    f"LLM call OK: model={self.config.model} prompt={_prompt_len}c resp={len(response_text)}c {_elapsed_ms}ms",
+                    f"LLM call OK: model={resolved_model} prompt={_prompt_len}c resp={len(response_text)}c {_elapsed_ms}ms",
                     extra={"context": {
-                        "model": self.config.model,
+                        "model": resolved_model,
                         "prompt_chars": _prompt_len,
                         "response_chars": len(response_text),
                         "elapsed_ms": _elapsed_ms,
@@ -1096,7 +1150,7 @@ class ReasoningClient:
             _llm_logger.error(
                 f"LLM HTTP {exc.code} after {_elapsed_ms}ms: {error_body[:200]}",
                 extra={"error_code": _code, "context": {
-                    "model": self.config.model,
+                    "model": resolved_model,
                     "http_status": exc.code,
                     "elapsed_ms": _elapsed_ms,
                     "prompt_chars": _prompt_len,
@@ -1149,11 +1203,18 @@ class ReasoningClient:
                 f"LLM output is not valid JSON: {cleaned[:300]}"
             ) from exc
 
-    def chat_json(self, user_prompt: str, *, system_prompt: str | None = None) -> dict[str, Any]:
-        """Run one JSON-only advisory request using the shared provider settings."""
+    def chat_json(self, user_prompt: str, *, system_prompt: str | None = None, tier: str = DEFAULT_TIER) -> dict[str, Any]:
+        """Run one JSON-only advisory request using the shared provider settings.
+
+        ``tier`` selects the routed model: "light" (LLM_MODEL_LIGHT when
+        configured) for extraction/classification tasks, "strong" (primary
+        LLM_MODEL) otherwise. Defaults to strong so existing callers keep
+        their historical model.
+        """
         if not self.config.enabled:
             raise ReasoningClientError("LLM is not configured")
-        raw = self._chat(user_prompt) if system_prompt is None else self._chat(user_prompt, system_prompt=system_prompt)
+        model = resolve_model_for_tier(self.config, tier)
+        raw = self._chat(user_prompt, system_prompt=system_prompt, model=model)
         return self._parse_json(raw)
 
     def complete_json(
@@ -1161,10 +1222,11 @@ class ReasoningClient:
         *,
         user_prompt: str,
         system_prompt: str | None = None,
+        tier: str = DEFAULT_TIER,
     ) -> dict[str, Any]:
         """Expose the fail-fast JSON contract used by constrained Agent planners."""
 
-        return self.chat_json(user_prompt, system_prompt=system_prompt)
+        return self.chat_json(user_prompt, system_prompt=system_prompt, tier=tier)
 
     def health_check(self) -> dict[str, Any]:
         """Perform a bounded provider check without storing credentials or prompts."""
@@ -1173,6 +1235,79 @@ class ReasoningClient:
             raise ReasoningClientError("LLM health response did not confirm ok=true")
         return {"ok": True, "model": self.config.model}
 
+    def _record_embedding_usage(self, response_text: str) -> None:
+        try:
+            response = json.loads(response_text)
+        except (TypeError, json.JSONDecodeError):
+            return
+        usage = response.get("usage") if isinstance(response, dict) and isinstance(response.get("usage"), dict) else {}
+        prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+        with self._usage_lock:
+            self._usage_totals["request_count"] += 1
+            try:
+                self._usage_totals["prompt_tokens"] += max(0, int(prompt or 0))
+            except (TypeError, ValueError):
+                pass
+
+    def embed(self, texts: list[str]) -> list[list[float]] | None:
+        """Non-decision embedding: candidate de-duplication and fact-retrieval
+        ranking only.
+
+        Returns None whenever the embedding model is unconfigured or the
+        provider fails — deterministic paths are never blocked by this
+        advisory capability (fail-soft by design).  Never feeds formal fact
+        merging, assertion evaluation, or the delivery gate.
+        """
+        if not self.config.enabled or not self.config.embedding_model:
+            return None
+        clean = [str(text or "")[:8000] for text in (texts or [])]
+        clean = [text for text in clean if text.strip()]
+        if not clean:
+            return None
+        payload = {"model": self.config.embedding_model, "input": clean}
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        url = f"{self.config.base_url}/embeddings"
+        request = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.config.api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as resp:
+                response_text = resp.read().decode("utf-8")
+            self._record_embedding_usage(response_text)
+            data = json.loads(response_text)
+            if not isinstance(data, dict):
+                return None
+            vectors: list[list[float]] = []
+            for item in data.get("data") or []:
+                embedding = item.get("embedding") if isinstance(item, dict) else None
+                if not isinstance(embedding, list) or not embedding:
+                    return None
+                if not all(isinstance(value, (int, float)) for value in embedding):
+                    return None
+                vectors.append([float(value) for value in embedding])
+            if len(vectors) != len(clean):
+                return None
+            _llm_logger.info(
+                "LLM embedding OK: model=%s texts=%d dim=%d",
+                self.config.embedding_model,
+                len(clean),
+                len(vectors[0]),
+            )
+            return vectors
+        except Exception as exc:
+            _llm_logger.warning(
+                "LLM embedding unavailable (non-decision path, skipped): %s:%s",
+                type(exc).__name__,
+                str(exc)[:160],
+            )
+            return None
+
 
 def compile_oracle_hypotheses(
     *,
@@ -1180,6 +1315,7 @@ def compile_oracle_hypotheses(
     api_schema: str,
     heuristic_findings: list[dict[str, Any]],
     known_paths: set[str],
+    client: "ReasoningClient | None" = None,
 ) -> list[dict[str, Any]]:
     """Compile only schema-grounded, read-only Oracle *hypotheses*.
 
@@ -1237,12 +1373,14 @@ def compile_oracle_hypotheses(
             confidence = min(0.60, max(0.0, float(candidate.get("confidence", 0.0))))
         except (TypeError, ValueError):
             confidence = 0.0
+        provenance = build_model_provenance("oracle_compiler", client=client)
         fingerprint_payload = {
             "family": family,
             "title": title[:300],
             "source_endpoint": source_endpoint,
             "comparison_endpoint": comparison_endpoint,
             "field_paths": [str(item)[:160] for item in field_paths[:8]],
+            **provenance,
         }
         fingerprint = sha256(json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
         hypotheses.append({
@@ -1263,6 +1401,9 @@ def compile_oracle_hypotheses(
             "read_only_validation": {"method": "GET", "requests": [str(item)[:240] for item in (read_only.get("requests") or [])[:8]]},
             "confidence": confidence,
             "false_positive_risk": str(candidate.get("false_positive_risk") or "")[:400],
+            "model_id": provenance["model_id"],
+            "temperature": provenance["temperature"],
+            "prompt_template_hash": provenance["prompt_template_hash"],
         })
     return hypotheses
 
@@ -1281,12 +1422,48 @@ def _safe_hypothesis_text(value: Any, limit: int) -> str:
     return text[:limit]
 
 
+def _prompt_template_hash(engine: str | None) -> str:
+    """Content hash of the prompt template used for one engine type.
+
+    Binds advisory hypotheses to the exact template version that produced
+    them.  Empty when the engine has no registered template (the compiler
+    still emits provenance so receipts never silently lose the binding).
+    """
+    template = PROMPTS.get(str(engine or "")) if engine else None
+    if not template:
+        return ""
+    return sha256(template.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def build_model_provenance(
+    engine: str | None = None,
+    *,
+    client: "ReasoningClient | None" = None,
+) -> dict[str, str]:
+    """Model identity for hypothesis provenance.
+
+    Every advisory hypothesis is bound to the exact model, temperature, and
+    prompt-template hash that produced it, so a champion/challenger replay or
+    a regression comparison can attribute discovery deltas to a model or
+    prompt change instead of guessing.  Values are literal config facts, never
+    credentials or prompts; empty strings mean "not configured" and stay
+    visible rather than being invented.
+    """
+    cfg = (client or _get_client()).config
+    return {
+        "model_id": str(cfg.model or ""),
+        "temperature": str(cfg.temperature),
+        "prompt_template_hash": _prompt_template_hash(engine),
+    }
+
+
 def compile_unverified_semantic_hypotheses(
     raw_findings: Any,
     *,
     engine: str,
     type_field: str,
     max_count: int = 5,
+    client: "ReasoningClient | None" = None,
 ) -> list[dict[str, Any]]:
     """Normalize legacy engine LLM output into non-authoritative hypotheses.
 
@@ -1315,7 +1492,11 @@ def compile_unverified_semantic_hypotheses(
 
         title = _safe_hypothesis_text(raw.get("title"), 300) or f"LLM 建议补充 {rule} 的确定性验证"
         observation = _safe_hypothesis_text(raw.get("expected") or raw.get("observed") or raw.get("actual"), 500)
-        fingerprint_payload = {"engine": engine_key, "rule": rule, "title": title}
+        provenance = build_model_provenance(engine_key, client=client)
+        fingerprint_payload = {
+            "engine": engine_key, "rule": rule, "title": title,
+            **provenance,
+        }
         fingerprint = sha256(json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
         hypothesis = {
             "hypothesis_id": f"LLM_{engine_key.upper()}_{fingerprint[:12].upper()}",
@@ -1330,6 +1511,9 @@ def compile_unverified_semantic_hypotheses(
             "suggested_next_observation": observation or "补充受控、可回放的确定性证据。",
             "confidence": confidence,
             "false_positive_risk": "模型推断未经过确定性回放，不能作为正式缺陷或发布依据。",
+            "model_id": provenance["model_id"],
+            "temperature": provenance["temperature"],
+            "prompt_template_hash": provenance["prompt_template_hash"],
         }
         hypothesis[str(type_field or "semantic_type")] = f"llm_semantic_{rule}"
         hypotheses.append(hypothesis)
@@ -1538,3 +1722,29 @@ def reason_layered(
 def is_available() -> bool:
     """Check if LLM reasoning is available without making an API call."""
     return _get_client().config.enabled
+
+
+def embed_texts(
+    texts: list[str],
+    *,
+    client: "ReasoningClient | None" = None,
+) -> list[list[float]] | None:
+    """Advisory embedding helper (non-decision role).
+
+    Used for near-duplicate hypothesis merging and fact-retrieval ranking
+    only.  Returns None (never raises) when embeddings are unavailable, so
+    deterministic pipelines keep running unchanged.
+    """
+    return (client or _get_client()).embed(texts)
+
+
+def cosine_similarity(vector_a: list[float], vector_b: list[float]) -> float:
+    """Cosine similarity between two equal-length vectors; 0.0 on mismatch."""
+    if not vector_a or not vector_b or len(vector_a) != len(vector_b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(vector_a, vector_b))
+    norm_a = math.sqrt(sum(x * x for x in vector_a))
+    norm_b = math.sqrt(sum(y * y for y in vector_b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)

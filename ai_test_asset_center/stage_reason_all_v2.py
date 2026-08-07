@@ -12,6 +12,7 @@ Future improvement: score hypotheses by engine reliability history + evidence gr
 
 import ast, copy, json, logging, os, re, time
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from hashlib import sha256
 from typing import Any
 
 from .console_output import safe_print as print
@@ -683,6 +684,104 @@ def _dedupe_hypotheses(hypotheses: list[dict[str, Any]]) -> list[dict[str, Any]]
     return [deduped[key] for key in order]
 
 
+# Near-duplicate merge threshold on embedding cosine similarity.  Only
+# hypotheses that already share the same risk category AND entity group are
+# compared; 0.93 is deliberately strict so genuinely distinct defects are
+# never collapsed by wording drift.
+SEMANTIC_DEDUP_SIMILARITY_THRESHOLD = 0.93
+SEMANTIC_DEDUP_MAX_TEXTS_PER_CALL = 60
+
+
+def _dedupe_hypotheses_semantic(
+    hypotheses: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Embedding-assisted near-duplicate merge of advisory hypotheses.
+
+    Non-decision role: exact dedupe (``_dedupe_hypotheses``) runs first; this
+    pass collapses only near-duplicates inside the same (risk_type/category,
+    entity) group whose wording drifts across engines.  Fail-soft: when
+    embeddings are unconfigured or the provider fails, the pass is skipped
+    with an explicit receipt and the exact-dedupe result is returned
+    unchanged.  Never touches formal facts, assertions, or delivery.
+    """
+    if str(os.environ.get("QUALIBUG_DISABLE_SEMANTIC_DEDUP", "")).lower() in {"1", "true", "yes", "on"}:
+        return list(hypotheses), {"status": "SKIPPED", "reason": "operator_disabled", "merged": 0, "compared": 0}
+    receipt: dict[str, Any] = {
+        "status": "SKIPPED", "reason": "no_embedding_provider", "merged": 0, "compared": 0,
+    }
+    compared = 0
+    try:
+        from .llm_reasoning import cosine_similarity, embed_texts
+
+        groups: dict[tuple[str, str], list[int]] = {}
+        for index, hypothesis in enumerate(hypotheses):
+            if not isinstance(hypothesis, dict):
+                continue
+            risk = str(hypothesis.get("risk_type") or hypothesis.get("category") or "").lower().strip()[:80]
+            entity = str(hypothesis.get("entity") or hypothesis.get("source_entity") or "").lower().strip()[:60]
+            groups.setdefault((risk, entity), []).append(index)
+
+        merged_out = list(hypotheses)
+        merged_flags: set[int] = set()
+        total_merged = 0
+        embeddings_used = 0
+        for (risk, entity), indexes in groups.items():
+            if len(indexes) < 2:
+                continue
+            for start in range(0, len(indexes), SEMANTIC_DEDUP_MAX_TEXTS_PER_CALL):
+                batch = indexes[start:start + SEMANTIC_DEDUP_MAX_TEXTS_PER_CALL]
+                texts = []
+                for index in batch:
+                    title = str(merged_out[index].get("title") or "").strip()
+                    expected = str(merged_out[index].get("expected_behavior") or "").strip()
+                    texts.append(f"{title} {expected}".strip()[:8000])
+                vectors = embed_texts(texts)
+                if not vectors or len(vectors) != len(batch):
+                    continue
+                embeddings_used += 1
+                for offset_a in range(len(batch)):
+                    if batch[offset_a] in merged_flags:
+                        continue
+                    for offset_b in range(offset_a + 1, len(batch)):
+                        if batch[offset_b] in merged_flags:
+                            continue
+                        similarity = cosine_similarity(vectors[offset_a], vectors[offset_b])
+                        compared += 1
+                        if similarity >= SEMANTIC_DEDUP_SIMILARITY_THRESHOLD:
+                            merged_out[batch[offset_a]] = _merge_hypothesis_pair(
+                                merged_out[batch[offset_a]], merged_out[batch[offset_b]]
+                            )
+                            merged_flags.add(batch[offset_b])
+                            total_merged += 1
+        if total_merged:
+            merged_out = [
+                hypothesis for index, hypothesis in enumerate(merged_out)
+                if index not in merged_flags
+            ]
+        if embeddings_used == 0:
+            receipt = {
+                "status": "SKIPPED", "reason": "embeddings_unavailable",
+                "merged": 0, "compared": 0, "embedding_calls": 0,
+            }
+        else:
+            receipt = {
+                "status": "CONSUMED" if total_merged else "RUN_NO_MERGE",
+                "reason": "embedding_near_duplicate_merge",
+                "merged": total_merged,
+                "compared": compared,
+                "embedding_calls": embeddings_used,
+            }
+        return merged_out, receipt
+    except Exception as exc:
+        receipt = {
+            "status": "FAILED",
+            "reason": f"{type(exc).__name__}:{str(exc)[:120]}",
+            "merged": 0,
+            "compared": compared,
+        }
+        return list(hypotheses), receipt
+
+
 def _execution_priority_score(hypothesis: dict[str, Any]) -> tuple[int, int, int, int, int]:
     """Rank stronger hypotheses first without changing their executable shape."""
     vm = hypothesis.get("verification_method", {})
@@ -791,6 +890,14 @@ def _run_reasoner_engine(
                 worker_config.response_format = "json_object"
             worker_client = ReasoningClient(config=worker_config)
 
+            # Model provenance: bind every hypothesis and engine result to the
+            # exact model / temperature / prompt template that produced it, so
+            # replay and regression comparisons can attribute discovery deltas
+            # to a model or prompt change. Literal config facts only.
+            result["model_id"] = str(getattr(worker_config, "model", "") or "")
+            result["temperature"] = str(getattr(worker_config, "temperature", "") or "")
+            result["prompt_template_hash"] = sha256(str(template or "").encode("utf-8", errors="replace")).hexdigest()[:16]
+
             result["model_attempt_count"] += 1
             raw = worker_client._chat(prompt, system_prompt=system_prompt)
             result["model_response_count"] += 1
@@ -821,6 +928,9 @@ def _run_reasoner_engine(
                         if isinstance(value, str) and len(value) > max_hypothesis_chars:
                             item[key] = value[:max_hypothesis_chars - 3] + "..."
                     item.setdefault("_reasoner_engine", engine_name)
+                    item["_model_id"] = str(getattr(worker_config, "model", "") or "")
+                    item["_model_temperature"] = str(getattr(worker_config, "temperature", "") or "")
+                    item["_prompt_template_hash"] = sha256(str(template or "").encode("utf-8", errors="replace")).hexdigest()[:16]
                     # Extract entity from title/description for cross-source dedup
                     if not item.get("entity") and not item.get("source_entity"):
                         extracted_entity = _extract_entity_from_hypothesis(item)
@@ -965,6 +1075,31 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
          "database_context": 25000, "bug_history_context": 25000})
     enabled_engines = get_policy_value("reasoner", "enabled_engines", [name for name, _ in engines])
     engine_weights = get_policy_value("reasoner", "engine_weights", {})
+
+    # ── Project-learned engine attention (closed loop, comprehension layer) ──
+    # Merge policy weights with per-engine confirmation history from this
+    # project's own confirmed defects.  Attention only: bounded boost,
+    # project-scoped, fail-soft, and never changes evidence rules, budgets,
+    # gates, or compile status.
+    engine_attention_receipt: dict = {"status": "SKIPPED", "reason": "project_not_set", "boosted": []}
+    engine_attention_records: dict = {}
+    try:
+        from .engine_feedback import (
+            load_engine_attention_records,
+            resolve_engine_attention_weights,
+        )
+
+        _attention_project = os.environ.get("QUALIBUG_PROJECT", "").strip()
+        engine_weights, engine_attention_receipt = resolve_engine_attention_weights(
+            engine_weights, project=_attention_project
+        )
+        engine_attention_records = load_engine_attention_records(_attention_project)
+    except Exception as exc:
+        engine_attention_receipt = {
+            "status": "FAILED",
+            "reason": f"{type(exc).__name__}:{str(exc)[:120]}",
+            "boosted": [],
+        }
     enabled_set = {str(name) for name in (enabled_engines or [])}
     if enabled_set:
         engines = [(name, template) for name, template in engines if name in enabled_set]
@@ -1187,6 +1322,28 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             learned_memory_receipt.get("pattern_count"),
         )
 
+    # ── Grounded fact retrieval (reasoner toolization) ──
+    # Deterministic, source-anchored facts (rules / state machines / relations
+    # / entities with source refs) extracted from the structured payload so
+    # every engine reasons over exact declared facts.  Advisory only: never
+    # infers, never blocks, and failures stay visible in the engine report.
+    fact_block = ""
+    fact_receipt: dict = {"status": "SKIPPED", "reason": "no_structured_payload", "facts": 0, "chars": 0}
+    try:
+        from .reasoning_fact_retrieval import retrieve_grounded_facts
+
+        fact_payload: Any = None
+        if isinstance(reader_output, dict):
+            graph_pack_dict = reader_output.get("_graph_evidence_pack")
+            fact_payload = graph_pack_dict if isinstance(graph_pack_dict, dict) else reader_output
+        if isinstance(fact_payload, dict) and fact_payload:
+            fact_block, fact_receipt = retrieve_grounded_facts(fact_payload)
+    except Exception as exc:
+        fact_block = ""
+        fact_receipt = {"status": "FAILED", "reason": f"{type(exc).__name__}:{str(exc)[:120]}", "facts": 0, "chars": 0}
+    if fact_block:
+        logger.info("[Stage 2] grounded fact retrieval: %s", fact_receipt)
+
     # ── Build prompts ──
     engine_prompts: dict[str, str] = {}
     for engine_name, template in engines:
@@ -1215,6 +1372,16 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             prompt += chunk_evidence
         if learned_memory_block:
             prompt += learned_memory_block
+        if fact_block:
+            prompt += fact_block
+        try:
+            from .engine_feedback import build_engine_attention_nudge
+
+            engine_nudge = build_engine_attention_nudge(engine_name, engine_attention_records)
+        except Exception:
+            engine_nudge = ""
+        if engine_nudge:
+            prompt += engine_nudge
         engine_prompts[engine_name] = prompt + _output_hard_limits()
 
     # ── Parallel execution ──
@@ -1486,6 +1653,14 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     if deduped_count > 0:
         logger.info("Deduplication removed %d duplicate hypotheses", deduped_count)
         print(f"  [OK] 去重移除了 {deduped_count} 条重复假设", flush=True)
+    # Embedding-assisted near-duplicate merge (advisory, fail-soft).  Runs
+    # after exact dedupe; never blocks and never touches formal evidence.
+    pre_semantic_total = len(all_hypotheses)
+    all_hypotheses, semantic_dedup_receipt = _dedupe_hypotheses_semantic(all_hypotheses)
+    semantic_deduped_count = pre_semantic_total - len(all_hypotheses)
+    if semantic_deduped_count > 0:
+        logger.info("Semantic dedup merged %d near-duplicate hypotheses", semantic_deduped_count)
+        print(f"  [OK] 语义去重合并了 {semantic_deduped_count} 条近重复假设", flush=True)
     all_hypotheses = _prioritize_hypotheses(all_hypotheses)
     if all_hypotheses:
         top = all_hypotheses[0]
@@ -1563,6 +1738,10 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         "graph_context_active": use_graph_context,
         "graph_context_chars": len(graph_rendered),
         "learned_memory_receipt": learned_memory_receipt,
+        "fact_retrieval_receipt": fact_receipt,
+        "engine_attention_receipt": engine_attention_receipt,
+        "semantic_dedup_receipt": semantic_dedup_receipt,
+        "semantic_dedup_merged": semantic_deduped_count,
         "retried_engines": [e for e in engine_names_for_report if results_by_engine.get(e, {}).get("retry_used")],
         "engines_with_low_output": [e for e in engine_names_for_report if len(results_by_engine.get(e, {}).get("hypotheses", [])) < 3 and e != "local_bootstrap"],
         "engine_outputs": {e: len(results_by_engine.get(e, {}).get("hypotheses", [])) for e in engine_names_for_report},

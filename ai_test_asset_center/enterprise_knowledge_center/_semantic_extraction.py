@@ -982,6 +982,7 @@ def run_semantic_extraction(
             result = client.chat_json(
                 user_prompt,
                 system_prompt=_SYSTEM_PROMPT,
+                tier="light",
             )
         except Exception as exc:
             chunk_failures += 1
