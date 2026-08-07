@@ -150,6 +150,7 @@ def _relation_actor_ref(relation: dict[str, Any]) -> str:
 
 _OWNERSHIP_LANGUAGE_MARKERS = (
     "自己的",
+    "自己",
     "本人",
     "归属",
     "own",
@@ -157,6 +158,22 @@ _OWNERSHIP_LANGUAGE_MARKERS = (
     "cross-user",
     "只能查询",
 )
+
+# Restrictive own-scope modals (只能/仅限/仅允许/only/must) combined with an
+# ownership modal (自己的/本人/own/self) on a FIELD's own description mark it
+# as caller-scoped identity input even when its name does not end with a
+# generic owner key (e.g. a role-scoped ``sellerId`` documented as 只能以
+# 自己作为 sellerId). Vocabulary is modality, never an industry term.
+_OWNERSHIP_RESTRICTIVE_MODALS = ("只能", "仅限", "仅允许", "only", "must")
+
+
+def _ownership_param_description_declares_scope(description: str) -> bool:
+    raw = _text(description)
+    if not raw:
+        return False
+    has_restrictive = any(m in raw for m in _OWNERSHIP_RESTRICTIVE_MODALS)
+    has_modal = any(m in raw for m in _OWNERSHIP_LANGUAGE_MARKERS)
+    return has_restrictive and has_modal
 
 
 def _param_key(name: str) -> str:
@@ -181,11 +198,29 @@ def _ownership_params_declared_on_operation(operation: dict[str, Any]) -> list[s
 
     found: list[str] = []
     seen: set[str] = set()
+    # Operation-level own-scope declaration (只能以自己作为 sellerId / 普通
+    # 用户只能使用自己的 ID): when the operation itself declares a caller
+    # scope, an identity-shaped body field (name ending in Id/ID, description
+    # carrying an ID marker) is ownership input even when its name does not
+    # end with a generic owner key (sellerId, memberId, …). Without the
+    # operation-level declaration the field stays an ordinary id.
+    _op_scope_declared = _operation_declares_ownership_language(operation)
+    _id_field_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:[Ii][Dd]|_id|_ID)$")
 
-    def _add(name: str) -> None:
+    def _add(name: str, description: str = "") -> None:
         text = _text(name)
         key = _param_key(text)
-        if not text or not _is_ownership_param_name(text) or key in seen:
+        if not text or key in seen:
+            return
+        if not (
+            _is_ownership_param_name(text)
+            or _ownership_param_description_declares_scope(description)
+            or (
+                _op_scope_declared
+                and bool(_id_field_pattern.match(text))
+                and re.search(r"(?:ID|Id|id)", _text(description))
+            )
+        ):
             return
         seen.add(key)
         found.append(text)
@@ -194,7 +229,7 @@ def _ownership_params_declared_on_operation(operation: dict[str, Any]) -> list[s
         if depth > 8 or not isinstance(properties, dict):
             return
         for field_name, field_schema in properties.items():
-            _add(str(field_name))
+            _add(str(field_name), _text(_dict(field_schema).get("description")))
             nested = _dict(field_schema)
             _walk_properties(_dict(nested.get("properties")), depth=depth + 1)
             items = _dict(nested.get("items"))

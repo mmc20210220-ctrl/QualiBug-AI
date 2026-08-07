@@ -5,6 +5,7 @@ import hashlib
 import re
 from typing import Any
 
+from .obligation_compiler_base import _ownership_params_declared_on_operation
 from .real_id_resolver import (
     alternate_collection_paths,
     body_field_collection_paths,
@@ -928,6 +929,15 @@ def build_binding_plan(
             ordered.append(name)
 
     plan: list[dict[str, Any]] = []
+    # Ownership identity params declared on the operation (fromUserId/ownerId/
+    # sellerId…, including description-driven own-scope fields) resolve from
+    # runtime-observed actor identities in the isolation/validation
+    # identity-binding stage. Their schema example is a placeholder-shaped
+    # identity literal, never a real account — exempt them from every
+    # source-example fallback so a fabricated owner never reaches transport.
+    _operation_declared_ownership_params = set(
+        _ownership_params_declared_on_operation(op)
+    )
     for name in ordered:
         existing = _dict(values.get(name))
         source = _text(existing.get("source") or existing.get("source_priority"))
@@ -1089,15 +1099,21 @@ def build_binding_plan(
             # example fallback): no resolver, fixture, or credential source —
             # the operation's own request-body schema example/default is the
             # last source-grounded value. Without one the placeholder stays
-            # visibly blocked; never invent enterprise data.
-            _body_example_bindings = _source_declared_body_example_bindings(
-                op,
-                [name],
-                body_placeholder_paths,
-            )
-            if _body_example_bindings and name in _body_example_bindings:
-                plan.append(_body_example_bindings[name])
-                continue
+            # visibly blocked; never invent enterprise data. Ownership
+            # identity params are exempt: their schema example is a
+            # placeholder-shaped identity literal, never a real account, so
+            # binding it would fire a fabricated owner at the target. They
+            # stay blocked here and resolve through the isolation/
+            # validation identity-binding stage (ownership_identity_param).
+            if name not in _operation_declared_ownership_params:
+                _body_example_bindings = _source_declared_body_example_bindings(
+                    op,
+                    [name],
+                    body_placeholder_paths,
+                )
+                if _body_example_bindings and name in _body_example_bindings:
+                    plan.append(_body_example_bindings[name])
+                    continue
             # An unbound placeholder is never a license to invent enterprise
             # data. Both path and body values must remain visibly blocked.
             is_path_param = name in path_placeholders

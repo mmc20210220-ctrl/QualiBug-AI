@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 from .behavior_ir import source_identity_fields_for_operation
 from .behavior_ir_core import _infer_operation_effect, _is_ephemeral_session_path
 from .experiment_protocols import compile_family_protocol
+from .obligation_compiler_base import _ownership_params_declared_on_operation
 from .observer_contracts_base import compile_observer_requirements
 from .validation_read_side_protocol import is_ownership_key as _is_ownership_identity_param
 from .real_id_resolver import (
@@ -236,6 +237,12 @@ def _rescue_binding_for_response_only_family(
         _text(primary_op.get("path") or primary_op.get("raw_path"))
     )
     _primary_params = set(infer_path_params(_primary_path))
+    # Operation-declared ownership identity params (fromUserId/ownerId/sellerId…)
+    # — same source-grounded vocabulary as the obligation layer, including
+    # description-driven own-scope detection (只能以自己作为 sellerId).
+    _operation_declared_ownership_params = set(
+        _ownership_params_declared_on_operation(primary_op)
+    )
     _example_bindings: dict[str, Any] = {}
     _has_body_ownership = False
     if not resolvers and not fixture:
@@ -256,7 +263,11 @@ def _rescue_binding_for_response_only_family(
                 or _text(entry.get("source_priority"))
                 == "body_placeholder_unresolvable"
             )
-            and _is_ownership_identity_param(_text(entry.get("target")))
+            and (
+                _is_ownership_identity_param(_text(entry.get("target")))
+                or _text(entry.get("target"))
+                in _operation_declared_ownership_params
+            )
             for entry in binding_plan
         )
         if not _example_bindings and not _has_body_ownership:
@@ -279,7 +290,10 @@ def _rescue_binding_for_response_only_family(
                 or _text(entry.get("source_priority"))
                 == "body_placeholder_unresolvable"
             )
-            and _is_ownership_identity_param(_entry_target)
+            and (
+                _is_ownership_identity_param(_entry_target)
+                or _entry_target in _operation_declared_ownership_params
+            )
         ):
             entry["status"] = "runtime_resolvable"
             entry["source_priority"] = "ownership_identity_param"

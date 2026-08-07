@@ -666,25 +666,98 @@ def materialize_experiment_fixtures(
                 # Fall through to path-scoped resolvers when identity proof fails.
             # ── Protocol-supplied ownership identity binding ──
             # Body ownership identity params (fromUserId/toUserId/ownerId…)
-            # carry the arm actors' login-observed account identities, which
-            # the isolation/validation protocol compiler concretized into the
-            # step bodies at compile time. A list read cannot supply them (a
-            # merge's fromUserId is a user identity, not a cart row), so the
-            # binding resolves without a runtime read — the target's response
-            # to the concrete body is the observation. No value is invented
-            # here; the step bodies already hold the concrete identity.
+            # carry the arm actors' login-observed account identities. The
+            # isolation/validation protocol compiler concretizes them into
+            # step bodies at compile time when identities are known; families
+            # that keep the ``{param}`` template resolve the value here from
+            # the arm actor's runtime-observed identity (account_id) — the
+            # same material a /me read would return. A list read cannot
+            # supply them (a merge's fromUserId is a user identity, not a
+            # cart row), so no read is attempted; the target's response to
+            # the concrete body is the observation. Missing observed
+            # identities stay a visible gap, never an invented value.
             if (
                 _text(binding.get("source_priority"))
                 == "ownership_identity_param"
             ):
-                fixture_receipts.append({
-                    "node_id": node_id,
-                    "kind": kind,
-                    "status": "resolved",
-                    "target": target,
-                    "source": "ownership_identity_param",
-                    "supplied_by": "protocol_compiler",
-                })
+                _identity_value = ""
+                for _plan_step in [
+                    *_list(exp.get("control_plan")),
+                    *_list(exp.get("treatment_plan")),
+                ]:
+                    if not isinstance(_plan_step, dict):
+                        continue
+                    _step_actor = actors.get(
+                        _text(_plan_step.get("actor_ref")) or ""
+                    ) or {}
+                    _step_identity = _text(_step_actor.get("account_id"))
+                    if not _step_identity:
+                        continue
+                    _identity_value = _step_identity
+                    break
+                if _identity_value:
+                    runtime_bindings[target] = _identity_value
+                    fixture_receipts.append({
+                        "node_id": node_id,
+                        "kind": kind,
+                        "status": "resolved",
+                        "target": target,
+                        "value": _identity_value,
+                        "value_fingerprint": hashlib.sha256(
+                            _identity_value.encode("utf-8")
+                        ).hexdigest()[:12],
+                        "source": "ownership_identity_param",
+                        "supplied_by": "runtime_observed_actor_identity",
+                    })
+                    binding_materialization_receipts.append({
+                        "target": target,
+                        "source_priority": "ownership_identity_param",
+                        "status": "bound",
+                        "value": _identity_value,
+                        "identity_source": "arm_actor_account_id",
+                    })
+                else:
+                    fixture_receipts.append({
+                        "node_id": node_id,
+                        "kind": kind,
+                        "status": "blocked",
+                        "target": target,
+                        "reason_code": "BLOCKED_MISSING_BINDING",
+                        "detail": (
+                            "ownership_identity_param_no_observed_actor_identity"
+                        ),
+                    })
+                    return {
+                        "status": "terminal",
+                        "result": {
+                            "schema_version": (
+                                "qualibug.experiment-execution.v1"
+                            ),
+                            "experiment_id": eid,
+                            "obligation_id": oid,
+                            "status": "BLOCKED",
+                            "reason_code": "BLOCKED_MISSING_BINDING",
+                            "detail": (
+                                "ownership_identity_param_no_observed_actor_identity:"
+                                + target
+                            ),
+                            "elapsed_ms": int(
+                                (time.time() - started) * 1000
+                            ),
+                            "steps": steps_out,
+                            "fixture_receipts": fixture_receipts,
+                            "binding_materialization_receipts": (
+                                binding_materialization_receipts
+                            ),
+                            "finding": None,
+                            "cleanup_failures": cleanup_failures,
+                            "execution_receipt": {
+                                "status": "BLOCKED",
+                                "reason_code": "BLOCKED_MISSING_BINDING",
+                                "cleanup_failures": cleanup_failures,
+                            },
+                        },
+                    }
                 continue
             # Invented identifiers are forbidden. A synthetic_value without a
             # source-declared GET/HEAD resolver or fixture setup remains blocked.
