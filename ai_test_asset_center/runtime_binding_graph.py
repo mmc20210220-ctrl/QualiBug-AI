@@ -952,6 +952,35 @@ def build_binding_plan(
                 "previous_fingerprint": _text(existing.get("previous_fingerprint")),
             })
         else:
+            # Body ownership identity params (userId/fromUserId/ownerId/…) on
+            # a same-resource authorization write (require_same_resource:
+            # treatment reuses the control actor's resource) resolve from the
+            # arm actors' login-observed identities — never from a list read
+            # of another entity's collection. A list read (GET users/search)
+            # returns whichever row sorts first, silently re-pointing the
+            # write at an unrelated account whose business data (cart/orders)
+            # may be empty — the control arm then fails before the rule under
+            # test is observed. The materializer resolves the control arm's
+            # observed identity and both arms share it (same-resource
+            # semantics). Isolation-family cross-user writes stay on their
+            # own arm-distinct identity channel.
+            if (
+                name in _operation_declared_ownership_params
+                and name not in path_placeholders
+                and _text(obl.get("risk_family")) == "authorization"
+                and _dict(obl.get("property")).get("require_same_resource") is True
+            ):
+                plan.append({
+                    "target": name,
+                    "target_path": f"/{{{name}}}",
+                    "status": "runtime_resolvable",
+                    "source_priority": "ownership_identity_param",
+                    "body_template_paths": list(dict.fromkeys(
+                        body_placeholder_paths.get(name, [])
+                    )),
+                    "value_fingerprint": "",
+                })
+                continue
             path_resolvers = declared_runtime_read_resolvers(
                 op,
                 behavior_ir=_dict(behavior_ir),
