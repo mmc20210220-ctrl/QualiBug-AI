@@ -13,6 +13,9 @@ from typing import Any
 
 from . import _experiment_batch_executor_single_finding_mechanics as _core
 from ._experiment_batch_executor_single_finding_mechanics import *  # noqa: F401,F403
+from .experiment_batch_concurrent_scheduler import (
+    execute_selected_experiments_concurrent,
+)
 from .contract_oracles import (
     project_contract_oracle_for_outcome,
     validate_contract_oracle_receipt,
@@ -476,7 +479,12 @@ def execute_selected_experiments(
     experiment_budget: int = 100,
     validation_phase: str = "",
 ) -> dict[str, Any]:
-    batch = _original_execute_selected_experiments(
+    # Task 9: resource-domain isolated concurrency (default 8 workers). The
+    # scheduler reuses the serial core per serial group, preserves the global
+    # budget/prioritization semantics and aggregates receipts in the original
+    # selected order. ``_original_execute_selected_experiments`` remains the
+    # pure-serial path (tests / operator fallback).
+    batch = execute_selected_experiments_concurrent(
         selected,
         experiments_by_obligation=experiments_by_obligation,
         behavior_ir=behavior_ir,
