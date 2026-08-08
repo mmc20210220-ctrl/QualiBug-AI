@@ -286,6 +286,13 @@ def _explicit_family(item: dict[str, Any]) -> str:
         normalized = value.replace("-", "_").replace(" ", "_")
         if normalized in ontology:
             return normalized
+        # Product short ids that are not literal aliases of their evaluator
+        # counterpart (conservation, idempotency, temporal, privacy, ...) must
+        # normalize here -- classify_risk_family never sees them and would
+        # otherwise drop them to "unclassified".
+        mapped = _evaluator_family(normalized)
+        if mapped in ontology:
+            return mapped
         for family, spec in ontology.items():
             aliases = {str(alias or "").strip().lower() for alias in spec.get("aliases", ())}
             if value and value in aliases:
@@ -326,27 +333,85 @@ def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+# ── Product family vocabulary → evaluator match ontology normalization ─────
+#
+# Two taxonomies describe the same defect classes: the product side
+# (ai_test_asset_center.test_obligation.CANONICAL_RISK_FAMILIES short ids and
+# bug_ontology_registry family ids, surfaced here by classify_risk_family) and
+# the evaluator match ontology (_benchmark_match_ontology.json).  Some product
+# labels are NOT literal aliases of their evaluator counterpart
+# (``conservation`` vs ``money_quantity_conservation``, ``idempotency`` vs
+# ``idempotency_duplicate_submit``), so direct string comparison rejected
+# semantically identical families as a family mismatch (-0.20).  This table is
+# the declared semantic correspondence between the two taxonomies; each entry
+# is grounded in the product-side definition cited in the comment.
+_PRODUCT_FAMILY_TO_EVALUATOR: dict[str, str] = {
+    # --- test_obligation.CANONICAL_RISK_FAMILIES short ids ------------------
+    "authorization": "authorization_access_control",  # 权限与访问控制
+    "isolation": "tenant_isolation",  # 租户/组织/数据隔离 (alias tenant_isolation→isolation)
+    "state": "state_machine",  # 状态机与生命周期 (assertion kind state_transition)
+    "conservation": "money_quantity_conservation",  # 金额/数量/库存守恒
+    "idempotency": "idempotency_duplicate_submit",  # 幂等与重复提交 (kind idempotency_effect)
+    "concurrency": "concurrency_race_condition",  # 并发竞态 (kind concurrency_final_invariant)
+    "validation": "input_validation_boundary",  # 输入校验与边界
+    "visibility": "visibility_disclosure",  # 可见性与数据泄露
+    # product DSL resolves temporal as eventual_consistency
+    # (assertion_dsl_base.KIND_ALIASES["temporal"]="eventual_consistency"):
+    # the evaluator counterpart with eventual-completion semantics is the
+    # async/eventual-consistency key.
+    "temporal": "async_eventual_consistency",
+    # product "privacy" = sensitive identity fields (email/phone/status/role)
+    # must be absent/masked for unauthorized actors (account_enumeration_guard);
+    # matches the evaluator invariant sensitive_fields_must_be_masked_or_omitted.
+    "privacy": "visibility_disclosure",
+    # --- bug_ontology_registry family ids (classify_risk_family output) -----
+    "tenant_isolation": "tenant_isolation",  # identity
+    "state_machine": "state_machine",  # identity
+    "input_boundary": "input_validation_boundary",  # Input Boundary → 输入校验与边界
+    "data_integrity": "data_consistency",  # invariant_type data_consistency_invariant
+    "lifecycle": "state_machine",  # Lifecycle Integrity → 状态机与生命周期
+    "eventual_consistency": "async_eventual_consistency",  # Eventual Consistency
+    "audit_trail": "audit_traceability",  # Audit Trail → 审计与可追踪性
+    # --- other product vocabularies -----------------------------------------
+    "workflow": "workflow_approval",  # 审批流/工作流
+    "audit": "audit_traceability",  # 审计与可追踪性
+    "data_consistency": "data_consistency",  # identity
+}
+
+
+def _evaluator_family(family: str) -> str:
+    """Normalize a product-side family label onto the evaluator match ontology.
+
+    Unknown labels pass through unchanged (including "unclassified"), so the
+    normalization is a strict superset of today's behavior.
+    """
+    key = str(family or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return _PRODUCT_FAMILY_TO_EVALUATOR.get(key, str(family or ""))
+
+
 def _canonical_match_family(item: dict[str, Any]) -> str:
     """Map product and GT family labels onto the evaluator match ontology.
 
     Product ontology uses short ids such as ``concurrency``; the evaluator match
     ontology uses ``concurrency_race_condition`` with ``concurrency`` as an
     alias. Matching must resolve both sides through that alias table so a real
-    concurrency deliverable is not rejected as a family mismatch.
+    concurrency deliverable is not rejected as a family mismatch.  Product
+    labels that are not literal aliases (``conservation``,
+    ``idempotency``, ...) are normalized through ``_evaluator_family``.
     """
     explicit = _explicit_family(item)
     if explicit:
-        return explicit
+        return _evaluator_family(explicit)
     classified = classify_risk_family(item)
     if classified and classified != "unclassified":
         aliased = _explicit_family({"risk_family": classified})
         if aliased:
-            return aliased
+            return _evaluator_family(aliased)
         ontology = _benchmark_match_ontology()
         if classified in ontology:
-            return classified
-        return classified
-    return _risk_family_for_item(item)
+            return _evaluator_family(classified)
+        return _evaluator_family(classified)
+    return _evaluator_family(_risk_family_for_item(item))
 
 
 def _risk_family_for_item(item: dict[str, Any]) -> str:
