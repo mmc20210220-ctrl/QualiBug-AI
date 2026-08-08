@@ -4945,17 +4945,33 @@ def build_behavior_ir_from_knowledge_asset(
             _extracted_fields = _extract_fields_from_statement(statement)
             if _extracted_fields:
                 _rule_operands = _extracted_fields
-                # Build conservation equation terms from extracted fields
+                # Build equation terms from extracted fields. 不能为负数 /
+                # 不得为负 / 非负 statements are FIELD BOUNDARY constraints
+                # (the field value must never go below zero), not sum
+                # conservation between fields — an unchanged_sum equation
+                # would assert the wrong property (adjust changes
+                # available_qty by design) and the boundary violation would
+                # stay invisible. 非负 vocabulary is generic business
+                # language, never industry terms.
                 _terms = [
                     _text(f.get("field_id") or f.get("field"))
                     for f in _extracted_fields
                     if f.get("field") or f.get("field_id")
                 ]
                 if _terms and not _rule_equation:
-                    _rule_equation = {
-                        "operator": "unchanged_sum",
-                        "terms": _terms,
-                    }
+                    if any(
+                        token in statement
+                        for token in ("不能为负", "不得为负", "非负", "不允许为负", "不可为负")
+                    ):
+                        _rule_equation = {
+                            "operator": "non_negative",
+                            "terms": _terms,
+                        }
+                    else:
+                        _rule_equation = {
+                            "operator": "unchanged_sum",
+                            "terms": _terms,
+                        }
 
         # V1.4.0: Detect Umbrella Rules — broad statements without concrete
         # entity/field references that cannot produce testable experiments.

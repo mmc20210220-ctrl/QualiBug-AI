@@ -319,6 +319,11 @@ SUPPORTED_KINDS = {
     "field_delta",
     "cross_entity_consistency",
     "limit_constraint",
+    # Field boundary constraint (available_qty、locked_qty 均不能为负数):
+    # after the write the declared fields must not go below zero. Evaluated
+    # against the entity_state observer's after_values, same evidence channel
+    # as conservation.
+    "non_negative",
     # Response-side constraint: a source rule forbids a field in the
     # response (导出结果禁止包含 password) — the field must be absent from
     # the observed body, not merely differ between arms.
@@ -1811,6 +1816,39 @@ def evaluate_assertion(
                     raise ValueError(
                         f"unsupported_conservation_operator:{operator}"
                     )
+        elif effective_kind == "non_negative":
+            # Field boundary: after the write every declared term must be
+            # >= 0. Uses the entity_state observer's after_values, the same
+            # evidence channel as conservation — never a separate observer.
+            equation = _dict(spec.get("equation"))
+            terms = [
+                _text(item)
+                for item in _list(
+                    equation.get("terms")
+                    or equation.get("fields")
+                )
+                if _text(item)
+            ]
+            after_values = obs.get("after_values")
+            expected = {"operator": "non_negative", "terms": terms}
+            if (
+                not isinstance(after_values, dict)
+                or not after_values
+                or not terms
+            ):
+                reason_code = "NON_NEGATIVE_VALUES_MISSING"
+            elif any(
+                term not in after_values
+                or isinstance(after_values[term], bool)
+                or not isinstance(after_values[term], (int, float))
+                for term in terms
+            ):
+                reason_code = "NON_NEGATIVE_VALUES_MISSING"
+            else:
+                actual = {"after": after_values}
+                passed = all(
+                    float(after_values[term]) >= 0 for term in terms
+                )
         elif effective_kind == "idempotency_effect":
             expected_count = spec.get("expected_effect_count", 1)
             expected = {"effect_count": expected_count}

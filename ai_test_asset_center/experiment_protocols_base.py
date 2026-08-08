@@ -1270,6 +1270,101 @@ def compile_family_protocol(
             "terms": list(dict.fromkeys(_normalized_terms)),
             "operator": _text(equation.get("operator")) or "unchanged_sum",
         }
+        # ── Non-negative boundary arm ──
+        # 不能为负数 statements are FIELD BOUNDARY constraints: after the
+        # write, the declared field must not go below zero. The treatment must
+        # push the field past the boundary, which for a delta-style write
+        # (adjust delta) depends on the current runtime value — the delta
+        # needed is -(current + 1). The mutation descriptor is resolved at
+        # runtime through the entity's status read (the single-entity GET
+        # whose path binds the body's identity field).
+        if _text(equation.get("operator")) == "non_negative":
+            _bound_mutation = None
+            _bound_field = _text(_normalized_terms[0]) if _normalized_terms else ""
+            _delta_field = next(
+                (
+                    key
+                    for key in _dict(body)
+                    if re.search(r"(?:delta|change|adjust|incr|decr|diff)$", str(key), re.I)
+                ),
+                "",
+            )
+            _identity_field = next(
+                (
+                    key
+                    for key in _dict(body)
+                    if re.search(r"(?:sku|code|key|no|ref)$", str(key), re.I)
+                ),
+                "",
+            )
+            if _delta_field and _identity_field:
+                _resolvers: list[dict[str, str]] = []
+                for _op in _list(_dict(behavior_ir).get("operations")):
+                    if not isinstance(_op, dict):
+                        continue
+                    if _text(_op.get("method")).upper() not in {"GET", "HEAD"}:
+                        continue
+                    _rp = _text(_op.get("path") or _op.get("raw_path"))
+                    if re.search(r"(?:^|/)(?:health)(?:/|$)", _rp.lower()):
+                        continue
+                    if _identity_field.lower() not in _rp.lower():
+                        continue
+                    _resolvers.append({
+                        "operation_ref": _text(_op.get("id")),
+                        "method": "GET",
+                        "path": _rp,
+                    })
+                if _resolvers:
+                    _bound_mutation = {
+                        "class": "runtime_boundary_break",
+                        "json_path": f"$.{_delta_field}",
+                        "resolver_operations": _resolvers,
+                        "bound_field": _bound_field,
+                        "delta_field": _delta_field,
+                        "identity_field": _identity_field,
+                    }
+            _cons_assertion: dict[str, Any] = {
+                "kind": "non_negative",
+                "equation": equation,
+                "operands": _list(expression.get("operands")),
+                "invariant_ref": _text(property_spec.get("invariant_ref")),
+                "rule_id": _text(property_spec.get("invariant_ref")),
+            }
+            _treatment_step: dict[str, Any] = {
+                "step_id": "treatment_1",
+                "actor_ref": treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "conservation_mutation",
+                "protocol_step": "conservation_write",
+                "body": deepcopy(body),
+                "property_template": _text(property_spec.get("template")),
+                "invariant_ref": _text(property_spec.get("invariant_ref")),
+            }
+            if _bound_mutation:
+                _treatment_step["mutation"] = _bound_mutation
+            _non_neg_observers: list[dict[str, Any]] = [
+                {"observer_id": "business_effect"},
+                {"observer_id": "entity_state"},
+            ]
+            if _resolvers:
+                # The entity_state observer reads the entity back after the
+                # write (GET /api/inventory/{sku}); without a resolver the
+                # after-values evidence never materializes and the boundary
+                # assertion stays BLOCKED_MISSING_OBSERVER. Reuse the boundary
+                # arm's resolvers for the observer's identity readback.
+                _non_neg_observers[1] = {
+                    "observer_id": "entity_state",
+                    "resolver_operations": [
+                        dict(row) for row in _resolvers
+                    ],
+                }
+            return {
+                "status": "COMPILED",
+                "control_plan": [],
+                "treatment_plan": [_treatment_step],
+                "observers": _non_neg_observers,
+                "assertion": _cons_assertion,
+            }
         _cons_assertion: dict[str, Any] = {
             "kind": "conservation",
             "equation": equation,

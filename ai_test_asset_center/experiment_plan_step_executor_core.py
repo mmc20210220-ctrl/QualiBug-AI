@@ -464,6 +464,77 @@ def execute_non_barrier_plans(
                                             _identity_field
                                         ],
                                     }
+            # ── Runtime boundary-break arm ──
+            # Non-negative boundary rules (available_qty、locked_qty 均不能为
+            # 负数) constrain the field AFTER a delta-style write (adjust
+            # delta): the value needed to push the field below zero is
+            # -(current + 1), known only at runtime. Execute the entity's
+            # status read (path bound with the body's identity value) and set
+            # the delta to cross the boundary.
+            _mutation_bound = _dict(step.get("mutation"))
+            if (
+                _text(_mutation_bound.get("class")) == "runtime_boundary_break"
+                and isinstance(request_body, dict)
+                and phase == "treatment"
+            ):
+                _bound_field = _text(_mutation_bound.get("bound_field"))
+                _delta_field = _text(_mutation_bound.get("delta_field"))
+                _identity_field_b = _text(
+                    _mutation_bound.get("identity_field")
+                )
+                _bound_resolvers = _list(
+                    _mutation_bound.get("resolver_operations")
+                )
+                _identity_value = (
+                    request_body.get(_identity_field_b)
+                    if _identity_field_b
+                    else None
+                )
+                if _bound_field and _delta_field and _bound_resolvers:
+                    _current_value = None
+                    for _bound_resolver_row in _bound_resolvers:
+                        _bound_resolver = _dict(_bound_resolver_row)
+                        _bound_path = _text(_bound_resolver.get("path"))
+                        if _identity_value not in (None, ""):
+                            _bound_path = _bound_path.replace(
+                                "{" + _identity_field_b + "}",
+                                str(_identity_value),
+                            )
+                        if not _bound_path:
+                            continue
+                        _bound_resp = _run_http_step(
+                            base_url=base_url,
+                            method="GET",
+                            path=_bound_path,
+                            token=_resolve_token(actor, tokens),
+                        )
+                        if not (
+                            200
+                            <= int(_bound_resp.get("status_code") or 0)
+                            < 300
+                        ):
+                            continue
+                        for _row in _runtime_entity_candidates(
+                            _bound_resp.get("body")
+                        ):
+                            if not isinstance(_row, dict):
+                                continue
+                            _bv = _row.get(_bound_field)
+                            if _bv not in (None, ""):
+                                _current_value = _bv
+                                break
+                        if _current_value is not None:
+                            break
+                    if _current_value is not None:
+                        try:
+                            _current_num = float(_current_value)
+                        except (TypeError, ValueError):
+                            _current_num = 0.0
+                        _cross_delta = -_current_num - 1
+                        request_body = {
+                            **request_body,
+                            _delta_field: _cross_delta,
+                        }
             unresolved_body_tokens = _unresolved_body_placeholders(
                 request_body,
                 runtime_bindings,
