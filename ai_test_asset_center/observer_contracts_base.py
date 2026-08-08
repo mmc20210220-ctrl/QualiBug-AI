@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 from collections.abc import Iterable
 from typing import Any
@@ -1282,11 +1283,17 @@ def _observe_ui_browser(experiment: dict[str, Any]) -> dict[str, Any]:
     try:
         from playwright.sync_api import sync_playwright
 
-        _chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        # Operator-declared browser executable wins; otherwise Playwright
+        # auto-discovers the system browser (Chrome/Edge) or its own
+        # installed Chromium. A hardcoded install path would break on any
+        # other machine — the browser binary is a deployment fact, declared
+        # by the operator, never assumed by the product.
+        _launch_kwargs: dict[str, Any] = {"headless": True}
+        _declared_chrome = os.environ.get("QUALIBUG_CHROMIUM_EXECUTABLE") or ""
+        if _declared_chrome:
+            _launch_kwargs["executable_path"] = _declared_chrome
         with sync_playwright() as _p:
-            _browser = _p.chromium.launch(
-                headless=True, executable_path=_chrome
-            )
+            _browser = _p.chromium.launch(**_launch_kwargs)
             _page = _browser.new_page()
             _page.goto(ui_url, timeout=20000)
             _page.wait_for_timeout(1500)
