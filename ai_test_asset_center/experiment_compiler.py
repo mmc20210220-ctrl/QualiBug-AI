@@ -212,7 +212,16 @@ def _scoped_behavior_ir(
     behavior_ir: dict[str, Any],
     obligation: dict[str, Any],
 ) -> dict[str, Any]:
-    ir = deepcopy(_dict(behavior_ir))
+    # NOTE: a full `deepcopy` of the whole IR per obligation used to be done
+    # here. With the semantic-binding mechanisms (rule→interface edges,
+    # state-machine transitions, conservation equations) the IR grew large,
+    # and per-obligation full deepcopy became O(obligations × IR) — measured
+    # stuck in `copy.deepcopy` for >50 minutes in the compile phase. The
+    # compile chain only READS behavior_ir (the only product write site,
+    # obligation_compiler.py:559, runs earlier during IR building), so a
+    # top-level shallow copy plus a freshly filtered conflicts list keeps
+    # each obligation's view independent without the quadratic copy cost.
+    ir = dict(_dict(behavior_ir))
     obligation_refs = _obligation_scope_refs(obligation)
     obligation_actor_refs = _obligation_node_refs(behavior_ir, obligation, "actors")
     obligation_actor_roles = _obligation_actor_roles(behavior_ir, obligation_actor_refs)
