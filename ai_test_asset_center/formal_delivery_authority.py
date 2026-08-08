@@ -152,10 +152,22 @@ def build_formal_delivery_authority_receipt(
     mainline_run: dict[str, Any],
     findings: list[dict[str, Any]],
     obligation_attempt_ledger: dict[str, Any],
+    obligation_attempt_ledger_prevalidated: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         mainline = validate_mainline_run_contract(mainline_run)
-        ledger = validate_obligation_attempt_ledger(obligation_attempt_ledger)
+        # The caller may pass a ledger it already validated (canonical
+        # defect registry / redaction chain validates once and reuses):
+        # re-validating re-serializes the ENTIRE ledger (json.dumps of every
+        # attempt's execution evidence) — with the execution-budget fix the
+        # ledger grew large and repeated validation stalled the delivery
+        # phase for tens of minutes. Semantics unchanged: the ledger is
+        # still fully validated, exactly once per object.
+        ledger = (
+            obligation_attempt_ledger_prevalidated
+            if obligation_attempt_ledger_prevalidated is not None
+            else validate_obligation_attempt_ledger(obligation_attempt_ledger)
+        )
         formal_findings = formal_customer_deliverable_findings(
             findings,
             obligation_attempt_ledger=ledger,

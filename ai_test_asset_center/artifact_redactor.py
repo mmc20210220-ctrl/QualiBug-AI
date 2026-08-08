@@ -341,17 +341,29 @@ def _rederive_redaction_sensitive_authority(value: Any) -> Any:
             # Rebuild inputs are the resealed (post-redaction) artifacts.
             # Rebuild failure must surface loudly: a persisted envelope whose
             # authority chain cannot be re-derived is corrupt, not redacted.
+            # Validate the ledger exactly once here and reuse it across the
+            # two rebuilds: both would otherwise re-serialize the ENTIRE
+            # ledger (json.dumps of every attempt's execution evidence),
+            # which stalls the delivery phase for tens of minutes once the
+            # ledger grows large. Semantics unchanged — the ledger is still
+            # fully validated, once per object.
+            from .obligation_attempt_ledger import (
+                validate_obligation_attempt_ledger,
+            )
+
+            ledger_validated = validate_obligation_attempt_ledger(ledger)
             scope["formal_delivery_authority"] = (
                 build_formal_delivery_authority_receipt(
                     mainline_run=mainline,
                     findings=occurrences,
                     obligation_attempt_ledger=ledger,
+                    obligation_attempt_ledger_prevalidated=ledger_validated,
                 )
             )
             scope["canonical_defect_registry"] = build_canonical_defect_registry(
                 mainline_run=mainline,
                 deliverable_occurrences=occurrences,
-                obligation_attempt_ledger=ledger,
+                obligation_attempt_ledger=ledger_validated,
             )
         return {
             key: _rederive_redaction_sensitive_authority(item)

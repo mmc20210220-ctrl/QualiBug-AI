@@ -776,6 +776,7 @@ def build_canonical_defect_registry(
             mainline_run=mainline,
             findings=occurrences,
             obligation_attempt_ledger=ledger,
+            obligation_attempt_ledger_prevalidated=ledger,
         )
     except (
         MainlineContractError,
