@@ -1526,7 +1526,12 @@ def compile_obligations_from_behavior_ir(
             if family == "idempotency":
                 property_spec.update({
                     "compare": "business_effect_not_http_status",
-                    "expected_effect_count": 1,
+                    # Replay-window contract: the repeated input must add
+                    # zero NEW business effect (the observer measures the
+                    # treatment window). Mirrors the assertion contract so
+                    # the evaluator's property fallback can never resurrect
+                    # the old aggregate-window expectation.
+                    "expected_effect_count": 0,
                 })
             elif family == "concurrency":
                 property_spec["insufficient_signal"] = "dual_2xx_alone"

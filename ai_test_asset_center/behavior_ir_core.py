@@ -3265,11 +3265,71 @@ _CONSTRAINT_TOKEN_FIELD_GROUPS = (
         2,
     ),
     (("次数", "限制", "限额"), ("limit", "count", "usage", "uses"), 2),
+    # Consumption-quota vocabulary: 限用/限领/限兑 state the quota without
+    # the 次数 noun (每个用户限用1次), so the channel must resolve them to
+    # the entity's usage-limit fields the same way 次数 resolves 次数规则.
+    (("限用", "限领", "限兑"), ("limit", "usage", "use", "claim", "redeem"), 2),
     (("类目", "分类", "范围"), ("categor", "scope", "class", "type"), 2),
     (("封顶", "上限", "最大"), ("max", "cap", "ceiling"), 2),
     (("最低", "门槛", "最小"), ("min", "minimum", "floor"), 2),
     (("金额",), ("amount", "price", "total", "fee", "cost"), 1),
 )
+# Usage-limit (consumption-quota) vocabulary. A rule constraining HOW MANY
+# TIMES an object may be consumed (使用次数/领取次数/兑换次数/核销次数 +
+# 不能超过/限制/上限) states a quota: the violation is a REPLAYED
+# consumption — the same input applied again must not apply a new effect.
+# This is distinct from an eligibility contract at a decision endpoint
+# (validate can never violate a quota; only the consumption operation can).
+# All terms are industry-neutral business language, never industry terms.
+_USAGE_LIMIT_TERMS = (
+    "使用次数", "领取次数", "兑换次数", "核销次数", "领用次数",
+    "限用", "限领", "限兑", "只能用一次", "只能使用一次", "限使用",
+    "次数限制", "次数上限",
+)
+_USAGE_LIMIT_RESTRICTORS = (
+    "不能超过", "不得超过", "不超过", "限制", "上限", "最多", "仅限",
+    "只能", "限用", "限领", "限兑",
+)
+# Consumption operations: the operations that APPLY the object's effect (as
+# opposed to read-only eligibility checks). The idempotency protocol needs a
+# write operation to replay; binding a quota rule to validate would compile
+# a replay on a surface that can never consume.
+_CONSUMPTION_OP_TOKENS = (
+    "use", "consume", "redeem", "claim", "apply",
+    "核销", "使用", "领取", "兑换",
+)
+# Consumption-action families: the rule's own action vocabulary (领取/限领
+# → claim, 兑换 → redeem, 使用/核销/限用/只能用 → use) narrows the quota
+# binding to the consumption family the statement names. Without the
+# narrowing a 限用 quota would also bind to the claim surface and a replay
+# there would report a legitimate claim-then-claim as a defect. Bare
+# single-character verbs are deliberately absent (用户 contains 用, 领取
+# contains 领) — only explicit quota phrases match.
+_USAGE_ACTION_FAMILIES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("领取", "领用", "限领"), ("claim", "领取", "领")),
+    (("兑换", "限兑"), ("redeem", "兑换")),
+    (("使用", "核销", "限用", "只能用"), ("use", "consume", "核销", "使用", "apply")),
+)
+
+
+def _op_text_has_token(text: str, token: str) -> bool:
+    """Token containment on an operation surface string (path + id).
+
+    ASCII tokens match as whole words (use matches /coupons/use but not
+    /users); CJK tokens match as plain substrings (使用 inside a path
+    segment). The model's operation ids are content-addressed and carry no
+    vocabulary, so the PATH is the op's readable identity.
+    """
+    if re.search(r"^[a-z]+$", token):
+        return bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])",
+                text.casefold(),
+            )
+        )
+    return token in text
+
+
 _SUBJECT_ALIAS_SUBSTRING_FLOOR = 2
 
 
@@ -5482,6 +5542,73 @@ def build_behavior_ir_from_knowledge_asset(
         }:
             _rule_kind = "validation"
             _record_fallback("SUBJECT_DECISION_OP_REKIND", 1)
+        # ── Usage-limit rekind (consumption-quota rules) ──
+        # A rule constraining how many times an object may be consumed
+        # (使用次数/限用/只能使用一次 + 不能超过/限制/上限) states a QUOTA:
+        # the violation is a REPLAYED consumption — the same input applied
+        # again must not apply a new business effect. The decision-op
+        # rekind above would bind it to validate (a read-only eligibility
+        # surface that can never violate a quota); the quota rekind narrows
+        # the surface to the CONSUMPTION operations and promotes the family
+        # to idempotency so the replay protocol (control = consume once,
+        # treatment = consume again) exercises the quota. Consumption ops
+        # are a subset of the channel's decision ops, so the rekind fires
+        # only when the subject channel actually resolved a consumption
+        # surface; the same op filter narrows the binding below.
+        _has_usage_limit_signal = bool(
+            any(_term in statement for _term in _USAGE_LIMIT_TERMS)
+            and any(
+                _restrictor in statement
+                for _restrictor in _USAGE_LIMIT_RESTRICTORS
+            )
+        )
+        _usage_limit_op_ids: list[str] = []
+        if _has_usage_limit_signal:
+            # Narrow to the consumption family the statement names: 领取/领
+            # → claim ops, 兑换 → redeem ops, 使用/核销/用 → use/consume
+            # ops. Consumption ops are a subset of the channel's decision
+            # ops, so the binding below never leaves the resolved surface.
+            # Op identity is the PATH: the model's operation ids are
+            # content-addressed and carry no vocabulary.
+            _op_path_by_id = {
+                _text(row.get("id")): _text(row.get("path") or row.get("raw_path"))
+                for row in _list(model.get("operations"))
+                if isinstance(row, dict) and _text(row.get("id"))
+            }
+            _matched_families = [
+                family_tokens
+                for family_terms, family_tokens in _USAGE_ACTION_FAMILIES
+                if any(_ft in statement for _ft in family_terms)
+            ]
+            _usage_limit_op_ids = [
+                _oid
+                for _oid in _subject_decision_ops
+                if any(
+                    _op_text_has_token(
+                        f" {_op_path_by_id.get(_oid, '')} {_oid} ",
+                        _token,
+                    )
+                    for _token in _CONSUMPTION_OP_TOKENS
+                )
+                and (
+                    not _matched_families
+                    or any(
+                        _op_text_has_token(
+                            f" {_op_path_by_id.get(_oid, '')} {_oid} ",
+                            _ftok,
+                        )
+                        for _tokens in _matched_families
+                        for _ftok in _tokens
+                    )
+                )
+            ]
+        if (
+            _has_usage_limit_signal
+            and _usage_limit_op_ids
+            and _rule_kind != "idempotency"
+        ):
+            _rule_kind = "idempotency"
+            _record_fallback("USAGE_LIMIT_CONSUMPTION_REKIND", 1)
         # Entity-scoped contract operands: the resolved entity's own fields
         # matched by the rule's constraint vocabulary (状态→status, 有效期→
         # expires_at, 次数→user_limit/global_limit, 类目→category_scope,
@@ -5505,12 +5632,26 @@ def build_behavior_ir_from_knowledge_asset(
         # input must apply its effect exactly once), so the obligation
         # compiler selects the idempotent_effect_cardinality protocol.
         if _rule_kind == "idempotency":
-            if not _rule_operands:
+            # The structured effect-cardinality operand is the protocol
+            # contract and must be present even when the channel attached
+            # quota field operands (user_limit/global_limit) — those name
+            # the constrained dimension, this names the replay contract.
+            if not any(
+                isinstance(_op, dict)
+                and _text(_op.get("operator")) == "business_effect_count"
+                for _op in _rule_operands
+            ):
                 _rule_operands = [
                     {
                         "operator": "business_effect_count",
-                        "expected_effect_count": 1,
-                    }
+                        # Replay-window contract: the repeated input must add
+                        # zero NEW business effect. The idempotency observer
+                        # measures the treatment (replay) window, so the
+                        # structured cardinality is 0 — an enforced quota
+                        # (replay refused) and a no-op replay both observe 0.
+                        "expected_effect_count": 0,
+                    },
+                    *_rule_operands,
                 ]
             _expression = {
                 "kind": _rule_kind,
@@ -5761,6 +5902,17 @@ def build_behavior_ir_from_knowledge_asset(
                             # channel rekinded them to validation (otherwise the
                             # kind gate above keeps them out).
                             _channel_ops = list(dict.fromkeys(_subject_channel_ops))
+                            if _has_usage_limit_signal:
+                                # A quota rule governs only the CONSUMPTION
+                                # operations — binding it to the full channel
+                                # surface (validate/check/… read-only
+                                # eligibility endpoints) would compile replay
+                                # obligations on surfaces that never consume.
+                                _channel_ops = [
+                                    _oid
+                                    for _oid in _channel_ops
+                                    if _oid in _usage_limit_op_ids
+                                ]
                             if "用户端" in statement:
                                 # User-facing rules (用户端不展示下架商品…) never
                                 # govern management surfaces: the admin console

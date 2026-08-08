@@ -1091,18 +1091,30 @@ def compile_experiment_for_obligation(
         )
 
         if actor_plan is not None and actor_plan.candidates:
-            # Plan exists — use the top candidate for compilation.
-            # For EXPLICIT_PERMISSION mode this is the only candidate.
-            # For PERMISSION_EXPLORATION mode the executor will try
-            # additional candidates if the first one fails.
-            required_actors = [actor_plan.candidates[0].actor_id]
+            # A candidate that is not an IR actor cannot be executed or
+            # credential-bound: the exploration synthesizes an anonymous
+            # candidate for operations whose (possibly builder-defaulted)
+            # security is an empty list. Prefer real runtime-bound actors —
+            # a replay/quota experiment must run as the governed identity,
+            # never as a synthetic placeholder. The synthetic candidate
+            # remains the fallback only when no IR actor exists at all.
+            _plan_candidates = [
+                _text(c.actor_id)
+                for c in actor_plan.candidates
+                if _text(c.actor_id) in actors
+            ]
+            if not _plan_candidates:
+                _plan_candidates = [
+                    _text(c.actor_id) for c in actor_plan.candidates
+                ]
+            required_actors = [_plan_candidates[0]]
             prop = {
                 **prop,
                 "actor_ref": required_actors[0],
                 # Attach the exploration plan so the executor can iterate
                 "_actor_exploration_plan": {
                     "mode": actor_plan.mode.value,
-                    "candidate_ids": [c.actor_id for c in actor_plan.candidates],
+                    "candidate_ids": _plan_candidates,
                     "authorization_oracle_enabled": actor_plan.authorization_oracle_enabled,
                     "max_attempts": actor_plan.max_attempts,
                     "reason": actor_plan.reason,
@@ -2414,11 +2426,31 @@ def compile_experiment_for_obligation(
             binding_plan.append(row)
             existing_targets.add(target)
 
+    # Replay protocols (idempotency) are driven by a single operator
+    # identity: the same actor issues the initial write and the replay. When
+    # no actor is declared or relation-bound, any runtime-bound actor can
+    # drive the replay — leaving the obligation actorless would block every
+    # quota rule (使用次数/限用) on the compile chain before execution.
+    _runtime_actor_fallback = (
+        next(
+            (
+                _text(a.get("id"))
+                for a in _list(ir.get("actors"))
+                if isinstance(a, dict)
+                and a.get("runtime_bound") is True
+                and _text(a.get("id"))
+            ),
+            "",
+        )
+        if family == "idempotency"
+        else ""
+    )
     control_actor = _text(
         prop.get("control_actor_ref")
         or prop.get("owner_actor_ref")
         or prop.get("actor_ref")
         or (required_actors[0] if required_actors else "")
+        or _runtime_actor_fallback
     )
     treatment_actor = _text(
         prop.get("treatment_actor_ref")
@@ -2991,6 +3023,16 @@ def compile_experiment_for_obligation(
         "require_control": needs_control,
         "rule_id": _text(_frb.get("rule_id") or prop.get("invariant_ref")),
         "invariant_ref": _text(prop.get("invariant_ref")),
+        **(
+            # Replay-window semantics: the idempotency observer measures the
+            # TREATMENT window (the repeated write must add zero new
+            # business effect). The evaluator default of 1 would report an
+            # enforced quota (replay refused) or a no-op replay as a
+            # violation — the explicit 0 is the assertion contract.
+            {"expected_effect_count": 0}
+            if family == "idempotency"
+            else {}
+        ),
         **{
             key: value
             for key, value in protocol_assertion.items()
@@ -3050,12 +3092,16 @@ def compile_experiment_for_obligation(
             "require_control": needs_control,
             "_secondary_assertion": True,
         })
-    # For idempotency: add effect-count assertion
+    # For idempotency: add effect-count assertion. The expected count is 0 —
+    # the observer measures the replay (treatment) window, and a correct
+    # target adds zero new business effect on the repeated write (an enforced
+    # quota refuses the replay; a no-op replay changes nothing). A buggy
+    # target that applies the effect again yields treatment-window effect 1.
     if family == "idempotency":
         assertions.append({
             "assertion_id": "assert_idempotency_effect",
             "kind": "idempotency_effect",
-            "expected_effect_count": 1,
+            "expected_effect_count": 0,
             "template": _text(prop.get("template")),
             "expected_from": "source_property",
             "property": prop,

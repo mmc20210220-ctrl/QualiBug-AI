@@ -1438,6 +1438,7 @@ def _observe_business_effect(
     execution_steps: list[dict[str, Any]],
     *,
     aggregate_control_treatment: bool = False,
+    require_treatment_window: bool = False,
 ) -> dict[str, Any]:
     write_steps = [
         step
@@ -1476,6 +1477,20 @@ def _observe_business_effect(
             continue
         phase_windows[phase] = window
         evidence[f"{phase}_effect_count"] = window["effect_count"]
+
+    if require_treatment_window and "treatment" not in phase_windows:
+        # Replay-window semantics (idempotency/effect-cardinality): the
+        # property is measured on the TREATMENT window — the replayed input
+        # must add zero new effect. A missing treatment phase means the
+        # replay never executed; falling back to the control window would
+        # report the control's own effect as a violation. Not observing the
+        # replay is not an observation of a violation.
+        return _receipt(
+            observer_id="business_effect",
+            status="INDETERMINATE",
+            reason_code="BUSINESS_EFFECT_TREATMENT_WINDOW_MISSING",
+            evidence=evidence,
+        )
 
     combined_window: dict[str, Any] = {}
     if aggregate_control_treatment:
@@ -2398,13 +2413,22 @@ def observe_experiment_requirements(
     ]
     business_effect_receipt: dict[str, Any] = {}
     if any(_text(observer.get("observer_id")) == "business_effect" for observer in observer_rows):
+        # Idempotency/effect-cardinality assertions measure the REPLAY
+        # window, not the aggregate: a correct target must add zero new
+        # effect on the repeated write, whether the replay is accepted as a
+        # no-op (treatment window 0) or refused outright by an enforced
+        # quota (write_not_accepted window 0). The aggregate window instead
+        # collapses to 0 on a refused replay and would report an enforced
+        # quota as a violation. The treatment window is required — a replay
+        # that never executed is INDETERMINATE, never a violation.
         business_effect_receipt = _observe_business_effect(
             [
                 step
                 for step in _list(evidence.get("execution_steps"))
                 if isinstance(step, dict)
             ],
-            aggregate_control_treatment=(
+            aggregate_control_treatment=False,
+            require_treatment_window=(
                 _text(assertion.get("kind") or assertion.get("type"))
                 in {"idempotency", "idempotency_effect"}
             ),

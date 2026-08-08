@@ -1167,7 +1167,14 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
         if receipt["observer_id"] == "business_effect"
     )
     assert effect["status"] == "OBSERVED"
-    assert effect["evidence"]["effect_count"] == 2
+    # Replay-window semantics: the idempotency observation measures the
+    # TREATMENT window — the replayed write's NEW effect. The control
+    # created one row; the buggy replay created a second, so the treatment
+    # window observes exactly one new effect (the defect evidence) while the
+    # control window's own effect stays visible in control_effect_count.
+    assert effect["evidence"]["control_effect_count"] == 1
+    assert effect["evidence"]["treatment_effect_count"] == 1
+    assert effect["evidence"]["effect_count"] == 1
     assert result["finding"] is None
 
 
