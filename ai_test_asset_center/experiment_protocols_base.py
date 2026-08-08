@@ -191,6 +191,21 @@ def _semantic_invalid_value(
 
     # String fields with semantic constraints
     if declared_type == "string":
+        # ── Query-safety injection probe ──
+        # A rule declaring query-safety vocabulary (关键词必须参数化查询 /
+        # 不得拼接 SQL / parameterized / injection) demands a probe that
+        # escapes the string literal when the backend concatenates raw input
+        # into a query — a generic OWASP-style probe, industry-neutral, never
+        # benchmark data. Gated on the rule's own vocabulary so ordinary
+        # string fields are never mutated into probes.
+        if any(
+            token in combined
+            for token in (
+                "参数化", "拼接", "注入", "sql", "parameterized",
+                "injection", "concatenat",
+            )
+        ):
+            return "' OR '1'='1", "semantic:sql_injection_probe"
         # A restrictive rule naming an enum value as the ONLY allowed value
         # (对外注册只能创建 buyer) forbids every other declared enum value.
         # The treatment is another enum value — the target must reject it or
