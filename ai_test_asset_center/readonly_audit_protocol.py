@@ -32,8 +32,13 @@ from typing import Any
 
 PROTOCOL_TEMPLATE = "readonly_audit_validation"
 ASSERTION_KIND = "readonly_uniqueness_audit"
+ASSERTION_KIND_NUMERIC = "readonly_numeric_audit"
 RISK_FAMILY = "validation"
 MIN_AUDIT_ROWS = 2
+_NUMERIC_BOUNDARY_KINDS = frozenset({
+    "numeric_boundary", "non_negative", "positive", "numeric_non_negative",
+})
+_NUMERIC_OPERATORS = frozenset({"non_negative", "positive"})
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -220,6 +225,163 @@ def _evaluate_readonly_uniqueness_audit(envelope: dict[str, Any]) -> dict[str, A
     }
 
 
+def _numeric_boundary_from_expression(expression: dict[str, Any]) -> tuple[str, str, str]:
+    """Extract (qualifier, column, operator) from a numeric boundary expression.
+
+    The planner emits operands carrying ``entity_ref`` + ``field``. Only the
+    first field operand is used; an expression without one yields empty
+    strings so the protocol compiler blocks visibly instead of guessing.
+    """
+    expr = _dict(expression)
+    operator = _text(expr.get("operator") or expr.get("boundary_operator")).lower()
+    if operator in _NUMERIC_OPERATORS:
+        resolved_operator = operator
+    elif _text(expr.get("kind")).lower() in _NUMERIC_BOUNDARY_KINDS:
+        resolved_operator = (
+            "positive"
+            if _text(expr.get("kind")).lower() == "positive"
+            else "non_negative"
+        )
+    else:
+        resolved_operator = ""
+    for operand in _list(expr.get("operands")):
+        if not isinstance(operand, dict):
+            continue
+        field = _text(
+            operand.get("field") or operand.get("field_ref") or operand.get("field_id")
+        )
+        if not field:
+            continue
+        qualifier = _text(operand.get("entity_ref") or operand.get("entity"))
+        return qualifier, field, resolved_operator
+    return "", "", resolved_operator
+
+
+def _numeric_value(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _evaluate_readonly_numeric_audit(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Tri-state evaluator for read-only numeric boundary audits.
+
+    Reads the executed GET response from the shared observation slots and
+    checks every observed row's field against the declared boundary
+    (non_negative: value >= 0; positive: value > 0). A row outside the
+    boundary is a violation — the schema omits the guard the invariant
+    asserts. Missing evidence, non-numeric values or too few rows seal
+    INDETERMINATE, never PASS.
+    """
+    spec = _dict(envelope.get("spec"))
+    obs = _dict(envelope.get("observations"))
+    column = _text(spec.get("field"))
+    qualifier = _text(spec.get("field_qualifier"))
+    operator = _text(spec.get("operator") or "non_negative").lower()
+    expected = {
+        "property": "numeric_boundary",
+        "field": column,
+        "field_qualifier": qualifier,
+        "operator": operator,
+        "min_observed_rows": MIN_AUDIT_ROWS,
+    }
+
+    status_code = obs.get("status_code")
+    if not isinstance(status_code, int) or status_code <= 0:
+        return {
+            "passed": None,
+            "reason_code": "AUDIT_READ_EVIDENCE_MISSING",
+            "expected": expected,
+            "actual": {"status_code": status_code},
+        }
+    if not (200 <= status_code < 300):
+        return {
+            "passed": None,
+            "reason_code": "AUDIT_READ_NOT_ACCEPTED",
+            "expected": expected,
+            "actual": {"status_code": status_code},
+        }
+    if not column or operator not in _NUMERIC_OPERATORS:
+        return {
+            "passed": None,
+            "reason_code": "AUDIT_NUMERIC_SPEC_INCOMPLETE",
+            "expected": expected,
+            "actual": {"column": column, "operator": operator},
+        }
+    if "body" not in obs or obs.get("body") is None:
+        return {
+            "passed": None,
+            "reason_code": "AUDIT_BODY_EVIDENCE_MISSING",
+            "expected": expected,
+            "actual": {"status_code": status_code},
+        }
+
+    rows = _extract_collection(obs.get("body"), qualifier, column)
+    if rows is None:
+        return {
+            "passed": None,
+            "reason_code": "AUDIT_COLLECTION_NOT_OBSERVED",
+            "expected": expected,
+            "actual": {"status_code": status_code},
+        }
+    if len(rows) < MIN_AUDIT_ROWS:
+        return {
+            "passed": None,
+            "reason_code": "AUDIT_COLLECTION_TOO_SMALL",
+            "expected": expected,
+            "actual": {"observed_rows": len(rows)},
+        }
+    missing_field = sum(1 for row in rows if column not in row)
+    if missing_field:
+        return {
+            "passed": None,
+            "reason_code": "AUDIT_FIELD_NOT_OBSERVED",
+            "expected": expected,
+            "actual": {"observed_rows": len(rows), "rows_missing_field": missing_field},
+        }
+
+    violations: list[dict[str, Any]] = []
+    non_numeric = 0
+    for row in rows:
+        value = _numeric_value(row.get(column))
+        if value is None:
+            non_numeric += 1
+            continue
+        violated = value < 0 if operator == "non_negative" else value <= 0
+        if violated:
+            violations.append({"field_value": value})
+    if non_numeric and not violations:
+        return {
+            "passed": None,
+            "reason_code": "AUDIT_FIELD_NOT_NUMERIC",
+            "expected": expected,
+            "actual": {"observed_rows": len(rows), "non_numeric_rows": non_numeric},
+        }
+    if violations:
+        return {
+            "passed": False,
+            "reason_code": "NUMERIC_BOUNDARY_VIOLATION_OBSERVED",
+            "expected": expected,
+            "actual": {
+                "observed_rows": len(rows),
+                "violating_rows": violations[:10],
+            },
+        }
+    return {
+        "passed": True,
+        "reason_code": "",
+        "expected": expected,
+        "actual": {"observed_rows": len(rows)},
+    }
+
+
 def _compile_readonly_validation_audit(envelope: dict[str, Any]) -> dict[str, Any]:
     """Protocol compiler for ``(validation, readonly_audit_validation)``.
 
@@ -251,38 +413,71 @@ def _compile_readonly_validation_audit(envelope: dict[str, Any]) -> dict[str, An
     expression = _dict(property_spec.get("expression"))
     expression_kind = _text(expression.get("kind")).lower()
     operator = _text(expression.get("operator")).lower()
-    if expression_kind != "validation_uniqueness" and operator != "unique":
-        # The audit layer currently judges uniqueness only. Anything else must
-        # stay a visible gap, not a silently repurposed write protocol.
+    if expression_kind == "validation_uniqueness" or operator == "unique":
+        qualifier, column = uniqueness_field_from_expression(expression)
+        if not column:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": "readonly_audit_field_ref_missing",
+            }
         return {
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_UNSUPPORTED_AUDIT_EXPRESSION",
-            "detail": f"readonly_audit_expression:{expression_kind or operator or 'unknown'}",
+            "status": "COMPILED",
+            "control_plan": [],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": actor,
+                "operation_ref": operation_ref,
+                "intent": "readonly_state_audit",
+                "protocol_step": "readonly_audit_read",
+                "property_template": PROTOCOL_TEMPLATE,
+            }],
+            "assertion": {
+                "kind": ASSERTION_KIND,
+                "field": column,
+                "field_qualifier": qualifier,
+                "invariant_ref": _text(property_spec.get("invariant_ref")),
+            },
         }
-    qualifier, column = uniqueness_field_from_expression(expression)
-    if not column:
+    if (
+        expression_kind in _NUMERIC_BOUNDARY_KINDS
+        or operator in _NUMERIC_OPERATORS
+    ):
+        qualifier, column, boundary_operator = (
+            _numeric_boundary_from_expression(expression)
+        )
+        if not column or boundary_operator not in _NUMERIC_OPERATORS:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": "readonly_numeric_field_ref_missing",
+            }
         return {
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_MISSING_BINDING",
-            "detail": "readonly_audit_field_ref_missing",
+            "status": "COMPILED",
+            "control_plan": [],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": actor,
+                "operation_ref": operation_ref,
+                "intent": "readonly_numeric_audit",
+                "protocol_step": "readonly_audit_read",
+                "property_template": PROTOCOL_TEMPLATE,
+            }],
+            "assertion": {
+                "kind": ASSERTION_KIND_NUMERIC,
+                "field": column,
+                "field_qualifier": qualifier,
+                "operator": boundary_operator,
+                "invariant_ref": _text(property_spec.get("invariant_ref")),
+            },
         }
+    # The audit layer currently judges uniqueness and numeric boundaries only.
+    # Anything else must stay a visible gap, not a silently repurposed write
+    # protocol.
     return {
-        "status": "COMPILED",
-        "control_plan": [],
-        "treatment_plan": [{
-            "step_id": "treatment_1",
-            "actor_ref": actor,
-            "operation_ref": operation_ref,
-            "intent": "readonly_state_audit",
-            "protocol_step": "readonly_audit_read",
-            "property_template": PROTOCOL_TEMPLATE,
-        }],
-        "assertion": {
-            "kind": ASSERTION_KIND,
-            "field": column,
-            "field_qualifier": qualifier,
-            "invariant_ref": _text(property_spec.get("invariant_ref")),
-        },
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_UNSUPPORTED_AUDIT_EXPRESSION",
+        "detail": f"readonly_audit_expression:{expression_kind or operator or 'unknown'}",
     }
 
 
@@ -319,6 +514,15 @@ def install_readonly_audit_protocol() -> dict[str, str]:
         )
     else:
         installed["assertion"] = ASSERTION_KIND
+
+    if ASSERTION_KIND_NUMERIC not in set(registered_assertion_kinds()):
+        installed["assertion_numeric"] = register_assertion_kind(
+            ASSERTION_KIND_NUMERIC,
+            evaluator=_evaluate_readonly_numeric_audit,
+            required_evidence_keys=("status_code", "body"),
+        )
+    else:
+        installed["assertion_numeric"] = ASSERTION_KIND_NUMERIC
 
     if resolve_family_protocol(RISK_FAMILY, PROTOCOL_TEMPLATE) is None:
         installed["protocol"] = register_family_protocol(

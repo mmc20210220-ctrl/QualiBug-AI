@@ -105,6 +105,25 @@ def build_runtime_source_knowledge_overlay(
         [row for _, parsed in parsed_rows for row in parsed.get("rules") or []],
         "rule_id",
     )
+    # ── Schema-declared constraint dimension ──
+    # The database schema declares money/quantity/idempotency columns and the
+    # guards (or their absence) on them. Industry-universal invariants derived
+    # from that DDL join the rule library so the DB surface becomes a first-
+    # class business dimension instead of a structural unreachable. Derivation
+    # is deterministic and DDL-only; a guarded column produces no rule.
+    from ..database_schema_invariants import derive_database_constraint_rules
+
+    schema_rules: list[dict[str, Any]] = []
+    for source, parsed in parsed_rows:
+        if str(source.get("source_type") or "") != "database_schema":
+            continue
+        schema_rules.extend(
+            derive_database_constraint_rules(
+                parsed.get("tables") or [],
+                str(source.get("source_id") or "database_schema"),
+            )
+        )
+    rules = _dedupe_by_id([*rules, *schema_rules], "rule_id")
     exact_edges = _authoritative_rule_to_interface_edges(rules, interfaces)
     exact_keys = {
         (str(edge.get("from")), str(edge.get("to")), str(edge.get("relation")))

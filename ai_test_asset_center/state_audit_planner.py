@@ -91,6 +91,13 @@ def _extract_entity_type(invariant: dict[str, Any]) -> str:
         entity = _text(operand.get("entity")).lower()
         if entity in _ENTITY_KEYWORDS:
             return _ENTITY_KEYWORDS[entity]
+        # Table names routinely embed the entity noun (order_items,
+        # inventory_locks, cart_lines). Match a keyword against the table name
+        # token-by-token so cart_items -> cart, inventory_locks -> inventory —
+        # generic relational naming, never industry vocabulary.
+        for token in re.split(r"[^a-z\u4e00-\u9fff]+", entity):
+            if token in _ENTITY_KEYWORDS:
+                return _ENTITY_KEYWORDS[token]
 
     # Check description text
     desc = _text(invariant.get("description") or expr.get("description")).lower()
@@ -129,6 +136,16 @@ def _classify_invariant_family(invariant: dict[str, Any]) -> str:
     desc = _text(invariant.get("description") or expr.get("description")).lower()
     combined = f"{kind} {desc}"
 
+    # Response-evaluable audit kinds stay in the validation family: a boundary
+    # (must not go below zero) or uniqueness constraint is a property a read
+    # collection can be checked against. Classifying them as conservation
+    # would route them into the write-causal family, which the audit planner
+    # (correctly) refuses for read-only verification.
+    if kind in {"numeric_boundary", "validation_uniqueness"} or (
+        kind == "business_rule"
+        and _text(expr.get("operator")).lower() in {"non_negative", "positive", "unique"}
+    ):
+        return "validation"
     if any(kw in combined for kw in _STATE_KEYWORDS):
         return "state"
     if any(kw in combined for kw in _AMOUNT_KEYWORDS):
@@ -297,16 +314,20 @@ def build_readonly_state_audit_obligations(
         # Build the audit obligation
         expr = _dict(inv.get("expression"))
 
-        # A uniqueness statement is only evidence-able against a collection:
-        # bind the list endpoint when one exists, not the detail endpoint.
+        # A uniqueness or boundary statement is only evidence-able against a
+        # collection: bind the list endpoint when one exists, not the detail
+        # endpoint.
         _is_uniqueness = (
             _text(expr.get("kind")).lower() == "validation_uniqueness"
             or _text(expr.get("operator")).lower() == "unique"
         )
+        _needs_collection = _is_uniqueness or (
+            _text(expr.get("kind")).lower() == "numeric_boundary"
+        )
 
         # Find GET endpoint for this entity
         get_op = _find_get_endpoint_for_entity(
-            entity, operations, prefer_list=_is_uniqueness
+            entity, operations, prefer_list=_needs_collection
         )
         if not get_op:
             continue
