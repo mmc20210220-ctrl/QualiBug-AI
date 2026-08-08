@@ -88,6 +88,149 @@ def _parse_runtime_datetime(value: str) -> datetime | None:
     return parsed
 
 
+# Public entity-state names: a state inside this set is public by its OWN
+# English meaning (ON_SALE/ACTIVE/ENABLED/PUBLISHED/…); anything else
+# (DRAFT/OFF_SALE/DISABLED/EXPIRED/DELETED/…) is non-public. Literal
+# semantics — generic status vocabulary, never an industry translation table.
+_PUBLIC_ENTITY_STATUS_VALUES = frozenset({
+    "on_sale", "active", "enabled", "published", "available",
+    "open", "normal", "listed", "in_stock", "activated",
+})
+
+
+def _entity_row_identity(row: dict[str, Any], identity_field: str) -> Any:
+    """The row's own identity slot.
+
+    The mutation's identity field when present, else any id-named key
+    (id/no/code/sku/key/ref — generic relational naming). A list read's rows
+    carry their collection primary key (id), not the request body's parameter
+    name (orderId) — both are the same entity.
+    """
+    if row.get(identity_field) not in (None, ""):
+        return row.get(identity_field)
+    for key, value in row.items():
+        if value in (None, ""):
+            continue
+        if re.search(r"(?:^|_)(?:id|no|code|sku|key|ref)$", str(key), re.IGNORECASE):
+            return value
+    return None
+
+
+def _entity_row_status_violating(
+    row: Any,
+    *,
+    status_field: str,
+    identity_field: str,
+) -> bool:
+    return (
+        isinstance(row, dict)
+        and str(row.get(status_field) or "").lower()
+        not in _PUBLIC_ENTITY_STATUS_VALUES
+        and _entity_row_identity(row, identity_field) is not None
+    )
+
+
+def _entity_row_expiry_violating(row: Any, *, identity_field: str) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if _entity_row_identity(row, identity_field) is None:
+        return False
+    for key, value in row.items():
+        if not re.search(
+            r"(?:expire|expiry|valid_until|end_date|end_at|valid_to|valid_till|到期|失效)",
+            str(key),
+            re.IGNORECASE,
+        ):
+            continue
+        try:
+            parsed = _parse_runtime_datetime(_text(value))
+        except Exception:
+            continue
+        if parsed is not None and parsed < _datetime_now_utc():
+            return True
+    return False
+
+
+def _resolve_runtime_violating_row_identity(
+    mutation: dict[str, Any],
+    *,
+    base_url: str,
+    actor: dict[str, Any],
+    tokens: dict[str, Any],
+) -> Any:
+    """Resolve a non-public-state entity identity for a runtime mutation arm.
+
+    The mutation descriptor names the status-carrying collection read; the
+    resolver executes it with the step's own credentials and returns the
+    identity of a row whose state is non-public (or whose validity date has
+    passed, per the rule's own violation dimension). Returns None when no
+    violating row exists — callers fail closed (the treatment must never fall
+    back to the control input).
+    """
+    if not isinstance(mutation, dict):
+        return None
+    identity_field = _text(mutation.get("identity_field"))
+    status_field = _text(mutation.get("status_field") or "status")
+    resolvers = _list(mutation.get("resolver_operations"))
+    if not identity_field or not resolvers:
+        return None
+    resolver = _dict(resolvers[0])
+    resolver_path = _text(resolver.get("path"))
+    if not resolver_path:
+        return None
+    list_resp = _run_http_step(
+        base_url=base_url,
+        method="GET",
+        path=resolver_path,
+        token=_resolve_token(actor, tokens),
+    )
+    if not (200 <= int(list_resp.get("status_code") or 0) < 300):
+        return None
+    violation_mode = _text(mutation.get("violation_mode") or "any").lower()
+    candidates = [
+        row
+        for row in _runtime_entity_candidates(list_resp.get("body"))
+        if isinstance(row, dict)
+    ]
+
+    def _status_violating(row: Any) -> bool:
+        return _entity_row_status_violating(
+            row, status_field=status_field, identity_field=identity_field
+        )
+
+    def _expiry_violating(row: Any) -> bool:
+        return _entity_row_expiry_violating(row, identity_field=identity_field)
+
+    violating = None
+    if violation_mode == "expiry":
+        violating = next(
+            (row for row in candidates if _expiry_violating(row)),
+            None,
+        )
+        if violating is None:
+            violating = next(
+                (row for row in candidates if _status_violating(row)),
+                None,
+            )
+    elif violation_mode == "status":
+        violating = next(
+            (row for row in candidates if _status_violating(row)),
+            None,
+        )
+    else:
+        violating = next(
+            (
+                row
+                for row in candidates
+                if _status_violating(row) or _expiry_violating(row)
+            ),
+            None,
+        )
+    if violating is None:
+        return None
+    return _entity_row_identity(violating, identity_field)
+
+
 def _numeric_field_value(
     row: dict[str, Any],
     *token_groups: tuple[str, ...],
@@ -401,6 +544,49 @@ def execute_non_barrier_plans(
                     detail=f"source_declared_path_missing:{op_ref}",
                 ))
                 continue
+            # ── Runtime path-identity violation arm ──
+            # Entity-state isolation rules on identity-scoped READS (用户端
+            # 不展示下架商品 → GET a detail read) carry their mutation on the
+            # PATH parameter, not the request body (a GET has none). The
+            # compiled mutation names the path param; here we resolve a real
+            # non-public entity row from the collection read and substitute
+            # its identity into the path template before materialization.
+            # Fail closed: without a violating row the treatment must not run
+            # with the control identity (that would fabricate a verdict from
+            # identical inputs).
+            _path_mutation = _dict(step.get("mutation"))
+            if (
+                phase == "treatment"
+                and _text(_path_mutation.get("class"))
+                == "runtime_entity_state_violation"
+                and _text(_path_mutation.get("path_param"))
+            ):
+                _violating_identity = _resolve_runtime_violating_row_identity(
+                    _path_mutation,
+                    base_url=base_url,
+                    actor=actor,
+                    tokens=tokens,
+                )
+                if _violating_identity is None:
+                    _reason = (
+                        "BLOCKED_RUNTIME_VIOLATION_ROW_MISSING:"
+                        "runtime_entity_state_violation_path"
+                    )
+                    pre_transport_block_reasons.append(_reason)
+                    results.append({
+                        "phase": phase,
+                        "step_id": subject_id,
+                        "status": "blocked_write",
+                        "reason": "BLOCKED_MISSING_BINDING",
+                        "detail": _reason,
+                        "method": _text(op.get("method") or "GET").upper(),
+                        "path": _text(step.get("path") or path_template),
+                        "status_code": 0,
+                    })
+                    continue
+                runtime_bindings[
+                    _text(_path_mutation.get("path_param"))
+                ] = _violating_identity
             path = _materialize_path(
                 path_template,
                 runtime_bindings,

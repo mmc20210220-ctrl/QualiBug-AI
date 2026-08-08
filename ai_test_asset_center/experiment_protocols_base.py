@@ -652,6 +652,177 @@ def _read_side_owned_scope_projection(
     }
 
 
+# Path-parameter name vocabulary: an identity-scoped read (GET a detail
+# resource, e.g. a product by sku or a coupon by code) addresses its row
+# through a path placeholder. Generic relational identity names — never
+# industry terms.
+_PATH_IDENTITY_PARAM_RE = re.compile(r"(?:sku|code|key|no|ref|id)$", re.I)
+
+
+def _read_side_path_identity_exposure(
+    *,
+    operation: dict[str, Any],
+    operation_ref: str,
+    property_spec: dict[str, Any],
+    control_actor_ref: str,
+    treatment_actor_ref: str,
+    behavior_ir: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Compile a two-arm read for an entity-state exposure rule on a detail read.
+
+    A rule like 用户端不展示下架商品、草稿商品、内部商品 constrains which entity
+    rows a read surface may return. On a LIST read the existing row-state filter
+    arm suffices; on an IDENTITY-SCOPED read (GET /api/products/{sku}) the
+    rule must be proven on the DETAIL response. Historically every such
+    obligation died below as read_side_rule_lacks_decidable_assertion because
+    the validation protocol only mutates request bodies — a GET has none.
+
+    The treatment references an entity the environment really has in a
+    non-public state, resolved at runtime through the entity's collection read
+    (the same resolver the write-side arm uses); the mutation descriptor names
+    the PATH parameter the executor substitutes the violating identity into.
+    The assertion expects the rejection (4xx): a detail surface that answers a
+    non-public entity is the violation. Returns a COMPILED protocol dict or
+    None when the rule is not an entity-state exposure rule on an identity-
+    scoped read or the structured material (subject entity, collection read,
+    path identity param) is missing.
+    """
+    method = _text(operation.get("method")).upper()
+    if method not in {"GET", "HEAD"}:
+        return None
+    raw_path = _text(operation.get("path") or operation.get("raw_path"))
+    if "{" not in raw_path and ":" not in raw_path:
+        return None
+    expression = _dict(property_spec.get("expression"))
+    semantic_text = "\n".join(
+        _text(value)
+        for value in (
+            expression.get("raw"),
+            property_spec.get("source_intent"),
+            property_spec.get("description"),
+        )
+        if _text(value)
+    )
+    # Same vocabulary gate as the write-side exposure arm: exposure verbs
+    # (不展示/不提供/不可见/不开放/不得展示/禁止展示/不显示) or consumption
+    # markers (必须为/必须在/在有效期/有效期内/只能用于/不能使用/不可用/
+    # 不能超过/次数/状态/ACTIVE/ENABLED) combined with a violation word
+    # (下架/草稿/停用/过期/禁用/删除/内部/归档).
+    _exposure_triggered = any(
+        v in semantic_text for v in _ENTITY_STATE_EXPOSURE_VERBS
+    )
+    if not _exposure_triggered:
+        if not any(m in semantic_text for m in _ENTITY_STATE_CONSUMPTION_MARKERS):
+            return None
+        if not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
+            if not any(t in semantic_text for t in ("有效", "状态", "ACTIVE", "次数", "停用", "禁用", "过期")):
+                return None
+    elif not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
+        return None
+    if not isinstance(behavior_ir, dict):
+        return None
+    # The path identity parameter: the placeholder whose name is the entity
+    # identity slot (sku/code/key/no/ref/id).
+    path_param = ""
+    for _param in _list(operation.get("parameters")):
+        if not isinstance(_param, dict):
+            continue
+        if _text(_param.get("in") or _param.get("location")).lower() != "path":
+            continue
+        _name = _text(_param.get("name"))
+        if _PATH_IDENTITY_PARAM_RE.search(_name):
+            path_param = _name
+            break
+    if not path_param:
+        for _segment in re.findall(r"\{([A-Za-z_]\w*)\}", raw_path):
+            if _PATH_IDENTITY_PARAM_RE.search(_segment):
+                path_param = _segment
+                break
+    if not path_param:
+        return None
+    subject_entities = [
+        _text(value).lower()
+        for value in _list(property_spec.get("subject_entity_refs"))
+        if _text(value)
+    ]
+    if not subject_entities:
+        _identity_tokens = [
+            _tok.lower()
+            for _tok in re.findall(r"[A-Za-z0-9]+", path_param)
+            if _tok.lower() not in {"id", "ids", "no", "key", "code", "ref", "sku"}
+        ]
+        subject_entities = _identity_tokens
+    # The entity collection read: a placeholder-free GET whose path names the
+    # subject entity — the same resolver the write-side exposure arm uses.
+    resolver = None
+    for op in _list(behavior_ir.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
+            continue
+        _rp = _text(op.get("path") or op.get("raw_path"))
+        if re.search(r"(?:^|/)(?:health)(?:/|$)", _rp.lower()):
+            continue
+        if "{" in _rp:
+            continue
+        _segments = [
+            seg
+            for seg in _rp.lower().strip("/").split("/")
+            if seg and seg not in {"api", "health", "v1"}
+        ]
+        if subject_entities and not any(
+            _seg.startswith(_obj) or _obj.startswith(_seg)
+            for _seg in _segments
+            for _obj in subject_entities
+        ):
+            continue
+        resolver = {
+            "operation_ref": _text(op.get("id")),
+            "method": "GET",
+            "path": _rp,
+        }
+        break
+    if not resolver:
+        return None
+    mutation = {
+        "class": "runtime_entity_state_violation",
+        "path_param": path_param,
+        "json_path": f"path:{path_param}",
+        "resolver_operations": [resolver],
+        "identity_field": path_param,
+        "status_field": "status",
+        "violation_mode": _entity_state_violation_mode(semantic_text),
+    }
+    return {
+        "status": "COMPILED",
+        "control_plan": [{
+            "step_id": "control_1",
+            "actor_ref": control_actor_ref,
+            "operation_ref": operation_ref,
+            "intent": "read_side_entity_state_control",
+            "protocol_step": "positive_control",
+            "property_template": _text(property_spec.get("template")),
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "actor_ref": treatment_actor_ref,
+            "operation_ref": operation_ref,
+            "intent": "read_side_entity_state_exposure",
+            "protocol_step": "single_observation",
+            "mutation": mutation,
+            "property_template": _text(property_spec.get("template")),
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        }],
+        "observers": [{"observer_id": "http_response"}],
+        "assertion": {
+            "kind": "http_status_class",
+            "expected_class": 4,
+            "compare_field": "status_code",
+        },
+    }
+
+
 # Generic account-state precondition vocabulary: a rule like 仅 ACTIVE 用户
 # 可登录 / 禁用用户不得登录 states an ACCOUNT-STATE precondition on an
 # identity operation. The experiment must then exercise a NON-ACTIVE account
@@ -682,7 +853,10 @@ _PUBLIC_ENTITY_STATUSES = frozenset({
 # from exposing entities in non-public states (用户端不展示下架商品、草稿商品、
 # 内部商品). 展示/提供/可见/开放 are generic exposure verbs; the state words
 # (下架/草稿/停用/过期/禁用/删除/内部) name the non-public states.
-_ENTITY_STATE_EXPOSURE_VERBS = ("不展示", "不提供", "不可见", "不开放", "不得展示", "禁止展示", "不显示")
+_ENTITY_STATE_EXPOSURE_VERBS = (
+    "不展示", "不提供", "不可见", "不开放", "不得展示", "禁止展示", "不显示",
+    "不得出现", "不出现", "不能出现", "禁止出现", "不允许出现",
+)
 _ENTITY_STATE_VIOLATION_WORDS = ("下架", "草稿", "停用", "过期", "禁用", "删除", "内部", "归档")
 
 # Decision-endpoint vocabulary: an operation that decides an entity's
@@ -2541,6 +2715,25 @@ def compile_family_protocol(
             )
             if _read_projection is not None:
                 return _read_projection
+            # ── Identity-scoped read entity-state exposure ──
+            # A rule constraining which entity rows a surface may return
+            # (用户端不展示下架商品、草稿商品、内部商品) is decidable on a
+            # DETAIL read (GET /api/products/{sku}) only when the treatment
+            # can aim the path at an entity the environment really has in a
+            # non-public state. The write-side mutation machinery is body-only;
+            # this projection builds the path-identity variant so the exposure
+            # rule reaches the detail surface instead of dying as
+            # read_side_rule_lacks_decidable_assertion.
+            _read_path_exposure = _read_side_path_identity_exposure(
+                operation=operation,
+                operation_ref=operation_ref,
+                property_spec=property_spec,
+                control_actor_ref=control_actor_ref,
+                treatment_actor_ref=treatment_actor_ref,
+                behavior_ir=behavior_ir,
+            )
+            if _read_path_exposure is not None:
+                return _read_path_exposure
         parameter_location = _text(property_spec.get("parameter_location")).lower()
         tokens = property_spec.get("field_tokens")
         if (

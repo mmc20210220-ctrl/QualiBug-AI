@@ -1006,6 +1006,15 @@
     "webhook",
     "callback"
   ],
+  "ephemeral_session_any_segment_markers": [
+    "login",
+    "logout",
+    "token",
+    "refresh",
+    "session",
+    "otp",
+    "captcha"
+  ],
   "ephemeral_session_path_suffixes": [
     "oauth/token",
     "oauth/refresh",

@@ -502,6 +502,36 @@ def compile_family_protocol(
     ):
         return result
 
+    # ── Read-side path-identity exposure arm wins over path-format
+    # constraints ──
+    # An identity-scoped read (GET /api/products/{sku}) governed by an
+    # entity-state exposure rule (用户端不展示下架商品) compiles in the base
+    # protocol as a two-arm read whose treatment carries a runtime path-
+    # identity mutation (class runtime_entity_state_violation, path_param).
+    # The expander also derives PATH-PARAMETER format constraints
+    # (remove_required_parameter / replace_with_wrong_type) for the same
+    # {sku} placeholder. Those path-format mutations are not wire-renderable
+    # (the executor never rewrites a path string statically) and would block
+    # as validation_treatment_identical_to_control. The exposure arm is the
+    # decidable projection for the rule — keep it and skip the constraint
+    # override.
+    if (
+        _text(risk_family) == "validation"
+        and _text(result.get("status")) == "COMPILED"
+    ):
+        _base_treatment = _list(result.get("treatment_plan"))
+        _base_mutation = (
+            _dict(_base_treatment[0]).get("mutation")
+            if len(_base_treatment) == 1
+            else {}
+        )
+        if (
+            isinstance(_base_mutation, dict)
+            and _text(_base_mutation.get("class")) == "runtime_entity_state_violation"
+            and _text(_base_mutation.get("path_param"))
+        ):
+            return result
+
     constraint = _text(property_spec.get("validation_constraint"))
     if constraint:
         control, treatment, mutation, reason = _source_constraint_material(

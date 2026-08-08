@@ -106,6 +106,56 @@ def declared_runtime_read_resolvers(
         for path in candidate_paths
         if path.startswith("/") and not path_has_placeholders(path)
     ))
+    # ── Action-path collection fallback ──
+    # An action-verb target path (POST <module>/<action>/{id}) has NO
+    # structural collection read of its own: the resource its placeholder
+    # addresses lives on a SIBLING collection under the same module prefix
+    # (a collection with a create POST). Deriving the collection purely from
+    # the action path leaves the placeholder unresolvable and every
+    # isolation/ownership obligation on the action dies as
+    # BLOCKED_MISSING_BINDING/FIXTURE. The fallback appends the module-prefix
+    # collection reads that pair with a collection create POST at the same
+    # path — the environment's own declared resource collections.
+    _module_prefix = _operation_module_prefix(target_path)
+    if _module_prefix:
+        for candidate in _list(_dict(behavior_ir).get("operations")):
+            if not isinstance(candidate, dict):
+                continue
+            _m = _text(candidate.get("method")).upper()
+            _p = normalize_path_placeholders(
+                _text(candidate.get("path") or candidate.get("raw_path"))
+            )
+            if (
+                _m not in {"GET", "HEAD"}
+                or not _text(candidate.get("id"))
+                or not _p.startswith(_module_prefix)
+                or _p == target_path
+                or path_has_placeholders(_p)
+            ):
+                continue
+            if _p in ordered_paths:
+                continue
+            if _module_prefix != _operation_module_prefix(_p):
+                continue
+            # The collection must be a real resource collection: a create POST
+            # exists at the same path.
+            _paired_create = any(
+                isinstance(row, dict)
+                and _text(row.get("method")).upper() == "POST"
+                and normalize_path_placeholders(
+                    _text(row.get("path") or row.get("raw_path"))
+                ) == _p
+                for row in _list(_dict(behavior_ir).get("operations"))
+            )
+            if not _paired_create:
+                continue
+            ordered_paths.append(_p)
+            break
+    ordered_paths = list(dict.fromkeys(
+        path
+        for path in ordered_paths
+        if path.startswith("/") and not path_has_placeholders(path)
+    ))
 
     declared_by_path: dict[str, list[dict[str, Any]]] = {}
     for candidate in _list(_dict(behavior_ir).get("operations")):
@@ -505,6 +555,31 @@ def _api_prefix(path: str) -> str:
     return f"/{parts[0]}" if parts else "/api"
 
 
+def _operation_module_prefix(path: str) -> str:
+    """Module-scope prefix of a path (/api/<module>).
+
+    Action-verb resource paths (POST <module>/<action>/{id}) share their
+    resource collections with sibling ops under the same module prefix.
+    Generic structural scoping — the first two static segments after the
+    version prefix, never an industry term.
+    """
+    parts = [
+        part
+        for part in normalize_path_placeholders(path).split("/")
+        if part
+    ]
+    if not parts:
+        return ""
+    start = 0
+    if parts[0].lower() == "api":
+        start = 1
+    elif re.fullmatch(r"v\d+(?:\.\d+)?", parts[0].lower()):
+        start = 1
+    if len(parts) <= start:
+        return "/" + "/".join(parts[:start]) if start else ""
+    return "/" + "/".join(parts[: start + 1])
+
+
 def _field_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", _text(value).lower())
 
@@ -808,12 +883,51 @@ def _declared_fixture_setup(
 ) -> dict[str, Any]:
     target_path = normalize_path_placeholders(_text(operation.get("path")))
     prefix = _api_prefix(target_path)
+    operations = _list(_dict(behavior_ir).get("operations"))
     collection_candidates = body_field_collection_paths(target, api_prefix=prefix)
     if not collection_candidates:
         primary = normalize_path_placeholders(collection_path(target_path))
         if primary.startswith("/") and not path_has_placeholders(primary):
             collection_candidates = [primary]
-    operations = _list(_dict(behavior_ir).get("operations"))
+    # ── Action-path collection fallback ──
+    # An action-verb resource path (POST <module>/<action>/{id}) has no
+    # structural collection create of its own: the resource its placeholder
+    # addresses is created through a SIBLING collection create under the same
+    # module prefix. Appending the module-prefix collections that pair a
+    # create POST with a collection GET makes the owned-resource fixture
+    # resolvable for action paths instead of dying as
+    # BLOCKED_MISSING_FIXTURE. Every candidate is a real declared collection
+    # pair — nothing is invented.
+    _module_prefix = _operation_module_prefix(target_path)
+    if _module_prefix:
+        for candidate in operations:
+            if not isinstance(candidate, dict):
+                continue
+            if _text(candidate.get("method")).upper() != "POST":
+                continue
+            candidate_path = normalize_path_placeholders(
+                _text(candidate.get("path") or candidate.get("raw_path"))
+            )
+            if (
+                not _text(candidate.get("id"))
+                or not candidate_path.startswith(_module_prefix)
+                or candidate_path == target_path
+                or path_has_placeholders(candidate_path)
+                or _operation_module_prefix(candidate_path) != _module_prefix
+                or candidate_path in collection_candidates
+            ):
+                continue
+            if not any(
+                isinstance(row, dict)
+                and _text(row.get("method")).upper() in {"GET", "HEAD"}
+                and normalize_path_placeholders(
+                    _text(row.get("path") or row.get("raw_path"))
+                ) == candidate_path
+                for row in operations
+            ):
+                continue
+            collection_candidates.append(candidate_path)
+            break
     _h25_reject: list[dict[str, Any]] = []
     for collection in collection_candidates:
         create = next((

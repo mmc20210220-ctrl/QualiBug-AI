@@ -422,6 +422,19 @@ def _is_ephemeral_session_path(path: str) -> bool:
         "ephemeral_session_terminal_markers"
     ):
         return True
+    # Any-segment identity/credential exchange markers: a path that carries a
+    # login/logout/token/session/otp/captcha/refresh segment ANYWHERE is a
+    # non-durable credential exchange even when the terminal segment is a
+    # resource word (手机号验证码登录 → /api/auth/login/phone, impersonate →
+    # /api/auth/token/impersonate). The exchange itself has no durable entity
+    # whose effect a before/after observer could read. Notification endpoints
+    # (webhook/callback) are deliberately excluded here: they may still carry
+    # durable effects (payment callbacks mutate payments).
+    if any(
+        segment in _semantic_marker_set("ephemeral_session_any_segment_markers")
+        for segment in normalized_segments
+    ):
+        return True
     normalized_path = "/" + "/".join(normalized_segments)
     return any(
         normalized_path.endswith(suffix)
