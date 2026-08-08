@@ -392,6 +392,21 @@ def build_behavior_ir_with_semantic_operation_bindings(
     stability_asset, scan_stability_receipt = overlay_scan_stability_contracts(
         effective_asset
     )
+    # Historical defect documentation (HISTORICAL_BUGS.md / 历史缺陷记录) is
+    # visible enterprise material the requirement-doc scoring excludes. This
+    # adapter re-admits it as source-backed defect-class rule candidates that
+    # flow through the generic rule-contract binding channel. Non-amount
+    # classes are recorded as coverage notes, never rules.
+    from .enterprise_knowledge_center._common import ROOT as _EKC_ROOT
+    from .historical_defect_rule_binding import (
+        enrich_asset_with_historical_defect_rules,
+    )
+
+    stability_asset, _historical_receipt = enrich_asset_with_historical_defect_rules(
+        stability_asset,
+        root=_EKC_ROOT,
+        project_id=project_id,
+    )
     behavior_ir = _original_build_behavior_ir(
         stability_asset,
         project_id=project_id,
@@ -448,6 +463,7 @@ def build_behavior_ir_with_semantic_operation_bindings(
     )
     job_ir["scan_stability_contract_overlay_receipt"] = dict(scan_stability_receipt)
     job_ir["rule_contract_validation_receipt"] = dict(_rule_contract_receipt)
+    job_ir["historical_defect_rule_receipt"] = dict(_historical_receipt)
     return job_ir
 
 
