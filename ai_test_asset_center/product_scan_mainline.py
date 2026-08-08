@@ -316,6 +316,14 @@ def _apply_scan_execution_defaults(context: dict[str, Any], base_url: str) -> di
     # phase downstream.
     if not str(normalized.get("validation_phase") or "").strip():
         normalized["validation_phase"] = "formal"
+    # A full discovery scan also guarantees the family-fair execution quota:
+    # every risk family present in the compiled pool keeps at least this many
+    # experiments per batch (default 1), so authorization obligations can
+    # never crowd state/idempotency/conservation/validation/privacy out of
+    # the execution budget. Operators may override the quota explicitly;
+    # the receipted runtime_contract carries it downstream.
+    if not str(normalized.get("family_execution_quota") or "").strip():
+        normalized["family_execution_quota"] = 1
     return normalized
 
 

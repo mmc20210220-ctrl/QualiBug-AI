@@ -5,6 +5,17 @@ executor-authored identity hint.  Every identity dimension is derived from the
 validated Gate-v2 evidence bundle embedded in the immutable attempt ledger.
 Occurrence identities remain available for audit while commercial counts use
 only canonical defect identities.
+
+Role-variant aggregation (distribution balance): the concrete treatment actor
+class is EVIDENCE, not identity. "buyer can access the owner's resource" and
+"auditor can access the owner's resource" on the same interface, assertion
+kind and violation shape are ONE defect whose breadth is proven by the role
+set — never N separate canonical defects. The identity keeps only the
+relation TYPE; concrete actor classes ride in ``proof.evidence_actor_classes``
+and surface as ``evidence_actors`` on each canonical defect entry. This makes
+``canonical_defect_id`` itself the cross-run stable role-variant aggregation
+key: the same defect surface aggregates identically no matter which roles a
+run explored.
 """
 from __future__ import annotations
 
@@ -361,15 +372,39 @@ def _canonical_actor_relation(
             "treatment_actor_class": "not_identity_defining",
             "relation": "actor_insensitive_property",
         }
-    # The resource owner's concrete role/instance is not identity defining:
-    # "a non-owner actor can access the owner's resource" is the same defect
-    # surface regardless of which owner role/instance holds the resource.
-    # Only the accessing (treatment) actor class distinguishes the surface.
+    # Role-variant aggregation: the resource owner's concrete role/instance is
+    # not identity defining ("a non-owner actor can access the owner's
+    # resource" is the same defect surface regardless of which owner
+    # role/instance holds the resource), and NEITHER is the treatment actor
+    # class — "buyer can access it" and "auditor can access it" describe the
+    # same interface-level defect with different breadth evidence. Only the
+    # relation TYPE (control_to_treatment vs actor_insensitive_property)
+    # distinguishes the defect surface; concrete actor classes move to
+    # ``proof.evidence_actor_classes`` and become ``evidence_actors`` on the
+    # canonical defect entry, never identity factors.
     return {
         "control_actor_class": "resource_owner",
-        "treatment_actor_class": treatment_actor_class,
+        "treatment_actor_class": "any_actor",
         "relation": "control_to_treatment",
     }
+
+
+def _concrete_actor_classes(classes: Any) -> list[str]:
+    """Concrete actor role classes that may serve as role evidence.
+
+    Identity-placeholder markers ("not_identity_defining", "any_actor") and
+    empty values are not evidence; everything else (buyer/seller/finance/…)
+    is kept, sorted, deduplicated.
+    """
+    collected: set[str] = set()
+    for value in _list(classes):
+        normalized = _normalized_text(value)
+        if normalized and normalized not in {
+            "not_identity_defining",
+            "any_actor",
+        }:
+            collected.add(normalized)
+    return sorted(collected)
 
 
 def _request_semantics_proof(
@@ -543,6 +578,13 @@ def derive_canonical_identity_evidence(
             "oracle_receipt_id": _text(oracle.get("receipt_id")),
             "reproduction_receipt_id": _text(reproduction.get("receipt_id")),
             **request_proof,
+            # Role evidence: concrete treatment actor class (buyer/seller/…),
+            # excluded from identity by design (role-variant aggregation) but
+            # preserved so the canonical defect can prove which roles were
+            # explored. Empty for actor-insensitive properties.
+            "evidence_actor_classes": _concrete_actor_classes(
+                [treatment_actor] if requires_control else []
+            ),
         },
     }
 
@@ -708,6 +750,16 @@ def derive_legacy_champion_canonical_identity_evidence(
             "reproduction_receipt_id": gate_receipt_id,
             "request_body_fingerprint": body_fp,
             "request_semantics_fingerprint": semantics_fp,
+            "evidence_actor_classes": _concrete_actor_classes(
+                [
+                    _normalized_text(
+                        _dict(
+                            _dict(row.get("raw_evidence")).get("request_raw")
+                        ).get("actor")
+                        or row.get("actor")
+                    )
+                ]
+            ),
         },
     }
 
@@ -755,6 +807,29 @@ def _attempt_by_finding(ledger: dict[str, Any]) -> dict[str, dict[str, Any]]:
             )
         result[occurrence_id] = attempt
     return result
+
+
+def _representative_finding_id(rows: list[dict[str, Any]]) -> str:
+    """Pick the representative occurrence of a canonical defect group.
+
+    The representative is the highest-confidence occurrence of the group so
+    the delivered representative carries the strongest evidence; ties break
+    by finding_id so the choice stays deterministic across rebuilds. Rows
+    without a numeric confidence score fall back to the sorted-first id
+    (identical to the pre-aggregation behavior).
+    """
+    def _key(row: dict[str, Any]) -> tuple[float, str]:
+        finding = _dict(row.get("finding"))
+        try:
+            confidence = float(finding.get("confidence_score") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return (
+            -confidence,
+            _text(_dict(row.get("occurrence")).get("finding_id")),
+        )
+    ordered = sorted(rows, key=_key)
+    return _text(_dict(ordered[0].get("occurrence")).get("finding_id"))
 
 
 def build_canonical_defect_registry(
@@ -870,6 +945,10 @@ def build_canonical_defect_registry(
         grouped[canonical["canonical_defect_id"]].append({
             "canonical": canonical,
             "occurrence": occurrence_receipt,
+            "finding": occurrence,
+            "evidence_actor_classes": _concrete_actor_classes(
+                _dict(_dict(evidence).get("proof")).get("evidence_actor_classes")
+            ),
         })
         mappings.append({
             "finding_id": occurrence_id,
@@ -884,11 +963,26 @@ def build_canonical_defect_registry(
         )
         occurrence_receipts = [row["occurrence"] for row in rows]
         occurrence_ids = [row["finding_id"] for row in occurrence_receipts]
+        # Role-variant aggregation evidence: the union of every concrete actor
+        # class whose occurrence proved this defect surface (buyer/auditor/…),
+        # so collapsing role variants never loses which roles were explored.
+        evidence_actors = sorted({
+            actor_class
+            for row in rows
+            for actor_class in _list(row.get("evidence_actor_classes"))
+        })
         canonical_defects.append({
             "canonical_defect_id": canonical_id,
             "identity_fingerprint": rows[0]["canonical"]["identity_fingerprint"],
+            # Cross-run stable role-variant aggregation key. Because the
+            # identity is actor-role-free, this fingerprint is identical for
+            # every role variant of the same defect surface regardless of
+            # which roles a run explored — the aggregation key is the
+            # canonical identity itself.
+            "aggregation_key": rows[0]["canonical"]["identity_fingerprint"],
             "identity": rows[0]["canonical"]["identity"],
-            "representative_finding_id": occurrence_ids[0],
+            "evidence_actors": evidence_actors,
+            "representative_finding_id": _representative_finding_id(rows),
             "occurrence_count": len(occurrence_ids),
             "occurrence_finding_ids": occurrence_ids,
             "occurrence_receipts": occurrence_receipts,

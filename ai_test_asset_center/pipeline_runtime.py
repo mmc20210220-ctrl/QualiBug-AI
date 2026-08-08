@@ -144,6 +144,12 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
     _vp = str(context.get("validation_phase") or "").strip().lower()
     if _vp:
         contract["validation_phase"] = _vp
+    # Propagate the family-fair execution quota (per-family minimum
+    # experiments per batch) so the batch executor's budget construction and
+    # the prioritizer's family tier respect the operator-declared quota.
+    _fq = context.get("family_execution_quota")
+    if _fq:
+        contract["family_execution_quota"] = int(_fq)
     return contract
 
 

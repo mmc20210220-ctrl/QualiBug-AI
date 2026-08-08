@@ -9,8 +9,16 @@ defect finding（gate_passed + 复现成功）按稳定身份写入档案；后�
 操作被正常执行且不再产生 violation，连续多 run 确认）才退休该条目——
 此时"没发现"才是正常的。
 
-通用性：身份归一全部基于 finding 自身的结构字段（canonical 身份 /
-title 的操作+路径形态 / 风险族 / 断言类别），不含任何行业或基准特定词汇，
+角色变体聚合（distribution balance）：档案身份 = 角色无关聚合键
+（风险族 + 断言类别 + 归一化操作 + 违反形态），角色是证据不是身份——
+同一缺陷面的 buyer/seller/finance/auditor 变体共享一个档案条目，与
+canonical registry 的聚合语义一致。旧档案（按角色相关 canonical id
+归档）在加载时做一次幂等兼容迁移（``migrate_archive_for_aggregation``），
+旧条目按自身 finding 快照重算聚合键，全部角色变体折叠为一条，与新 run
+的聚合交付对齐而不是重复。
+
+通用性：身份归一全部基于 finding 自身的结构字段（操作+路径形态 /
+断言类别 / 违反形态 / 风险族），不含任何行业或基准特定词汇，
 换任何目标系统同样适用。档案存放于
 ``platform_workspace/<project>/defect_discovery/verified_discovery_archive.json``
 （git-ignored 工作区，非仓库产物）。
@@ -33,9 +41,25 @@ _UUID_RE = re.compile(
 )
 _NONCE_RE = re.compile(r"-[0-9a-f]{8,}$")
 
+# 档案身份前缀：角色变体聚合身份（canonical identity 的跨 run 稳定聚合键）。
+_AGG_IDENTITY_PREFIX = "cdef_agg_"
+
+# 标题中的操作捕获：`[ContractOracle] <kind>: [role] METHOD /path`。
+_TITLE_OPERATION_RE = re.compile(
+    r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S+)"
+)
+
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def _sha256(value: Any) -> str:
@@ -57,23 +81,167 @@ def _normalize_identity_text(value: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def _normalize_operation_path(path: str) -> str:
+    """Normalize an operation path for aggregation (industry-agnostic).
+
+    Mirrors the canonical identity locator normalization: query strings are
+    dropped, UUID / nonce / numeric / test-id segments collapse to ``{id}`` so
+    the same interface yields the same path across runs and role variants.
+    """
+    text = _text(path).split("?", 1)[0].rstrip("/")
+    if not text:
+        return ""
+    text = _UUID_RE.sub("{id}", text)
+    text = _NONCE_RE.sub("", text)
+    segments: list[str] = []
+    for segment in text.split("/"):
+        if not segment:
+            continue
+        if segment.isdigit():
+            segment = "{id}"
+        elif re.fullmatch(r"(?i)qb[_-]test[_-].+", segment):
+            segment = "{id}"
+        elif re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9]*", segment) and len(segment) >= 3:
+            segment = "{id}"
+        segments.append(segment)
+    return "/".join(segments)
+
+
+def _aggregation_value_digest(value: Any, depth: int = 0) -> Any:
+    """Stable semantic digest of an assertion expected/actual value.
+
+    Role-variant aggregation semantics: the violation shape is what the
+    assertion compared (booleans as-is, numbers by class, strings by
+    normalized digest, nested containers recursively), never run-specific
+    instance values. Generic — no industry or benchmark vocabulary.
+    """
+    if depth > 4:
+        return {"type": "truncated"}
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 0:
+            return {"type": "number", "class": "zero"}
+        return {"type": "number", "class": "positive" if value > 0 else "negative"}
+    if isinstance(value, str):
+        return {"type": "string", "digest": _sha256(_normalize_identity_text(value))}
+    if isinstance(value, list):
+        return {
+            "type": "list",
+            "items": [
+                _aggregation_value_digest(item, depth + 1)
+                for item in value[:12]
+            ],
+        }
+    if isinstance(value, dict):
+        entries = [
+            {
+                "key": _normalize_identity_text(key),
+                "value": _aggregation_value_digest(item, depth + 1),
+            }
+            for key, item in sorted(
+                value.items(),
+                key=lambda pair: _normalize_identity_text(pair[0]),
+            )[:24]
+        ]
+        return {"type": "object", "entries": entries}
+    return {"type": type(value).__name__}
+
+
+def _finding_assertion_kind(finding: dict[str, Any]) -> str:
+    row = dict(finding)
+    evidence = _dict(row.get("evidence"))
+    assertion = _dict(evidence.get("assertion"))
+    kind = _normalize_identity_text(assertion.get("kind"))
+    if not kind:
+        for failed in _list(row.get("failed_assertions")):
+            if isinstance(failed, dict):
+                kind = _normalize_identity_text(failed.get("kind"))
+                if kind:
+                    break
+    if not kind:
+        kind = _normalize_identity_text(row.get("category"))
+    if not kind:
+        kind = _normalize_identity_text(row.get("risk_family"))
+    return kind
+
+
+def _finding_operation(finding: dict[str, Any]) -> tuple[str, str]:
+    """Return (verb, normalized path) from the finding's own structure."""
+    row = dict(finding)
+    reproduction = _dict(row.get("reproduction"))
+    verb = _text(reproduction.get("method")).upper()
+    path = _text(reproduction.get("path"))
+    if not verb or not path:
+        match = _TITLE_OPERATION_RE.search(_text(row.get("title")))
+        if match:
+            verb = match.group(1).upper()
+            path = match.group(2)
+    return verb, _normalize_operation_path(path)
+
+
+def _finding_violation_shape(finding: dict[str, Any]) -> str:
+    """Stable digest of the assertion's expected/actual violation shape."""
+    row = dict(finding)
+    evidence = _dict(row.get("evidence"))
+    assertion = _dict(evidence.get("assertion"))
+    expected = assertion.get("expected")
+    actual = assertion.get("actual")
+    if expected is None and actual is None:
+        for failed in _list(row.get("failed_assertions")):
+            if not isinstance(failed, dict):
+                continue
+            expected = expected if expected is not None else failed.get("expected")
+            actual = actual if actual is not None else failed.get("actual")
+    return _sha256({
+        "expected": _aggregation_value_digest(expected),
+        "actual": _aggregation_value_digest(actual),
+    })
+
+
+def derive_aggregation_key(finding: dict[str, Any]) -> str:
+    """Cross-run stable, role-invariant aggregation key of a finding.
+
+    Components: assertion kind, normalized verb+path, and the violation shape
+    (expected/actual semantic digest) — exactly the canonical registry's
+    aggregation dimensions (interface + assertion kind + violation shape).
+    The actor role is deliberately absent, and so is risk_family: the same
+    defect surface can be compiled under different risk families across
+    role variants (authorization vs visibility vs isolation obligations all
+    probe the same owner/tenant visibility leak), so the family would split
+    one defect surface into several archive identities. Returns "" when the
+    finding carries none of the structural evidence needed.
+    """
+    row = dict(finding)
+    kind = _finding_assertion_kind(row)
+    verb, path = _finding_operation(row)
+    if not kind or not verb or not path:
+        return ""
+    return "|".join((
+        kind,
+        f"{verb} {path}",
+        _finding_violation_shape(row),
+    ))
+
+
 def finding_stable_identity(finding: dict[str, Any]) -> str:
     """Stable cross-run identity of a delivered defect finding.
 
-    Priority: canonical_defect_id (canonical registry's receipt-derived
-    identity) > canonical_identity_fingerprint > fallback fingerprint over
-    the finding's own structure (normalized title / risk family / category /
-    obligation identity). Runtime instance values (UUIDs, nonces) never
-    participate, so the same target defect yields the same identity across
-    runs even when the explored rows differ.
+    Priority: role-variant aggregation identity (derived from the finding's
+    own structure — operation + assertion kind + violation shape, actor
+    role-free) > canonical_defect_id > fallback fingerprint over the
+    finding's own structure. Runtime instance values (UUIDs, nonces) never
+    participate, and the actor role never participates, so every role variant
+    of the same defect surface yields the same identity across runs — the
+    aggregation-key semantics that the canonical registry now applies.
     """
     row = dict(finding)
+    key = derive_aggregation_key(finding)
+    if key:
+        return _AGG_IDENTITY_PREFIX + _sha256(key)[:32]
     canonical = _text(row.get("canonical_defect_id"))
     if canonical:
         return canonical
-    fingerprint = _text(row.get("canonical_identity_fingerprint"))
-    if fingerprint:
-        return "cdef_fp_" + fingerprint[:32]
     title = _normalize_identity_text(_text(row.get("title")))
     fallback = {
         "title": title,
@@ -84,6 +252,123 @@ def finding_stable_identity(finding: dict[str, Any]) -> str:
         ),
     }
     return "cdef_fb_" + _sha256(fallback)[:32]
+
+
+def _merge_archive_entries(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Merge entries that collapse onto one aggregation identity.
+
+    The newest finding snapshot (by last_verified_at) wins while the earliest
+    first_verified provenance is preserved, so a migrated multi-role entry
+    keeps full history and the strongest evidence. Deterministic ordering.
+    """
+    ordered = sorted(
+        candidates,
+        key=lambda entry: (
+            _text(entry.get("last_verified_at")),
+            _text(entry.get("identity")),
+        ),
+    )
+    merged = dict(ordered[-1])
+    merged["identity"] = _text(ordered[-1].get("identity"))
+    merged.pop("_source_identity", None)
+    first = min(
+        ordered,
+        key=lambda entry: (
+            _text(entry.get("first_verified_run")),
+            _text(entry.get("first_verified_at")),
+        ),
+    )
+    merged["first_verified_run"] = first.get("first_verified_run")
+    merged["first_verified_at"] = first.get("first_verified_at")
+    merged["fix_signal_count"] = max(
+        int(entry.get("fix_signal_count") or 0) for entry in ordered
+    )
+    return merged
+
+
+def migrate_archive_for_aggregation(
+    archive: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """One-time archive compatibility migration to aggregation identities.
+
+    Pre-aggregation runs archived under per-role canonical defect ids
+    (the concrete treatment actor class was identity-defining). Role-variant
+    aggregation removed the actor role from identity, so every role variant
+    of one defect surface now shares one aggregation identity — and old
+    entries must be re-keyed to it or they would reappear as duplicates next
+    to the aggregated delivery of the same defect. Entries and retired rows
+    are re-keyed by deriving the aggregation identity from their stored
+    finding snapshots; entries that collapse keep the newest finding while
+    the earliest first_verified_run is preserved. Re-running is idempotent:
+    an already migrated key re-derives to itself.
+    """
+    payload = dict(archive)
+    entries = dict(_dict(payload.get("entries")))
+    retired = dict(_dict(payload.get("retired")))
+    if not entries and not retired:
+        return payload, {
+            "schema_version": _ARCHIVE_SCHEMA,
+            "migrated_entries": 0,
+            "collapsed_entries": 0,
+            "unmigrated_entries": 0,
+            "migrated_retired": 0,
+            "collapsed_retired": 0,
+        }
+    rekeyed_entries: dict[str, list[dict[str, Any]]] = {}
+    rekeyed_retired: dict[str, list[dict[str, Any]]] = {}
+    unmigrated = 0
+    for identity, entry in entries.items():
+        new_id = finding_stable_identity(_dict(entry).get("finding") or {})
+        if not new_id:
+            unmigrated += 1
+            new_id = _text(identity)
+        row = dict(_dict(entry))
+        row["identity"] = new_id
+        row["_source_identity"] = _text(identity)
+        rekeyed_entries.setdefault(_text(new_id), []).append(row)
+    for identity, entry in retired.items():
+        new_id = finding_stable_identity(_dict(entry).get("finding") or {})
+        if not new_id:
+            new_id = _text(identity)
+        row = dict(_dict(entry))
+        row["identity"] = new_id
+        row["_source_identity"] = _text(identity)
+        rekeyed_retired.setdefault(_text(new_id), []).append(row)
+
+    def _migrated(rows: list[dict[str, Any]]) -> int:
+        return sum(
+            1
+            for row in rows
+            if _text(row.get("_source_identity")) != _text(row.get("identity"))
+        )
+
+    def _collapsed(rows: list[dict[str, Any]]) -> int:
+        return max(0, len(rows) - 1)
+
+    payload["entries"] = {
+        new_id: _merge_archive_entries(rows)
+        for new_id, rows in rekeyed_entries.items()
+    }
+    payload["retired"] = {
+        new_id: _merge_archive_entries(rows)
+        for new_id, rows in rekeyed_retired.items()
+    }
+    receipt = {
+        "schema_version": _ARCHIVE_SCHEMA,
+        "migrated_entries": sum(_migrated(rows) for rows in rekeyed_entries.values()),
+        "migrated_retired": sum(_migrated(rows) for rows in rekeyed_retired.values()),
+        "collapsed_entries": sum(_collapsed(rows) for rows in rekeyed_entries.values()),
+        "collapsed_retired": sum(_collapsed(rows) for rows in rekeyed_retired.values()),
+        "unmigrated_entries": unmigrated,
+        "note": (
+            "legacy per-role canonical ids re-keyed to the role-invariant "
+            "aggregation identity; re-running is idempotent"
+        ),
+    }
+    payload["aggregation_migration_receipt"] = receipt
+    return payload, receipt
 
 
 def archive_path(project: str, root: Path) -> Path:
@@ -123,7 +408,12 @@ def load_verified_discovery_archive(
     payload.setdefault("schema_version", _ARCHIVE_SCHEMA)
     payload.setdefault("entries", {})
     payload.setdefault("retired", {})
-    return payload
+    # Role-variant aggregation compatibility: legacy archives keyed by
+    # per-role canonical defect ids are re-keyed to the role-invariant
+    # aggregation identity at load time, so old entries align with new-run
+    # aggregated deliveries instead of duplicating them. Idempotent.
+    migrated, _receipt = migrate_archive_for_aggregation(payload)
+    return migrated
 
 
 def save_verified_discovery_archive(

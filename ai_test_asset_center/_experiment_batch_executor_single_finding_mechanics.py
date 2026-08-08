@@ -249,6 +249,44 @@ def _operation_coverage_budget(
     return max(int(budget), min(distinct_operations, int(hard_cap)))
 
 
+def _family_coverage_budget(
+    selected: list[Any],
+    budget: int,
+    hard_cap: int = 200,
+) -> int:
+    """Floor the batch budget so family-fair and operation-fair both fit.
+
+    Family-fair execution budget (distribution balance): the operation floor
+    guarantees every operation a slot, but a family whose obligations are
+    all second-tier rows of operations dominated by authorization would still
+    starve. The prioritizer promotes one row per family ABOVE the
+    operation tier; when several families' top rows land on the same
+    operation, the family tier and the operation tier together can need up
+    to ``#operations + #families`` distinct rows before every operation AND
+    every family is inside the budget. Raising the budget to that union
+    bound (capped at the same hard cap) keeps BOTH guarantees intact, so
+    state/idempotency/conservation/validation/privacy obligations can no
+    longer be pushed out of a batch purely by global rank. Families come
+    from the obligation rows themselves (the product's open family
+    registry), never hardcoded.
+    """
+    distinct_operations = len({
+        _text(_dict(item).get("operation_key"))
+        for item in _list(selected)
+        if _text(_dict(item).get("operation_key"))
+    })
+    distinct_families = len({
+        _text(_dict(item).get("risk_family"))
+        for item in _list(selected)
+        if _text(_dict(item).get("risk_family"))
+    })
+    if distinct_operations and distinct_families:
+        union_floor = distinct_operations + distinct_families
+    else:
+        union_floor = max(distinct_operations, distinct_families)
+    return max(int(budget), min(union_floor, int(hard_cap)))
+
+
 def execute_selected_experiments(
     selected: list[Any],
     *,
@@ -351,6 +389,16 @@ def execute_selected_experiments(
     # One experiment per distinct operation minimum, bounded by the same hard
     # cap. See _operation_coverage_budget for the rationale.
     _budget = _operation_coverage_budget(selected, _budget, hard_cap=200)
+    # ── Family-coverage floor (family-fair execution budget) ──
+    # One experiment per distinct risk family minimum, bounded by the same
+    # hard cap, so the prioritizer's family-fair tier can fit every family
+    # (authorization can no longer crowd out state/idempotency/conservation/
+    # validation/privacy). The quota itself is operator-configurable through
+    # the runtime contract (family_execution_quota, default 1).
+    _budget = _family_coverage_budget(selected, _budget, hard_cap=200)
+    _family_quota = max(
+        1, int(_dict(runtime_contract).get("family_execution_quota") or 0) or 1
+    )
     _total_selected = len(selected)
     # Rows past the per-batch budget are handed back so the caller can run them
     # in a later round. Dropping them here leaves the obligation with no terminal
@@ -376,6 +424,7 @@ def execute_selected_experiments(
             obligations=_obligations_for_priority,
             behavior_ir=behavior_ir,
             budget=_budget,
+            family_quota=_family_quota,
         )
         _ordered_ids = _list(_prioritization_receipt.get("ordered_experiment_ids"))
         if _ordered_ids:
@@ -902,6 +951,7 @@ def execute_selected_experiments(
         "budget_exceeded_count": budget_exceeded,
         "budget_deferred": budget_deferred,
         "experiment_budget": _budget,
+        "family_execution_quota": _family_quota,
         "duplicate_delivery_count": duplicate_delivery_count,
         "validation_phase": _phase,
         "findings": findings,

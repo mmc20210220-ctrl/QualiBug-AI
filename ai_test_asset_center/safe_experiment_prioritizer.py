@@ -6,6 +6,16 @@ This module orders experiments by safety, observability, depth, and
 novelty potential. It never changes blocking decisions or gate standards.
 
 Ordering only affects execution sequence within a fixed budget.
+
+Family-fair execution budget (distribution balance): on top of the
+operation-fair tier, each risk family present in the pool keeps a minimum
+execution quota (top ``family_quota`` scored rows per family, default 1)
+ABOVE every second-tier row. A large, high-scoring authorization base can
+therefore never push state/idempotency/conservation/validation/privacy
+obligations out of the per-batch budget — with a budget of at least
+``family_quota * <distinct families>`` every family executes, on any
+enterprise system. Families are taken from the obligation rows themselves
+(``risk_family``, the product's open family registry), never hardcoded.
 """
 from __future__ import annotations
 
@@ -160,11 +170,27 @@ def prioritize_experiments(
     behavior_ir: dict[str, Any],
     historical_findings: list[dict[str, Any]] | None = None,
     budget: int = 100,
+    family_quota: int = 1,
 ) -> dict[str, Any]:
     """Prioritize experiments for execution within a budget.
 
-    Returns ordered list with scores. Does NOT change blocking status.
-    Low-priority obligations remain in the funnel.
+    Ordering tiers (family-fair above operation-fair, then score):
+      1. Family-fair: the top ``family_quota`` scored rows of every risk
+         family present in the pool — a minimum execution quota per family
+         so authorization can never crowd out state/idempotency/conservation/
+         validation/privacy obligations.
+      2. Operation-fair: the top scored row of every operation not already
+         promoted by the family tier — one experiment per operation minimum.
+      3. Remaining rows by score.
+
+    Guarantees (for any pool, any target): with budget >= family_quota ×
+    <distinct families> every family has at least its quota inside the
+    budget (the family tier occupies the leading positions); when several
+    families' top rows land on the same operation the two tiers together can
+    need up to <distinct operations> + <distinct families> rows, so the
+    batch executor floors the budget at that union bound and every operation
+    keeps its minimum too. Does NOT change blocking status. Low-priority
+    obligations remain in the funnel.
     """
     obl_by_id: dict[str, dict[str, Any]] = {}
     for obl in _list(obligations):
@@ -195,40 +221,75 @@ def prioritize_experiments(
     # Sort by score descending
     scored.sort(key=lambda x: x["score"], reverse=True)
 
-    # ── Operation-fair first tier ──
-    # The per-batch execution budget can be far smaller than the compiled
-    # pool. A global score sort lets the highest-readiness operations of a
-    # few modules monopolize every batch; the rest stay pending at
-    # OBLIGATION_BUDGET_REACHED and whole operations (modules) never execute.
+    quota = max(1, int(family_quota or 1))
+
+    # ── Family-fair first tier ──
+    # Each risk family present in the pool keeps its minimum execution quota
+    # (top `quota` scored rows per family) above every second-tier row, so a
+    # large authorization base can never push state/idempotency/conservation/
+    # validation/privacy obligations out of the per-batch budget.
+    family_taken: dict[str, int] = {}
+    family_tier: list[dict[str, Any]] = []
+    for item in scored:
+        family = _text(item.get("risk_family"))
+        if not family:
+            continue
+        if family_taken.get(family, 0) >= quota:
+            continue
+        family_taken[family] = family_taken.get(family, 0) + 1
+        family_tier.append(item)
+    family_tier.sort(
+        key=lambda x: (-float(x["score"]), _text(x["obligation_id"]))
+    )
+    family_tier_ids = {_text(item["obligation_id"]) for item in family_tier}
+
+    # ── Operation-fair second tier ──
     # Promote the top-scoring experiment of each distinct operation above all
-    # second-tier rows, so any budget that fits one experiment per operation
-    # always covers every operation. Ordering still respects readiness within
-    # the promoted tier; nothing about blocking or gate standards changes.
-    promoted: dict[str, dict[str, Any]] = {}
+    # remaining rows, so any budget that fits one experiment per operation
+    # always covers every operation. An operation whose top row was already
+    # promoted by the family tier is covered there — its second row must not
+    # consume an operation-tier slot.
+    promoted_ops: set[str] = set()
+    operation_tier: list[dict[str, Any]] = []
     for item in scored:
         op = item["operation_key"]
-        if op and op not in promoted:
-            promoted[op] = item
-    if promoted:
-        promoted_items = sorted(
-            promoted.values(),
-            key=lambda x: (-float(x["score"]), _text(x["obligation_id"])),
-        )
-        promoted_ids = {_text(item["obligation_id"]) for item in promoted_items}
-        rest = [
-            item for item in scored if _text(item["obligation_id"]) not in promoted_ids
-        ]
-        scored = promoted_items + rest
+        if not op or op in promoted_ops:
+            continue
+        promoted_ops.add(op)
+        if _text(item["obligation_id"]) in family_tier_ids:
+            continue
+        operation_tier.append(item)
+    operation_tier.sort(
+        key=lambda x: (-float(x["score"]), _text(x["obligation_id"]))
+    )
+    operation_tier_ids = {_text(item["obligation_id"]) for item in operation_tier}
+
+    # ── Remainder by score ──
+    promoted_ids = family_tier_ids | operation_tier_ids
+    rest = [
+        item for item in scored if _text(item["obligation_id"]) not in promoted_ids
+    ]
+    ordered = family_tier + operation_tier + rest
 
     # Mark budget boundary
-    for i, item in enumerate(scored):
+    for i, item in enumerate(ordered):
         item["within_budget"] = i < budget
         item["execution_rank"] = i + 1
 
+    # Family coverage within the budget (operator-visible, generic).
+    family_coverage: dict[str, int] = {}
+    for item in ordered[:budget]:
+        family = _text(item.get("risk_family"))
+        if family:
+            family_coverage[family] = family_coverage.get(family, 0) + 1
+
     return {
         "schema_version": "qualibug.experiment-priority.v1",
-        "total_scored": len(scored),
+        "total_scored": len(ordered),
         "budget": budget,
-        "within_budget_count": min(len(scored), budget),
-        "prioritized": scored,
+        "family_quota": quota,
+        "within_budget_count": min(len(ordered), budget),
+        "family_coverage": family_coverage,
+        "families_present": sorted(family_taken),
+        "prioritized": ordered,
     }
