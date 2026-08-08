@@ -471,6 +471,7 @@ def execute_non_barrier_plans(
             # -(current + 1), known only at runtime. Execute the entity's
             # status read (path bound with the body's identity value) and set
             # the delta to cross the boundary.
+            _runtime_bound_obs_path = ""
             _mutation_bound = _dict(step.get("mutation"))
             if (
                 _text(_mutation_bound.get("class")) == "runtime_boundary_break"
@@ -535,6 +536,12 @@ def execute_non_barrier_plans(
                             **request_body,
                             _delta_field: _cross_delta,
                         }
+                        # The resolver that actually carries the bound field is
+                        # the entity's status read — record it so the
+                        # governance before/after observation reads the same
+                        # entity (not a sibling resolver like the product
+                        # detail that lacks the quantity field).
+                        _runtime_bound_obs_path = _bound_path
             unresolved_body_tokens = _unresolved_body_placeholders(
                 request_body,
                 runtime_bindings,
@@ -723,12 +730,19 @@ def execute_non_barrier_plans(
                         "path": path,
                     })
                     continue
-                observation_path = _declared_observation_path(
-                    path_template,
-                    ops,
-                    runtime_bindings=runtime_bindings,
-                    request_body=request_body,
-                )
+                # The runtime boundary arm records the resolver that actually
+                # carries the bound field — that IS the entity status read and
+                # wins as the governance before/after observation path. Runtime
+                # re-derivation has no way to discover the delta write's
+                # readback; all other experiments keep their derived path.
+                observation_path = _runtime_bound_obs_path
+                if not observation_path:
+                    observation_path = _declared_observation_path(
+                        path_template,
+                        ops,
+                        runtime_bindings=runtime_bindings,
+                        request_body=request_body,
+                    )
                 # Collection creates often only declare identity GETs
                 # (…/{id}). Those cannot materialize before the write; governance
                 # may observe the create collection, and effect proof comes from
