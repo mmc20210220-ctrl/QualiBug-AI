@@ -250,8 +250,22 @@ def _attach_source_rule_identity(
 
     identity = _source_rule_identity(exp)
     governed = dict(_dict(result))
+
+    def _enrich(source: dict[str, Any]) -> dict[str, Any]:
+        # ── Source contract + runtime evidence paragraphs ──
+        # The single-statement identity above is the canonical-title contract
+        # and stays.  Every bound rule statement (all assertions, not only the
+        # first) is additionally carried as a 源契约 paragraph, and the
+        # observed runtime evidence (actor, path, dual-arm outcome,
+        # reproduction, observed response) as a 运行时证据 paragraph.
+        # Obligations without bound rules contribute no 源契约 text — nothing
+        # is ever invented.
+        from .finding_source_contract import enrich_governed_result
+
+        return enrich_governed_result(source, exp=exp)
+
     if not identity:
-        return governed
+        return _enrich(governed)
 
     findings = [
         dict(row)
@@ -292,7 +306,7 @@ def _attach_source_rule_identity(
     governed["findings"] = enriched
     if _dict(governed.get("finding")):
         governed["finding"] = enriched[0]
-    return governed
+    return _enrich(governed)
 
 
 def _finding_for_assertion(

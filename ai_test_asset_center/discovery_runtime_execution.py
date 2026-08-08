@@ -775,6 +775,38 @@ def run_experiment_candidate(
             if isinstance(row, dict)
         ],
     )
+    # ── Source contract statements for delivered findings ──
+    # Resolve each executed finding's own source_refs against the knowledge
+    # asset's rule/permission statement texts and append a 源契约 paragraph
+    # when the obligation is rule-bound (permission-matrix rows, rule library,
+    # interface contracts).  Obligations without a bound statement contribute
+    # nothing.  The finalizer has already appended assertion-derived 源契约 and
+    # the always-present 运行时证据 paragraph.
+    from .finding_source_contract import (
+        attach_evidence_paragraphs,
+        build_rule_statement_index,
+        resolve_source_ref_statements,
+    )
+
+    _knowledge_asset = _dict(plan.experiments.get("_knowledge_asset"))
+    if _knowledge_asset:
+        _statement_index = build_rule_statement_index(_knowledge_asset)
+        for _batch in (
+            batch,
+            round_two_batch,
+            *list(business_follow_on_batches or []),
+        ):
+            _batch["findings"] = [
+                attach_evidence_paragraphs(
+                    dict(row),
+                    statements=resolve_source_ref_statements(
+                        _list(row.get("source_refs")), _statement_index
+                    ),
+                    with_runtime_evidence=False,
+                )
+                for row in _list(_batch.get("findings"))
+                if isinstance(row, dict)
+            ]
     deliverable, candidates, shadow = _authority_findings(
         raw_findings=[
             dict(row)
