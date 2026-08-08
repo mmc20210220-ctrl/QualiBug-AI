@@ -1343,6 +1343,23 @@ def compile_obligations_from_behavior_ir(
                 _top_ent = _text(inv.get("entity_ref"))
                 if _top_ent:
                     _inv_entity_refs.add(_top_ent)
+                # Entity-id → name resolution: invariant operands reference the
+                # entity NODE id (bir_c62542c74b63e71f) while operations carry
+                # the entity NAME (inventory) in entity_refs — two namespaces
+                # that never intersect. Resolve node ids to their declared
+                # names so co-reference can match.
+                _entity_name_by_id = {
+                    _text(entity.get("id")): _text(
+                        entity.get("name") or entity.get("entity_ref") or ""
+                    )
+                    for entity in _list(ir.get("entities"))
+                    if isinstance(entity, dict) and _text(entity.get("id"))
+                }
+                _inv_entity_names = {
+                    _entity_name_by_id.get(_ent) or _ent
+                    for _ent in _inv_entity_refs
+                }
+                _inv_entity_refs |= {name for name in _inv_entity_names if name}
                 # V1.4.0: field-based dual-signal binding ──
                 # When invariant carries field_ids, prefer operations whose
                 # schema contains those fields (Entity + Field = dual signal).
