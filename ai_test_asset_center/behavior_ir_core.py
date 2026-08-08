@@ -1360,6 +1360,7 @@ def _relation_node(
     preconditions: list[Any] | None = None,
     effects: list[Any] | None = None,
     source_refs: list[dict[str, Any]] | None = None,
+    source_rule_statements: list[dict[str, Any]] | None = None,
     confidence: float = 0.8,
     derivation: str = "schema-derived",
     status: str = "accepted",
@@ -1367,6 +1368,17 @@ def _relation_node(
     source_relationship_ref: str = "",
     scope: str = "",
 ) -> dict[str, Any]:
+    # Source-rule statement carry: the verbatim permission/role source texts
+    # this relation was derived from (permission-matrix rows, operation role
+    # declarations).  Carried on the relation so obligation compilers can bind
+    # the rule statement into the authorization obligation property — the
+    # permission rule-binding channel.  Only verbatim source texts; a relation
+    # without a statement carries an empty list.
+    _source_rule_statements = [
+        dict(row)
+        for row in _list(source_rule_statements)
+        if isinstance(row, dict)
+    ]
     return _fact_node(
         node_id=_stable_id("rel", relation_type, from_ref, to_ref, operation_ref, actor_ref, scope),
         typed_fields={
@@ -1379,6 +1391,7 @@ def _relation_node(
             "effects": list(effects or []),
             "permission_decision": _text(permission_decision),
             "source_relationship_ref": _text(source_relationship_ref),
+            "source_rule_statements": _source_rule_statements,
         },
         source_refs=source_refs,
         confidence=confidence,
@@ -1506,6 +1519,30 @@ def _derive_permission_relations(
                     )
                     for row in scoped_rows
                 ]
+                # Permission rule-binding channel: carry the verbatim source
+                # statement of each permission-matrix row that produced this
+                # relation (evidence/statement/description text + rule id), so
+                # the authorization obligation property can bind the rule text.
+                # Only verbatim source texts are carried; rows without text are
+                # skipped.
+                source_rule_statements = [
+                    {
+                        "rule_id": _text(row.get("permission_id") or row.get("id") or ""),
+                        "statement": _text(
+                            row.get("evidence")
+                            or row.get("statement")
+                            or row.get("description")
+                        ),
+                        "role": role_key,
+                        "resource": _text(row.get("resource")),
+                    }
+                    for row in scoped_rows
+                    if _text(
+                        row.get("evidence")
+                        or row.get("statement")
+                        or row.get("description")
+                    )
+                ]
                 actions = sorted({
                     _text(action)
                     for row in scoped_rows
@@ -1525,6 +1562,7 @@ def _derive_permission_relations(
                         preconditions=preconditions,
                         effects=[{"allowed_actions": actions}],
                         source_refs=source_refs,
+                        source_rule_statements=source_rule_statements,
                         confidence=(
                             0.82
                             if permission_decision == "PERMIT"
@@ -1548,6 +1586,7 @@ def _derive_permission_relations(
                             actor_ref=actor_ref,
                             preconditions=[{"scope": "own"}],
                             source_refs=source_refs,
+                            source_rule_statements=source_rule_statements,
                             confidence=0.78,
                             derivation="explicit",
                             scope="own",
@@ -1615,6 +1654,22 @@ def _derive_permission_relations(
             locator=f"{_text(operation.get('method')).upper()} {_text(operation.get('path'))}",
             kind="operation_role_declaration",
         )]
+        # Permission rule-binding channel (operation role declaration): the
+        # operation's own verbatim role-contract text (权限：… description /
+        # summary) is the rule statement this role declaration is derived from.
+        # Only verbatim operation source text is carried; empty text carries
+        # no statement.
+        _op_contract_text = _text(
+            operation.get("description") or operation.get("summary")
+        )
+        source_rule_statements = [
+            {
+                "rule_id": operation_id,
+                "statement": _op_contract_text,
+                "role": "",
+                "resource": "",
+            }
+        ] if _op_contract_text else []
         for role_key, actors in actors_by_role.items():
             for actor in actors:
                 actor_ref = _text(actor.get("id"))
@@ -1652,6 +1707,7 @@ def _derive_permission_relations(
                     preconditions=[],
                     effects=[{"allowed_actions": ["*"]}] if decision == "PERMIT" else [],
                     source_refs=[dict(row) for row in source_refs],
+                    source_rule_statements=source_rule_statements,
                     confidence=0.9,
                     derivation="explicit",
                     status="accepted",

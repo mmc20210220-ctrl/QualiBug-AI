@@ -222,6 +222,7 @@ def _source_rule_identity(exp: dict[str, Any]) -> dict[str, str]:
         )
         statement = _text(
             expression.get("raw")
+            or field_binding.get("statement")
             or prop.get("description")
             or assertion.get("description")
         )

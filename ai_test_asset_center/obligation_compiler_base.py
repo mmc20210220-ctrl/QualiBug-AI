@@ -763,6 +763,61 @@ def _combined_source_refs(*nodes: dict[str, Any], limit: int = 5) -> list[dict[s
     return out
 
 
+def _permission_rule_binding(
+    *relations: dict[str, Any],
+    operation_ref: str = "",
+) -> dict[str, Any]:
+    """Compile the permission-rule binding carried by permit/deny/owns relations.
+
+    The binding carries the verbatim permission-matrix / operation role
+    declaration statements the relations were derived from (carried by the IR
+    builder as ``source_rule_statements`` on each relation).  This is the
+    permission rule-binding channel: authorization obligations bind their role
+    declaration to the actual permission rule statement text, so delivered
+    findings carry a 源契约 even when the knowledge asset is not present at
+    delivery time.  Only verbatim source texts are bound — relations without a
+    statement contribute nothing, and no binding is emitted when no statement
+    exists.
+    """
+    statements: list[str] = []
+    rule_refs: list[str] = []
+    for relation in relations:
+        for row in _list(_dict(relation).get("source_rule_statements")):
+            if not isinstance(row, dict):
+                continue
+            statement = _text(row.get("statement"))
+            rule_id = _text(row.get("rule_id"))
+            if statement:
+                statements.append(statement)
+            if rule_id and rule_id not in rule_refs:
+                rule_refs.append(rule_id)
+    statements = list(dict.fromkeys(statement for statement in statements if statement))
+    if not statements:
+        return {}
+    return {
+        "rule_id": rule_refs[0] if rule_refs else "",
+        "rule_fingerprint": rule_refs[0] if rule_refs else "",
+        "rule_type": "permission",
+        "statement": "；".join(statements),
+        "source_rule_refs": list(rule_refs),
+        "required_field_ids": [],
+        "typed_expression": {},
+        "operation_id": _text(operation_ref),
+    }
+
+
+def _with_permission_rule_binding(
+    property_spec: dict[str, Any],
+    *relations: dict[str, Any],
+    operation_ref: str = "",
+) -> dict[str, Any]:
+    """Attach the permission rule binding onto an authorization property spec."""
+    binding = _permission_rule_binding(*relations, operation_ref=operation_ref)
+    if binding:
+        property_spec["field_rule_binding"] = binding
+    return property_spec
+
+
 def _actor_binding_gap(
     *,
     actor: dict[str, Any],
@@ -931,14 +986,19 @@ def compile_obligations_from_behavior_ir(
                         _text(allowed.get("id")),
                         _text(denied.get("id")),
                     ],
-                    property_spec={
-                        "template": "authorization_control_treatment",
-                        "control_actor_ref": _text(allowed.get("id")),
-                        "treatment_actor_ref": _text(denied.get("id")),
-                        "operation_ref": operation_ref,
-                        "operation_path_prefix": _operation_path_prefix(op),
-                        "require_same_resource": True,
-                    },
+                    property_spec=_with_permission_rule_binding(
+                        {
+                            "template": "authorization_control_treatment",
+                            "control_actor_ref": _text(allowed.get("id")),
+                            "treatment_actor_ref": _text(denied.get("id")),
+                            "operation_ref": operation_ref,
+                            "operation_path_prefix": _operation_path_prefix(op),
+                            "require_same_resource": True,
+                        },
+                        permit_relation,
+                        deny_relation,
+                        operation_ref=operation_ref,
+                    ),
                     required_actors=[_text(allowed.get("id")), _text(denied.get("id"))],
                     required_operations=[operation_ref],
                     required_observers=["http_response", "actor_identity"],
@@ -1019,14 +1079,18 @@ def compile_obligations_from_behavior_ir(
                     obligations.append(make_obligation(
                         risk_family="authorization",
                         subject_refs=[_text(read_op.get("id")), actor_ref],
-                        property_spec={
-                            "template": "permitted_operation_invocation",
-                            "actor_ref": actor_ref,
-                            "control_actor_ref": actor_ref,
-                            "treatment_actor_ref": actor_ref,
-                            "operation_ref": _text(read_op.get("id")),
-                            "operation_path_prefix": _operation_path_prefix(read_op),
-                        },
+                        property_spec=_with_permission_rule_binding(
+                            {
+                                "template": "permitted_operation_invocation",
+                                "actor_ref": actor_ref,
+                                "control_actor_ref": actor_ref,
+                                "treatment_actor_ref": actor_ref,
+                                "operation_ref": _text(read_op.get("id")),
+                                "operation_path_prefix": _operation_path_prefix(read_op),
+                            },
+                            *actor_relations,
+                            operation_ref=_text(read_op.get("id")),
+                        ),
                         required_actors=[actor_ref],
                         required_operations=[_text(read_op.get("id"))],
                         required_observers=["http_response", "actor_identity"],
@@ -1046,14 +1110,18 @@ def compile_obligations_from_behavior_ir(
             obligations.append(make_obligation(
                 risk_family="authorization",
                 subject_refs=[operation_ref, actor_ref],
-                property_spec={
-                    "template": "permitted_operation_invocation",
-                    "actor_ref": actor_ref,
-                    "control_actor_ref": actor_ref,
-                    "treatment_actor_ref": actor_ref,
-                    "operation_ref": operation_ref,
-                    "operation_path_prefix": _operation_path_prefix(op),
-                },
+                property_spec=_with_permission_rule_binding(
+                    {
+                        "template": "permitted_operation_invocation",
+                        "actor_ref": actor_ref,
+                        "control_actor_ref": actor_ref,
+                        "treatment_actor_ref": actor_ref,
+                        "operation_ref": operation_ref,
+                        "operation_path_prefix": _operation_path_prefix(op),
+                    },
+                    *actor_relations,
+                    operation_ref=operation_ref,
+                ),
                 required_actors=[actor_ref],
                 required_operations=[operation_ref],
                 required_observers=["http_response", "actor_identity"],
@@ -1106,14 +1174,18 @@ def compile_obligations_from_behavior_ir(
                 owner = active_actors_by_id[owner_ref]
                 viewer = active_actors_by_id[viewer_ref]
                 pair_relations = relation_by_actor[owner_ref] + relation_by_actor[viewer_ref]
-                property_spec: dict[str, Any] = {
-                    "template": "owner_viewer_isolation",
-                    "owner_actor_ref": owner_ref,
-                    "viewer_actor_ref": viewer_ref,
-                    "operation_ref": _text(op.get("id")),
-                    "operation_path_prefix": _operation_path_prefix(op),
-                    "require_same_resource": True,
-                }
+                property_spec: dict[str, Any] = _with_permission_rule_binding(
+                    {
+                        "template": "owner_viewer_isolation",
+                        "owner_actor_ref": owner_ref,
+                        "viewer_actor_ref": viewer_ref,
+                        "operation_ref": _text(op.get("id")),
+                        "operation_path_prefix": _operation_path_prefix(op),
+                        "require_same_resource": True,
+                    },
+                    *pair_relations,
+                    operation_ref=_text(op.get("id")),
+                )
                 required_fixtures: list[str] = []
                 required_observers = ["http_response", "actor_identity"]
                 if has_path_target:
