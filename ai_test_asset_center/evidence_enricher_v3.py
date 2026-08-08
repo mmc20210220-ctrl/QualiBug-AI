@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_redactor import redact_artifact
+from .finding_risk_grading import apply_finding_grading as _apply_finding_grading
 
 
 CATEGORY_MODULE_MAP = {
@@ -529,6 +530,12 @@ def enrich_finding(
     ):
         computed_quality = {**computed_quality, **existing_quality}
     enriched["evidence_quality"] = computed_quality
+
+    # ── Task 10: severity/confidence differentiation grading ──
+    # Delivery-path re-grading with the full evidence chain (gate status,
+    # occurrence multiplicity, observer depth).  Idempotent and backward
+    # compatible: `severity` and `evidence_quality.level/score` are preserved.
+    enriched = _apply_finding_grading(enriched)
 
     if not _text(enriched.get("expected")):
         enriched["expected_source_status"] = "missing"

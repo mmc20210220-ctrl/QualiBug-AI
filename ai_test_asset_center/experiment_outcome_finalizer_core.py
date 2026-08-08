@@ -32,6 +32,7 @@ from .observer_contracts_base import observe_experiment_requirements
 from .runtime_binding_materializer import materialize_path as _materialize_path
 from .cleanup_equivalence import evaluate_cleanup_equivalence
 from .cleanup_observation_adapter import build_cleanup_equivalence_inputs
+from .finding_risk_grading import apply_finding_grading as _apply_finding_grading
 
 
 # ─── V1.3.0-A: Experiment Lifecycle State Machine ─────────────────────────────
@@ -2022,6 +2023,13 @@ def finalize_experiment_execution(
         status = "EXECUTED_BUT_NOT_RESTORED"
 
     # ── P0-12: Finding filter reason ──
+    # Task 10: construction-time severity/confidence grading — derives
+    # severity_grade (critical/high/medium/low) from risk_family + category +
+    # violation shape, and a dynamic confidence from the evidence chain.
+    # Preserves `severity` (P-level) and `evidence_quality.level/score`.
+    if finding is not None:
+        finding = _apply_finding_grading(finding)
+
     _finding_created = finding is not None
     _finding_filter_reason = ""
     if not _finding_created:
