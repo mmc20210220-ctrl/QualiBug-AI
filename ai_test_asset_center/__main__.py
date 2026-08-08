@@ -356,6 +356,43 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     candidates = list(canonical_scope["candidates"])
     # ── FP quality filter: demote low-confidence http_status_class findings ──
     confirmed, candidates = _filter_http_status_class_quality(confirmed, candidates)
+    # ── Verified Discovery Archive: 已验证发现跨 run 单调保持 ──
+    # 只要目标系统未修复，已交付的 defect finding（gate_passed + 复现成功）
+    # 不得因单次扫描的覆盖波动而丢失：本 run 交付并入档案，输出 findings =
+    # 本 run 新交付 ∪ 档案中未退休的历史发现（archive_entry 标记）。只有
+    # 「目标已修复」信号（连续多 run 确认）才退休——届时没发现才是正常的。
+    try:
+        from .verified_discovery_archive import (
+            apply_archive_to_run,
+            load_verified_discovery_archive,
+            merge_run_deliveries,
+            save_verified_discovery_archive,
+        )
+
+        run_identity = _text(
+            _dict(v12.get("mainline_run")).get("run_id")
+        ) or _text(campaign.get("campaign_id"))
+        archive = load_verified_discovery_archive(project, root)
+        archive = merge_run_deliveries(
+            archive,
+            run_id=run_identity,
+            campaign_id=_text(campaign.get("campaign_id")),
+            findings=confirmed,
+        )
+        confirmed, verified_archive_receipt = apply_archive_to_run(
+            archive,
+            run_id=run_identity,
+            findings=confirmed,
+        )
+        save_verified_discovery_archive(project, root, archive)
+    except Exception as _archive_exc:
+        # The archive must never block the scan; a failure is recorded
+        # visibly and the run proceeds with its own findings only.
+        verified_archive_receipt = {
+            "schema_version": "qualibug.verified-discovery-archive.v1",
+            "status": "FAILED",
+            "reason": f"{type(_archive_exc).__name__}:{str(_archive_exc)[:160]}",
+        }
     delivery_occurrences = list(canonical_scope["delivery_occurrences"])
     canonical_registry = dict(canonical_scope["canonical_defect_registry"])
     dedupe_input_count = int(
@@ -924,6 +961,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "behavior_slice_ledger": result["behavior_slice_ledger"],
             "execution_status": execution_status,
             "coverage_honesty": coverage_honesty,
+            "verified_archive_receipt": verified_archive_receipt,
             "evidence_bundle": evidence_bundle,
             "release_gate": result.get("release_gate"),
             "ui_execution_summary": ui_execution_summary,
