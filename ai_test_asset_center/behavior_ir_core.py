@@ -3232,6 +3232,355 @@ def _extract_action_phrases(
     return list(dict.fromkeys(phrases))
 
 
+# ── Subject-frame → operation binding channel ──
+# A rule's grounded semantic frame names the OBJECT it constrains
+# (优惠券必须在有效期内 → subject 优惠券 / 类目券只能用于指定类目 →
+# 类目券). The IR's subject-entity fallback binds object nouns through the
+# asset's own business-object aliases and schema tables, but it only
+# consumes n-gram rule tokens — the frame subject (structured evidence,
+# source_grounded) never participates, so object-noun rules without action
+# verbs stayed permanently unbound (operation_refs == []) and produced zero
+# obligations. This channel feeds the frame subject (+ the rule's own
+# constraint vocabulary matched against declared contract fields, for
+# subject-less rules like 必须满足最低订单金额) into the same object →
+# table → operation resolution. Fully data-driven: business-object aliases
+# and schema field names are visible enterprise material; the constraint
+# vocabulary below is industry-neutral business language (state/validity/
+# usage/scope/cap/minimum categories every system documents).
+_DECISION_OPERATION_TOKENS = (
+    "validate", "check", "verify", "eligible", "usable", "consume",
+    "apply", "simulate", "quote", "estimate", "calculate", "use",
+    "claim", "校验", "验证", "使用", "领取", "可用", "模拟", "计算",
+    "预估", "报价", "试算",
+)
+# Constraint vocabulary → contract-field name tokens. Specific groups (state/
+# validity/usage/scope/cap/minimum) score 2, the generic 金额 group scores 1,
+# so 必须满足最低订单金额 resolves to the entity that declares min_order_amount
+# instead of every entity that declares an amount field.
+_CONSTRAINT_TOKEN_FIELD_GROUPS = (
+    (("状态",), ("status", "state"), 2),
+    (
+        ("有效期", "生效", "失效", "过期", "到期", "时间"),
+        ("expires", "expiry", "valid", "start", "effective", "end"),
+        2,
+    ),
+    (("次数", "限制", "限额"), ("limit", "count", "usage", "uses"), 2),
+    (("类目", "分类", "范围"), ("categor", "scope", "class", "type"), 2),
+    (("封顶", "上限", "最大"), ("max", "cap", "ceiling"), 2),
+    (("最低", "门槛", "最小"), ("min", "minimum", "floor"), 2),
+    (("金额",), ("amount", "price", "total", "fee", "cost"), 1),
+)
+_SUBJECT_ALIAS_SUBSTRING_FLOOR = 2
+
+
+def _subject_matches_alias(subject: str, alias: str) -> bool:
+    """Exact / substring alias match between a frame subject and an object alias.
+
+    Substring covers compound subjects (优惠券状态 ⊃ 优惠券, category coupon
+    ⊃ coupon). No fuzzy similarity: only containment, never token overlap.
+    """
+    if not subject or not alias:
+        return False
+    s = subject.casefold().strip()
+    a = alias.casefold().strip()
+    if not s or not a:
+        return False
+    if s == a or s in a or a in s:
+        return True
+    # CJK compound head-noun: 类目券/折扣券 share the head noun 券 with the
+    # declared alias 优惠券. Restricted to SHORT subject noun phrases (the
+    # frame subject, never the behavior clause): a long phrase ending in a
+    # shared character (遵守封顶金额 ends 额 like 余额) is a verb phrase, not
+    # an object name, and must not head-match. Requires a unique head
+    # resolution — if two objects share the head (买家/卖家 both end 家), no
+    # binding (fail-safe).
+    if (
+        2 <= len(s) <= 4
+        and len(a) >= _SUBJECT_ALIAS_SUBSTRING_FLOOR
+        and s[-1] == a[-1]
+        and ord(s[-1]) > 127
+    ):
+        return True
+    return False
+
+
+def _constraint_field_score(statement: str, field_name: str) -> int:
+    """Score a declared contract field against the rule's constraint vocabulary."""
+    combined = f" {statement} ".casefold()
+    field = field_name.casefold()
+    score = 0
+    for terms, tokens, weight in _CONSTRAINT_TOKEN_FIELD_GROUPS:
+        if not any(term in combined for term in terms):
+            continue
+        for token in tokens:
+            if re.search(
+                rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])",
+                field,
+            ):
+                score += weight
+                break
+    return score
+
+
+def _subject_channel_resolution(
+    rule: dict[str, Any],
+    frame: dict[str, Any] | None,
+    statement: str,
+    data: dict[str, Any],
+    model: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve the governed object surface for a rule through its frame subject.
+
+    Returns subject objects (business-object names), the entity tables they
+    map to, the operations whose paths name those tables, the decision
+    operations among them, and entity-scoped contract-field operands matched
+    by the rule's constraint vocabulary. Empty op_ids means the rule has no
+    subject channel surface (caller keeps the legacy flow untouched).
+    """
+    result: dict[str, Any] = {
+        "subject_objects": [],
+        "entity_tables": [],
+        "op_ids": [],
+        "decision_op_ids": [],
+        "field_operands": [],
+        "basis": "",
+    }
+    if not isinstance(data, dict) or not isinstance(model, dict):
+        return result
+    frame = frame if isinstance(frame, dict) else {}
+    subject = _text(frame.get("subject"))
+    behavior = _text(frame.get("behavior"))
+
+    # 1) Subject nouns: the frame subject plus its behavior words. N-gram
+    #    tokens from the extractor are deliberately not used — they are
+    #    parser fragments (期内/顶金额), not object names.
+    subject_terms = {t for t in (subject, behavior) if _text(t)}
+    objects: list[dict[str, Any]] = []
+    for row in _list(data.get("business_objects")):
+        if not isinstance(row, dict):
+            continue
+        obj_name = _text(row.get("object"))
+        aliases = {
+            _text(a).casefold()
+            for a in _list(row.get("aliases"))
+            if _text(a)
+        }
+        if not obj_name:
+            continue
+        if any(
+            _subject_matches_alias(term, alias)
+            for term in subject_terms
+            for alias in aliases
+        ):
+            objects.append(row)
+
+    # 2) Constraint-field channel: an object whose declared tables carry the
+    #    rule's constraint fields (用户使用次数不能超过限制 → coupons.user_limit
+    #    / global_limit; 必须满足最低订单金额 → coupons.min_order_amount).
+    #    Subject matches dominate; the field channel adds the object when the
+    #    subject resolved to none, or when the subject's own tables carry none
+    #    of the constrained fields (the subject noun 用户使用次数 names the
+    #    limit dimension, the governed entity declares the limit fields).
+    #    Scoring is lexicographic (specific groups first): an object that
+    #    declares the SPECIFIC constrained field (min_order_amount for 最低
+    #    金额) beats an object that merely declares generic amount fields.
+    all_table_names = {
+        _text(t.get("name")).casefold()
+        for t in _list(data.get("data_tables"))
+        if isinstance(t, dict) and _text(t.get("name"))
+    }
+
+    def _object_field_scores(
+        obj_name: str,
+    ) -> tuple[int, int]:
+        specific = 0
+        generic = 0
+        seen: set[tuple[str, str]] = set()
+        obj_tables = {
+            tname
+            for tname in all_table_names
+            if (
+                tname == obj_name.casefold()
+                or tname.startswith(obj_name.casefold())
+                or obj_name.casefold().startswith(tname)
+            )
+        }
+        for tname in obj_tables:
+            for ent in _list(model.get("entities")):
+                if not isinstance(ent, dict):
+                    continue
+                ent_table = _text(ent.get("table") or ent.get("name"))
+                if ent_table.casefold() != tname:
+                    continue
+                for fnode in _list(ent.get("fields")):
+                    if not isinstance(fnode, dict):
+                        continue
+                    fname = _text(fnode.get("name"))
+                    if not fname:
+                        continue
+                    key = (tname, fname.casefold())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    score = _constraint_field_score(statement, fname)
+                    if score >= 2:
+                        specific += 1
+                    elif score == 1:
+                        generic += 1
+        return specific, generic
+
+    field_scored: list[tuple[tuple[int, int], dict[str, Any]]] = []
+    for row in _list(data.get("business_objects")):
+        if not isinstance(row, dict):
+            continue
+        obj_name = _text(row.get("object"))
+        if not obj_name:
+            continue
+        scores = _object_field_scores(obj_name)
+        if scores != (0, 0):
+            field_scored.append((scores, row))
+    field_objects = set()
+    if field_scored:
+        best = max(score for score, _ in field_scored)
+        field_objects = {
+            _text(row.get("object")).casefold()
+            for score, row in field_scored
+            if score == best
+        }
+
+    subject_names = {_text(row.get("object")).casefold() for row in objects}
+    if objects and not field_objects:
+        selected = objects
+        basis = "subject_frame"
+    elif not objects and field_objects:
+        selected = [
+            row
+            for score, row in field_scored
+            if _text(row.get("object")).casefold() in field_objects
+        ]
+        basis = "constraint_field"
+    elif objects and field_objects:
+        # Subject objects whose own tables carry none of the constrained
+        # fields describe the limit dimension, not the governed entity —
+        # replace them with the field-carrying object (用户使用次数 → the
+        # entity declaring user_limit, not the users table).  The check
+        # requires a SPECIFIC constraint match on the subject's own tables:
+        # a generic 金额 field on the subject's table (orders.total_amount)
+        # does not make 必须满足最低订单金额 an order-surface rule when the
+        # coupon entity declares the specific min_order_amount field.
+        subject_own_fields = False
+        for row in objects:
+            if _object_field_scores(_text(row.get("object")))[0] > 0:
+                subject_own_fields = True
+                break
+        if subject_own_fields:
+            selected = objects
+            basis = "subject_frame"
+        else:
+            selected = [
+                row
+                for score, row in field_scored
+                if _text(row.get("object")).casefold() in field_objects
+            ]
+            basis = "constraint_field_dominant"
+    else:
+        return result
+    if not selected:
+        return result
+    result["basis"] = basis
+    result["subject_objects"] = sorted(
+        {_text(row.get("object")).casefold() for row in selected}
+    )
+
+    # 3) Tables → operations: an operation whose PATH names the object
+    #    (coupons ↔ coupon) is the governed surface. Path segments are the
+    #    reliable signal — operation entity_refs are polluted by cross-entity
+    #    conservation equations (a balance-adjust endpoint may reference the
+    #    coupons table through a money rule) and would mis-bind the rule to
+    #    unrelated operations. Health probes are never governed.
+    entity_tables: set[str] = set()
+    for obj_name in result["subject_objects"]:
+        for tname in all_table_names:
+            if (
+                tname == obj_name
+                or tname.startswith(obj_name)
+                or obj_name.startswith(tname)
+            ):
+                entity_tables.add(tname)
+    result["entity_tables"] = sorted(entity_tables)
+    decision_ids: list[str] = []
+    for op in _list(model.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        op_id = _text(op.get("id"))
+        op_path = _text(op.get("path") or op.get("raw_path"))
+        if not op_id or not op_path:
+            continue
+        if re.search(r"(?:^|/)(?:health)(?:/|$)", op_path.casefold()):
+            continue
+        segments = [
+            seg
+            for seg in op_path.casefold().strip("/").split("/")
+            if seg and seg not in {"api", "health", "v1"}
+        ]
+        if not any(
+            _seg.startswith(_obj) or _obj.startswith(_seg)
+            for _seg in segments
+            for _obj in result["subject_objects"]
+        ):
+            continue
+        result["op_ids"].append(op_id)
+        combined = f"{op_path.casefold()} {_text(op.get('summary')).casefold()}"
+        if any(token in combined for token in _DECISION_OPERATION_TOKENS):
+            decision_ids.append(op_id)
+    result["decision_op_ids"] = decision_ids
+    # Bind the decision surface when the object has one (校验/验证/使用/领取/
+    # simulate/validate/check/use/claim…), otherwise the whole matched
+    # surface. A decision operation is where an object's eligibility rules
+    # are enforced; the collection CRUD (admin create/status) is not where
+    # 有效期/ACTIVE/类目 constraints are tested.
+    if decision_ids:
+        result["op_ids"] = decision_ids
+
+    # 4) Entity-scoped contract operands: the matched entity's fields that
+    #    the rule's constraint vocabulary names (状态→status, 有效期→expires_at,
+    #    次数→user_limit/global_limit, 类目→category_scope, 封顶→max_discount,
+    #    最低金额→min_order_amount). Scoped to the resolved entity — never
+    #    the global money fields a bare 金额 term would collect.
+    seen_fields: set[tuple[str, str]] = set()
+    for obj_name in result["subject_objects"]:
+        for tname in entity_tables:
+            for ent in _list(model.get("entities")):
+                if not isinstance(ent, dict):
+                    continue
+                ent_table = _text(ent.get("table") or ent.get("name"))
+                if ent_table.casefold() != tname:
+                    continue
+                ent_id = _text(ent.get("id")) or tname
+                for fnode in _list(ent.get("fields")):
+                    if not isinstance(fnode, dict):
+                        continue
+                    fname = _text(fnode.get("name"))
+                    if not fname:
+                        continue
+                    if _constraint_field_score(statement, fname) <= 0:
+                        continue
+                    key = (ent_id.casefold(), fname.casefold())
+                    if key in seen_fields:
+                        continue
+                    seen_fields.add(key)
+                    operand: dict[str, Any] = {
+                        "entity_ref": ent_id,
+                        "field": fname,
+                    }
+                    if _text(fnode.get("field_id")):
+                        operand["field_id"] = _text(fnode.get("field_id"))
+                    if _text(fnode.get("semantic_type")):
+                        operand["semantic_type"] = _text(fnode.get("semantic_type"))
+                    result["field_operands"].append(operand)
+    return result
+
+
 def build_behavior_ir_from_knowledge_asset(
     asset: dict[str, Any] | None,
     *,
@@ -4976,6 +5325,26 @@ def build_behavior_ir_from_knowledge_asset(
         # V1.4.0: Detect Umbrella Rules — broad statements without concrete
         # entity/field references that cannot produce testable experiments.
         _stmt_lower = statement.lower()
+        # ── Subject-frame binding channel (P0-D extension) ──
+        # Resolve the rule's governed object surface through its grounded
+        # semantic frame BEFORE the umbrella decision: a rule whose frame
+        # subject (or constraint vocabulary) resolves to declared business
+        # objects, tables and operations is concrete by construction — the
+        # umbrella overlay exists to keep VAGUE overlays out, and an object-
+        # bound rule is the opposite of vague. The channel result also feeds
+        # the decision-operation rekind and entity-scoped operands below.
+        _subject_channel = _subject_channel_resolution(
+            rule,
+            _semantic_frame if _semantic_frame.get("source_grounded") is True else None,
+            statement,
+            data,
+            model,
+        )
+        _subject_channel_ops = [
+            _text(value)
+            for value in _list(_subject_channel.get("op_ids"))
+            if _text(value)
+        ]
         _is_umbrella = any(p in _stmt_lower for p in _UMBRELLA_PATTERNS)
         if _is_umbrella:
             # P0-E: a grounded frame is structured technical evidence — the
@@ -5084,6 +5453,49 @@ def build_behavior_ir_from_knowledge_asset(
                 and len(statement) < 30
             ):
                 _is_umbrella = True
+        if _subject_channel_ops:
+            # A subject-resolved rule is concrete: the frame subject bound to
+            # real objects, tables and operations — never a vague overlay.
+            _is_umbrella = False
+            _record_fallback("SUBJECT_FRAME_CHANNEL_CONCRETE", 1)
+        # ── Decision-operation rekind + entity-scoped operands ──
+        # A rule that constrains an object's ELIGIBILITY at a decision
+        # operation (校验/验证/使用/领取/模拟/validate/check/use/claim/
+        # simulate) is a validation contract on that operation, whatever the
+        # asset classified it as (state_machine / permission_boundary /
+        # data_conservation). 优惠券状态必须为 ACTIVE 是状态约束而非状态转移;
+        # 折扣券必须遵守封顶金额 是输入边界而非全局金额守恒 — the state /
+        # conservation families would compile transition/DB-observer
+        # experiments that can never verify the decision endpoint.  The
+        # rekind fires only when the subject channel resolved DECISION
+        # operations, so lifecycle/conservation rules on non-decision
+        # surfaces (退款金额不能大于实际支付金额 → refund ops) keep their
+        # families untouched.
+        _subject_decision_ops = [
+            _text(value)
+            for value in _list(_subject_channel.get("decision_op_ids"))
+            if _text(value)
+        ]
+        if _subject_decision_ops and _rule_kind in {
+            "state_machine", "state", "permission_boundary", "permission",
+            "access_control", "data_conservation", "conservation",
+        }:
+            _rule_kind = "validation"
+            _record_fallback("SUBJECT_DECISION_OP_REKIND", 1)
+        # Entity-scoped contract operands: the resolved entity's own fields
+        # matched by the rule's constraint vocabulary (状态→status, 有效期→
+        # expires_at, 次数→user_limit/global_limit, 类目→category_scope,
+        # 封顶→max_discount, 最低金额→min_order_amount). Only attached when
+        # the rule carries no operands — rules with extracted operands keep
+        # them byte-identical.
+        _subject_field_operands = [
+            dict(row)
+            for row in _list(_subject_channel.get("field_operands"))
+            if isinstance(row, dict)
+        ]
+        if _subject_field_operands and not _rule_operands:
+            _rule_operands = _subject_field_operands
+            _record_fallback("SUBJECT_ENTITY_SCOPED_OPERANDS", len(_subject_field_operands))
         # Keep expression identity-stable. Semantic-frame enrichment is recorded on
         # the invariant node only — merging modality/polarity/condition/subject/
         # behavior into expression changes property fingerprints and silently
@@ -5339,10 +5751,58 @@ def build_behavior_ir_from_knowledge_asset(
                         }
                         and not _list(_inv_typed.get("operation_refs"))
                     ):
-                        _subject_bound_ops: list[str] = []
-                        _rule_tokens = {
-                            _text(t) for t in _list(rule.get("tokens")) if _text(t)
-                        }
+                        if _subject_channel_ops:
+                            # Subject-frame channel: the grounded frame subject
+                            # (or the rule's constraint vocabulary) resolved the
+                            # object surface already — bind it directly. The
+                            # decision-op rekind and entity-scoped operands
+                            # happened before the expression build; the
+                            # state/permission kinds reached here only when the
+                            # channel rekinded them to validation (otherwise the
+                            # kind gate above keeps them out).
+                            _channel_ops = list(dict.fromkeys(_subject_channel_ops))
+                            if "用户端" in statement:
+                                # User-facing rules (用户端不展示下架商品…) never
+                                # govern management surfaces: the admin console
+                                # is exactly who may see draft/delisted records.
+                                # Exclude admin-scoped paths so the obligation
+                                # cannot misreport legitimate management reads.
+                                _op_path_by_id = {
+                                    _text(row.get("id")): _text(
+                                        row.get("path") or row.get("raw_path")
+                                    )
+                                    for row in _list(model.get("operations"))
+                                    if isinstance(row, dict)
+                                    and _text(row.get("id"))
+                                }
+                                _channel_ops = [
+                                    _oid
+                                    for _oid in _channel_ops
+                                    if not re.search(
+                                        r"(?:^|/)(?:admin|manage|management)(?:/|$)",
+                                        _op_path_by_id.get(_oid, "").lower(),
+                                    )
+                                ]
+                            _inv_typed["operation_refs"] = list(
+                                dict.fromkeys(_channel_ops)
+                            )
+                            _subject_entity_refs = [
+                                _text(value)
+                                for value in _list(
+                                    _subject_channel.get("subject_objects")
+                                )
+                                if _text(value)
+                            ]
+                            if _subject_entity_refs:
+                                _inv_typed["subject_entity_refs"] = sorted(
+                                    _subject_entity_refs
+                                )
+                            _record_fallback("SUBJECT_FRAME_BINDING", 1)
+                        else:
+                            _subject_bound_ops: list[str] = []
+                            _rule_tokens = {
+                                _text(t) for t in _list(rule.get("tokens")) if _text(t)
+                            }
                         _subject_objects: set[str] = set()
                         for _bo in _list(data.get("business_objects")):
                             if not isinstance(_bo, dict):

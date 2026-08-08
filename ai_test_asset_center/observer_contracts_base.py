@@ -95,24 +95,41 @@ def _business_outcome_from_body(body: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return outcome
 
-    for key in ("success", "ok", "accepted", "passed"):
+    # Decision-flavoured flags: validation/eligibility endpoints (validate/
+    # check/verify/simulate) echo their decision as a boolean field
+    # (valid/eligible/approved/usable). A false decision on an accepted
+    # transport status is the target DECLARING the rejection — the same soft
+    # rejection signal as success:false. "valid" is a generic decision
+    # vocabulary word, never an industry term.
+    decision_flag_found = False
+    for key in ("success", "ok", "accepted", "passed",
+                "valid", "eligible", "approved", "usable", "enabled"):
         if key in payload:
             flag = payload.get(key)
             if isinstance(flag, bool):
                 outcome["success_flag"] = flag
+                decision_flag_found = True
                 if flag is False:
                     outcome["business_rejected"] = True
             break
 
+    # Outcome-status extraction. A body that carries a decision flag has an
+    # authoritative acceptance signal — its "code" key is the ENTITY's code
+    # (a coupon code EXPIRED50), not a rejection status, and substring reject
+    # scanning would misread the entity code as a business rejection. Only
+    # bodies WITHOUT a decision flag fall back to scanning code/result keys.
     outcome_status = ""
-    for key in ("status", "state", "code", "errorCode", "error_code", "result"):
+    status_keys = ("status", "state") if decision_flag_found else (
+        "status", "state", "code", "errorCode", "error_code", "result",
+    )
+    for key in status_keys:
         value = payload.get(key)
         if isinstance(value, (str, int)) and not isinstance(value, bool):
             outcome_status = _text(value)
             if outcome_status:
                 break
     error_obj = _dict(payload.get("error"))
-    if not outcome_status:
+    if not outcome_status and not decision_flag_found:
         for key in ("code", "message", "type"):
             value = error_obj.get(key)
             if isinstance(value, (str, int)) and not isinstance(value, bool):
@@ -2242,9 +2259,11 @@ _TYPED_ASSERTION_KINDS = {
     "json_path_compare",
     "json_path_exists",
     "json_path_type",
+    "non_negative",
     "owner_tenant_visibility",
     "postcondition",
     "privacy",
+    "response_field_absent",
     "response_rows_state_filter",
     "state",
     "state_transition",

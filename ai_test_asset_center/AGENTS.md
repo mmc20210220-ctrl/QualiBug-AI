@@ -198,7 +198,7 @@ by replacing host methods:
 | Chinese context resolution (P0-C) | `enterprise_understanding/chinese_context_resolver.py` (frame-level omitted-actor recovery from unique evidence — only-if subject, unique prior frame in the same section, unique section heading; mention-level coreference: 该X/本X/此X explicit same-sentence nouns, bare pronouns need exactly one candidate; `document_context` section/list/neighbor population; UNKNOWN never force-bound; raw text never rewritten) |
 | Concept & grounding (P0-D) | `enterprise_understanding/business_concept_registry.py` (explicit-evidence concept layer: label→canonical with priority understanding_model > identity_registry > permission_matrix > data_tables; similarity never merges) + `chinese_semantic_grounding.py` (evidence chains per SPEC §12.2: actor = permission matrix > roles > UI contract > concept registry; operation = rule ref > summary verbatim > description > rule_to_interface > formal UI contract > structural entity+CRUD; entity = declared object labels/aliases; state = field-description enum / state machines; scope = ownership phrases → structured OWN; every binding has a typed GROUNDED/AMBIGUOUS/UNKNOWN receipt) |
 | Legacy Chinese parse demotion (P0-E) | `behavior_ir_core.py` `build_behavior_ir_from_knowledge_asset` (frame-confirmation gate over the six legacy Chinese-text parse products + `frame_family_evidence` on invariants + `model["legacy_semantic_fallback_receipt"]`) + `_chinese_business_comprehension_extractor_v1.py` (candidate marking) + `_chinese_business_comprehension/__init__.py` `apply_v1_extractor_frame_confirmation` (phase-2 rule confirmation gate + `asset["v1_extractor_demotion_receipt"]`) + `obligation_compiler_base.py` (phase-3 `_FRAME_TYPE_FAMILY` family SSOT + CJK family/ownership counting) + `obligation_compiler_privacy_pair_base.py` (phase-3 CJK privacy-policy marker counting) + `behavior_semantic_mapper.py` (phase-4 finding-enrichment neutralization: no built-in path/role/SQL/industry dictionaries) |
-| Scan execution phase & per-batch budget | `product_scan_mainline.py` `_apply_scan_execution_defaults` (full discovery scans declare `validation_phase=formal` when the operator does not; the declared phase propagates through `pipeline_runtime.py` / `scan_source_runtime.py` into the receipted runtime contract) + `_experiment_batch_executor_single_finding_mechanics.py` `get_validation_budget` (small_scale ≤20 / formal ≤100, hard cap 200). An undeclared phase must never silently truncate compiled obligations at the small-scale budget — the budget is operator-visible in the runtime contract and the planning budget receipt |
+| Scan execution phase & per-batch budget | `product_scan_mainline.py` `_apply_scan_execution_defaults` (full discovery scans declare `validation_phase=formal` when the operator does not; the declared phase propagates through `pipeline_runtime.py` / `scan_source_runtime.py` into the receipted runtime contract) + `_experiment_batch_executor_single_finding_mechanics.py` `get_validation_budget` (small_scale ≤20 / formal ≤100, hard cap 200). An undeclared phase must never silently truncate compiled obligations at the small-scale budget — the budget is operator-visible in the runtime contract and the planning budget receipt. Per-batch truncation must never exclude an operation: `_operation_coverage_budget` floors the batch budget at one experiment per distinct operation (max(phase budget, min(distinct operations, 200 hard cap))), and `safe_experiment_prioritizer.py` `prioritize_experiments` promotes each operation's top-scoring experiment above all second-tier rows (operation-fair first tier), so a budget that fits one experiment per operation always executes every operation — starvation of whole operations at `OBLIGATION_BUDGET_REACHED` (measured 539/859 deferred) is structurally impossible |
 | Identity-addressed path ownership | `obligation_compiler.py` `_with_source_declared_ownership_relations` (+`_path_identity_params`: identity-shaped path params) — path-target reads/writes whose operation text declares caller-scoped ownership (本人/自己的/归属/应校验 + identity path param, or an owned collection anchor) derive source-grounded `owns` relations with `path_target` preconditions; `experiment_protocols_base.py` `_identity_addressed_read_isolation_protocol` compiles the two-arm owned-resource read (owner reads own identity-addressed resource, viewer reads the owner's resource — both paths resolved from runtime-observed `account_id`s, no create fixture) with the `_identity_addressed_read` marker consumed by `experiment_compiler_obligation_core.py` (drops the `owned_resource` fixture / `resource_ownership` observer requirements for that shape) |
 
 Chinese semantic frame contract (P0-A): the frame ledger is projected in
@@ -1013,3 +1013,118 @@ The learning loop is a first-class mainline stage, not an add-on. Anchors
   (`load_failure`, `FAILED` statuses); internal counts (patterns stored,
   obligations boosted, resolvers reordered) are mechanism observables, never
   recall/precision claims.
+
+## Rule Contract-Field Validation Binding — Implementation Anchors
+
+- **WRITE side (planning, additive IR stage)** —
+  `rule_contract_validation_binding.bind_rule_contract_validation_invariants`
+  derives `validation`-kind invariants for source constraint rules whose
+  derived invariants are still unbound (`operation_refs == []`): a rule's
+  grounded semantic-frame subject resolves to the governed schema entity via
+  the entity field nodes' own source descriptions (优惠券 ↔
+  `coupons.expires_at` — 优惠券过期时间, visible enterprise material, never a
+  translation table); the rule's constraint vocabulary (状态/有效期/次数/
+  类目/封顶/最低/金额 + English tokens — industry-neutral business language)
+  scores the entity's declared fields entity-scoped; the entity's consuming
+  operations bind through path/module identity and request/response
+  contract-field overlap with the rule's OWN top-scored constraint fields
+  (never bare trigger-text token matching); the constraint operator is
+  extracted from the behavior phrase (`must_equal`/`under_limit`/
+  `scope_restricted`/`capped`/`within_time_window`/`non_negative`/`minimum`
+  + literal expected value when the statement names one, e.g. ACTIVE);
+  operands keep only top-scored fields (a min-order rule carries
+  `min_order_amount`, not every amount field); explicit declared field names
+  in the statement (discount_amount 不能小于 0) score above vocabulary
+  groups. Staged in
+  `discovery_runtime_semantic_binding.build_behavior_ir_with_semantic_operation_bindings`
+  after `bind_business_behavior_invariants`; receipt
+  `qualibug.rule-contract-validation-binding.v1` on the IR (per-rule
+  dispositions BOUND / NO_ENTITY_FIELD_MATCH / MULTI_ENTITY_MONEY_AMBIGUOUS /
+  NO_CONSUMING_OPERATION — every skip is named, nothing fabricated).
+- **Non-duplication contract** — the stage derives only for rules where
+  every already-derived invariant is unbound; the shared subject-frame
+  channel in `behavior_ir_core.build_behavior_ir_from_knowledge_asset`
+  (frame subject → business-object aliases → tables → operations, with the
+  decision-operation rekind and entity-scoped operands) is the primary
+  channel; this stage is the fallback semantic layer that does not depend on
+  `business_objects` being populated (it reads schema tables + field
+  dictionary directly). Rules already bound by either channel are never
+  duplicated.
+- **Historical defect material (H3)** —
+  `historical_defect_rule_binding.enrich_asset_with_historical_defect_rules`
+  re-admits historical-defect documents (generic names HISTORICAL_BUGS.md /
+  historical_bugs.md / 历史缺陷* …) into the planning asset as
+  defect-class rule candidates with origin `historical_defect` (amount/
+  calculation classes → money-consistency rules that flow through the same
+  binding channel; every other class is recorded as a coverage note, never a
+  rule; entry titles only participate in classification — body words such as
+  敏感金额字段 in a role-filtering class never misclassify). Receipt
+  `qualibug.historical-defect-rule-binding.v1`. The shared requirement-doc
+  scoring change (admitting `historical_bug` source types in
+  `scan_source_runtime`) is deliberately NOT applied here — recorded for the
+  coordinator to merge.
+- **Boundaries (must hold)** — operands carry field identities from the
+  entity's own declared schema, never inferred values; the derived invariant
+  never references benchmark/GT material; a rule that cannot resolve to a
+  unique entity + fields + consuming operation stays unbound with a named
+  reason; the downstream compiler/evaluator chain (validation →
+  `validation_rejection`, http-response observer, delivery gate) is reused
+  unchanged — this stage only supplies the missing binding link.
+
+## Rule-Surface Binding & Decision-Endpoint Validation — Implementation Anchors
+
+Object-eligibility rules (优惠券必须在有效期内 / 状态必须为 ACTIVE / 使用次数
+不能超过限制 / 类目券只能用于指定类目 / 折扣券必须遵守封顶金额) are concrete
+contracts, not vague overlays, and the decision operations that enforce them
+(validate/check/use/claim/simulate) carry the verdict in the RESPONSE body.
+Anchors (update together with the code):
+
+- **Subject-frame binding channel** — `behavior_ir_core`
+  (`_subject_channel_resolution`): a rule's grounded semantic-frame subject
+  (plus its constraint vocabulary, for subject-less rules like 必须满足最低
+  订单金额) resolves through the asset's own business-object aliases →
+  schema tables → operations whose PATH segments name the object. Resolved
+  rules are never umbrella-excluded (`SUBJECT_FRAME_CHANNEL_CONCRETE`), bind
+  to the object's DECISION surface only (`SUBJECT_FRAME_BINDING`), rekind
+  state/permission/conservation rules to the validation family on that
+  surface (`SUBJECT_DECISION_OP_REKIND`), and carry entity-scoped contract
+  operands (`SUBJECT_ENTITY_SCOPED_OPERANDS` — 有效期→expires_at, 状态→
+  status, 次数→user_limit/global_limit, 类目→category_scope, 封顶→
+  max_discount, 最低金额→min_order_amount; never the global money fields a
+  bare 金额 term would collect). Vague overlays (数据一致性) stay
+  umbrella-excluded; money conservation on non-decision surfaces keeps its
+  family.
+- **Consumption-state / amount-boundary treatment arms** —
+  `experiment_protocols_base` (`_non_public_entity_treatment` consumption
+  trigger + `_amount_boundary_treatment`): the treatment input for an
+  eligibility rule is an entity row the environment ACTUALLY has in the
+  forbidden state (status non-public, validity date passed, or a declared
+  min/cap boundary) — resolved at runtime, never guessed. Mutations:
+  `runtime_entity_state_violation` (with `violation_mode` status/expiry/any)
+  and `runtime_amount_boundary_violation` (min_amount → boundary − 1;
+  max_cap → cap × 100 / rate + 1 on a percent-type row). Both are resolved
+  in `experiment_plan_step_executor_core` from the entity's own list read
+  and FAIL CLOSED when no violating row exists
+  (`BLOCKED_RUNTIME_VIOLATION_ROW_MISSING` /
+  `BLOCKED_RUNTIME_AMOUNT_BOUNDARY_ROW_MISSING`) — a treatment must never
+  silently equal the control body.
+- **Decision endpoints** — an operation whose path/summary carries
+  validation vocabulary (校验/验证/使用/领取/模拟/validate/check/use/claim/
+  simulate/estimate) is a decision surface: it does not mutate the entity,
+  its response body IS the effect. The validation protocol marks such
+  assertions `response_decision`, the observer parses decision-flavoured
+  flags (valid/eligible/approved/usable/enabled — false = business
+  rejection; the entity-code key is never misread as a reject token), and
+  the validation oracle converts an accepted 2xx with an acceptance decision
+  on a marked assertion into `VALIDATION_REJECTION_NOT_ENFORCED` (VIOLATION)
+  instead of the historical zero-effect INDETERMINATE. Unmarked experiments
+  keep the fail-closed INDETERMINATE. Cap rules assert the value bound
+  directly (`json_path_compare` with `expected_path` — discountAmount ≤
+  coupon.max_discount from the target's own response, numeric-safe).
+- **Boundaries (must hold)** — the channel is fully source-driven
+  (business-object aliases, schema fields and the rule's own text); no
+  benchmark/GT material, no industry-term tables, no fuzzy similarity
+  (containment/head-noun only, unique head required); rules that resolve to
+  nothing stay unbound with visible fallback receipts; failures are visible
+  in the attempt ledger (`BLOCKED_RUNTIME_*_ROW_MISSING`,
+  `JSON_COMPARE_EXPECTED_PATH_MISSING`).

@@ -7,6 +7,7 @@ control-body capture for treatment reuse and pre-transport binding blocks.
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 from typing import Any
@@ -48,6 +49,70 @@ from .sandbox_write_executor import (
     sandbox_write_allowed,
 )
 from .sandbox_write_executor_base import evaluator_request_trace
+
+
+def _datetime_now_utc() -> datetime:
+    """Current UTC instant for observed validity-date comparisons."""
+    return datetime.now(timezone.utc)
+
+
+def _parse_runtime_datetime(value: str) -> datetime | None:
+    """Parse an ISO-8601 / compact date-time string from observed data.
+
+    Observed validity dates arrive in many spellings (2026-08-06T23:43:11Z,
+    2026-08-06 23:43:11, 2026-08-06). Returns None when the value is not a
+    parseable date — a non-date string is never treated as an expiry signal.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        parsed = None
+    if parsed is None:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                break
+            except (TypeError, ValueError):
+                continue
+    if parsed is None:
+        return None
+    # Observed validity dates without a zone are the target's local clock;
+    # comparing them against the UTC now would raise (naive vs aware) and
+    # silently skip every row. Assume UTC for zone-less instants so an
+    # expired row is actually detected.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _numeric_field_value(
+    row: dict[str, Any],
+    *token_groups: tuple[str, ...],
+) -> float | None:
+    """Read a numeric field from an observed row by generic name tokens.
+
+    Matches the FIRST row key whose normalized name carries a token from
+    every group (min + amount → min_order_amount; max + amount →
+    max_discount). No industry terms — min/max/cap/amount/discount/percent
+    are universal contract names.
+    """
+    for key, value in row.items():
+        normalized = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+        if not all(
+            any(token in normalized for token in group)
+            for group in token_groups
+        ):
+            continue
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _resolve_route_with_fallback(
@@ -415,22 +480,185 @@ def execute_non_barrier_plans(
                                 "available", "open", "normal", "listed",
                                 "in_stock", "activated",
                             }
-                            _violating = next(
-                                (
-                                    row
-                                    for row in _runtime_entity_candidates(
-                                        _list_resp.get("body")
-                                    )
-                                    if isinstance(row, dict)
-                                    and str(
-                                        row.get(_status_field) or ""
-                                    ).lower()
+                            # Violation dimension from the rule's own
+                            # vocabulary: date-expiry rules (必须在有效期内)
+                            # need a row whose validity DATE has passed even
+                            # when its status is still public; status rules
+                            # (状态必须为 ACTIVE) need a row whose status is
+                            # non-public; anything else takes either.
+                            _violation_mode = _text(
+                                _mutation_runtime.get("violation_mode")
+                                or "any"
+                            ).lower()
+
+                            def _row_identity(row: dict[str, Any]) -> Any:
+                                # The row's own identity slot: the body's
+                                # identity field when present, else any
+                                # id-named key (id/no/code/sku/key/ref —
+                                # generic relational naming). A list read's
+                                # rows carry their collection primary key
+                                # (id), not the request body's parameter
+                                # name (orderId) — both are the same entity.
+                                if row.get(_identity_field) not in (None, ""):
+                                    return row.get(_identity_field)
+                                for _key, _value in row.items():
+                                    if _value in (None, ""):
+                                        continue
+                                    if re.search(
+                                        r"(?:^|_)(?:id|no|code|sku|key|ref)$",
+                                        str(_key),
+                                        re.IGNORECASE,
+                                    ):
+                                        return _value
+                                return None
+
+                            def _status_violating(row: Any) -> bool:
+                                return (
+                                    isinstance(row, dict)
+                                    and str(row.get(_status_field) or "").lower()
                                     not in _PUBLIC_STATUSES
-                                    and row.get(_identity_field) not in (None, "")
-                                ),
-                                None,
+                                    and _row_identity(row) is not None
+                                )
+
+                            def _expiry_violating(row: Any) -> bool:
+                                if not isinstance(row, dict):
+                                    return False
+                                if _row_identity(row) is None:
+                                    return False
+                                for _key, _value in row.items():
+                                    if not re.search(
+                                        r"(?:expire|expiry|valid_until|end_date|end_at|valid_to|valid_till|到期|失效)",
+                                        str(_key),
+                                        re.IGNORECASE,
+                                    ):
+                                        continue
+                                    try:
+                                        _parsed = _parse_runtime_datetime(
+                                            _text(_value)
+                                        )
+                                    except Exception:
+                                        continue
+                                    if _parsed is not None and _parsed < _datetime_now_utc():
+                                        return True
+                                return False
+
+                            _candidates = [
+                                row
+                                for row in _runtime_entity_candidates(
+                                    _list_resp.get("body")
+                                )
+                                if isinstance(row, dict)
+                            ]
+                            _violating = None
+                            # State-change anchored violation: the rule forbids
+                            # operations on entities in a specific state (已取消
+                            # 订单不能支付). The compiled state_prepare names the
+                            # state-change operation (取消订单); the runtime
+                            # executes it on a real candidate, reads the list
+                            # back, and accepts the row only when its read-back
+                            # state is non-public (the state change landed).
+                            # Rows whose state change fails are skipped — an
+                            # unverifiable state never fabricates a verdict.
+                            _state_prepare = _dict(
+                                _mutation_runtime.get("state_prepare")
                             )
-                            if _violating is not None:
+                            if _state_prepare:
+                                _prep_path = _text(_state_prepare.get("path"))
+                                _prep_id_param = _text(
+                                    _state_prepare.get("identity_param")
+                                ) or "id"
+                                if _prep_path:
+                                    for _cand in _candidates:
+                                        _cand_identity = _row_identity(_cand)
+                                        if _cand_identity is None:
+                                            continue
+                                        _bound_prep_path = _prep_path.replace(
+                                            "{" + _prep_id_param + "}",
+                                            str(_cand_identity),
+                                        )
+                                        _prep_resp = _run_http_step(
+                                            base_url=base_url,
+                                            method="POST",
+                                            path=_bound_prep_path,
+                                            token=_resolve_token(actor, tokens),
+                                        )
+                                        if not (
+                                            200
+                                            <= int(
+                                                _prep_resp.get("status_code") or 0
+                                            )
+                                            < 300
+                                        ):
+                                            continue
+                                        _re_read = _run_http_step(
+                                            base_url=base_url,
+                                            method="GET",
+                                            path=_resolver_path,
+                                            token=_resolve_token(actor, tokens),
+                                        )
+                                        if not (
+                                            200
+                                            <= int(
+                                                _re_read.get("status_code") or 0
+                                            )
+                                            < 300
+                                        ):
+                                            continue
+                                        for _row2 in _runtime_entity_candidates(
+                                            _re_read.get("body")
+                                        ):
+                                            if not isinstance(_row2, dict):
+                                                continue
+                                            if (
+                                                str(
+                                                    _row2.get(_status_field) or ""
+                                                ).lower()
+                                                in _PUBLIC_STATUSES
+                                            ):
+                                                continue
+                                            if (
+                                                _row_identity(_row2)
+                                                != _cand_identity
+                                            ):
+                                                continue
+                                            _violating = _row2
+                                            break
+                                        if _violating is not None:
+                                            break
+                            elif _violation_mode == "expiry":
+                                _violating = next(
+                                    (row for row in _candidates if _expiry_violating(row)),
+                                    None,
+                                )
+                                if _violating is None:
+                                    _violating = next(
+                                        (row for row in _candidates if _status_violating(row)),
+                                        None,
+                                    )
+                            elif _violation_mode == "status":
+                                _violating = next(
+                                    (row for row in _candidates if _status_violating(row)),
+                                    None,
+                                )
+                            else:
+                                _violating = next(
+                                    (
+                                        row
+                                        for row in _candidates
+                                        if _status_violating(row) or _expiry_violating(row)
+                                    ),
+                                    None,
+                                )
+                            if _violating is None:
+                                # Fail closed: a treatment that cannot name a
+                                # real violating row must never fall back to
+                                # the control body (that would fabricate a
+                                # violation verdict from identical inputs).
+                                pre_transport_block_reasons.append(
+                                    "BLOCKED_RUNTIME_VIOLATION_ROW_MISSING:"
+                                    f"{_mutation_runtime.get('class')}"
+                                )
+                            else:
                                 _json_path = _text(
                                     _mutation_runtime.get("json_path") or ""
                                 )
@@ -447,9 +675,9 @@ def execute_non_barrier_plans(
                                         and isinstance(_list_value[0], dict)
                                     ):
                                         _first = dict(_list_value[0])
-                                        _first[_elem_key] = _violating[
-                                            _identity_field
-                                        ]
+                                        _first[_elem_key] = _row_identity(
+                                            _violating
+                                        )
                                         request_body = {
                                             **request_body,
                                             _list_key: [
@@ -460,10 +688,115 @@ def execute_non_barrier_plans(
                                 else:
                                     request_body = {
                                         **request_body,
-                                        _identity_field: _violating[
-                                            _identity_field
-                                        ],
+                                        _identity_field: _row_identity(
+                                            _violating
+                                        ),
                                     }
+            # ── Runtime amount-boundary arm ──
+            # Input amount-boundary rules (必须满足最低订单金额 / 折扣券必须
+            # 遵守封顶金额) constrain the ORDER amount a decision endpoint
+            # accepts for an entity. The treatment reads the entity's list
+            # read, picks a row that DECLARES the boundary (min_order_amount,
+            # or a percent rate + max_discount), computes the violating input
+            # amount (boundary - 1 for a minimum; boundary * 100 / rate + 1
+            # for a percent cap) and swaps the entity identity into the body.
+            # All values are the environment's own observed contract data;
+            # nothing is synthesized. Fail closed when no boundary-carrying
+            # row exists — the treatment must never silently equal the
+            # control body.
+            _mutation_amount = _dict(step.get("mutation"))
+            if (
+                _text(_mutation_amount.get("class"))
+                == "runtime_amount_boundary_violation"
+                and isinstance(request_body, dict)
+                and phase == "treatment"
+            ):
+                _amount_identity_field = _text(
+                    _mutation_amount.get("identity_field")
+                )
+                _amount_body_field = _text(
+                    _mutation_amount.get("amount_field")
+                )
+                _boundary_kind = _text(
+                    _mutation_amount.get("boundary_kind")
+                ).lower()
+                _amount_resolvers = _list(
+                    _mutation_amount.get("resolver_operations")
+                )
+                _violating_amount: float | None = None
+                _boundary_row: dict[str, Any] | None = None
+                if _amount_identity_field and _amount_body_field and _amount_resolvers:
+                    _amount_resolver = _dict(_amount_resolvers[0])
+                    _amount_path = _text(_amount_resolver.get("path"))
+                    if _amount_path:
+                        _amount_list_resp = _run_http_step(
+                            base_url=base_url,
+                            method="GET",
+                            path=_amount_path,
+                            token=_resolve_token(actor, tokens),
+                        )
+                        if (
+                            200
+                            <= int(_amount_list_resp.get("status_code") or 0)
+                            < 300
+                        ):
+                            for _row in _runtime_entity_candidates(
+                                _amount_list_resp.get("body")
+                            ):
+                                if not isinstance(_row, dict):
+                                    continue
+                                if _row.get(_amount_identity_field) in (None, ""):
+                                    continue
+                                if _boundary_kind == "min_amount":
+                                    _min_value = _numeric_field_value(
+                                        _row, ("min",), ("amount", "order", "spend", "total")
+                                    )
+                                    if _min_value is None:
+                                        continue
+                                    if _min_value <= 0:
+                                        continue
+                                    _boundary_row = _row
+                                    _violating_amount = _min_value - 1
+                                    break
+                                if _boundary_kind == "max_cap":
+                                    _rate_value = None
+                                    _row_type = _text(
+                                        _row.get("type") or _row.get("kind")
+                                    ).lower()
+                                    if any(
+                                        marker in _row_type
+                                        for marker in ("percent", "rate", "%", "折扣", "比例")
+                                    ):
+                                        _rate_value = _numeric_field_value(
+                                            _row, ("amount", "rate", "percent", "value")
+                                        )
+                                    if _rate_value is None or _rate_value <= 0:
+                                        continue
+                                    _cap_value = _numeric_field_value(
+                                        _row,
+                                        ("max", "cap", "ceiling"),
+                                        ("amount", "discount"),
+                                    )
+                                    if _cap_value is None or _cap_value <= 0:
+                                        continue
+                                    _boundary_row = _row
+                                    _violating_amount = (
+                                        _cap_value * 100.0 / _rate_value + 1
+                                    )
+                                    break
+                    if _boundary_row is None or _violating_amount is None:
+                        pre_transport_block_reasons.append(
+                            "BLOCKED_RUNTIME_AMOUNT_BOUNDARY_ROW_MISSING:"
+                            f"{_boundary_kind}"
+                        )
+                    else:
+                        request_body = {
+                            **request_body,
+                            _amount_identity_field: _boundary_row[
+                                _amount_identity_field
+                            ],
+                            _amount_body_field: _violating_amount,
+                        }
             # ── Runtime boundary-break arm ──
             # Non-negative boundary rules (available_qty、locked_qty 均不能为
             # 负数) constrain the field AFTER a delta-style write (adjust
