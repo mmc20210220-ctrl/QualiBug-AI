@@ -2245,6 +2245,7 @@ _TYPED_ASSERTION_KINDS = {
     "owner_tenant_visibility",
     "postcondition",
     "privacy",
+    "response_rows_state_filter",
     "state",
     "state_transition",
     "temporal",

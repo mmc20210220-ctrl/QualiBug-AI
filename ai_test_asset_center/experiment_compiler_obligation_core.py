@@ -3023,7 +3023,10 @@ def compile_experiment_for_obligation(
     # single control call is a legitimate source-valid request and 2xx is the
     # expected outcome, so the rejection assertion must not be paired.
     _is_readonly_audit = _text(prop.get("template")).startswith("readonly_audit")
-    _is_response_side_observation = assertion_kind == "response_field_absent"
+    _is_response_side_observation = assertion_kind in {
+        "response_field_absent",
+        "response_rows_state_filter",
+    }
     # Owned-scope read arms (owned_read_scope) are the same shape: the
     # treatment is a legitimate peer-identity read whose rejection (4xx) OR
     # a caller-scoped 2xx body both satisfy the rule. A blanket 4xx-expecting

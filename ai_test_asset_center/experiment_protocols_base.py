@@ -406,6 +406,36 @@ def _concrete_ownership_body_values(
     return {"control": control, "treatment": treatment}
 
 
+def _read_side_allowed_states(
+    property_spec: dict[str, Any],
+    operation: dict[str, Any],
+) -> set[str]:
+    """Extract the ONLY row states a read surface may return.
+
+    A rule constraining response rows (用户端不展示下架商品…) has no
+    decidable assertion until the operation's own declaration names the
+    allowed state set (业务约束：用户端默认仅返回 ON_SALE 商品). The
+    allowed states are generic enum literals in that declaration — never
+    inferred from field names or response samples. Rules without the
+    declaration keep their visible BLOCKED below (no vacuous observation).
+    """
+    material = " ".join(
+        [
+            _text(_dict(property_spec.get("expression")).get("raw")),
+            _text(operation.get("description")),
+        ]
+    )
+    allowed: set[str] = set()
+    for _match in re.finditer(
+        r"(?:仅|只|默认|只会)[^。；，\n]{0,30}?"
+        r"(?:返回|展示|显示|呈现)[^。；，\n]{0,20}?"
+        r"\b([A-Z][A-Z0-9_]{2,})\b",
+        material,
+    ):
+        allowed.add(_match.group(1))
+    return allowed
+
+
 def _read_side_owned_scope_projection(
     *,
     operation: dict[str, Any],
@@ -1897,6 +1927,57 @@ def compile_family_protocol(
         ):
             parameter_location = str(tokens[0])[1:].lower()
         allows_non_body = parameter_location in {"query", "path", "header"}
+        # ── Read-side row-state filter protocol ──
+        # A rule constraining which entity rows a caller may see (用户端
+        # 不展示下架商品、草稿商品、内部商品) becomes decidable when the
+        # operation's own declaration states the ONLY row states the surface
+        # may return (业务约束：用户端默认仅返回 ON_SALE 商品). The allowed
+        # states come from that declaration — generic enum literals in the
+        # source contract, never inferred. The single control arm observes
+        # the real rows; the assertion fails on any row whose state field is
+        # outside the declared set. Without the declaration the rule stays a
+        # visible BLOCKED below (no vacuous observation).
+        _allowed_states = _read_side_allowed_states(property_spec, operation)
+        if method in {"GET", "HEAD"} and _allowed_states:
+            _read_query: dict[str, Any] = {}
+            for _param in _list(operation.get("parameters")):
+                if not isinstance(_param, dict):
+                    continue
+                if _text(_param.get("in")).lower() != "query":
+                    continue
+                if not _text(_param.get("name")):
+                    continue
+                if not (_text(_param.get("required")).lower() == "true" or _param.get("required") is True):
+                    continue
+                _param_value = (
+                    _param.get("example")
+                    or _dict(_param.get("schema")).get("example")
+                    or _param.get("default")
+                )
+                if _param_value is not None:
+                    _read_query[_text(_param.get("name"))] = _param_value
+            _read_step: dict[str, Any] = {
+                "step_id": "control_1",
+                "actor_ref": control_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "read_side_row_state_observation",
+                "protocol_step": "positive_control",
+            }
+            if _read_query:
+                _read_step["query"] = _read_query
+            return {
+                "status": "COMPILED",
+                "control_plan": [_read_step],
+                "treatment_plan": [],
+                "observers": [
+                    {"observer_id": "http_response"},
+                    {"observer_id": "typed_assertion"},
+                ],
+                "assertion": {
+                    "kind": "response_rows_state_filter",
+                    "allowed_states": sorted(_allowed_states),
+                },
+            }
         if method not in {"POST", "PUT", "PATCH", "DELETE"} and not (
             allows_non_body and method in {"GET", "HEAD"}
         ):
