@@ -201,6 +201,8 @@ by replacing host methods:
 | Scan execution phase & per-batch budget | `product_scan_mainline.py` `_apply_scan_execution_defaults` (full discovery scans declare `validation_phase=formal` when the operator does not; the declared phase propagates through `pipeline_runtime.py` / `scan_source_runtime.py` into the receipted runtime contract) + `_experiment_batch_executor_single_finding_mechanics.py` `get_validation_budget` (small_scale ≤20 / formal ≤100, hard cap 200). An undeclared phase must never silently truncate compiled obligations at the small-scale budget — the budget is operator-visible in the runtime contract and the planning budget receipt. Per-batch truncation must never exclude an operation: `_operation_coverage_budget` floors the batch budget at one experiment per distinct operation (max(phase budget, min(distinct operations, 200 hard cap))), and `safe_experiment_prioritizer.py` `prioritize_experiments` promotes each operation's top-scoring experiment above all second-tier rows (operation-fair first tier), so a budget that fits one experiment per operation always executes every operation — starvation of whole operations at `OBLIGATION_BUDGET_REACHED` (measured 539/859 deferred) is structurally impossible |
 | Identity-addressed path ownership | `obligation_compiler.py` `_with_source_declared_ownership_relations` (+`_path_identity_params`: identity-shaped path params) — path-target reads/writes whose operation text declares caller-scoped ownership (本人/自己的/归属/应校验 + identity path param, or an owned collection anchor) derive source-grounded `owns` relations with `path_target` preconditions; `experiment_protocols_base.py` `_identity_addressed_read_isolation_protocol` compiles the two-arm owned-resource read (owner reads own identity-addressed resource, viewer reads the owner's resource — both paths resolved from runtime-observed `account_id`s, no create fixture) with the `_identity_addressed_read` marker consumed by `experiment_compiler_obligation_core.py` (drops the `owned_resource` fixture / `resource_ownership` observer requirements for that shape) |
 | Read-side row-state allowed-set fallback | `experiment_protocols_base.py` `_read_side_allowed_states` — primary source is the operation's own declaration (仅返回 ON_SALE); when absent, an entity-state exposure rule (用户端不展示下架商品…: exposure verb + generic non-public state word) on a PUBLIC surface (no `required_roles`) resolves the allowed set from the rule's subject entity's declared STATE enum (`semantic_type=STATE` + `enum_values` in the IR entity model), keeping only literals whose own meaning is public (`_READ_SIDE_PUBLIC_STATE_LITERALS` — ON_SALE/ACTIVE/ENABLED/PUBLISHED/…; literal semantics, never a translation table). Restricted surfaces (declared roles) stay excluded — their rows legitimately include non-public states the owner may see. Rules without a declaration or enum keep the visible `read_side_rule_lacks_decidable_assertion` BLOCKED (no vacuous observation) |
+| Validation mutation array-item descent | `experiment_protocols_base.py` `_validation_protocol_material` Strategy 1 — when a top-level schema property is an array with declared `items.properties` (batch-create/detail bodies: `products: [{...}]`, `items: [{...}]`), the semantic invalid-value heuristics descend into the first element: explicit rule targets first, then element property order; the mutation addresses the first element (`$.products[0].stock`, constraint `semantic:negative_value`). Arrays without a mutatable element field fall through to the existing required-removal strategy. Generic for any batch/detail body; the runtime executor already writes `$.key[0].elem` paths |
+| Query-safety injection probe | `experiment_protocols_base.py` `_semantic_invalid_value` string branch — a rule declaring query-safety vocabulary (参数化/拼接/注入/SQL/parameterized/injection/concatenat*) makes the treated string field carry a generic OWASP-style probe (`' OR '1'='1`, constraint `semantic:sql_injection_probe`). Vocabulary-gated so ordinary string fields are never mutated into probes; numeric fields keep type-gated heuristics (negative value first). Industry-neutral, never benchmark data. The rule→operation binding for query-parameter rules stays the binding channel's item (rules without a subject entity remain `operation_refs: []` until then) |
 | Anonymous account-enumeration guard | `account_enumeration_guard.py` `build_account_enumeration_guard_obligations` (wired in `discovery_runtime_planning.py` after the state-audit block, receipt `account_enumeration_report`) — identity-locator GET/HEAD operations (generic identity vocabulary: email/phone/mobile/username/login/account/user_id…) with NO declared permits/denies relation are anonymous-reachable by definition and get a single-arm privacy guard obligation: the anonymous response must not carry account attributes (generic account-field concepts 邮箱/手机号/状态/角色 → email/phone/mobile/status/role). The obligation names the injected `anonymous` actor (empty credential binding → executor sends the request without an Authorization header), and flows through the existing response-side privacy channel (`obligation_compiler_privacy_pair_base.py` keeps single-arm field-policy obligations; `_assertion_dsl_privacy_mechanics.py` `privacy_field_policy` absent-policy + `match_field_names` scans nested field names). Structure-derived only; never benchmark or industry-specific |
 
 Chinese semantic frame contract (P0-A): the frame ledger is projected in
@@ -1072,6 +1074,44 @@ The learning loop is a first-class mainline stage, not an add-on. Anchors
   reason; the downstream compiler/evaluator chain (validation →
   `validation_rejection`, http-response observer, delivery gate) is reused
   unchanged — this stage only supplies the missing binding link.
+
+## Semantic Contract Binding — Implementation Anchors
+
+Interface-documented business contracts (per-endpoint 关键契约/业务约束 lines
+inside API documents and OpenAPI operation descriptions) bind to their owning
+operations through `enterprise_knowledge_center/semantic_contract_binding.py`
+(`apply_semantic_contract_binding`, staged in
+`discovery_runtime_planning.build_discovery_plan` after the runtime overlay
+merge and before the Behavior IR build). Pure-Chinese (CJK) business
+statements — state machine, money conservation, idempotency,
+sensitive-content contracts — previously failed every authoritative
+rule-to-interface channel (verbatim-excerpt / exclusive ASCII contract fields /
+same-source neighbors) and stayed unbound invariants with zero obligations.
+Binding channels (all evidence-carrying, `status=accepted`):
+
+- endpoint section line-range (a rule whose `source_locator=line:N` falls
+  inside an interface's section is that interface's own contract line) /
+  verbatim containment in the interface excerpt / CJK action-term bigram
+  overlap with the interface's own summary → `rule_to_interface` edge
+  (`derivation=interface_contract_attachment`);
+- OpenAPI operation-description contracts are materialized into attached
+  rules (`source_locator` with `#interface=<id>` identity, explicit
+  `operation_refs`, channel `interface_contract_declaration`);
+- conservation equations are structured into binary forms
+  (field_equality / upper_bound / non_negative) with operands resolved to
+  unique canonical fields — never the previous whole-statement multi-field
+  `unchanged_sum` garbage equation that blocked every database-numeric
+  projection;
+- state-machine forbidden/allowed transitions bind via TO-state names in the
+  bound contract text (`transition["operation_ref"]`), feeding
+  `_derive_state_transition_relations` / forbidden-transition invariants;
+- sensitive-content contracts (不得返回/禁止泄露 + key/password/secret
+  vocabulary) route to the privacy family.
+
+Pure enrichment: the adapter never invents rules, operations, actors or
+fields; every edge carries a named evidence channel; rules that resolve to
+nothing stay unbound with a named reason. Receipt
+`qualibug.semantic-contract-binding.v1` on the IR.
 
 ## Rule-Surface Binding & Decision-Endpoint Validation — Implementation Anchors
 
