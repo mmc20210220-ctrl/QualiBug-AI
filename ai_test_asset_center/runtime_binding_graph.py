@@ -1220,6 +1220,60 @@ def build_binding_plan(
                     "value_fingerprint": "",
                 })
                 continue
+            # ── Owned-resource proof without a pre-bound fixture ──
+            # A path-target write's placeholder binding resolves through a
+            # collection GET read (same_actor_list_read), which cannot prove
+            # ownership: the read returns rows the runtime cannot attribute to
+            # the control actor. When no binding already carries a
+            # fixture_setup, build the owned-resource fixture from the
+            # collection create so the owner's resource exists to aim
+            # control/treatment at. This is the generic path for
+            # isolation/visibility path-target writes (DELETE
+            # /api/users/addresses/{id} on an owned collection); without it
+            # the obligation compiles to a visible BLOCKED_MISSING_FIXTURE and
+            # the ownership boundary is never tested.
+            _owned_target = ""
+            _owned_path = _text(op.get("path") or op.get("raw_path"))
+            if path_has_placeholders(_owned_path):
+                from .real_id_resolver import infer_path_params as _infer_path_params
+
+                _owned_target = next(iter(_infer_path_params(_owned_path)), "")
+            _target_binding = next((
+                item
+                for item in plan
+                if isinstance(item, dict)
+                and _text(item.get("target")) == _owned_target
+            ), None) if _owned_target else None
+            _owned_setup: dict[str, Any] = {}
+            if _owned_target and isinstance(_target_binding, dict):
+                _owned_setup = _declared_fixture_setup(
+                    operation=op,
+                    target=_owned_target,
+                    behavior_ir=behavior_ir,
+                )
+            if _owned_setup and isinstance(_target_binding, dict):
+                _target_binding["fixture_setup"] = _owned_setup
+                _target_binding["force_fixture_setup"] = True
+                _target_binding["required_fixture_id"] = name
+                _target_binding["fixture_owner_actor_ref"] = owner_actor_ref
+                plan.append({
+                    "target": f"fixture:{name}",
+                    "fixture_id": name,
+                    "status": "fixture_proof",
+                    "source_priority": "owned_resource_create_fixture",
+                    "binding_target": _text(_target_binding.get("target")),
+                    "owner_actor_ref": owner_actor_ref,
+                    "create_operation_ref": _text(_owned_setup.get("operation_ref")),
+                    "create_path": _text(_owned_setup.get("path")),
+                    "proof_operation_ref": _text(op.get("id")),
+                    "cleanup_operations": [
+                        dict(row)
+                        for row in _list(_owned_setup.get("cleanup_operations"))
+                        if isinstance(row, dict)
+                    ],
+                    "value_fingerprint": "",
+                })
+                continue
         plan.append({
             "target": f"fixture:{name}",
             "fixture_id": name,

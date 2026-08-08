@@ -182,6 +182,11 @@ def _user_ir() -> dict:
             _relation("comp-delete", "compensates", "op-addresses-delete", "op-addresses-post", operation_ref="op-addresses-delete"),
             _relation("obs-profile", "observes", "op-profile", "ent-users", operation_ref="op-profile"),
             _relation("obs-search", "observes", "op-admin-search", "ent-users", operation_ref="op-admin-search"),
+            # create-fixture actor authority (permission matrix declares the
+            # role may create addresses — the fixture's owner-actor proof
+            # resolves through these permits relations)
+            _relation("perm-a-post", "permits", "actor-buyer-a", "op-addresses-post", operation_ref="op-addresses-post", actor_ref="actor-buyer-a"),
+            _relation("perm-b-post", "permits", "actor-buyer-b", "op-addresses-post", operation_ref="op-addresses-post", actor_ref="actor-buyer-b"),
         ],
     })
     return ir
@@ -344,3 +349,75 @@ def test_family_protocol_direct_shape() -> None:
     assert protocol["status"] == "COMPILED"
     assert protocol.get("_identity_addressed_read") is True
     assert protocol["assertion"]["kind"] == "owner_tenant_visibility"
+
+
+def test_path_target_write_isolation_gets_owned_resource_fixture_proof() -> None:
+    """Path-target write isolation (DELETE /api/users/addresses/{id}) must
+    materialize the owned-resource proof from the collection create even when
+    the placeholder binding resolves through a collection GET read — otherwise
+    the ownership boundary never compiles (BLOCKED_MISSING_FIXTURE)."""
+    from ai_test_asset_center.runtime_binding_graph import build_binding_plan
+
+    ir = _user_ir()
+    # give the create operation a request example so the fixture is buildable
+    for op in ir["operations"]:
+        if op.get("id") == "op-addresses-post":
+            op["request_example"] = {"receiver": "张三", "phone": "13800000000"}
+    compiled = compile_obligations_from_behavior_ir(ir)
+    delete_iso = next(
+        row
+        for row in compiled["obligations"]
+        if row["risk_family"] == "isolation"
+        and row["property"]["operation_ref"] == "op-addresses-delete"
+    )
+    del_op = next(op for op in ir["operations"] if op.get("id") == "op-addresses-delete")
+    plan = build_binding_plan(
+        operation=del_op,
+        obligation=delete_iso,
+        actors=[a for a in ir["actors"] if a["id"] in delete_iso.get("required_actors", [])],
+        behavior_ir=ir,
+    )
+    proofs = [
+        row
+        for row in plan
+        if row.get("fixture_id") == "owned_resource"
+        and row.get("status") == "fixture_proof"
+    ]
+    assert proofs, "owned_resource must compile to a fixture_proof from the collection create"
+    assert proofs[0].get("create_operation_ref") == "op-addresses-post"
+    owner = delete_iso["property"].get("owner_actor_ref")
+    assert proofs[0].get("owner_actor_ref") == owner
+
+
+def test_path_target_write_without_create_fixture_stays_required() -> None:
+    """Without a buildable create fixture the owned_resource proof stays a
+    visible 'required' entry (the compile blocks with BLOCKED_MISSING_FIXTURE
+    instead of silently degrading the ownership test)."""
+    from ai_test_asset_center.runtime_binding_graph import build_binding_plan
+
+    ir = _user_ir()
+    # strip the create example: fixture cannot be built
+    for op in ir["operations"]:
+        if op.get("id") == "op-addresses-post":
+            op.pop("request_example", None)
+    compiled = compile_obligations_from_behavior_ir(ir)
+    delete_iso = next(
+        row
+        for row in compiled["obligations"]
+        if row["risk_family"] == "isolation"
+        and row["property"]["operation_ref"] == "op-addresses-delete"
+    )
+    del_op = next(op for op in ir["operations"] if op.get("id") == "op-addresses-delete")
+    plan = build_binding_plan(
+        operation=del_op,
+        obligation=delete_iso,
+        actors=[a for a in ir["actors"] if a["id"] in delete_iso.get("required_actors", [])],
+        behavior_ir=ir,
+    )
+    required = [
+        row
+        for row in plan
+        if row.get("fixture_id") == "owned_resource"
+        and row.get("status") == "required"
+    ]
+    assert required, "unbuildable fixture must stay a visible required entry"
