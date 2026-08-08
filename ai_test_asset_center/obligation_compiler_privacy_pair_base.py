@@ -19,6 +19,14 @@ from .obligation_compiler_base import *  # noqa: F401,F403
 _original_compile = _base.compile_obligations_from_behavior_ir
 _PAIR_FAMILIES = frozenset({"privacy", "visibility"})
 
+# Response-side constraint signals — the same generic business syntax the
+# protocol layer uses for response_field_absent (导出结果禁止包含 password):
+# a rule carrying one of these constrains RESPONSE content, so its obligation
+# is a single-arm field check that must survive actor pairing. Kept in sync
+# with experiment_protocols_base._RESPONSE_SIDE_SIGNALS (single source of
+# vocabulary, mirrored here to avoid an import cycle).
+_RESPONSE_SIDE_SIGNALS = ("导出", "结果", "响应", "返回", "输出")
+
 # P0-E phase-3: CJK privacy policy markers (从 obligation_compiler 的
 # _ABSENT_MARKERS/_MASK_MARKERS 中文项派生——SSOT 单一词表，不重复定义)
 # 是 legacy 候选提示；frame 通道尚无隐私策略粒度（登记扩展点），计数使
@@ -161,6 +169,57 @@ def _pair_obligations(
             and treatment_ref
             and control_ref != treatment_ref
         ):
+            paired.append(dict(obligation))
+            continue
+
+        # ── Single-arm privacy field constraints ──
+        # A privacy rule constraining RESPONSE content (导出结果禁止包含
+        # password / 响应不得返回密钥) is a single-arm field check: any
+        # permitted actor's read IS the observation — no treatment actor is
+        # needed. Requiring a permits/denies pair here discards the obligation
+        # (BLOCKED_MISSING_ACTOR_PAIR) whenever the permission matrix declares
+        # only the allowed role, which is exactly the documented contract for
+        # admin-only exports. The response-side signal vocabulary (导出/结果/
+        # 响应/返回/输出) is the same generic business syntax the protocol
+        # layer uses for response_field_absent; keeping it in sync there is
+        # the only contract (see experiment_protocols_base._RESPONSE_SIDE_SIGNALS).
+        _privacy_expr = _dict(prop.get("expression"))
+        _privacy_raw = " ".join(
+            _text(value)
+            for value in (
+                _privacy_expr.get("raw"),
+                prop.get("source_intent"),
+                prop.get("description"),
+            )
+            if _text(value)
+        )
+        if family == "privacy" and any(
+            signal in _privacy_raw for signal in _RESPONSE_SIDE_SIGNALS
+        ):
+            # Field-policy shape: the rule names forbidden response fields
+            # (导出结果禁止包含 password) without structured operands, so the
+            # field-policy protocol's token requirement must be supplied from
+            # the rule's own text. Reuses the protocol layer's response-side
+            # extractor (same regex + secret/account concept vocabulary) so the
+            # single-arm privacy_field_policy assertion checks the observed
+            # body for exactly the forbidden material the rule declared.
+            from .experiment_protocols_base import (
+                _extract_forbidden_response_fields,
+            )
+
+            _forbidden, _family_match = _extract_forbidden_response_fields(
+                {"expression": _privacy_expr}
+            )
+            if _forbidden:
+                prop = dict(prop)
+                prop.update({
+                    "privacy_test_mode": "field_policy",
+                    "privacy_policy": "absent",
+                    "field_tokens": list(dict.fromkeys(_forbidden)),
+                    "match_field_names": True,
+                    "privacy_field_source": "response_side_rule_text",
+                })
+                obligation = {**dict(obligation), "property": prop}
             paired.append(dict(obligation))
             continue
 

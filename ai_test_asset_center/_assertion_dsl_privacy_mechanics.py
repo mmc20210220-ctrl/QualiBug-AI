@@ -86,6 +86,51 @@ def _resolve_at(value: Any, tokens: list[str | int]) -> tuple[bool, Any]:
     return True, current
 
 
+def _field_name_matches(field_name: str, token: str) -> bool:
+    """Normalized field-name match for name-mode tokens.
+
+    A rule like 导出结果禁止包含 password names the forbidden field by its
+    identifier; the observed body may nest it at any depth (rows[].password).
+    Both sides normalize (lowercase, non-alphanumerics stripped) and the
+    token must be a substring of the normalized field name (password matches
+    password / user_password / credentials matches credential), so a
+    response-side rule fires wherever the declared field appears.
+    """
+    normalized_field = re.sub(r"[^a-z0-9]+", "", str(field_name).lower())
+    normalized_token = re.sub(r"[^a-z0-9]+", "", str(token).lower())
+    return bool(normalized_token) and normalized_token in normalized_field
+
+
+def _field_name_occurrences(value: Any, tokens: list[str | int]) -> list[Any]:
+    """Recursive field-NAME scan for response-side privacy rules.
+
+    The JSON-path mode (`_field_occurrences`) requires structured operand
+    paths; a response-side rule (导出结果禁止包含 password) declares only the
+    forbidden field name, whose nesting depth in the observed body is not
+    part of the rule. This mode scans every dict key at every depth and
+    reports the values under any key matching one of the tokens.
+    """
+    string_tokens = [token for token in tokens if isinstance(token, str)]
+    if not string_tokens:
+        return []
+    occurrences: list[Any] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                if any(_field_name_matches(str(key), token) for token in string_tokens):
+                    occurrences.append(child)
+                if isinstance(child, (dict, list)):
+                    visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                if isinstance(child, (dict, list)):
+                    visit(child)
+
+    visit(value)
+    return occurrences
+
+
 def _field_occurrences(value: Any, tokens: list[str | int]) -> list[Any]:
     occurrences: list[Any] = []
 
@@ -255,7 +300,15 @@ def evaluate_assertion(
             actual=actual,
         )
 
-    occurrences = _field_occurrences(body, tokens)
+    # Response-side rules declare the forbidden field NAME (导出结果禁止包含
+    # password), not a JSON path — the field may nest at any depth. The
+    # match_field_names mode (stamped by the response-side privacy obligation
+    # pairing) scans field names recursively; structured-operand obligations
+    # keep the exact JSON-path mode.
+    if spec.get("match_field_names") is True:
+        occurrences = _field_name_occurrences(body, tokens)
+    else:
+        occurrences = _field_occurrences(body, tokens)
     actual.update({
         "occurrence_count": len(occurrences),
         "value_types": sorted({type(value).__name__ for value in occurrences}),

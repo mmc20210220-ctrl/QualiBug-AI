@@ -421,3 +421,144 @@ def test_path_target_write_without_create_fixture_stays_required() -> None:
         and row.get("status") == "required"
     ]
     assert required, "unbuildable fixture must stay a visible required entry"
+
+
+# ── USER-008: response-side privacy rule survives actor pairing ──
+
+
+def test_response_side_privacy_obligation_survives_pairing() -> None:
+    """A privacy rule constraining RESPONSE content (导出结果禁止包含
+    password) is a single-arm field check: the permits/denies actor pairing
+    must keep the obligation (not discard it as BLOCKED_MISSING_ACTOR_PAIR)
+    and stamp the field-policy shape from the rule's own text."""
+    from ai_test_asset_center.obligation_compiler_privacy_pair_base import (
+        _pair_obligations,
+    )
+    from ai_test_asset_center.test_obligation import make_obligation
+
+    ir = empty_behavior_ir(project_id="pair-privacy")
+    ir["actors"] = [{
+        "id": "actor-admin", "role": "admin", "account_ref": "admin",
+        "account_status": "active", "credential_secret_ref": "secret_ref:test_accounts:admin",
+    }]
+    ir["operations"] = [{
+        "id": "op-export", "method": "GET", "path": "/api/users/admin/export",
+        "read_write": "read",
+        "source_refs": [{"source_id": "api_spec", "locator": "GET /api/users/admin/export", "kind": "api_operation"}],
+    }]
+    obl = make_obligation(
+        risk_family="privacy",
+        subject_refs=["inv-1", "op-export"],
+        property_spec={
+            "template": "invariant_privacy",
+            "invariant_ref": "inv-1",
+            "operation_ref": "op-export",
+            "expression": {
+                "kind": "privacy", "operator": "must_hold", "operands": [],
+                "raw": "导出结果禁止包含 password 或其他认证凭据",
+            },
+        },
+        required_actors=[],
+        required_operations=["op-export"],
+        required_observers=["http_response"],
+        source_refs=[{"source_id": "api_spec", "locator": "GET /api/users/admin/export", "kind": "api_operation"}],
+    )
+    result = {"obligations": [obl], "coverage_gaps": [], "by_family": {"privacy": 1}, "obligation_count": 1}
+    out = _pair_obligations(result, ir)
+    kept = [
+        row
+        for row in out["obligations"]
+        if row["risk_family"] == "privacy"
+    ]
+    assert kept, "response-side privacy obligation must survive pairing"
+    prop = kept[0]["property"]
+    assert prop.get("privacy_test_mode") == "field_policy"
+    assert prop.get("privacy_policy") == "absent"
+    assert "password" in prop.get("field_tokens", [])
+    assert "credential" in prop.get("field_tokens", [])
+
+
+def test_response_side_privacy_obligation_compiles_single_arm_read() -> None:
+    """The kept obligation compiles as a single-arm read with the
+    privacy_field_policy assertion (no treatment actor required)."""
+    from ai_test_asset_center.obligation_compiler_privacy_pair_base import (
+        _pair_obligations,
+    )
+    from ai_test_asset_center.test_obligation import make_obligation
+
+    ir = empty_behavior_ir(project_id="pair-privacy-compile")
+    ir["actors"] = [{
+        "id": "actor-admin", "role": "admin", "account_ref": "admin",
+        "account_status": "active", "credential_secret_ref": "secret_ref:test_accounts:admin",
+    }]
+    ir["operations"] = [{
+        "id": "op-export", "method": "GET", "path": "/api/users/admin/export",
+        "read_write": "read",
+        "source_refs": [{"source_id": "api_spec", "locator": "GET /api/users/admin/export", "kind": "api_operation"}],
+    }]
+    obl = make_obligation(
+        risk_family="privacy",
+        subject_refs=["inv-1", "op-export"],
+        property_spec={
+            "template": "invariant_privacy",
+            "invariant_ref": "inv-1",
+            "operation_ref": "op-export",
+            "expression": {
+                "kind": "privacy", "operator": "must_hold", "operands": [],
+                "raw": "导出结果禁止包含 password 或其他认证凭据",
+            },
+        },
+        required_actors=["actor-admin"],
+        required_operations=["op-export"],
+        required_observers=["http_response"],
+        source_refs=[{"source_id": "api_spec", "locator": "GET /api/users/admin/export", "kind": "api_operation"}],
+    )
+    result = {"obligations": [obl], "coverage_gaps": [], "by_family": {"privacy": 1}, "obligation_count": 1}
+    kept = _pair_obligations(result, ir)["obligations"][0]
+    experiment = compile_experiment_for_obligation(
+        kept, behavior_ir=ir, environment_type="test",
+    )
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment.get("compile_receipt")
+    kinds = [a.get("kind") for a in experiment.get("assertions") or []]
+    assert "privacy_field_policy" in kinds
+    treatment = experiment["treatment_plan"][0]
+    assert treatment["actor_ref"] == "actor-admin"
+    assert treatment["intent"] == "privacy_field_observation"
+
+
+def test_privacy_field_policy_absent_assertion_violates_on_present_field() -> None:
+    """The absent policy must VIOLATE when the observed body carries a
+    forbidden token (export response containing password)."""
+    from ai_test_asset_center._assertion_dsl_privacy_mechanics import (
+        evaluate_assertion as _privacy_evaluate,
+    )
+
+    receipt = _privacy_evaluate(
+        {
+            "kind": "privacy_field_policy",
+            "privacy_policy": "absent",
+            "field_tokens": ["password", "credential"],
+            "match_field_names": True,
+        },
+        observations={
+            "status_code": 200,
+            "body": {"rows": [{"id": "u1", "email": "a@b.c", "password": "secret", "role": "seller"}]},
+        },
+        source_refs=[{"source_id": "api_spec", "locator": "GET /api/users/admin/export", "kind": "api_operation"}],
+    )
+    assert receipt["status"] == "VIOLATION", receipt.get("reason_code")
+    # compliant target: no forbidden token -> PASS
+    clean = _privacy_evaluate(
+        {
+            "kind": "privacy_field_policy",
+            "privacy_policy": "absent",
+            "field_tokens": ["password", "credential"],
+            "match_field_names": True,
+        },
+        observations={
+            "status_code": 200,
+            "body": {"rows": [{"id": "u1", "email": "a@b.c", "role": "seller"}]},
+        },
+        source_refs=[{"source_id": "api_spec", "locator": "GET /api/users/admin/export", "kind": "api_operation"}],
+    )
+    assert clean["status"] == "PASS", clean.get("reason_code")
