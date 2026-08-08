@@ -1579,6 +1579,76 @@ def _validation_protocol_material(
             else:
                 continue
         result = _semantic_invalid_value(field, declared_type, property_schema, semantic_text)
+        if declared_type == "array":
+            # ── Nested array-item descent ──
+            # Batch-create / detail bodies (products: [{...}], items: [{...}])
+            # carry the governed fields inside the array element schema; the
+            # top-level heuristics cannot see them, so a negative stock/price
+            # inside products[0] stayed untested and the strategy fell through
+            # to "remove the required array" (a missing-array test, not an
+            # abnormal-value test). Descend into the first element: the same
+            # semantic invalid-value heuristics over the element's own
+            # declared properties, honoring explicit rule targets first; the
+            # mutation path addresses the first element ($.products[0].stock).
+            _items_schema = _dict(property_schema.get("items"))
+            _item_properties = _dict(_items_schema.get("properties"))
+            _item_control = (
+                control[field][0]
+                if isinstance(control.get(field), list)
+                and control[field]
+                and isinstance(control[field][0], dict)
+                else None
+            )
+            if _item_properties and _item_control:
+                _item_explicit = [
+                    str(f)
+                    for f in _item_properties
+                    if str(f) in normalized_direct
+                    or re.search(
+                        rf"(?<![A-Za-z0-9_]){re.escape(str(f))}(?![A-Za-z0-9_])",
+                        semantic_text,
+                    )
+                ]
+                _item_field_order = [
+                    *_item_explicit,
+                    *[
+                        str(f)
+                        for f in _item_properties
+                        if str(f) not in _item_explicit
+                    ],
+                ]
+                for _item_field in _item_field_order:
+                    if _item_field not in _item_control:
+                        continue
+                    _item_raw = _dict(_item_properties.get(_item_field))
+                    _item_type = _text(_item_raw.get("type")).lower()
+                    if not _item_type:
+                        _item_val = _item_control[_item_field]
+                        if isinstance(_item_val, bool):
+                            _item_type = "boolean"
+                        elif isinstance(_item_val, int):
+                            _item_type = "integer"
+                        elif isinstance(_item_val, float):
+                            _item_type = "number"
+                        elif isinstance(_item_val, str):
+                            _item_type = "string"
+                        else:
+                            continue
+                    _item_result = _semantic_invalid_value(
+                        _item_field, _item_type, _item_raw, semantic_text
+                    )
+                    if _item_result is not None:
+                        _invalid_value, _constraint = _item_result
+                        treatment = deepcopy(control)
+                        treatment[field] = [
+                            {**_item_control, _item_field: _invalid_value},
+                            *list(control[field])[1:],
+                        ]
+                        return control, treatment, {
+                            "json_path": f"$.{field}[0].{_item_field}",
+                            "constraint": _constraint,
+                            "source": "request_schema",
+                        }
         if result is not None:
             invalid_value, constraint = result
             treatment = deepcopy(control)
