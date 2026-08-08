@@ -4,6 +4,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import re
 from typing import Any
 
 from .observer_contracts_base import validate_observer_receipt
@@ -328,6 +329,11 @@ SUPPORTED_KINDS = {
     # response (导出结果禁止包含 password) — the field must be absent from
     # the observed body, not merely differ between arms.
     "response_field_absent",
+    # Read-side row-state filter: a rule constrains which entity rows a
+    # caller may see (用户端不展示下架商品) and the operation's own
+    # declaration states the ONLY states it may return (仅返回 ON_SALE) —
+    # every row's state field must be within the declared set.
+    "response_rows_state_filter",
 }
 
 
@@ -998,6 +1004,68 @@ def _body_contains_family_field(body: Any, matchers: list[str]) -> list[str]:
         for item in body:
             found.extend(_body_contains_family_field(item, matchers))
     return list(dict.fromkeys(found))
+
+
+_ROW_CONTAINER_KEYS = (
+    "items", "data", "rows", "records", "results", "content", "list",
+    "entries",
+)
+
+
+def _response_rows(body: Any) -> list[Any]:
+    """Business rows of an observed response body.
+
+    A collection response is the array itself, or a dict whose container key
+    (items/data/rows/records/… — generic contract vocabulary) holds the
+    array; a dict without a recognizable container falls back to its first
+    array value. Non-collection bodies yield no rows (nothing to assert).
+    """
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        for key in _ROW_CONTAINER_KEYS:
+            value = body.get(key)
+            if isinstance(value, list):
+                return value
+        for value in body.values():
+            if isinstance(value, list):
+                return value
+    return []
+
+
+def _row_state_violations(body: Any, allowed: set[str]) -> list[dict[str, Any]]:
+    """Rows whose state field value lies outside the allowed state set.
+
+    The state field of a row is recognized generically: the first key whose
+    normalized name carries status/state, else the key whose value is one of
+    the allowed states. Rows with no recognizable state field are skipped —
+    missing structure never fabricates a verdict. Values are compared as
+    declared (the source contract's enum literal is the assertion target).
+    """
+    violations: list[dict[str, Any]] = []
+    for row in _response_rows(body):
+        if not isinstance(row, dict):
+            continue
+        state_key: str | None = None
+        state_value: Any = None
+        for key, value in row.items():
+            normalized = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+            if "status" in normalized or "state" in normalized:
+                state_key, state_value = str(key), value
+                break
+        if state_key is None:
+            for key, value in row.items():
+                if isinstance(value, str) and value in allowed:
+                    state_key, state_value = str(key), value
+                    break
+        if state_key is None:
+            continue
+        if str(state_value) not in allowed:
+            violations.append({
+                "row_state_key": state_key,
+                "row_state_value": str(state_value),
+            })
+    return violations
 
 
 def _numeric_safe_compare(left: Any, right: Any, operator: str) -> bool | None:
@@ -1892,6 +1960,31 @@ def evaluate_assertion(
                 passed = all(
                     float(after_values[term]) >= 0 for term in terms
                 )
+        elif effective_kind == "response_rows_state_filter":
+            # Read-side row-state constraint: the response rows a caller may
+            # see are limited to the declared state set (业务约束：用户端默认
+            # 仅返回 ON_SALE 商品). Every row of the observed body must carry
+            # a state field whose value is inside the declared set; any row
+            # outside it is defect evidence. Rows without a recognizable
+            # state field are not asserted — a missing structure never
+            # fabricates a verdict.
+            expected = True
+            if "body" not in obs:
+                reason_code = "HTTP_BODY_EVIDENCE_MISSING"
+            else:
+                allowed = {
+                    _text(value)
+                    for value in _list(spec.get("allowed_states"))
+                    if _text(value)
+                }
+                if not allowed:
+                    reason_code = "ROW_STATE_FILTER_ALLOWED_STATES_MISSING"
+                else:
+                    violations = _row_state_violations(obs["body"], allowed)
+                    actual = violations
+                    passed = not violations
+                    if violations:
+                        reason_code = "RESPONSE_ROW_STATE_OUTSIDE_ALLOWED"
         elif effective_kind == "idempotency_effect":
             expected_count = spec.get("expected_effect_count", 1)
             expected = {"effect_count": expected_count}

@@ -384,9 +384,13 @@ def build_contract_oracle_activation_receipt(
     if not required["treatment"]:
         # Single-arm response-side observation: a response_field_absent
         # assertion consumes only the control read's body (导出结果禁止包含
-        # password), so an empty treatment plan is not an input gap.
+        # password), so an empty treatment plan is not an input gap. The same
+        # holds for a read-side row-state filter (用户端默认仅返回 ON_SALE
+        # 商品) — its single control read observes the real rows the rule
+        # constrains.
+        _single_arm_read_kinds = {"response_field_absent", "response_rows_state_filter"}
         _requires_treatment = not any(
-            _text(_dict(assertion).get("kind")) == "response_field_absent"
+            _text(_dict(assertion).get("kind")) in _single_arm_read_kinds
             for assertion in _list(exp.get("assertions"))
             if isinstance(assertion, dict)
         )
