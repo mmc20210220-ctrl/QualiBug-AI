@@ -797,6 +797,123 @@ def execute_non_barrier_plans(
                             ],
                             _amount_body_field: _violating_amount,
                         }
+            # ── Runtime object-scope arm ──
+            # 类目券只能用于指定类目 constrains the category an entity may be
+            # applied to. The treatment reads the entity's own list read,
+            # picks a row that DECLARES a scope (category_scope non-null),
+            # and sets the line-item category to a DIFFERENT scope value
+            # observed in the same collection. All values are the
+            # environment's own observed data; fail closed when no scoped row
+            # or no distinct scope exists — the treatment must never silently
+            # equal the control body.
+            _mutation_scope = _dict(step.get("mutation"))
+            if (
+                _text(_mutation_scope.get("class")) == "runtime_scope_violation"
+                and isinstance(request_body, dict)
+                and phase == "treatment"
+            ):
+                _scope_identity_field = _text(
+                    _mutation_scope.get("identity_field")
+                )
+                _scope_field = _text(
+                    _mutation_scope.get("scope_field") or "category_scope"
+                )
+                _category_field = _text(
+                    _mutation_scope.get("category_field") or "category"
+                )
+                _scope_resolvers = _list(
+                    _mutation_scope.get("resolver_operations")
+                )
+                _scoped_row: dict[str, Any] | None = None
+                _distinct_scope = ""
+                if _scope_identity_field and _scope_resolvers:
+                    _scope_resolver = _dict(_scope_resolvers[0])
+                    _scope_path = _text(_scope_resolver.get("path"))
+                    if _scope_path:
+                        _scope_list_resp = _run_http_step(
+                            base_url=base_url,
+                            method="GET",
+                            path=_scope_path,
+                            token=_resolve_token(actor, tokens),
+                        )
+                        if (
+                            200
+                            <= int(_scope_list_resp.get("status_code") or 0)
+                            < 300
+                        ):
+                            _scope_rows = [
+                                row
+                                for row in _runtime_entity_candidates(
+                                    _scope_list_resp.get("body")
+                                )
+                                if isinstance(row, dict)
+                                and row.get(_scope_identity_field) not in (None, "")
+                            ]
+                            _declared_scopes: list[str] = []
+                            for _row in _scope_rows:
+                                _scope_value = _text(
+                                    _row.get(_scope_field)
+                                ).strip()
+                                if not _scope_value:
+                                    continue
+                                if _scope_value.casefold() not in {
+                                    s.casefold() for s in _declared_scopes
+                                }:
+                                    _declared_scopes.append(_scope_value)
+                            if len(_declared_scopes) >= 2:
+                                _scoped_row = next(
+                                    (
+                                        row
+                                        for row in _scope_rows
+                                        if _text(
+                                            row.get(_scope_field)
+                                        ).strip()
+                                        == _declared_scopes[0]
+                                    ),
+                                    None,
+                                )
+                                _distinct_scope = _declared_scopes[1]
+                    if _scoped_row is None or not _distinct_scope:
+                        pre_transport_block_reasons.append(
+                            "BLOCKED_RUNTIME_SCOPE_ROW_MISSING:"
+                            f"{_scope_field}"
+                        )
+                    else:
+                        _scope_json_path = _text(
+                            _mutation_scope.get("json_path") or ""
+                        )
+                        _nested_scope = re.match(
+                            r"^\$\.([A-Za-z_]\w*)\[0\]\.([A-Za-z_]\w*)$",
+                            _scope_json_path,
+                        )
+                        if _nested_scope:
+                            _list_key, _elem_key = _nested_scope.groups()
+                            _list_value = request_body.get(_list_key)
+                            if (
+                                isinstance(_list_value, list)
+                                and _list_value
+                                and isinstance(_list_value[0], dict)
+                            ):
+                                _first = dict(_list_value[0])
+                                _first[_elem_key] = _distinct_scope
+                                request_body = {
+                                    **request_body,
+                                    _scope_identity_field: _scoped_row[
+                                        _scope_identity_field
+                                    ],
+                                    _list_key: [
+                                        _first,
+                                        *_list_value[1:],
+                                    ],
+                                }
+                        else:
+                            request_body = {
+                                **request_body,
+                                _scope_identity_field: _scoped_row[
+                                    _scope_identity_field
+                                ],
+                                _category_field: _distinct_scope,
+                            }
             # ── Runtime boundary-break arm ──
             # Non-negative boundary rules (available_qty、locked_qty 均不能为
             # 负数) constrain the field AFTER a delta-style write (adjust

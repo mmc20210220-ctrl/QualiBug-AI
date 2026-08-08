@@ -50,7 +50,9 @@ def _validate_operation() -> dict:
         "request_example": {
             "code": "NEW100",
             "totalAmount": 6999,
-            "items": [{"sku": "SKU-001", "qty": 1, "price": 6999}],
+            "items": [
+                {"sku": "SKU-001", "qty": 1, "price": 6999, "category": "数码"},
+            ],
         },
         "request_schema": {
             "type": "object",
@@ -125,6 +127,23 @@ def test_cap_rule_builds_cap_boundary_arm():
     )
     assert mutation["class"] == "runtime_amount_boundary_violation"
     assert mutation["boundary_kind"] == "max_cap"
+
+
+def test_scope_rule_builds_scope_arm():
+    # 类目券只能用于指定类目: the treatment names a scoped entity + a
+    # distinct observed scope for the line-item category — resolved at
+    # runtime from the entity's own list read.
+    control, treatment, mutation = _validation_protocol_material(
+        _validate_operation(),
+        _property_spec("类目券只能用于指定类目"),
+        actor_catalog=[],
+        behavior_ir=_behavior_ir(),
+    )
+    assert mutation["class"] == "runtime_scope_violation"
+    assert mutation["identity_field"] == "code"
+    assert mutation["scope_field"] == "category_scope"
+    assert mutation["json_path"] == "$.items[0].category"
+    assert mutation["resolver_operations"][0]["path"] == "/api/coupons"
 
 
 def test_unrelated_rule_keeps_generic_mutation():

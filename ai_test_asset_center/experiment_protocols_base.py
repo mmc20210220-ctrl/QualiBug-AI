@@ -648,8 +648,8 @@ _ACCOUNT_STATE_RESTRICTIVE_MODALS = ("仅", "只能", "必须", "不得", "不�
 _IDENTITY_LOCATOR_KEYS = ("email", "phone", "mobile", "username", "login", "account", "user_id", "userid")
 
 # Entity identity fields a business-object reference may carry in a request
-# body (SKU / code / key / no / ref — generic relational identifiers, never
-# industry vocabulary).
+# body (SKU / code / key / no / ref / id — generic relational identifiers,
+# never industry vocabulary).
 _ENTITY_IDENTITY_FIELD_RE = re.compile(r"(?:sku|code|key|no|ref|id)$", re.I)
 
 # Public/sellable state names: a state outside this set is non-public by its
@@ -1075,6 +1075,116 @@ def _amount_boundary_treatment(
     return treatment, mutation
 
 
+def _scope_violation_treatment(
+    control: dict[str, Any],
+    semantic_text: str,
+    behavior_ir: dict[str, Any],
+    property_spec: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Build the rejection-arm body for an object-scope rule.
+
+    类目券只能用于指定类目 constrains which category an entity may be applied
+    to. The treatment uses an entity row the environment ACTUALLY has with a
+    declared scope (category_scope non-null) and sets the request's line-item
+    category to a DIFFERENT scope value observed in the same collection —
+    all values are the environment's own observed data, never synthesized.
+    The runtime resolver picks the scoped row and the distinct scope from the
+    entity's own list read.
+    """
+    _SCOPE_MARKERS = ("类目", "分类", "范围", "只能用于", "仅限")
+    if not any(m in semantic_text for m in _SCOPE_MARKERS):
+        return None
+    if not isinstance(control, dict) or not isinstance(behavior_ir, dict):
+        return None
+    identity_field = next(
+        (
+            key
+            for key in control
+            if _ENTITY_IDENTITY_FIELD_RE.search(str(key))
+        ),
+        "",
+    )
+    if not identity_field:
+        return None
+    # The line-item array carrying the category input: items[].category /
+    # lines[].type — a generic detail-array field, never an industry term.
+    items_path = ""
+    category_field = ""
+    for _body_key, _body_value in control.items():
+        if not (
+            isinstance(_body_value, list)
+            and _body_value
+            and isinstance(_body_value[0], dict)
+        ):
+            continue
+        _cat_field = next(
+            (
+                key
+                for key in _body_value[0]
+                if re.search(
+                    r"(?:categor|class|type|scope|分类|类目)",
+                    str(key),
+                    re.IGNORECASE,
+                )
+            ),
+            "",
+        )
+        if _cat_field:
+            items_path = f"$.{_body_key}[0].{_cat_field}"
+            category_field = _cat_field
+            break
+    if not items_path:
+        return None
+    subject_entities = [
+        _text(value).lower()
+        for value in _list(_dict(property_spec).get("subject_entity_refs"))
+        if _text(value)
+    ]
+    resolver = None
+    for op in _list(behavior_ir.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
+            continue
+        if re.search(r"(?:^|/)(?:health)(?:/|$)", _text(op.get("path")).lower()):
+            continue
+        if "{" in _text(op.get("path") or op.get("raw_path")):
+            continue
+        _path_segments = [
+            seg
+            for seg in _text(op.get("path") or op.get("raw_path"))
+            .lower()
+            .strip("/")
+            .split("/")
+            if seg and seg not in {"api", "health", "v1"}
+        ]
+        if subject_entities and not any(
+            _seg.startswith(_obj) or _obj.startswith(_seg)
+            for _seg in _path_segments
+            for _obj in subject_entities
+        ):
+            continue
+        resolver = {
+            "operation_ref": _text(op.get("id")),
+            "method": "GET",
+            "path": _text(op.get("path") or op.get("raw_path")),
+        }
+        break
+    if not resolver:
+        return None
+    treatment = deepcopy(control)
+    mutation = {
+        "class": "runtime_scope_violation",
+        "json_path": items_path,
+        "resolver_operations": [resolver],
+        "identity_field": identity_field,
+        "category_field": category_field,
+        "scope_field": "category_scope",
+        "status_field": "status",
+    }
+    return treatment, mutation
+
+
 def _non_active_account_treatment(
     control: dict[str, Any],
     semantic_text: str,
@@ -1276,6 +1386,17 @@ def _validation_protocol_material(
         )
         if _amount_treatment:
             treatment, mutation = _amount_treatment
+            return control, treatment, mutation
+        # ── Object-scope arm ──
+        # 类目券只能用于指定类目 constrains the category an entity may be
+        # applied to. The treatment's scoped entity + a distinct observed
+        # scope value are resolved at runtime from the environment's own
+        # collection read — never a compile-time guess.
+        _scope_treatment = _scope_violation_treatment(
+            control, _semantic_text_pre, _dict(behavior_ir), property_spec,
+        )
+        if _scope_treatment:
+            treatment, mutation = _scope_treatment
             return control, treatment, mutation
     if not schema:
         # No request body schema — but if we have a control body from
@@ -1909,6 +2030,21 @@ def compile_family_protocol(
             }
             if _bound_mutation:
                 _treatment_step["mutation"] = _bound_mutation
+                # The boundary arm's resolver IS the entity status read
+                # (GET /api/inventory/{sku}) — use it as the governance
+                # before/after observation path so after_values materializes
+                # and the non_negative assertion can evaluate. The identity
+                # value comes from the compiled body (the example SKU).
+                _obs_path = _text(
+                    _dict(_list(_bound_mutation.get("resolver_operations"))[0]).get(
+                        "path"
+                    )
+                )
+                _body_identity = _text(_dict(body).get(_identity_field) or "")
+                if _obs_path and _body_identity:
+                    _treatment_step["observation_path"] = _obs_path.replace(
+                        "{" + _identity_field + "}", _body_identity
+                    )
             _non_neg_observers: list[dict[str, Any]] = [
                 {"observer_id": "business_effect"},
                 {"observer_id": "entity_state"},
