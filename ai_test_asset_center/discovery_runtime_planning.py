@@ -440,6 +440,39 @@ def build_discovery_plan(
             "state_audit_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
+    # ── Account-enumeration guard obligations (anonymous identity queries) ──
+    # For identity-locator GET/HEAD operations with no declared permit/deny
+    # relation (anonymous-reachable by definition), generate single-arm
+    # privacy guard obligations: the anonymous response must not carry account
+    # attributes. Read-only by construction; flows through the existing
+    # response-side privacy field-policy channel.
+    account_enumeration_report: dict[str, Any] = {}
+    try:
+        from .account_enumeration_guard import (
+            build_account_enumeration_guard_obligations,
+        )
+
+        guard_obligations = build_account_enumeration_guard_obligations(behavior_ir)
+        if guard_obligations:
+            existing_sigs = {
+                _text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)
+            }
+            new_guards = [
+                go for go in guard_obligations
+                if _text(go.get("obligation_id")) not in existing_sigs
+            ]
+            obligations.extend(new_guards)
+            account_enumeration_report = {
+                "account_enumeration_obligations_generated": len(guard_obligations),
+                "account_enumeration_obligations_added": len(new_guards),
+                "total_obligations_after_account_enumeration_guard": len(obligations),
+            }
+    except Exception as exc:
+        account_enumeration_report = {
+            "account_enumeration_obligations_added": 0,
+            "account_enumeration_error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
     # ── Cross-document conflict obligations ──
     # Consume conflicts detected by enterprise_knowledge_center between
     # different source documents. Each conflict becomes a test obligation
@@ -1216,6 +1249,7 @@ def build_discovery_plan(
             "obligation_identity_receipt": _obligation_identity_receipt,
             "behavior_ir_coverage_report": coverage_report,
             "state_audit_report": state_audit_report,
+            "account_enumeration_report": account_enumeration_report,
             "conflict_report": conflict_report,
             "mainline_reasoner_report": mainline_reasoner_report,
             "fact_ref_attach_receipt": _fact_ref_attach_receipt,
