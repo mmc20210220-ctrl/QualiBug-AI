@@ -406,18 +406,37 @@ def _concrete_ownership_body_values(
     return {"control": control, "treatment": treatment}
 
 
+# Generic public-state literals: a state literal is public by its OWN English
+# meaning (ON_SALE/ACTIVE/ENABLED/PUBLISHED/…), matching the runtime
+# entity-state classification in the step executor. Literal semantics, never
+# a translation table — no industry vocabulary enters the product.
+_READ_SIDE_PUBLIC_STATE_LITERALS = frozenset({
+    "on_sale", "active", "enabled", "published", "available", "open",
+    "normal", "listed", "in_stock", "activated",
+})
+
+
 def _read_side_allowed_states(
     property_spec: dict[str, Any],
     operation: dict[str, Any],
+    behavior_ir: dict[str, Any] | None = None,
 ) -> set[str]:
     """Extract the ONLY row states a read surface may return.
 
-    A rule constraining response rows (用户端不展示下架商品…) has no
-    decidable assertion until the operation's own declaration names the
-    allowed state set (业务约束：用户端默认仅返回 ON_SALE 商品). The
-    allowed states are generic enum literals in that declaration — never
-    inferred from field names or response samples. Rules without the
-    declaration keep their visible BLOCKED below (no vacuous observation).
+    Primary source: the operation's own declaration naming the allowed state
+    set (业务约束：用户端默认仅返回 ON_SALE 商品). The allowed states are
+    generic enum literals in that declaration — never inferred from field
+    names or response samples.
+
+    Fallback (no declaration): when the rule is an entity-state exposure rule
+    (用户端不展示下架商品、草稿商品、内部商品) on a PUBLIC surface (no declared
+    roles) and the rule's subject entity carries a state enum in the IR model
+    (schema CHECK / OpenAPI enum), the allowed rows are the enum literals
+    whose own meaning is public. Restricted surfaces (卖家目录 — 商家本人或
+    管理员) stay excluded: their legitimate rows include non-public states the
+    owner may see, and a state filter would fabricate false positives.
+    Rules without the declaration keep their visible BLOCKED below (no
+    vacuous observation).
     """
     material = " ".join(
         [
@@ -433,7 +452,50 @@ def _read_side_allowed_states(
         material,
     ):
         allowed.add(_match.group(1))
-    return allowed
+    if allowed:
+        return allowed
+    # ── Fallback: exposure rule + declared entity state enum ──
+    if not any(w in material for w in _ENTITY_STATE_VIOLATION_WORDS):
+        return allowed
+    if not (
+        any(v in material for v in _ENTITY_STATE_EXPOSURE_VERBS)
+        or "出现" in material
+    ):
+        return allowed
+    if _list(operation.get("required_roles")):
+        # Restricted surface — its rows legitimately include non-public
+        # states (owner-facing catalogs, admin lists). No state filter.
+        return allowed
+    if not isinstance(behavior_ir, dict):
+        return allowed
+    subject_names = {
+        _text(value).lower()
+        for value in _list(_dict(property_spec).get("subject_entity_refs"))
+        if _text(value)
+    }
+    if not subject_names:
+        return allowed
+    enum_values: set[str] = set()
+    for entity in _list(behavior_ir.get("entities")):
+        if not isinstance(entity, dict):
+            continue
+        if _text(entity.get("name")).lower() not in subject_names:
+            continue
+        for field in _list(entity.get("fields")):
+            if not isinstance(field, dict):
+                continue
+            if _text(field.get("semantic_type")).upper() != "STATE":
+                continue
+            for value in _list(field.get("enum_values")):
+                if _text(value):
+                    enum_values.add(_text(value))
+    if not enum_values:
+        return allowed
+    return {
+        value
+        for value in enum_values
+        if value.lower() in _READ_SIDE_PUBLIC_STATE_LITERALS
+    }
 
 
 def _read_side_owned_scope_projection(
@@ -2083,7 +2145,9 @@ def compile_family_protocol(
         # the real rows; the assertion fails on any row whose state field is
         # outside the declared set. Without the declaration the rule stays a
         # visible BLOCKED below (no vacuous observation).
-        _allowed_states = _read_side_allowed_states(property_spec, operation)
+        _allowed_states = _read_side_allowed_states(
+            property_spec, operation, behavior_ir=behavior_ir
+        )
         if method in {"GET", "HEAD"} and _allowed_states:
             _read_query: dict[str, Any] = {}
             for _param in _list(operation.get("parameters")):
