@@ -473,6 +473,46 @@ def build_discovery_plan(
             "account_enumeration_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
+    # ── Credential-gated write guard obligations (unauthenticated writes) ──
+    # For WRITE operations whose own contract demands verification-based
+    # authentication (回调必须验签 / 必须完成验证码或等价身份校验) but declares
+    # no permit/deny relation (anonymous-reachable by definition), generate
+    # single-arm authorization guard obligations: the anonymous write must be
+    # rejected. The treatment body aims the identity-locator field at a real
+    # runtime account and a callback surface's status field carries the
+    # success literal — the forged state-change shape. Rejection-only by
+    # construction; flows through the authorization protocol channel with the
+    # dedicated credential_gated_write template.
+    credential_gated_write_report: dict[str, Any] = {}
+    try:
+        from .credential_gated_write_guard import (
+            build_credential_gated_write_guard_obligations,
+        )
+
+        credential_guards = build_credential_gated_write_guard_obligations(behavior_ir)
+        if credential_guards:
+            existing_sigs = {
+                _text(o.get("obligation_id"))
+                for o in obligations
+                if isinstance(o, dict)
+            }
+            new_credential_guards = [
+                go
+                for go in credential_guards
+                if _text(go.get("obligation_id")) not in existing_sigs
+            ]
+            obligations.extend(new_credential_guards)
+            credential_gated_write_report = {
+                "credential_gated_write_obligations_generated": len(credential_guards),
+                "credential_gated_write_obligations_added": len(new_credential_guards),
+                "total_obligations_after_credential_gated_write_guard": len(obligations),
+            }
+    except Exception as exc:
+        credential_gated_write_report = {
+            "credential_gated_write_obligations_added": 0,
+            "credential_gated_write_error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
     # ── Cross-document conflict obligations ──
     # Consume conflicts detected by enterprise_knowledge_center between
     # different source documents. Each conflict becomes a test obligation
@@ -1250,6 +1290,7 @@ def build_discovery_plan(
             "behavior_ir_coverage_report": coverage_report,
             "state_audit_report": state_audit_report,
             "account_enumeration_report": account_enumeration_report,
+            "credential_gated_write_report": credential_gated_write_report,
             "conflict_report": conflict_report,
             "mainline_reasoner_report": mainline_reasoner_report,
             "fact_ref_attach_receipt": _fact_ref_attach_receipt,

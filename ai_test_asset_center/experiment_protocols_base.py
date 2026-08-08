@@ -145,7 +145,9 @@ _NUMERIC_NEGATIVE_FIELDS = re.compile(
     r"(price|amount|total|balance|stock|quantity|qty|count|num|limit|quota|"
     r"weight|volume|rate|fee|cost|salary|wage|budget|credit|debit|payment|"
     r"refund|discount|tax|margin|profit|revenue|income|expense|"
-    r"价格|金额|余额|库存|数量|限额|配额|费用|单价|总价|退款|优惠)",
+    r"percent|pct|ratio|markup|"
+    r"价格|金额|余额|库存|数量|限额|配额|费用|单价|总价|退款|优惠|"
+    r"百分比|比率|调价|折扣率|上浮|下调)",
     re.IGNORECASE,
 )
 _PASSWORD_FIELDS = re.compile(
@@ -1887,6 +1889,87 @@ def compile_family_protocol(
             "assertion": {
                 "kind": "http_status_class",
                 "expected_class": 2,
+                "compare_field": "status_code",
+            },
+        }
+    # ── Credential-gated write guard ──
+    # A write operation whose own contract demands verification-based
+    # authentication (回调必须验签 / 必须完成验证码或等价身份校验) but is
+    # reachable without any declared credential is tested by an ANONYMOUS
+    # (no-credential) write: the target must reject the unverified request.
+    # The treatment body carries the documented example; the identity-locator
+    # field (email/username/…) is aimed at a real account from the runtime
+    # catalogue (the "any account" shape of a password-reset surface), and a
+    # callback surface's status field carries the success literal the state
+    # machine accepts. Single-arm by construction — there is no authorized
+    # baseline to compare; the rejection itself is the property.
+    if template == "credential_gated_write":
+        actor = treatment_actor_ref or control_actor_ref or _text(
+            property_spec.get("actor_ref")
+        )
+        if not actor:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ACTOR",
+                "detail": "credential_gated_write_actor",
+            }
+        body = source_request_example(
+            operation, sibling_operations=sibling_operations
+        )
+        if not body and method in {"POST", "PUT", "PATCH"}:
+            body = _minimal_body_from_schema(operation)
+        if not isinstance(body, dict):
+            body = {}
+        _locator_field = _text(property_spec.get("identity_locator_field"))
+        if _locator_field and _locator_field not in body:
+            # The schema may declare the locator while the example omits it;
+            # keep the probe aimed at a real account.
+            body[_locator_field] = "test_value"
+        if _locator_field:
+            # Aim the probe at a real account from the runtime catalogue — an
+            # anonymous caller must not be able to touch ANY declared account,
+            # so any account-bound actor is a valid target (never synthesized).
+            for _actor in _list(_dict(behavior_ir).get("actors")):
+                _ref = _text(_actor.get("account_ref") or _actor.get("account"))
+                if (
+                    _ref
+                    and _text(_actor.get("role")).lower()
+                    not in {"anonymous", "public"}
+                ):
+                    body[_locator_field] = _ref
+                    break
+        # Callback/webhook surfaces: the body's status/state field carries the
+        # success literal the channel would accept — the forged-success shape.
+        _surface = (
+            f"{_text(operation.get('path') or operation.get('raw_path'))} "
+            f"{_text(operation.get('summary'))}"
+        ).casefold()
+        if any(token in _surface for token in ("callback", "回调", "notify", "通知")):
+            _status_field = next(
+                (
+                    key
+                    for key in body
+                    if re.search(r"(?:^|_)(?:status|state)$", str(key), re.I)
+                ),
+                "",
+            )
+            if _status_field:
+                body[_status_field] = "SUCCESS"
+        return {
+            "status": "COMPILED",
+            "control_plan": [],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": actor,
+                "operation_ref": operation_ref,
+                "intent": "credential_gated_anonymous_write",
+                "protocol_step": "treatment",
+                "body": deepcopy(body),
+                "property_template": template,
+            }],
+            "assertion": {
+                "kind": "http_status_class",
+                "expected_class": 4,
                 "compare_field": "status_code",
             },
         }

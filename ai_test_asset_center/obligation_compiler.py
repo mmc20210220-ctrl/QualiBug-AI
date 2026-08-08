@@ -450,6 +450,45 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
             )
         )
         if not source_declares_own_scope:
+            # ── Own-scope writes (write-declared caller-scope contract) ──
+            # A write operation whose OWN contract declares a caller-scoped
+            # invariant (只能合并当前登录用户的购物车，禁止跨用户转移 / 仅限本人
+            # 数据 / 只能对自己执行) carries an ownership parameter that is NOT
+            # an intentional delegation contract — the source itself forbids
+            # touching other accounts' resources through it. Deriving owns lets
+            # the isolation channel compile the cross-account treatment (owner
+            # operates with own identity, viewer attempts the owner's identity
+            # on the ownership binder). Generic ownership vocabulary only
+            # (自己的/本人/归属/禁止跨用户/cross-user), never industry terms.
+            _write_own_scope_declared = bool(
+                operation_ref
+                and not is_read
+                and not _has_path_target
+                and ownership_params
+                and (
+                    _pair._base._operation_declares_ownership_language(operation)
+                    or any(
+                        marker
+                        in " ".join((
+                            _text(operation.get("summary")),
+                            _text(operation.get("description")),
+                        ))
+                        for marker in ("禁止跨用户", "禁止转移", "禁止访问他人", "禁止操作他人")
+                    )
+                )
+            )
+            if not _write_own_scope_declared:
+                continue
+            _append_owns(
+                operation_ref=operation_ref,
+                source_refs=_pair._base._combined_source_refs(operation),
+                derivation="explicit",
+                preconditions=[{
+                    "scope": "own",
+                    "ownership_input": "write_declared_own_scope",
+                    "ownership_params": sorted(ownership_params),
+                }],
+            )
             continue
         entity_refs = _entity_refs(
             operation_ref,
