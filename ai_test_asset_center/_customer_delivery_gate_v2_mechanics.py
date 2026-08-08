@@ -1472,6 +1472,40 @@ def validate_customer_delivery_gate_receipt_v2(
         raise DeliveryGateV2Error("nondeliverable_finding_fingerprint_present")
     if deliverable and finding is not None:
         if finding_payload_fingerprint(_dict(finding)) != payload_fingerprint:
+            # TEMP-DIAG (fingerprint mismatch root-cause hunt): report the
+            # finding's identity, redaction idempotency, and any sensitive
+            # markers so the mismatching payload shape is visible.
+            try:
+                import json as _json
+
+                _diag = _dict(finding)
+                _raw = _json.dumps(_diag, ensure_ascii=False, default=str)
+                _red1, _ = redact_artifact(_diag)
+                _red2, _ = redact_artifact(_diag)
+                _sensitive = [k for k in ("token", "authorization", "bearer", "password", "secret")
+                              if k in _raw.lower()]
+                _raw_keys = sorted(_diag.keys())
+                _red_keys = sorted(_red1.keys()) if isinstance(_red1, dict) else []
+                _recomputed = finding_payload_fingerprint(_diag)
+                print(
+                    "FINGERPRINT_DIAG finding_id=%s expected=%s recomputed=%s "
+                    "redact_idempotent=%s raw_chars=%d sensitive=%s "
+                    "raw_keys=%s red_keys=%s redact_added_keys=%s redact_dropped_keys=%s",
+                    _text(_diag.get("finding_id") or _diag.get("id")),
+                    payload_fingerprint[:16],
+                    _recomputed[:16],
+                    _json.dumps(_red1, ensure_ascii=False, sort_keys=True, default=str)
+                    == _json.dumps(_red2, ensure_ascii=False, sort_keys=True, default=str),
+                    len(_raw),
+                    ",".join(_sensitive) or "none",
+                    ",".join(_raw_keys)[:300],
+                    ",".join(_red_keys)[:300],
+                    ",".join(sorted(set(_red_keys) - set(_raw_keys)))[:200],
+                    ",".join(sorted(set(_raw_keys) - set(_red_keys)))[:200],
+                    flush=True,
+                )
+            except Exception as _diag_exc:
+                print(f"FINGERPRINT_DIAG_FAILED: {_diag_exc}", flush=True)
             raise DeliveryGateV2Error("finding_payload_fingerprint_mismatch")
         if _text(_dict(finding).get("finding_id") or _dict(finding).get("id")) != identity["finding_id"]:
             raise DeliveryGateV2Error("finding_identity_mismatch")

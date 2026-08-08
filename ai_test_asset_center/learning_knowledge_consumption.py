@@ -242,8 +242,19 @@ def build_learned_memory_prompt_block(learned_knowledge: Any) -> tuple[str, dict
         parts = [f"type={pattern_type}", f"entity={entity}"]
         if method:
             parts.append(f"method={method}")
+        # Comprehension-layer semantics (observed finding fields only):
+        # the reproducing actor and the semantic description guide
+        # hypothesis generation toward the violated behavior class, not just
+        # the endpoint that carried it.
+        actor = _text(item.get("actor"))
+        if actor:
+            parts.append(f"actor={actor}")
         parts.append(f"confirmed_rounds={count}")
-        lines.append("- " + ", ".join(parts))
+        line = "- " + ", ".join(parts)
+        summary = _text(item.get("semantic_summary"))
+        if summary:
+            line += f" ({summary[:120]})"
+        lines.append(line)
 
     block = (
         "\n\nLEARNED RISK MEMORY (this project's own prior confirmed-defect observation history; "

@@ -84,7 +84,13 @@ class LearningPatternBridge:
                     "entity": pattern.get("entity"),
                     "mutation": pattern.get("mutation_hint", ""),
                     "source_scan": scan_id,
-                    "stored_at": datetime.now().isoformat()
+                    "stored_at": datetime.now().isoformat(),
+                    # Comprehension-layer semantics carried through from the
+                    # closed-loop extractor (observed finding fields only).
+                    "assertion_kind": pattern.get("assertion_kind") or pattern.get("type"),
+                    "actor": pattern.get("actor", ""),
+                    "semantic_summary": pattern.get("semantic_summary", ""),
+                    "behavior_delta": pattern.get("behavior_delta"),
                 }
                 entry_confidence = float(
                     (confidence_map or {}).get(str(key), confidence)
@@ -186,6 +192,41 @@ class LearningPatternBridge:
                 "load_failure": "{}:{}".format(type(e).__name__, str(e)[:200]),
             }
             
+    def load_binding_experience(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Load verified binding-resolver mappings from the knowledge base.
+
+        READ side of binding-experience learning: entries recorded by
+        ``binding_experience_learning.build_binding_experience_context``.
+        Only source-declared resolver identities are carried (operation_ref,
+        target, path) — never resolved business values. Usage is recorded so
+        the reinforcement loop observes consumption.
+        """
+        try:
+            entries = self.kb.get_effective_patterns(
+                "binding_resolver", min_usage=0
+            )
+            entries = sorted(
+                entries, key=lambda e: (e.usage_count, e.confidence), reverse=True
+            )[:limit]
+            resolvers = []
+            for e in entries:
+                content = dict(e.content) if isinstance(e.content, dict) else {}
+                resolvers.append({
+                    "key": e.key,
+                    "operation_ref": str(content.get("operation_ref") or ""),
+                    "target": str(content.get("target") or ""),
+                    "path": str(content.get("path") or ""),
+                    "success_count": int(content.get("success_count") or e.usage_count or 1),
+                    "confidence": e.confidence,
+                    "_usage_count": e.usage_count,
+                })
+            if entries:
+                self.kb.record_usage([e.entry_id for e in entries])
+            return resolvers
+        except Exception as e:
+            logger.warning("Failed to load binding experience: %s", e)
+            return []
+
     def migrate_legacy_patterns_to_sqlite(self) -> int:
         """Migrate patterns from legacy JSON file to SQLite.
         

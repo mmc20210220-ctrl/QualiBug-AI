@@ -1000,6 +1000,30 @@ def _body_contains_family_field(body: Any, matchers: list[str]) -> list[str]:
     return list(dict.fromkeys(found))
 
 
+def _numeric_safe_compare(left: Any, right: Any, operator: str) -> bool | None:
+    """Compare two observed values, coercing string numerics.
+
+    Observed amounts arrive as strings ("300.00") on one side and floats on
+    the other; a raw <= would raise and poison the verdict. Coerces only
+    when BOTH sides parse as numbers — a non-numeric value keeps the caller's
+    fail-closed path (None).
+    """
+    try:
+        left_num = float(left)
+        right_num = float(right)
+    except (TypeError, ValueError):
+        return None
+    if operator == "gte":
+        return left_num >= right_num
+    if operator == "lte":
+        return left_num <= right_num
+    if operator == "eq":
+        return left_num == right_num
+    if operator == "neq":
+        return left_num != right_num
+    return None
+
+
 def _json_path(data: Any, path: str) -> Any:
     """Minimal JSON path: $.a.b[0] style without eval."""
 
@@ -1398,7 +1422,9 @@ def evaluate_assertion(
                     actual = None
                     passed = False
         elif effective_kind == "json_path_compare":
-            if "body" not in obs or "expected" not in spec:
+            if "body" not in obs or (
+                "expected" not in spec and "expected_path" not in spec
+            ):
                 reason_code = "JSON_COMPARE_EVIDENCE_MISSING"
             else:
                 try:
@@ -1410,14 +1436,31 @@ def evaluate_assertion(
                     actual = None
                     passed = False
                 if passed is None:
-                    if operator == "eq":
+                    # expected_path compares two paths from the SAME observed
+                    # body (discountAmount ≤ coupon.max_discount echoed by the
+                    # target itself) — the expected value is the target's own
+                    # observed contract data, never a synthesized literal.
+                    if "expected_path" in spec:
+                        try:
+                            expected = _json_path(
+                                obs["body"],
+                                _text(spec.get("expected_path")),
+                            )
+                        except (KeyError, IndexError, TypeError):
+                            expected = None
+                    if expected is None:
+                        passed = False
+                        reason_code = "JSON_COMPARE_EXPECTED_PATH_MISSING"
+                    elif operator == "eq":
                         passed = actual == expected
                     elif operator == "neq":
                         passed = actual != expected
                     elif operator == "gte":
-                        passed = actual >= expected
+                        passed = _numeric_safe_compare(actual, expected, "gte")
                     elif operator == "lte":
-                        passed = actual <= expected
+                        passed = _numeric_safe_compare(actual, expected, "lte")
+                    elif passed is None:
+                        reason_code = "JSON_COMPARE_OPERATOR_UNSUPPORTED"
         elif effective_kind == "equality":
             if "value" not in obs or "expected" not in spec:
                 reason_code = "EQUALITY_EVIDENCE_MISSING"

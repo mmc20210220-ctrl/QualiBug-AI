@@ -262,6 +262,41 @@ def _field_variants(
     return variants, []
 
 
+def _path_identity_params(
+    operation: dict[str, Any],
+    path: str,
+) -> list[str]:
+    """Identity-shaped path params on a resource-targeted operation.
+
+    Structure-only detection: a path param whose name is an ownership key
+    (userId/ownerId/…) or an identity name (id/user_id) whose description
+    carries an ID marker. Returns [] for collection operations or paths with
+    no identity param. This is the path-side counterpart of
+    ``_ownership_params_declared_on_operation`` — collection reads declare
+    ownership through a query/body binder, resource-targeted reads through
+    the path identity itself.
+    """
+    if not _pair._base._path_has_resource_placeholder(path):
+        return []
+    found: list[str] = []
+    for _param in _list(operation.get("parameters")):
+        if not isinstance(_param, dict):
+            continue
+        if _text(_param.get("in") or _param.get("location")).lower() != "path":
+            continue
+        name = _text(_param.get("name"))
+        if not name:
+            continue
+        if _pair._base._is_ownership_param_name(name):
+            found.append(name)
+        elif (
+            re.sub(r"[^a-z0-9]+", "", name.lower()).endswith("id")
+            and re.search(r"(?:ID|Id|id)", _text(_param.get("description")))
+        ):
+            found.append(name)
+    return found
+
+
 def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> dict[str, Any]:
     """Normalize source-declared ownership into the existing IR relation graph.
 
@@ -382,7 +417,7 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
         existing_owned_operations.add(operation_ref)
 
     changed = False
-    owned_reads: list[tuple[dict[str, Any], set[str], list[str]]] = []
+    owned_reads: list[tuple[dict[str, Any], set[str], list[str], bool]] = []
     for operation in operations:
         operation_ref = _text(operation.get("id"))
         path = _text(operation.get("path") or operation.get("raw_path"))
@@ -392,12 +427,27 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
         ownership_params = (
             _pair._base._ownership_params_declared_on_operation(operation)
         )
+        _has_path_target = _pair._base._path_has_resource_placeholder(path)
+        # Own-scope collection reads (addresses?userId=…) and identity-addressed
+        # path reads (profile/{id} 权限：本人或管理员) both declare the
+        # caller-scoped contract in the operation text. Path-target reads were
+        # previously excluded by the placeholder guard, so they only ever
+        # compiled permit-only obligations whose single-arm 2xx observation
+        # could not test the ownership boundary — a silent PROPERTY_HELD
+        # instead of an isolation comparison.
+        _path_identity_declared = bool(
+            _has_path_target
+            and _pair._base._operation_declares_ownership_language(operation)
+            and _path_identity_params(operation, path)
+        )
         source_declares_own_scope = bool(
             is_read
             and operation_ref
-            and not _pair._base._path_has_resource_placeholder(path)
             and _pair._base._operation_declares_ownership_language(operation)
-            and ownership_params
+            and (
+                (not _has_path_target and bool(ownership_params))
+                or _path_identity_declared
+            )
         )
         if not source_declares_own_scope:
             continue
@@ -405,15 +455,19 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
             operation_ref,
             {"observes", "consumes", "scopes"},
         )
-        owned_reads.append((operation, entity_refs, ownership_params))
+        owned_reads.append((operation, entity_refs, ownership_params, _has_path_target))
         _append_owns(
             operation_ref=operation_ref,
             source_refs=_pair._base._combined_source_refs(operation),
             derivation="explicit",
-            preconditions=[{"scope": "own"}],
+            preconditions=(
+                [{"scope": "own", "path_target": True}]
+                if _has_path_target
+                else [{"scope": "own"}]
+            ),
         )
 
-    for read_operation, owned_entities, ownership_params in owned_reads:
+    for read_operation, owned_entities, ownership_params, read_has_path_target in owned_reads:
         if not owned_entities:
             continue
         read_ref = _text(read_operation.get("id"))
@@ -421,18 +475,22 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
             _pair._base._param_key(name)
             for name in ownership_params
         }
+        read_collection = _pair._base.normalize_path_placeholders(
+            _pair._base.collection_path(
+                _text(read_operation.get("path") or read_operation.get("raw_path"))
+            )
+        )
         for operation in operations:
             operation_ref = _text(operation.get("id"))
             method = _text(operation.get("method")).upper()
             path = _text(operation.get("path") or operation.get("raw_path"))
             if (
                 operation_ref in existing_owned_operations
-                or method not in {"POST", "PUT", "PATCH"}
+                or method not in {"POST", "PUT", "PATCH", "DELETE"}
                 or _text(
                     operation.get("read_write")
                     or operation.get("side_effect_class")
                 ) != "write"
-                or _pair._base._path_has_resource_placeholder(path)
             ):
                 continue
             write_entities = _entity_refs(
@@ -440,6 +498,16 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
                 {"produces", "consumes", "transitions", "scopes"},
             )
             shared_entities = owned_entities.intersection(write_entities)
+            if not shared_entities:
+                # Runtime-discovered writes may lack entity relations; a
+                # collection match against the owned read anchor is the same
+                # identity evidence (DELETE /api/users/addresses/{id} vs
+                # GET /api/users/addresses).
+                write_collection = _pair._base.normalize_path_placeholders(
+                    _pair._base.collection_path(path)
+                )
+                if write_collection and read_collection and write_collection == read_collection:
+                    shared_entities = owned_entities
             if not shared_entities:
                 continue
             declared_write_params = {
@@ -453,6 +521,7 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
                 # do not reinterpret an intentional delegation contract as an
                 # own-scope invariant.
                 continue
+            _write_has_path_target = _pair._base._path_has_resource_placeholder(path)
             _append_owns(
                 operation_ref=operation_ref,
                 source_refs=_relation_sources(
@@ -465,6 +534,7 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
                     "source_operation_ref": read_ref,
                     "entity_refs": sorted(shared_entities),
                     "ownership_input": "server_controlled",
+                    **({"path_target": True} if _write_has_path_target else {}),
                 }],
             )
 

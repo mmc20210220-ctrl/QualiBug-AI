@@ -938,6 +938,28 @@ def _normalize_example_enum_scalars(
     return out
 
 
+def _has_path_identity_param(operation: dict[str, Any]) -> bool:
+    """Path-targeted operation with an identity-shaped path param.
+
+    Structure-only: the path carries a placeholder AND a path parameter whose
+    normalized name ends with ``id`` (id/userId/addressId/…). Used to detect
+    identity-addressed resource reads (profile/{id}) that can compile the
+    two-arm owned-resource read without a create fixture.
+    """
+    path = _text(operation.get("path") or operation.get("raw_path"))
+    if "{" not in path and "/:" not in path:
+        return False
+    for _param in _list(operation.get("parameters")):
+        if not isinstance(_param, dict):
+            continue
+        if _text(_param.get("in") or _param.get("location")).lower() != "path":
+            continue
+        _name = _text(_param.get("name"))
+        if _name and re.sub(r"[^a-z0-9]+", "", _name.lower()).endswith("id"):
+            return True
+    return False
+
+
 def compile_experiment_for_obligation(
     obligation: dict[str, Any],
     *,
@@ -1229,6 +1251,29 @@ def compile_experiment_for_obligation(
         _infer_operation_effect(primary_op, _op_method_upper) == "write"
         and not is_ephemeral_session
     )
+    # ── Identity-addressed path-target reads (isolation/visibility) ──
+    # compile a two-arm owned-resource read from runtime-observed actor
+    # identities (see _identity_addressed_read_isolation_protocol) and need
+    # no owned_resource fixture nor resource_ownership proof. Detect the
+    # shape early so the fixture gates and observer requirements below do
+    # not block the protocol before it compiles.
+    _identity_addressed_read = bool(
+        not is_write
+        and family in {"isolation", "visibility"}
+        and _dict(prop).get("require_ownership_evidence") is True
+        and _has_path_identity_param(primary_op)
+    )
+    if _identity_addressed_read:
+        required_fixtures = [
+            item
+            for item in required_fixtures
+            if _text(item) != "owned_resource"
+        ]
+        required_observers = [
+            item
+            for item in required_observers
+            if _text(item) != "resource_ownership"
+        ]
     _primary_example = _source_request_example(
         primary_op,
         sibling_operations=list(ops.values()),

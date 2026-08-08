@@ -225,6 +225,30 @@ def stamp_finding_delivery_gate_refs(
     return row
 
 
+def _operation_coverage_budget(
+    selected: list[Any],
+    budget: int,
+    hard_cap: int = 200,
+) -> int:
+    """Floor the batch budget at one experiment per distinct operation.
+
+    The planner auto-scales the slice budget to the compiled pool, but the
+    per-batch execution budget is phase-based and can be far smaller. A
+    global-priority truncation under a tiny budget lets whole operations
+    starve at OBLIGATION_BUDGET_REACHED (measured: 859 compiled, 233
+    executed, 539 deferred). Raising the budget to the distinct-operation
+    count (still bounded by the hard cap) makes the prioritizer's
+    operation-fair tier able to fit every operation, so no operation can be
+    excluded from a batch purely by global rank.
+    """
+    distinct_operations = len({
+        _text(_dict(item).get("operation_key"))
+        for item in _list(selected)
+        if _text(_dict(item).get("operation_key"))
+    })
+    return max(int(budget), min(distinct_operations, int(hard_cap)))
+
+
 def execute_selected_experiments(
     selected: list[Any],
     *,
@@ -323,6 +347,10 @@ def execute_selected_experiments(
         _phase = "small_scale"  # Default to small-scale for safety
     _budget = get_validation_budget(runtime_contract, phase=_phase)
     _budget = max(1, min(_budget, 200))  # hard cap at 200
+    # ── Operation-coverage floor ──
+    # One experiment per distinct operation minimum, bounded by the same hard
+    # cap. See _operation_coverage_budget for the rationale.
+    _budget = _operation_coverage_budget(selected, _budget, hard_cap=200)
     _total_selected = len(selected)
     # Rows past the per-batch budget are handed back so the caller can run them
     # in a later round. Dropping them here leaves the obligation with no terminal

@@ -207,6 +207,96 @@ def _rule_prompt_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _transition_token(value: Any) -> str:
+    """Lowercase, whitespace-free state token shared with the IR state nodes."""
+    return _text(value).lower().replace(" ", "").replace("-", "")
+
+
+def _machine_transitions(
+    machine: dict[str, Any],
+) -> list[tuple[str, str, str]]:
+    """Enumerate (kind, from, to) pairs for one source state machine.
+
+    ``forbidden_transitions`` may carry a wildcard target (``CLOSED -> 任意状态``
+    recorded as an empty destination) — such rows are kept with an empty
+    ``to_state`` so the linker can still bind the operation that must never be
+    performed from that state, but only when the machine explicitly declared
+    them. Nothing is inferred here.
+    """
+    out: list[tuple[str, str, str]] = []
+    machine_ref = _text(machine.get("state_machine_id") or machine.get("id"))
+    for kind, key in (("allowed", "transitions"), ("forbidden", "forbidden_transitions")):
+        for raw in _list(machine.get(key)):
+            transition = _dict(raw)
+            from_state = _text(transition.get("from") or transition.get("from_state"))
+            to_state = _text(transition.get("to") or transition.get("to_state"))
+            if not from_state:
+                continue
+            out.append((kind, from_state, to_state))
+    return out
+
+
+def _transition_prompt_row(
+    machine_ref: str,
+    kind: str,
+    from_state: str,
+    to_state: str,
+) -> dict[str, Any]:
+    transition_id = transition_identity(machine_ref, kind, from_state, to_state)
+    return {
+        "transition_id": transition_id,
+        "machine_id": machine_ref,
+        "kind": kind,
+        "entity": _text(
+            machine_ref.partition(":")[2].partition(":")[0]
+            if machine_ref.count(":") >= 2
+            else ""
+        ),
+        "from_state": from_state,
+        "to_state": to_state,
+    }
+
+
+def transition_identity(
+    machine_ref: str,
+    kind: str,
+    from_state: str,
+    to_state: str,
+) -> str:
+    """Stable identity for one state-machine transition.
+
+    Shared by the linker (assessment id), the semantic binder (accepted edge
+    resolution) and the Behavior IR derivation, so an accepted
+    ``state_transition_to_interface`` edge resolves without fuzzy matching.
+    """
+    machine = _text(machine_ref) or "state_machine"
+    kind_norm = "allowed" if kind in ("allowed", "transitions", "") else "forbidden"
+    from_token = _transition_token(from_state)
+    to_token = _transition_token(to_state)
+    return f"st:{machine}:{kind_norm}:{from_token}:{to_token}"
+
+
+def _asset_transition_rows(
+    asset: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """All assessed transitions across every source state machine."""
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in _list(asset.get("state_machines")):
+        machine = _dict(raw)
+        machine_ref = _text(machine.get("state_machine_id") or machine.get("id"))
+        if not machine_ref:
+            continue
+        for kind, from_state, to_state in _machine_transitions(machine):
+            row = _transition_prompt_row(machine_ref, kind, from_state, to_state)
+            transition_id = _text(row.get("transition_id"))
+            if not transition_id or transition_id in seen:
+                continue
+            seen.add(transition_id)
+            rows.append(row)
+    return rows
+
+
 def _interface_prompt_row(row: dict[str, Any]) -> dict[str, Any]:
     field_names = [
         _text(value)
@@ -356,9 +446,11 @@ def _prompt(
         for row in _list(asset.get("interfaces"))
         if isinstance(row, dict) and _text(row.get("interface_id"))
     ]
+    transitions = _asset_transition_rows(asset)
     facts, omitted_fact_count = _fact_rows(asset)
     valid_refs = {
         *(_text(row.get("rule_id")) for row in rules),
+        *(_text(row.get("transition_id")) for row in transitions),
         *(_text(row.get("interface_id")) for row in interfaces),
         *(_text(row.get("fact_id")) for row in facts),
     }
@@ -367,6 +459,7 @@ def _prompt(
         "protocol": PROMPT_PROTOCOL,
         "business_semantic_model": {
             "rules_to_assess": rules,
+            "state_transitions_to_assess": transitions,
             "documented_interfaces": interfaces,
             "source_backed_context_facts": facts,
             "context_fact_omitted_count": omitted_fact_count,
@@ -389,6 +482,22 @@ def _prompt(
                 ],
             }],
         }],
+        "transition_assessments": [{
+            "transition_id": "exact supplied transition_id",
+            "disposition": "LINKED|NO_EXECUTABLE_INTERFACE|AMBIGUOUS",
+            "reason": "brief business and test rationale",
+            "relationships": [{
+                "interface_id": "exact supplied interface_id",
+                "confidence": 0.0,
+                "reason": "how this interface performs the state transition "
+                "or would violate the forbidden transition",
+                "evidence_refs": [
+                    "transition_id",
+                    "interface_id",
+                    "optional exact fact_id",
+                ],
+            }],
+        }],
     }
     prompt = (
         "Act as both an enterprise product expert and a senior test expert. "
@@ -398,24 +507,33 @@ def _prompt(
         "state transitions, preconditions, postconditions, negative paths, and "
         "business outcomes. This creates bounded experiment intent, never a bug "
         "finding or a new business fact.\n\n"
+        "For every state transition in state_transitions_to_assess, link the "
+        "documented interface that performs that transition (allowed) or the "
+        "interface that would attempt the forbidden move (forbidden transitions: "
+        "the operation that changes the entity's state, e.g. the payment or "
+        "status-change operation for a payment/status machine). A transition "
+        "without any interface that can perform or attempt it is "
+        "NO_EXECUTABLE_INTERFACE.\n\n"
         "Use only exact identifiers and facts supplied in the model. Never invent "
         "endpoints, fields, actors, states, credentials, request bodies, rules, or "
         "observations. LINKED requires one to four relationships and evidence_refs "
-        "must contain the exact rule_id, interface_id, and any supporting fact_ids "
-        "you relied on. Use NO_EXECUTABLE_INTERFACE when the source has no callable "
-        "surface. Use AMBIGUOUS when several interpretations remain plausible. "
-        "The disposition and relationships fields are one atomic contract: "
-        "LINKED requires at least one relationship; NO_EXECUTABLE_INTERFACE and "
-        "AMBIGUOUS require relationships to be exactly an empty array. Never put "
-        "a candidate interface in relationships for an unlinked disposition. "
-        f"Omit links below confidence {MIN_CONFIDENCE}. Return exactly one assessment "
-        "for every supplied rule and JSON only, with this exact shape:\n"
+        "must contain the exact rule_id or transition_id, the interface_id, and "
+        "any supporting fact_ids you relied on. Use NO_EXECUTABLE_INTERFACE when "
+        "the source has no callable surface. Use AMBIGUOUS when several "
+        "interpretations remain plausible. The disposition and relationships "
+        "fields are one atomic contract: LINKED requires at least one "
+        "relationship; NO_EXECUTABLE_INTERFACE and AMBIGUOUS require "
+        "relationships to be exactly an empty array. Never put a candidate "
+        "interface in relationships for an unlinked disposition. Omit links below "
+        f"confidence {MIN_CONFIDENCE}. Return exactly one assessment for every "
+        "supplied rule and exactly one transition assessment for every supplied "
+        "state transition, and JSON only, with this exact shape:\n"
         + json.dumps(response_contract, ensure_ascii=False, separators=(",", ":"))
         + "\n\nINPUT:\n"
         + json.dumps(safe_packet, ensure_ascii=False, separators=(",", ":"))
-        + "\n\nFINAL CONTRACT CHECK: for every assessment, if disposition is not "
-        "LINKED, emit `relationships: []`; if relationships is non-empty, "
-        "emit `disposition: LINKED`."
+        + "\n\nFINAL CONTRACT CHECK: for every assessment and transition "
+        "assessment, if disposition is not LINKED, emit `relationships: []`; if "
+        "relationships is non-empty, emit `disposition: LINKED`."
     )
     return prompt, valid_refs, len(facts), omitted_fact_count
 
@@ -483,8 +601,19 @@ def enrich_knowledge_asset_with_agent_relationships(
         id_key="interface_id",
         collection="interfaces",
     )
+    transitions = _asset_transition_rows(knowledge_asset)
     if not rules or not interfaces:
         raise AgentSemanticLinkerError("agent_semantic_inputs_empty")
+    if transitions:
+        transition_ids = {
+            _text(row.get("transition_id"))
+            for row in transitions
+            if _text(row.get("transition_id"))
+        }
+        if len(transition_ids) != len(transitions):
+            raise AgentSemanticLinkerError(
+                "agent_semantic_duplicate_transition_identity"
+            )
 
     resolved_client = client or _default_client()
     rule_rows = list(rules.values())
@@ -512,11 +641,31 @@ def enrich_knowledge_asset_with_agent_relationships(
             resolved_client,
             prompt=prompt,
         )
-        if not isinstance(response, dict) or set(response) != {"assessments"}:
+        if not isinstance(response, dict) or not set(response) <= {
+            "assessments",
+            "transition_assessments",
+        } or not (
+            set(response) & {"assessments", "transition_assessments"}
+        ):
             raise AgentSemanticLinkerError("agent_semantic_response_schema_invalid")
         assessments = response.get("assessments")
-        if not isinstance(assessments, list):
+        transition_assessments = response.get("transition_assessments")
+        if assessments is not None and not isinstance(assessments, list):
             raise AgentSemanticLinkerError("agent_semantic_assessments_not_list")
+        if transition_assessments is not None and not isinstance(
+            transition_assessments, list
+        ):
+            raise AgentSemanticLinkerError(
+                "agent_semantic_transition_assessments_not_list"
+            )
+        if transitions and not transition_assessments:
+            raise AgentSemanticLinkerError(
+                "agent_semantic_transition_assessments_missing"
+            )
+        if not transitions and transition_assessments:
+            raise AgentSemanticLinkerError(
+                "agent_semantic_unexpected_transition_assessments"
+            )
         responses.append((batch, response, valid_refs))
         provider_attempt_count += attempts
         provider_retry_count += retries
@@ -527,19 +676,23 @@ def enrich_knowledge_asset_with_agent_relationships(
         )
 
     existing = {
-        (_text(row.get("from")), _text(row.get("to")))
+        (
+            _text(row.get("relation") or row.get("relation_type")),
+            _text(row.get("from")),
+            _text(row.get("to")),
+        )
         for row in _list(knowledge_asset.get("relationships"))
         if isinstance(row, dict)
-        and _text(row.get("relation") or row.get("relation_type"))
-        == "rule_to_interface"
         and _text(row.get("status") or "accepted").lower() == "accepted"
     }
     accepted: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
     rule_assessments: list[dict[str, Any]] = []
-    seen_pairs: set[tuple[str, str]] = set()
+    transition_assessments: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str, str]] = set()
     seen_assessments: set[str] = set()
-    per_rule: dict[str, int] = {}
+    seen_transition_assessments: set[str] = set()
+    per_subject: dict[str, int] = {}
     rejected_low_confidence = 0
     rejected_invalid_identity = 0
     rejected_invalid_evidence = 0
@@ -562,6 +715,233 @@ def enrich_knowledge_asset_with_agent_relationships(
             "proposal_fingerprint": _fingerprint(raw),
         })
 
+    def accept_relationships(
+        *,
+        subject_id: str,
+        subject_kind: str,
+        disposition: str,
+        reason: str,
+        relationships: list[Any],
+        assessment_index: int,
+        relation: str,
+        raw_assessment: dict[str, Any],
+        expected_ids: set[str],
+    ) -> tuple[int, bool]:
+        """Validate one assessment's relationships under the shared contract.
+
+        Returns ``(accepted_count, handled)``. ``handled=False`` means the
+        assessment was identity-invalid or a duplicate, so the caller must not
+        count it toward the provider-completeness check. Every rejection is
+        receipted; malformed output raises instead of degrading silently.
+        """
+        nonlocal proposal_count, rejected_low_confidence
+        nonlocal rejected_invalid_identity, rejected_invalid_evidence
+        nonlocal rejected_duplicates, rejected_rule_limit, existing_count
+        if disposition not in _DISPOSITIONS:
+            raise AgentSemanticLinkerError(
+                f"agent_semantic_disposition_invalid:{assessment_index}"
+            )
+        if not reason:
+            raise AgentSemanticLinkerError(
+                f"agent_semantic_assessment_reason_missing:{assessment_index}"
+            )
+        if not isinstance(relationships, list):
+            raise AgentSemanticLinkerError(
+                f"agent_semantic_relationships_not_list:{assessment_index}"
+            )
+        if disposition == "LINKED" and not relationships:
+            raise AgentSemanticLinkerError(
+                f"agent_semantic_linked_relationship_missing:{assessment_index}"
+            )
+        if disposition != "LINKED" and relationships:
+            raise AgentSemanticLinkerError(
+                f"agent_semantic_unlinked_relationship_present:{assessment_index}"
+            )
+        if subject_id not in expected_ids:
+            rejected_invalid_identity += 1
+            reject(
+                assessment_index,
+                -1,
+                raw_assessment,
+                f"UNKNOWN_{subject_kind.upper()}_ID",
+            )
+            return 0, False
+        if (
+            subject_kind == "rule"
+            and subject_id in seen_assessments
+        ) or (
+            subject_kind == "transition"
+            and subject_id in seen_transition_assessments
+        ):
+            rejected_duplicates += 1
+            reject(
+                assessment_index,
+                -1,
+                raw_assessment,
+                f"DUPLICATE_{subject_kind.upper()}_ASSESSMENT",
+            )
+            return 0, False
+        if subject_kind == "rule":
+            seen_assessments.add(subject_id)
+        else:
+            seen_transition_assessments.add(subject_id)
+        accepted_for_assessment = 0
+
+        for relationship_index, raw in enumerate(relationships):
+            proposal_count += 1
+            if not isinstance(raw, dict) or set(raw) != {
+                "interface_id",
+                "confidence",
+                "reason",
+                "evidence_refs",
+            }:
+                raise AgentSemanticLinkerError(
+                    "agent_semantic_relationship_fields_invalid:"
+                    f"{assessment_index}:{relationship_index}"
+                )
+            interface_id = _text(raw.get("interface_id"))
+            if interface_id not in interfaces:
+                rejected_invalid_identity += 1
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw,
+                    "UNKNOWN_INTERFACE_ID",
+                )
+                continue
+            try:
+                confidence = float(raw.get("confidence"))
+            except (TypeError, ValueError) as exc:
+                raise AgentSemanticLinkerError(
+                    "agent_semantic_confidence_invalid:"
+                    f"{assessment_index}:{relationship_index}"
+                ) from exc
+            if not 0.0 <= confidence <= 1.0:
+                raise AgentSemanticLinkerError(
+                    "agent_semantic_confidence_invalid:"
+                    f"{assessment_index}:{relationship_index}"
+                )
+            rationale = _prompt_safe_text(raw.get("reason"), limit=600)
+            if not rationale:
+                raise AgentSemanticLinkerError(
+                    "agent_semantic_reason_missing:"
+                    f"{assessment_index}:{relationship_index}"
+                )
+            evidence_refs = raw.get("evidence_refs")
+            if (
+                not isinstance(evidence_refs, list)
+                or not evidence_refs
+                or any(not _text(ref) for ref in evidence_refs)
+            ):
+                raise AgentSemanticLinkerError(
+                    "agent_semantic_evidence_refs_invalid:"
+                    f"{assessment_index}:{relationship_index}"
+                )
+            evidence_refs = list(dict.fromkeys(
+                _text(ref) for ref in evidence_refs
+            ))
+            if (
+                subject_id not in evidence_refs
+                or interface_id not in evidence_refs
+                or any(ref not in valid_refs for ref in evidence_refs)
+            ):
+                rejected_invalid_evidence += 1
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw,
+                    "UNKNOWN_EVIDENCE_REF",
+                )
+                continue
+            pair = (relation, subject_id, interface_id)
+            if pair in seen_pairs:
+                rejected_duplicates += 1
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw,
+                    "DUPLICATE_PROPOSAL",
+                )
+                continue
+            seen_pairs.add(pair)
+            if confidence < MIN_CONFIDENCE:
+                rejected_low_confidence += 1
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw,
+                    "LOW_CONFIDENCE",
+                )
+                continue
+            if per_subject.get(subject_id, 0) >= MAX_LINKS_PER_RULE:
+                rejected_rule_limit += 1
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw,
+                    "RULE_LINK_LIMIT_EXCEEDED",
+                )
+                continue
+            per_subject[subject_id] = per_subject.get(subject_id, 0) + 1
+            if pair in existing:
+                existing_count += 1
+                accepted_for_assessment += 1
+                continue
+
+            proposal_fingerprint = _fingerprint({
+                "subject_id": subject_id,
+                "interface_id": interface_id,
+                "confidence": confidence,
+                "reason": rationale,
+                "evidence_refs": evidence_refs,
+            })
+            accepted.append({
+                "edge_id": "edge:" + _fingerprint({
+                    "subject": subject_id,
+                    "interface": interface_id,
+                    "derivation": "agent_semantic_mapping",
+                })[:20],
+                "from": subject_id,
+                "to": interface_id,
+                "relation": relation,
+                "confidence": round(confidence, 4),
+                "status": "accepted",
+                "derivation": "agent_semantic_mapping",
+                "evidence_gate": (
+                    "behavior_ir_ids_and_runtime_oracle_required"
+                ),
+                "source_id": "agent_semantic_linker",
+                "evidence": {
+                    "subject_source_id": _text(
+                        (rules if subject_kind == "rule" else transitions_by_id).get(
+                            subject_id, {}
+                        ).get("source_id")
+                    )
+                    if subject_kind == "rule"
+                    else _text(
+                        transitions_by_id.get(subject_id, {}).get("machine_id")
+                    ),
+                    "interface_source_id": _text(
+                        interfaces[interface_id].get("source_id")
+                    ),
+                    "proposal_fingerprint": proposal_fingerprint,
+                    "supporting_fact_refs": evidence_refs,
+                    "semantic_rationale": rationale,
+                    "semantic_rationale_is_not_business_fact": True,
+                    "runtime_verification_required": True,
+                },
+            })
+            accepted_for_assessment += 1
+        return accepted_for_assessment, True
+
+    transitions_by_id: dict[str, dict[str, Any]] = {
+        _text(row.get("transition_id")): dict(row)
+        for row in transitions
+        if _text(row.get("transition_id"))
+    }
+    expected_transition_ids = set(transitions_by_id)
+    batch_transition_seen: set[str] = set()
+
     for batch, response, valid_refs in responses:
         expected_rule_ids = {
             _text(row.get("rule_id")) for row in batch if _text(row.get("rule_id"))
@@ -579,197 +959,29 @@ def enrich_knowledge_asset_with_agent_relationships(
                     f"agent_semantic_assessment_fields_invalid:{assessment_index}"
                 )
             rule_id = _text(raw_assessment.get("rule_id"))
-            disposition = _text(raw_assessment.get("disposition")).upper()
-            reason = _prompt_safe_text(
-                raw_assessment.get("reason"),
-                limit=600,
+            accepted_for_assessment, handled = accept_relationships(
+                subject_id=rule_id,
+                subject_kind="rule",
+                disposition=_text(raw_assessment.get("disposition")).upper(),
+                reason=_prompt_safe_text(
+                    raw_assessment.get("reason"),
+                    limit=600,
+                ),
+                relationships=raw_assessment.get("relationships"),
+                assessment_index=assessment_index,
+                relation="rule_to_interface",
+                raw_assessment=raw_assessment,
+                expected_ids=expected_rule_ids,
             )
-            relationships = raw_assessment.get("relationships")
-            if disposition not in _DISPOSITIONS:
-                raise AgentSemanticLinkerError(
-                    f"agent_semantic_disposition_invalid:{assessment_index}"
-                )
-            if not reason:
-                raise AgentSemanticLinkerError(
-                    f"agent_semantic_assessment_reason_missing:{assessment_index}"
-                )
-            if not isinstance(relationships, list):
-                raise AgentSemanticLinkerError(
-                    f"agent_semantic_relationships_not_list:{assessment_index}"
-                )
-            if disposition == "LINKED" and not relationships:
-                raise AgentSemanticLinkerError(
-                    f"agent_semantic_linked_relationship_missing:{assessment_index}"
-                )
-            if disposition != "LINKED" and relationships:
-                raise AgentSemanticLinkerError(
-                    f"agent_semantic_unlinked_relationship_present:{assessment_index}"
-                )
-            if rule_id not in expected_rule_ids:
-                rejected_invalid_identity += 1
-                reject(
-                    assessment_index,
-                    -1,
-                    raw_assessment,
-                    "UNKNOWN_RULE_ID",
-                )
-                continue
-            if rule_id in batch_seen or rule_id in seen_assessments:
-                rejected_duplicates += 1
-                reject(
-                    assessment_index,
-                    -1,
-                    raw_assessment,
-                    "DUPLICATE_RULE_ASSESSMENT",
-                )
-                continue
-            batch_seen.add(rule_id)
-            seen_assessments.add(rule_id)
-            accepted_for_assessment = 0
-
-            for relationship_index, raw in enumerate(relationships):
-                proposal_count += 1
-                if not isinstance(raw, dict) or set(raw) != {
-                    "interface_id",
-                    "confidence",
-                    "reason",
-                    "evidence_refs",
-                }:
-                    raise AgentSemanticLinkerError(
-                        "agent_semantic_relationship_fields_invalid:"
-                        f"{assessment_index}:{relationship_index}"
-                    )
-                interface_id = _text(raw.get("interface_id"))
-                if interface_id not in interfaces:
-                    rejected_invalid_identity += 1
-                    reject(
-                        assessment_index,
-                        relationship_index,
-                        raw,
-                        "UNKNOWN_INTERFACE_ID",
-                    )
-                    continue
-                try:
-                    confidence = float(raw.get("confidence"))
-                except (TypeError, ValueError) as exc:
-                    raise AgentSemanticLinkerError(
-                        "agent_semantic_confidence_invalid:"
-                        f"{assessment_index}:{relationship_index}"
-                    ) from exc
-                if not 0.0 <= confidence <= 1.0:
-                    raise AgentSemanticLinkerError(
-                        "agent_semantic_confidence_invalid:"
-                        f"{assessment_index}:{relationship_index}"
-                    )
-                rationale = _prompt_safe_text(raw.get("reason"), limit=600)
-                if not rationale:
-                    raise AgentSemanticLinkerError(
-                        "agent_semantic_reason_missing:"
-                        f"{assessment_index}:{relationship_index}"
-                    )
-                evidence_refs = raw.get("evidence_refs")
-                if (
-                    not isinstance(evidence_refs, list)
-                    or not evidence_refs
-                    or any(not _text(ref) for ref in evidence_refs)
-                ):
-                    raise AgentSemanticLinkerError(
-                        "agent_semantic_evidence_refs_invalid:"
-                        f"{assessment_index}:{relationship_index}"
-                    )
-                evidence_refs = list(dict.fromkeys(
-                    _text(ref) for ref in evidence_refs
-                ))
-                if (
-                    rule_id not in evidence_refs
-                    or interface_id not in evidence_refs
-                    or any(ref not in valid_refs for ref in evidence_refs)
-                ):
-                    rejected_invalid_evidence += 1
-                    reject(
-                        assessment_index,
-                        relationship_index,
-                        raw,
-                        "UNKNOWN_EVIDENCE_REF",
-                    )
-                    continue
-                pair = (rule_id, interface_id)
-                if pair in seen_pairs:
-                    rejected_duplicates += 1
-                    reject(
-                        assessment_index,
-                        relationship_index,
-                        raw,
-                        "DUPLICATE_PROPOSAL",
-                    )
-                    continue
-                seen_pairs.add(pair)
-                if confidence < MIN_CONFIDENCE:
-                    rejected_low_confidence += 1
-                    reject(
-                        assessment_index,
-                        relationship_index,
-                        raw,
-                        "LOW_CONFIDENCE",
-                    )
-                    continue
-                if per_rule.get(rule_id, 0) >= MAX_LINKS_PER_RULE:
-                    rejected_rule_limit += 1
-                    reject(
-                        assessment_index,
-                        relationship_index,
-                        raw,
-                        "RULE_LINK_LIMIT_EXCEEDED",
-                    )
-                    continue
-                per_rule[rule_id] = per_rule.get(rule_id, 0) + 1
-                if pair in existing:
-                    existing_count += 1
-                    accepted_for_assessment += 1
-                    continue
-
-                proposal_fingerprint = _fingerprint({
-                    "rule_id": rule_id,
-                    "interface_id": interface_id,
-                    "confidence": confidence,
-                    "reason": rationale,
-                    "evidence_refs": evidence_refs,
-                })
-                accepted.append({
-                    "edge_id": "edge:" + _fingerprint({
-                        "rule": rule_id,
-                        "interface": interface_id,
-                        "derivation": "agent_semantic_mapping",
-                    })[:20],
-                    "from": rule_id,
-                    "to": interface_id,
-                    "relation": "rule_to_interface",
-                    "confidence": round(confidence, 4),
-                    "status": "accepted",
-                    "derivation": "agent_semantic_mapping",
-                    "evidence_gate": (
-                        "behavior_ir_ids_and_runtime_oracle_required"
-                    ),
-                    "source_id": "agent_semantic_linker",
-                    "evidence": {
-                        "rule_source_id": _text(rules[rule_id].get("source_id")),
-                        "interface_source_id": _text(
-                            interfaces[interface_id].get("source_id")
-                        ),
-                        "proposal_fingerprint": proposal_fingerprint,
-                        "supporting_fact_refs": evidence_refs,
-                        "semantic_rationale": rationale,
-                        "semantic_rationale_is_not_business_fact": True,
-                        "runtime_verification_required": True,
-                    },
-                })
-                accepted_for_assessment += 1
-
+            if handled:
+                batch_seen.add(rule_id)
             rule_assessments.append({
                 "rule_id": rule_id,
-                "disposition": disposition,
+                "disposition": _text(raw_assessment.get("disposition")).upper(),
                 "accepted_relationship_count": accepted_for_assessment,
-                "reason": reason,
+                "reason": _prompt_safe_text(
+                    raw_assessment.get("reason"), limit=600
+                ),
                 "reason_is_not_business_fact": True,
                 "assessment_fingerprint": _fingerprint(raw_assessment),
             })
@@ -783,20 +995,80 @@ def enrich_knowledge_asset_with_agent_relationships(
                     "rule_id": missing_rule_id,
                 }),
             })
+
+        for local_index, raw_transition in enumerate(
+            response.get("transition_assessments") or []
+        ):
+            assessment_index = assessment_offset + local_index
+            if not isinstance(raw_transition, dict) or set(raw_transition) != {
+                "transition_id",
+                "disposition",
+                "reason",
+                "relationships",
+            }:
+                raise AgentSemanticLinkerError(
+                    "agent_semantic_transition_assessment_fields_invalid:"
+                    f"{assessment_index}"
+                )
+            transition_id = _text(raw_transition.get("transition_id"))
+            accepted_for_assessment, handled = accept_relationships(
+                subject_id=transition_id,
+                subject_kind="transition",
+                disposition=_text(raw_transition.get("disposition")).upper(),
+                reason=_prompt_safe_text(
+                    raw_transition.get("reason"),
+                    limit=600,
+                ),
+                relationships=raw_transition.get("relationships"),
+                assessment_index=assessment_index,
+                relation="state_transition_to_interface",
+                raw_assessment=raw_transition,
+                expected_ids=expected_transition_ids,
+            )
+            if handled:
+                batch_transition_seen.add(transition_id)
+            transition_assessments.append({
+                "transition_id": transition_id,
+                "disposition": _text(raw_transition.get("disposition")).upper(),
+                "accepted_relationship_count": accepted_for_assessment,
+                "reason": _prompt_safe_text(
+                    raw_transition.get("reason"), limit=600
+                ),
+                "reason_is_not_business_fact": True,
+                "assessment_fingerprint": _fingerprint(raw_transition),
+            })
+
+        for missing_transition_id in sorted(
+            expected_transition_ids - batch_transition_seen
+        ):
+            rejections.append({
+                "assessment_index": -1,
+                "relationship_index": -1,
+                "reason_code": "PROVIDER_OMITTED_TRANSITION",
+                "proposal_fingerprint": _fingerprint({
+                    "transition_id": missing_transition_id,
+                }),
+            })
         assessment_offset += len(response["assessments"])
 
     unassessed_rule_ids = [
         rule_id for rule_id in rules if rule_id not in seen_assessments
     ]
+    unassessed_transition_ids = [
+        transition_id
+        for transition_id in expected_transition_ids
+        if transition_id not in seen_transition_assessments
+    ]
     usage = resolved_client.usage_snapshot()
     has_gaps = bool(
         rejections
         or unassessed_rule_ids
+        or unassessed_transition_ids
         or budget_skipped_rule_ids
         or any(
             row["disposition"] != "LINKED"
             or row["accepted_relationship_count"] == 0
-            for row in rule_assessments
+            for row in [*rule_assessments, *transition_assessments]
         )
     )
     enriched = deepcopy(knowledge_asset)
@@ -846,6 +1118,19 @@ def enrich_knowledge_asset_with_agent_relationships(
             row["disposition"] == "AMBIGUOUS"
             for row in rule_assessments
         ),
+        "transition_count": len(transitions),
+        "assessed_transition_count": len(seen_transition_assessments),
+        "unassessed_transition_count": len(unassessed_transition_ids),
+        "unassessed_transition_ids": unassessed_transition_ids,
+        "no_executable_transition_count": sum(
+            row["disposition"] == "NO_EXECUTABLE_INTERFACE"
+            for row in transition_assessments
+        ),
+        "ambiguous_transition_count": sum(
+            row["disposition"] == "AMBIGUOUS"
+            for row in transition_assessments
+        ),
+        "transition_assessments": transition_assessments,
         "provider_attempt_count": provider_attempt_count,
         "provider_retry_count": provider_retry_count,
         "rule_assessments": rule_assessments,

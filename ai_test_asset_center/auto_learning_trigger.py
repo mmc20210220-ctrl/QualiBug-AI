@@ -24,8 +24,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +32,10 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _as_text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 @dataclass
@@ -95,36 +97,41 @@ class AutoLearningTrigger:
     def should_trigger(self, current_scan_result: dict) -> tuple[bool, str]:
         """Check if learning should be triggered based on scan results.
 
-        Signals are evaluated independently with OR semantics: any single
-        strong signal justifies learning. The previous AND-gate required
-        benchmark_metrics.coverage_gain which normal scans do not carry,
-        so the pipeline effectively never ran; each signal now stands alone
-        and the decision reason is explicit and receipt-friendly.
+        Signals are evaluated independently with OR semantics. The previous
+        gate read legacy fields that no mainline v12 scan ever writes
+        (``high_value_summary.total_confirmed_bugs``,
+        ``benchmark_metrics.coverage_gain``, top-level
+        ``probe_execution_result``), so the pipeline never fired. Signals now
+        read the authoritative v12 fields:
+
+        - ``formal_count_projection.formal_customer_deliverable_count`` — the
+          verified customer-deliverable defect count (falls back to
+          ``canonical_defect_count``);
+        - ``pipeline_health.blocked_obligation_count`` — binding/execution
+          blockage is itself a learning opportunity (binding experience
+          extraction feeds the next round), even when few defects surfaced.
+
+        The decision reason is explicit and receipt-friendly.
         """
-        benchmark = current_scan_result.get("benchmark_metrics", {})
-        summary = current_scan_result.get("high_value_summary", {})
+        projection = {}
+        if isinstance(current_scan_result.get("formal_count_projection"), dict):
+            projection = current_scan_result["formal_count_projection"]
+        health = {}
+        if isinstance(current_scan_result.get("pipeline_health"), dict):
+            health = current_scan_result["pipeline_health"]
 
-        confirmed_bugs = int(summary.get("total_confirmed_bugs", 0) or 0)
-        coverage_gain = float(benchmark.get("coverage_gain", 0.0) or 0.0)
-
-        execution = current_scan_result.get("probe_execution_result", [])
-        failed_probes = sum(
-            1 for item in execution
-            if isinstance(item, dict) and item.get("assertion_result") == "failed"
-        )
+        confirmed_bugs = int(projection.get("formal_customer_deliverable_count") or 0)
+        if not confirmed_bugs:
+            confirmed_bugs = int(projection.get("canonical_defect_count") or 0)
+        blocked_obligations = int(health.get("blocked_obligation_count") or 0)
 
         signals: list[str] = []
         if confirmed_bugs >= self.config.min_confirmed_bugs:
             signals.append(
                 f"confirmed_bugs={confirmed_bugs}>={self.config.min_confirmed_bugs}"
             )
-        if coverage_gain >= self.config.min_coverage_gain:
-            signals.append(
-                f"coverage_gain={coverage_gain:.3f}>={self.config.min_coverage_gain:.3f}"
-            )
-        if failed_probes > 5:
-            # Many failures indicate learning opportunity even with few bugs
-            signals.append(f"failed_probes={failed_probes}>5")
+        if blocked_obligations > 0:
+            signals.append(f"blocked_obligations={blocked_obligations}>0")
 
         if signals:
             return True, "SIGNALS_MET:" + ",".join(signals)
@@ -132,14 +139,22 @@ class AutoLearningTrigger:
         return False, (
             "NO_SIGNALS:"
             f"confirmed_bugs={confirmed_bugs}<{self.config.min_confirmed_bugs},"
-            f"coverage_gain={coverage_gain:.3f}<{self.config.min_coverage_gain:.3f},"
-            f"failed_probes={failed_probes}<=5"
+            f"blocked_obligations={blocked_obligations}<=0"
         )
     
-    def execute(self) -> LearningResult:
-        """Execute the learning pipeline."""
+    def execute(self, scan_result: dict | None = None) -> LearningResult:
+        """Execute the learning pipeline.
+
+        Extracts reusable detection signals from this scan's confirmed
+        defects and persists them back into the SQLite knowledge base
+        (category ``risk_pattern``), so the next scan's planning boost and
+        reasoner memory block consume them. The legacy ``learned_probes.json``
+        output had no mainline consumer (probe-pool files are not part of the
+        v12 Behavior IR mainline) and is no longer produced; learned signals
+        now flow through the same SQLite read side as closed-loop patterns.
+        """
         t0 = datetime.now()
-        
+
         if self.config.dry_run:
             return LearningResult(
                 success=True,
@@ -150,128 +165,65 @@ class AutoLearningTrigger:
                 execution_time_seconds=0.0,
                 error_message="Dry run - no actual learning performed",
             )
-        
+
         try:
-            # Step 1: Run learning effectiveness analysis
-            logger.info("Step 1/4: Running learning effectiveness analysis...")
-            result = subprocess.run(
-                [
-                    "python", str(self.root / "tools" / "learning_effectiveness_dashboard.py"),
-                    "--project", self.project,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-            
-            if result.returncode != 0:
-                logger.error("Learning effectiveness analysis failed: %s", result.stderr)
+            # Step 1: Locate this scan's confirmed findings
+            if scan_result is None:
+                recent = self._load_recent_scans(limit=1)
+                scan_result = recent[0] if recent else {}
+            findings = self._extract_confirmed_findings(scan_result)
+            if not findings:
                 return LearningResult(
                     success=False,
-                    rounds_analyzed=0,
+                    rounds_analyzed=len(self._load_recent_scans(limit=3)),
                     patterns_extracted=0,
                     new_probes_generated=0,
                     risk_weights_updated={},
                     execution_time_seconds=(datetime.now() - t0).total_seconds(),
-                    error_message=result.stderr[:500],
+                    error_message="No confirmed findings in scan result",
                 )
-            
-            # Step 2: Build risk learning profile
-            logger.info("Step 2/4: Building risk learning profile...")
-            from ai_test_asset_center.defect_discovery._reporting import (
-                build_risk_learning_profile,
-                build_high_value_pattern_memory,
-            )
-            
-            # Load scan results
-            scan_results = self._load_recent_scans()
-            if not scan_results:
-                return LearningResult(
-                    success=False,
-                    rounds_analyzed=0,
-                    patterns_extracted=0,
-                    new_probes_generated=0,
-                    risk_weights_updated={},
-                    execution_time_seconds=(datetime.now() - t0).total_seconds(),
-                    error_message="No scan results found",
-                )
-            
-            # Extract bugs from recent scans
-            all_bugs = []
-            for scan in scan_results:
-                bugs = scan.get("high_value_summary", {}).get("confirmed_bugs_list", [])
-                all_bugs.extend(bugs)
-            
-            # Build learning artifacts
-            summary = {"total_confirmed_bugs": len(all_bugs)}
-            strategy = {}
-            memory = {}
-            
-            risk_profile = build_risk_learning_profile(
-                bugs=all_bugs,
-                summary=summary,
-                strategy=strategy,
-                memory=memory,
-            )
-            
-            pattern_memory = build_high_value_pattern_memory(
-                bugs=all_bugs,
-            )
-            
-            # Step 3: Generate new probes from learned patterns
-            logger.info("Step 3/4: Generating new probes from learned patterns...")
-            from ai_test_asset_center.defect_discovery._probes import (
-                generate_feedback_learning_probes,
-            )
-            
-            business_model = {
-                "risk_learning_profile": risk_profile,
-                "high_value_pattern_memory": pattern_memory,
-            }
-            
-            new_probes = generate_feedback_learning_probes(business_model)
-            
-            # Step 4: Persist learning artifacts
-            logger.info("Step 4/4: Persisting learning artifacts...")
-            self.workspace_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Save risk learning profile
-            profile_path = self.workspace_dir / "risk_learning_profile.json"
-            with open(profile_path, "w", encoding="utf-8") as f:
-                json.dump(risk_profile, f, indent=2, ensure_ascii=False)
-            
-            # Save pattern memory
-            memory_path = self.workspace_dir / "high_value_pattern_memory.json"
-            with open(memory_path, "w", encoding="utf-8") as f:
-                json.dump(pattern_memory, f, indent=2, ensure_ascii=False)
-            
-            # Save new probes
-            probes_path = self.workspace_dir / "learned_probes.json"
-            with open(probes_path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "version": "v1",
-                    "generated_at": datetime.now().isoformat(),
-                    "probe_count": len(new_probes),
-                    "probes": new_probes,
-                }, f, indent=2, ensure_ascii=False)
-            
-            # Extract risk weights
+
+            # Step 2: Build pattern memory and extract detection signals
+            from .bug_pattern_memory import BugPatternMemory
+
+            memory = BugPatternMemory()
+            for finding in findings:
+                memory.add(finding)
+            signals = memory.extract_detection_signals(min_frequency=1)
+
+            # Step 3: Persist signals back into the SQLite knowledge base so
+            # the next scan's planning boost / reasoner memory block consume
+            # them (single read-side SSOT: LearningPatternBridge).
+            stored_count = self._persist_signals_to_kb(signals)
             risk_weights = {
-                item["name"]: item["weight"]
-                for item in risk_profile.get("priority_risks", [])
+                str(signal.get("category") or "unknown"): float(signal.get("frequency") or 1)
+                for signal in signals
             }
-            
-            execution_time = (datetime.now() - t0).total_seconds()
-            
+
+            # Step 4: Keep an observable profile artifact (reporting only)
+            self.workspace_dir.mkdir(parents=True, exist_ok=True)
+            profile = {
+                "schema_version": "qualibug.auto-learning-profile.v2",
+                "generated_at": datetime.now().isoformat(),
+                "project": self.project,
+                "signals": signals,
+                "kb_patterns_stored": stored_count,
+                "source": "auto_learning_trigger",
+            }
+            (self.workspace_dir / "high_value_pattern_memory.json").write_text(
+                json.dumps(profile, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
             return LearningResult(
                 success=True,
-                rounds_analyzed=len(scan_results),
-                patterns_extracted=pattern_memory.get("pattern_count", 0),
-                new_probes_generated=len(new_probes),
+                rounds_analyzed=len(self._load_recent_scans(limit=3)),
+                patterns_extracted=len(signals),
+                new_probes_generated=0,
                 risk_weights_updated=risk_weights,
-                execution_time_seconds=execution_time,
+                execution_time_seconds=(datetime.now() - t0).total_seconds(),
             )
-            
+
         except Exception as e:
             logger.exception("Learning execution failed")
             return LearningResult(
@@ -283,19 +235,126 @@ class AutoLearningTrigger:
                 execution_time_seconds=(datetime.now() - t0).total_seconds(),
                 error_message=str(e)[:500],
             )
+
+    def _extract_confirmed_findings(self, scan_result: dict) -> list[dict]:
+        """Extract confirmed (customer-deliverable) findings from a v12 scan.
+
+        Reads the authoritative registry / projection fields that mainline
+        scans actually emit — never the legacy ``high_value_summary`` shape.
+        """
+        findings: list[dict] = []
+
+        registry = scan_result.get("canonical_defect_registry") or {}
+        if isinstance(registry, dict):
+            for item in registry.get("canonical_defects") or []:
+                if not isinstance(item, dict):
+                    continue
+                identity = item.get("identity") if isinstance(item.get("identity"), dict) else {}
+                operation = identity.get("operation") if isinstance(identity.get("operation"), dict) else {}
+                findings.append({
+                    "title": _as_text(operation.get("source_locator") or item.get("canonical_defect_id")),
+                    "category": _as_text(identity.get("property") or "uncategorized"),
+                    "severity": _as_text(item.get("severity") or "P2"),
+                    "canonical_defect_id": _as_text(item.get("canonical_defect_id")),
+                    "occurrence_count": int(item.get("occurrence_count") or 0),
+                })
+
+        projection = scan_result.get("formal_count_projection") or {}
+        if isinstance(projection, dict):
+            for item in projection.get("canonical_representative_findings") or []:
+                if not isinstance(item, dict):
+                    continue
+                findings.append({
+                    "title": _as_text(item.get("title")),
+                    "category": _as_text(
+                        item.get("category") or item.get("risk_family") or "uncategorized"
+                    ),
+                    "severity": _as_text(item.get("severity") or "P2"),
+                    "obligation_id": _as_text(item.get("obligation_id")),
+                    "experiment_id": _as_text(item.get("experiment_id")),
+                })
+
+        # De-duplicate on canonical_defect_id where present, then on title.
+        seen_titles: set[str] = set()
+        deduped: list[dict] = []
+        for finding in findings:
+            key = _as_text(finding.get("canonical_defect_id")) or _as_text(finding.get("title"))
+            if key and key in seen_titles:
+                continue
+            if key:
+                seen_titles.add(key)
+            deduped.append(finding)
+        return deduped
+
+    def _persist_signals_to_kb(self, signals: list[dict]) -> int:
+        """Write detection signals into the SQLite knowledge base.
+
+        Product-owned confirmed-defect signals only; never benchmark or
+        customer vocabulary. Each signal becomes a ``risk_pattern`` entry so
+        the existing planning boost / reasoner memory read side consumes it.
+        """
+        if not signals:
+            return 0
+        from .learning_pattern_bridge import LearningPatternBridge
+
+        patterns = []
+        for signal in signals:
+            category = _as_text(signal.get("category") or "uncategorized")
+            pattern_name = _as_text(signal.get("pattern_name") or f"learned_{category}")
+            patterns.append({
+                "signature": f"learned:{pattern_name}",
+                "type": f"learned:{category}",
+                "entity": "",
+                "mutation_hint": "",
+                "count": int(signal.get("frequency") or 1),
+                "_source": "auto_learning_trigger",
+            })
+        bridge = LearningPatternBridge(project=self.project)
+        return bridge.store_patterns(
+            patterns,
+            scan_id="auto_learning",
+            confidence=0.8,
+        )
     
     def _load_recent_scans(self, limit: int = 3) -> list[dict]:
-        """Load recent scan results."""
-        scans = []
-        
-        for scan_file in sorted(self.output_dir.glob("scan_*.json"), reverse=True)[:limit]:
+        """Load recent scan results.
+
+        Reads the per-round immutable trace ledgers
+        (``platform_outputs/<project>/discovery_evolution/trace_ledgers/``)
+        plus the latest ``scan_result.json`` — the real persisted history.
+        The previous glob of ``scan_*.json`` matched only the overwritten
+        ``scan_result.json``, so ``rounds_analyzed`` was always 1.
+        """
+        scans: list[dict] = []
+        ledger_dir = (
+            self.output_dir
+            / "discovery_evolution"
+            / "trace_ledgers"
+        )
+        ledger_files: list[Path] = []
+        if ledger_dir.exists():
+            ledger_files = sorted(
+                ledger_dir.glob("*/*.trace-ledger.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        for ledger_path in ledger_files[:limit]:
             try:
-                data = json.load(open(scan_file, encoding="utf-8"))
-                scans.append(data)
+                data = json.loads(ledger_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    scans.append(data)
             except Exception as e:
-                logger.warning("Failed to load %s: %s", scan_file, e)
-        
-        return scans
+                logger.warning("Failed to load %s: %s", ledger_path, e)
+
+        latest = self.output_dir / "scan_result.json"
+        if latest.exists():
+            try:
+                data = json.loads(latest.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    scans.append(data)
+            except Exception as e:
+                logger.warning("Failed to load %s: %s", latest, e)
+        return scans[:limit]
     
     def print_summary(self, result: LearningResult):
         """Print learning execution summary."""

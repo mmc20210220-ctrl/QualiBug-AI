@@ -346,8 +346,24 @@ if _KB_SNAPSHOT:
 else:
     print("LEARNING_KB_RESTORED: none (cold start)", flush=True)
 
-api_doc_text = (INPUT / "API_SPEC.md").read_text(encoding="utf-8")
-source_hash = hashlib.sha256(api_doc_text.encode("utf-8")).hexdigest()
+_use_registered_source = (
+    os.environ.get("QUALIBUG_FUNNEL_USE_REGISTERED_SOURCE", "0").strip().lower()
+    in {"1", "true", "on", "yes"}
+)
+if _use_registered_source:
+    # Registered-source mode: leave api_doc_text empty so the scan loads its
+    # API source from the enterprise source registry (same path as customer
+    # scans / the e2e runner). This makes ablation runs comparable to the
+    # full-input product path instead of the reduced single-file input.
+    api_doc_text = ""
+    source_hash = ""
+    _funnel_source_id = "registered_source_registry"
+    print("FUNNEL_SOURCE: registered_source_registry (scan loads via registry)", flush=True)
+else:
+    api_doc_text = (INPUT / "API_SPEC.md").read_text(encoding="utf-8")
+    source_hash = hashlib.sha256(api_doc_text.encode("utf-8")).hexdigest()
+    _funnel_source_id = "benchmark_mall/API_SPEC.md"
+    print(f"FUNNEL_SOURCE: {_funnel_source_id} ({len(api_doc_text)} chars)", flush=True)
 
 _benchmark_target_id = (
     os.environ.get("QUALIBUG_BENCHMARK_TARGET_ID", "").strip()
@@ -386,10 +402,16 @@ context = {
     "evaluation_mode": _evaluation_mode,
     "agent_semantic_linking_enabled": _semantic_flag in {"1", "true", "on"},
     "runtime_interface_discovery_enabled": _discovery_flag in {"1", "true", "on"},
-    "source_manifest": {
-        "source_id": "benchmark_mall/API_SPEC.md",
-        "source_hash": source_hash,
-    },
+    "source_manifest": (
+        # Registered-source mode: let the scan resolve and record the source
+        # manifest itself (registry selection updates it).
+        {}
+        if _use_registered_source
+        else {
+            "source_id": _funnel_source_id,
+            "source_hash": source_hash,
+        }
+    ),
 }
 # Exercise the same product defaults used by customer scans.  The explicitly
 # declared non-production target must enter governed sandbox-write mode and

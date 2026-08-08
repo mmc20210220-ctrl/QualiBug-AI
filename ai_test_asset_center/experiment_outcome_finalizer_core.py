@@ -76,7 +76,14 @@ def _requires_cleanup_equivalence(
         governance = _dict(step.get("governance_receipt"))
         if governance.get("accepted") is True:
             return True
-        status = int(step.get("status_code") or step.get("status") or 0)
+        try:
+            status = int(step.get("status_code") or step.get("status") or 0)
+        except (TypeError, ValueError):
+            # A non-numeric step status (e.g. "blocked_write": the write was
+            # intercepted by the sandbox barrier before transport) is not a
+            # 2xx write — it carries no write evidence, so it must not crash
+            # the finalizer and must not demand cleanup equivalence.
+            status = 0
         if 200 <= status < 300:
             return True
     return False

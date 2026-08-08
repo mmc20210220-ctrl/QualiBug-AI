@@ -576,6 +576,44 @@ _PUBLIC_ENTITY_STATUSES = frozenset({
 _ENTITY_STATE_EXPOSURE_VERBS = ("不展示", "不提供", "不可见", "不开放", "不得展示", "禁止展示", "不显示")
 _ENTITY_STATE_VIOLATION_WORDS = ("下架", "草稿", "停用", "过期", "禁用", "删除", "内部", "归档")
 
+# Decision-endpoint vocabulary: an operation that decides an entity's
+# eligibility and echoes the decision in its response (校验优惠券并试算优惠 /
+# 使用优惠券 / 领取优惠券 / 模拟折扣计算 / validate/check/verify/use/claim/
+# simulate/estimate). For such operations the response body IS the effect —
+# there is no entity mutation to observe.
+_DECISION_ENDPOINT_TOKENS = (
+    "validate", "check", "verify", "eligible", "usable", "consume",
+    "apply", "simulate", "quote", "estimate", "calculate", "use",
+    "claim", "校验", "验证", "使用", "领取", "可用", "模拟", "计算",
+    "预估", "报价", "试算",
+)
+
+# Consumption-state markers: rules that constrain an object's ELIGIBILITY at
+# a decision operation (优惠券必须在有效期内 / 优惠券状态必须为 ACTIVE / 用户
+# 使用次数不能超过限制). The violating input is an entity row the environment
+# really has in the forbidden state — the treatment resolves it at runtime the
+# same way the exposure arm does. The markers are positive state constraints
+# (必须为/必须在/在有效期/状态/ACTIVE/只能用于/不能超过/不能使用/次数) and
+# their violation words — generic business language, never industry terms.
+_ENTITY_STATE_CONSUMPTION_MARKERS = (
+    "必须为", "必须在", "在有效期", "有效期内", "只能用于", "不能使用",
+    "不可用", "不能超过", "次数", "状态", "ACTIVE", "ENABLED",
+)
+# Which violation dimension the rule constrains: date-expiry rules (有效期/
+# 过期/失效/生效) need a row whose validity DATE has passed even when its
+# status is still public; status rules need a row whose status is non-public.
+_ENTITY_STATE_EXPIRY_MARKERS = ("有效期", "过期", "失效", "生效", "到期", "有效期内")
+_ENTITY_STATE_STATUS_MARKERS = ("状态", "ACTIVE", "ENABLED", "停用", "禁用")
+
+
+def _entity_state_violation_mode(semantic_text: str) -> str:
+    """Derive the runtime violation dimension from the rule's own vocabulary."""
+    if any(marker in semantic_text for marker in _ENTITY_STATE_EXPIRY_MARKERS):
+        return "expiry"
+    if any(marker in semantic_text for marker in _ENTITY_STATE_STATUS_MARKERS):
+        return "status"
+    return "any"
+
 
 def _non_public_entity_treatment(
     control: dict[str, Any],
@@ -595,37 +633,66 @@ def _non_public_entity_treatment(
     entity-state isolation rule or no entity list read exists.
     """
     if not any(v in semantic_text for v in _ENTITY_STATE_EXPOSURE_VERBS):
-        return None
-    if not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
+        if not any(m in semantic_text for m in _ENTITY_STATE_CONSUMPTION_MARKERS):
+            return None
+        if not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
+            # Positive state constraints (必须在有效期内 / 必须为 ACTIVE /
+            # 不能超过限制) name the REQUIRED state, not a violation word —
+            # the treatment is an entity that does NOT satisfy the required
+            # state. The consumption markers above already bound the rule to
+            # the eligibility surface; a state-constraint rule without any
+            # state vocabulary at all (must satisfy 最低金额) belongs to the
+            # amount-boundary arm, not here.
+            if not any(t in semantic_text for t in ("有效", "状态", "ACTIVE", "次数", "停用", "禁用", "过期")):
+                return None
+    elif not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
         return None
     if not isinstance(control, dict) or not isinstance(behavior_ir, dict):
         return None
     identity_field = ""
     identity_path = ""
-    # Business-line bodies carry the entity identity inside a detail array
-    # (items[].sku / lines[].code); the treatment must replace the element's
-    # identity field and the json_path records the nested location. Detail
-    # arrays take priority over top-level identity-like fields: a top-level
-    # couponCode names a REFERENCED entity (a coupon), not the business line's
-    # entity, and would mis-target the state substitution.
-    for _body_key, _body_value in control.items():
-        if (
-            isinstance(_body_value, list)
-            and _body_value
-            and isinstance(_body_value[0], dict)
-        ):
-            _inner_field = next(
-                (
-                    key
-                    for key in _body_value[0]
-                    if _ENTITY_IDENTITY_FIELD_RE.search(str(key))
-                ),
-                "",
-            )
-            if _inner_field:
-                identity_field = _inner_field
-                identity_path = f"$.{_body_key}[0].{_inner_field}"
-                break
+    # The governed entity's identity slot. For the exposure arm (用户端不展示
+    # 下架商品) the business line carries the entity identity inside a detail
+    # array (items[].sku) and a top-level couponCode names a REFERENCED
+    # entity — detail arrays take priority. For the consumption arm (优惠券
+    # 必须在有效期内 / 状态必须为 ACTIVE) the rule constrains the REFERENCED
+    # entity itself — its identity is the top-level slot (code), and replacing
+    # items[].sku with a coupon code would break the request. The two arms
+    # are distinguished by their trigger: exposure verbs vs consumption
+    # markers.
+    _consumption_triggered = not any(
+        v in semantic_text for v in _ENTITY_STATE_EXPOSURE_VERBS
+    )
+    if _consumption_triggered:
+        identity_field = next(
+            (
+                key
+                for key in control
+                if _ENTITY_IDENTITY_FIELD_RE.search(str(key))
+            ),
+            "",
+        )
+        if identity_field:
+            identity_path = f"$.{identity_field}"
+    if not identity_field:
+        for _body_key, _body_value in control.items():
+            if (
+                isinstance(_body_value, list)
+                and _body_value
+                and isinstance(_body_value[0], dict)
+            ):
+                _inner_field = next(
+                    (
+                        key
+                        for key in _body_value[0]
+                        if _ENTITY_IDENTITY_FIELD_RE.search(str(key))
+                    ),
+                    "",
+                )
+                if _inner_field:
+                    identity_field = _inner_field
+                    identity_path = f"$.{_body_key}[0].{_inner_field}"
+                    break
     if not identity_field:
         identity_field = next(
             (
@@ -682,6 +749,115 @@ def _non_public_entity_treatment(
         "json_path": identity_path or f"$.{identity_field}",
         "resolver_operations": [resolver],
         "identity_field": identity_field,
+        "status_field": "status",
+        # The runtime resolver picks the violating row by the rule's own
+        # dimension: date-expiry rules need a row whose validity date has
+        # passed (status may still be public); status rules need a row whose
+        # status is non-public; anything else takes either.
+        "violation_mode": _entity_state_violation_mode(semantic_text),
+    }
+    return treatment, mutation
+
+
+def _amount_boundary_treatment(
+    control: dict[str, Any],
+    semantic_text: str,
+    behavior_ir: dict[str, Any],
+    property_spec: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Build the rejection-arm body for an input amount-boundary rule.
+
+    A rule like 必须满足最低订单金额 / 折扣券必须遵守封顶金额 constrains the
+    ORDER amount a decision endpoint accepts for an entity (a coupon): the
+    treatment uses an entity row whose DECLARED boundary (min_order_amount /
+    max_discount) the runtime reads from the environment's own collection,
+    then computes the violating input amount (boundary - 1 for a minimum;
+    boundary * 100 / rate + 1 for a percent cap). The mutation descriptor is
+    runtime-resolved — the body value cannot be known at compile time — and
+    the executor replaces the entity identity field with the boundary-
+    carrying row, exactly like the entity-state arm.
+    """
+    _MIN_MARKERS = ("最低金额", "最低订单金额", "门槛", "最小金额", "最低消费")
+    _CAP_MARKERS = ("封顶", "上限", "最大优惠", "最大金额", "封顶金额")
+    boundary_kind = ""
+    if any(m in semantic_text for m in _MIN_MARKERS):
+        boundary_kind = "min_amount"
+    elif any(m in semantic_text for m in _CAP_MARKERS):
+        boundary_kind = "max_cap"
+    if not boundary_kind:
+        return None
+    if not isinstance(control, dict) or not isinstance(behavior_ir, dict):
+        return None
+    identity_field = next(
+        (
+            key
+            for key in control
+            if _ENTITY_IDENTITY_FIELD_RE.search(str(key))
+        ),
+        "",
+    )
+    if not identity_field:
+        return None
+    # The body field carrying the order amount: the numeric field whose name
+    # names the order total (totalAmount/orderAmount/subtotal/amount) — the
+    # generic amount vocabulary, not an industry term.
+    amount_field = next(
+        (
+            key
+            for key in control
+            if re.search(
+                r"(?:total|order|subtotal|amount|orderamount|totalamount)",
+                str(key),
+                re.IGNORECASE,
+            )
+        ),
+        "",
+    )
+    if not amount_field:
+        return None
+    subject_entities = [
+        _text(value).lower()
+        for value in _list(_dict(property_spec).get("subject_entity_refs"))
+        if _text(value)
+    ]
+    resolver = None
+    for op in _list(behavior_ir.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
+            continue
+        if re.search(r"(?:^|/)(?:health)(?:/|$)", _text(op.get("path")).lower()):
+            continue
+        _path_segments = [
+            seg
+            for seg in _text(op.get("path") or op.get("raw_path"))
+            .lower()
+            .strip("/")
+            .split("/")
+            if seg and seg not in {"api", "health", "v1"}
+        ]
+        if subject_entities and not any(
+            _seg.startswith(_obj) or _obj.startswith(_seg)
+            for _seg in _path_segments
+            for _obj in subject_entities
+        ):
+            continue
+        resolver = {
+            "operation_ref": _text(op.get("id")),
+            "method": "GET",
+            "path": _text(op.get("path") or op.get("raw_path")),
+        }
+        break
+    if not resolver:
+        return None
+    treatment = deepcopy(control)
+    mutation = {
+        "class": "runtime_amount_boundary_violation",
+        "json_path": f"$.{amount_field}",
+        "resolver_operations": [resolver],
+        "identity_field": identity_field,
+        "amount_field": amount_field,
+        "boundary_kind": boundary_kind,
         "status_field": "status",
     }
     return treatment, mutation
@@ -772,6 +948,38 @@ def _mutation_required_field_removals(mutation: dict[str, Any]) -> list[str]:
     return [leaf] if leaf else []
 
 
+def _normalize_identity_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _strip_ownership_identity_fields(
+    value: Any,
+    keep: set[str] | None = None,
+) -> Any:
+    """Validation arms isolate the field under test.
+
+    Ownership identity fields (userId/ownerId/accountId/…) carried by the
+    source example point the write at a different account. In a validation
+    experiment that confounds the effect observation: a 2xx write lands in an
+    invisible cart and reads as zero effect (VALIDATION_EFFECT_AMBIGUOUS)
+    instead of proving the malformed input was accepted. Dropping them lets
+    the target derive the identity from the authenticated actor, so the
+    treatment's effect is observable on the acting account. The field under
+    mutation (if it is an ownership field itself) is preserved.
+    """
+    if not isinstance(value, dict):
+        if isinstance(value, list):
+            return [_strip_ownership_identity_fields(item, keep) for item in value]
+        return value
+    keep_norm = {_normalize_identity_key(k) for k in (keep or set())}
+    return {
+        key: _strip_ownership_identity_fields(child, keep)
+        for key, child in value.items()
+        if _normalize_identity_key(key) in keep_norm
+        or not _is_ownership_key_read_side(str(key))
+    }
+
+
 def _validation_protocol_material(
     operation: dict[str, Any],
     property_spec: dict[str, Any],
@@ -817,6 +1025,19 @@ def _validation_protocol_material(
         )
         if _entity_state_treatment:
             treatment, mutation = _entity_state_treatment
+            return control, treatment, mutation
+        # ── Input amount-boundary arm ──
+        # 必须满足最低订单金额 / 折扣券必须遵守封顶金额 constrain the order
+        # amount a decision endpoint accepts for an entity. The treatment's
+        # violating amount is computed at runtime from the boundary the
+        # environment's own entity row declares (min_order_amount - 1, or the
+        # percent cap * 100 / rate + 1) — the mutation descriptor is
+        # runtime-resolved, never a compile-time guess.
+        _amount_treatment = _amount_boundary_treatment(
+            control, _semantic_text_pre, _dict(behavior_ir), property_spec,
+        )
+        if _amount_treatment:
+            treatment, mutation = _amount_treatment
             return control, treatment, mutation
     if not schema:
         # No request body schema — but if we have a control body from
@@ -1069,6 +1290,114 @@ def _validation_protocol_material(
     return {}, {}, {}
 
 
+def _identity_addressed_read_isolation_protocol(
+    *,
+    operation: dict[str, Any],
+    operation_ref: str,
+    control_actor_ref: str,
+    treatment_actor_ref: str,
+    property_spec: dict[str, Any],
+    behavior_ir: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Two-arm owned-resource read for identity-addressed path targets.
+
+    A resource-targeted owned read (profile/{id} documented as 权限：本人或
+    管理员) has no collection query param and usually no create fixture for
+    the owned entity — the fixture-backed ``owned_resource`` proof cannot
+    materialize, so the obligation would block without ever testing the
+    boundary. When the runtime catalogue carries two account-bound actors
+    with observed identities, compile the two-arm read directly:
+
+    * control — the owner reads its own identity-addressed resource;
+    * treatment — the viewer reads the owner's resource (the same concrete
+      path, so same-resource identity is provable from the observed body).
+
+    Both paths are resolved at compile time from runtime-observed account
+    ids (the actor's own login identity) — no fixture, no fabricated data.
+    Returns None when the shape does not apply (no identity path param, no
+    two distinct actors with observed identities); the caller then falls
+    through to the existing compile chain (which blocks visibly when the
+    owned-resource fixture cannot be materialized).
+    """
+    path = _text(operation.get("path") or operation.get("raw_path"))
+    if "{" not in path and "/:" not in path:
+        return None
+    owner_ref = _text(property_spec.get("owner_actor_ref") or control_actor_ref)
+    viewer_ref = _text(property_spec.get("viewer_actor_ref") or treatment_actor_ref)
+    if not owner_ref or not viewer_ref or owner_ref == viewer_ref:
+        return None
+    actor_catalog = [
+        item
+        for item in _list(_dict(behavior_ir).get("actors"))
+        if isinstance(item, dict)
+    ]
+    actors_by_ref = {_text(item.get("id")): item for item in actor_catalog}
+    owner = actors_by_ref.get(owner_ref)
+    viewer = actors_by_ref.get(viewer_ref)
+    if not owner or not viewer:
+        return None
+    owner_identity = _text(owner.get("account_id"))
+    if not owner_identity:
+        return None
+    identity_param = ""
+    for _param in _list(operation.get("parameters")):
+        if not isinstance(_param, dict):
+            continue
+        if _text(_param.get("in") or _param.get("location")).lower() != "path":
+            continue
+        _name = _text(_param.get("name"))
+        if not _name:
+            continue
+        if _is_ownership_key_read_side(_name) or re.sub(
+            r"[^a-z0-9]+", "", _name.lower()
+        ).endswith("id"):
+            identity_param = _name
+            break
+    if not identity_param:
+        return None
+    owner_path = re.sub(
+        r"\{" + re.escape(identity_param) + r"\}",
+        owner_identity,
+        path,
+    )
+    if "{" in owner_path or "/:" in owner_path:
+        # Additional non-identity placeholders must go through the ordinary
+        # binding machinery — this shape does not own them.
+        return None
+    return {
+        "status": "COMPILED",
+        "control_plan": [{
+            "step_id": "control_1",
+            "actor_ref": owner_ref,
+            "operation_ref": operation_ref,
+            "intent": "owned_scope_own_identity_read",
+            "protocol_step": "positive_control",
+            "path": owner_path,
+            "property_template": _text(property_spec.get("template")),
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "actor_ref": viewer_ref,
+            "operation_ref": operation_ref,
+            "intent": "owned_scope_peer_identity_read",
+            "protocol_step": "treatment",
+            "path": owner_path,
+            "property_template": _text(property_spec.get("template")),
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        }],
+        "observers": [
+            {"observer_id": "http_response"},
+            {"observer_id": "actor_identity"},
+        ],
+        "assertion": {
+            "kind": "owner_tenant_visibility",
+            "require_same_resource": True,
+        },
+        "_identity_addressed_read": True,
+    }
+
+
 def compile_family_protocol(
     *,
     risk_family: str,
@@ -1280,6 +1609,7 @@ def compile_family_protocol(
         # whose path binds the body's identity field).
         if _text(equation.get("operator")) == "non_negative":
             _bound_mutation = None
+            _resolvers: list[dict[str, str]] = []
             _bound_field = _text(_normalized_terms[0]) if _normalized_terms else ""
             _delta_field = next(
                 (
@@ -1298,7 +1628,6 @@ def compile_family_protocol(
                 "",
             )
             if _delta_field and _identity_field:
-                _resolvers: list[dict[str, str]] = []
                 for _op in _list(_dict(behavior_ir).get("operations")):
                     if not isinstance(_op, dict):
                         continue
@@ -1622,6 +1951,58 @@ def compile_family_protocol(
                 "reason_code": "BLOCKED_MISSING_BINDING",
                 "detail": "validation_requires_source_example_and_request_schema",
             }
+        # Validation arms isolate the field under test: ownership identity
+        # fields from the source example (userId/ownerId/…) would aim the
+        # write at another account and make the effect invisible to the
+        # acting account (VALIDATION_EFFECT_AMBIGUOUS). Drop them so the
+        # target derives the identity from the authenticated actor.
+        _mutation_field = _text(mutation.get("json_path")).rsplit(".", 1)[-1].strip("[]")
+        _keep_fields = {_mutation_field} if _mutation_field else None
+        control_body = _strip_ownership_identity_fields(
+            control_body, keep=_keep_fields
+        )
+        treatment_body = _strip_ownership_identity_fields(
+            treatment_body, keep=_keep_fields
+        )
+        # ── Cap-boundary assertion ──
+        # A percent-cap rule (折扣券必须遵守封顶金额) does not reject the
+        # input — a correct target accepts it and CLAMPS the discount to the
+        # declared cap. The assertion is the value bound discount ≤ cap, both
+        # read from the target's own response (discountAmount vs the echoed
+        # coupon.max_discount), never a rejection expectation.
+        if (
+            _text(mutation.get("class")) == "runtime_amount_boundary_violation"
+            and _text(mutation.get("boundary_kind")) == "max_cap"
+        ):
+            _cap_assertion: dict[str, Any] = {
+                "kind": "json_path_compare",
+                "path": "$.discountAmount",
+                "expected_path": "$.coupon.max_discount",
+                "operator": "lte",
+                "compare_field": "json",
+            }
+        else:
+            # Decision endpoints (validate/check/verify/use/claim/simulate:
+            # the operation decides eligibility and echoes its decision in
+            # the response body) are read-only for the entity — their
+            # "effect" IS the response decision, and a zero-effect signal
+            # must not mask an accepted-but-should-be-rejected treatment.
+            # Marked on the assertion for the validation oracle.
+            _op_surface = (
+                f"{_text(operation.get('path') or operation.get('raw_path'))} "
+                f"{_text(operation.get('summary'))}"
+            ).casefold()
+            _response_decision = any(
+                token in _op_surface
+                for token in _DECISION_ENDPOINT_TOKENS
+            )
+            _cap_assertion = {
+                "kind": "http_status_class",
+                "expected_class": 4,
+                "compare_field": "status_code",
+            }
+            if _response_decision:
+                _cap_assertion["response_decision"] = True
         return {
             "status": "COMPILED",
             "control_plan": [{
@@ -1648,11 +2029,7 @@ def compile_family_protocol(
                     mutation
                 ),
             }],
-            "assertion": {
-                "kind": "http_status_class",
-                "expected_class": 4,
-                "compare_field": "status_code",
-            },
+            "assertion": _cap_assertion,
         }
 
     if family == "state":
@@ -1800,6 +2177,30 @@ def compile_family_protocol(
         write_body = source_request_example(operation, sibling_operations=sibling_operations)
         if not write_body and not property_spec.get("defer_write_body_to_runtime"):
             write_body = _minimal_body_from_schema(operation)
+
+    # ── Identity-addressed path reads (isolation/visibility) ──
+    # A resource-targeted owned read (profile/{id} 权限：本人或管理员) has no
+    # collection query param and usually no create fixture for the owned
+    # entity, so the fixture-backed owned_resource proof cannot materialize
+    # and the obligation would block without ever testing the boundary. When
+    # the runtime catalogue carries two account-bound actors with observed
+    # identities, compile the two-arm read directly (owner reads own
+    # identity-addressed resource, viewer reads the owner's resource).
+    if (
+        family in {"isolation", "visibility"}
+        and method in {"GET", "HEAD"}
+        and _dict(property_spec).get("require_ownership_evidence") is True
+    ):
+        _identity_read = _identity_addressed_read_isolation_protocol(
+            operation=operation,
+            operation_ref=operation_ref,
+            control_actor_ref=control_actor_ref,
+            treatment_actor_ref=treatment_actor_ref,
+            property_spec=property_spec,
+            behavior_ir=behavior_ir,
+        )
+        if _identity_read is not None:
+            return _identity_read
 
     control_plan: list[dict[str, Any]] = []
     if needs_control:

@@ -202,6 +202,27 @@ def evaluate_assertion(
                     actual={**actual, "business_rejected": True},
                 )
             if obs.get("zero_effect_on_accepted_write") is True:
+                # A decision endpoint (validate/check/verify/use/claim/
+                # simulate) does not mutate the entity — zero effect is its
+                # normal shape, and the response body IS the effect. The
+                # protocol marks such assertions response_decision: an
+                # accepted 2xx with an acceptance decision (valid:true) while
+                # the rule required rejection is a real violation, not an
+                # ambiguous swallow. Only the marker changes the verdict —
+                # unmarked experiments keep the historical fail-closed
+                # INDETERMINATE.
+                if spec.get("response_decision") is True:
+                    return _validation_receipt(
+                        status_probe=probe,
+                        status="VIOLATION",
+                        reason_code="VALIDATION_REJECTION_NOT_ENFORCED",
+                        expected=expected,
+                        actual={
+                            **actual,
+                            "zero_effect_on_accepted_write": True,
+                            "response_decision": True,
+                        },
+                    )
                 return _validation_receipt(
                     status_probe=probe,
                     status="INDETERMINATE",

@@ -36,6 +36,9 @@ from .behavior_ir_surface_reconciliation import (
 from .business_behavior_invariant_binding import (
     bind_business_behavior_invariants,
 )
+from .rule_contract_validation_binding import (
+    bind_rule_contract_validation_invariants,
+)
 from .effect_observer_binding import bind_source_effect_observers
 from .formal_event_capability_guard import install_formal_event_capability_guard
 from .formal_event_pre_cleanup import install_formal_event_pre_cleanup_observer
@@ -412,7 +415,18 @@ def build_behavior_ir_with_semantic_operation_bindings(
         semantic_ir,
         effective_asset,
     )
-    observer_ir, _observer_receipt = bind_source_effect_observers(business_ir)
+    # Source constraint rules whose derived invariants are still unbound
+    # (operation_refs == []) become validation-contract invariants here: the
+    # rule's subject and constraint vocabulary resolve to the governed
+    # entity's declared fields and consuming operations, so the obligation
+    # compiler's validation → validation_rejection mapping can fire. Fully
+    # data-driven and non-duplicating — rules already bound by the shared
+    # subject-frame channel or legacy binding are skipped (receipted).
+    rule_contract_ir, _rule_contract_receipt = bind_rule_contract_validation_invariants(
+        business_ir,
+        effective_asset,
+    )
+    observer_ir, _observer_receipt = bind_source_effect_observers(rule_contract_ir)
     ui_ir, _ui_receipt = bind_source_ui_contracts(observer_ir, effective_asset)
     event_ir, _event_receipt = bind_source_event_contracts(ui_ir, effective_asset)
     performance_ir, _performance_receipt = bind_source_performance_contracts(
@@ -433,6 +447,7 @@ def build_behavior_ir_with_semantic_operation_bindings(
         scan_performance_receipt
     )
     job_ir["scan_stability_contract_overlay_receipt"] = dict(scan_stability_receipt)
+    job_ir["rule_contract_validation_receipt"] = dict(_rule_contract_receipt)
     return job_ir
 
 

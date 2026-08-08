@@ -784,3 +784,52 @@ def test_post_cleanup_readback_http_is_counted_in_runtime_step(
     )
     assert receipt["http_request_attempt_count"] == 4
     assert receipt["write_request_attempt_count"] == 1
+
+
+def test_requires_cleanup_equivalence_tolerates_blocked_write_status() -> None:
+    """A barrier-intercepted write step (status="blocked_write") must not
+    crash the finalizer and must not demand cleanup equivalence.
+
+    Regression: `_requires_cleanup_equivalence` called int() on the step's
+    `status` field, and a sandbox-barrier step carries the legal string
+    "blocked_write" (the write never reached transport), crashing every
+    experiment finalization that contained such a step.
+    """
+    # A blocked write (never sent) is not a 2xx write: no equivalence demand.
+    steps = [
+        {
+            "phase": "treatment",
+            "method": "POST",
+            "status": "blocked_write",
+            "status_code": None,
+        }
+    ]
+    assert _requires_cleanup_equivalence(
+        safety_contract={}, steps_out=steps
+    ) is False
+
+    # A genuine 2xx write still demands equivalence (unchanged semantics).
+    steps = [
+        {
+            "phase": "treatment",
+            "method": "POST",
+            "status_code": 201,
+            "status": "ok",
+        }
+    ]
+    assert _requires_cleanup_equivalence(
+        safety_contract={}, steps_out=steps
+    ) is True
+
+    # A non-2xx numeric status stays non-demanding.
+    steps = [
+        {
+            "phase": "treatment",
+            "method": "POST",
+            "status_code": 400,
+            "status": "client_error",
+        }
+    ]
+    assert _requires_cleanup_equivalence(
+        safety_contract={}, steps_out=steps
+    ) is False

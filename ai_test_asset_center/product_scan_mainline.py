@@ -306,6 +306,16 @@ def _apply_scan_execution_defaults(context: dict[str, Any], base_url: str) -> di
         })
         if inferred_contract:
             normalized["test_data_contract"] = dict(inferred_contract)
+    # A full discovery scan is a formal-phase campaign: the per-batch execution
+    # budget must be the formal budget (≤100), not the silent small-scale
+    # default (≤20). An undeclared phase previously truncated every compiled
+    # obligation past ~20 per batch (539 of 859 in the 131-bug baseline run)
+    # and projected that truncation as OBLIGATION_BUDGET_REACHED — a capability
+    # ceiling masquerading as budget exhaustion. Operators may still override
+    # the phase explicitly through campaign_context; the receipted
+    # runtime_contract carries the declared phase downstream.
+    if not str(normalized.get("validation_phase") or "").strip():
+        normalized["validation_phase"] = "formal"
     return normalized
 
 

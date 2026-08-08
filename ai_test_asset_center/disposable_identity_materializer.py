@@ -167,6 +167,112 @@ _CHECK_ENUM_RE = re.compile(
     re.I,
 )
 
+# Column-level REFERENCES clause: the column is a foreign key to another
+# table's row. Its value must name an EXISTING referenced row — a generated
+# literal (unique-key nonce suffix) would fabricate a nonexistent reference
+# and break the write with 404/500 before the rule under test is observed.
+_FK_COLUMN_RE = re.compile(
+    r"^\s*(\w+)\s+.*?\bREFERENCES\b",
+    re.M | re.I,
+)
+_TABLE_FK_RE = re.compile(
+    r"\bFOREIGN\s+KEY\s*\(\s*([^)]+?)\s*\)\s*REFERENCES\b",
+    re.I,
+)
+
+
+def declared_schema_tables(schema_text: str) -> set[str]:
+    """Parse normalized table names from a target DB schema."""
+    tables: set[str] = set()
+    if not isinstance(schema_text, str) or not schema_text.strip():
+        return tables
+    for block in _CREATE_TABLE_BLOCK_RE.finditer(schema_text):
+        table = _normalize_key(block.group(1))
+        if table:
+            tables.add(table)
+    return tables
+
+
+def declared_fk_reference_columns(schema_text: str) -> dict[str, set[str]]:
+    """Parse FOREIGN KEY reference columns per table from a target DB schema.
+
+    Returns ``{table: {child_fk_column, ...}}``. A column that ``REFERENCES``
+    another table is a foreign key (e.g. cart_items.sku -> products.sku): it
+    names an existing row and must never be nonce-suffixed as a unique key.
+    The referenced (parent) side is unaffected — a products create may still
+    generate its own unique sku. Parsing REFERENCES clauses is
+    industry-neutral SQL present in every enterprise target's schema.
+    """
+    columns_by_table: dict[str, set[str]] = {}
+    if not isinstance(schema_text, str) or not schema_text.strip():
+        return columns_by_table
+    for block in _CREATE_TABLE_BLOCK_RE.finditer(schema_text):
+        table = _normalize_key(block.group(1))
+        if not table:
+            continue
+        columns: set[str] = set()
+        for m in _FK_COLUMN_RE.finditer(block.group(2)):
+            columns.add(_normalize_key(m.group(1)))
+        for m in _TABLE_FK_RE.finditer(block.group(2)):
+            for col in m.group(1).split(","):
+                columns.add(_normalize_key(col.strip().strip('"')))
+        if columns:
+            columns_by_table[table] = columns
+    return {t: {c for c in cols if c} for t, cols in columns_by_table.items() if cols}
+
+# Column-level REFERENCES clause: the column is a foreign key to another
+# table's row. Its value must name an EXISTING referenced row — a generated
+# literal (unique-key nonce suffix) would fabricate a nonexistent reference
+# and break the write with 404/500 before the rule under test is observed.
+_FK_COLUMN_RE = re.compile(
+    r"^\s*(\w+)\s+.*?\bREFERENCES\b",
+    re.M | re.I,
+)
+_TABLE_FK_RE = re.compile(
+    r"\bFOREIGN\s+KEY\s*\(\s*([^)]+?)\s*\)\s*REFERENCES\b",
+    re.I,
+)
+
+
+def declared_schema_tables(schema_text: str) -> set[str]:
+    """Parse normalized table names from a target DB schema."""
+    tables: set[str] = set()
+    if not isinstance(schema_text, str) or not schema_text.strip():
+        return tables
+    for block in _CREATE_TABLE_BLOCK_RE.finditer(schema_text):
+        table = _normalize_key(block.group(1))
+        if table:
+            tables.add(table)
+    return tables
+
+
+def declared_fk_reference_columns(schema_text: str) -> dict[str, set[str]]:
+    """Parse FOREIGN KEY reference columns per table from a target DB schema.
+
+    Returns ``{table: {child_fk_column, ...}}``. A column that ``REFERENCES``
+    another table is a foreign key (e.g. cart_items.sku -> products.sku): it
+    names an existing row and must never be nonce-suffixed as a unique key.
+    The referenced (parent) side is unaffected — a products create may still
+    generate its own unique sku. Parsing REFERENCES clauses is
+    industry-neutral SQL present in every enterprise target's schema.
+    """
+    columns_by_table: dict[str, set[str]] = {}
+    if not isinstance(schema_text, str) or not schema_text.strip():
+        return columns_by_table
+    for block in _CREATE_TABLE_BLOCK_RE.finditer(schema_text):
+        table = _normalize_key(block.group(1))
+        if not table:
+            continue
+        columns: set[str] = set()
+        for m in _FK_COLUMN_RE.finditer(block.group(2)):
+            columns.add(_normalize_key(m.group(1)))
+        for m in _TABLE_FK_RE.finditer(block.group(2)):
+            for col in m.group(1).split(","):
+                columns.add(_normalize_key(col.strip().strip('"')))
+        if columns:
+            columns_by_table[table] = columns
+    return {t: {c for c in cols if c} for t, cols in columns_by_table.items() if cols}
+
 
 def declared_check_enum_values(schema_text: str) -> dict[str, dict[str, list[str]]]:
     """Parse CHECK (field IN ('a','b')) constraints from a target DB schema.
@@ -283,35 +389,99 @@ def materialize_unique_create_fields(
     value: Any,
     nonce: str,
     unique_fields: set[str],
+    *,
+    fk_reference_columns: dict[str, set[str]] | set[str] | None = None,
+    table_hint: str = "",
+    schema_tables: set[str] | None = None,
 ) -> tuple[Any, list[str]]:
     """Append a per-call nonce to schema-declared unique key literals.
 
     Applies to creation bodies: single-entity POST bodies whose top-level
     fields are unique keys, and batch-create arrays (``{products: [...]}``)
     whose element fields are unique keys. Only string values are touched —
-    numeric unique keys are left alone. Returns the new body and the list of
-    materialized field paths for audit visibility.
+    numeric unique keys are left alone.
+
+    Foreign-key reference columns are never suffixed: their value must name an
+    existing referenced row, so a nonce suffix would fabricate a nonexistent
+    reference (404/500) and block the write before the rule under test is
+    observed. The exclusion is table-scoped — a create on the referenced
+    table itself (e.g. products.sku, the parent side) still gets its own
+    unique key suffixed. Nested array keys are only treated as batch-create
+    arrays when the key names a declared table (``{products: [...]}``); a
+    business-detail array (``items[].sku``) references existing rows and is
+    never rewritten. Returns the new body and the list of materialized field
+    paths for audit visibility.
     """
     if not unique_fields or not isinstance(value, dict):
         return value, []
     normalized = {_normalize_key(f) for f in unique_fields}
     materialized: list[str] = []
 
+    # Resolve the create's own table from the path hint (first segment) so
+    # the child-FK exclusion applies to the right table. No hint match falls
+    # back to the flat exclusion set (fail toward not rewriting references).
+    fk_flat: set[str] = set()
+    fk_by_table: dict[str, set[str]] = {}
+    if isinstance(fk_reference_columns, dict):
+        for table, cols in fk_reference_columns.items():
+            fk_by_table[_normalize_key(str(table))] = {
+                _normalize_key(c) for c in cols
+            }
+            fk_flat |= fk_by_table[_normalize_key(str(table))]
+    elif fk_reference_columns:
+        fk_flat = {_normalize_key(c) for c in fk_reference_columns}
+    hint = _normalize_key(table_hint)
+    schema_tables_norm = {
+        _normalize_key(t) for t in (schema_tables or set())
+    }
+    matched_tables = {
+        table
+        for table in fk_by_table
+        if hint and (table == hint or table.startswith(hint) or hint.startswith(table))
+    }
+    excluded: set[str] = set()
+    for table in matched_tables:
+        excluded |= fk_by_table[table]
+    if not matched_tables:
+        # The hint names a declared table with no child-FK columns of its
+        # own (products.sku is the referenced parent side): nothing to
+        # exclude, the create may generate its own unique key. Only when the
+        # hint matches NO declared table is the flat exclusion applied
+        # (unidentified collection — fail toward not rewriting references).
+        hint_matches_schema_table = any(
+            hint and (t == hint or t.startswith(hint) or hint.startswith(t))
+            for t in schema_tables_norm
+        )
+        if not hint_matches_schema_table:
+            excluded = fk_flat
+
+    def _excluded_key(key_l: str) -> bool:
+        return key_l in excluded
+
     def _unique_replace(item: dict[str, Any], path: str) -> None:
         for key, child in item.items():
             key_l = _normalize_key(str(key))
-            if key_l in normalized and isinstance(child, str) and child.strip():
+            if (
+                key_l in normalized
+                and not _excluded_key(key_l)
+                and isinstance(child, str)
+                and child.strip()
+            ):
                 item[key] = f"{child}-{nonce}"
                 materialized.append(f"{path}.{key}")
 
     for key, child in value.items():
+        key_l = _normalize_key(str(key))
         if isinstance(child, list):
+            # Batch-create arrays must name their own table ({products: [...]});
+            # business-detail arrays (items[].sku) reference existing rows.
+            if schema_tables_norm and key_l not in schema_tables_norm:
+                continue
             for index, element in enumerate(child):
                 if isinstance(element, dict):
                     _unique_replace(element, f"{key}[{index}]")
         elif isinstance(child, str):
-            key_l = _normalize_key(str(key))
-            if key_l in normalized and child.strip():
+            if key_l in normalized and not _excluded_key(key_l) and child.strip():
                 value[key] = f"{child}-{nonce}"
                 materialized.append(str(key))
     return value, materialized

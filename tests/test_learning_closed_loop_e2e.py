@@ -19,6 +19,7 @@ module consumed by planning and the reasoner.
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from pathlib import Path
 
@@ -262,9 +263,156 @@ def test_trigger_decision_on_realistic_scan_result(isolated_kb: Path) -> None:
 
     trigger = AutoLearningTrigger(project=PROJECT, config=LearningTriggerConfig())
 
-    # A normal scan carries high_value_summary but NO benchmark_metrics —
-    # the pre-fix AND-gate never fired here.
+    # A real v12 scan carries formal_count_projection / pipeline_health —
+    # the pre-fix gate read legacy fields (high_value_summary etc.) that no
+    # mainline scan writes, so it never fired.
     ok, reason = trigger.should_trigger(
-        {"high_value_summary": {"total_confirmed_bugs": 5}}
+        {
+            "formal_count_projection": {
+                "formal_customer_deliverable_count": 5,
+                "canonical_defect_count": 5,
+            },
+            "pipeline_health": {"blocked_obligation_count": 0},
+        }
     )
     assert ok and reason.startswith("SIGNALS_MET")
+
+    # Clean scan with zero deliverable defects and zero blockage stays quiet.
+    ok, reason = trigger.should_trigger(
+        {
+            "formal_count_projection": {"formal_customer_deliverable_count": 0},
+            "pipeline_health": {"blocked_obligation_count": 0},
+        }
+    )
+    assert not ok and reason.startswith("NO_SIGNALS")
+
+
+def test_binding_resolver_loop_closes_via_kb(isolated_kb: Path) -> None:
+    """binding-experience write -> KB -> read reorder is a closed loop.
+
+    A BOUND resolver mapping from one scan is persisted, loaded by the
+    scan-start read, and consumed by the planning-time reorder.
+    """
+    from ai_test_asset_center.binding_experience_learning import (
+        apply_binding_experience_reorder,
+        build_binding_experience_context,
+        build_binding_experience_index,
+    )
+    from ai_test_asset_center.learning_pattern_bridge import LearningPatternBridge
+
+    root = isolated_kb
+    scan_result = {
+        "v12": {
+            "experiment_execution": {
+                "results": [
+                    {
+                        "schema_version": "qualibug.experiment-execution.v1",
+                        "experiment_id": "exp_1",
+                        "obligation_id": "obl_1",
+                        "status": "DELIVERABLE",
+                        "binding_materialization_receipts": [
+                            {
+                                "target": "sku",
+                                "status": "BOUND",
+                                "source_priority": "same_actor_list_read",
+                                "resolver_path": "/api/products",
+                                "resolver_operation_ref": "bir_products_list",
+                                "status_code": 200,
+                                "resolver_actor_ref": "bir_actor_1",
+                                "value_fingerprint": "deadbeef",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    }
+
+    # Round 1: write side persists the verified mapping.
+    write_receipt = build_binding_experience_context(PROJECT, root, scan_result)
+    assert write_receipt["status"] == "OK"
+    assert write_receipt["stored_count"] == 1
+
+    # Round 2 scan start: read side loads it with usage writeback.
+    learned = LearningPatternBridge(project=PROJECT).load_learned_context()
+    resolvers = LearningPatternBridge(project=PROJECT).load_binding_experience()
+    assert len(resolvers) == 1
+    assert resolvers[0]["operation_ref"] == "bir_products_list"
+    assert resolvers[0]["target"] == "sku"
+    # The resolved business value never rides along.
+    assert "deadbeef" not in json.dumps(resolvers)
+
+    learned["binding_resolvers"] = resolvers
+    index = build_binding_experience_index(learned)
+    assert index["status"] == "CONSUMED"
+
+    # Round 2 planning: reorder consumes the experience.
+    experiment = {
+        "obligation_id": "obl_1",
+        "binding_plan": [
+            {
+                "target": "sku",
+                "status": "runtime_resolvable",
+                "source_priority": "same_actor_list_read",
+                "resolver_operations": [
+                    {"operation_ref": "bir_alt", "method": "GET", "path": "/api/x"},
+                    {"operation_ref": "bir_products_list", "method": "GET", "path": "/api/products"},
+                ],
+            }
+        ],
+    }
+    receipt = apply_binding_experience_reorder({"obl_1": experiment}, learned)
+    assert receipt["status"] == "CONSUMED"
+    assert receipt["reordered_count"] == 1
+    order = [r["operation_ref"] for r in experiment["binding_plan"][0]["resolver_operations"]]
+    assert order[0] == "bir_products_list"
+
+
+def test_pattern_carries_semantic_features(isolated_kb: Path) -> None:
+    """The closed-loop pattern carries comprehension-layer semantics from
+    the finding's own observed fields (actor, description, behavior delta)
+    so the reasoner's learned-memory block guides hypothesis generation by
+    violated behavior class, not just endpoint.
+    """
+    from ai_test_asset_center.closed_loop_feedback import _extract_pattern
+    from ai_test_asset_center.learning_knowledge_consumption import (
+        build_learned_memory_prompt_block,
+    )
+
+    finding = _deliverable_finding(
+        method="GET", path="/api/orders/{id}", category="owner_tenant_visibility",
+        finding_id="sem1",
+    )
+    finding["reproduction"] = {
+        "method": "GET", "path": "/api/orders/{id}", "actor": "buyer",
+        "reproduction_steps": ["GET /api/orders/1"],
+    }
+    finding["description"] = "control=seller succeeded; treatment=buyer violated the typed assertion"
+    finding["expected"] = {"viewer_can_access": False, "leak_detected": False}
+    finding["actual"] = {"viewer_can_access": True, "leak_detected": True}
+
+    pattern = _extract_pattern(finding)
+    assert pattern["assertion_kind"] == "owner_tenant_visibility"
+    assert pattern["actor"] == "buyer"
+    assert "treatment=buyer violated" in pattern["semantic_summary"]
+    assert pattern["behavior_delta"] == {
+        "viewer_can_access": {"expected": False, "actual": True},
+        "leak_detected": {"expected": False, "actual": True},
+    }
+    # No full response bodies in the delta — only differing fields.
+    assert len(pattern["behavior_delta"]) == 2
+
+    # The prompt block renders the semantics (actor + description) inside the
+    # 1200-char budget, still attention guidance only.
+    block, receipt = build_learned_memory_prompt_block({
+        "learned_patterns": [
+            {"type": pattern["type"], "entity": pattern["entity"],
+             "method": pattern["method"], "count": 2,
+             "actor": pattern["actor"],
+             "semantic_summary": pattern["semantic_summary"]},
+        ]
+    })
+    assert receipt["status"] == "CONSUMED"
+    assert "actor=buyer" in block
+    assert "treatment=buyer violated" in block
+    assert len(block) <= 1200

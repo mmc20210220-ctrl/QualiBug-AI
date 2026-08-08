@@ -1154,6 +1154,9 @@ def _sql_tables(text: str, source_id: str = "") -> list[dict[str, Any]]:
         columns: list[str] = []
         foreign_keys: list[str] = []
         identity_fields: list[str] = []
+        unique_columns: list[str] = []
+        column_types: dict[str, str] = {}
+        check_constraints: list[dict[str, Any]] = []
         for declaration in _sql_table_body_declarations(body):
             clean = declaration.strip().strip(",")
             if not clean:
@@ -1163,24 +1166,120 @@ def _sql_tables(text: str, source_id: str = "") -> list[dict[str, Any]]:
                 foreign_keys.append(ref.group(1))
             col = re.match(r"[`\"\[]?([a-zA-Z_][a-zA-Z0-9_]*)[`\"\]]?\s+", clean)
             if col and col.group(1).lower() not in {"primary", "foreign", "constraint", "unique", "key", "index", "check"}:
-                columns.append(col.group(1))
+                column = col.group(1)
+                columns.append(column)
+                column_types[column] = _sql_column_type(clean[col.end():])
                 # Inline form: "sku TEXT UNIQUE" / "id SERIAL PRIMARY KEY".
                 if _declares_identity(clean[col.end():]):
-                    identity_fields.append(col.group(1))
+                    identity_fields.append(column)
+                if re.search(r"(?i)\bunique\b", clean[col.end():]):
+                    unique_columns.append(column)
             else:
                 # Table-constraint form: "PRIMARY KEY (id)" / "UNIQUE (sku, org)".
                 identity_fields.extend(_identity_columns_from_constraint_calls(clean))
+                unique_columns.extend(_unique_columns_from_constraint_calls(clean))
+            check_constraints.extend(_check_constraint_columns(clean))
         tables.append({
             "table_id": f"table:{name}",
             "source_id": source_id,
             "name": name,
             "columns": sorted(set(columns)),
             "identity_fields": sorted(set(identity_fields)),
+            "unique_columns": sorted(set(unique_columns)),
+            "column_types": {
+                key: column_types[key] for key in sorted(column_types)
+            },
+            "check_constraints": check_constraints,
             "foreign_keys": sorted(set(foreign_keys)),
             "derivation": "sql_ddl",
             "tokens": sorted(_tokens(f"{name} {' '.join(columns)} {' '.join(foreign_keys)}")),
         })
     return tables
+
+
+_SQL_TYPE_TOKENS = re.compile(
+    r"(?i)(numeric|decimal|int|integer|bigint|smallint|tinyint|float|double|real|money|serial|text|varchar|char|uuid|boolean|bool|timestamptz|timestamp|date|time|json|jsonb|bytea)"
+)
+
+
+def _sql_column_type(rest: str) -> str:
+    """Normalize the declared SQL column type (e.g. NUMERIC(12,2) -> numeric).
+
+    Only generic SQL vocabulary; unknown declarations stay empty rather than
+    being guessed. Used by the schema-constraint dimension to decide which
+    industry-universal invariants a column can carry (numeric boundaries,
+    uniqueness intent).
+    """
+    match = _SQL_TYPE_TOKENS.search(rest)
+    if not match:
+        return ""
+    return match.group(1).lower()
+
+
+def _unique_columns_from_constraint_calls(clean: str) -> list[str]:
+    """Columns named by a table-level ``UNIQUE (...)`` constraint call."""
+    if not re.match(r"(?i)\bunique\b", clean):
+        return []
+    return _columns_from_constraint_parens(clean)
+
+
+def _columns_from_constraint_parens(clean: str) -> list[str]:
+    out: list[str] = []
+    for match in re.finditer(r"\(([^()]*)\)", clean):
+        for part in re.split(r"[, ]+", match.group(1)):
+            token = part.strip().strip("`\"[]")
+            if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", token):
+                out.append(token)
+    return out
+
+
+def _check_constraint_columns(clean: str) -> list[dict[str, Any]]:
+    """Per-column constraints declared by ``CHECK (...)`` clauses.
+
+    Parses the common DDL shapes only (``col >= 0``, ``col > 0``,
+    ``col IN (...)``); anything else is left out of the structured list. The
+    presence of a guard is what the schema-constraint dimension reads — a
+    money/quantity column without any non-negative CHECK is where the
+    industry-universal boundary invariant applies.
+    """
+    if not re.search(r"(?i)\bcheck\b", clean):
+        return []
+    out: list[dict[str, Any]] = []
+    # Greedy to the LAST closing paren: CHECK bodies are single-level, and a
+    # left-to-right innermost scan would grab the value list parens instead of
+    # the constraint expression.
+    for match in re.finditer(r"(?i)\bcheck\s*\((.*)\)", clean):
+        body = match.group(1).strip()
+        if not body:
+            continue
+        column = re.match(r"[`\"\[]?([a-zA-Z_][a-zA-Z0-9_]*)[`\"\]]?\s*", body)
+        if not column:
+            continue
+        column_name = column.group(1)
+        remainder = body[column.end():].strip()
+        operator = re.match(r"(>=|<=|>|<|=|!=|<>|in|IN)", remainder)
+        if not operator:
+            continue
+        operator_text = operator.group(1).lower()
+        value_text = remainder[operator.end():].strip().strip("'\"")
+        if operator_text == "in":
+            values = [
+                item.strip().strip("'\"")
+                for item in value_text.strip("()").split(",")
+                if item.strip()
+            ]
+            out.append({
+                "column": column_name,
+                "operator": "in",
+                "values": values,
+            })
+        else:
+            out.append({
+                "column": column_name,
+                "operator": operator_text,
+                "value": value_text,
+            })
+    return out
 
 
 def _json_schema_tables(payload: Any, source_id: str = "") -> list[dict[str, Any]]:

@@ -185,10 +185,40 @@ def prioritize_experiments(
             behavior_ir=behavior_ir,
             historical_findings=historical_findings,
         )
+        # Operation identity comes from the planner row (selected obligation
+        # rows carry operation_key / path_prefix). Kept on the scored item so
+        # the operation-fair ordering below can group without re-resolving.
+        priority["operation_key"] = _text(obl.get("operation_key"))
+        priority["path_prefix"] = _text(obl.get("path_prefix"))
         scored.append(priority)
 
     # Sort by score descending
     scored.sort(key=lambda x: x["score"], reverse=True)
+
+    # ── Operation-fair first tier ──
+    # The per-batch execution budget can be far smaller than the compiled
+    # pool. A global score sort lets the highest-readiness operations of a
+    # few modules monopolize every batch; the rest stay pending at
+    # OBLIGATION_BUDGET_REACHED and whole operations (modules) never execute.
+    # Promote the top-scoring experiment of each distinct operation above all
+    # second-tier rows, so any budget that fits one experiment per operation
+    # always covers every operation. Ordering still respects readiness within
+    # the promoted tier; nothing about blocking or gate standards changes.
+    promoted: dict[str, dict[str, Any]] = {}
+    for item in scored:
+        op = item["operation_key"]
+        if op and op not in promoted:
+            promoted[op] = item
+    if promoted:
+        promoted_items = sorted(
+            promoted.values(),
+            key=lambda x: (-float(x["score"]), _text(x["obligation_id"])),
+        )
+        promoted_ids = {_text(item["obligation_id"]) for item in promoted_items}
+        rest = [
+            item for item in scored if _text(item["obligation_id"]) not in promoted_ids
+        ]
+        scored = promoted_items + rest
 
     # Mark budget boundary
     for i, item in enumerate(scored):

@@ -36,6 +36,8 @@ from .real_id_resolver import (
 from .disposable_identity_materializer import (
     align_body_enums_with_declared_schema as _align_body_enums_with_declared_schema,
     declared_check_enum_values as _declared_check_enum_values,
+    declared_fk_reference_columns as _declared_fk_reference_columns,
+    declared_schema_tables as _declared_schema_tables,
     declared_unique_fields as _declared_unique_fields,
     disposable_identity_nonce as _disposable_identity_nonce,
     materialize_unique_create_fields as _materialize_unique_create_fields,
@@ -704,6 +706,7 @@ def materialize_experiment_fixtures(
                 == "ownership_identity_param"
             ):
                 _identity_value = ""
+                _identity_source = "arm_actor_account_id"
                 for _plan_step in [
                     *_list(exp.get("control_plan")),
                     *_list(exp.get("treatment_plan")),
@@ -718,6 +721,17 @@ def materialize_experiment_fixtures(
                         continue
                     _identity_value = _step_identity
                     break
+                if not _identity_value:
+                    # Fall back to the identity already observed for this
+                    # experiment's actors (the /me read the binding machinery
+                    # ran for the user_id target) — the same runtime material
+                    # the compile-time concretization uses. Never invented.
+                    _observed_identity = _text(
+                        runtime_bindings.get("user_id") or runtime_bindings.get("me")
+                    )
+                    if _observed_identity:
+                        _identity_value = _observed_identity
+                        _identity_source = "runtime_observed_me_identity"
                 if _identity_value:
                     runtime_bindings[target] = _identity_value
                     fixture_receipts.append({
@@ -737,7 +751,7 @@ def materialize_experiment_fixtures(
                         "source_priority": "ownership_identity_param",
                         "status": "bound",
                         "value": _identity_value,
-                        "identity_source": "arm_actor_account_id",
+                        "identity_source": _identity_source,
                     })
                 else:
                     fixture_receipts.append({
@@ -1510,10 +1524,14 @@ def materialize_experiment_fixtures(
                     # by earlier runs. Experiment writes keep their own channel
                     # (verb/array-gated in the governed writer); this layer
                     # cannot misclassify action-style POSTs because it only
-                    # runs for fixture setup bodies.
-                    _fixture_unique_fields = _declared_unique_fields(
-                        _load_declared_schema_text(root, project)
-                    )
+                    # runs for fixture setup bodies. Foreign-key reference
+                    # columns of the create's own table (cart_items.sku ->
+                    # products.sku) are excluded: they must name an existing
+                    # referenced row, never a suffixed literal.
+                    _schema_text = _load_declared_schema_text(root, project)
+                    _fixture_unique_fields = _declared_unique_fields(_schema_text)
+                    _fixture_fk_columns = _declared_fk_reference_columns(_schema_text)
+                    _schema_tables = _declared_schema_tables(_schema_text)
                     if _fixture_unique_fields:
                         setup_body, _uniq_fields = _materialize_unique_create_fields(
                             setup_body,
@@ -1523,6 +1541,9 @@ def materialize_experiment_fixtures(
                                 _text(fixture_setup.get("path")),
                             ),
                             _fixture_unique_fields,
+                            fk_reference_columns=_fixture_fk_columns,
+                            table_hint=_hint_table,
+                            schema_tables=_schema_tables,
                         )
 
                     # Fixture create-only plans have no list-read resolver.

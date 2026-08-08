@@ -152,6 +152,28 @@ def build_discovery_plan(
     asset["rule_library"] = _structurize_rule_causal_chains(
         asset.get("rule_library") or []
     )
+    # ── Semantic contract binding (interface-documented contract rules) ──
+    # Per-endpoint contract lines (关键契约/业务约束) inside the API document
+    # are parsed as plain rules but the authoritative rule→interface channels
+    # cannot bind pure-Chinese statements, so state/idempotency/conservation
+    # semantics never reach an executable operation. The adapter re-attaches
+    # them to the interface they are documented at (section line range /
+    # verbatim containment / CJK action terms), structures conservation
+    # equations and state preconditions, and binds state-machine transitions
+    # to the operations whose contracts mention the TO state. Pure enrichment:
+    # it never invents rules, operations, actors or fields; every edge carries
+    # a named evidence channel. Runs before the Behavior IR build so the
+    # existing rule_to_interface channel and compiler consume the semantics.
+    from .enterprise_knowledge_center.semantic_contract_binding import (
+        apply_semantic_contract_binding,
+    )
+
+    asset = apply_semantic_contract_binding(
+        asset,
+        api_spec_text=_text(
+            inputs.campaign_context.get("_source_verification_text")
+        ) or inputs.api_spec_text,
+    )
     agent_semantic_link_receipt: dict[str, Any] = {
         "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
         "status": "NOT_REQUESTED",
@@ -581,6 +603,14 @@ def build_discovery_plan(
                         "failed_engine_names",
                         "engine_error_class_counts",
                         "max_hypotheses_per_engine",
+                        # Learning-loop observability (closed-loop consumption
+                        # state must be visible in the scan receipt, not
+                        # dropped at the reasoner boundary).
+                        "learned_memory_receipt",
+                        "engine_attention_receipt",
+                        "fact_retrieval_receipt",
+                        "semantic_dedup_receipt",
+                        "graph_context",
                     )
                     if key in _reasoner_meta
                 },
@@ -1068,6 +1098,28 @@ def build_discovery_plan(
         _learning_consumption_receipt.get("obligations_boosted"),
     )
 
+    # ── Binding-experience READ: reorder resolver candidates by verified
+    # prior success (execution-changing surface of the learning loop).
+    # Additive only: reorders an experiment's existing source-declared
+    # resolver list; never adds sources, never changes binding status,
+    # budgets, gates, or compile state.
+    try:
+        from .binding_experience_learning import apply_binding_experience_reorder
+
+        _binding_reorder_receipt = apply_binding_experience_reorder(
+            by_obligation,
+            inputs.campaign_context.get("learned_knowledge"),
+        )
+    except Exception as exc:
+        _binding_reorder_receipt = {
+            "schema_version": "qualibug.binding-experience-read.v1",
+            "status": "FAILED",
+            "load_failure": f"{type(exc).__name__}:{str(exc)[:120]}",
+            "reordered_count": 0,
+            "plans_scanned": 0,
+            "authority": "resolver_priority_reorder_only_no_new_sources",
+        }
+
     # ── Coverage-Guided Reorder (within selected set only, no budget change) ──
     from .coverage_guided_scheduler import CoverageGuidedScheduler
 
@@ -1193,6 +1245,7 @@ def build_discovery_plan(
             ),
             "preflight_receipt": preflight_receipt,
             "learning_consumption_receipt": _learning_consumption_receipt,
+            "binding_experience_receipt": _binding_reorder_receipt,
             "binding_closure_receipt": _binding_closure_receipt,
             "space_exploration_receipt": {
                 "schema_version": "qualibug.space-exploration-receipt.v1",

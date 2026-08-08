@@ -22,13 +22,13 @@ def test_statusless_existing_edge_does_not_suppress_source_backed_agent_edge() -
     )
 
     assert receipt["existing_relationship_count"] == 0
-    assert receipt["accepted_relationship_count"] == 1
+    assert receipt["accepted_relationship_count"] == 2
     assert receipt["ungoverned_existing_relationship_count"] == 1
-    assert len(enriched["relationships"]) == 2
+    assert len(enriched["relationships"]) == 3
     authoritative = [
         row for row in enriched["relationships"] if row.get("status") == "accepted"
     ]
-    assert len(authoritative) == 1
+    assert len(authoritative) == 2
     assert authoritative[0]["evidence"]["supporting_fact_refs"]
 
 
@@ -55,9 +55,15 @@ def test_governed_existing_edge_still_suppresses_duplicate_generation() -> None:
     )
 
     assert receipt["existing_relationship_count"] == 1
-    assert receipt["accepted_relationship_count"] == 0
+    # The governed existing rule edge suppresses the duplicate rule proposal;
+    # the state-transition proposal is a distinct edge and is accepted.
+    assert receipt["accepted_relationship_count"] == 1
     assert receipt["ungoverned_existing_relationship_count"] == 0
-    assert enriched["relationships"] == asset["relationships"]
+    assert len(enriched["relationships"]) == 2
+    assert any(
+        row.get("relation") == "state_transition_to_interface"
+        for row in enriched["relationships"]
+    )
 
 
 def test_discovery_composition_installs_governed_agent_linker() -> None:

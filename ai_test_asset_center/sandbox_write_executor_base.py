@@ -27,6 +27,8 @@ from typing import Any, Callable
 from .enterprise_project_config import match_production_data_exclusion
 from .behavior_ir_core import _is_ephemeral_session_path
 from .disposable_identity_materializer import (
+    declared_fk_reference_columns,
+    declared_schema_tables,
     declared_unique_fields,
     disposable_identity_nonce,
     materialize_disposable_identity_fields,
@@ -636,6 +638,60 @@ def _load_declared_unique_fields(root: Any, project: str) -> set[str]:
     return fields
 
 
+def _load_declared_fk_reference_columns(root: Any, project: str) -> dict[str, set[str]]:
+    """Load FOREIGN KEY reference columns per table from the target DB schema.
+
+    A column that ``REFERENCES`` another table names an existing row (e.g.
+    cart_items.sku -> products.sku) and must never be nonce-suffixed as a
+    unique key. Same visible-surface source and cache discipline as
+    ``_load_declared_unique_fields``.
+    """
+    key = ("fk", str(root or ""), str(project or ""))
+    cached = _DECLARED_UNIQUE_FIELDS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    candidates = [
+        Path(root) / "platform_workspace" / str(project) / "input" / "schema.sql",
+        Path(root) / "platform_inputs" / str(project) / "schema.sql",
+    ]
+    columns_by_table: dict[str, set[str]] = {}
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                columns_by_table = declared_fk_reference_columns(
+                    candidate.read_text(encoding="utf-8")
+                )
+                break
+        except OSError:
+            continue
+    _DECLARED_UNIQUE_FIELDS_CACHE[key] = columns_by_table
+    return columns_by_table
+
+
+def _load_declared_schema_tables(root: Any, project: str) -> set[str]:
+    """Load normalized table names from the target's DB schema (cached)."""
+    key = ("tables", str(root or ""), str(project or ""))
+    cached = _DECLARED_UNIQUE_FIELDS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    candidates = [
+        Path(root) / "platform_workspace" / str(project) / "input" / "schema.sql",
+        Path(root) / "platform_inputs" / str(project) / "schema.sql",
+    ]
+    tables: set[str] = set()
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                tables = declared_schema_tables(
+                    candidate.read_text(encoding="utf-8")
+                )
+                break
+        except OSError:
+            continue
+    _DECLARED_UNIQUE_FIELDS_CACHE[key] = tables
+    return tables
+
+
 def execute_governed_control_write(
     *,
     root: Path,
@@ -779,10 +835,17 @@ def execute_governed_control_write(
         if _creation_semantics:
             _unique_fields = _load_declared_unique_fields(root, project)
             if _unique_fields:
+                _fk_columns = _load_declared_fk_reference_columns(root, project)
+                _schema_tables = _load_declared_schema_tables(root, project)
+                _hint_table = _text(normalize_path_placeholders(_text(path))).strip("/").split("/")[1:2]
+                _hint_table = _hint_table[0] if _hint_table else ""
                 _unique_body, _unique_materialized = materialize_unique_create_fields(
                     body,
                     disposable_identity_nonce("schema_unique", method, path),
                     _unique_fields,
+                    fk_reference_columns=_fk_columns,
+                    table_hint=_hint_table,
+                    schema_tables=_schema_tables,
                 )
                 if _unique_materialized:
                     body = _unique_body

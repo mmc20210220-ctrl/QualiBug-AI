@@ -939,3 +939,75 @@ Contract. This section pins only the package-local anchors:
   for fact_ref tracing, and `rule_promotion_gates_met` checks the §19 gates
   as data (no evidence-less promotion, no silent conflict resolution, full
   traceability) before augment may activate.
+
+## Self-Learning Closed Loop — Implementation Anchors
+
+The learning loop is a first-class mainline stage, not an add-on. Anchors
+(update together with the code):
+
+- **WRITE side (per scan close)** — `closed_loop_feedback.build_closed_loop_context`
+  extracts open-taxonomy patterns (`type:method:entity` signatures) from
+  customer-deliverable findings into the SQLite knowledge base via
+  `learning_pattern_bridge.LearningPatternBridge` (category `risk_pattern`);
+  re-confirmed signatures reinforce to 0.95, consumed-but-not-reconfirmed
+  signatures decay (×0.95, floor 0.05, never deleted). Patterns also carry
+  comprehension-layer semantics from the finding's own observed fields —
+  `assertion_kind` (category), reproducing `actor` (`reproduction.actor`),
+  `semantic_summary` (`description`), and `behavior_delta` (differing
+  expected/actual fields only, never full bodies) — which the reasoner's
+  learned-memory block renders as violated-behavior guidance, not just
+  endpoint names. The same close also records per-engine confirmation
+  attention (`engine_feedback.record_confirmed_engine_attribution`), records
+  the round in `cross_round_knowledge_transfer.record_round_completion`
+  (observational provenance only), persists verified binding-resolver
+  mappings (`binding_experience_learning.build_binding_experience_context`,
+  category `binding_resolver`), and writes the executed-set diff report
+  (`learning_effect_observation.write_learning_effect_report`).
+- **READ side (per scan start)** — `__main__` loads the SQLite knowledge
+  base into `campaign_context["learned_knowledge"]` (risk patterns +
+  `binding_resolvers` + `cross_round_insights`). Consumption surfaces:
+  (1) planning-time bounded ranking boost (`learning_knowledge_consumption`
+  `build_learned_boost_index`/`apply_learned_boost`, cap 1.5×, path-entity /
+  risk-family matching only — never budget/compile changes);
+  (2) reasoner comprehension memory block
+  (`build_learned_memory_prompt_block`, ≤8 patterns / ≤1200 chars appended
+  to every engine prompt, attention guidance only);
+  (3) engine attention weights (`engine_feedback.resolve_engine_attention_weights`,
+  cap 2.0, staleness decay 90 days);
+  (4) resolver-priority reorder (`binding_experience_learning.apply_binding_experience_reorder`,
+  stable verified-first sort of an experiment's existing source-declared
+  resolver list; never adds sources, never changes binding status).
+  Consumption state is visible in the scan receipt: `learning_consumption_receipt`,
+  `binding_experience_receipt` (planning bundle) and `learned_memory_receipt` /
+  `engine_attention_receipt` / `fact_retrieval_receipt` / `semantic_dedup_receipt`
+  / `graph_context` (reasoner `provider_meta` — surfaced at the
+  `collect_reasoner_hypotheses` boundary, never dropped).
+- **Trigger** — `auto_learning_trigger.AutoLearningTrigger` fires after a
+  scan when the authoritative v12 fields carry a signal:
+  `formal_count_projection.formal_customer_deliverable_count` (or
+  `canonical_defect_count`) ≥ threshold, or
+  `pipeline_health.blocked_obligation_count` > 0 (blockage is itself a
+  learning opportunity). Its execution extracts detection signals
+  (`bug_pattern_memory.extract_detection_signals`) and persists them back
+  into the KB as `learned:*` `risk_pattern` entries — the legacy
+  `learned_probes.json` output had no mainline consumer and is no longer
+  produced.
+- **Effect observability** — `learning_effect_observation` diffs adjacent
+  rounds of the same campaign from the immutable per-round trace ledgers
+  (executed obligation id sets, blocked reason-code distribution,
+  delivery occurrences, canonical defects) into
+  `platform_outputs/<project>/learning_effect/`. These are diagnostic
+  observables only — never recall/precision/commercial capability; pairing a
+  learning change with a controlled re-run (champion/challenger) remains the
+  promotion evidence path. `tools/learning_effectiveness_dashboard.py` and
+  `tools/enhanced_learning_signals.py` read the authoritative v12 fields
+  (`formal_count_projection`, `canonical_defect_registry`,
+  `obligation_attempt_ledger`, `pipeline_health`).
+- **Boundaries (must hold)** — the loop never infers request bodies,
+  credentials, business rules, entity/table names, SQL, or impact; resolved
+  business values never enter the KB (binding receipts stay
+  fingerprint-only; `binding_resolver` entries carry source-declared
+  resolver identities only); failures stay visible in every receipt
+  (`load_failure`, `FAILED` statuses); internal counts (patterns stored,
+  obligations boosted, resolvers reordered) are mechanism observables, never
+  recall/precision claims.

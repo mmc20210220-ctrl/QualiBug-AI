@@ -133,18 +133,53 @@ def load_scan_results(project: str, root: Path) -> list[dict]:
 
 
 def compute_round_metrics(scan_result: dict) -> RoundMetrics:
-    """Compute metrics for a single scan result."""
+    """Compute metrics for a single scan result.
+
+    Field mapping honours the mainline v12 schema: legacy keys
+    (``high_value_summary.*``, ``benchmark_metrics.total_probes`` etc.) are
+    not written by real scans and previously produced all-zero metrics. The
+    authoritative sources are ``formal_count_projection``,
+    ``pipeline_health`` and ``obligation_attempt_ledger``; legacy keys remain
+    as fallbacks for older fixtures.
+
+    NOTE: ``recall_estimate`` here is an internal yield ratio (confirmed bugs
+    per executed obligation), NOT evaluator recall — internal counts are
+    diagnostic only and must never be presented as recall/precision.
+    """
     data = scan_result["data"]
-    
-    # Extract from benchmark_metrics or equivalent
+
+    # ── v12 schema mapping ──
     benchmark = data.get("benchmark_metrics", {})
     summary = data.get("high_value_summary", {})
-    
-    total_probes = benchmark.get("total_probes", 0)
-    successful_probes = benchmark.get("successful_probes", 0)
-    failed_probes = benchmark.get("failed_probes", 0)
-    confirmed_bugs = summary.get("total_confirmed_bugs", 0)
-    false_positives = summary.get("false_positive_count", 0)
+    projection = data.get("formal_count_projection", {})
+    if not isinstance(projection, dict):
+        projection = {}
+    health = data.get("pipeline_health", {})
+    if not isinstance(health, dict):
+        health = {}
+    ledger = data.get("obligation_attempt_ledger", {})
+    if not isinstance(ledger, dict):
+        ledger = {}
+
+    total_probes = int(
+        benchmark.get("total_probes", 0)
+        or health.get("executed_obligation_count")
+        or ledger.get("execution_count")
+        or 0
+    )
+    successful_probes = int(benchmark.get("successful_probes", 0) or 0)
+    failed_probes = int(
+        benchmark.get("failed_probes", 0)
+        or health.get("blocked_obligation_count")
+        or 0
+    )
+    confirmed_bugs = int(
+        summary.get("total_confirmed_bugs", 0)
+        or projection.get("formal_customer_deliverable_count")
+        or projection.get("canonical_defect_count")
+        or 0
+    )
+    false_positives = int(summary.get("false_positive_count", 0) or 0)
     
     # Model usage
     model_usage = benchmark.get("model_usage", {})

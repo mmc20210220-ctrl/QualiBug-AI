@@ -208,6 +208,15 @@ def _extract_pattern(finding: dict) -> dict:
     kinds extend the space instead of being silently relabelled.
     Mutation hints are never fabricated: only a source-declared hint on the
     finding itself is carried through; otherwise the field stays empty.
+
+    Semantic features (comprehension layer): the pattern additionally carries
+    the finding's own structured semantics — the assertion kind (category),
+    the reproducing actor (``reproduction.actor``), the semantic description,
+    and the expected/actual behavior delta. All of these come from the
+    finding's own observed fields; nothing is inferred or invented. These
+    features feed the reasoner's learned-memory prompt block so the next
+    scan's hypothesis generation is guided by *what kind of behavior was
+    violated*, not just which endpoint.
     """
     category = str(finding.get("category", "")).strip()
     risk_family = str(finding.get("risk_family", "")).strip()
@@ -227,5 +236,27 @@ def _extract_pattern(finding: dict) -> dict:
         or ""
     )
 
-    return {"type": pattern_type, "entity": entity,
-            "category": category, "method": method, "signature": signature, "mutation": mutation}
+    # ── Semantic features (all from the finding's own observed fields) ──
+    reproduction = finding.get("reproduction") if isinstance(finding.get("reproduction"), dict) else {}
+    actor = str(reproduction.get("actor") or "").strip()
+    description = str(finding.get("description") or "").strip()[:240]
+    expected = finding.get("expected")
+    actual = finding.get("actual")
+    behavior_delta: dict | None = None
+    if isinstance(expected, dict) and isinstance(actual, dict) and expected != actual:
+        # Only the differing fields — never the full response bodies.
+        behavior_delta = {
+            key: {"expected": expected[key], "actual": actual.get(key)}
+            for key in expected
+            if key in actual and expected[key] != actual[key]
+        }
+
+    return {
+        "type": pattern_type, "entity": entity,
+        "category": category, "method": method, "signature": signature, "mutation": mutation,
+        # Comprehension-layer semantics (observed, never inferred):
+        "assertion_kind": category or pattern_type,
+        "actor": actor,
+        "semantic_summary": description,
+        "behavior_delta": behavior_delta,
+    }

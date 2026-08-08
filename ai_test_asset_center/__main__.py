@@ -238,6 +238,43 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                 learned_context.get("pattern_count", 0),
                 learned_context.get("load_failure", "none"),
             )
+        # Cross-round knowledge transfer READ: attach per-round history
+        # insights to the learned payload (observational only — planning
+        # consumes the same risk_pattern entries as before; round history
+        # adds provenance context, never new evidence sources).
+        try:
+            from .cross_round_knowledge_transfer import CrossRoundKnowledgeTransfer
+
+            transfer = CrossRoundKnowledgeTransfer(project)
+            insights = transfer.get_cross_round_insights()
+            if isinstance(learned_context, dict) and isinstance(insights, dict):
+                learned_context["cross_round_insights"] = insights
+        except Exception as exc:
+            _LOGGER.warning(
+                "cross_round_insights_load_failed: %s:%s",
+                type(exc).__name__,
+                str(exc)[:120],
+            )
+        # Binding-experience READ: verified resolver mappings from prior
+        # scans (source-declared resolver identities only, never resolved
+        # values) ride along for the planning-time resolver reorder.
+        try:
+            from .learning_pattern_bridge import LearningPatternBridge
+
+            binding_resolvers = LearningPatternBridge(project=project).load_binding_experience()
+            if isinstance(learned_context, dict) and binding_resolvers:
+                learned_context["binding_resolvers"] = binding_resolvers
+                _LOGGER.info(
+                    "binding_experience_loaded project=%s resolvers=%s",
+                    project,
+                    len(binding_resolvers),
+                )
+        except Exception as exc:
+            _LOGGER.warning(
+                "binding_experience_load_failed: %s:%s",
+                type(exc).__name__,
+                str(exc)[:120],
+            )
     except Exception as exc:
         _LOGGER.exception("closed_loop_learned_context_load_failed")
         context["learned_knowledge"] = {
@@ -970,6 +1007,105 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                 "sqlite_storage": feedback.get("sqlite_storage", {}),
             }
 
+            # ── Binding-experience WRITE: persist verified resolver mappings
+            # (source-declared identities only) so the next scan reorders its
+            # resolver candidates by verified success. This is the execution-
+            # changing surface of the learning loop.
+            try:
+                from .binding_experience_learning import (
+                    build_binding_experience_context,
+                )
+
+                binding_experience = build_binding_experience_context(
+                    project, root, result
+                )
+                result["binding_experience"] = binding_experience
+            except Exception as exc:
+                result["binding_experience"] = {
+                    "schema_version": "qualibug.binding-experience-write.v1",
+                    "status": "FAILED",
+                    "failure": f"{type(exc).__name__}:{str(exc)[:200]}",
+                    "stored_count": 0,
+                }
+
+            # ── Cross-round knowledge transfer WRITE: record this round's
+            # knowledge so the round history / insights are persisted for the
+            # next scan's READ (observational provenance, not new sources).
+            try:
+                from .closed_loop_feedback import load_learned_scan_context
+                from .cross_round_knowledge_transfer import CrossRoundKnowledgeTransfer
+
+                transfer = CrossRoundKnowledgeTransfer(project)
+                round_patterns = list(
+                    (load_learned_scan_context(project) or {}).get("learned_patterns") or []
+                )
+                transfer.record_round_completion(
+                    round_id=str(result.get("run_id") or result.get("scan_id") or "scan"),
+                    risk_patterns=round_patterns,
+                    effective_probes=[],
+                    failure_patterns=[],
+                    domains=[],
+                    avg_confidence=0.8,
+                )
+                result["cross_round_transfer"] = {
+                    "status": "recorded",
+                    "patterns": len(round_patterns),
+                }
+            except Exception as exc:
+                result["cross_round_transfer"] = {
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}:{str(exc)[:200]}",
+                }
+
+            # ── Confirmed-bug flywheel signals → SQLite KB (loop closure):
+            # signals extracted by the flywheel's pattern memory enter the
+            # same knowledge base the planning boost / reasoner memory block
+            # consume, instead of dying in an unread manifest file.
+            try:
+                from .confirmed_bug_flywheel import load_confirmed_bug_flywheel_profile
+                from .learning_pattern_bridge import LearningPatternBridge
+
+                flywheel_profile = load_confirmed_bug_flywheel_profile(project, root)
+                flywheel_signals = (
+                    (flywheel_profile.get("pattern_memory") or {}).get("extracted_signals")
+                    if isinstance(flywheel_profile, dict) else None
+                )
+                if isinstance(flywheel_signals, list) and flywheel_signals:
+                    flywheel_patterns = []
+                    for signal in flywheel_signals:
+                        if not isinstance(signal, dict):
+                            continue
+                        category = str(signal.get("category") or "uncategorized")
+                        pattern_name = str(
+                            signal.get("pattern_name") or f"learned_{category}"
+                        )
+                        flywheel_patterns.append({
+                            "signature": f"flywheel:{pattern_name}",
+                            "type": f"flywheel:{category}",
+                            "entity": "",
+                            "mutation_hint": "",
+                            "count": int(signal.get("frequency") or 1),
+                        })
+                    stored = LearningPatternBridge(project=project).store_patterns(
+                        flywheel_patterns,
+                        scan_id="confirmed_bug_flywheel",
+                        confidence=0.8,
+                    )
+                    result["flywheel_loopback"] = {
+                        "status": "stored",
+                        "patterns_stored": stored,
+                    }
+                else:
+                    result["flywheel_loopback"] = {
+                        "status": "no_signals",
+                        "patterns_stored": 0,
+                    }
+            except Exception as exc:
+                result["flywheel_loopback"] = {
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}:{str(exc)[:200]}",
+                }
+
             # ── V2.0: Auto-learning trigger (automated) ──
             try:
                 trigger = AutoLearningTrigger(
@@ -988,7 +1124,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                            "YES" if should_learn else "NO", reason)
                 
                 if should_learn:
-                    learn_result = trigger.execute()
+                    learn_result = trigger.execute(scan_result=result)
                     result["auto_learning"] = {
                         "success": learn_result.success,
                         "rounds_analyzed": learn_result.rounds_analyzed,
@@ -1031,6 +1167,27 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         if funnel:
             funnel["pipeline_health"] = dict(pipeline_health)
             result["discovery_funnel"] = funnel
+
+    # ── Learning-effect observation: persist executed-set diffs vs the
+    # previous round of the same campaign (diagnostic observability only —
+    # never recall/precision; those need evaluator-private GT).
+    try:
+        from .learning_effect_observation import write_learning_effect_report
+
+        effect_report = write_learning_effect_report(project, root)
+        result["learning_effect"] = {
+            "status": effect_report.get("status"),
+            "campaign_count": effect_report.get("campaign_count"),
+            "round_count": effect_report.get("round_count"),
+            "report_path": str(
+                root / "platform_outputs" / project / "learning_effect" / "learning_effect_report.json"
+            ),
+        }
+    except Exception as exc:
+        result["learning_effect"] = {
+            "status": "FAILED",
+            "failure": f"{type(exc).__name__}:{str(exc)[:200]}",
+        }
 
     return result
 

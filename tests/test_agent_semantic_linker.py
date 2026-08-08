@@ -105,6 +105,20 @@ def _linked_response(
                 ],
             }],
         }],
+        "transition_assessments": [{
+            "transition_id": "st:state:transfer:allowed:pending:completed",
+            "disposition": "LINKED",
+            "reason": "The completion operation performs the declared transition.",
+            "relationships": [{
+                "interface_id": interface_id,
+                "confidence": confidence,
+                "reason": "This operation moves the transfer from PENDING to COMPLETED.",
+                "evidence_refs": [
+                    "st:state:transfer:allowed:pending:completed",
+                    interface_id,
+                ],
+            }],
+        }],
     }
 
 
@@ -115,10 +129,14 @@ def test_agent_semantic_link_becomes_source_bound_runtime_obligation() -> None:
     )
 
     assert receipt["status"] == "VERIFIED"
-    assert receipt["accepted_relationship_count"] == 1
+    assert receipt["accepted_relationship_count"] == 2
     assert receipt["assessed_rule_count"] == 1
     assert receipt["unassessed_rule_count"] == 0
-    relationship = enriched["relationships"][0]
+    assert receipt["assessed_transition_count"] == 1
+    assert receipt["unassessed_transition_count"] == 0
+    relationships = enriched["relationships"]
+    assert len(relationships) == 2
+    relationship = relationships[0]
     assert relationship["status"] == "accepted"
     assert relationship["derivation"] == "agent_semantic_mapping"
     assert relationship["from"] == "rule-conservation"
@@ -128,6 +146,10 @@ def test_agent_semantic_link_becomes_source_bound_runtime_obligation() -> None:
         "api:POST:/transfers",
         "table:transfers",
     ]
+    transition_relationship = relationships[1]
+    assert transition_relationship["relation"] == "state_transition_to_interface"
+    assert transition_relationship["from"] == "st:state:transfer:allowed:pending:completed"
+    assert transition_relationship["to"] == "api:POST:/transfers"
 
     behavior_ir = build_behavior_ir_from_knowledge_asset(
         enriched,
@@ -138,17 +160,36 @@ def test_agent_semantic_link_becomes_source_bound_runtime_obligation() -> None:
 
 
 def test_agent_semantic_linker_rejects_invented_behavior_identity_visibly() -> None:
+    invented_response = _linked_response(
+        interface_id="api:POST:/invented",
+        evidence_refs=["rule-conservation", "api:POST:/invented"],
+    )
+    # The transition link stays on the documented interface so only the rule
+    # assessment carries the invented identity.
+    invented_response["transition_assessments"] = [{
+        "transition_id": "st:state:transfer:allowed:pending:completed",
+        "disposition": "LINKED",
+        "reason": "The completion operation performs the declared transition.",
+        "relationships": [{
+            "interface_id": "api:POST:/transfers",
+            "confidence": 0.91,
+            "reason": "This operation moves the transfer from PENDING to COMPLETED.",
+            "evidence_refs": [
+                "st:state:transfer:allowed:pending:completed",
+                "api:POST:/transfers",
+            ],
+        }],
+    }]
     enriched, receipt = enrich_knowledge_asset_with_agent_relationships(
         _asset(),
-        client=FakeAgentClient(_linked_response(
-            interface_id="api:POST:/invented",
-            evidence_refs=["rule-conservation", "api:POST:/invented"],
-        )),
+        client=FakeAgentClient(invented_response),
     )
 
-    assert enriched["relationships"] == []
+    assert [row["relation"] for row in enriched["relationships"]] == [
+        "state_transition_to_interface"
+    ]
     assert receipt["status"] == "VERIFIED_WITH_REJECTIONS"
-    assert receipt["accepted_relationship_count"] == 0
+    assert receipt["accepted_relationship_count"] == 1
     assert receipt["rejected_invalid_identity_count"] == 1
     assert receipt["rejected_proposal_count"] == 1
     assert receipt["rejections"] == [{
@@ -305,6 +346,12 @@ def test_agent_semantic_linker_records_explicit_unlinked_assessment() -> None:
             "reason": "No documented interface can exercise the rule.",
             "relationships": [],
         }],
+        "transition_assessments": [{
+            "transition_id": "st:state:transfer:allowed:pending:completed",
+            "disposition": "NO_EXECUTABLE_INTERFACE",
+            "reason": "No documented interface performs this transition.",
+            "relationships": [],
+        }],
     })
 
     enriched, receipt = enrich_knowledge_asset_with_agent_relationships(
@@ -316,22 +363,43 @@ def test_agent_semantic_linker_records_explicit_unlinked_assessment() -> None:
     assert receipt["status"] == "VERIFIED_WITH_GAPS"
     assert receipt["accepted_relationship_count"] == 0
     assert receipt["no_executable_interface_count"] == 1
+    assert receipt["no_executable_transition_count"] == 1
     assert receipt["unassessed_rule_count"] == 0
     assert receipt["rule_assessments"][0]["disposition"] == "NO_EXECUTABLE_INTERFACE"
+    assert (
+        receipt["transition_assessments"][0]["disposition"]
+        == "NO_EXECUTABLE_INTERFACE"
+    )
 
 
 def test_agent_semantic_linker_rejects_invented_supporting_fact() -> None:
-    enriched, receipt = enrich_knowledge_asset_with_agent_relationships(
-        _asset(),
-        client=FakeAgentClient(_linked_response(
-            evidence_refs=[
-                "rule-conservation",
+    invented_response = _linked_response(
+        evidence_refs=[
+            "rule-conservation",
+            "api:POST:/transfers",
+            "table:invented",
+        ],
+    )
+    invented_response["transition_assessments"] = [{
+        "transition_id": "st:state:transfer:allowed:pending:completed",
+        "disposition": "LINKED",
+        "reason": "The completion operation performs the declared transition.",
+        "relationships": [{
+            "interface_id": "api:POST:/transfers",
+            "confidence": 0.91,
+            "reason": "This operation moves the transfer from PENDING to COMPLETED.",
+            "evidence_refs": [
+                "st:state:transfer:allowed:pending:completed",
                 "api:POST:/transfers",
                 "table:invented",
             ],
-        )),
+        }],
+    }]
+    enriched, receipt = enrich_knowledge_asset_with_agent_relationships(
+        _asset(),
+        client=FakeAgentClient(invented_response),
     )
 
     assert enriched["relationships"] == []
-    assert receipt["rejected_invalid_evidence_count"] == 1
+    assert receipt["rejected_invalid_evidence_count"] == 2
     assert receipt["rejections"][0]["reason_code"] == "UNKNOWN_EVIDENCE_REF"

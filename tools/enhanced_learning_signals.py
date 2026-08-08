@@ -353,38 +353,113 @@ class EnhancedSignalExtractor:
         return int(benchmark.get("round_number", 1))
     
     def _extract_confirmed_bugs(self, data: dict, signals: EnhancedLearningSignals):
-        """Extract confirmed bug signals."""
+        """Extract confirmed bug signals.
+
+        Reads the authoritative v12 fields (``canonical_defect_registry`` /
+        ``formal_count_projection``); the legacy ``high_value_summary``
+        shape is not written by mainline scans and previously yielded zero
+        signals.
+        """
         summary = data.get("high_value_summary", {})
         bugs = summary.get("confirmed_bugs_list", [])
-        
         if not isinstance(bugs, list):
-            # Try alternative structure
             bugs = summary.get("discovered", [])
-        
+
+        if not bugs:
+            # ── v12 schema mapping: authoritative defect registry ──
+            registry = data.get("canonical_defect_registry", {})
+            if isinstance(registry, dict):
+                bugs = [
+                    item for item in registry.get("canonical_defects", [])
+                    if isinstance(item, dict)
+                ]
+            if not bugs:
+                projection = data.get("formal_count_projection", {})
+                if isinstance(projection, dict):
+                    bugs = [
+                        item for item in projection.get("canonical_representative_findings", [])
+                        if isinstance(item, dict)
+                    ]
+
         for bug in bugs:
             if isinstance(bug, dict):
+                # Normalize v12 defect registry entries to the legacy shape
+                # the signal constructor understands.
+                identity = bug.get("identity", {})
+                if isinstance(identity, dict):
+                    operation = identity.get("operation", {})
+                    if isinstance(operation, dict):
+                        bug.setdefault("title", operation.get("source_locator") or bug.get("canonical_defect_id"))
+                    bug.setdefault("defect_family", identity.get("property") or bug.get("category") or bug.get("risk_family"))
+                    bug.setdefault("severity", bug.get("severity") or "P2")
+                    bug.setdefault("risk_type", identity.get("property") or bug.get("risk_family"))
                 signals.confirmed_bugs.append(
                     LearningSignal.from_confirmed_bug(bug, signals.scan_file, signals.round_number)
                 )
-    
+
     def _extract_failed_probes(self, data: dict, signals: EnhancedLearningSignals):
-        """Extract failed probe signals."""
+        """Extract failed probe signals.
+
+        Reads the authoritative v12 execution ledger
+        (``obligation_attempt_ledger.attempts`` with terminal BLOCKED /
+        HARNESS_FAILED) instead of the legacy top-level
+        ``probe_execution_result``, which mainline scans do not emit.
+        """
         execution = data.get("probe_execution_result", [])
-        
         if not isinstance(execution, list):
-            return
-        
+            execution = []
+
+        if not execution:
+            # ── v12 schema mapping: blocked/harness-failed attempts ──
+            ledger = data.get("obligation_attempt_ledger", {})
+            if isinstance(ledger, dict):
+                execution = [
+                    attempt for attempt in ledger.get("attempts", [])
+                    if isinstance(attempt, dict)
+                    and str(attempt.get("terminal_status") or "").upper()
+                    in {"BLOCKED", "HARNESS_FAILED"}
+                ]
+            if not execution:
+                health = data.get("pipeline_health", {})
+                if isinstance(health, dict) and int(health.get("blocked_obligation_count") or 0):
+                    execution = [{"blocked_obligation_count": int(health.get("blocked_obligation_count"))}]
+
         for item in execution:
             if not isinstance(item, dict):
                 continue
-            
-            # Check if probe failed
+
+            # Legacy shape: probe result with assertion_result == "failed"
             if item.get("assertion_result") == "failed":
                 signals.failed_probes.append(
                     LearningSignal.from_failed_probe(
                         item, signals.scan_file, signals.round_number
                     )
                 )
+                continue
+
+            # v12 shape: an attempt ledger row or a blocked-count fallback.
+            reason_code = str(item.get("reason_code") or "BLOCKED")
+            signals.failed_probes.append(
+                LearningSignal(
+                    signal_type="failed_probe",
+                    source_file=signals.scan_file,
+                    round_number=signals.round_number,
+                    timestamp=datetime.now().isoformat(),
+                    severity="high",
+                    category=str(item.get("risk_family") or "unknown"),
+                    raw_data={
+                        "probe_id": str(item.get("obligation_id") or item.get("experiment_id") or item.get("blocked_obligation_count") or "")[:50],
+                        "error_type": reason_code,
+                        "error_message": str(item.get("reason_detail") or item.get("detail") or "")[:500],
+                        "probe_source": "mainline_execution_ledger",
+                        "api_path": str(item.get("operation_refs") or item.get("locator") or "")[:200],
+                    },
+                    risk_types=[reason_code],
+                    related_apis=[],
+                    probe_sources=["mainline_execution_ledger"],
+                    learning_potential=0.5,
+                )
+            )
     
     def _extract_engine_failures(self, data: dict, signals: EnhancedLearningSignals):
         """Extract engine failure signals."""

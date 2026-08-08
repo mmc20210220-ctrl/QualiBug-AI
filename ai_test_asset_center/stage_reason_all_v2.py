@@ -1896,6 +1896,20 @@ def collect_reasoner_hypotheses(
         "max_hypotheses_per_engine": report.get("max_hypotheses_per_engine", MAX_HYPOTHESES),
         "timeout_seconds": report.get("timeout_seconds", MIN_REASONER_TIMEOUT_SECONDS),
         "max_tokens": report.get("max_tokens", MIN_REASONER_MAX_TOKENS),
+        # Learning-loop observability: surfaces the closed-loop consumption
+        # state (learned memory prompt block, engine attention, grounded
+        # facts, semantic dedup) in the mainline reasoner receipt instead of
+        # dropping it at the collect_reasoner_hypotheses boundary.
+        "learned_memory_receipt": report.get("learned_memory_receipt"),
+        "engine_attention_receipt": report.get("engine_attention_receipt"),
+        "fact_retrieval_receipt": report.get("fact_retrieval_receipt"),
+        "semantic_dedup_receipt": report.get("semantic_dedup_receipt"),
+        "graph_context": {
+            "mode": report.get("graph_context_mode"),
+            "ready": report.get("graph_context_ready"),
+            "active": report.get("graph_context_active"),
+            "chars": report.get("graph_context_chars"),
+        },
     }
     return hypotheses, meta
 

@@ -12,6 +12,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from .agent_semantic_linker import transition_identity
 from .enterprise_knowledge_center._linking import _relationship_is_authoritative
 
 from .behavior_ir import (
@@ -111,6 +112,354 @@ def _operation_identity_index(
         else:
             ambiguous[identity] = ordered
     return unique, ambiguous
+
+
+def _accepted_transition_edges(asset: dict[str, Any]) -> list[dict[str, Any]]:
+    """Accepted ``state_transition_to_interface`` edges from the semantic linker.
+
+    Same authority gate as rule edges: the edge must be accepted and carry an
+    exact transition identity. No fuzzy matching at this layer.
+    """
+    accepted: list[dict[str, Any]] = []
+    for raw in _list(asset.get("relationships")):
+        edge = _dict(raw)
+        relation = _text(edge.get("relation") or edge.get("relation_type")).lower()
+        transition_ref = _text(edge.get("from") or edge.get("from_ref"))
+        interface_ref = _text(edge.get("to") or edge.get("to_ref"))
+        if (
+            relation != "state_transition_to_interface"
+            or not _relationship_is_authoritative(edge)
+            or not transition_ref
+            or not interface_ref
+        ):
+            continue
+        accepted.append({
+            **edge,
+            "transition_ref": transition_ref,
+            "interface_ref": interface_ref,
+        })
+    return accepted
+
+
+def _machine_transition_identities(
+    knowledge_asset: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Map stable transition identities to their (machine, kind, from, to)."""
+    identities: dict[str, dict[str, Any]] = {}
+    for raw in _list(knowledge_asset.get("state_machines")):
+        machine = _dict(raw)
+        machine_ref = _text(machine.get("state_machine_id") or machine.get("id"))
+        if not machine_ref:
+            continue
+        entity_ref = _text(machine.get("entity") or machine.get("object"))
+        for kind, key in (
+            ("allowed", "transitions"),
+            ("forbidden", "forbidden_transitions"),
+        ):
+            for raw_transition in _list(machine.get(key)):
+                transition = _dict(raw_transition)
+                from_state = _text(
+                    transition.get("from") or transition.get("from_state")
+                )
+                to_state = _text(transition.get("to") or transition.get("to_state"))
+                if not from_state:
+                    continue
+                identity = transition_identity(machine_ref, kind, from_state, to_state)
+                identities[identity] = {
+                    "machine_ref": machine_ref,
+                    "kind": kind,
+                    "from_state": from_state,
+                    "to_state": to_state,
+                    "entity_ref": entity_ref,
+                }
+    return identities
+
+
+def bind_accepted_state_transitions(
+    behavior_ir: dict[str, Any],
+    knowledge_asset: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Bind accepted state-transition identities to IR forbidden invariants and
+    transition relations.
+
+    Source state machines declare the legal and forbidden moves; the semantic
+    linker binds each move to the documented interface that performs it. This
+    function turns those accepted identities into IR structure — never text,
+    path, or state-name matching:
+
+    * forbidden moves advance the matching ``forbidden_state_transition``
+      invariant's ``operation_refs`` (its machine ref and from/to come from the
+      invariant itself);
+    * allowed moves become ``transitions`` relations between IR state nodes so
+      the precondition planner can build reachability paths.
+
+    Unresolved or ambiguous identities stay visible in the receipt.
+    """
+    if not isinstance(behavior_ir, dict):
+        raise SemanticOperationBindingError("behavior_ir_not_object")
+    if not isinstance(knowledge_asset, dict):
+        raise SemanticOperationBindingError("knowledge_asset_not_object")
+
+    enriched = deepcopy(behavior_ir)
+    edges = _accepted_transition_edges(knowledge_asset)
+    if not edges:
+        return enriched, {
+            "schema_version": SCHEMA_VERSION,
+            "status": "NO_ACCEPTED_TRANSITION_LINKS",
+            "accepted_transition_edge_count": 0,
+            "bound_transition_invariant_count": 0,
+            "added_transition_relation_count": 0,
+            "unresolved_transition_refs": [],
+            "ambiguous_transition_refs": {},
+        }
+
+    unique_operations, ambiguous_operations = _operation_identity_index(enriched)
+    operations = {
+        _text(row.get("id")): row
+        for row in _list(enriched.get("operations"))
+        if isinstance(row, dict) and _text(row.get("id"))
+    }
+    edges_by_transition: dict[str, list[dict[str, Any]]] = {}
+    unresolved_transition_refs: set[str] = set()
+    ambiguous_transition_refs: dict[str, list[str]] = {}
+    for edge in edges:
+        transition_ref = edge["transition_ref"]
+        interface_ref = edge["interface_ref"]
+        if interface_ref in ambiguous_operations:
+            ambiguous_transition_refs[transition_ref] = ambiguous_operations[
+                interface_ref
+            ]
+            continue
+        operation_ref = unique_operations.get(interface_ref)
+        if not operation_ref:
+            unresolved_transition_refs.add(transition_ref)
+            continue
+        edges_by_transition.setdefault(transition_ref, []).append({
+            "operation_ref": operation_ref,
+            "edge": edge,
+        })
+
+    machine_identities = _machine_transition_identities(knowledge_asset)
+    states_by_key = {
+        (
+            _text(row.get("entity_ref")).lower(),
+            _text(row.get("value") or row.get("name")).lower(),
+        ): row
+        for row in _list(enriched.get("states"))
+        if isinstance(row, dict)
+        and _text(row.get("entity_ref"))
+        and _text(row.get("value") or row.get("name"))
+    }
+    existing_relation_keys = {
+        (
+            _text(row.get("relation_type")),
+            _text(row.get("from_ref")),
+            _text(row.get("to_ref")),
+            _text(row.get("operation_ref")),
+        )
+        for row in _list(enriched.get("relations"))
+        if isinstance(row, dict)
+    }
+    added_relations: list[dict[str, Any]] = []
+    bound_invariant_ids: set[str] = set()
+    bound_transition_ids: set[str] = set()
+
+    # Forbidden moves → invariant operation refs + observes relations.
+    for raw_invariant in _list(enriched.get("invariants")):
+        invariant = _dict(raw_invariant)
+        invariant_ref = _text(invariant.get("id"))
+        if not invariant_ref:
+            continue
+        expression = _dict(invariant.get("expression"))
+        if _text(expression.get("kind")) != "forbidden_state_transition":
+            continue
+        operands = [
+            _dict(row)
+            for row in _list(expression.get("operands"))
+            if isinstance(row, dict)
+        ]
+        from_state = _text(
+            next(
+                (_text(op.get("from_state")) for op in operands if op.get("from_state")),
+                "",
+            )
+        )
+        to_state = _text(
+            next(
+                (_text(op.get("to_state")) for op in operands if op.get("to_state")),
+                "",
+            )
+        )
+        if not from_state or not to_state:
+            continue
+        machine_ref = next(
+            (
+                _text(value)
+                for value in _list(invariant.get("source_rule_refs"))
+                if _text(value).startswith("state:")
+            ),
+            "",
+        )
+        if not machine_ref:
+            continue
+        identity = transition_identity(machine_ref, "forbidden", from_state, to_state)
+        bindings = edges_by_transition.get(identity, [])
+        if not bindings:
+            continue
+        operation_refs = [
+            _text(value)
+            for value in _list(invariant.get("operation_refs"))
+            if _text(value)
+        ]
+        semantic_refs = [
+            _text(value)
+            for value in _list(invariant.get("semantic_operation_binding_refs"))
+            if _text(value)
+        ]
+        relation_type = _invariant_relation_type(invariant)
+        for binding in bindings:
+            operation_ref = binding["operation_ref"]
+            edge = binding["edge"]
+            edge_ref = _text(edge.get("edge_id") or edge.get("id"))
+            if operation_ref not in operation_refs:
+                operation_refs.append(operation_ref)
+            if edge_ref and edge_ref not in semantic_refs:
+                semantic_refs.append(edge_ref)
+            relation_key = (
+                relation_type,
+                operation_ref,
+                invariant_ref,
+                operation_ref,
+            )
+            if relation_key not in existing_relation_keys:
+                operation = _dict(operations.get(operation_ref))
+                relation = _relation_node(
+                    relation_type=relation_type,
+                    from_ref=operation_ref,
+                    to_ref=invariant_ref,
+                    operation_ref=operation_ref,
+                    source_refs=(
+                        [
+                            _source_ref(
+                                _text(edge.get("source_id"))
+                                or "agent_semantic_linker",
+                                locator=edge_ref or identity,
+                                kind="accepted_state_transition_identity",
+                            )
+                        ]
+                        + _list(operation.get("source_refs"))
+                        + _list(invariant.get("source_refs"))
+                    )[:5],
+                    confidence=min(
+                        float(edge.get("confidence") or 0.7),
+                        float(operation.get("confidence") or 0.7),
+                        float(invariant.get("confidence") or 0.7),
+                    ),
+                    derivation="model-inferred",
+                    source_relationship_ref=edge_ref,
+                )
+                added_relations.append(relation)
+                existing_relation_keys.add(relation_key)
+            bound_invariant_ids.add(invariant_ref)
+            bound_transition_ids.add(identity)
+        invariant["operation_refs"] = operation_refs
+        invariant["semantic_operation_binding_refs"] = semantic_refs
+        invariant["operation_binding_authority"] = (
+            "accepted_state_transition_identity"
+        )
+
+    # Allowed moves → transitions relations for the precondition graph.
+    for identity, metadata in machine_identities.items():
+        if metadata["kind"] != "allowed":
+            continue
+        bindings = edges_by_transition.get(identity, [])
+        if not bindings:
+            continue
+        entity_ref = _text(metadata.get("entity_ref"))
+        from_state = metadata["from_state"]
+        to_state = metadata["to_state"]
+        if not to_state:
+            continue
+        from_node = states_by_key.get((entity_ref.lower(), from_state.lower()))
+        to_node = states_by_key.get((entity_ref.lower(), to_state.lower()))
+        if not from_node or not to_node:
+            continue
+        for binding in bindings:
+            operation_ref = binding["operation_ref"]
+            edge = binding["edge"]
+            edge_ref = _text(edge.get("edge_id") or edge.get("id"))
+            relation_key = (
+                "transitions",
+                _text(from_node.get("id")),
+                _text(to_node.get("id")),
+                operation_ref,
+            )
+            if relation_key in existing_relation_keys:
+                # The relation already exists (e.g. via the rule action-phrase
+                # channel); the accepted transition identity still advances the
+                # binding — count it, don't duplicate the relation.
+                bound_transition_ids.add(identity)
+                continue
+            operation = _dict(operations.get(operation_ref))
+            relation = _relation_node(
+                relation_type="transitions",
+                from_ref=_text(from_node.get("id")),
+                to_ref=_text(to_node.get("id")),
+                operation_ref=operation_ref,
+                source_refs=(
+                    [
+                        _source_ref(
+                            _text(edge.get("source_id")) or "agent_semantic_linker",
+                            locator=edge_ref or identity,
+                            kind="accepted_state_transition_identity",
+                        )
+                    ]
+                    + _list(operation.get("source_refs"))
+                )[:4],
+                confidence=min(
+                    float(edge.get("confidence") or 0.7),
+                    float(operation.get("confidence") or 0.7),
+                ),
+                derivation="model-inferred",
+                source_relationship_ref=edge_ref,
+            )
+            added_relations.append(relation)
+            existing_relation_keys.add(relation_key)
+            bound_transition_ids.add(identity)
+
+    enriched["relations"] = [
+        *[
+            dict(row)
+            for row in _list(enriched.get("relations"))
+            if isinstance(row, dict)
+        ],
+        *added_relations,
+    ]
+
+    linked_transition_ids = set(edges_by_transition)
+    unbound_transition_ids = sorted(linked_transition_ids - bound_transition_ids)
+    receipt: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "status": (
+            "BOUND_WITH_GAPS"
+            if unresolved_transition_refs
+            or ambiguous_transition_refs
+            or unbound_transition_ids
+            else "BOUND"
+        ),
+        "accepted_transition_edge_count": len(edges),
+        "bound_transition_invariant_count": len(bound_invariant_ids),
+        "bound_transition_ids": sorted(bound_transition_ids),
+        "added_transition_relation_count": sum(
+            1 for row in added_relations if row.get("relation_type") == "transitions"
+        ),
+        "unresolved_transition_refs": sorted(unresolved_transition_refs),
+        "ambiguous_transition_refs": ambiguous_transition_refs,
+        "unbound_transition_ids": unbound_transition_ids,
+    }
+    receipt["receipt_fingerprint"] = _fingerprint(receipt)
+    enriched["state_transition_binding_receipt"] = receipt
+    return enriched, receipt
 
 
 def bind_accepted_semantic_operations(
@@ -298,6 +647,20 @@ def bind_accepted_semantic_operations(
     receipt["receipt_fingerprint"] = _fingerprint(receipt)
     enriched["semantic_operation_binding_receipt"] = receipt
     enriched["model_id"] = _content_addressed_id(enriched)
+
+    # ── State-machine transition channel ──
+    # Accepted state_transition_to_interface edges bind forbidden-transition
+    # invariants to the operation that would perform the move, and allowed
+    # transitions to the operation that performs them (feeding the state
+    # precondition graph). Both stay identity-exact; the transition channel
+    # keeps its own receipt so the two authorities remain separately auditable.
+    transition_enriched, transition_receipt = bind_accepted_state_transitions(
+        enriched,
+        knowledge_asset,
+    )
+    transition_receipt["receipt_fingerprint"] = _fingerprint(transition_receipt)
+    enriched = transition_enriched
+    enriched["state_transition_binding_receipt"] = transition_receipt
 
     errors = validate_behavior_ir(enriched)
     if errors:
