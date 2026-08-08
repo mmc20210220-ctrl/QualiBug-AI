@@ -623,6 +623,14 @@ def preflight_experiment_executable(
     for step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
         if not isinstance(step, dict):
             continue
+        # UI page-observation steps open a browser URL and carry no HTTP
+        # actor/operation pair (the page renders under the session the target
+        # serves, not under a request credential). The transport-facing
+        # checks below do not apply to them; only the declared URL is real.
+        if _text(step.get("protocol_step")) == "ui_open":
+            if not _text(step.get("ui_url")):
+                return False, "BLOCKED_MISSING_OPERATION", "ui_open_without_ui_url"
+            continue
         actor_ref = _text(step.get("actor_ref"))
         op_ref = _text(step.get("operation_ref"))
         if not actor_ref or actor_ref not in actors:

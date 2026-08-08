@@ -1013,6 +1013,55 @@ def compile_experiment_for_obligation(
     required_observers = [
         _text(x) for x in _list(obl.get("required_observers")) if _text(x)
     ]
+    if family == "ui_state_consistency":
+        # ── UI/UX surface experiment ──
+        # A UI rule constrains a browser page, not an API operation: the
+        # browser plan compiles directly from the declared page URL (no
+        # primary API operation or actor pair exists). The ui_browser
+        # observer executes the plan and the ui_state_consistency assertion
+        # judges the rendered DOM against the rule.
+        protocol = compile_family_protocol(
+            risk_family=family,
+            operation={},
+            operation_ref="",
+            control_actor_ref="",
+            treatment_actor_ref="",
+            property_spec=prop,
+            behavior_ir=ir,
+        )
+        if protocol.get("status") != "COMPILED":
+            return make_experiment(
+                obligation_id=oid,
+                risk_family=family,
+                compile_receipt={
+                    "status": protocol.get("status") or "BLOCKED",
+                    "reason_code": protocol.get("reason_code") or "",
+                    "detail": protocol.get("detail") or "",
+                },
+            )
+        return make_experiment(
+            obligation_id=oid,
+            risk_family=family,
+            control_plan=protocol.get("control_plan") or [],
+            treatment_plan=protocol.get("treatment_plan") or [],
+            assertions=[dict(protocol["assertion"])] if protocol.get("assertion") else [],
+            observers=protocol.get("observers") or [],
+            source_refs=[
+                ref for ref in _list(obl.get("source_refs"))
+                if isinstance(ref, dict)
+                and _text(ref.get("kind") or ref.get("type") or ref.get("source_type"))
+                and _text(
+                    ref.get("locator")
+                    or ref.get("source_locator")
+                    or ref.get("path")
+                    or ref.get("ref")
+                )
+            ][:5] or [
+                {"id": oid, "kind": "obligation", "type": "obligation", "locator": oid}
+            ],
+            compiled_adapters={"ui_browser"},
+            compile_receipt={"status": "COMPILED"},
+        )
     primary_op_id = required_ops[0] if required_ops else _text(prop.get("operation_ref"))
 
     if family == "state":

@@ -128,14 +128,16 @@ def _classify_source_multi(name: str, text: str, explicit: str | None = None) ->
         (_has_in_text("飞书", "feishu", "lark"), "feishu_document"),
     ]
     matched: list[str] = []
+    if explicit in SOURCE_TYPES:
+        # An explicit source_type from the ingest caller is authoritative
+        # (structured formats the content rules cannot infer, e.g. a UI/UX
+        # requirements JSON); automatic labels still join as secondary tags.
+        matched.append(explicit)
     for condition, source_type in rules:
         if condition and source_type not in matched:
             matched.append(source_type)
     if not matched:
-        if explicit in SOURCE_TYPES:
-            matched.append(explicit)
-        else:
-            matched.append("collaboration_document")
+        matched.append("collaboration_document")
     # Additional: if text contains 2D tables with field-definition headers,
     # add db_field_dictionary as secondary label
     if "db_field_dictionary" not in matched and "database_schema" not in matched:
@@ -1344,6 +1346,112 @@ def _uiux_specs_from_text(text: str, source_id: str, source_type: str, filename:
     return specs
 
 
+
+
+def _uiux_requirements_from_json(
+    payload: dict[str, Any],
+    source_id: str,
+    filename: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Parse a structured UI/UX requirements document into UI specs + rules.
+
+    The document (Benchmark UI/UX requirements JSON) declares screens with
+    URLs, a role visibility matrix, an order-action button matrix, numbered
+    requirements and executable UI oracles. Each oracle becomes a grounded
+    rule (rule_type=ui_state_consistency) whose precondition/action/expected
+    ride as structured fields; each screen becomes a UI design spec carrying
+    its URL, regions and interaction matrices. All values come from the
+    document — nothing is inferred or industry-hardcoded.
+    """
+    specs: list[dict[str, Any]] = []
+    rules: list[dict[str, Any]] = []
+    doc_name = str((payload.get("document") or {}).get("name") or Path(filename).stem)
+    for screen in list(payload.get("screens")):
+        if not isinstance(screen, dict):
+            continue
+        screen_id = _clean_markup_text(screen.get("id")) or f"screen_{len(specs) + 1}"
+        spec: dict[str, Any] = {
+            "ui_spec_id": f"ui:{source_id}:{screen_id}",
+            "source_id": source_id,
+            "source_type": "uiux_requirements",
+            "name": _clean_markup_text(screen.get("name")) or screen_id,
+            "url": _clean_markup_text(screen.get("url")),
+            "regions": [
+                _clean_markup_text(region)
+                for region in list(screen.get("regions"))
+                if _clean_markup_text(region)
+            ],
+            "viewport": dict(screen.get("viewport") or {}),
+            "states": ["loading", "error", "empty", "success"],
+        }
+        role_visibility = payload.get("role_visibility")
+        if isinstance(role_visibility, dict):
+            spec["role_visibility"] = role_visibility
+        action_matrix = payload.get("order_action_matrix")
+        if isinstance(action_matrix, dict):
+            spec["order_action_matrix"] = action_matrix
+        specs.append(spec)
+
+    for requirement in list(payload.get("requirements")):
+        if not isinstance(requirement, dict):
+            continue
+        req_id = _clean_markup_text(requirement.get("id"))
+        rule_text = _clean_markup_text(requirement.get("rule"))
+        if not req_id or not rule_text:
+            continue
+        statement = f"{req_id}：{rule_text}"
+        rule: dict[str, Any] = {
+            "rule_id": f"rule:{source_id}:{req_id}",
+            "source_id": source_id,
+            "statement": statement,
+            "rule_type": "ui_state_consistency",
+            "risk_type": "ui",
+            "severity": "P1",
+            "tokens": sorted(_tokens(statement)),
+        }
+        for key in ("screen", "type", "field", "negative_examples"):
+            if requirement.get(key) is not None:
+                rule[key] = requirement[key]
+        rules.append(rule)
+
+    for oracle in list(payload.get("oracles")):
+        if not isinstance(oracle, dict):
+            continue
+        oracle_id = _clean_markup_text(oracle.get("id"))
+        # The document's oracles are Gherkin-shaped ({given, when, then}); a
+        # flat rule/expected text is only one possible form. Without a flat
+        # text the expectation sentences are the rule statement — dropping
+        # them silently would hide every oracle from the obligation chain.
+        then_rows = [
+            _clean_markup_text(item)
+            for item in list(oracle.get("then"))
+            if _clean_markup_text(item)
+        ]
+        rule_text = (
+            _clean_markup_text(oracle.get("rule"))
+            or _clean_markup_text(oracle.get("expected"))
+            or " ".join(then_rows)
+        )
+        if not oracle_id or not rule_text:
+            continue
+        statement = f"{oracle_id}：{rule_text}"
+        ui_oracle = {
+            key: oracle[key]
+            for key in ("given", "when", "then", "precondition", "action", "expected")
+            if oracle.get(key) is not None
+        }
+        rule: dict[str, Any] = {
+            "rule_id": f"rule:{source_id}:{oracle_id}",
+            "source_id": source_id,
+            "statement": statement,
+            "rule_type": "ui_state_consistency",
+            "risk_type": "ui",
+            "severity": "P1",
+            "tokens": sorted(_tokens(statement)),
+            "ui_oracle": ui_oracle,
+        }
+        rules.append(rule)
+    return specs, rules
 
 
 def _markdown_table_rows(text: str) -> list[dict[str, str]]:
@@ -2563,6 +2671,11 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         tables += _field_dictionary_tables(field_dictionary, source_id)
     tables = _apply_constraint_list_identities(_merge_table_identities(tables), text)
     ui_specs = _uiux_specs_from_text(text, source_id, source_type, filename)
+    _uiux_rules: list[dict[str, Any]] = []
+    if source_type == "uiux_requirements" and isinstance(payload, dict):
+        ui_specs, _uiux_rules = _uiux_requirements_from_json(
+            payload, source_id, filename
+        )
     permissions = _dedupe_by_id(
         [*_permission_entries(text, payload, source_id, source_type),
          *_permission_crosstab_entries(text, source_id)],
@@ -2579,7 +2692,9 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "ui_specs": len(ui_specs),
         "permissions": len(permissions),
         "tickets": len(tickets),
-        "rules": len(_rules_from_text(text, source_id, source_type)),
+        "rules": len(_uiux_rules)
+        if source_type == "uiux_requirements"
+        else len(_rules_from_text(text, source_id, source_type)),
         "roles": len(_roles_from_text(text, source_id)),
         "state_machines": len(_state_machines_from_text(text, source_id)),
     }
@@ -2642,7 +2757,9 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "tickets": tickets,
         "har_errors": har_errors,
         "log_errors": log_errors,
-        "rules": _rules_from_text(text, source_id, source_type),
+        "rules": _uiux_rules
+        if source_type == "uiux_requirements"
+        else _rules_from_text(text, source_id, source_type),
         "roles": _roles_from_text(text, source_id),
         "state_machines": _state_machines_from_text(text, source_id),
         "parse_status": parse_status,

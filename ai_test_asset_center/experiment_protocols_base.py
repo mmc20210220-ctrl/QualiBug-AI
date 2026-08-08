@@ -1903,7 +1903,7 @@ def compile_family_protocol(
             "reason_code": "BLOCKED_MISSING_ACTOR",
             "detail": "control_actor",
         }
-    if not treatment_actor_ref:
+    if not treatment_actor_ref and family != "ui_state_consistency":
         return {
             "status": "BLOCKED",
             "reason_code": "BLOCKED_MISSING_ACTOR",
@@ -2264,6 +2264,119 @@ def compile_family_protocol(
             "assertion": {
                 "kind": "eventual_consistency",
                 "window_ms": window_ms,
+            },
+        }
+
+    if family == "ui_state_consistency":
+        # ── UI/UX browser plan protocol ──
+        # A UI rule (CUST-PROD-01 / ORACLE-UI-002 …) constrains a browser
+        # page: the experiment opens the declared page URL, optionally
+        # performs the oracle's action, and observes the rendered DOM. The
+        # ui_browser observer captures the page evidence; the
+        # ui_state_consistency assertion judges it against the rule.
+        _ui_url = _text(property_spec.get("ui_url"))
+        if not _ui_url:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_OPERATION",
+                "detail": "ui_rule_requires_declared_page_url",
+            }
+        # State vocabulary comes from the rule's own text: the status enum
+        # literals (ON_SALE/OFF_SALE/DRAFT/…) the UI rule names are the
+        # observable tokens the rendered page must honour. Never inferred.
+        # Protocol/technology vocabulary (API/HTTP/URL/DOM/SKU/…) is product
+        # domain language, not a business state — a rule mentioning "the API
+        # returns them" must not turn "API" into a page state.
+        _TECH_VOCAB = {
+            "API", "HTTP", "HTTPS", "URL", "URI", "JSON", "XML", "DOM",
+            "SKU", "A11Y", "ID", "SQL", "HTML", "CSS", "JS", "CLI", "UI",
+            "UX", "PDF", "CSV", "XLSX",
+        }
+        _ui_raw = _text(_dict(property_spec.get("expression")).get("raw"))
+        # Rule-id tokens (CUST-PROD-01 → CUST/PROD) are not page states:
+        # exclude the id prefix before the rule text.
+        _ui_id_part = _ui_raw.split("：", 1)[0]
+        _ui_id_tokens = {
+            _it.group(0)
+            for _it in re.finditer(r"\b[A-Z]{2,}\b", _ui_id_part)
+        }
+        _ui_states = sorted({
+            _match.group(0)
+            for _match in re.finditer(r"\b[A-Z][A-Z0-9_]{2,}\b", _ui_raw)
+            if _match.group(0) not in _ui_id_tokens
+            and _match.group(0) not in _TECH_VOCAB
+        })
+        # The allowed state set from the rule's own declaration
+        # (Only products with status ON_SALE may be rendered / 仅返回
+        # ON_SALE / Filter non-ON_SALE items): the enum literal after
+        # only/仅/只 or after non- is the ONLY state the page may render.
+        # Without the declaration the assertion stays INDETERMINATE on every
+        # page (no fabricated verdicts).
+        _ui_allowed = sorted({
+            _am.group(1)
+            for _am in re.finditer(
+                r"(?:only|Only|ONLY|only may|Only may|仅|只|只允许|non-|Non-)"
+                r"\b[^.]{0,60}?\b([A-Z][A-Z0-9_]{2,})\b",
+                _ui_raw,
+            )
+        })
+        # Forbidden states: the rule's own prohibition words. Two source
+        # shapes are consumed — the document's structured negative_examples
+        # (["OFF_SALE", "DRAFT", …]) and prohibition sentences in the rule /
+        # oracle text (OFF_SALE and DRAFT titles are absent from DOM, 页面
+        # 不得渲染已删除商品). Prohibition is judged sentence-wise: a
+        # sentence carrying a prohibition word makes every enum literal in
+        # that sentence forbidden; a plain statement (order state becomes
+        # CANCELLED) forbids nothing. Never inferred.
+        _ui_forbidden_raw: list[str] = []
+        _ui_forbidden_set: set[str] = set()
+        # The document's structured negative_examples are forbidden by
+        # declaration — no prohibition sentence is needed for them.
+        _ui_forbidden_set.update(
+            _text(item)
+            for item in _list(property_spec.get("negative_examples"))
+            if _text(item)
+            and re.search(r"\b[A-Z][A-Z0-9_]{2,}\b", _text(item))
+            and _text(item) not in _TECH_VOCAB
+        )
+        _ui_oracle = _dict(property_spec.get("ui_oracle"))
+        for _then_row in _list(_ui_oracle.get("then")):
+            _ui_forbidden_raw.append(_text(_then_row))
+        # Oracle expectation sentences are judged sentence-wise: a sentence
+        # carrying a prohibition word makes every enum literal in that
+        # sentence forbidden; a plain statement (state text is CANCELLED)
+        # forbids nothing. Never inferred.
+        for _sentence in re.split(r"[.;。\n]+", " ".join(_ui_forbidden_raw)):
+            if re.search(
+                r"(?:absent|not present|must not|must never|should not|"
+                r"is not|are not|cannot|can not|\bno\b|without|"
+                r"禁止|不得|不可|不应|不能|不包含|不存在|隐藏)",
+                _sentence,
+            ):
+                _ui_forbidden_set.update(
+                    _fm.group(0)
+                    for _fm in re.finditer(r"\b[A-Z][A-Z0-9_]{2,}\b", _sentence)
+                    if _fm.group(0) not in _TECH_VOCAB
+                )
+        _ui_forbidden = sorted(_ui_forbidden_set)
+        return {
+            "status": "COMPILED",
+            "control_plan": [{
+                "step_id": "control_1",
+                "actor_ref": control_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "ui_page_observation",
+                "protocol_step": "ui_open",
+                "ui_url": _ui_url,
+            }],
+            "treatment_plan": [],
+            "observers": [{"observer_id": "ui_browser"}],
+            "assertion": {
+                "kind": "ui_state_consistency",
+                "ui_url": _ui_url,
+                "states": _ui_states,
+                "allowed_states": _ui_allowed,
+                "forbidden_states": _ui_forbidden,
             },
         }
 

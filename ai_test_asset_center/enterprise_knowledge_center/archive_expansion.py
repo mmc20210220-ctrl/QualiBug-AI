@@ -253,6 +253,11 @@ def _provenance_compat(
     row["tags"] = list(policy.get("tags") or [])
     if policy.get("inherit_source_type") and policy.get("source_type"):
         row["source_type"] = str(policy["source_type"])
+    elif row.get("source_type"):
+        # Explicit per-document source_type hint from the ingest caller
+        # (structured formats the classifier cannot infer, e.g. a UI/UX
+        # requirements JSON) survives for non-archive documents.
+        pass
     else:
         row.pop("source_type", None)
     provenance.update(

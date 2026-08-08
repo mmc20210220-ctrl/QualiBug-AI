@@ -86,6 +86,7 @@ SOURCE_TYPES = {
     "config", "deploy",
     "feishu_document", "confluence_document",
     "collaboration_document", "other_document", "other",
+    "uiux_requirements",
 }
 TEXT_SUFFIXES = {".md", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".csv", ".sql", ".json", ".xml", ".svg", ".har", ".log", ".xlsx", ".xls"}
 SOURCE_CODE_SUFFIXES = {

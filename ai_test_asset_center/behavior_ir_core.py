@@ -2635,6 +2635,7 @@ def empty_behavior_ir(*, project_id: str = "", source_snapshot_hash: str = "") -
         "relations": [],
         "invariants": [],
         "observation_surfaces": [],
+        "ui_specs": [],
         "capabilities": [],
         "conflicts": [],
         "coverage_gaps": [],
@@ -2659,7 +2660,8 @@ def validate_behavior_ir(
         errors.append("schema_version_mismatch")
     for collection in (
         "sources", "entities", "operations", "actors", "states", "relations",
-        "invariants", "observation_surfaces", "capabilities", "conflicts", "coverage_gaps",
+        "invariants", "observation_surfaces", "ui_specs", "capabilities",
+        "conflicts", "coverage_gaps",
     ):
         if not isinstance(model.get(collection), list):
             errors.append(f"missing_collection:{collection}")
@@ -5705,6 +5707,19 @@ def build_behavior_ir_from_knowledge_asset(
             _inv_typed["field_ids"] = _inv_field_ids
         if _semantic_frame:
             _inv_typed["semantic_frame"] = _semantic_frame
+        # UI/UX rules declare the page states they forbid (negative_examples)
+        # and Gherkin expectations (ui_oracle.then) in the source document.
+        # Carry them onto the invariant so the UI obligation → protocol →
+        # assertion chain judges the page against the document's own words.
+        if _rule_kind == "ui":
+            if rule.get("negative_examples") is not None:
+                _inv_typed["negative_examples"] = [
+                    _text(item)
+                    for item in list(rule.get("negative_examples"))
+                    if _text(item)
+                ]
+            if isinstance(rule.get("ui_oracle"), dict):
+                _inv_typed["ui_oracle"] = dict(rule["ui_oracle"])
         # P0-E phase 2: the v1 extractor confirmation gate (composition,
         # apply_v1_extractor_frame_confirmation) marks legacy regex-candidate
         # rules CONFIRMED / FALLBACK_UNGROUNDED / UNCONFIRMED_NO_FRAME.
@@ -6573,6 +6588,17 @@ def build_behavior_ir_from_knowledge_asset(
     # here. Omitting it keeps the previous http-only behaviour, so the failure direction
     # stays "fewer surfaces".
     declared_surfaces = available_surfaces if isinstance(available_surfaces, dict) else None
+    # UI design specs ride on the IR: UI-family obligations resolve their
+    # page URL and interaction matrices from these specs.
+    model["ui_specs"] = [
+        {
+            **dict(spec),
+            "id": _text(spec.get("ui_spec_id"))
+            or _stable_id("ui_spec", _text(spec.get("name") or "")),
+        }
+        for spec in _list(data.get("ui_design_specs"))
+        if isinstance(spec, dict) and _text(spec.get("ui_spec_id"))
+    ]
     surfaces = [("http_api", "HTTP/API"), ("ui_browser", "Browser/UI"), ("db_snapshot", "DB read snapshot")]
     for surface_id, label in surfaces:
         if declared_surfaces is None:

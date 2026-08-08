@@ -1243,6 +1243,98 @@ def observe_authorization_comparison(
     )
 
 
+def _observe_ui_browser(experiment: dict[str, Any]) -> dict[str, Any]:
+    """Open the declared page URL in a real headless browser and capture the
+    rendered DOM text — the target's own page, never synthesized.
+
+    The ui_browser observer is the execution surface for UI/UX rules: the
+    browser renders the real frontend, and the page's visible text (product
+    rows, button labels, state words) is the evidence the
+    ui_state_consistency assertion judges.
+    """
+    assertion = _primary_assertion(experiment)
+    ui_url = _text(assertion.get("ui_url"))
+    # The observer declares the plan step it observes (subject_step_id);
+    # the receipt carries it so finalization can bind the page-rendering
+    # verdict to the ui_open step's exact scope.
+    _scope_step = ""
+    for _obs_row in _list(experiment.get("observers")):
+        _obs_dict = _dict(_obs_row)
+        if _text(_obs_dict.get("observer_id")) == "ui_browser":
+            _scope_step = _text(
+                _obs_dict.get("subject_step_id")
+                or _obs_dict.get("step_id")
+                or _obs_dict.get("scope_step_id")
+            )
+            break
+    evidence = {
+        "ui_url": ui_url,
+        "ui_browser": False,
+        "step_id": _scope_step,
+    }
+    if not ui_url:
+        return _receipt(
+            observer_id="ui_browser",
+            status="INDETERMINATE",
+            reason_code="UI_URL_MISSING",
+            evidence=evidence,
+        )
+    try:
+        from playwright.sync_api import sync_playwright
+
+        _chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        with sync_playwright() as _p:
+            _browser = _p.chromium.launch(
+                headless=True, executable_path=_chrome
+            )
+            _page = _browser.new_page()
+            _page.goto(ui_url, timeout=20000)
+            _page.wait_for_timeout(1500)
+            evidence["body_text"] = _page.inner_text("body") or ""
+            evidence["url"] = _page.url
+            _browser.close()
+    except Exception as exc:
+        return _receipt(
+            observer_id="ui_browser",
+            status="INDETERMINATE",
+            reason_code="UI_BROWSER_EXECUTION_FAILED",
+            evidence={
+                **evidence,
+                "error": f"{type(exc).__name__}: {exc}"[:200],
+            },
+        )
+    evidence["ui_browser"] = True
+    # Successful page rendering is the ui_open step's semantic completion:
+    # the browser navigated and the DOM rendered (the assertion judges the
+    # rendered state; this verdict only proves the observation happened).
+    evidence["target_reached"] = True
+    return _receipt(
+        observer_id="ui_browser",
+        status="OBSERVED",
+        evidence=evidence,
+    )
+
+
+def _ui_browser_observer_handler(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Envelope-compatible handler for the additive ui_browser registration.
+
+    The built-in dispatch branch already calls ``_observe_ui_browser`` directly;
+    this wrapper exists so the registry entry is honest about its callable while
+    never being consulted twice.
+    """
+    return _observe_ui_browser(_dict(envelope.get("experiment")))
+
+
+if "ui_browser" not in OBSERVER_REGISTRY:
+    register_observer(
+        "ui_browser",
+        surface="ui_browser",
+        adapter="ui_browser",
+        handler=_ui_browser_observer_handler,
+        evidence_keys=("ui_url", "body_text", "url"),
+    )
+
+
 def _observe_http_response(
     control: dict[str, Any],
     treatment: dict[str, Any],
@@ -2440,7 +2532,9 @@ def observe_experiment_requirements(
     )
     for observer in observer_rows:
         observer_id = _text(_dict(observer).get("observer_id"))
-        if observer_id == "http_response":
+        if observer_id == "ui_browser":
+            receipt = _observe_ui_browser(experiment)
+        elif observer_id == "http_response":
             receipt = _observe_http_response(control, treatment)
         elif observer_id == "actor_identity":
             receipt = _observe_actor_identity(

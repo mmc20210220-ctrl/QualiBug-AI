@@ -1896,26 +1896,46 @@ def finalize_experiment_execution(
                 )
                 else []
             )
+            # Cleanup-set balance is a WRITE contract: every executed write
+            # must be covered by a cleanup receipt. Read-only single-arm
+            # surfaces (ui_browser page observation, response-side reads)
+            # declare no cleanup_plan and never produce cleanup receipts;
+            # demanding cleanup coverage there blocks an experiment that was
+            # never due any. None keeps the balance check off; a write that
+            # lost its cleanup receipts still fails via cleanup_ver below.
+            _cleanup_obligated = bool(
+                _list(exp.get("cleanup_plan"))
+                or _dict(exp.get("safety_contract")).get("governed_write") is True
+            )
             _balance = _step_balance(
                 required_step_ids=list(_required_steps),
                 executed_step_ids=list(_executed_steps),
                 observed_step_ids=list(_observed_steps),
                 oracle_step_ids=list(_oracle_steps),
-                cleanup_step_ids=list(_cleanup_steps),
+                cleanup_step_ids=(
+                    list(_cleanup_steps) if _cleanup_obligated else None
+                ),
             )
             observations["process_step_balance"] = _balance
 
             # Attempt bundle/finalization whenever ledger id + structural materials
             # exist. Cleanup/env flags are passed honestly into derivation so
             # missing cleanup yields CLEANUP_FAILED / ENVIRONMENT_DIRTY rather than
-            # skipping Finalization Receipt entirely (SPEC §15).
+            # skipping Finalization Receipt entirely (SPEC §15). Fixture receipts
+            # are required only when the lifecycle ledger says a fixture is
+            # required: read-only single-arm surfaces (ui_browser page
+            # observation) declare NOT_APPLICABLE and must not be blocked for
+            # missing fixture material that was never due.
             _attempt_finalization = bool(
                 observations.get("force_receipt_bundle")
                 or (
                     bool(_ledger_id)
                     and bool(_required_steps)
                     and bool(_executed_steps)
-                    and bool(fixture_receipts or _fixture_prov)
+                    and (
+                        bool(fixture_receipts or _fixture_prov)
+                        or not bool(observations.get("fixture_required"))
+                    )
                     and bool(_compile_raw)
                     and _oracle_evaluated
                     and not _finalizer_block_reason

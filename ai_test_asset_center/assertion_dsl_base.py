@@ -334,6 +334,11 @@ SUPPORTED_KINDS = {
     # declaration states the ONLY states it may return (仅返回 ON_SALE) —
     # every row's state field must be within the declared set.
     "response_rows_state_filter",
+    # UI/UX page-state consistency: a UI rule constrains a browser page
+    # (Only products with status ON_SALE may be rendered) — the rendered DOM
+    # text must not carry state vocabulary outside the rule's declared
+    # allowed set.
+    "ui_state_consistency",
 }
 
 
@@ -1985,6 +1990,62 @@ def evaluate_assertion(
                     passed = not violations
                     if violations:
                         reason_code = "RESPONSE_ROW_STATE_OUTSIDE_ALLOWED"
+        elif effective_kind == "ui_state_consistency":
+            # UI/UX page-state rule: the rendered page (ui_browser body text)
+            # must not carry state vocabulary outside the rule's declared
+            # allowed set (Only ON_SALE products may be rendered → DELETED/
+            # DRAFT rows on the page are defect evidence). The state tokens,
+            # the allowed set and the forbidden set come from the rule's own
+            # text — never inferred. Without any allowed or forbidden
+            # declaration the assertion stays INDETERMINATE (no fabricated
+            # verdicts from unknown states).
+            expected = True
+            if "body_text" not in obs:
+                reason_code = "UI_DOM_EVIDENCE_MISSING"
+            else:
+                states = [
+                    _text(value)
+                    for value in _list(spec.get("states"))
+                    if _text(value)
+                ]
+                allowed = {
+                    _text(value)
+                    for value in _list(spec.get("allowed_states"))
+                    if _text(value)
+                }
+                forbidden = {
+                    _text(value)
+                    for value in _list(spec.get("forbidden_states"))
+                    if _text(value)
+                }
+                if not allowed and not forbidden:
+                    reason_code = "UI_ALLOWED_STATES_MISSING"
+                else:
+                    # Verdict candidates: every state the page may NOT carry —
+                    # states outside the allowed set, plus source-declared
+                    # forbidden states. A plain statement (state becomes
+                    # CANCELLED) declares neither, so it cannot fabricate a
+                    # verdict. Word-boundary matching only; a state token
+                    # inside another word is not evidence.
+                    candidates = sorted(
+                        (set(states) - allowed) | (forbidden - allowed)
+                    )
+                    if not candidates:
+                        reason_code = "UI_STATES_MISSING"
+                    else:
+                        page_text = str(obs.get("body_text") or "")
+                        found = [
+                            state
+                            for state in candidates
+                            if re.search(
+                                r"\b" + re.escape(state) + r"\b",
+                                page_text,
+                            )
+                        ]
+                        actual = found
+                        passed = not found
+                        if found:
+                            reason_code = "UI_PAGE_STATE_OUTSIDE_ALLOWED"
         elif effective_kind == "idempotency_effect":
             expected_count = spec.get("expected_effect_count", 1)
             expected = {"effect_count": expected_count}

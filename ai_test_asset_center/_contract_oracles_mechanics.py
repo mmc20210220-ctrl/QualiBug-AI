@@ -388,7 +388,11 @@ def build_contract_oracle_activation_receipt(
         # holds for a read-side row-state filter (用户端默认仅返回 ON_SALE
         # 商品) — its single control read observes the real rows the rule
         # constrains.
-        _single_arm_read_kinds = {"response_field_absent", "response_rows_state_filter"}
+        _single_arm_read_kinds = {
+            "response_field_absent",
+            "response_rows_state_filter",
+            "ui_state_consistency",
+        }
         _requires_treatment = not any(
             _text(_dict(assertion).get("kind")) in _single_arm_read_kinds
             for assertion in _list(exp.get("assertions"))
@@ -575,8 +579,24 @@ def build_contract_oracle_activation_receipt(
                 and receipt_evidence.get("control_succeeded") is True
                 and int(receipt_evidence.get("status_code") or 0) > 0
             ):
-                blockers.append(f"CONTROL_SUCCESS_NOT_PROVEN:{subject}")
-                continue
+                # UI page-observation control: the step attests it was planned
+                # on the ui_browser surface, and rendering proof lives in the
+                # ui_browser observer receipt (a real browser opened the URL).
+                # An HTTP status line does not exist on this surface and must
+                # never be fabricated.
+                if _text(receipt_evidence.get("surface")) != "ui_browser":
+                    blockers.append(f"CONTROL_SUCCESS_NOT_PROVEN:{subject}")
+                    continue
+                _ui_rendered = any(
+                    _dict(_dict(row).get("evidence")).get("ui_browser") is True
+                    and _text(_dict(_dict(row).get("evidence")).get("ui_url"))
+                    for row in _list(ev.get("observer_receipts"))
+                    if _text(_dict(row).get("observer_id")) == "ui_browser"
+                    and _text(_dict(row).get("status")).upper() == "OBSERVED"
+                )
+                if not _ui_rendered:
+                    blockers.append(f"CONTROL_UI_NOT_RENDERED:{subject}")
+                    continue
             if kind == "treatment" and not (
                 receipt_evidence.get("response_observed") is True
                 and int(receipt_evidence.get("status_code") or 0) > 0

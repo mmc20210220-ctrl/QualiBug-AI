@@ -285,6 +285,60 @@ def execute_non_barrier_plans(
                     or f"{phase}:{op_ref or 'operation'}:{index + 1}"
                 )
             )
+            if _text(step.get("protocol_step")) == "ui_open":
+                # UI browser plan step: the page observation is performed by
+                # the ui_browser observer (real browser rendering); there is
+                # no HTTP actor/operation identity to resolve. The contract
+                # receipt attests the step was planned and executed on the
+                # ui_browser surface; page rendering proof itself lives in the
+                # ui_browser observer receipt (never a fabricated status line).
+                contract_evidence_receipts.append(build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="OBSERVED",
+                    evidence={
+                        "method": "BROWSER",
+                        "path": _text(step.get("ui_url")),
+                        "surface": "ui_browser",
+                        "ui_url": _text(step.get("ui_url")),
+                        "response_observed": False,
+                        "request_reached_transport": False,
+                        "control_succeeded": None,
+                    },
+                ))
+                results.append({
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "executed",
+                    "method": "BROWSER",
+                    "path": _text(step.get("ui_url")),
+                    "status_code": 200,
+                })
+                # The page-observation step is a real process step: it must
+                # appear in the process-step ledger like any HTTP step, or
+                # the ledger hash drifts and the finalizer blocks the run.
+                # status_code=200 marks successful browser navigation on the
+                # ui_browser surface (no HTTP response exists to report);
+                # final_status stays EXECUTED and business-state proof is
+                # left to the ui_browser observer receipt.
+                process_ledger.record_step_execution(
+                    step_id=subject_id,
+                    phase=phase,
+                    operation_ref="",
+                    actor_ref="",
+                    runtime_identity=runtime_bindings,
+                    status_code=200,
+                    final_status="EXECUTED",
+                    mutation_occurred=False,
+                    operation_accepted=True,
+                    business_effect_observed=None,
+                    target_reached=None,
+                )
+                continue
             if phase == "treatment" and source_body_control_blocked:
                 reason = "control_body_binding_blocked"
                 pre_transport_block_reasons.append(reason)

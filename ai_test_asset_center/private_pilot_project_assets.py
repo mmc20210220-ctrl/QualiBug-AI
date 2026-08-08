@@ -43,6 +43,7 @@ KNOWLEDGE_INGEST_SOURCE_TYPES = (
     "test_report",
     "uiux_spec",
     "uiux_svg",
+    "uiux_requirements",
     "db_design",
     "business_rules",
     "ui_design",

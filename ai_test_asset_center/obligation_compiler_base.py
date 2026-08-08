@@ -1289,6 +1289,96 @@ def compile_obligations_from_behavior_ir(
                 _count_legacy_cjk_kind(
                     _legacy_fallback_kind_counts(ir), "CJK_FAMILY_TOKEN_FALLBACK"
                 )
+        if kind == "ui":
+            # ── UI/UX surface obligation ──
+            # A UI rule (CUST-PROD-01 / ORACLE-UI-002 …) constrains a browser
+            # page, not an API operation: the page URL comes from the UI
+            # design specs riding on the IR, and the experiment is a browser
+            # plan. No API operation binding — binding UI rules to HTTP
+            # operations would compile hundreds of misdirected validation
+            # obligations against the wrong surface.
+            _ui_url = ""
+            _ui_stmt = _text(inv.get("description")) or _text(expr.get("raw"))
+            invariant_ref = _text(inv.get("id"))
+            # Requirement ids carry the screen prefix (CUST-PROD-01 belongs
+            # to the CUST-01 workbench; ADMIN-INV-04 to ADMIN-01); match the
+            # prefix and resolve the spec that declares it.
+            _screen_prefix = ""
+            _screen_match = re.search(r"\b(CUST|ADMIN)\b", _ui_stmt)
+            if _screen_match:
+                _screen_prefix = _screen_match.group(1)
+            else:
+                # Oracle rules (ORACLE-UI-*) carry no screen prefix; the
+                # scene words in their own given/when text (customer/user/
+                # buyer → CUST; admin/finance/manager → ADMIN) resolve the
+                # same declared UI specs. No scene signal — the URL stays
+                # unresolved and the obligation blocks visibly.
+                _ui_oracle_row = _dict(inv.get("ui_oracle") or {})
+                _scene_text = " ".join([
+                    _text(_ui_oracle_row.get("given") or ""),
+                    _text(_ui_oracle_row.get("when") or ""),
+                ])
+                if re.search(
+                    r"(?:customer|user|buyer|shopper|顾客|用户|买家)",
+                    _scene_text,
+                ):
+                    _screen_prefix = "CUST"
+                elif re.search(
+                    r"(?:admin|finance|manager|seller|管理员|管理|财务|运营)",
+                    _scene_text,
+                ):
+                    _screen_prefix = "ADMIN"
+            if _screen_prefix:
+                for _ui_spec in _list(ir.get("ui_specs")):
+                    _spec_id = _text(_ui_spec.get("ui_spec_id"))
+                    _spec_name = _text(_ui_spec.get("name"))
+                    if (
+                        _screen_prefix in _spec_id
+                        or (
+                            _screen_prefix == "CUST"
+                            and "用户端" in _spec_name
+                        )
+                        or (
+                            _screen_prefix == "ADMIN"
+                            and "管理端" in _spec_name
+                        )
+                    ):
+                        _ui_url = _text(_ui_spec.get("url"))
+                        break
+            obligations.append({
+                "obligation_id": (
+                    "obl_"
+                    + hashlib.sha256(
+                        f"ui|{invariant_ref}|{_ui_url}".encode("utf-8")
+                    ).hexdigest()[:24]
+                ),
+                "risk_family": "ui_state_consistency",
+                "required_surface": "ui_browser",
+                "required_operations": [],
+                "ui_url": _ui_url,
+                "property": {
+                    "template": "ui_state_consistency",
+                    "invariant_ref": invariant_ref,
+                    "expression": dict(expr),
+                    "ui_url": _ui_url,
+                    # Source-declared page-state vocabulary rides with the
+                    # obligation so the browser-plan protocol can judge the
+                    # rendered DOM against the document's own words.
+                    "negative_examples": [
+                        _text(item)
+                        for item in _list(inv.get("negative_examples"))
+                        if _text(item)
+                    ],
+                    "ui_oracle": dict(inv.get("ui_oracle") or {}),
+                },
+                "source_refs": [
+                    dict(row)
+                    for row in _list(inv.get("source_refs"))
+                    if isinstance(row, dict)
+                ],
+                "schema_version": _text(ir.get("schema_version")),
+            })
+            continue
         relation_types = {
             "idempotency": {"observes", "produces", "consumes", "transitions"},
             "concurrency": {"observes", "produces", "consumes", "transitions"},
