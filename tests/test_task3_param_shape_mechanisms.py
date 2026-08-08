@@ -331,3 +331,60 @@ def test_percent_field_negative_mutation():
     assert "negative" in result[1]
     assert _NUMERIC_NEGATIVE_FIELDS.search("deltaPercent")
     assert _NUMERIC_NEGATIVE_FIELDS.search("price_adjust_percent")
+
+
+# ── 5) full-chain compile through the real compile_experiments entry ──
+
+def test_guard_full_chain_compiles_through_compile_experiments():
+    """The pair gate + comparison contract + observer requirements must not
+    block the single-arm credential-gated guard (regression for the ABSTRACT
+    status observed in the real pipeline)."""
+    from ai_test_asset_center.experiment_compiler import compile_experiments
+
+    reset = _op(
+        "/api/auth/password/reset",
+        summary="重置登录密码",
+        description="权限：公开。业务约束：必须完成验证码或等价身份校验；不得仅凭邮箱重置。",
+        body_props={
+            "email": {"type": "string", "example": "buyer01@example.com"},
+            "newPassword": {"type": "string", "example": "NewTest@123456"},
+        },
+        example={"email": "buyer01@example.com", "newPassword": "NewTest@123456"},
+    )
+    me = _op("/api/auth/me", method="GET", summary="当前用户", description="身份校验后返回账号")
+    profile = _op("/api/users/profile/{id}", method="GET", summary="用户详情", description="本人或管理员")
+    ir = empty_behavior_ir(project_id="t3")
+    ir["operations"] = [reset, me, profile]
+    ir["actors"] = _actors()
+    ir["entities"] = [
+        {"id": "ent-users", "name": "users", "fields": ["id", "email", "password", "role", "status"], "status": "accepted"},
+    ]
+    ir["relations"] = [
+        {
+            "id": "rel-obs-me", "relation_type": "observes", "from_ref": me["id"],
+            "to_ref": "ent-users", "operation_ref": me["id"], "actor_ref": "",
+            "preconditions": [], "effects": [], "permission_decision": "",
+            "source_relationship_ref": "", "source_refs": [], "confidence": 0.9,
+            "derivation": "explicit", "status": "accepted",
+        },
+        {
+            "id": "rel-prod-reset", "relation_type": "produces", "from_ref": reset["id"],
+            "to_ref": "ent-users", "operation_ref": reset["id"], "actor_ref": "",
+            "preconditions": [], "effects": [], "permission_decision": "",
+            "source_relationship_ref": "", "source_refs": [], "confidence": 0.9,
+            "derivation": "explicit", "status": "accepted",
+        },
+    ]
+    guards = build_credential_gated_write_guard_obligations(ir)
+    assert len(guards) == 1
+    pack = compile_experiments(
+        guards, behavior_ir=ir, environment_type="test",
+        policy_version="t3", available_adapters={"http_api"},
+    )
+    compiled = (pack.get("experiments") or []) + (pack.get("blocked_experiments") or []) + (pack.get("abstract_experiments") or [])
+    assert compiled, "guard experiment must exist in the pack"
+    for e in compiled:
+        cr = e.get("compile_receipt") if isinstance(e.get("compile_receipt"), dict) else {}
+        assert cr.get("status") == "COMPILED", f"guard must COMPILE, got {cr}"
+        treatment = (e.get("treatment_plan") or [])
+        assert treatment and treatment[0].get("actor_ref") == "anonymous"

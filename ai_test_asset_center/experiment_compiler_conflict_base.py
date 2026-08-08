@@ -95,6 +95,14 @@ def _runtime_pair_problem(
         == "permitted_operation_invocation"
     ):
         return ""
+    # Single-arm credential-gated write guard: the anonymous write is the whole
+    # experiment (rejection-expected), there is no second principal to pair —
+    # same shape rationale as permitted_operation_invocation.
+    if (
+        _text(_dict(_dict(obligation).get("property")).get("template"))
+        == "credential_gated_write"
+    ):
+        return ""
     control_ref, treatment_ref = _pair_refs(obligation)
     if not control_ref or not treatment_ref:
         return "actor_pair_missing"

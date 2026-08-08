@@ -247,6 +247,12 @@ def attach_authorization_comparison_contract(
     prop = _dict(_dict(obligation).get("property"))
     if _text(prop.get("template")) == "permitted_operation_invocation":
         return updated, "", ""
+    # Credential-gated write guard: single-arm by construction — the anonymous
+    # write's rejection (http_status_class 4xx) IS the property, and there is
+    # no authorized baseline to compare. Same exemption shape as the permit-only
+    # template above.
+    if _text(prop.get("template")) == "credential_gated_write":
+        return updated, "", ""
 
     control_plan = [dict(row) for row in _list(updated.get("control_plan")) if isinstance(row, dict)]
     treatment_plan = [dict(row) for row in _list(updated.get("treatment_plan")) if isinstance(row, dict)]

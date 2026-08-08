@@ -2591,7 +2591,13 @@ def compile_experiment_for_obligation(
         risk_family=family,
         available_adapters=adapters,
         # Permit-only protocols have empty control_plan; auth comparison cannot run.
-        require_authorization_comparison=not permit_only,
+        # The credential-gated write guard is likewise single-arm by construction
+        # (the anonymous write's rejection IS the property) — its assertion is
+        # the http_status_class 4xx, never a control-vs-treatment comparison.
+        require_authorization_comparison=(
+            not permit_only
+            and _text(prop.get("template")) != "credential_gated_write"
+        ),
     )
     if observer_reason:
         return blocked_experiment(oid, observer_reason, observer_detail)
