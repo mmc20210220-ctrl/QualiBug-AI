@@ -1000,8 +1000,13 @@ def execute_governed_control_write(
         "write_request_attempt_count": 1 if allowed else 0,
         "production_http_requests": 0,
     }
-    if runtime_body_receipt or identity_target_is_disposable:
+    # The exact request body that reached transport is a real runtime
+    # observation: persist it (always, not only for mutation plans) so the
+    # finding's runtime evidence can cite the actual sent payload.  Redaction
+    # happens at the evidence-text boundary; this receipt stays internal.
+    if allowed and body not in (None, {}, []):
         result["materialized_request_body"] = body
+    if runtime_body_receipt or identity_target_is_disposable:
         result["runtime_body_receipt"] = runtime_body_receipt
     return result
 
