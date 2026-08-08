@@ -588,7 +588,7 @@ _IDENTITY_LOCATOR_KEYS = ("email", "phone", "mobile", "username", "login", "acco
 # Entity identity fields a business-object reference may carry in a request
 # body (SKU / code / key / no / ref — generic relational identifiers, never
 # industry vocabulary).
-_ENTITY_IDENTITY_FIELD_RE = re.compile(r"(?:sku|code|key|no|ref)$", re.I)
+_ENTITY_IDENTITY_FIELD_RE = re.compile(r"(?:sku|code|key|no|ref|id)$", re.I)
 
 # Public/sellable state names: a state outside this set is non-public by its
 # own English meaning (DRAFT = unpublished, OFF_SALE = delisted,
@@ -635,6 +635,91 @@ _ENTITY_STATE_CONSUMPTION_MARKERS = (
 _ENTITY_STATE_EXPIRY_MARKERS = ("有效期", "过期", "失效", "生效", "到期", "有效期内")
 _ENTITY_STATE_STATUS_MARKERS = ("状态", "ACTIVE", "ENABLED", "停用", "禁用")
 
+# Entity-state precondition vocabulary: a rule like 已取消订单不能支付 /
+# 已支付订单不能直接取消 names a subject in a non-public state (取消/退款/
+# 完成/关闭/…) and forbids an operation on it (不能/不得/禁止). The treatment
+# references an entity the environment really has in such a state (resolved
+# from its list read, same as the exposure arm) and the write protocol
+# asserts the 4xx rejection. State words are generic system lifecycle
+# vocabulary, never industry terms.
+_ENTITY_STATE_PRECONDITION_STATE_WORDS = (
+    "取消", "退款", "完成", "关闭", "发货", "收货", "支付", "过期",
+    "删除", "下架", "停用", "禁用", "草稿", "归档", "冻结",
+)
+_ENTITY_STATE_PRECONDITION_BANS = ("不能", "不得", "禁止", "不可", "不允许")
+
+
+def _entity_state_precondition_triggered(semantic_text: str) -> bool:
+    """True when the rule names a subject state and forbids an operation.
+
+    已取消订单不能支付、发货、确认收货 → subject state word (取消) + ban
+    (不能) + subject marker (已). A ban alone on an amount/limit constraint
+    (折扣金额不能超过 X) carries no subject state — it stays in the
+    amount-boundary arm, not here.
+    """
+    if not any(ban in semantic_text for ban in _ENTITY_STATE_PRECONDITION_BANS):
+        return False
+    if not any(
+        word in semantic_text for word in _ENTITY_STATE_PRECONDITION_STATE_WORDS
+    ):
+        return False
+    return any(marker in semantic_text for marker in ("已", "后", "状态"))
+
+
+def _state_prepare_operation(
+    semantic_text: str,
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve the state-change operation that moves an entity INTO the
+    rule's forbidden state (已取消订单 → the cancel operation).
+
+    The state word (取消) matches the operation's own declared vocabulary —
+    its summary/description (取消订单) — never an inferred English enum.
+    The runtime then executes the state change on a real entity, reads the
+    entity back, and anchors the forbidden state value from the target's own
+    response. Returns None when no operation declares the state word.
+    """
+    if not isinstance(behavior_ir, dict):
+        return None
+    _state_word = next(
+        (word for word in _ENTITY_STATE_PRECONDITION_STATE_WORDS if word in semantic_text),
+        "",
+    )
+    if not _state_word:
+        return None
+    for _op in _list(behavior_ir.get("operations")):
+        if not isinstance(_op, dict):
+            continue
+        if _text(_op.get("method")).upper() not in {"POST", "PUT", "PATCH"}:
+            continue
+        _surface = " ".join(
+            [
+                _text(_op.get("path") or _op.get("raw_path")),
+                _text(_op.get("summary") or _op.get("title")),
+                _text(_op.get("description")),
+            ]
+        )
+        if _state_word not in _surface:
+            continue
+        _identity_param = next(
+            (
+                _text(_param.get("name"))
+                for _param in _list(_op.get("parameters"))
+                if isinstance(_param, dict)
+                and _text(_param.get("in") or _param.get("location")).lower()
+                in {"path", "query"}
+                and _text(_param.get("name"))
+            ),
+            "",
+        )
+        return {
+            "operation_ref": _text(_op.get("id")),
+            "method": "POST",
+            "path": _text(_op.get("path") or _op.get("raw_path")),
+            "identity_param": _identity_param,
+        }
+    return None
+
 
 def _entity_state_violation_mode(semantic_text: str) -> str:
     """Derive the runtime violation dimension from the rule's own vocabulary."""
@@ -650,6 +735,8 @@ def _non_public_entity_treatment(
     semantic_text: str,
     behavior_ir: dict[str, Any],
     property_spec: dict[str, Any] | None = None,
+    *,
+    force: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Build the rejection-arm body for an entity-state isolation rule.
 
@@ -661,22 +748,29 @@ def _non_public_entity_treatment(
     never guessed. Returns (treatment, mutation evidence) with a
     runtime-resolved mutation descriptor, or None when the rule is not an
     entity-state isolation rule or no entity list read exists.
+
+    ``force=True`` skips the exposure/consumption vocabulary gate: a
+    state-precondition rule (已取消订单不能支付) constrains a WRITE on an
+    entity the environment has in a non-public state — the same runtime
+    resolver selects that entity, and the write protocol asserts the 4xx
+    rejection instead of a response-content filter.
     """
-    if not any(v in semantic_text for v in _ENTITY_STATE_EXPOSURE_VERBS):
-        if not any(m in semantic_text for m in _ENTITY_STATE_CONSUMPTION_MARKERS):
-            return None
-        if not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
-            # Positive state constraints (必须在有效期内 / 必须为 ACTIVE /
-            # 不能超过限制) name the REQUIRED state, not a violation word —
-            # the treatment is an entity that does NOT satisfy the required
-            # state. The consumption markers above already bound the rule to
-            # the eligibility surface; a state-constraint rule without any
-            # state vocabulary at all (must satisfy 最低金额) belongs to the
-            # amount-boundary arm, not here.
-            if not any(t in semantic_text for t in ("有效", "状态", "ACTIVE", "次数", "停用", "禁用", "过期")):
+    if not force:
+        if not any(v in semantic_text for v in _ENTITY_STATE_EXPOSURE_VERBS):
+            if not any(m in semantic_text for m in _ENTITY_STATE_CONSUMPTION_MARKERS):
                 return None
-    elif not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
-        return None
+            if not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
+                # Positive state constraints (必须在有效期内 / 必须为 ACTIVE /
+                # 不能超过限制) name the REQUIRED state, not a violation word —
+                # the treatment is an entity that does NOT satisfy the required
+                # state. The consumption markers above already bound the rule to
+                # the eligibility surface; a state-constraint rule without any
+                # state vocabulary at all (must satisfy 最低金额) belongs to the
+                # amount-boundary arm, not here.
+                if not any(t in semantic_text for t in ("有效", "状态", "ACTIVE", "次数", "停用", "禁用", "过期")):
+                    return None
+        elif not any(w in semantic_text for w in _ENTITY_STATE_VIOLATION_WORDS):
+            return None
     if not isinstance(control, dict) or not isinstance(behavior_ir, dict):
         return None
     identity_field = ""
@@ -739,6 +833,24 @@ def _non_public_entity_treatment(
         for value in _list(_dict(property_spec).get("subject_entity_refs"))
         if _text(value)
     ]
+    if not subject_entities:
+        # Fall back to the identity field's own entity name (orderId → order):
+        # a list GET whose path names that entity still carries the status
+        # field the runtime resolver needs. Generic identity naming (entity
+        # name + id suffix), never an industry term; ownership prefixes
+        # (user/owner) are excluded so an owner-key never aims the resolver
+        # at the account collection.
+        _identity_tokens = [
+            _tok.lower()
+            for _tok in re.findall(r"[A-Z]?[a-z0-9]+", identity_field)
+            if _tok
+            and _tok.lower()
+            not in {
+                "id", "ids", "no", "key", "code", "ref", "sku",
+                "user", "owner", "account", "actor",
+            }
+        ]
+        subject_entities = _identity_tokens
     # The entity list read: a GET whose path names the subject entity
     # (products ↔ product from the IR subject-entity binding). Only such a
     # read lists the entity's rows with their status field — an identity-only
@@ -750,6 +862,10 @@ def _non_public_entity_treatment(
         if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
             continue
         if re.search(r"(?:^|/)(?:health)(?:/|$)", _text(op.get("path")).lower()):
+            continue
+        # The entity list read carries no path parameter (collection shape);
+        # an identity-scoped read (…/order/{orderId}) cannot enumerate rows.
+        if "{" in _text(op.get("path") or op.get("raw_path")):
             continue
         _path_segments = [
             seg
@@ -857,6 +973,10 @@ def _amount_boundary_treatment(
         if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
             continue
         if re.search(r"(?:^|/)(?:health)(?:/|$)", _text(op.get("path")).lower()):
+            continue
+        # The entity list read carries no path parameter (collection shape);
+        # an identity-scoped read (…/order/{orderId}) cannot enumerate rows.
+        if "{" in _text(op.get("path") or op.get("raw_path")):
             continue
         _path_segments = [
             seg
@@ -1056,6 +1176,32 @@ def _validation_protocol_material(
         if _entity_state_treatment:
             treatment, mutation = _entity_state_treatment
             return control, treatment, mutation
+        # ── Entity-state precondition arm ──
+        # 已取消订单不能支付、发货、确认收货 names a subject in a non-public
+        # state and forbids an operation on it: the write must be REJECTED
+        # (4xx). The treatment references an entity the environment really
+        # has in such a state (resolved at runtime from its list read, the
+        # same resolver as the isolation arm); the validation protocol's
+        # default rejection assertion judges the write.
+        if _entity_state_precondition_triggered(_semantic_text_pre):
+            _precondition_treatment = _non_public_entity_treatment(
+                control, _semantic_text_pre, _dict(behavior_ir), property_spec,
+                force=True,
+            )
+            if _precondition_treatment:
+                treatment, mutation = _precondition_treatment
+                # Anchor the forbidden state at runtime: the state-change
+                # operation (取消订单) moves a real entity INTO the state the
+                # rule forbids operations on (已取消订单不能支付). The executor
+                # executes it, reads the entity back, and uses that entity as
+                # the treatment input — never an arbitrary non-public row.
+                _state_prepare = _state_prepare_operation(
+                    _semantic_text_pre, _dict(behavior_ir)
+                )
+                if _state_prepare:
+                    mutation = dict(mutation)
+                    mutation["state_prepare"] = _state_prepare
+                return control, treatment, mutation
         # ── Input amount-boundary arm ──
         # 必须满足最低订单金额 / 折扣券必须遵守封顶金额 constrain the order
         # amount a decision endpoint accepts for an entity. The treatment's
