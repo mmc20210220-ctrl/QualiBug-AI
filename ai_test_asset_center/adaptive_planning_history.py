@@ -15,6 +15,11 @@ class AdaptivePlanningHistoryError(ValueError):
     """Planning history is malformed or belongs to another policy identity."""
 
 
+# Planning history reads only the receipt sub-field of the previous
+# scan_result; a multi-hundred-MB scan_result must never be fully loaded
+# just to reach it (measured MemoryError at 787MB). Skip above this size.
+_MAX_PLANNING_HISTORY_LOAD_BYTES = 256 << 20  # 256MB
+
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -243,6 +248,22 @@ def load_prior_planning_history_receipt(
         raise AdaptivePlanningHistoryError("planning_history_project_invalid")
     if not path.is_file():
         return {}
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return {}
+    if size > _MAX_PLANNING_HISTORY_LOAD_BYTES:
+        # Planning history needs only the receipt sub-field, but a full
+        # json.loads of a multi-hundred-MB scan_result (findings + ledger +
+        # occurrences) exhausts memory before the receipt is reached. Skip
+        # with a visible reason (fail-open, cold-start semantics) instead of
+        # MemoryError; the run proceeds and writes a fresh scan_result.
+        return {
+            "status": "SKIPPED",
+            "reason_code": "scan_result_too_large",
+            "bytes": size,
+            "limit_bytes": _MAX_PLANNING_HISTORY_LOAD_BYTES,
+        }
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
