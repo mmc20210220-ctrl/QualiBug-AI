@@ -460,6 +460,11 @@ def assess_benchmark_runtime_cleanup(
         from .scan_result_store import load_scan_result
 
         document = load_scan_result(path, keys=None)
+        # Store index is small (shards carry their own hashes); hash the
+        # index bytes for the document's source identity. ``raw`` was an
+        # undefined name after the sharded-store migration — fixed by
+        # hashing the actual index file.
+        raw = path.read_bytes()
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, KeyError) as exc:
         return _not_measured(
             project=project,
