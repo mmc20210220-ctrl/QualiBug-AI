@@ -2431,6 +2431,7 @@ _TYPED_ASSERTION_KINDS = {
     "cardinality",
     "concurrency",
     "concurrency_final_invariant",
+    "concurrent_double_write",
     "conservation",
     "cross_surface_consistency",
     "delta",

@@ -139,6 +139,33 @@ def _experiment_steps(exp: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _barrier_group_count(
+    group_selected: list[list[Any]],
+    experiments_by_obligation: dict[str, dict[str, Any]],
+) -> int:
+    """Number of serial groups holding at least one barrier-pair experiment.
+
+    Receipt-visible concurrency metadata: a barrier experiment releases its
+    control/treatment pair at the same moment, so its group count says how many
+    concurrent double-write windows this batch actually executed (each in its own
+    isolated group).
+    """
+    count = 0
+    for rows in group_selected:
+        if any(
+            _text(_dict(step).get("barrier_group"))
+            for item in rows
+            for exp in [
+                experiments_by_obligation.get(
+                    _text(_dict(item).get("obligation_id")), {}
+                )
+            ]
+            for step in _experiment_steps(exp)
+        ):
+            count += 1
+    return count
+
+
 def _actor_ref_of(exp: dict[str, Any]) -> str:
     contract = _dict(exp.get("actor_selection_contract"))
     ref = _text(contract.get("treatment_actor_ref"))
@@ -247,6 +274,21 @@ def _write_group_key(
         for match in _BINDING_PLACEHOLDER_RE.finditer(path):
             placeholder_names.add(match.group(1) or match.group(2))
     resource_key = _resource_key_of(exp, write_steps, placeholder_names)
+    # ── Barrier pairs (same-experiment concurrent double-write) ──
+    # A barrier experiment releases its control/treatment pair at the same moment
+    # on the same resource; the pair's race window must never overlap another
+    # experiment's window on the same interface. When the concrete resource
+    # instance is bound, the existing ("res", …) key already serializes against
+    # every experiment touching that instance. An UNKNOWN resource instance (the
+    # fixture binding is resolved only at runtime) serializes ALL barrier
+    # experiments on the interface regardless of actor: two oversell pairs from
+    # different actors on the same unknown SKU would otherwise corrupt each
+    # other's window. Generic mechanism, never benchmark data.
+    _barrier_write = any(
+        _text(step.get("barrier_group")) for step in write_steps
+    )
+    if _barrier_write and not resource_key:
+        return ("barrier", interface_key)
     if resource_key:
         return ("res", interface_key, resource_key)
     actor_ref = _actor_ref_of(exp) or _step_actors(exp, write_steps)
@@ -571,6 +613,9 @@ def _merge_group_batches(
             "mode": "concurrent",
             "max_workers": get_concurrency(),
             "group_count": len(group_batches),
+            "barrier_group_count": _barrier_group_count(
+                group_selected, experiments_by_obligation
+            ),
             "group_errors": group_errors,
             "group_validation_notes": group_validation_notes,
         },

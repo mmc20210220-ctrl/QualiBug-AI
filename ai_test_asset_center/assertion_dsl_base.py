@@ -315,6 +315,13 @@ SUPPORTED_KINDS = {
     "conservation",
     "idempotency_effect",
     "concurrency_final_invariant",
+    # Same-experiment concurrent double-write: two writes released at the same
+    # moment on the same resource. dual 2xx alone is never a verdict
+    # (insufficient_signal: dual_2xx_alone); the boundary comes only from the
+    # rule's own declaration (structured comparison, non-negative equation, or
+    # the oversell runtime projection) and the concurrent release must be
+    # evidenced by the barrier timeline.
+    "concurrent_double_write",
     "eventual_consistency",
     "cross_surface_consistency",
     "field_delta",
@@ -812,6 +819,168 @@ def _compute_invariant_held_from_source(
         _compare_decimals(left_val, right_val, operator),
         "COMPUTED_FROM_SOURCE_INVARIANT",
     )
+
+
+def _non_negative_boundary_held(
+    equation: dict[str, Any],
+    observations: dict[str, Any],
+) -> tuple[bool | None, str]:
+    """Evaluate a source-declared non-negative field boundary over the after state.
+
+    A rule like 库存不能为负 / available_qty 不得为负 declares a field boundary:
+    the declared fields must never go below zero. The concurrent double-write
+    protocol projects it to the pair: after BOTH concurrent writes the observed
+    after-values of every declared term must stay >= 0. All values are the
+    observer-captured entity readback; a term below zero after the pair is the
+    boundary break. Only the structured ``non_negative`` equation form the IR
+    builds is computed — nothing is inferred from prose.
+    """
+    if not isinstance(equation, dict):
+        return None, "CONCURRENCY_INVARIANT_NOT_COMPARABLE"
+    if _text(equation.get("operator")).lower() != "non_negative":
+        return None, "CONCURRENCY_INVARIANT_NOT_COMPARABLE"
+    terms = [
+        _text(item)
+        for item in _list(equation.get("terms") or equation.get("fields"))
+        if _text(item)
+    ]
+    if not terms:
+        return None, "CONCURRENCY_INVARIANT_NOT_COMPARABLE"
+    after_values = _dict(observations.get("after_values"))
+    if not after_values or any(
+        term not in after_values
+        or isinstance(after_values[term], bool)
+        or not isinstance(after_values[term], (int, float))
+        for term in terms
+    ):
+        return None, "CONCURRENCY_INVARIANT_VALUES_MISSING"
+    return (
+        all(float(after_values[term]) >= 0 for term in terms),
+        "COMPUTED_FROM_NON_NEGATIVE_EQUATION",
+    )
+
+
+def _oversell_projection_held(
+    observations: dict[str, Any],
+) -> tuple[bool | None, str]:
+    """Project the concurrent double-write onto the resource's own readback.
+
+    A rule declaring oversell prohibition (同一个 SKU 在高并发下不得超卖 /
+    不得超额 / oversell) binds no field at compile time — the violated quantity is
+    whatever the resource readback carries. The projection is a controlled two-arm
+    comparison on the SAME resource: every numeric field that was non-negative in
+    the before readback and is negative in the after readback after both concurrent
+    writes were accepted is evidence of oversell. Fields already negative before
+    are excluded (they cannot prove a NEW oversell), so a legitimately negative
+    field never fabricates a verdict; at least one common numeric field must exist
+    or the projection stays INDETERMINATE (no vacuous pass from an empty field
+    set).
+    """
+    from .observer_contracts_base import _numeric_snapshot_values
+
+    before_nums: dict[str, float] = {}
+    after_nums: dict[str, float] = {}
+    before_body = observations.get("before_state")
+    after_body = observations.get("after_state")
+    if isinstance(before_body, (dict, list)) and isinstance(after_body, (dict, list)):
+        before_nums = _numeric_snapshot_values(
+            before_body, [], allow_unscoped_numeric=True
+        )
+        after_nums = _numeric_snapshot_values(
+            after_body, [], allow_unscoped_numeric=True
+        )
+    if not before_nums or not after_nums:
+        before_nums = {
+            _text(key): value
+            for key, value in _dict(observations.get("before_values")).items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+        after_nums = {
+            _text(key): value
+            for key, value in _dict(observations.get("after_values")).items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+    common = sorted(set(before_nums) & set(after_nums))
+    if not common:
+        return None, "CONCURRENCY_INVARIANT_VALUES_MISSING"
+    for field in common:
+        before_val = _to_decimal(before_nums[field])
+        after_val = _to_decimal(after_nums[field])
+        if before_val is None or after_val is None:
+            continue
+        if before_val >= Decimal("0") and after_val < Decimal("0"):
+            return False, "COMPUTED_FROM_OVERSELL_PROJECTION"
+    return True, "COMPUTED_FROM_OVERSELL_PROJECTION"
+
+
+def _concurrent_boundary_held(
+    spec: dict[str, Any],
+    observations: dict[str, Any],
+) -> tuple[bool | None, str]:
+    """Resolve the concurrent double-write boundary from the rule's own declaration.
+
+    Priority is source-grounded and strict:
+    1. a structured comparison (GTE/LTE/GT/LT/EQ/NEQ) the source declared — its
+       verdict is final even when evidence is missing (never substituted);
+    2. the IR-built non-negative field equation (不能为负 rules);
+    3. the oversell runtime projection — ONLY when the protocol flagged the rule
+       as oversell-prohibition (超卖/超额/oversell) AND no field boundary exists.
+    Anything else stays INDETERMINATE with a named reason — a boundary is never
+    invented.
+    """
+    _prop = _dict(spec.get("property"))
+    expression = (
+        _dict(spec.get("expression"))
+        or _dict(_prop.get("expression"))
+        or _dict(_dict(_prop.get("field_rule_binding")).get("typed_expression"))
+    )
+    # The protocol emits the boundary at assertion level; the legacy compile
+    # chain carries it inside the property expression. Both the structured form
+    # (structured_expression / left+right) and the IR equation form are accepted.
+    _structured = (
+        _dict(expression.get("structured_expression"))
+        or _dict(spec.get("structured_expression"))
+    )
+    _operator = _text(
+        expression.get("operator") or _structured.get("operator")
+    ).upper()
+    if _structured or _operator in {"GTE", "LTE", "GT", "LT", "EQ", "NEQ"}:
+        if not expression:
+            expression = {"structured_expression": _structured}
+        return _compute_invariant_held_from_source(expression, observations)
+    _equation = _dict(expression.get("equation")) or _dict(spec.get("equation"))
+    if _equation:
+        return _non_negative_boundary_held(_equation, observations)
+    if spec.get("oversell_projection") is True:
+        return _oversell_projection_held(observations)
+    return None, "CONCURRENCY_INVARIANT_NOT_COMPARABLE"
+
+
+def _dual_write_statuses(
+    observations: dict[str, Any], phase: str
+) -> list[int]:
+    """Observed status codes of one arm of the concurrent pair, or [].
+
+    ``control_statuses`` / ``treatment_statuses`` are written by the outcome
+    finalizer from the executed steps; the per-step observation is the fallback.
+    """
+    statuses = observations.get(f"{phase}_statuses")
+    if isinstance(statuses, list) and statuses:
+        parsed: list[int] = []
+        for raw in statuses:
+            try:
+                parsed.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        if parsed:
+            return parsed
+    step = observations.get(f"{phase}_observation")
+    if isinstance(step, dict) and step.get("status_code") is not None:
+        try:
+            return [int(step["status_code"])]
+        except (TypeError, ValueError):
+            return []
+    return []
 
 
 def _assertion_receipt(
@@ -2077,17 +2246,29 @@ def evaluate_assertion(
                 # The barrier protocol released control and treatment and the
                 # final state was observed, but no producer wrote invariant_held.
                 # Compute it from the source-declared expression over the observed
-                # after-values when the source declared a structured comparison;
-                # otherwise stay INDETERMINATE (never guess a verdict).
+                # after-values when the source declared a structured comparison or
+                # a non-negative field equation (不能为负 rules); otherwise stay
+                # INDETERMINATE (never guess a verdict).
                 _prop = _dict(spec.get("property"))
-                _computed, _compute_reason = _compute_invariant_held_from_source(
+                _expr = (
                     _dict(spec.get("expression"))
                     or _dict(_prop.get("expression"))
                     or _dict(
                         _dict(_prop.get("field_rule_binding")).get("typed_expression")
-                    ),
-                    obs,
+                    )
                 )
+                _computed, _compute_reason = _compute_invariant_held_from_source(
+                    _expr, obs
+                )
+                if (
+                    not isinstance(_computed, bool)
+                    and _compute_reason == "CONCURRENCY_INVARIANT_NOT_COMPARABLE"
+                ):
+                    # No structured comparison declared: the non-negative field
+                    # equation is the only other source-declared boundary shape.
+                    _computed, _compute_reason = _non_negative_boundary_held(
+                        _dict(_expr.get("equation")), obs
+                    )
                 if isinstance(_computed, bool):
                     obs["invariant_held"] = _computed
                     actual["invariant_held"] = _computed
@@ -2099,6 +2280,67 @@ def evaluate_assertion(
                     actual["invariant_held_missing_reason"] = _compute_reason
             else:
                 passed = obs["invariant_held"] is True
+        elif effective_kind == "concurrent_double_write":
+            # Same-experiment concurrent double-write verdict.
+            #
+            # Evidence gates are fail-closed: without BOTH arms' status codes the
+            # pair never happened (INDETERMINATE), and without a released barrier
+            # timeline with two participants the writes were not proven to overlap
+            # (INDETERMINATE) — a sequential pair is not a concurrency test and
+            # must never read as one.
+            #
+            # Verdict semantics (dual 2xx alone is never a verdict):
+            #   * at least one arm rejected → the target serialized or refused the
+            #     second write, the race window produced no double acceptance →
+            #     PASS, basis CONCURRENT_PAIR_NOT_BOTH_ACCEPTED;
+            #   * both arms accepted → the race window existed; the source-
+            #     declared boundary decides: held → PASS (conserved), broken →
+            #     VIOLATION (oversell / double side effect under concurrency);
+            #   * no source boundary and no oversell projection → INDETERMINATE.
+            expected = {"dual_2xx": True, "invariant_held": True}
+            control_statuses = _dual_write_statuses(obs, "control")
+            treatment_statuses = _dual_write_statuses(obs, "treatment")
+            actual: dict[str, Any] = {
+                "control_statuses": control_statuses,
+                "treatment_statuses": treatment_statuses,
+                "dual_2xx": obs.get("dual_2xx"),
+            }
+            if not control_statuses or not treatment_statuses:
+                reason_code = "CONCURRENT_DUAL_WRITE_EVIDENCE_MISSING"
+            elif obs.get("barrier_released") is not True or int(
+                obs.get("participant_count") or 0
+            ) < 2:
+                reason_code = "CONCURRENT_RELEASE_EVIDENCE_MISSING"
+            else:
+                dual = (
+                    all(200 <= status < 300 for status in control_statuses)
+                    and all(200 <= status < 300 for status in treatment_statuses)
+                )
+                actual["dual_2xx"] = dual
+                if not dual:
+                    passed = True
+                    actual["invariant_held"] = True
+                    actual["invariant_held_basis"] = (
+                        "CONCURRENT_PAIR_NOT_BOTH_ACCEPTED"
+                    )
+                else:
+                    _held, _basis = _concurrent_boundary_held(spec, obs)
+                    if isinstance(_held, bool):
+                        obs["invariant_held"] = _held
+                        actual["invariant_held"] = _held
+                        actual["invariant_held_basis"] = _basis
+                        passed = _held
+                        if not _held:
+                            reason_code = "CONCURRENT_BOUNDARY_VIOLATED"
+                    else:
+                        reason_code = "FINAL_INVARIANT_MISSING"
+                        actual["invariant_held_missing_reason"] = _basis
+            before_values = obs.get("before_values")
+            after_values = obs.get("after_values")
+            if isinstance(before_values, dict) and before_values:
+                actual["before_values"] = dict(before_values)
+            if isinstance(after_values, dict) and after_values:
+                actual["after_values"] = dict(after_values)
         elif effective_kind == "eventual_consistency":
             expected = {
                 "converged": True,

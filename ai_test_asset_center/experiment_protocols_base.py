@@ -2397,6 +2397,46 @@ def compile_family_protocol(
         if method in {"POST", "PUT", "PATCH"} and not body:
             body = _minimal_body_from_schema(operation)
         barrier_group = f"barrier:{operation_ref}"
+        # ── Same-experiment concurrent double-write ──
+        # Control and treatment are the SAME write (same operation, same body)
+        # released at the same moment by the barrier executor against the SAME
+        # resource. The assertion boundary comes only from the rule's own
+        # declaration:
+        #   * a structured comparison the source declared (available_qty >= 0),
+        #   * the IR-built non-negative field equation (库存不能为负 → non_negative
+        #     + terms),
+        #   * oversell-prohibition vocabulary (超卖/超额/oversell) with no declared
+        #     field → the runtime readback projection of the resource.
+        # Without any of these the pair still executes (dual 2xx alone is never a
+        # verdict — ``insufficient_signal: dual_2xx_alone``) and the evaluator
+        # stays INDETERMINATE with a named reason; a boundary is never invented.
+        _expression = _dict(property_spec.get("expression"))
+        _semantic_text = " ".join(
+            _text(value)
+            for value in (
+                _expression.get("raw"),
+                property_spec.get("source_intent"),
+                property_spec.get("description"),
+            )
+            if _text(value)
+        )
+        _assertion_payload: dict[str, Any] = {
+            "kind": "concurrent_double_write",
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        }
+        if _dict(_expression.get("structured_expression")):
+            _assertion_payload["structured_expression"] = _dict(
+                _expression.get("structured_expression")
+            )
+        if _dict(_expression.get("equation")):
+            _assertion_payload["equation"] = _dict(_expression.get("equation"))
+        if any(
+            token in _semantic_text
+            for token in (
+                "超卖", "超额", "oversell", "over-sell", "over_sell", "overconsum",
+            )
+        ):
+            _assertion_payload["oversell_projection"] = True
         return {
             "status": "COMPILED",
             "control_plan": [{
@@ -2421,6 +2461,11 @@ def compile_family_protocol(
                 "body": deepcopy(body),
                 "property_template": _text(property_spec.get("template")),
             }],
+            "observers": [
+                {"observer_id": "final_state"},
+                {"observer_id": "barrier_timeline"},
+            ],
+            "assertion": _assertion_payload,
         }
 
     if family == "conservation":
