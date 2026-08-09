@@ -2863,25 +2863,46 @@ def compile_experiment_for_obligation(
             dict(row) for row in _money_precondition_plan if isinstance(row, dict)
         ]
         # Cleanup coverage for the fixture-phase subject create: the chain
-        # creates a persistent entity (order) through its source-declared
-        # create op, so that op must be compensated when the experiment ends.
-        # Derive the compensator from the same declared-cleanup authority the
-        # primary-write cleanup uses; a chain without one would leave residue.
-        _money_create_op_ref = _text(
-            _money_precondition_plan[0].get("operation_ref")
-            if _money_precondition_plan else ""
-        )
-        if _money_create_op_ref and not any(
-            isinstance(row, dict)
-            and _text(row.get("operation_ref")) == _money_create_op_ref
-            and _text(row.get("compensates_operation_ref"))
-            == _money_create_op_ref
-            for row in cleanup_plan
-        ):
+        # creates persistent entities (order, and every dependency the
+        # multi-level planner added: address, ...) through their
+        # source-declared create ops, so EACH create op must be compensated
+        # when the experiment ends. Derive each compensator from the same
+        # declared-cleanup authority the primary-write cleanup uses; a chain
+        # without one would leave residue.
+        _money_chain_create_refs = list(dict.fromkeys(
+            _text(row.get("operation_ref"))
+            for row in _precondition_plan
+            if isinstance(row, dict)
+            and _text(row.get("protocol_step")) == "precondition_write"
+            and _text(row.get("intent"))
+            in {"money_subject_establishment",
+                "multi_level_dependency_establishment"}
+            and _text(row.get("operation_ref"))
+        ))
+        for _money_create_op_ref in _money_chain_create_refs:
+            if not _money_create_op_ref or any(
+                isinstance(row, dict)
+                and _text(row.get("operation_ref")) == _money_create_op_ref
+                and _text(row.get("compensates_operation_ref"))
+                == _money_create_op_ref
+                for row in cleanup_plan
+            ):
+                continue
             from .runtime_binding_graph import _declared_cleanup_operations
 
             _money_create_path = _text(
-                _money_precondition_plan[0].get("path")
+                _dict(
+                    next(
+                        (
+                            row
+                            for row in _precondition_plan
+                            if isinstance(row, dict)
+                            and _text(row.get("operation_ref"))
+                            == _money_create_op_ref
+                        ),
+                        {},
+                    )
+                ).get("path")
                 or _dict(ops.get(_money_create_op_ref)).get("path")
                 or _dict(ops.get(_money_create_op_ref)).get("raw_path")
             )
@@ -2946,11 +2967,26 @@ def compile_experiment_for_obligation(
                     "source_priority": "money_precondition_chain",
                     "identity_binding_target": _money_identity_target,
                     "precondition_step_id": _text(
-                        _precondition_plan[0].get("step_id")
-                        if _precondition_plan else ""
+                        next(
+                            (
+                                row.get("step_id")
+                                for row in _precondition_plan
+                                if isinstance(row, dict)
+                                and _text(row.get("identity_binding_target"))
+                                == _money_identity_target
+                            ),
+                            _precondition_plan[0].get("step_id")
+                            if _precondition_plan else "",
+                        )
                     ),
                     "precondition_provided": True,
-                    "resolver_operations": [],
+                    # Observe-first: keep the subject collection's source-
+                    # declared reads so the fixture materializer binds a REAL
+                    # environment row when one exists and only falls back to
+                    # the fixture-phase create when the collection is empty.
+                    "resolver_operations": _list(
+                        _money_chain.get("observation_resolvers")
+                    ),
                     "value_fingerprint": "",
                 })
                 _existing_identity_entry.pop("blocked_reason", None)
@@ -2962,11 +2998,22 @@ def compile_experiment_for_obligation(
                     "source_priority": "money_precondition_chain",
                     "identity_binding_target": _money_identity_target,
                     "precondition_step_id": _text(
-                        _precondition_plan[0].get("step_id")
-                        if _precondition_plan else ""
+                        next(
+                            (
+                                row.get("step_id")
+                                for row in _precondition_plan
+                                if isinstance(row, dict)
+                                and _text(row.get("identity_binding_target"))
+                                == _money_identity_target
+                            ),
+                            _precondition_plan[0].get("step_id")
+                            if _precondition_plan else "",
+                        )
                     ),
                     "precondition_provided": True,
-                    "resolver_operations": [],
+                    "resolver_operations": _list(
+                        _money_chain.get("observation_resolvers")
+                    ),
                     "value_fingerprint": "",
                 })
     if _registry_protocol_id:

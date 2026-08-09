@@ -529,6 +529,84 @@ def materialize_experiment_fixtures(
             # BLOCKED_MISSING_BINDING). Skip it; the control/treatment body
             # materializes the placeholder from the precondition identity.
             if binding.get("precondition_provided") is True:
+                # ── Observe-first: real environment rows are preferred ──
+                # The multi-level chain planner keeps the subject collection's
+                # source-declared reads on the binding (observation_resolvers).
+                # When the environment already holds real rows of the subject
+                # entity, the REAL identity is bound here and the precondition
+                # executor skips its create step (skip_if_observed_target);
+                # the governed create remains the fallback for empty
+                # collections. Never invents a value.
+                _obs_value: Any = None
+                _obs_source = ""
+                _obs_actor_ref = _text(
+                    binding.get("fixture_owner_actor_ref")
+                ) or resolver_actor_ref
+                _obs_actor = actors.get(_obs_actor_ref) or {}
+                _obs_token = _resolve_token(_obs_actor, tokens) or resolver_token
+                for _obs_index, _obs_res in enumerate(
+                    _validated_runtime_resolvers(binding, ops)[:3]
+                ):
+                    _obs = _run_http_step(
+                        base_url=base_url,
+                        method=_text(_obs_res.get("method")).upper(),
+                        path=_text(_obs_res.get("path")),
+                        token=_obs_token,
+                    )
+                    _obs.update({
+                        "phase": "binding_materialization_precondition_observation",
+                        "step_id": (
+                            f"bind:{target}:observe:{_obs_index}"
+                        ),
+                        "actor_ref": _obs_actor_ref,
+                        "operation_ref": _text(
+                            _obs_res.get("operation_ref")
+                        ),
+                    })
+                    steps_out.append(_obs)
+                    if not (
+                        200
+                        <= int(_obs.get("status_code") or 0)
+                        < 300
+                    ):
+                        continue
+                    _obs_value = _runtime_value_from_response(
+                        _obs.get("body"),
+                        target,
+                        f"/{{{target}}}",
+                    )
+                    if _obs_value in (None, "", [], {}):
+                        _obs_value = _runtime_setup_value_from_response(
+                            _obs.get("body"),
+                            target,
+                        )
+                    if _obs_value not in (None, "", [], {}):
+                        _obs_source = _text(_obs_res.get("path"))
+                        break
+                if _obs_value not in (None, "", [], {}):
+                    runtime_bindings[target] = _obs_value
+                    fixture_receipts.append({
+                        "node_id": node_id,
+                        "kind": kind,
+                        "status": "resolved",
+                        "target": target,
+                        "value_fingerprint": hashlib.sha256(
+                            str(_obs_value).encode("utf-8")
+                        ).hexdigest()[:12],
+                        "source": "observed_reuse_priority",
+                        "detail": "precondition_target_observed_reuse",
+                        "resolver_path": _obs_source,
+                    })
+                    binding_materialization_receipts.append({
+                        "target": target,
+                        "source_priority": "observed_reuse_priority",
+                        "status": "bound",
+                        "value_fingerprint": hashlib.sha256(
+                            str(_obs_value).encode("utf-8")
+                        ).hexdigest()[:12],
+                        "resolver_path": _obs_source,
+                    })
+                    continue
                 fixture_receipts.append({
                     "node_id": node_id,
                     "kind": kind,

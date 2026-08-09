@@ -145,9 +145,16 @@ def _subject_entities_from_example(
             if _text(alias):
                 by_name.setdefault(_text(alias).lower(), entity)
     for key in list(by_name):
-        singular = key[:-1] if key.endswith("s") else ""
+        singular = key[:-1] if key.endswith("s") and len(key) > 1 else ""
         if singular and singular not in by_name:
             by_name.setdefault(singular, by_name[key])
+        # Structural "es" singularization (addresses -> address) so singular
+        # reference fields resolve to plural-named entities. Language
+        # morphology only — never industry vocabulary.
+        if key.endswith("es") and len(key) > 2:
+            es_singular = key[:-2]
+            if es_singular and es_singular not in by_name:
+                by_name.setdefault(es_singular, by_name[key])
 
     resolved: list[tuple[str, str]] = []
     for field, value in example.items():
@@ -437,34 +444,58 @@ def plan_money_family_precondition(
             continue
 
         create_path = _text(create_op.get("path") or create_op.get("raw_path"))
-        readback_contract = _readback_contract_for_entity(ir, create_path, entity)
-        entry_state = _text(
-            entity.get("entry_state")
-            or entity.get("initial_state")
+        # ── Multi-level dependency DAG ──
+        # The subject's own create operation may carry further reference
+        # fields (order create -> addressId; items[].sku -> products). The
+        # shared multi-level planner resolves the full dependency DAG
+        # (leaves-first, cycle-detected, depth-capped, observe-first
+        # resolvers) instead of this module planning a single create step.
+        from .multi_level_dependency_chain import (
+            BLOCKED as _ML_CHAIN_BLOCKED,
+            PLANNED as _ML_CHAIN_PLANNED,
+            plan_multi_level_dependency_chain as _plan_multi_level_chain,
         )
-        steps = [
-            {
-                "step_id": "money_precondition_create",
-                "phase": "fixture",
-                "actor_ref": chain_actors[0],
-                "operation_ref": create_op_id,
-                "intent": "money_subject_establishment",
-                "protocol_step": "precondition_write",
+
+        chain_result = _plan_multi_level_chain(
+            behavior_ir=ir,
+            entity_id=entity_id,
+            reference_field=reference_field,
+            actor_refs=chain_actors,
+            family=_text(family),
+        )
+        if _text(chain_result.get("status")) == _ML_CHAIN_BLOCKED:
+            return {
+                "status": BLOCKED,
+                "reason_code": _text(chain_result.get("reason_code"))
+                or REASON_NO_CREATE_OPERATION,
+                "steps": [],
                 "identity_binding_target": reference_field,
-                "observe_response_body": True,
-                "step_ordinal": 1,
-                "method": "POST",
-                "path": create_path,
+                "entity_ref": entity_id,
+                "create_operation_ref": create_op_id,
+                "chain_detail": _dict(chain_result.get("detail")),
             }
-        ]
-        if entry_state:
-            steps[0]["to_state"] = entry_state
-            steps[0]["state_field"] = _text(
-                entity.get("state_field") or entity.get("status_field") or "status"
-            )
-        elif readback_contract:
-            steps[0]["to_state"] = _text(entity.get("entry_state"))
-            steps[0]["state_field"] = _text(readback_contract.get("state_field"))
+        if _text(chain_result.get("status")) != _ML_CHAIN_PLANNED:
+            unresolved_reasons.append({
+                "entity_ref": entity_id,
+                "reference_field": reference_field,
+                "reason_code": REASON_NO_CREATE_OPERATION,
+            })
+            continue
+        steps = [dict(step) for step in _list(chain_result.get("steps"))]
+        if not steps:
+            unresolved_reasons.append({
+                "entity_ref": entity_id,
+                "reference_field": reference_field,
+                "reason_code": REASON_NO_CREATE_OPERATION,
+            })
+            continue
+        # Backward-compatible subject step identity: the final (subject) step
+        # keeps the historical step id / intent so existing compiled
+        # experiments and receipts stay stable; nested dependency steps keep
+        # their own ids.
+        subject_step = steps[-1]
+        subject_step["step_id"] = "money_precondition_create"
+        subject_step["intent"] = "money_subject_establishment"
 
         # Optional state advancement: when the property declares a required
         # pre-state (e.g. CANCELLED for a pay-after-cancel rule), plan the
@@ -489,12 +520,13 @@ def plan_money_family_precondition(
                     "state_goal": state_goal,
                     "state_reason": _text(state_result.get("reason_code")),
                 }
+            _state_base = len(steps)
             for index, edge in enumerate(
-                _list(state_result.get("steps")), start=2
+                _list(state_result.get("steps")), start=_state_base + 1
             ):
                 steps.append(
                     {
-                        "step_id": f"money_precondition_state_{index - 1}",
+                        "step_id": f"money_precondition_state_{index - _state_base}",
                         "phase": "fixture",
                         "actor_ref": _text(edge.get("actor_ref")) or chain_actors[0],
                         "operation_ref": _text(edge.get("operation_ref")),
@@ -506,6 +538,7 @@ def plan_money_family_precondition(
                     }
                 )
 
+        chain_detail = _dict(chain_result.get("detail"))
         return {
             "status": PLANNED,
             "schema_version": SCHEMA_VERSION,
@@ -513,6 +546,9 @@ def plan_money_family_precondition(
             "identity_binding_target": reference_field,
             "create_operation_ref": create_op_id,
             "entity_ref": entity_id,
+            "observation_resolvers": _list(
+                chain_result.get("observation_resolvers")
+            ),
             "reason_code": "",
             "detail": {
                 "subject_entity": entity_id,
@@ -520,6 +556,11 @@ def plan_money_family_precondition(
                 "create_path": create_path,
                 "cleanup_operation_count": len(cleanup),
                 "family": _text(family),
+                "chain_levels": int(chain_detail.get("level_count") or 0),
+                "chain_entity_count": int(chain_detail.get("entity_count") or 0),
+                "unresolved_nested_references": _list(
+                    chain_detail.get("unresolved_nested_references")
+                ),
             },
         }
 

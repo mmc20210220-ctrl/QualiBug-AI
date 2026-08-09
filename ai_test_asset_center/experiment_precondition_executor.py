@@ -20,8 +20,9 @@ from .experiment_runtime_support import (
     _declared_observation_path,
     _dict,
     _list,
-    _request_example,
     _resolve_token,
+    _run_http_step,
+    _select_runtime_binding,
     _text,
     _unresolved_body_placeholders,
     _unresolved_path_placeholders,
@@ -32,6 +33,9 @@ from .runtime_binding_materializer import (
 )
 from .runtime_binding_materializer_base import (
     runtime_setup_value_from_response as _runtime_setup_value_from_response,
+)
+from .runtime_binding_graph import (
+    _request_example as _tokenized_request_example,
 )
 from .sandbox_write_executor import execute_governed_control_write
 
@@ -61,6 +65,56 @@ def _state_field(step: dict[str, Any]) -> str:
         or step.get("field")
         or _dict(step.get("readback_contract")).get("state_field")
     )
+
+
+def _observe_reference_value(
+    *,
+    step: dict[str, Any],
+    base_url: str,
+    actor_token: str,
+) -> str:
+    """Observe-first: bind a real environment row for a chain target.
+
+    The multi-level dependency planner marks every establishment step with
+    ``observation_resolvers`` (source-declared collection GET/HEAD of the
+    entity it creates) and ``skip_if_observed_target`` (the body reference
+    field the created identity flows into). When the environment already
+    holds real rows, that real identity is the preferred subject — read-only
+    observation, never a write. Returns the observed value or ""; the caller
+    falls back to the governed create when nothing is observed.
+    """
+    token = _text(step.get("skip_if_observed_target"))
+    resolvers = _list(step.get("observation_resolvers"))
+    if not token or not resolvers:
+        return ""
+    leaf = token.split(".")[-1].split("[")[0]
+    for index, resolver in enumerate(resolvers[:3]):
+        if not isinstance(resolver, dict):
+            continue
+        method = _text(resolver.get("method")).upper()
+        path = _text(resolver.get("path"))
+        if method not in {"GET", "HEAD"} or not path.startswith("/"):
+            continue
+        obs = _run_http_step(
+            base_url=base_url,
+            method=method,
+            path=path,
+            token=actor_token,
+        )
+        if not (200 <= int(obs.get("status_code") or 0) < 300):
+            continue
+        projected = _select_runtime_binding(
+            obs.get("body"),
+            f"/{{{token}}}",
+        )
+        value = projected.get(token) if isinstance(projected, dict) else None
+        if value in (None, "", [], {}):
+            value = _runtime_setup_value_from_response(obs.get("body"), token)
+        if value in (None, "", [], {}):
+            value = _runtime_setup_value_from_response(obs.get("body"), leaf)
+        if value not in (None, "", [], {}):
+            return str(value)
+    return ""
 
 
 def _field_values(value: Any, field: str) -> list[Any]:
@@ -223,11 +277,100 @@ def execute_precondition_plan(
                 "detail": f"invalid_precondition_step:{step_id or ordinal}",
             }
 
+        # ── Observe-first / skip-if-observed ──
+        # Multi-level chain steps declare skip_if_observed_target (the body
+        # reference field the created identity flows into). A real row bound
+        # earlier (fixture-layer observation) must not be re-created: skip
+        # the write and receipt the reuse. When nothing is bound yet, the
+        # step's observation_resolvers (source-declared collection reads of
+        # the entity it creates) are consulted — real environment data wins
+        # over creation; the governed create remains the fallback. Reads are
+        # read-only on the declared target; never a write to customer data.
+        _skip_token = _text(step.get("skip_if_observed_target"))
+        if (
+            _skip_token
+            and runtime_bindings.get(_skip_token) not in (None, "", [], {})
+        ):
+            receipts.append({
+                "schema_version": SCHEMA_VERSION,
+                "receipt_id": "precond_" + _fingerprint(
+                    {
+                        "step_id": step_id,
+                        "action": "skip_observed_reuse",
+                        "token": _skip_token,
+                        "value": runtime_bindings.get(_skip_token),
+                    }
+                )[:24],
+                "step_id": step_id,
+                "source_step_id": step_id,
+                "step_ordinal": ordinal,
+                "phase": "precondition",
+                "operation_ref": operation_ref,
+                "actor_ref": actor_ref,
+                "status_code": 0,
+                "accepted": True,
+                "status": "COMPLETED",
+                "reason_code": "PRECONDITION_STEP_SKIPPED_OBSERVED_REUSE",
+                "detail": (
+                    f"target_already_bound:{_skip_token}="
+                    f"{runtime_bindings.get(_skip_token)}"
+                ),
+            })
+            continue
+        if _skip_token:
+            _observed_value = _observe_reference_value(
+                step=step,
+                base_url=base_url,
+                actor_token=token,
+            )
+            if _observed_value:
+                runtime_bindings[_skip_token] = _observed_value
+                identity_bindings[_skip_token] = _observed_value
+                import re as _re
+
+                _snake_obs = _re.sub(
+                    r"(?<=[a-z0-9])(?=[A-Z])", "_", _skip_token
+                ).lower()
+                if _snake_obs and _snake_obs != _skip_token:
+                    runtime_bindings[_snake_obs] = _observed_value
+                    identity_bindings[_snake_obs] = _observed_value
+                receipts.append({
+                    "schema_version": SCHEMA_VERSION,
+                    "receipt_id": "precond_" + _fingerprint(
+                        {
+                            "step_id": step_id,
+                            "action": "observe_reuse",
+                            "token": _skip_token,
+                            "value": _observed_value,
+                        }
+                    )[:24],
+                    "step_id": step_id,
+                    "source_step_id": step_id,
+                    "step_ordinal": ordinal,
+                    "phase": "precondition_identity",
+                    "operation_ref": operation_ref,
+                    "actor_ref": actor_ref,
+                    "status_code": 0,
+                    "accepted": True,
+                    "status": "COMPLETED",
+                    "reason_code": "PRECONDITION_TARGET_OBSERVED_REUSE",
+                    "target": _skip_token,
+                    "identity_value": _observed_value,
+                    "detail": "observed_real_row_bound",
+                })
+                continue
+
         path = materialize_path(path_template, runtime_bindings)
         body_template = (
             step.get("body")
             if "body" in step
-            else _request_example(operation)
+            # Tokenized example (same authority as _declared_fixture_setup):
+            # placeholder identity literals (zero/near-nil UUIDs in documented
+            # examples) become {field} tokens so the multi-level chain binds
+            # REAL captured identities into reference slots. Sending the raw
+            # placeholder reaches the target as an invalid FK reference (500)
+            # before the rule under test is observed.
+            else _tokenized_request_example(operation)
         )
         body = materialize_body_template(body_template, runtime_bindings)
         unresolved_path = _unresolved_path_placeholders(path)
@@ -328,41 +471,56 @@ def execute_precondition_plan(
         # same created subject (pay the order that was just created).
         # Registration mirrors the fixture materializer's setup capture and
         # is therefore exactly one source: the create response itself.
+        # Multi-level chains may consume one created entity through several
+        # parent reference fields (diamond: order create references both
+        # ``addressId`` and ``billingAddressId`` of one address row); the
+        # step then declares ``identity_binding_targets`` and every listed
+        # name (camel + snake spellings) is bound to the captured value.
+        _identity_targets = [
+            _text(value)
+            for value in _list(step.get("identity_binding_targets"))
+            if _text(value)
+        ]
         _identity_target = _text(step.get("identity_binding_target"))
+        if _identity_target and _identity_target not in _identity_targets:
+            _identity_targets.insert(0, _identity_target)
+        _identity_value: Any = None
         if (
-            _identity_target
+            _identity_targets
             and accepted
             and verdict.get("reached") is not False
         ):
             _identity_value = _runtime_setup_value_from_response(
                 write.get("body"),
-                _identity_target,
+                _identity_targets[0],
             )
             if _identity_value in (None, "", [], {}):
-                # Final fallback: the response may wrap the created entity
-                # (data/result/entity) or name the id differently (order_id
-                # vs orderId). The helper's wrapper scan already covers the
-                # common shapes; keep the binding unresolved otherwise — the
-                # control arm then fails visibly instead of guessing.
-                pass
-            else:
-                runtime_bindings[_identity_target] = _identity_value
-                identity_bindings[_identity_target] = _identity_value
+                _leaf_value = _identity_targets[0].split(".")[-1].split("[")[0]
+                _identity_value = _runtime_setup_value_from_response(
+                    write.get("body"),
+                    _leaf_value,
+                )
+            for _target_name in _identity_targets:
+                if _identity_value in (None, "", [], {}):
+                    break
+                runtime_bindings[_target_name] = _identity_value
+                identity_bindings[_target_name] = _identity_value
                 # The request-body placeholder may carry either spelling
                 # (``<order_id>`` token form vs ``{orderId}`` field form);
                 # register both so body materialization binds either shape.
                 import re as _re
 
                 _snake_form = _re.sub(
-                    r"(?<=[a-z0-9])(?=[A-Z])", "_", _identity_target
+                    r"(?<=[a-z0-9])(?=[A-Z])", "_", _target_name
                 ).lower()
-                if _snake_form and _snake_form != _identity_target:
+                if _snake_form and _snake_form != _target_name:
                     runtime_bindings[_snake_form] = _identity_value
                     identity_bindings[_snake_form] = _identity_value
+            if _identity_value not in (None, "", [], {}):
                 receipt_id_identity = "precond_identity_" + _fingerprint(
                     {
                         "step_id": step_id,
-                        "target": _identity_target,
+                        "target": _identity_targets[0],
                         "value": _identity_value,
                     }
                 )[:24]
@@ -377,8 +535,9 @@ def execute_precondition_plan(
                     "actor_ref": actor_ref,
                     "status_code": status_code,
                     "accepted": True,
-                    "target": _identity_target,
+                    "target": _identity_targets[0],
                     "identity_value": _identity_value,
+                    "identity_binding_targets": _identity_targets,
                     "status": "COMPLETED",
                     "reason_code": "",
                     "detail": "money_subject_identity_captured",
