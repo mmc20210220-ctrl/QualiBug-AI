@@ -81,6 +81,65 @@ def _safe_asset_projection(project: str, asset: dict[str, Any]) -> dict[str, Any
             if isinstance(row, dict)
         ],
         "governance": dict(_dict(asset.get("governance"))),
+        # Schema declarations only (table names, columns, declared identity and
+        # field names) — never rows, values, credentials or customer data. The
+        # database-numeric before/after observer chain resolves exact table/field
+        # bindings from this parsed schema material, so it can bind without an
+        # operator approval step while staying fail-closed on ambiguity.
+        "database_schema_view": {
+            "tables": [
+                {
+                    "table_id": _text(row.get("table_id")),
+                    "source_id": _text(row.get("source_id")),
+                    "name": _text(row.get("name")),
+                    "columns": [
+                        _text(value)
+                        for value in _list(row.get("columns"))
+                        if _text(value)
+                    ],
+                    "identity_fields": [
+                        _text(value)
+                        for value in [
+                            *_list(row.get("identity_fields")),
+                            *_list(row.get("unique_columns")),
+                        ]
+                        if _text(value)
+                    ],
+                    "identity_keys": [
+                        {
+                            "columns": [
+                                _text(value)
+                                for value in _list(
+                                    _dict(key).get("columns")
+                                    or _dict(key).get("fields")
+                                )
+                                if _text(value)
+                            ],
+                            "identity_key_id": _text(
+                                _dict(key).get("identity_key_id")
+                                or _dict(key).get("index_id")
+                            ),
+                        }
+                        for key in _list(row.get("identity_keys"))
+                        if isinstance(key, dict) and _list(
+                            key.get("columns") or key.get("fields")
+                        )
+                    ],
+                }
+                for row in _list(asset.get("data_tables"))
+                if isinstance(row, dict) and _text(row.get("table_id"))
+            ],
+            "fields": [
+                {
+                    "field_id": _text(row.get("field_id")),
+                    "table_id": _text(row.get("table_id")),
+                    "field": _text(row.get("field")),
+                    "field_path": _text(row.get("field_path")),
+                }
+                for row in _list(asset.get("field_dictionary"))
+                if isinstance(row, dict) and _text(row.get("field_id"))
+            ],
+        },
     }
 
 

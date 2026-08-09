@@ -306,6 +306,154 @@ def _observer_ids(experiment: dict[str, Any]) -> set[str]:
     }
 
 
+def _project_experiment_assertions(
+    experiment: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
+    """Run the exact per-assertion numeric projection over one experiment.
+
+    Returns ``(projected, gaps, ambiguous)``. The caller owns attaching the
+    projected assertions back onto the experiment and deciding block vs bound.
+    """
+    projected: list[dict[str, Any]] = []
+    gaps: list[dict[str, Any]] = []
+    ambiguous: dict[str, Any] | None = None
+
+    for assertion in [
+        dict(row)
+        for row in _list(experiment.get("assertions"))
+        if isinstance(row, dict)
+    ]:
+        source_kind = _source_kind(assertion)
+        if source_kind not in _SOURCE_KINDS:
+            projected.append(assertion)
+            continue
+        if source_kind == "field_delta":
+            raw_terms = _delta_terms(assertion)
+            term_error = "" if raw_terms else "DATABASE_NUMERIC_DELTA_TERMS_MISSING"
+        else:
+            raw_terms, term_error = _conservation_terms(assertion)
+        if term_error:
+            gaps.append(
+                {
+                    "assertion_id": _text(assertion.get("assertion_id")),
+                    "reason_code": term_error,
+                }
+            )
+            projected.append(assertion)
+            continue
+
+        terms: list[dict[str, Any]] = []
+        missing_term: dict[str, Any] | None = None
+        for index, raw_term in enumerate(raw_terms):
+            matches = _approved_field_candidates(raw_term, experiment)
+            if len(matches) > 1:
+                ambiguous = {
+                    "assertion_id": _text(assertion.get("assertion_id")),
+                    "term_index": index,
+                    "candidate_count": len(matches),
+                    "candidate_refs": [
+                        {
+                            "observer_contract_ref": _text(row.get("observer_contract_ref")),
+                            "field_binding_id": _text(
+                                _dict(row.get("field_binding")).get("field_binding_id")
+                            ),
+                            "database_field_id": _text(
+                                _dict(row.get("field_binding")).get("database_field_id")
+                            ),
+                        }
+                        for row in matches
+                    ],
+                    "automatic_winner_allowed": False,
+                }
+                break
+            if not matches:
+                ids, names, literals = _term_tokens(raw_term)
+                missing_term = {
+                    "assertion_id": _text(assertion.get("assertion_id")),
+                    "term_index": index,
+                    "reason_code": "DATABASE_NUMERIC_EXACT_FIELD_BINDING_MISSING",
+                    "explicit_field_ids": sorted(ids),
+                    "explicit_field_names": sorted(names),
+                    "literal_terms": sorted(literals),
+                    "fuzzy_matching_allowed": False,
+                }
+                break
+            terms.append(_term_projection(raw_term, matches[0], index=index))
+        if ambiguous is not None:
+            break
+        if missing_term is not None:
+            gaps.append(missing_term)
+            projected.append(assertion)
+            continue
+
+        binding_keys = [
+            (
+                _text(row.get("database_observer_contract_ref")),
+                _text(row.get("field_binding_id")),
+            )
+            for row in terms
+        ]
+        if len(set(binding_keys)) != len(binding_keys):
+            gaps.append(
+                {
+                    "assertion_id": _text(assertion.get("assertion_id")),
+                    "reason_code": "DATABASE_NUMERIC_DUPLICATE_FIELD_TERM",
+                    "duplicate_binding_keys": [
+                        {"observer_contract_ref": contract_ref, "field_binding_id": field_binding_id}
+                        for contract_ref, field_binding_id in binding_keys
+                        if binding_keys.count((contract_ref, field_binding_id)) > 1
+                    ],
+                    "automatic_deduplication_allowed": False,
+                }
+            )
+            projected.append(assertion)
+            continue
+
+        if source_kind == "conservation":
+            contract_refs = {
+                _text(row.get("database_observer_contract_ref")) for row in terms
+            }
+            if len(contract_refs) != 1:
+                gaps.append(
+                    {
+                        "assertion_id": _text(assertion.get("assertion_id")),
+                        "reason_code": "DATABASE_NUMERIC_CROSS_CONTRACT_SCOPE_UNPROVEN",
+                        "observer_contract_refs": sorted(contract_refs),
+                        "automatic_relation_mapping_allowed": False,
+                    }
+                )
+                projected.append(assertion)
+                continue
+
+        projected.append(_project_assertion(assertion, terms))
+
+    return projected, gaps, ambiguous
+
+
+def _schema_numeric_fallback_available() -> bool:
+    """True when a schema-material view is captured for the current run."""
+    from .runtime_materialization_experiment_bridge import _CAPTURED_ASSET
+
+    capture = _CAPTURED_ASSET.get()
+    return bool(_dict(capture).get("database_schema_view"))
+
+
+def _attempt_schema_numeric_binding(
+    experiment: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach schema-declared DB before/after drafts, or return the experiment unchanged."""
+    from .runtime_materialization_experiment_bridge import _CAPTURED_ASSET
+    from .database_numeric_schema_observer import (
+        attach_schema_numeric_observation,
+    )
+
+    capture = _CAPTURED_ASSET.get()
+    schema_view = _dict(capture).get("database_schema_view")
+    if not isinstance(schema_view, dict):
+        return experiment
+    return attach_schema_numeric_observation(experiment, schema_view)
+
+
 def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict[str, Any]:
     """Project exact numeric assertions and preserve unsupported cases visibly."""
     pack = dict(experiment_pack or {})
@@ -313,128 +461,15 @@ def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict
     newly_blocked: list[dict[str, Any]] = []
     projected_count = 0
     incomplete_count = 0
+    schema_bound_count = 0
+    schema_unresolved_count = 0
 
     for raw in _list(pack.get("experiments")):
         if not isinstance(raw, dict):
             continue
         experiment = deepcopy(raw)
-        projected: list[dict[str, Any]] = []
-        gaps: list[dict[str, Any]] = []
-        ambiguous: dict[str, Any] | None = None
-
-        for assertion in [
-            dict(row)
-            for row in _list(experiment.get("assertions"))
-            if isinstance(row, dict)
-        ]:
-            source_kind = _source_kind(assertion)
-            if source_kind not in _SOURCE_KINDS:
-                projected.append(assertion)
-                continue
-            if source_kind == "field_delta":
-                raw_terms = _delta_terms(assertion)
-                term_error = "" if raw_terms else "DATABASE_NUMERIC_DELTA_TERMS_MISSING"
-            else:
-                raw_terms, term_error = _conservation_terms(assertion)
-            if term_error:
-                gaps.append(
-                    {
-                        "assertion_id": _text(assertion.get("assertion_id")),
-                        "reason_code": term_error,
-                    }
-                )
-                projected.append(assertion)
-                incomplete_count += 1
-                continue
-
-            terms: list[dict[str, Any]] = []
-            missing_term: dict[str, Any] | None = None
-            for index, raw_term in enumerate(raw_terms):
-                matches = _approved_field_candidates(raw_term, experiment)
-                if len(matches) > 1:
-                    ambiguous = {
-                        "assertion_id": _text(assertion.get("assertion_id")),
-                        "term_index": index,
-                        "candidate_count": len(matches),
-                        "candidate_refs": [
-                            {
-                                "observer_contract_ref": _text(row.get("observer_contract_ref")),
-                                "field_binding_id": _text(
-                                    _dict(row.get("field_binding")).get("field_binding_id")
-                                ),
-                                "database_field_id": _text(
-                                    _dict(row.get("field_binding")).get("database_field_id")
-                                ),
-                            }
-                            for row in matches
-                        ],
-                        "automatic_winner_allowed": False,
-                    }
-                    break
-                if not matches:
-                    ids, names, literals = _term_tokens(raw_term)
-                    missing_term = {
-                        "assertion_id": _text(assertion.get("assertion_id")),
-                        "term_index": index,
-                        "reason_code": "DATABASE_NUMERIC_EXACT_FIELD_BINDING_MISSING",
-                        "explicit_field_ids": sorted(ids),
-                        "explicit_field_names": sorted(names),
-                        "literal_terms": sorted(literals),
-                        "fuzzy_matching_allowed": False,
-                    }
-                    break
-                terms.append(_term_projection(raw_term, matches[0], index=index))
-            if ambiguous is not None:
-                break
-            if missing_term is not None:
-                gaps.append(missing_term)
-                projected.append(assertion)
-                incomplete_count += 1
-                continue
-
-            binding_keys = [
-                (
-                    _text(row.get("database_observer_contract_ref")),
-                    _text(row.get("field_binding_id")),
-                )
-                for row in terms
-            ]
-            if len(set(binding_keys)) != len(binding_keys):
-                gaps.append(
-                    {
-                        "assertion_id": _text(assertion.get("assertion_id")),
-                        "reason_code": "DATABASE_NUMERIC_DUPLICATE_FIELD_TERM",
-                        "duplicate_binding_keys": [
-                            {"observer_contract_ref": contract_ref, "field_binding_id": field_binding_id}
-                            for contract_ref, field_binding_id in binding_keys
-                            if binding_keys.count((contract_ref, field_binding_id)) > 1
-                        ],
-                        "automatic_deduplication_allowed": False,
-                    }
-                )
-                projected.append(assertion)
-                incomplete_count += 1
-                continue
-
-            if source_kind == "conservation":
-                contract_refs = {
-                    _text(row.get("database_observer_contract_ref")) for row in terms
-                }
-                if len(contract_refs) != 1:
-                    gaps.append(
-                        {
-                            "assertion_id": _text(assertion.get("assertion_id")),
-                            "reason_code": "DATABASE_NUMERIC_CROSS_CONTRACT_SCOPE_UNPROVEN",
-                            "observer_contract_refs": sorted(contract_refs),
-                            "automatic_relation_mapping_allowed": False,
-                        }
-                    )
-                    projected.append(assertion)
-                    incomplete_count += 1
-                    continue
-
-            projected.append(_project_assertion(assertion, terms))
-            projected_count += 1
+        projected, gaps, ambiguous = _project_experiment_assertions(experiment)
+        incomplete_count += len(gaps)
 
         if ambiguous is not None:
             newly_blocked.append(_blocked(experiment, ambiguous))
@@ -448,13 +483,86 @@ def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict
             "before_state",
             "after_state",
         }.issubset(_observer_ids(experiment)):
-            newly_blocked.append(
-                _blocked(
+            # No approved database binding and no HTTP before/after observer.
+            # Before sealing the legacy HTTP-fallback block, try the
+            # schema-material-declared database numeric before/after observer
+            # chain: exact table/field/identity resolution from the parsed
+            # schema material, executed by the existing governed read-only
+            # database phase chain.
+            if _schema_numeric_fallback_available():
+                bound = _attempt_schema_numeric_binding(experiment)
+                observer_status = _text(
+                    _dict(bound.get("database_numeric_schema_observer")).get(
+                        "status"
+                    )
+                )
+                if observer_status == "BOUND":
+                    schema_bound_count += 1
+                    projected, gaps, ambiguous = _project_experiment_assertions(
+                        bound
+                    )
+                    incomplete_count += len(gaps)
+                    if ambiguous is not None:
+                        newly_blocked.append(_blocked(bound, ambiguous))
+                        continue
+                    experiment = bound
+                    experiment["assertions"] = projected
+                    unresolved_numeric = [
+                        row
+                        for row in projected
+                        if _source_kind(row) in _SOURCE_KINDS
+                    ]
+                    if unresolved_numeric and not {
+                        "before_state",
+                        "after_state",
+                    }.issubset(_observer_ids(experiment)):
+                        blocked = _blocked(
+                            experiment,
+                            {
+                                "reason": "legacy_numeric_assertion_requires_http_before_after",
+                                "unresolved_assertion_ids": [
+                                    _text(row.get("assertion_id"))
+                                    for row in unresolved_numeric
+                                ],
+                                "required_observer_ids": ["before_state", "after_state"],
+                                "present_observer_ids": sorted(_observer_ids(experiment)),
+                                "automatic_observer_recreation_allowed": False,
+                            },
+                            reason_code=_FALLBACK_BLOCK_REASON,
+                        )
+                        if gaps:
+                            blocked["database_numeric_projection_gaps"] = gaps
+                        newly_blocked.append(blocked)
+                        continue
+                else:
+                    schema_unresolved_count += 1
+                    blocked = _blocked(
+                        bound,
+                        {
+                            "reason": "legacy_numeric_assertion_requires_http_before_after",
+                            "unresolved_assertion_ids": [
+                                _text(row.get("assertion_id"))
+                                for row in unresolved_numeric
+                            ],
+                            "required_observer_ids": ["before_state", "after_state"],
+                            "present_observer_ids": sorted(_observer_ids(bound)),
+                            "automatic_observer_recreation_allowed": False,
+                            "schema_numeric_observation": "UNRESOLVED",
+                        },
+                        reason_code=_FALLBACK_BLOCK_REASON,
+                    )
+                    if gaps:
+                        blocked["database_numeric_projection_gaps"] = gaps
+                    newly_blocked.append(blocked)
+                    continue
+            else:
+                blocked = _blocked(
                     experiment,
                     {
                         "reason": "legacy_numeric_assertion_requires_http_before_after",
                         "unresolved_assertion_ids": [
-                            _text(row.get("assertion_id")) for row in unresolved_numeric
+                            _text(row.get("assertion_id"))
+                            for row in unresolved_numeric
                         ],
                         "required_observer_ids": ["before_state", "after_state"],
                         "present_observer_ids": sorted(_observer_ids(experiment)),
@@ -462,8 +570,10 @@ def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict
                     },
                     reason_code=_FALLBACK_BLOCK_REASON,
                 )
-            )
-            continue
+                if gaps:
+                    blocked["database_numeric_projection_gaps"] = gaps
+                newly_blocked.append(blocked)
+                continue
 
         numeric_rows = [
             row for row in projected if _source_kind(row) in _NUMERIC_KINDS
@@ -551,6 +661,8 @@ def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict
                 "projected_assertion_count": projected_count,
                 "incomplete_assertion_count": incomplete_count,
                 "newly_blocked_experiment_count": len(newly_blocked),
+                "schema_observer_bound_experiment_count": schema_bound_count,
+                "schema_observer_unresolved_experiment_count": schema_unresolved_count,
                 "automatic_field_mapping_count": 0,
                 "fuzzy_name_matching_count": 0,
                 "automatic_relation_mapping_count": 0,
