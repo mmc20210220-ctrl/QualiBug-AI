@@ -236,6 +236,14 @@ def build_llm_observability_receipt() -> dict[str, Any]:
     for o in processing_failures:
         reason = str(o["failure_reason"] or "unknown")
         processing_reasons[reason] = processing_reasons.get(reason, 0) + 1
+    # Parse *recoveries* are successful response_processing entries whose
+    # failure_reason carries "recovered:<method>" — content-free visibility
+    # into how often the tolerant parser had to salvage model output.
+    recoveries = [o for o in observations if o["kind"] == "response_processing" and o["success"]]
+    recovery_methods: dict[str, int] = {}
+    for o in recoveries:
+        method = str(o["failure_reason"] or "unknown")
+        recovery_methods[method] = recovery_methods.get(method, 0) + 1
 
     top_slow = sorted(calls, key=lambda o: int(o["latency_ms"] or 0), reverse=True)[:20]
     top_slow_calls = [
@@ -265,6 +273,7 @@ def build_llm_observability_receipt() -> dict[str, Any]:
             "successful_calls": len(succeeded),
             "failed_calls": len(failed),
             "response_processing_failures": len(processing_failures),
+            "parse_recovered_calls": len(recoveries),
             "total_latency_ms": total_latency,
             "latency_p50_ms": _percentile(latencies, 0.50),
             "latency_p95_ms": _percentile(latencies, 0.95),
@@ -289,6 +298,10 @@ def build_llm_observability_receipt() -> dict[str, Any]:
         "response_processing_failures": {
             "count": len(processing_failures),
             "by_reason": processing_reasons,
+        },
+        "parse_recoveries": {
+            "count": len(recoveries),
+            "by_method": recovery_methods,
         },
         "top_slow_calls": top_slow_calls,
     }
@@ -1179,6 +1192,24 @@ class ReasoningClientError(RuntimeError):
     pass
 
 
+# Sentinel returned by the tolerant JSON parser when a candidate does not
+# parse at all (distinct from a candidate that parses to a non-dict root).
+_UNPARSEABLE = object()
+
+
+class _JsonContentParseError(ReasoningClientError):
+    """Internal: content-level JSON parse failure carrying a granular reason.
+
+    Never escapes :meth:`ReasoningClient._parse_json` — it is translated into
+    a plain :class:`ReasoningClientError` (plus a granular observation) so
+    downstream message/type matchers keep their existing contracts.
+    """
+
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
 class ReasoningClient:
     """LLM client for business reasoning. Uses OpenAI-compatible Chat Completions
     API (stdlib only, same as the rest of QualiBug)."""
@@ -1276,8 +1307,10 @@ class ReasoningClient:
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "tokens_estimated": bool(tokens_estimated),
-            # The client performs no internal retries; higher-level retry
-            # loops (e.g. reasoner workers) surface as separate observations.
+            # The client performs at most one bounded internal retry per
+            # call — and only for response-parse failures (see
+            # _chat_with_parse_retry). Every attempt surfaces as its own
+            # observation, so the receipt never hides retried traffic.
             "retry_count": 0,
             "failure_reason": failure_reason,
             "failure_code": failure_code,
@@ -1296,6 +1329,22 @@ class ReasoningClient:
             latency_ms=0,
             http_status=None,
             failure_reason=failure_reason,
+            failure_code=None,
+        )
+
+    def _record_processing_recovery(self, call_point: str, method: str) -> None:
+        """Record a successful response-processing parse that required
+        tolerance (fence/comment stripping, substring extraction, truncation
+        closure). ``failure_reason`` carries ``recovered:<method>`` and is
+        aggregated by the receipt's ``parse_recoveries`` section."""
+        self._record_observation(
+            call_point=call_point,
+            kind="response_processing",
+            model=None,
+            success=True,
+            latency_ms=0,
+            http_status=None,
+            failure_reason=f"recovered:{method}",
             failure_code=None,
         )
 
@@ -1374,13 +1423,12 @@ class ReasoningClient:
             user_prompt += FACT_BLOCK_HEADER + str(retrieved_facts)[:3000]
 
         try:
-            response_text = self._chat(
+            return self._chat_with_parse_retry(
                 user_prompt,
                 system_prompt=system_prompt,
                 model=model,
                 call_point=engine_type,
             )
-            return self._parse_json(response_text, call_point=engine_type)
         except Exception:
             return None
 
@@ -1507,44 +1555,392 @@ class ReasoningClient:
             )
             raise ReasoningClientError(f"LLM network error: {exc}") from exc
 
+    def _chat_with_parse_retry(
+        self,
+        user_prompt: str,
+        *,
+        system_prompt: str | None,
+        model: str,
+        call_point: str,
+    ) -> dict[str, Any]:
+        """Run one chat round trip and parse its JSON contract, retrying the
+        *identical payload* once when the parse fails.
+
+        Parse failures happen when the provider returns output that the
+        tolerant parser cannot salvage (explanation-wrapped prose, hard
+        truncation, non-JSON content). Model output is sampled, so one bounded
+        retry can yield a clean response; each attempt is recorded as its own
+        observation and no more than one retry is ever made (run10 p50≈36s —
+        unbounded retries would burn scan time). HTTP/network failures are
+        never retried here; they already carry their own error contract.
+        """
+        raw = self._chat(
+            user_prompt,
+            system_prompt=system_prompt,
+            model=model,
+            call_point=call_point,
+        )
+        try:
+            return self._parse_json(raw, call_point=call_point)
+        except ReasoningClientError as exc:
+            _llm_logger.info(
+                "LLM parse failed, retrying once: %s",
+                exc,
+                extra={"context": {"call_point": call_point, "retry": 1}},
+            )
+            raw = self._chat(
+                user_prompt,
+                system_prompt=system_prompt,
+                model=model,
+                call_point=call_point,
+            )
+            return self._parse_json(raw, call_point=call_point)
+
+    # ------------------------------------------------------------------
+    # LLM output parse tolerance (root-cause fix for run10's 62% parse
+    # failure rate on chat_json: DeepSeek wraps JSON in explanation text,
+    # uses fenced JSON with language tags, emits JSONC comments/trailing
+    # commas, returns content as part lists, or truncates at max_tokens).
+    # Recovery is purely mechanical and content-free — it never infers
+    # request bodies, credentials, business rules or impact.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_message_content(raw: dict[str, Any]) -> tuple[Any, str]:
+        """Pull the message content and finish_reason from a chat-completion
+        envelope. Raises KeyError/IndexError/TypeError on shape violations so
+        the caller can classify them as ``shape_error``.
+
+        OpenAI-compatible providers (e.g. DeepSeek thinking mode) may return
+        ``content`` as a list of typed parts or as a ``{"text": ...}`` dict
+        instead of a plain string — all string parts are joined.
+        """
+        choices = raw["choices"]
+        if not isinstance(choices, list) or not choices:
+            raise KeyError("choices")
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise KeyError("choice")
+        message = choice["message"]
+        if not isinstance(message, dict):
+            raise KeyError("message")
+        finish_reason = str(choice.get("finish_reason") or "").lower()
+        content = message.get("content")
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+                elif isinstance(part, str):
+                    parts.append(part)
+            content = "".join(parts)
+        elif isinstance(content, dict) and isinstance(content.get("text"), str):
+            content = content["text"]
+        return content, finish_reason
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        """Strip one markdown ``` fence around JSON, tolerating a language
+        tag (```json, ```JSON, ```text, ...). Text without a leading fence is
+        returned unchanged; an unclosed fence keeps all lines after the
+        opener as content."""
+        stripped = text.strip()
+        if not stripped.startswith("```"):
+            return text
+        lines = stripped.splitlines()
+        if not lines or not lines[0].strip().startswith("```"):
+            return text
+        rest = lines[1:]
+        if rest and rest[-1].strip().startswith("```"):
+            rest = rest[:-1]
+        return "\n".join(rest).strip()
+
+    @staticmethod
+    def _strip_json_comments(text: str) -> str:
+        """Remove JSONC comments (``//`` and ``/* */``) and trailing commas
+        outside strings. String-aware, so markers inside quoted values are
+        never touched."""
+        out: list[str] = []
+        i = 0
+        n = len(text)
+        in_str = False
+        escape = False
+        while i < n:
+            ch = text[i]
+            if in_str:
+                out.append(ch)
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+                i += 1
+                continue
+            if ch == '"':
+                in_str = True
+                out.append(ch)
+                i += 1
+                continue
+            if ch == "/" and i + 1 < n and text[i + 1] == "/":
+                j = text.find("\n", i)
+                i = n if j == -1 else j
+                continue
+            if ch == "/" and i + 1 < n and text[i + 1] == "*":
+                j = text.find("*/", i + 2)
+                i = n if j == -1 else j + 2
+                continue
+            if ch == ",":
+                j = i + 1
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                if j < n and text[j] in "}]":
+                    i += 1
+                    continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
+
+    @staticmethod
+    def _iter_json_spans(text: str):
+        """Yield ``(candidate, closed)`` for each outermost JSON value found
+        embedded in ``text``, scanning past a candidate when more text follows
+        it (e.g. prose containing ``{placeholders}`` before the real JSON).
+
+        ``closed=False`` means the text ends before the structure closes
+        (provider truncation at max_tokens). Brace/bracket matching is
+        string-aware: braces inside quoted values never count.
+        """
+        n = len(text)
+        search_from = 0
+        while search_from < n:
+            start = -1
+            in_str = False
+            escape = False
+            i = search_from
+            while i < n:
+                ch = text[i]
+                if in_str:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_str = False
+                elif ch == '"':
+                    in_str = True
+                elif ch in "{[":
+                    start = i
+                    break
+                i += 1
+            if start < 0:
+                return
+            stack: list[str] = []
+            j = start
+            in_str = False
+            escape = False
+            while j < n:
+                ch = text[j]
+                if in_str:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch in "{[":
+                        stack.append(ch)
+                    elif ch == "}" and stack and stack[-1] == "{":
+                        stack.pop()
+                        if not stack:
+                            break
+                    elif ch == "]" and stack and stack[-1] == "[":
+                        stack.pop()
+                        if not stack:
+                            break
+                j += 1
+            if stack:
+                yield text[start:], False
+                return
+            end = j + 1
+            yield text[start:end], True
+            search_from = end
+
+    @staticmethod
+    def _close_truncated_json(text: str) -> str | None:
+        """Progressively close truncated JSON: terminate a dangling string
+        and every still-open ``{`` / ``[`` in reverse order. Returns the
+        closed text, or None when nothing needs closing."""
+        stack: list[str] = []
+        in_str = False
+        escape = False
+        for ch in text:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch in "{[":
+                stack.append(ch)
+            elif ch == "}" and stack and stack[-1] == "{":
+                stack.pop()
+            elif ch == "]" and stack and stack[-1] == "[":
+                stack.pop()
+        suffix = ""
+        if in_str:
+            suffix += '"'
+        for opener in reversed(stack):
+            suffix += "}" if opener == "{" else "]"
+        if not suffix:
+            return None
+        return text + suffix
+
+    @classmethod
+    def _parse_content_json(cls, content: str) -> tuple[Any, str]:
+        """Parse model ``content`` into a JSON object with progressive
+        tolerance. Returns ``(parsed, recovery_method)`` where method is one
+        of ``clean`` / ``fenced`` / ``comments`` / ``extracted`` /
+        ``truncated_closed``. Raises :class:`_JsonContentParseError` with a
+        granular reason (``not_json`` / ``prefix_text`` / ``truncated``) when
+        nothing parses."""
+        text = (content or "").lstrip("\ufeff \t\r\n")
+        fenced_text = cls._strip_code_fence(text)
+        fenced = fenced_text != text
+        cleaned = cls._strip_json_comments(fenced_text)
+        comments = cleaned != fenced_text
+
+        def _parse_dict(candidate: str) -> tuple[Any, bool]:
+            try:
+                parsed = json.loads(candidate)
+                return parsed, isinstance(parsed, dict)
+            except (TypeError, json.JSONDecodeError):
+                return _UNPARSEABLE, False
+
+        non_dict_root = False
+        saw_candidate = False
+
+        parsed, is_dict = _parse_dict(fenced_text)
+        if is_dict:
+            return parsed, "fenced" if fenced else "clean"
+        if parsed is not _UNPARSEABLE:
+            non_dict_root = True
+
+        parsed, is_dict = _parse_dict(cleaned)
+        if is_dict:
+            return parsed, "comments"
+        if parsed is not _UNPARSEABLE:
+            non_dict_root = True
+
+        for candidate, closed in cls._iter_json_spans(cleaned):
+            saw_candidate = True
+            if not closed:
+                closed_text = cls._close_truncated_json(candidate)
+                if closed_text is not None:
+                    parsed, is_dict = _parse_dict(closed_text)
+                    if is_dict:
+                        return parsed, "truncated_closed"
+                    if parsed is not _UNPARSEABLE:
+                        non_dict_root = True
+                if non_dict_root:
+                    raise _JsonContentParseError(
+                        "shape_error", "LLM JSON root must be an object"
+                    )
+                raise _JsonContentParseError(
+                    "truncated",
+                    f"LLM output JSON is truncated and cannot be salvaged "
+                    f"(parse_reason=truncated): {content[:300]}",
+                )
+            parsed, is_dict = _parse_dict(candidate)
+            if is_dict:
+                return parsed, "extracted"
+            if parsed is not _UNPARSEABLE:
+                non_dict_root = True
+
+        if non_dict_root:
+            raise _JsonContentParseError("shape_error", "LLM JSON root must be an object")
+        if not saw_candidate:
+            raise _JsonContentParseError(
+                "not_json",
+                f"LLM output is not valid JSON (parse_reason=not_json): {content[:300]}",
+            )
+        raise _JsonContentParseError(
+            "prefix_text",
+            f"LLM output JSON is malformed (parse_reason=prefix_text): {content[:300]}",
+        )
+
     def _parse_json(
         self,
         response_text: str,
         *,
         call_point: str = "response_processing",
     ) -> dict[str, Any]:
+        """Parse the chat-completion envelope and its JSON content contract.
+
+        Tolerance pipeline (all content-free):
+        1. envelope shape extraction (``shape_error`` on violations, including
+           DeepSeek-style content part lists);
+        2. code-fence stripping with language tags;
+        3. JSONC comment / trailing-comma stripping;
+        4. embedded JSON substring extraction (``extracted``);
+        5. truncation closure when the structure never closes
+           (``truncated_closed`` when salvage succeeds).
+
+        Failures are recorded with granular reasons — ``shape_error`` /
+        ``not_json`` / ``prefix_text`` / ``truncated`` — and still raise
+        plain :class:`ReasoningClientError`, so downstream matchers
+        (agent_semantic_linker, stage_reason_all_v2) keep their contracts.
+        """
         try:
             raw = json.loads(response_text)
-            content = raw["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            self._record_processing_failure(call_point, "response_parse_error")
+        except (TypeError, json.JSONDecodeError) as exc:
+            self._record_processing_failure(call_point, "shape_error")
+            raise ReasoningClientError(f"Unexpected LLM response shape: {exc}") from exc
+        if not isinstance(raw, dict):
+            self._record_processing_failure(call_point, "shape_error")
+            raise ReasoningClientError("Unexpected LLM response shape: envelope is not an object")
+        try:
+            content, finish_reason = self._extract_message_content(raw)
+        except (KeyError, IndexError, TypeError) as exc:
+            self._record_processing_failure(call_point, "shape_error")
             raise ReasoningClientError(f"Unexpected LLM response shape: {exc}") from exc
 
         if not isinstance(content, str) or not content.strip():
-            self._record_processing_failure(call_point, "response_parse_error")
+            self._record_processing_failure(call_point, "not_json")
             raise ReasoningClientError("LLM response did not include JSON content")
 
-        # Handle models that wrap JSON in ``` fences
-        cleaned = content.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.splitlines()
-            if lines and lines[0].lstrip().startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip().startswith("```"):
-                lines = lines[:-1]
-            cleaned = "\n".join(lines).strip()
-
+        truncated = finish_reason == "length"
         try:
-            parsed = json.loads(cleaned)
-            if not isinstance(parsed, dict):
-                self._record_processing_failure(call_point, "response_parse_error")
-                raise ReasoningClientError("LLM JSON root must be an object")
-            return parsed
-        except json.JSONDecodeError as exc:
-            self._record_processing_failure(call_point, "response_parse_error")
-            raise ReasoningClientError(
-                f"LLM output is not valid JSON: {cleaned[:300]}"
-            ) from exc
+            parsed, recovery = self._parse_content_json(content)
+        except _JsonContentParseError as exc:
+            # A length-limited response that still fails to parse is a
+            # truncation casualty regardless of the mechanical reason.
+            reason = "truncated" if truncated and exc.reason in ("prefix_text", "not_json") else exc.reason
+            self._record_processing_failure(call_point, reason)
+            message = str(exc)
+            if reason != exc.reason:
+                message = message.replace(f"parse_reason={exc.reason}", f"parse_reason={reason}")
+            raise ReasoningClientError(message) from exc
+
+        if recovery != "clean" or truncated:
+            method = recovery
+            if truncated and recovery in ("clean", "fenced", "comments", "extracted"):
+                # Parsed but the provider cut the output at max_tokens —
+                # mark the call so receipts never present a truncated dict
+                # as a fully clean parse.
+                method = "truncated_flagged"
+            self._record_processing_recovery(call_point, method)
+        return parsed
 
     def chat_json(self, user_prompt: str, *, system_prompt: str | None = None, tier: str = DEFAULT_TIER) -> dict[str, Any]:
         """Run one JSON-only advisory request using the shared provider settings.
@@ -1557,8 +1953,12 @@ class ReasoningClient:
         if not self.config.enabled:
             raise ReasoningClientError("LLM is not configured")
         model = resolve_model_for_tier(self.config, tier)
-        raw = self._chat(user_prompt, system_prompt=system_prompt, model=model, call_point="chat_json")
-        return self._parse_json(raw, call_point="chat_json")
+        return self._chat_with_parse_retry(
+            user_prompt,
+            system_prompt=system_prompt,
+            model=model,
+            call_point="chat_json",
+        )
 
     def complete_json(
         self,
@@ -2049,8 +2449,10 @@ def reason_layered(
                 reader_prompt = reader_template.format(**{
                     k: (v or "(not provided)")[:8000] for k, v in context.items()
                 })
-                reader_output = client._parse_json(
-                    client._chat(reader_prompt, system_prompt=READER_SYSTEM_PROMPT, call_point="reader"),
+                reader_output = client._chat_with_parse_retry(
+                    reader_prompt,
+                    system_prompt=READER_SYSTEM_PROMPT,
+                    model=resolve_model_for_tier(client.config, DEFAULT_TIER),
                     call_point="reader",
                 )
                 result["reader_output"] = reader_output
@@ -2069,8 +2471,10 @@ def reason_layered(
             reasoner_prompt = reasoner_template.format(**{
                 k: (v or "(not provided)")[:8000] for k, v in enriched_context.items()
             })
-            reasoner_output = client._parse_json(
-                client._chat(reasoner_prompt, system_prompt=REASONER_SYSTEM_PROMPT, call_point="reasoner"),
+            reasoner_output = client._chat_with_parse_retry(
+                reasoner_prompt,
+                system_prompt=REASONER_SYSTEM_PROMPT,
+                model=resolve_model_for_tier(client.config, DEFAULT_TIER),
                 call_point="reasoner",
             )
             result["reasoner_hypotheses"] = reasoner_output
@@ -2085,8 +2489,10 @@ def reason_layered(
                 api_responses=api_responses[:6000],
                 runtime_observations=runtime_observations[:3000],
             )
-            verifications = client._parse_json(
-                client._chat(verifier_prompt, system_prompt=VERIFIER_SYSTEM_PROMPT, call_point="verifier"),
+            verifications = client._chat_with_parse_retry(
+                verifier_prompt,
+                system_prompt=VERIFIER_SYSTEM_PROMPT,
+                model=resolve_model_for_tier(client.config, DEFAULT_TIER),
                 call_point="verifier",
             )
             result["verifications"] = verifications

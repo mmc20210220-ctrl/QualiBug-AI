@@ -188,13 +188,16 @@ def test_parse_failure_recorded_as_processing():
         with pytest.raises(Exception):
             client.chat_json("hi")
     obs = llm_observation_snapshot()
-    assert len(obs) == 2
+    # chat_json performs one bounded retry on parse failure: 2 HTTP attempts
+    # (each recorded as a chat observation) + 2 processing failures.
+    assert len(obs) == 4
     kinds = {o["kind"] for o in obs}
     assert kinds == {"chat", "response_processing"}
-    proc = [o for o in obs if o["kind"] == "response_processing"][0]
-    assert proc["success"] is False
-    assert proc["failure_reason"] == "response_parse_error"
-    assert proc["call_point"] == "chat_json"
+    proc = [o for o in obs if o["kind"] == "response_processing"]
+    assert all(o["success"] is False for o in proc)
+    # Granular failure reasons replace the old blanket response_parse_error.
+    assert all(o["failure_reason"] == "not_json" for o in proc)
+    assert all(o["call_point"] == "chat_json" for o in proc)
 
 
 def test_reason_swallows_failure_but_records_observation():
