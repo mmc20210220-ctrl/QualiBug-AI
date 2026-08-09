@@ -172,12 +172,13 @@ def test_attach_evidence_paragraphs_passthrough_and_idempotent():
     )
     finding["description"] = "original"
     enriched = attach_evidence_paragraphs(finding, statements=["规则A"])
-    description = enriched["description"]
-    assert "源契约: 规则A" in description
-    assert "运行时证据: " in description
-    assert "观察query形态=userId=<uuid>" in description
+    # description is the fingerprinted payload: untouched.
+    assert enriched["description"] == "original"
+    assert "源契约: 规则A" in enriched["contract_evidence"]
+    assert "运行时证据: " in enriched["runtime_observation"]
+    assert "观察query形态=userId=<uuid>" in enriched["runtime_observation"]
     # Idempotent: a second pass must not duplicate paragraphs.
     enriched2 = attach_evidence_paragraphs(enriched, statements=["规则A"])
-    assert enriched2["description"].count("运行时证据: ") == 1
-    assert enriched2["description"].count("源契约: ") == 1
-    assert "original" in enriched2["description"]
+    assert enriched2["runtime_observation"].count("运行时证据: ") == 1
+    assert enriched2["contract_evidence"].count("源契约: ") == 1
+    assert enriched2["description"] == "original"

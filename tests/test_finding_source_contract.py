@@ -3,6 +3,11 @@
 paragraphs on delivered findings.
 
 Synthetic industry-neutral data only (no benchmark vocabulary).
+
+Evidence paragraphs are stored on dedicated fields (``contract_evidence`` /
+``runtime_observation``) — never appended to ``description``/``title`` — so the
+delivery gate's ``finding_payload_fingerprint`` (bound to the description/title
+payload at gate-build time) stays stable across later enrichment passes.
 """
 import pytest
 
@@ -48,37 +53,36 @@ def test_all_bound_rule_statements_are_carried():
     assert statements == ["库存不得为负", "同一幂等键不得重复扣款", "金额关系必须保持一致"]
 
 
-def test_paragraphs_appended_prefix_preserved():
+def test_paragraphs_stored_on_dedicated_fields_description_untouched():
     finding = _finding()
     out = attach_evidence_paragraphs(finding, statements=["库存不得为负"])
-    desc = out["description"]
-    assert "源契约: 库存不得为负" in desc
-    assert "运行时证据: " in desc
-    assert "角色 operator 对照实验" in desc
-    assert "PUT /v1/items/a1" in desc
-    assert "control=成功" in desc
-    assert "复现: PUT /v1/items/a1 -> HTTP 200" in desc
-    assert "观察HTTP状态=200" in desc
-    # original text and machine-readable title untouched
-    assert out["description"].startswith(
-        "control=admin succeeded; treatment=operator violated the typed assertion"
-    )
+    # Title and description are the fingerprinted payload: byte-identical.
+    assert out["description"] == finding["description"]
     assert out["title"] == finding["title"]
+    # Evidence paragraphs live on dedicated fields.
+    assert "源契约: 库存不得为负" in out["contract_evidence"]
+    assert "运行时证据: " in out["runtime_observation"]
+    assert "角色 operator 对照实验" in out["runtime_observation"]
+    assert "PUT /v1/items/a1" in out["runtime_observation"]
+    assert "control=成功" in out["runtime_observation"]
+    assert "复现: PUT /v1/items/a1 -> HTTP 200" in out["runtime_observation"]
+    assert "观察HTTP状态=200" in out["runtime_observation"]
 
 
-def test_exp_derived_statements_appended_without_explicit_list():
+def test_exp_derived_statements_without_explicit_list():
     exp = {"assertions": [{"property": {"expression": {"raw": "订单必须处于待支付状态"}}}]}
     out = attach_evidence_paragraphs(_finding(), exp=exp)
-    assert "源契约: 订单必须处于待支付状态" in out["description"]
-    assert "运行时证据: " in out["description"]
+    assert "源契约: 订单必须处于待支付状态" in out["contract_evidence"]
+    assert "运行时证据: " in out["runtime_observation"]
+    assert out["description"] == _finding()["description"]
 
 
 def test_no_rules_no_injection():
-    # no bound rules -> no 源契约 paragraph; runtime evidence still present
+    # no bound rules -> no contract_evidence; runtime evidence still present
     finding = _finding(description="")
     out = attach_evidence_paragraphs(finding, statements=[])
-    assert "源契约:" not in out["description"]
-    assert "运行时证据: " in out["description"]
+    assert not out.get("contract_evidence")
+    assert "运行时证据: " in out["runtime_observation"]
     # no runtime evidence at all -> completely unchanged
     bare = {"title": "t", "description": "nothing observed"}
     out_bare = attach_evidence_paragraphs(bare, statements=[])
@@ -89,10 +93,13 @@ def test_idempotent_merge():
     finding = _finding()
     once = attach_evidence_paragraphs(finding, statements=["规则一"])
     twice = attach_evidence_paragraphs(once, statements=["规则二"])
-    desc = twice["description"]
-    assert desc.count("源契约:") == 1
-    assert "规则一" in desc and "规则二" in desc
-    assert desc.count("运行时证据:") == 1
+    assert twice["contract_evidence"].count("源契约:") == 1
+    assert "规则一" in twice["contract_evidence"]
+    assert "规则二" in twice["contract_evidence"]
+    assert twice["runtime_observation"].count("运行时证据:") == 1
+    assert twice["description"] == finding["description"]
+    # Re-applying the same statements is a no-op (byte-identical finding).
+    assert attach_evidence_paragraphs(twice, statements=["规则一"]) == twice
 
 
 def test_governed_result_enrichment():
@@ -103,8 +110,9 @@ def test_governed_result_enrichment():
     )
     assert len(out["findings"]) == 2
     for row in out["findings"]:
-        assert "源契约: 必须保持守恒" in row["description"]
-        assert "运行时证据: " in row["description"]
+        assert "源契约: 必须保持守恒" in row["contract_evidence"]
+        assert "运行时证据: " in row["runtime_observation"]
+        assert row["description"] == _finding()["description"]
 
 
 def test_asset_statement_index_and_source_ref_resolution():
@@ -143,4 +151,21 @@ def test_no_fabrication_for_unbound_obligations():
     )
     assert statements == []
     out = attach_evidence_paragraphs(_finding(), statements=[])
-    assert "源契约:" not in out["description"]
+    assert not out.get("contract_evidence")
+
+
+def test_legacy_description_paragraphs_kept_and_merged_into_fields():
+    # Pre-fix persisted findings carry the paragraphs inside description and
+    # their gate fingerprint includes that text: the fixed injector must leave
+    # description byte-identical and only merge new statements into the fields.
+    finding = _finding()
+    finding["description"] = (
+        "control=admin succeeded; treatment=operator violated the typed assertion\n"
+        "源契约: 旧规则一\n"
+        "运行时证据: 角色 operator 对照实验"
+    )
+    out = attach_evidence_paragraphs(finding, statements=["新规则二"])
+    assert out["description"] == finding["description"]
+    assert "源契约: 旧规则一; 新规则二" == out["contract_evidence"]
+    # Legacy 运行时证据 paragraph stays in description; no duplicate field.
+    assert not out.get("runtime_observation")

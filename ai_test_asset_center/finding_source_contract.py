@@ -7,26 +7,32 @@ matches on the finding text blob; without the source contract statement the
 obligation was bound to, and without the runtime observations the experiment
 produced, there is no semantic signal to align against.
 
-Two evidence paragraphs are appended to the finding ``description``:
+Two evidence paragraphs are stored on dedicated finding fields (never appended
+to ``description`` / ``title`` — those must stay byte-identical from the moment
+the delivery gate binds ``finding_payload_fingerprint``):
 
-1. ``源契约: ...`` — verbatim statement texts of the rules the obligation was
-   bound to.  Sources are strictly: (a) the compiled rule statements carried
-   on the experiment's assertions (``property.expression.raw`` /
-   ``property.description`` / ``field_rule_binding.typed_expression.raw`` /
-   ``assertion.description``), and (b) rule/permission statement texts
-   resolved from the knowledge asset through the finding's own ``source_refs``
-   (permission-matrix rows, rule library, interface contracts).  Nothing is
-   invented: an obligation without a bound rule statement simply contributes
-   nothing.
-2. ``运行时证据: ...`` — the observed runtime evidence of the executed
-   experiment: actor role(s), interface path, dual-arm comparison outcome
-   (control vs treatment), assertion kinds, reproduction steps, observed HTTP
-   status and observed response body summary.  This paragraph is always
-   present: runtime observation is legitimate evidence even when the source
+1. ``contract_evidence`` — verbatim statement texts of the rules the obligation
+   was bound to, as a ``源契约: ...`` paragraph.  Sources are strictly: (a) the
+   compiled rule statements carried on the experiment's assertions
+   (``property.expression.raw`` / ``property.description`` /
+   ``field_rule_binding.typed_expression.raw`` / ``assertion.description``),
+   and (b) rule/permission statement texts resolved from the knowledge asset
+   through the finding's own ``source_refs`` (permission-matrix rows, rule
+   library, interface contracts).  Nothing is invented: an obligation without
+   a bound rule statement simply contributes nothing.
+2. ``runtime_observation`` — the observed runtime evidence of the executed
+   experiment, as a ``运行时证据: ...`` paragraph: actor role(s), interface
+   path, dual-arm comparison outcome (control vs treatment), assertion kinds,
+   reproduction steps, observed HTTP status and observed response body
+   summary.  This field is always populated when the finding carries runtime
+   evidence: runtime observation is legitimate evidence even when the source
    materials never stated the violated rule.
 
 The machine-readable title prefix and the original description are preserved
-unchanged; the paragraphs are appended idempotently.
+unchanged; injection is idempotent.  Legacy persisted findings that already
+carry ``源契约:`` / ``运行时证据:`` lines inside ``description`` keep them
+untouched (they are part of the fingerprinted payload of their own gate) —
+new injections land in the dedicated fields only.
 """
 from __future__ import annotations
 
@@ -521,6 +527,24 @@ def build_runtime_evidence_text(
     return "；".join(parts)
 
 
+def _paragraph_statements(text: str) -> list[str]:
+    """Normalized statement list inside one ``源契约: ...`` paragraph body.
+
+    Used to merge statements already carried on the finding — either in the
+    dedicated ``contract_evidence`` field (current scheme) or in legacy
+    ``源契约:`` lines inside ``description`` (persisted pre-fix findings).
+    """
+    statements: list[str] = []
+    body = _text(text)
+    if body.startswith(_CONTRACT_PREFIX):
+        body = body[len(_CONTRACT_PREFIX):]
+    for statement in body.split("; "):
+        normalized = _normalize_statement(statement)
+        if normalized:
+            statements.append(normalized)
+    return statements
+
+
 def attach_evidence_paragraphs(
     finding: dict[str, Any],
     *,
@@ -529,67 +553,85 @@ def attach_evidence_paragraphs(
     with_runtime_evidence: bool = True,
     include_observed_payloads: bool = True,
 ) -> dict[str, Any]:
-    """Append ``源契约`` and ``运行时证据`` paragraphs to one finding.
+    """Store ``源契约`` and ``运行时证据`` paragraphs on dedicated fields.
 
-    - ``源契约`` is appended only when bound rule statement texts exist
-      (from ``statements`` or collected from ``exp``) — nothing is fabricated
-      for obligations without rule associations.
-    - ``运行时证据`` is always appended when the finding carries runtime
-      evidence.
+    The paragraphs are written to ``contract_evidence`` and
+    ``runtime_observation`` — never appended to ``description``/``title``.
+    ``description`` and ``title`` are the core evidence payload the delivery
+    gate binds with ``finding_payload_fingerprint`` at gate-build time; any
+    later mutation (e.g. the asset-index enrichment pass that runs after the
+    batch returns) would re-derive a different fingerprint and fail delivery
+    with ``finding_payload_fingerprint_mismatch``.  Dedicated fields keep the
+    injected matching material out of the fingerprinted payload while still
+    feeding the evaluator blob (benchmark_evaluator ``_finding_text_blob``
+    reads them).
+
+    - ``源契约`` (``contract_evidence``) is populated only when bound rule
+      statement texts exist (from ``statements`` or collected from ``exp``) —
+      nothing is fabricated for obligations without rule associations.
+    - ``运行时证据`` (``runtime_observation``) is populated when the finding
+      carries runtime evidence.
     - ``include_observed_payloads`` controls whether the observed request
       query shapes / request bodies / response bodies are included as
       matching material (default on).
-    - Existing description text is preserved; appends are idempotent.
+    - Original ``title``/``description`` are preserved byte-for-byte; appends
+      are idempotent.  Legacy ``源契约:``/``运行时证据:`` lines already present
+      in ``description`` (pre-fix persisted findings) are left untouched and
+      only merged into the fields, never rewritten into the description.
     """
     if not isinstance(finding, dict):
         return finding
     description = _text(finding.get("description"))
-    source_statements = list(statements or [])
+    new_statements = list(statements or [])
     if exp is not None:
-        source_statements = list(dict.fromkeys(
-            [*source_statements, *collect_experiment_rule_statements(exp)]
+        new_statements = list(dict.fromkeys(
+            [*new_statements, *collect_experiment_rule_statements(exp)]
         ))
-    source_statements = list(dict.fromkeys(s for s in source_statements if _text(s)))
+    new_statements = list(dict.fromkeys(s for s in new_statements if _text(s)))
 
-    # Merge into an existing 源契约 paragraph (idempotent, no duplication).
-    existing_contract_lines: list[str] = []
+    # Merge statements already carried on the finding — the dedicated field
+    # (current scheme) and legacy description paragraphs (old scheme) — so a
+    # later pass extends rather than duplicates.  Existing statements come
+    # first so the paragraph order is deterministic across passes (idempotent).
+    existing_statements: list[str] = []
+    existing_field = _text(finding.get("contract_evidence"))
+    if existing_field:
+        existing_statements.extend(_paragraph_statements(existing_field))
     if _CONTRACT_PREFIX in description:
-        existing_contract_lines = [
-            _normalize_statement(line)
-            for line in description.splitlines()
-            if line.startswith(_CONTRACT_PREFIX)
-        ]
-        for line in existing_contract_lines:
-            body = line[len(_CONTRACT_PREFIX):]
-            for statement in body.split("; "):
-                normalized = _normalize_statement(statement)
-                if normalized:
-                    source_statements.append(normalized)
-        source_statements = list(dict.fromkeys(source_statements))
+        for line in description.splitlines():
+            if line.startswith(_CONTRACT_PREFIX):
+                existing_statements.extend(_paragraph_statements(line))
+    source_statements = list(dict.fromkeys(
+        [*existing_statements, *new_statements]
+    ))
 
-    paragraphs: list[str] = []
+    contract_text = ""
     if source_statements:
-        paragraphs.append(_CONTRACT_PREFIX + "; ".join(source_statements))
-    if with_runtime_evidence and _EVIDENCE_PREFIX not in description:
+        contract_text = _CONTRACT_PREFIX + "; ".join(source_statements)
+
+    runtime_text = ""
+    if (
+        with_runtime_evidence
+        and not _text(finding.get("runtime_observation"))
+        and _EVIDENCE_PREFIX not in description
+    ):
         evidence_text = build_runtime_evidence_text(
             finding,
             description=description,
             include_observed_payloads=include_observed_payloads,
         )
         if evidence_text:
-            paragraphs.append(_EVIDENCE_PREFIX + evidence_text)
-    if not paragraphs:
-        return finding
-    kept_lines = [
-        line
-        for line in description.splitlines()
-        if not line.startswith(_CONTRACT_PREFIX)
-    ]
+            runtime_text = _EVIDENCE_PREFIX + evidence_text
+
     enriched = dict(finding)
-    enriched["description"] = "\n".join(
-        [*kept_lines, *paragraphs]
-    ) if kept_lines else "\n".join(paragraphs)
-    return enriched
+    changed = False
+    if contract_text and contract_text != _text(enriched.get("contract_evidence")):
+        enriched["contract_evidence"] = contract_text
+        changed = True
+    if runtime_text and runtime_text != _text(enriched.get("runtime_observation")):
+        enriched["runtime_observation"] = runtime_text
+        changed = True
+    return enriched if changed else finding
 
 
 def enrich_governed_result(

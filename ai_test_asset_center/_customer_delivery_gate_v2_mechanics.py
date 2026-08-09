@@ -58,6 +58,7 @@ _IDENTITY_FIELDS = (
 _DERIVED_FINDING_FIELDS = frozenset({
     "canonical_defect_id",
     "canonical_identity_fingerprint",
+    "contract_evidence",
     "customer_delivery_gate_reasons",
     "customer_delivery_status",
     "customer_visible",
@@ -71,6 +72,7 @@ _DERIVED_FINDING_FIELDS = frozenset({
     "duplicate_variants",
     "finding_class",
     "gate_passed",
+    "runtime_observation",
     "semantic_delivery_gate_status",
     "shadow_origin",
 })
@@ -1478,6 +1480,8 @@ def validate_customer_delivery_gate_receipt_v2(
             try:
                 import json as _json
 
+                from .artifact_redactor import redact_artifact
+
                 _diag = _dict(finding)
                 _raw = _json.dumps(_diag, ensure_ascii=False, default=str)
                 _red1, _ = redact_artifact(_diag)
@@ -1488,20 +1492,13 @@ def validate_customer_delivery_gate_receipt_v2(
                 _red_keys = sorted(_red1.keys()) if isinstance(_red1, dict) else []
                 _recomputed = finding_payload_fingerprint(_diag)
                 print(
-                    "FINGERPRINT_DIAG finding_id=%s expected=%s recomputed=%s "
-                    "redact_idempotent=%s raw_chars=%d sensitive=%s "
-                    "raw_keys=%s red_keys=%s redact_added_keys=%s redact_dropped_keys=%s",
-                    _text(_diag.get("finding_id") or _diag.get("id")),
-                    payload_fingerprint[:16],
-                    _recomputed[:16],
-                    _json.dumps(_red1, ensure_ascii=False, sort_keys=True, default=str)
-                    == _json.dumps(_red2, ensure_ascii=False, sort_keys=True, default=str),
-                    len(_raw),
-                    ",".join(_sensitive) or "none",
-                    ",".join(_raw_keys)[:300],
-                    ",".join(_red_keys)[:300],
-                    ",".join(sorted(set(_red_keys) - set(_raw_keys)))[:200],
-                    ",".join(sorted(set(_raw_keys) - set(_red_keys)))[:200],
+                    f"FINGERPRINT_DIAG finding_id={_text(_diag.get('finding_id') or _diag.get('id'))} "
+                    f"expected={payload_fingerprint[:16]} recomputed={_recomputed[:16]} "
+                    f"redact_idempotent={_json.dumps(_red1, ensure_ascii=False, sort_keys=True, default=str) == _json.dumps(_red2, ensure_ascii=False, sort_keys=True, default=str)} "
+                    f"raw_chars={len(_raw)} sensitive={','.join(_sensitive) or 'none'} "
+                    f"raw_keys={','.join(_raw_keys)[:300]} red_keys={','.join(_red_keys)[:300]} "
+                    f"redact_added_keys={','.join(sorted(set(_red_keys) - set(_raw_keys)))[:200]} "
+                    f"redact_dropped_keys={','.join(sorted(set(_raw_keys) - set(_red_keys)))[:200]}",
                     flush=True,
                 )
             except Exception as _diag_exc:
