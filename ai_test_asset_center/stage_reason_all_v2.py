@@ -899,7 +899,7 @@ def _run_reasoner_engine(
             result["prompt_template_hash"] = sha256(str(template or "").encode("utf-8", errors="replace")).hexdigest()[:16]
 
             result["model_attempt_count"] += 1
-            raw = worker_client._chat(prompt, system_prompt=system_prompt)
+            raw = worker_client._chat(prompt, system_prompt=system_prompt, call_point=engine_name)
             result["model_response_count"] += 1
             usage_snapshot = getattr(worker_client, "usage_snapshot", None)
             if callable(usage_snapshot):

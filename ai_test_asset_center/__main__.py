@@ -501,6 +501,15 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                 "stage_failures": ["EVIDENCE_BUNDLE_PERSISTENCE_FAILED"],
             },
         }
+        try:
+            from .llm_reasoning import build_llm_observability_receipt
+
+            failure["llm_observability_receipt"] = build_llm_observability_receipt()
+        except Exception:
+            failure["llm_observability_receipt"] = {
+                "schema_version": "qualibug.llm-observability.v1",
+                "status": "FAILED",
+            }
         failure_path = (
             root
             / "platform_outputs"
@@ -994,6 +1003,21 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             result.setdefault("stage_failures", []).append(
                 f"FACT_TRACKING_REPORT_FAILED:{type(exc).__name__}"
             )
+    # LLM call observability: aggregated per-call stats mounted on the scan
+    # result (qualibug.llm-observability.v1). Metadata only — never prompt or
+    # model-output content. Fail-soft: an observability failure must never
+    # break the scan result.
+    try:
+        from .llm_reasoning import build_llm_observability_receipt
+
+        result["llm_observability_receipt"] = build_llm_observability_receipt()
+    except Exception as _llm_obs_exc:
+        _LOGGER.exception("llm_observability_receipt_build_failed")
+        result["llm_observability_receipt"] = {
+            "schema_version": "qualibug.llm-observability.v1",
+            "status": "FAILED",
+            "reason": f"{type(_llm_obs_exc).__name__}:{str(_llm_obs_exc)[:160]}",
+        }
     output_root = root / "platform_outputs" / _safe_project(project)
     _write_json(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")

@@ -81,6 +81,12 @@ class ReasoningConfig:
     thinking_mode: str = ""
     response_format: str = ""
     embedding_model: str = ""
+    # Optional unit prices (USD per 1M tokens) used only for the LLM
+    # observability receipt's cost estimate. When unset the receipt records
+    # token counts without any cost claim (never invents a price).
+    cost_per_1m_input_usd: float | None = None
+    cost_per_1m_output_usd: float | None = None
+    embedding_cost_per_1m_input_usd: float | None = None
 
     @classmethod
     def from_env(cls) -> "ReasoningConfig":
@@ -102,11 +108,190 @@ class ReasoningConfig:
             thinking_mode=thinking_mode,
             response_format=response_format,
             embedding_model=os.getenv("LLM_EMBEDDING_MODEL", "").strip(),
+            cost_per_1m_input_usd=_env_float("LLM_COST_PER_1M_INPUT_USD"),
+            cost_per_1m_output_usd=_env_float("LLM_COST_PER_1M_OUTPUT_USD"),
+            embedding_cost_per_1m_input_usd=_env_float("LLM_EMBEDDING_COST_PER_1M_INPUT_USD"),
         )
 
     @property
     def enabled(self) -> bool:
         return bool(self.base_url and self.api_key and self.model)
+
+
+def _env_float(name: str) -> float | None:
+    """Parse an optional numeric env var; empty/invalid values stay None."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Per-call LLM observation ledger (process-global)
+# ---------------------------------------------------------------------------
+#
+# Every ReasoningClient (engines create fresh short-lived clients per attempt,
+# including the stage_reason_all_v2 workers) records one observation per LLM
+# round trip into this module-level ledger, so a scan can aggregate usage
+# across all call points. Records contain counts, latency and status only —
+# never prompt text, model output text, credentials or request bodies.
+
+LLM_OBSERVATION_LEDGER_MAX = 20000
+_LLM_OBSERVATION_LOCK = threading.Lock()
+_LLM_OBSERVATIONS: list[dict[str, Any]] = []
+_LLM_OBSERVATIONS_TRUNCATED = False
+
+
+def record_llm_observation(observation: dict[str, Any]) -> None:
+    """Append one per-call observation; bounded FIFO so memory stays flat."""
+    global _LLM_OBSERVATIONS_TRUNCATED
+    with _LLM_OBSERVATION_LOCK:
+        if len(_LLM_OBSERVATIONS) >= LLM_OBSERVATION_LEDGER_MAX:
+            _LLM_OBSERVATIONS.pop(0)
+            _LLM_OBSERVATIONS_TRUNCATED = True
+        _LLM_OBSERVATIONS.append(dict(observation))
+
+
+def llm_observation_snapshot() -> list[dict[str, Any]]:
+    """Return a copy of all recorded per-call observations."""
+    with _LLM_OBSERVATION_LOCK:
+        return [dict(observation) for observation in _LLM_OBSERVATIONS]
+
+
+def reset_llm_observations() -> None:
+    """Clear the ledger (test isolation / operator reset)."""
+    global _LLM_OBSERVATIONS_TRUNCATED
+    with _LLM_OBSERVATION_LOCK:
+        _LLM_OBSERVATIONS.clear()
+        _LLM_OBSERVATIONS_TRUNCATED = False
+
+
+def _llm_observations_truncated() -> bool:
+    with _LLM_OBSERVATION_LOCK:
+        return _LLM_OBSERVATIONS_TRUNCATED
+
+
+def build_llm_observability_receipt() -> dict[str, Any]:
+    """Aggregate all recorded LLM calls into a bounded, content-free receipt.
+
+    Schema ``qualibug.llm-observability.v1``: total calls, latency percentiles,
+    token totals, estimated cost (only when unit prices are configured),
+    failure counts, per-call-point distribution, and the ≤20 slowest calls.
+    Contains metadata only — never prompt text, model output, credentials or
+    request bodies. Empty ledger produces an honest zero-filled receipt.
+    """
+    observations = llm_observation_snapshot()
+    calls = [o for o in observations if o["kind"] in ("chat", "embedding")]
+    processing_failures = [o for o in observations if o["kind"] == "response_processing" and not o["success"]]
+    succeeded = [o for o in calls if o["success"]]
+    failed = [o for o in calls if not o["success"]]
+    latencies = sorted(int(o["latency_ms"] or 0) for o in calls)
+
+    def _percentile(sorted_values: list[int], fraction: float) -> int | None:
+        if not sorted_values:
+            return None
+        index = int(round(fraction * (len(sorted_values) - 1)))
+        return sorted_values[index]
+
+    total_latency = sum(latencies)
+    total_input = sum(int(o["input_tokens"] or 0) for o in calls)
+    total_output = sum(int(o["output_tokens"] or 0) for o in calls)
+    tokens_estimated_calls = sum(1 for o in calls if o["tokens_estimated"])
+    costs = [float(o["cost_estimate_usd"]) for o in calls if o["cost_estimate_usd"] is not None]
+    total_cost = round(sum(costs), 6) if costs else None
+
+    by_call_point: dict[str, dict[str, Any]] = {}
+    for o in calls:
+        entry = by_call_point.setdefault(str(o["call_point"] or "unknown"), {
+            "calls": 0,
+            "failed": 0,
+            "total_latency_ms": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_estimated_cost_usd": 0.0,
+            "cost_covered_calls": 0,
+        })
+        entry["calls"] += 1
+        entry["failed"] += 0 if o["success"] else 1
+        entry["total_latency_ms"] += int(o["latency_ms"] or 0)
+        entry["total_input_tokens"] += int(o["input_tokens"] or 0)
+        entry["total_output_tokens"] += int(o["output_tokens"] or 0)
+        if o["cost_estimate_usd"] is not None:
+            entry["total_estimated_cost_usd"] += float(o["cost_estimate_usd"])
+            entry["cost_covered_calls"] += 1
+    for entry in by_call_point.values():
+        entry["total_estimated_cost_usd"] = round(entry["total_estimated_cost_usd"], 6)
+
+    failure_reasons: dict[str, int] = {}
+    failure_codes: dict[str, int] = {}
+    for o in failed:
+        reason = str(o["failure_reason"] or "unknown")
+        failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+        code = str(o["failure_code"] or "none")
+        failure_codes[code] = failure_codes.get(code, 0) + 1
+    processing_reasons: dict[str, int] = {}
+    for o in processing_failures:
+        reason = str(o["failure_reason"] or "unknown")
+        processing_reasons[reason] = processing_reasons.get(reason, 0) + 1
+
+    top_slow = sorted(calls, key=lambda o: int(o["latency_ms"] or 0), reverse=True)[:20]
+    top_slow_calls = [
+        {
+            "call_point": o["call_point"],
+            "kind": o["kind"],
+            "model": o["model"],
+            "success": o["success"],
+            "http_status": o["http_status"],
+            "latency_ms": int(o["latency_ms"] or 0),
+            "input_tokens": o["input_tokens"],
+            "output_tokens": o["output_tokens"],
+            "tokens_estimated": o["tokens_estimated"],
+            "failure_reason": o["failure_reason"],
+            "started_at_utc": o["started_at_utc"],
+        }
+        for o in top_slow
+    ]
+
+    return {
+        "schema_version": "qualibug.llm-observability.v1",
+        "produced_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "observations_recorded": len(observations),
+        "observations_truncated": _llm_observations_truncated(),
+        "summary": {
+            "total_calls": len(calls),
+            "successful_calls": len(succeeded),
+            "failed_calls": len(failed),
+            "response_processing_failures": len(processing_failures),
+            "total_latency_ms": total_latency,
+            "latency_p50_ms": _percentile(latencies, 0.50),
+            "latency_p95_ms": _percentile(latencies, 0.95),
+            "latency_max_ms": _percentile(latencies, 1.00),
+            "total_input_tokens": total_input,
+            "total_output_tokens": total_output,
+            "tokens_estimated_calls": tokens_estimated_calls,
+            "total_retry_count": sum(int(o["retry_count"] or 0) for o in calls),
+            "total_estimated_cost_usd": total_cost,
+            "cost_basis": "configured_unit_prices" if total_cost is not None else "not_configured",
+            "cost_note": None if total_cost is not None else (
+                "No unit price configured (LLM_COST_PER_1M_INPUT_USD / "
+                "LLM_COST_PER_1M_OUTPUT_USD); tokens recorded without cost."
+            ),
+        },
+        "by_call_point": by_call_point,
+        "failures": {
+            "count": len(failed),
+            "by_reason": failure_reasons,
+            "by_code": failure_codes,
+        },
+        "response_processing_failures": {
+            "count": len(processing_failures),
+            "by_reason": processing_reasons,
+        },
+        "top_slow_calls": top_slow_calls,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1014,14 +1199,113 @@ class ReasoningClient:
         with self._usage_lock:
             return dict(self._usage_totals)
 
+    @staticmethod
+    def _extract_usage(response_text: str) -> dict[str, Any]:
+        """Extract the provider-reported usage object (never the content)."""
+        try:
+            response = json.loads(response_text)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        usage = response.get("usage") if isinstance(response, dict) and isinstance(response.get("usage"), dict) else {}
+        return dict(usage)
+
+    @staticmethod
+    def _usage_token_counts(usage: dict[str, Any]) -> tuple[int | None, int | None]:
+        """(input, output) token counts from a provider usage object, or None
+        when the provider did not report them."""
+        prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
+        completion = usage.get("completion_tokens", usage.get("output_tokens"))
+
+        def _to_int(value: Any) -> int | None:
+            if value is None:
+                return None
+            try:
+                return max(0, int(value))
+            except (TypeError, ValueError):
+                return None
+
+        return _to_int(prompt), _to_int(completion)
+
+    def _estimate_cost_usd(self, kind: str, input_tokens: int, output_tokens: int) -> float | None:
+        """Estimate cost from configured unit prices. Returns None when no
+        unit price is configured — the receipt then records tokens only."""
+        if kind == "embedding":
+            price_in = self.config.embedding_cost_per_1m_input_usd
+            if price_in is None:
+                price_in = self.config.cost_per_1m_input_usd
+            if price_in is None:
+                return None
+            return round((input_tokens or 0) / 1_000_000.0 * price_in, 8)
+        price_in = self.config.cost_per_1m_input_usd
+        price_out = self.config.cost_per_1m_output_usd
+        if price_in is None or price_out is None:
+            return None
+        return round(
+            (input_tokens or 0) / 1_000_000.0 * price_in
+            + (output_tokens or 0) / 1_000_000.0 * price_out,
+            8,
+        )
+
+    def _record_observation(
+        self,
+        *,
+        call_point: str,
+        kind: str,
+        model: str | None,
+        success: bool,
+        latency_ms: int,
+        http_status: int | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        tokens_estimated: bool = False,
+        failure_reason: str | None = None,
+        failure_code: str | None = None,
+    ) -> None:
+        """Record one per-call observation. Metadata only — never prompt or
+        model-output content. Observation never affects the call outcome."""
+        cost = None
+        if success and input_tokens is not None and output_tokens is not None:
+            cost = self._estimate_cost_usd(kind, input_tokens, output_tokens)
+        record_llm_observation({
+            "call_point": call_point,
+            "kind": kind,
+            "model": model,
+            "success": bool(success),
+            "http_status": http_status,
+            "latency_ms": int(latency_ms or 0),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "tokens_estimated": bool(tokens_estimated),
+            # The client performs no internal retries; higher-level retry
+            # loops (e.g. reasoner workers) surface as separate observations.
+            "retry_count": 0,
+            "failure_reason": failure_reason,
+            "failure_code": failure_code,
+            "cost_estimate_usd": cost,
+            "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+
+    def _record_processing_failure(self, call_point: str, failure_reason: str) -> None:
+        """Record a response-processing (parse) failure for a round trip that
+        already succeeded at the HTTP layer."""
+        self._record_observation(
+            call_point=call_point,
+            kind="response_processing",
+            model=None,
+            success=False,
+            latency_ms=0,
+            http_status=None,
+            failure_reason=failure_reason,
+            failure_code=None,
+        )
+
     def _record_usage(self, response_text: str) -> None:
         try:
             response = json.loads(response_text)
         except (TypeError, json.JSONDecodeError):
             return
         usage = response.get("usage") if isinstance(response, dict) and isinstance(response.get("usage"), dict) else {}
-        prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
-        completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
+        prompt, completion = self._usage_token_counts(usage)
         total = usage.get("total_tokens", 0)
         cost_value = usage.get("cost_usd", response.get("cost_usd") if isinstance(response, dict) else None)
         with self._usage_lock:
@@ -1090,13 +1374,26 @@ class ReasoningClient:
             user_prompt += FACT_BLOCK_HEADER + str(retrieved_facts)[:3000]
 
         try:
-            response_text = self._chat(user_prompt, system_prompt=system_prompt, model=model)
-            return self._parse_json(response_text)
+            response_text = self._chat(
+                user_prompt,
+                system_prompt=system_prompt,
+                model=model,
+                call_point=engine_type,
+            )
+            return self._parse_json(response_text, call_point=engine_type)
         except Exception:
             return None
 
-    def _chat(self, user_prompt: str, *, system_prompt: str | None = None, model: str | None = None) -> str:
+    def _chat(
+        self,
+        user_prompt: str,
+        *,
+        system_prompt: str | None = None,
+        model: str | None = None,
+        call_point: str | None = None,
+    ) -> str:
         resolved_model = model or self.config.model
+        call_point = call_point or "chat"
         payload = {
             "model": resolved_model,
             "messages": [
@@ -1132,6 +1429,24 @@ class ReasoningClient:
                 response_text = resp.read().decode("utf-8")
                 _elapsed_ms = int((time.time() - _llm_start) * 1000)
                 self._record_usage(response_text)
+                usage = self._extract_usage(response_text)
+                input_tokens, output_tokens = self._usage_token_counts(usage)
+                tokens_estimated = input_tokens is None or output_tokens is None
+                if input_tokens is None:
+                    input_tokens = max(1, math.ceil(_prompt_len / 4))
+                if output_tokens is None:
+                    output_tokens = max(0, math.ceil(len(response_text) / 4))
+                self._record_observation(
+                    call_point=call_point,
+                    kind="chat",
+                    model=resolved_model,
+                    success=True,
+                    http_status=200,
+                    latency_ms=_elapsed_ms,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    tokens_estimated=tokens_estimated,
+                )
                 _llm_logger.info(
                     f"LLM call OK: model={resolved_model} prompt={_prompt_len}c resp={len(response_text)}c {_elapsed_ms}ms",
                     extra={"context": {
@@ -1147,6 +1462,16 @@ class ReasoningClient:
             _elapsed_ms = int((time.time() - _llm_start) * 1000)
             error_body = exc.read().decode("utf-8", errors="replace")
             _code = "QB-L006" if exc.code in (401, 403) else ("QB-L002" if exc.code == 429 else "QB-L001")
+            self._record_observation(
+                call_point=call_point,
+                kind="chat",
+                model=resolved_model,
+                success=False,
+                http_status=exc.code,
+                latency_ms=_elapsed_ms,
+                failure_reason="http_error",
+                failure_code=_code,
+            )
             _llm_logger.error(
                 f"LLM HTTP {exc.code} after {_elapsed_ms}ms: {error_body[:200]}",
                 extra={"error_code": _code, "context": {
@@ -1161,6 +1486,16 @@ class ReasoningClient:
             _elapsed_ms = int((time.time() - _llm_start) * 1000)
             _is_timeout = "timed out" in str(exc).lower() or _elapsed_ms >= (self.config.timeout_seconds * 1000 - 500)
             _code = "QB-L001" if _is_timeout else "QB-L004"
+            self._record_observation(
+                call_point=call_point,
+                kind="chat",
+                model=resolved_model,
+                success=False,
+                http_status=None,
+                latency_ms=_elapsed_ms,
+                failure_reason="timeout" if _is_timeout else "network_error",
+                failure_code=_code,
+            )
             _llm_logger.error(
                 f"LLM network error after {_elapsed_ms}ms: {exc}",
                 extra={"error_code": _code, "context": {
@@ -1172,15 +1507,21 @@ class ReasoningClient:
             )
             raise ReasoningClientError(f"LLM network error: {exc}") from exc
 
-    @staticmethod
-    def _parse_json(response_text: str) -> dict[str, Any]:
+    def _parse_json(
+        self,
+        response_text: str,
+        *,
+        call_point: str = "response_processing",
+    ) -> dict[str, Any]:
         try:
             raw = json.loads(response_text)
             content = raw["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            self._record_processing_failure(call_point, "response_parse_error")
             raise ReasoningClientError(f"Unexpected LLM response shape: {exc}") from exc
 
         if not isinstance(content, str) or not content.strip():
+            self._record_processing_failure(call_point, "response_parse_error")
             raise ReasoningClientError("LLM response did not include JSON content")
 
         # Handle models that wrap JSON in ``` fences
@@ -1196,9 +1537,11 @@ class ReasoningClient:
         try:
             parsed = json.loads(cleaned)
             if not isinstance(parsed, dict):
+                self._record_processing_failure(call_point, "response_parse_error")
                 raise ReasoningClientError("LLM JSON root must be an object")
             return parsed
         except json.JSONDecodeError as exc:
+            self._record_processing_failure(call_point, "response_parse_error")
             raise ReasoningClientError(
                 f"LLM output is not valid JSON: {cleaned[:300]}"
             ) from exc
@@ -1214,8 +1557,8 @@ class ReasoningClient:
         if not self.config.enabled:
             raise ReasoningClientError("LLM is not configured")
         model = resolve_model_for_tier(self.config, tier)
-        raw = self._chat(user_prompt, system_prompt=system_prompt, model=model)
-        return self._parse_json(raw)
+        raw = self._chat(user_prompt, system_prompt=system_prompt, model=model, call_point="chat_json")
+        return self._parse_json(raw, call_point="chat_json")
 
     def complete_json(
         self,
@@ -1249,7 +1592,7 @@ class ReasoningClient:
             except (TypeError, ValueError):
                 pass
 
-    def embed(self, texts: list[str]) -> list[list[float]] | None:
+    def embed(self, texts: list[str], *, call_point: str = "embedding") -> list[list[float]] | None:
         """Non-decision embedding: candidate de-duplication and fact-retrieval
         ranking only.
 
@@ -1264,6 +1607,24 @@ class ReasoningClient:
         clean = [text for text in clean if text.strip()]
         if not clean:
             return None
+        _embed_start = time.time()
+        _prompt_chars = sum(len(text) for text in clean)
+
+        def _embedding_observation(*, success: bool, latency_ms: int, failure_reason: str | None = None, input_tokens: int | None = None, tokens_estimated: bool = False) -> None:
+            self._record_observation(
+                call_point=call_point,
+                kind="embedding",
+                model=self.config.embedding_model,
+                success=success,
+                http_status=200 if success else None,
+                latency_ms=latency_ms,
+                input_tokens=input_tokens,
+                output_tokens=0,
+                tokens_estimated=tokens_estimated,
+                failure_reason=failure_reason,
+                failure_code=None,
+            )
+
         payload = {"model": self.config.embedding_model, "input": clean}
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         url = f"{self.config.base_url}/embeddings"
@@ -1279,20 +1640,31 @@ class ReasoningClient:
         try:
             with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as resp:
                 response_text = resp.read().decode("utf-8")
+            _embed_elapsed = int((time.time() - _embed_start) * 1000)
             self._record_embedding_usage(response_text)
+            usage = self._extract_usage(response_text)
+            input_tokens, _ = self._usage_token_counts(usage)
+            tokens_estimated = input_tokens is None
+            if input_tokens is None:
+                input_tokens = max(1, math.ceil(_prompt_chars / 4))
             data = json.loads(response_text)
             if not isinstance(data, dict):
+                _embedding_observation(success=False, latency_ms=_embed_elapsed, failure_reason="embedding_response_shape")
                 return None
             vectors: list[list[float]] = []
             for item in data.get("data") or []:
                 embedding = item.get("embedding") if isinstance(item, dict) else None
                 if not isinstance(embedding, list) or not embedding:
+                    _embedding_observation(success=False, latency_ms=_embed_elapsed, failure_reason="embedding_response_shape")
                     return None
                 if not all(isinstance(value, (int, float)) for value in embedding):
+                    _embedding_observation(success=False, latency_ms=_embed_elapsed, failure_reason="embedding_response_shape")
                     return None
                 vectors.append([float(value) for value in embedding])
             if len(vectors) != len(clean):
+                _embedding_observation(success=False, latency_ms=_embed_elapsed, failure_reason="embedding_response_shape")
                 return None
+            _embedding_observation(success=True, latency_ms=_embed_elapsed, input_tokens=input_tokens, tokens_estimated=tokens_estimated)
             _llm_logger.info(
                 "LLM embedding OK: model=%s texts=%d dim=%d",
                 self.config.embedding_model,
@@ -1301,6 +1673,8 @@ class ReasoningClient:
             )
             return vectors
         except Exception as exc:
+            _embed_elapsed = int((time.time() - _embed_start) * 1000)
+            _embedding_observation(success=False, latency_ms=_embed_elapsed, failure_reason="embedding_error")
             _llm_logger.warning(
                 "LLM embedding unavailable (non-decision path, skipped): %s:%s",
                 type(exc).__name__,
@@ -1676,7 +2050,8 @@ def reason_layered(
                     k: (v or "(not provided)")[:8000] for k, v in context.items()
                 })
                 reader_output = client._parse_json(
-                    client._chat(reader_prompt, system_prompt=READER_SYSTEM_PROMPT)
+                    client._chat(reader_prompt, system_prompt=READER_SYSTEM_PROMPT, call_point="reader"),
+                    call_point="reader",
                 )
                 result["reader_output"] = reader_output
         except Exception:
@@ -1695,7 +2070,8 @@ def reason_layered(
                 k: (v or "(not provided)")[:8000] for k, v in enriched_context.items()
             })
             reasoner_output = client._parse_json(
-                client._chat(reasoner_prompt, system_prompt=REASONER_SYSTEM_PROMPT)
+                client._chat(reasoner_prompt, system_prompt=REASONER_SYSTEM_PROMPT, call_point="reasoner"),
+                call_point="reasoner",
             )
             result["reasoner_hypotheses"] = reasoner_output
         except Exception:
@@ -1710,7 +2086,8 @@ def reason_layered(
                 runtime_observations=runtime_observations[:3000],
             )
             verifications = client._parse_json(
-                client._chat(verifier_prompt, system_prompt=VERIFIER_SYSTEM_PROMPT)
+                client._chat(verifier_prompt, system_prompt=VERIFIER_SYSTEM_PROMPT, call_point="verifier"),
+                call_point="verifier",
             )
             result["verifications"] = verifications
         except Exception:
