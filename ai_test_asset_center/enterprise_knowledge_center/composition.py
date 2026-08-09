@@ -21,6 +21,7 @@ from . import _chinese_business_downstream as _downstream
 from ._common import ROOT, _safe_project_id
 from ._formal_ui_contract_guard import install_formal_ui_root_array_guard
 from ._formal_ui_contracts import install_formal_ui_contract_parser
+from ._ui_surface_declarations import install_ui_surface_declaration_parser
 from ._formal_ui_persistent_probe_guard import install_formal_ui_persistent_probe_guard
 from ._formal_ui_visual_baseline_guard import install_formal_ui_visual_baseline_guard
 from ._formal_ui_visual_viewport_guard import install_formal_ui_visual_viewport_guard
@@ -1687,8 +1688,12 @@ def refresh_enterprise_business_knowledge_asset_incremental(
         asset = ground_semantic_frames(asset)
         # P0-E phase 2: v1 regex-candidate rules are decided against the
         # grounded frame SSOT (CONFIRMED / FALLBACK_UNGROUNDED /
-        # UNCONFIRMED_NO_FRAME) with an observable receipt.
-        asset = apply_v1_extractor_frame_confirmation(asset)
+        # UNCONFIRMED_NO_FRAME) with an observable receipt. The function
+        # mutates the asset in place and RETURNS ONLY THE RECEIPT — the
+        # return value must never replace the asset, or the entire knowledge
+        # asset (ui_design_specs / rule_library / interfaces …) is wiped to
+        # a receipt dict on every rebuild.
+        apply_v1_extractor_frame_confirmation(asset)
         asset, _discarded = _downstream.refresh_chinese_business_downstream(
             asset,
             max_probe_count=0,
@@ -1986,6 +1991,7 @@ def configure_source_parser_extensions() -> None:
     """
     install_formal_ui_root_array_guard()
     install_formal_ui_contract_parser()
+    install_ui_surface_declaration_parser()
     install_formal_ui_persistent_probe_guard()
     install_formal_ui_visual_baseline_guard()
     install_formal_ui_visual_viewport_guard()
@@ -2229,8 +2235,12 @@ def build_enterprise_business_knowledge_asset(
 
     # P0-E phase 2: v1 regex-candidate rules are decided against the
     # grounded frame SSOT (CONFIRMED / FALLBACK_UNGROUNDED /
-    # UNCONFIRMED_NO_FRAME) with an observable receipt.
-    asset = apply_v1_extractor_frame_confirmation(asset)
+    # UNCONFIRMED_NO_FRAME) with an observable receipt. The function mutates
+    # the asset in place and returns only the receipt — the return value must
+    # never replace the asset, or the entire knowledge asset (ui_design_specs
+    # / rule_library / interfaces …) is wiped to a receipt dict on every
+    # rebuild.
+    apply_v1_extractor_frame_confirmation(asset)
 
     # Downstream rule/oracle projection is still needed before Job projection, but
     # Probe compilation remains deferred to the final stage.

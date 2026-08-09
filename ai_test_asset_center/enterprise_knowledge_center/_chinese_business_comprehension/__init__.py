@@ -115,7 +115,22 @@ def build_chinese_first_comprehension(
         kind = _text(authorization.get("semantic_kind"))
         declared = bool(authorization.get("authority_declared"))
         resolved_auth = kind in {"AUTHORIZATION", "AUTHORIZATION_DELEGATION"} and declared
-        if not _list(_dict(rule.get("semantic_contract")).get("state_effects")):
+        # Rules that a structured parser classified explicitly (e.g. a UI/UX
+        # requirements document declaring rule_type=ui_state_consistency /
+        # risk_type=ui) are not legacy compatibility rules: their family is
+        # the source document's own declaration and must survive the legacy
+        # reclassification, or the whole UI surface chain (rule -> invariant
+        # kind=ui -> obligation) silently disappears. Generic rule: never
+        # overwrite an explicit structured classification with the legacy
+        # fallback.
+        _structured_classification = (
+            _text(rule.get("rule_type")) not in {"", "business_rule", "business_logic"}
+            or _text(rule.get("risk_type")) not in {"", "business_logic"}
+        )
+        if (
+            not _structured_classification
+            and not _list(_dict(rule.get("semantic_contract")).get("state_effects"))
+        ):
             rule["risk_type"] = "authorization" if resolved_auth else "business_logic"
             rule["rule_type"] = "permission" if resolved_auth else "business_rule"
         rule["authorization_decision"] = _text(authorization.get("decision"))

@@ -25,6 +25,34 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _surface_contracts_for_screen(
+    ui_specs: list[dict[str, Any]],
+    screen_ref: str,
+) -> list[dict[str, Any]]:
+    """Surface-declared browser plans belonging to one screen identity.
+
+    The UI surface declaration chain attaches compiled read-only Playwright
+    contracts (``surface_contracts``) to each UI design spec. This helper
+    resolves them by the same exact screen identity the URL uses, so the
+    protocol compiles the document's own DOM assertions into the experiment
+    instead of token-guessing the page. Contracts are carried verbatim —
+    nothing is inferred here.
+    """
+    if not _text(screen_ref):
+        return []
+    for spec in ui_specs:
+        spec_screen = _text(
+            spec.get("screen")
+            or spec.get("screen_id")
+            or _text(spec.get("ui_spec_id") or "").rsplit(":", 1)[-1]
+        )
+        if screen_ref not in {spec_screen, _text(spec.get("name"))}:
+            continue
+        contracts = _list(spec.get("surface_contracts"))
+        return [dict(row) for row in contracts if isinstance(row, dict)]
+    return []
+
+
 # P0-E phase-3: structured frame_type → risk family mapping (Chinese
 # Semantic Frame SSOT schema types — industry-neutral structured evidence).
 # When a rule's frame is grounded, its frame_type decides the obligation
@@ -1483,51 +1511,69 @@ def compile_obligations_from_behavior_ir(
             _ui_url = ""
             _ui_stmt = _text(inv.get("description")) or _text(expr.get("raw"))
             invariant_ref = _text(inv.get("id"))
-            # Requirement ids carry the screen prefix (CUST-PROD-01 belongs
-            # to the CUST-01 workbench; ADMIN-INV-04 to ADMIN-01); match the
-            # prefix and resolve the spec that declares it.
-            _screen_prefix = ""
-            _screen_match = re.search(r"\b(CUST|ADMIN)\b", _ui_stmt)
-            if _screen_match:
-                _screen_prefix = _screen_match.group(1)
-            else:
-                # Oracle rules (ORACLE-UI-*) carry no screen prefix; the
-                # scene words in their own given/when text (customer/user/
-                # buyer → CUST; admin/finance/manager → ADMIN) resolve the
-                # same declared UI specs. No scene signal — the URL stays
-                # unresolved and the obligation blocks visibly.
+            # The screen identity (CUST-01 / ADMIN-01 …) is source-declared
+            # by the UI requirements document and carried on the invariant;
+            # resolve the page URL by EXACT identity against the declared UI
+            # specs (ui_spec_id suffix / screen field / name), never by
+            # hardcoded prefix vocabulary.
+            _ui_specs = [
+                dict(row)
+                for row in _list(ir.get("ui_specs"))
+                if isinstance(row, dict)
+            ]
+            _screen_ref = _text(inv.get("screen"))
+            _ui_url = ""
+            if _screen_ref:
+                for _ui_spec in _ui_specs:
+                    _spec_id = _text(_ui_spec.get("ui_spec_id"))
+                    _spec_name = _text(_ui_spec.get("name"))
+                    _spec_screen = _text(
+                        _ui_spec.get("screen")
+                        or _ui_spec.get("screen_id")
+                        or _spec_id.rsplit(":", 1)[-1]
+                    )
+                    if (
+                        _screen_ref == _spec_screen
+                        or _screen_ref == _spec_name
+                        or _screen_ref in _spec_id
+                    ):
+                        _ui_url = _text(_ui_spec.get("url"))
+                        break
+            if not _ui_url:
+                # Oracle rules (ORACLE-UI-*) may carry no screen identity; the
+                # scene words in their own given/when text (customer/user/buyer
+                # vs admin/finance/manager) resolve the same declared UI specs
+                # directly by generic scene vocabulary. No scene signal — the
+                # URL stays unresolved and the obligation blocks visibly.
                 _ui_oracle_row = _dict(inv.get("ui_oracle") or {})
                 _scene_text = " ".join([
                     _text(_ui_oracle_row.get("given") or ""),
                     _text(_ui_oracle_row.get("when") or ""),
                 ])
-                if re.search(
+                _scene_is_customer = bool(re.search(
                     r"(?:customer|user|buyer|shopper|顾客|用户|买家)",
                     _scene_text,
-                ):
-                    _screen_prefix = "CUST"
-                elif re.search(
+                ))
+                _scene_is_admin = bool(re.search(
                     r"(?:admin|finance|manager|seller|管理员|管理|财务|运营)",
                     _scene_text,
-                ):
-                    _screen_prefix = "ADMIN"
-            if _screen_prefix:
-                for _ui_spec in _list(ir.get("ui_specs")):
-                    _spec_id = _text(_ui_spec.get("ui_spec_id"))
-                    _spec_name = _text(_ui_spec.get("name"))
-                    if (
-                        _screen_prefix in _spec_id
-                        or (
-                            _screen_prefix == "CUST"
-                            and "用户端" in _spec_name
-                        )
-                        or (
-                            _screen_prefix == "ADMIN"
-                            and "管理端" in _spec_name
-                        )
-                    ):
-                        _ui_url = _text(_ui_spec.get("url"))
-                        break
+                ))
+                if _scene_is_customer or _scene_is_admin:
+                    for _ui_spec in _ui_specs:
+                        _spec_id = _text(_ui_spec.get("ui_spec_id"))
+                        _spec_name = _text(_ui_spec.get("name"))
+                        if _scene_is_customer and re.search(
+                            r"(?:顾客|用户|买家|customer|user|buyer|shopper)",
+                            f"{_spec_id} {_spec_name}",
+                        ):
+                            _ui_url = _text(_ui_spec.get("url"))
+                            break
+                        if _scene_is_admin and re.search(
+                            r"(?:管理|管理员|admin|finance|manager|seller)",
+                            f"{_spec_id} {_spec_name}",
+                        ):
+                            _ui_url = _text(_ui_spec.get("url"))
+                            break
             obligations.append({
                 "obligation_id": (
                     "obl_"
@@ -1544,6 +1590,7 @@ def compile_obligations_from_behavior_ir(
                     "invariant_ref": invariant_ref,
                     "expression": dict(expr),
                     "ui_url": _ui_url,
+                    "screen": _screen_ref,
                     # Source-declared page-state vocabulary rides with the
                     # obligation so the browser-plan protocol can judge the
                     # rendered DOM against the document's own words.
@@ -1553,6 +1600,15 @@ def compile_obligations_from_behavior_ir(
                         if _text(item)
                     ],
                     "ui_oracle": dict(inv.get("ui_oracle") or {}),
+                    # Surface-declared browser plans (compiled from visible UI
+                    # material into governed read-only Playwright plans) ride
+                    # with the obligation so the protocol compiles the DOM
+                    # assertions into the experiment instead of relying on
+                    # token guessing. Matched by the same exact screen
+                    # identity used for the URL.
+                    "surface_contracts": _surface_contracts_for_screen(
+                        _ui_specs, _screen_ref
+                    ),
                 },
                 "source_refs": [
                     dict(row)

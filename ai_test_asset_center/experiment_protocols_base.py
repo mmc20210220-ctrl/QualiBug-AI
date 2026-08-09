@@ -52,6 +52,37 @@ def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+# Read-only UI plan actions the ui_state_consistency protocol may compile from
+# surface-declared contracts. Interactive actions (click/fill/select/press) are
+# excluded: the UI read-only guard blocks any interaction step without cleanup
+# equivalence, and the governed interactive UI adapter owns that path.
+_READ_ONLY_UI_ACTIONS = frozenset({
+    "goto",
+    "wait_for_load",
+    "screenshot",
+    "expect_text",
+    "expect_url",
+    "expect_visible",
+    "expect_hidden",
+    "expect_enabled",
+    "expect_disabled",
+    "expect_value",
+    "expect_checked",
+    "expect_unchecked",
+    "expect_count",
+    "expect_attribute",
+    "expect_css",
+    "expect_role",
+    "expect_accessible_name",
+    "expect_dimensions",
+    "expect_in_viewport",
+    "expect_not_obscured",
+    "expect_no_horizontal_overflow",
+    "expect_no_console_errors",
+    "expect_no_failed_requests",
+})
+
+
 def _minimal_body_from_schema(operation: dict[str, Any]) -> dict[str, Any]:
     """Generate a minimal default request body from the operation's schema properties."""
     schema = _dict(operation.get("request_schema") or operation.get("requestBody") or {})
@@ -2848,6 +2879,60 @@ def compile_family_protocol(
                     if _fm.group(0) not in _TECH_VOCAB
                 )
         _ui_forbidden = sorted(_ui_forbidden_set)
+        # ── Surface-declared DOM assertions ──
+        # The UI surface declaration chain compiles visible UI material into
+        # governed read-only Playwright plans (surface_contracts) riding on
+        # the obligation property. When present, the protocol carries their
+        # declared expectations into the assertion so the rendered page is
+        # judged against the document's own control vocabulary (button
+        # visible/hidden, menu isolation, display-state absence) instead of
+        # token guessing. Only read-only expectations are accepted; an
+        # interactive surface plan is refused here — it must declare cleanup
+        # equivalence through the governed interactive UI adapter, never
+        # through this read-only protocol.
+        _surface_checks: list[dict[str, Any]] = []
+        for _surface_contract in _list(property_spec.get("surface_contracts")):
+            _steps = [
+                dict(row)
+                for row in _list(
+                    _dict(_dict(_surface_contract.get("ui_request")).get("browser_plan")).get("steps")
+                )
+                if isinstance(row, dict)
+            ]
+            _surface_actions = [
+                _text(row.get("action")).lower()
+                for row in _steps
+                if _text(row.get("action"))
+            ]
+            if any(
+                _text(action) not in _READ_ONLY_UI_ACTIONS
+                for action in _surface_actions
+                if _text(action)
+            ):
+                return {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_TARGET_POLICY",
+                    "detail": (
+                        "ui_surface_interaction_requires_cleanup_equivalence:"
+                        + ",".join(
+                            action
+                            for action in _surface_actions
+                            if _text(action) not in _READ_ONLY_UI_ACTIONS
+                        )
+                    ),
+                }
+            for _step in _steps:
+                _action = _text(_step.get("action")).lower()
+                if _action not in _READ_ONLY_UI_ACTIONS:
+                    continue
+                _check: dict[str, Any] = {
+                    "action": _action,
+                    "locator_intent": dict(_step.get("locator_intent") or {}),
+                }
+                for _field in ("text", "pattern", "expected", "selector"):
+                    if _text(_step.get(_field)):
+                        _check[_field] = _text(_step.get(_field))
+                _surface_checks.append(_check)
         return {
             "status": "COMPILED",
             "control_plan": [{
@@ -2873,6 +2958,7 @@ def compile_family_protocol(
                 "states": _ui_states,
                 "allowed_states": _ui_allowed,
                 "forbidden_states": _ui_forbidden,
+                "surface_checks": _surface_checks,
             },
         }
 

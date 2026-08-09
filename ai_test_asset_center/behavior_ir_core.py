@@ -5838,6 +5838,13 @@ def build_behavior_ir_from_knowledge_asset(
                 ]
             if isinstance(rule.get("ui_oracle"), dict):
                 _inv_typed["ui_oracle"] = dict(rule["ui_oracle"])
+            # The screen identity (CUST-01 / ADMIN-01 …) is source-declared
+            # by the UI requirements document, never inferred from rule-text
+            # prefixes. Carried onto the invariant so the obligation compiler
+            # resolves the page URL by exact screen identity instead of
+            # hardcoded prefix vocabulary.
+            if _text(rule.get("screen")):
+                _inv_typed["screen"] = _text(rule.get("screen"))
         # P0-E phase 2: the v1 extractor confirmation gate (composition,
         # apply_v1_extractor_frame_confirmation) marks legacy regex-candidate
         # rules CONFIRMED / FALLBACK_UNGROUNDED / UNCONFIRMED_NO_FRAME.

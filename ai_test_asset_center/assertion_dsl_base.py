@@ -2172,6 +2172,7 @@ def evaluate_assertion(
             if "body_text" not in obs:
                 reason_code = "UI_DOM_EVIDENCE_MISSING"
             else:
+                page_text = str(obs.get("body_text") or "")
                 states = [
                     _text(value)
                     for value in _list(spec.get("states"))
@@ -2187,34 +2188,93 @@ def evaluate_assertion(
                     for value in _list(spec.get("forbidden_states"))
                     if _text(value)
                 }
-                if not allowed and not forbidden:
-                    reason_code = "UI_ALLOWED_STATES_MISSING"
-                else:
-                    # Verdict candidates: every state the page may NOT carry —
-                    # states outside the allowed set, plus source-declared
-                    # forbidden states. A plain statement (state becomes
-                    # CANCELLED) declares neither, so it cannot fabricate a
-                    # verdict. Word-boundary matching only; a state token
-                    # inside another word is not evidence.
-                    candidates = sorted(
-                        (set(states) - allowed) | (forbidden - allowed)
+                surface_checks = [
+                    dict(row)
+                    for row in _list(spec.get("surface_checks"))
+                    if isinstance(row, dict) and row
+                ]
+                # ── Surface-declared DOM assertions ──
+                # The UI surface declaration chain compiles visible UI
+                # material into read-only browser-plan expectations
+                # (surface_checks): expect_visible / expect_enabled /
+                # expect_text require the document's own control vocabulary
+                # to be present on the rendered page; expect_hidden /
+                # expect_disabled require it to be absent. The locator intent
+                # carries the document's declared text — judged word-boundary
+                # against the rendered body, never inferred.
+                check_violations: list[dict[str, Any]] = []
+                for check in surface_checks:
+                    action = _text(check.get("action")).lower()
+                    intent = _dict(check.get("locator_intent"))
+                    declared_text = _text(
+                        check.get("text")
+                        or intent.get("text")
+                        or intent.get("name")
                     )
-                    if not candidates:
-                        reason_code = "UI_STATES_MISSING"
+                    if not declared_text:
+                        continue
+                    present = bool(
+                        re.search(
+                            r"\b" + re.escape(declared_text) + r"\b",
+                            page_text,
+                        )
+                    )
+                    if action in {"expect_hidden", "expect_disabled"}:
+                        if present:
+                            check_violations.append({
+                                "control": declared_text,
+                                "action": action,
+                                "expected": "absent",
+                                "actual": "present",
+                            })
+                    elif action in {
+                        "expect_visible",
+                        "expect_enabled",
+                        "expect_text",
+                    }:
+                        if not present:
+                            check_violations.append({
+                                "control": declared_text,
+                                "action": action,
+                                "expected": "present",
+                                "actual": "absent",
+                            })
+                if check_violations:
+                    actual = check_violations
+                    passed = False
+                    reason_code = "UI_SURFACE_CHECK_VIOLATED"
+                else:
+                    if not allowed and not forbidden and not surface_checks:
+                        reason_code = "UI_ALLOWED_STATES_MISSING"
+                    elif not allowed and not forbidden:
+                        # Only surface checks were declared and they all held.
+                        passed = True
                     else:
-                        page_text = str(obs.get("body_text") or "")
-                        found = [
-                            state
-                            for state in candidates
-                            if re.search(
-                                r"\b" + re.escape(state) + r"\b",
-                                page_text,
-                            )
-                        ]
-                        actual = found
-                        passed = not found
-                        if found:
-                            reason_code = "UI_PAGE_STATE_OUTSIDE_ALLOWED"
+                        # Verdict candidates: every state the page may NOT
+                        # carry — states outside the allowed set, plus
+                        # source-declared forbidden states. A plain statement
+                        # (state becomes CANCELLED) declares neither, so it
+                        # cannot fabricate a verdict. Word-boundary matching
+                        # only; a state token inside another word is not
+                        # evidence.
+                        candidates = sorted(
+                            (set(states) - allowed) | (forbidden - allowed)
+                        )
+                        if not candidates:
+                            reason_code = "UI_STATES_MISSING"
+                        else:
+                            found = [
+                                state
+                                for state in candidates
+                                if re.search(
+                                    r"\b" + re.escape(state) + r"\b",
+                                    page_text,
+                                )
+                            ]
+                            actual = found
+                            passed = not found
+                            if found:
+                                reason_code = "UI_PAGE_STATE_OUTSIDE_ALLOWED"
         elif effective_kind == "idempotency_effect":
             expected_count = spec.get("expected_effect_count", 1)
             expected = {"effect_count": expected_count}
