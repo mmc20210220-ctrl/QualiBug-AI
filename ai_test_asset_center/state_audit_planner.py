@@ -153,6 +153,34 @@ def _classify_invariant_family(invariant: dict[str, Any]) -> str:
     return "validation"
 
 
+# Operational/probe endpoint tokens: health, liveness, readiness, ping and
+# metrics endpoints answer the probe itself, never a business entity
+# collection. Binding an audit to them would read a static {"status":"ok"}
+# body forever — INDETERMINATE by construction, a structural ceiling dressed
+# as a configuration value. The set is operational vocabulary (any system may
+# expose such probes), never industry or customer terminology.
+_OPERATIONAL_ENDPOINT_TOKENS = frozenset({
+    "health", "healthz", "ready", "readyz", "ping", "pong",
+    "metrics", "liveness", "readiness",
+})
+
+
+def _is_operational_endpoint(op: dict[str, Any]) -> bool:
+    """Whether a GET/HEAD endpoint is an operational probe, not a business read."""
+    path = _text(op.get("path") or op.get("raw_path")).lower()
+    path_tokens = {
+        token.strip("{}:").lower()
+        for token in re.split(r"[/\s]+", path)
+        if token.strip("{}:").lower()
+    }
+    if path_tokens & _OPERATIONAL_ENDPOINT_TOKENS:
+        return True
+    op_id = _text(op.get("id") or op.get("operation_id")).lower()
+    if any(token in op_id for token in _OPERATIONAL_ENDPOINT_TOKENS):
+        return True
+    return False
+
+
 def _find_get_endpoint_for_entity(
     entity: str,
     operations: list[dict[str, Any]],
@@ -165,6 +193,11 @@ def _find_get_endpoint_for_entity(
     when ``prefer_list`` is set: a uniqueness audit needs a collection read —
     a single-entity detail response can never exhibit duplicates, so binding
     it would only produce vacuous INDETERMINATE audits.
+
+    Operational probe endpoints (health/ping/metrics …) are excluded first:
+    they match the entity noun by path token ("orders" in /api/orders/health)
+    but return a probe body, not entity rows — an audit bound to them can
+    never observe the collection it must judge.
     """
     entity_lower = entity.lower()
     # Also match plural forms
@@ -182,6 +215,9 @@ def _find_get_endpoint_for_entity(
         path = _text(op.get("path") or op.get("raw_path")).lower()
         op_id = _text(op.get("id"))
         if not op_id:
+            continue
+        # Operational probes are not entity reads: skip before any matching.
+        if _is_operational_endpoint(op):
             continue
 
         # Check if path contains the entity name

@@ -22,6 +22,20 @@ from .validation_read_side_protocol import (
 
 install_owned_read_scope_protocol()
 
+# Read-only audit protocol (additive): registers the readonly_numeric_audit /
+# readonly_uniqueness_audit assertion kinds and the (validation,
+# readonly_audit_validation) protocol once per process. The validation
+# branch below reuses its numeric projection for GET/HEAD rules that carry a
+# source-declared numeric boundary but no write-side mutation material —
+# the same observer/assertion chain, never a duplicated implementation.
+from .readonly_audit_protocol import (
+    install_readonly_audit_protocol,
+    _numeric_boundary_from_expression as _audit_numeric_boundary_from_expression,
+    _evaluate_readonly_numeric_audit as _readonly_numeric_audit_evaluator,
+)
+
+install_readonly_audit_protocol()
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -900,6 +914,60 @@ _ENTITY_STATE_PRECONDITION_STATE_WORDS = (
     "删除", "下架", "停用", "禁用", "草稿", "归档", "冻结",
 )
 _ENTITY_STATE_PRECONDITION_BANS = ("不能", "不得", "禁止", "不可", "不允许")
+
+
+def _read_side_numeric_boundary_projection(
+    *,
+    property_spec: dict[str, Any],
+    operation_ref: str,
+    actor_ref: str,
+) -> dict[str, Any] | None:
+    """Compile a read-only numeric boundary audit for a GET/HEAD validation rule.
+
+    A source rule carrying a numeric boundary (inventory available_qty must
+    not go below zero, cart qty must stay positive) on a read-side binding
+    has no request body to mutate; historically it died as
+    ``read_side_rule_lacks_decidable_assertion`` — a structural break: the
+    boundary is decidable on the response the bound read itself returns. This
+    projection reuses the read-only numeric audit chain (assertion kind and
+    ``http_response`` observer, both registered by
+    ``readonly_audit_protocol.install_readonly_audit_protocol``): one
+    observed row below the boundary is violation evidence.
+
+    Returns a COMPILED protocol dict, or None when the rule is not a
+    numeric-boundary rule or the declared field/boundary operator is missing
+    (the rule then stays a visible BLOCKED — no vacuous observation).
+    """
+    if not _text(operation_ref) or not _text(actor_ref):
+        return None
+    expression = _dict(property_spec.get("expression"))
+    qualifier, column, boundary_operator = _audit_numeric_boundary_from_expression(
+        expression
+    )
+    if not column or boundary_operator not in {"non_negative", "positive"}:
+        return None
+    return {
+        "status": "COMPILED",
+        "control_plan": [],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "actor_ref": actor_ref,
+            "operation_ref": operation_ref,
+            "intent": "readonly_numeric_audit",
+            "protocol_step": "readonly_audit_read",
+            "property_template": _text(property_spec.get("template")),
+        }],
+        "observers": [
+            {"observer_id": "http_response"},
+        ],
+        "assertion": {
+            "kind": "readonly_numeric_audit",
+            "field": column,
+            "field_qualifier": qualifier,
+            "operator": boundary_operator,
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        },
+    }
 
 
 def _entity_state_precondition_triggered(semantic_text: str) -> bool:
@@ -2625,6 +2693,13 @@ def compile_family_protocol(
                 "intent": "ui_page_observation",
                 "protocol_step": "ui_open",
                 "ui_url": _ui_url,
+                # The page observation is executed by the ui_browser observer
+                # (real browser navigation of the declared URL) — declare the
+                # observer requirement on the step itself so the flow freezer
+                # binds it to this exact step; the step carries no HTTP
+                # operation identity for scope-based observer resolution.
+                "surface": "ui_browser",
+                "observer_requirements": [{"observer_id": "ui_browser"}],
             }],
             "treatment_plan": [],
             "observers": [{"observer_id": "ui_browser"}],
@@ -2801,6 +2876,24 @@ def compile_family_protocol(
         if method not in {"POST", "PUT", "PATCH", "DELETE"} and not (
             allows_non_body and method in {"GET", "HEAD"}
         ):
+            # ── Read-side numeric boundary projection ──
+            # A GET/HEAD rule carrying a source-declared numeric boundary
+            # (库存可用数量必须非负 / cart qty must stay positive) reached the
+            # read-side fallback with no write-side mutation material. The
+            # boundary is decidable on the response the read itself returns:
+            # reuse the read-only numeric audit chain (assertion kind +
+            # http_response observer, both already registered) on the bound
+            # operation — a single observed row below the boundary is
+            # violation evidence. Without the declared field or boundary
+            # operator the rule stays a visible BLOCKED below (no vacuous
+            # observation).
+            _read_numeric = _read_side_numeric_boundary_projection(
+                property_spec=property_spec,
+                operation_ref=operation_ref,
+                actor_ref=control_actor_ref or treatment_actor_ref,
+            )
+            if _read_numeric is not None:
+                return _read_numeric
             # A GET/HEAD rule that reached this point has no forbidden
             # response field, no ownership binding material and no declared
             # parameter location: there is no decidable assertion projection

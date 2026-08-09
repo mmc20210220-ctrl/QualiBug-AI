@@ -123,6 +123,24 @@ def _extract_collection(body: Any, qualifier: str, column: str) -> list[Any] | N
     return None
 
 
+def _extract_numeric_rows(body: Any, qualifier: str, column: str) -> list[Any] | None:
+    """Locate numeric-boundary rows, including a single-row detail response.
+
+    A collection read returns rows for a set-level boundary audit; a DETAIL
+    read (GET /api/entity/{id}) returns the entity itself — the body dict
+    carrying the field is the single row to judge. A single row is decidable
+    for a numeric boundary (one row already below zero is a violation), which
+    is not true for a uniqueness claim. Falls back to
+    ``_extract_collection``; returns ``None`` when no candidate exists.
+    """
+    rows = _extract_collection(body, qualifier, column)
+    if rows is not None:
+        return rows
+    if isinstance(body, dict) and column in body:
+        return [body]
+    return None
+
+
 def _evaluate_readonly_uniqueness_audit(envelope: dict[str, Any]) -> dict[str, Any]:
     """Tri-state evaluator for read-only uniqueness audits.
 
@@ -231,10 +249,21 @@ def _numeric_boundary_from_expression(expression: dict[str, Any]) -> tuple[str, 
     The planner emits operands carrying ``entity_ref`` + ``field``. Only the
     first field operand is used; an expression without one yields empty
     strings so the protocol compiler blocks visibly instead of guessing.
+
+    Boundary precedence is structural: the equation's declared operator
+    (``equation.operator``: positive / non_negative) is the precise boundary;
+    the expression-level operator and kind are fallbacks. Falling back to
+    ``non_negative`` for every ``numeric_boundary`` kind would silently weaken
+    a positive boundary (qty > 0) into qty >= 0 and let a zero quantity pass
+    as clean — a fabricated pass, not a precision trade-off.
     """
     expr = _dict(expression)
     operator = _text(expr.get("operator") or expr.get("boundary_operator")).lower()
-    if operator in _NUMERIC_OPERATORS:
+    equation = _dict(expr.get("equation"))
+    equation_operator = _text(equation.get("operator")).lower()
+    if equation_operator in _NUMERIC_OPERATORS:
+        resolved_operator = equation_operator
+    elif operator in _NUMERIC_OPERATORS:
         resolved_operator = operator
     elif _text(expr.get("kind")).lower() in _NUMERIC_BOUNDARY_KINDS:
         resolved_operator = (
@@ -323,7 +352,7 @@ def _evaluate_readonly_numeric_audit(envelope: dict[str, Any]) -> dict[str, Any]
             "actual": {"status_code": status_code},
         }
 
-    rows = _extract_collection(obs.get("body"), qualifier, column)
+    rows = _extract_numeric_rows(obs.get("body"), qualifier, column)
     if rows is None:
         return {
             "passed": None,
@@ -331,12 +360,16 @@ def _evaluate_readonly_numeric_audit(envelope: dict[str, Any]) -> dict[str, Any]
             "expected": expected,
             "actual": {"status_code": status_code},
         }
-    if len(rows) < MIN_AUDIT_ROWS:
+    # A numeric boundary is decidable on a single row: one observed row
+    # already below the boundary is violation evidence (unlike a uniqueness
+    # claim, which needs two rows to exhibit a duplicate). A collection read
+    # is still preferred, but a detail read must not starve the audit.
+    if not rows:
         return {
             "passed": None,
-            "reason_code": "AUDIT_COLLECTION_TOO_SMALL",
+            "reason_code": "AUDIT_COLLECTION_EMPTY",
             "expected": expected,
-            "actual": {"observed_rows": len(rows)},
+            "actual": {"observed_rows": 0},
         }
     missing_field = sum(1 for row in rows if column not in row)
     if missing_field:

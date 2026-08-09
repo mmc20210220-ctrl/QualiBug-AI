@@ -101,6 +101,38 @@ def _operation_index(behavior_ir: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _is_ui_surface_step(step: dict[str, Any]) -> bool:
+    """Whether a plan step is a browser page observation on the ui_browser
+    surface.
+
+    UI/UX rules constrain a rendered page, not an HTTP operation: the step
+    carries the declared page URL (``ui_url``) and is executed by the
+    ``ui_browser`` observer through a real browser navigation — there is no
+    HTTP operation identity to resolve. Recognising the step structurally
+    (protocol intent plus the URL field) keeps the freezer surface-aware for
+    any UI plan, not just one protocol branch.
+    """
+    return (
+        _text(step.get("protocol_step")) == "ui_open"
+        or _text(step.get("intent")) == "ui_page_observation"
+        or (
+            _text(step.get("ui_url"))
+            and not _text(step.get("operation_ref"))
+        )
+    )
+
+
+def _ui_surface_operation_ref(step: dict[str, Any]) -> str:
+    """Stable virtual operation identity for a browser page observation step.
+
+    The page URL is the step's semantic identity; the virtual ref mirrors the
+    URL so the flow-requirements ledger stays a stable, replayable identity
+    without pretending the browser step is an HTTP operation.
+    """
+    raw = _text(step.get("ui_url"))
+    return "ui_page:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def _primary_operation_ref(experiment: dict[str, Any]) -> str:
     for assertion in _list(experiment.get("assertions")):
         row = _dict(assertion)
@@ -422,8 +454,19 @@ def freeze_compiled_experiment(
                     f"{phase}:invalid_step_id:{step_id or 'missing'}",
                 )
             seen_step_ids.add(step_id)
+            # Browser page-observation steps (protocol_step=ui_open) carry no
+            # HTTP operation: the ui_browser observer navigates the declared
+            # URL directly. Demanding an IR operation index entry for them was
+            # a structural break — every UI rule died at freeze time as
+            # operation_unresolved:missing before its observer ever ran. The
+            # step's stable virtual ref keeps the flow ledger intact.
+            ui_surface_step = _is_ui_surface_step(step)
             operation_ref = _text(step.get("operation_ref"))
-            if not operation_ref or operation_ref not in operations:
+            if ui_surface_step:
+                operation_ref = _ui_surface_operation_ref(step)
+                step = dict(step)
+                step["operation_ref"] = operation_ref
+            elif not operation_ref or operation_ref not in operations:
                 return _block(
                     source,
                     BLOCKED_FLOW_REQUIREMENTS_INVALID,
@@ -442,9 +485,11 @@ def freeze_compiled_experiment(
             if phase in {"control", "treatment"}:
                 required_step_ids.append(step_id)
             operation_refs.append(operation_ref)
-            method = _text(
-                step.get("method") or _dict(operations.get(operation_ref)).get("method")
-            ).upper()
+            method = _text(step.get("method")).upper()
+            if not method and not ui_surface_step:
+                method = _text(
+                    _dict(operations.get(operation_ref)).get("method")
+                ).upper()
             if method in _WRITE_METHODS:
                 write_step_ids.append(step_id)
         frozen_plans[key] = frozen_rows
