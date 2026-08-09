@@ -156,6 +156,15 @@ from .source_performance_contract_binding import bind_source_performance_contrac
 from .source_performance_obligation_binding import (
     install_source_performance_obligation_binding,
 )
+from .formal_parameter_scale_surface import install_formal_parameter_scale_surface
+from .source_parameter_bound_contracts import (
+    bind_source_parameter_contracts,
+    derive_parameter_bound_contracts,
+    overlay_scan_parameter_contracts,
+)
+from .source_parameter_obligation_binding import (
+    install_source_parameter_obligation_binding,
+)
 from .source_stability_contract_binding import bind_source_stability_contracts
 from .source_stability_obligation_binding import (
     install_source_stability_obligation_binding,
@@ -239,6 +248,14 @@ install_source_event_obligation_binding()
 install_message_chain_obligation_binding()
 install_source_performance_obligation_binding()
 install_source_stability_obligation_binding()
+# Parameter-bound performance contracts (REPORT-008 class): the parameter-scale
+# surface registers a second protocol on the performance_latency family (one
+# observer, one assertion kind) and the obligation wrapper compiles
+# parameter-bound invariants plus the generic resource-protection degradation
+# channel for unbounded integer query parameters on GET/HEAD operations.
+# Idempotent registration only; activation still requires the source contract.
+install_formal_parameter_scale_surface()
+install_source_parameter_obligation_binding()
 register_job_async_protocol()
 install_source_job_obligation_binding()
 
@@ -412,10 +429,22 @@ def build_behavior_ir_with_semantic_operation_bindings(
         overlay_message_chain_contracts_with_external_signals(event_asset)
     )
     effective_asset, scan_performance_receipt = overlay_scan_performance_contracts(
-        event_asset
+        chain_asset
     )
     stability_asset, scan_stability_receipt = overlay_scan_stability_contracts(
         effective_asset
+    )
+    param_asset, scan_parameter_receipt = overlay_scan_parameter_contracts(
+        stability_asset
+    )
+    # Source-declared parameter bounds (OpenAPI integer query parameter
+    # minimum/maximum or verbatim range statements) become parameter-scale
+    # performance contracts on GET/HEAD operations.  Extraction only: the
+    # parameter name and the declared bounds come verbatim from the source.
+    derived_param_asset, param_derive_receipt = derive_parameter_bound_contracts(
+        param_asset,
+        api_operations=api_operations,
+        runtime_actors=runtime_actors,
     )
     # Historical defect documentation (HISTORICAL_BUGS.md / 历史缺陷记录) is
     # visible enterprise material the requirement-doc scoring excludes. This
@@ -427,13 +456,13 @@ def build_behavior_ir_with_semantic_operation_bindings(
         enrich_asset_with_historical_defect_rules,
     )
 
-    stability_asset, _historical_receipt = enrich_asset_with_historical_defect_rules(
-        stability_asset,
+    derived_param_asset, _historical_receipt = enrich_asset_with_historical_defect_rules(
+        derived_param_asset,
         root=_EKC_ROOT,
         project_id=project_id,
     )
     behavior_ir = _original_build_behavior_ir(
-        stability_asset,
+        derived_param_asset,
         project_id=project_id,
         source_snapshot_hash=source_snapshot_hash,
         api_operations=api_operations,
@@ -478,8 +507,12 @@ def build_behavior_ir_with_semantic_operation_bindings(
         performance_ir,
         effective_asset,
     )
-    job_ir, _job_receipt = bind_source_job_contracts(
+    parameter_ir, _parameter_scale_receipt = bind_source_parameter_contracts(
         stability_ir,
+        derived_param_asset,
+    )
+    job_ir, _job_receipt = bind_source_job_contracts(
+        parameter_ir,
         effective_asset,
     )
     job_ir["scan_ui_contract_overlay_receipt"] = dict(scan_ui_receipt)
@@ -489,6 +522,9 @@ def build_behavior_ir_with_semantic_operation_bindings(
         scan_performance_receipt
     )
     job_ir["scan_stability_contract_overlay_receipt"] = dict(scan_stability_receipt)
+    job_ir["scan_parameter_contract_overlay_receipt"] = dict(scan_parameter_receipt)
+    job_ir["parameter_bound_contract_derivation_receipt"] = dict(param_derive_receipt)
+    job_ir["source_parameter_contract_binding_receipt"] = dict(_parameter_scale_receipt)
     job_ir["rule_contract_validation_receipt"] = dict(_rule_contract_receipt)
     job_ir["historical_defect_rule_receipt"] = dict(_historical_receipt)
     return job_ir
