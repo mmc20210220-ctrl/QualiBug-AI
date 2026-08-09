@@ -78,6 +78,16 @@ def _attempt_row(row: dict[str, Any]) -> dict[str, Any]:
     the nested shape wins when present, otherwise the row itself is the
     attempt (fingerprint and identity fields live at the same level).
     """
+    if not isinstance(row, dict):
+        # TEMP-DIAG: non-dict row in attempts (str/None observed in run14)
+        import sys as _sys
+        print(
+            "ATTEMPT_ROW_DIAG type=%s repr=%s"
+            % (type(row).__name__, repr(row)[:120]),
+            file=_sys.stderr,
+            flush=True,
+        )
+        return {"_invalid_row": row}
     nested = row.get("obligation_attempt")
     if isinstance(nested, dict):
         return nested

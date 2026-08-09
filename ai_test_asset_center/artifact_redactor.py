@@ -89,6 +89,18 @@ def _is_safe_placeholder(value: Any) -> bool:
 # String redaction is bounded: pattern scanning must stay O(prefix), never
 # O(whole multi-MB captured payload). Anything beyond the window is dropped.
 _MAX_REDACT_STRING_CHARS = 256 * 1024  # 256KB
+# Ledger attempt lists are integrity data: truncating them during redaction
+# drops rows from the persisted ledger (measured: >5000 attempts in run14/15
+# produced "<REDACTED_LIST_TRUNCATED>" inside obligation_attempt_ledger and
+# broke reseal). Lists under these keys are never truncated — redaction still
+# rewrites sensitive VALUES inside their rows, only the row count is kept.
+_NO_TRUNCATE_LIST_KEYS = frozenset({
+    "attempts",
+    "delivery_occurrences",
+    "findings",
+    "candidate_findings",
+    "stage_records",
+})
 
 def _redact_string(text: str) -> tuple[str, list[str]]:
     # Oversized strings (captured response bodies, raw evidence dumps) are
@@ -156,7 +168,7 @@ def _redact_value(value: Any, *, key: str = "", depth: int = 0) -> tuple[Any, li
             redacted, child_events = _redact_value(item, key=key, depth=depth + 1)
             out_list.append(redacted)
             events.extend(child_events)
-            if index >= 5000:
+            if index >= 5000 and key not in _NO_TRUNCATE_LIST_KEYS:
                 out_list.append("<REDACTED_LIST_TRUNCATED>")
                 break
         return out_list, events
