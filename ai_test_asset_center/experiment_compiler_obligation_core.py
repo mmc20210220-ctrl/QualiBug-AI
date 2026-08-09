@@ -25,6 +25,7 @@ from .real_id_resolver import (
     infer_path_params,
     normalize_path_placeholders,
 )
+from .runtime_binding_graph import _is_placeholder_identity_literal
 
 # Risk-family labels are not assertion kinds. Map only when the protocol did not
 # already emit a concrete DSL kind.
@@ -355,6 +356,15 @@ def _source_declared_path_example_bindings(
     Returns a target→binding map, or None when the operation declares no
     example for any unresolved placeholder (the probe stays a visible
     BLOCKED rather than guessing).
+
+    Placeholder-form identity literals (zero/nil UUIDs such as
+    ``00000000-0000-0000-0000-000000000001``, or the explicit unresolved
+    marker) are documentation example filler, not real resource identities.
+    Binding one sends the control arm to a fabricated resource that can never
+    exist, so the target 404s and the experiment dies as
+    ``CONTROL_ARM_NOT_PROVEN`` before the rule under test is observed. Such
+    examples are skipped — the placeholder then stays a visible BLOCKED (or
+    resolves through a real fixture) instead of shipping a fabricated id.
     """
     parameters = _list(primary_op.get("parameters"))
     examples: dict[str, Any] = {}
@@ -369,7 +379,7 @@ def _source_declared_path_example_bindings(
             or _dict(parameter.get("schema")).get("example")
             or parameter.get("default")
         )
-        if name and value not in (None, ""):
+        if name and value not in (None, "") and not _is_placeholder_identity_literal(value):
             examples[name] = value
     if not examples:
         return None

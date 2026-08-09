@@ -23,7 +23,7 @@ from .enterprise_campaign import (
     source_snapshot_hash,
 )
 from .discovery_runtime_execution_support import _governed_write_block_reason
-from .pipeline_runtime import _dict, _confirmed_findings_path
+from .pipeline_runtime import _dict, _confirmed_findings_path, _text
 from .pipeline_slices import _behavior_slice_settings
 from .target_policy import build_target_policy_decision
 

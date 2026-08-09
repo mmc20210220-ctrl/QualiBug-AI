@@ -5,7 +5,10 @@ import hashlib
 import re
 from typing import Any
 
-from .obligation_compiler_base import _ownership_params_declared_on_operation
+from .obligation_compiler_base import (
+    _ownership_binder_location,
+    _ownership_params_declared_on_operation,
+)
 from .real_id_resolver import (
     alternate_collection_paths,
     body_field_collection_paths,
@@ -1076,6 +1079,22 @@ def build_binding_plan(
         if name not in seen:
             seen.add(name)
             ordered.append(name)
+    # Query-located ownership identity params (GET /api/cart/items?userId=…,
+    # DELETE /api/cart/selected?userId=…, GET /api/orders?userId=…) are
+    # declared as operation parameters, not path tokens — a bare ``userId``
+    # never matches the ``{...}`` placeholder regex. Their plan-step query
+    # spec carries the ``{userId}`` placeholder and the runtime identity
+    # channel must resolve it from the arm actor's login-observed identity.
+    # Without a binding target here the step blocks pre-transport with
+    # ``unresolved_path_placeholders:userId`` even though the identity is
+    # runtime-observed material.
+    for _ownership_param in _ownership_params_declared_on_operation(op):
+        if _ownership_param in seen:
+            continue
+        if _ownership_binder_location(op, name=_ownership_param) != "query":
+            continue
+        seen.add(_ownership_param)
+        ordered.append(_ownership_param)
 
     plan: list[dict[str, Any]] = []
     # Ownership identity params declared on the operation (fromUserId/ownerId/
@@ -1113,11 +1132,31 @@ def build_binding_plan(
             # observed identity and both arms share it (same-resource
             # semantics). Isolation-family cross-user writes stay on their
             # own arm-distinct identity channel.
+            #
+            # Identity-scoped READS (GET /api/cart/items?userId=…,
+            # GET /api/orders?userId=…) carry the caller's ownership identity
+            # as a QUERY parameter, not a body field. Their plan steps hold a
+            # ``{userId}`` query placeholder that no list read can supply (the
+            # current user's identity is runtime-observed material, never a
+            # row of a users collection the caller may or may not be allowed
+            # to list). Bind query-located ownership params through the same
+            # runtime identity channel so the placeholder resolves from the
+            # arm actor's login-observed identity instead of dying as
+            # BLOCKED_MISSING_BINDING.
             if (
                 name in _operation_declared_ownership_params
                 and name not in path_placeholders
-                and _text(obl.get("risk_family")) == "authorization"
-                and _dict(obl.get("property")).get("require_same_resource") is True
+                and (
+                    (
+                        _text(obl.get("risk_family")) == "authorization"
+                        and _dict(obl.get("property")).get("require_same_resource") is True
+                    )
+                    or _ownership_binder_location(op, name=name) == "query"
+                    or (
+                        _text(obl.get("risk_family")) == "validation"
+                        and _ownership_binder_location(op, name=name) == "body"
+                    )
+                )
             ):
                 plan.append({
                     "target": name,

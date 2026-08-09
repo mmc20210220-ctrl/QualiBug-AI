@@ -35,6 +35,38 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _jwt_claim_identity(token: str) -> str:
+    """Read the account identity claim from a JWT payload, structurally.
+
+    Only the payload segment is decoded (no signature check — the target owns
+    the secret, mirroring the credential refresher). The identity claim is
+    read from the standard claims ``id``/``sub``/``user_id`` when present. A
+    malformed segment or a non-JWT bearer (opaque token, API key) yields an
+    empty string so callers leave the identity absent instead of guessing.
+    """
+    import base64 as _b64
+
+    token = str(token or "").strip()
+    parts = token.split(".")
+    if len(parts) != 3:
+        return ""
+    try:
+        segment = parts[1]
+        segment += "=" * (-len(segment) % 4)
+        claims = json.loads(_b64.urlsafe_b64decode(segment.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return ""
+    if not isinstance(claims, dict):
+        return ""
+    for key in ("id", "sub", "user_id", "userId"):
+        value = claims.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+    return ""
+
+
 def _api_operations(
     api_spec_text: str,
     *,
@@ -154,13 +186,29 @@ def _runtime_actors(root: Path, project: str, context: dict[str, Any]) -> list[d
             or row.get("id")
             or role
         )
-        actors.append({
+        actor: dict[str, Any] = {
             "role": role,
             "account_ref": account_ref,
             "tenant": row.get("tenant") or row.get("scope"),
             "secret_ref": f"secret_ref:test_accounts:{account_ref}",
             "status": _text(row.get("status") or "active"),
-        })
+        }
+        # The account row may carry an observed bearer token (login-response
+        # identity). A JWT declares the account identity inside its own
+        # payload (id/sub/user_id); surface it as account_id so read-side
+        # ownership protocols can bind "own identity" parameters from
+        # runtime-observed material. Unparseable or non-JWT tokens leave
+        # account_id absent — never guessed.
+        _account_id = _jwt_claim_identity(
+            _text(
+                row.get("token")
+                or row.get("access_token")
+                or row.get("jwt")
+            )
+        )
+        if _account_id:
+            actor["account_id"] = _account_id
+        actors.append(actor)
     scenario_actor = _dict(_dict(context.get("runtime_scenario_contract")).get("actor"))
     declared_role = _text(
         scenario_actor.get("role")

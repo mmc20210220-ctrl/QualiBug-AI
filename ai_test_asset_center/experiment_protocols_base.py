@@ -72,10 +72,54 @@ def _minimal_body_from_schema(operation: dict[str, Any]) -> dict[str, Any]:
         elif prop_type == "boolean":
             body[name] = True
         elif prop_type == "array":
-            body[name] = []
+            # A required array detail field (batch interfaces: items/products)
+            # must carry at least one row built from the declared item schema.
+            # An empty array trips the required-field gate
+            # (``missing_required_body_fields:<field>``) and blocks the whole
+            # experiment before the batch rule under test is observed.
+            body[name] = _minimal_array_rows(_dict(prop.get("items")))
         else:
             body[name] = {}
     return body
+
+
+def _minimal_array_rows(items_schema: dict[str, Any], *, depth: int = 0) -> list[dict[str, Any]]:
+    """Build one structurally-valid detail row from an array item schema.
+
+    Recursively populates the item's declared properties with type-appropriate
+    defaults (or declared examples) so a batch request body (items/products
+    arrays) carries a real detail row instead of an empty array. Schema-driven
+    and industry-neutral: no field name is hardcoded — only the item schema's
+    own properties are walked. An item schema without any property declaration
+    yields one empty object row, which still satisfies the required-array gate
+    and lets the target's own validation produce the observation.
+    """
+    if depth > 6 or not isinstance(items_schema, dict):
+        return [{}]
+    props = _dict(items_schema.get("properties"))
+    if not props:
+        return [{}]
+    row: dict[str, Any] = {}
+    for field_name, field_schema in props.items():
+        if not isinstance(field_schema, dict):
+            continue
+        field_type = _text(field_schema.get("type") or "string")
+        example = field_schema.get("example")
+        if example is not None:
+            row[field_name] = example
+        elif field_type == "string":
+            row[field_name] = "test_value"
+        elif field_type in ("integer", "number"):
+            row[field_name] = 1
+        elif field_type == "boolean":
+            row[field_name] = True
+        elif field_type == "array":
+            row[field_name] = _minimal_array_rows(
+                _dict(field_schema.get("items")), depth=depth + 1
+            )
+        else:
+            row[field_name] = {}
+    return [row]
 
 
 def source_request_example(
@@ -146,7 +190,9 @@ def _generate_minimal_body_from_schema(schema: dict[str, Any]) -> dict[str, Any]
         elif field_type == "boolean":
             body[field_name] = True
         elif field_type == "array":
-            body[field_name] = []
+            # Batch detail arrays (items/products) must carry one structurally
+            # valid row or the required-field gate blocks the whole experiment.
+            body[field_name] = _minimal_array_rows(_dict(field_schema.get("items")))
         elif field_type == "object":
             body[field_name] = {}
         else:
@@ -2950,13 +2996,25 @@ def compile_family_protocol(
         # write at another account and make the effect invisible to the
         # acting account (VALIDATION_EFFECT_AMBIGUOUS). Drop them so the
         # target derives the identity from the authenticated actor.
+        # Schema-REQUIRED ownership fields must stay: the required-field gate
+        # (``missing_required_body_fields:userId``) blocks pre-transport when
+        # a field the target's contract declares mandatory is stripped, so the
+        # experiment dies before the rule under test is observed. Keeping the
+        # required identity field lets the runtime identity channel bind the
+        # acting actor's own login-observed identity into it.
         _mutation_field = _text(mutation.get("json_path")).rsplit(".", 1)[-1].strip("[]")
-        _keep_fields = {_mutation_field} if _mutation_field else None
+        _keep_fields = {_mutation_field} if _mutation_field else set()
+        _required_schema_fields = {
+            str(field)
+            for field in _list(_request_body_schema(operation).get("required"))
+            if _text(field)
+        }
+        _keep_fields.update(_required_schema_fields)
         control_body = _strip_ownership_identity_fields(
-            control_body, keep=_keep_fields
+            control_body, keep=_keep_fields or None
         )
         treatment_body = _strip_ownership_identity_fields(
-            treatment_body, keep=_keep_fields
+            treatment_body, keep=_keep_fields or None
         )
         # ── Cap-boundary assertion ──
         # A percent-cap rule (折扣券必须遵守封顶金额) does not reject the
