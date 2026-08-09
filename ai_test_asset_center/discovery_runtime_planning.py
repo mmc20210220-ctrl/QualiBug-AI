@@ -513,6 +513,50 @@ def build_discovery_plan(
             "credential_gated_write_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
+    # ── Credential-boundary guard obligations (auth/backdoor surfaces) ──
+    # Authentication/backdoor defects are runtime divergences between an
+    # endpoint's DECLARED access contract and its observed enforcement: the
+    # source states the correct contract (权限：管理员 / 必须完成验证码校验), so
+    # no rule→operation binding can surface them. Two structure-only arms:
+    #  - Arm A: a role-declared credential surface (token/password/login/
+    #    impersonate/debug-sign …) must REJECT anonymous callers — an accepted
+    #    anonymous call lets anyone mint/impersonate/change credentials.
+    #  - Arm B: a declared verification-code login must actually verify the
+    #    code — a wrong code must be rejected (any-code-login weakness).
+    # Both are rejection-only single-arm obligations flowing through the
+    # existing credential_gated_write / validation protocol channels; no
+    # endpoint names, no industry terms (driven by the operation's own
+    # contract text + generic security vocabulary).
+    credential_boundary_report: dict[str, Any] = {}
+    try:
+        from .credential_boundary_guard import (
+            build_credential_boundary_guard_obligations,
+        )
+
+        boundary_guards = build_credential_boundary_guard_obligations(behavior_ir)
+        if boundary_guards:
+            existing_sigs = {
+                _text(o.get("obligation_id"))
+                for o in obligations
+                if isinstance(o, dict)
+            }
+            new_boundary_guards = [
+                go
+                for go in boundary_guards
+                if _text(go.get("obligation_id")) not in existing_sigs
+            ]
+            obligations.extend(new_boundary_guards)
+            credential_boundary_report = {
+                "credential_boundary_obligations_generated": len(boundary_guards),
+                "credential_boundary_obligations_added": len(new_boundary_guards),
+                "total_obligations_after_credential_boundary_guard": len(obligations),
+            }
+    except Exception as exc:
+        credential_boundary_report = {
+            "credential_boundary_obligations_added": 0,
+            "credential_boundary_error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
     # ── Cross-document conflict obligations ──
     # Consume conflicts detected by enterprise_knowledge_center between
     # different source documents. Each conflict becomes a test obligation
@@ -1291,6 +1335,7 @@ def build_discovery_plan(
             "state_audit_report": state_audit_report,
             "account_enumeration_report": account_enumeration_report,
             "credential_gated_write_report": credential_gated_write_report,
+            "credential_boundary_report": credential_boundary_report,
             "conflict_report": conflict_report,
             "mainline_reasoner_report": mainline_reasoner_report,
             "fact_ref_attach_receipt": _fact_ref_attach_receipt,

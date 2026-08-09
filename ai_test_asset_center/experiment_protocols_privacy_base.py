@@ -311,6 +311,15 @@ def _invalid_constraint_value(
         while len(value) <= constraint_value:
             value.append(deepcopy(filler))
         return True, value, "extend_above_max_items"
+    if constraint == "verification_code_mismatch":
+        # Verification-code login surfaces must verify the code server-side:
+        # a code that was never issued must be rejected. The mutation is a
+        # deterministic wrong code (format-valid, never issued) — universal
+        # verification vocabulary, never benchmark data. Accepting it is the
+        # any-code-login weakness (length-only verification).
+        if not isinstance(current, str):
+            return False, None, ""
+        return True, "000000", "replace_with_wrong_code"
     return False, None, ""
 
 

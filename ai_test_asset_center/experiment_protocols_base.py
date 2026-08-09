@@ -246,6 +246,15 @@ def _semantic_invalid_value(
     if declared_type in ("integer", "number"):
         if _NUMERIC_NEGATIVE_FIELDS.search(combined):
             return -1, "semantic:negative_value"
+        # ── Numeric verification-code field (integer codes) ──
+        # Same verification-must-verify semantics as the string branch below:
+        # a numeric verification-value field (code/otp) on a verification
+        # surface must reject a code that was never issued.
+        if (
+            _verification_value_field_hit(field_name, combined)
+            and _verification_login_context_hit(combined)
+        ):
+            return 999999, "semantic:verification_code_mismatch"
         # Check for maximum constraint in schema
         maximum = property_schema.get("maximum")
         if isinstance(maximum, (int, float)) and not isinstance(maximum, bool):
@@ -308,6 +317,21 @@ def _semantic_invalid_value(
             return "0", "semantic:invalid_phone_format"
         if _DATE_FIELDS.search(field_name):
             return "1900-13-99", "semantic:invalid_date"
+        # ── Verification-code login must actually verify the code ──
+        # A verification-value field (code/otp/验证码…) on a surface whose own
+        # contract names a verification mechanism (验证码登录 / otp login) is
+        # the credential the login claims to check. The property under test is
+        # that the code is REALLY verified server-side: a deterministic wrong
+        # code that was never issued must be rejected. Accepting it is the
+        # any-code-login weakness — industry-universal verification vocabulary,
+        # never an industry term. Runs before generic minLength/pattern
+        # checks: a length-gated code field still has to reject a wrong code,
+        # which is exactly the defect class (length-only verification).
+        if (
+            _verification_value_field_hit(field_name, combined)
+            and _verification_login_context_hit(combined)
+        ):
+            return "000000", "semantic:verification_code_mismatch"
         # Check for minLength constraint
         min_length = property_schema.get("minLength")
         if isinstance(min_length, int) and min_length > 1:
@@ -317,6 +341,52 @@ def _semantic_invalid_value(
             return "!!!invalid!!!", "semantic:pattern_violation"
 
     return None
+
+
+def _verification_value_field_hit(field_name: str, combined: str) -> bool:
+    """Whether the FIELD itself is a verification-value field.
+
+    The field name is the primary signal (code/otp/验证码/…). The combined
+    corpus (field name + contract text) is only consulted for CJK-named
+    fields, where the field name appears verbatim in the corpus — a
+    ``phone`` field on a verification surface must never be treated as the
+    verification value just because the contract text mentions 验证码.
+    """
+    name_lower = _text(field_name).lower()
+    if re.search(
+        r"(?:^|[^a-z0-9])"
+        r"(?:code|otp|captcha|verifycode|verificationcode|smscode)"
+        r"(?:[^a-z0-9]|$)",
+        name_lower,
+    ):
+        return True
+    return any(
+        token in name_lower
+        for token in ("验证码", "校验码", "短信码")
+    )
+
+
+def _verification_login_context_hit(combined: str) -> bool:
+    """Whether the combined corpus names a verification-code login context.
+
+    The mechanism vocabulary (验证码/otp/verification code/sms code) is the
+    precise gate: a coupon redemption-code operation or an HTTP status-code
+    rule never declares a verification-code login. The identity-exchange
+    context (登录/login/登入) is required for English-only contracts where the
+    mechanism is implied by the login surface itself.
+    """
+    if any(
+        token in combined
+        for token in (
+            "验证码", "校验码", "短信码", "otp",
+            "verification code", "sms code",
+        )
+    ):
+        return True
+    return any(
+        token in combined
+        for token in ("登录", "登入", "login", "sign in", "signin")
+    )
 
 
 # Response-side constraint signals: the rule constrains what a response may

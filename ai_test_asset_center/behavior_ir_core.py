@@ -1477,6 +1477,19 @@ def _derive_permission_relations(
         for operation in _list(model.get("operations")):
             if not isinstance(operation, dict):
                 continue
+            # ── Public-access declaration authority ──
+            # An operation whose own contract declares PUBLIC access
+            # (权限：公开 / public / anonymous) is anonymous-reachable by that
+            # declaration; matrix rows from OTHER roles must not grant it
+            # permits. The operation access contract is authoritative — the
+            # same principle as the x-required-roles loop below. Without this
+            # guard, a wildcard admin grant ("admin | 所有权限") silently turns
+            # every public surface into a "role-restricted" operation, the
+            # anonymous-reachability guards skip it, and public-but-gated
+            # surfaces (password reset, verification-code login) compile zero
+            # obligations.
+            if _operation_declares_public_access(operation):
+                continue
             matching_rows = [
                 row
                 for row in role_rows
@@ -1925,6 +1938,42 @@ def _operation_contract_text(operation: dict[str, Any]) -> str:
             parts.append(value)
     parts.extend(_text(value) for value in _list(operation.get("tags")) if _text(value))
     return " ".join(parts).lower()
+
+
+# Public-access declaration vocabulary: the operation's OWN access contract
+# states that any caller (including unauthenticated ones) may reach it.
+# Generic enterprise API-documentation language — never an industry term.
+_PUBLIC_ACCESS_DECLARATION_MARKERS = (
+    "权限：公开",
+    "权限:公开",
+    "公开访问",
+    "公开可访问",
+    "匿名访问",
+    "匿名可访问",
+    "public access",
+    "publicly accessible",
+    "no authentication required",
+    "no auth required",
+    "anonymous access",
+)
+
+
+def _operation_declares_public_access(operation: dict[str, Any]) -> bool:
+    """Whether the operation's own contract declares PUBLIC access.
+
+    A public declaration is the operation's authoritative access contract
+    (same authority as x-required-roles): such an operation is
+    anonymous-reachable BY CONTRACT. Wildcard/matrix grants from other roles
+    (for example an ``admin | 所有权限`` row) must not mask it — otherwise
+    every public surface silently becomes "role-restricted" in the IR and the
+    anonymous-reachability guards (account-enumeration, credential-gated
+    write, credential-boundary) can never fire on it, which is exactly how a
+    public-but-verification-gated password-reset surface lost its obligations.
+    """
+    corpus = _operation_contract_text(operation)
+    if not corpus:
+        return False
+    return any(marker in corpus for marker in _PUBLIC_ACCESS_DECLARATION_MARKERS)
 
 
 def _has_exclusive_role_marker(source_text: str) -> bool:
