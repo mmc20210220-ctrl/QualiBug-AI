@@ -1463,6 +1463,39 @@ def _observe_resource_ownership(
     )
 
 
+def _write_response_materialization_effect(
+    write: dict[str, Any],
+    before: dict[str, Any],
+    request_body: Any,
+) -> int:
+    """New-entity materialization proven by the write response itself.
+
+    A 2xx write whose response body carries identity values that were neither
+    in the observed pre-write state nor in the request payload is the target's
+    own runtime statement that a NEW entity was materialized: the accepted
+    write DID take effect, even when the after-readback surface cannot reflect
+    it (paged/limited collection, filtered projection, identity-scoped GET
+    bound to a different row). This is purely runtime-observed evidence — no
+    inference, no fabricated before/after counts. Returns 0 (fail-closed) when
+    the write was not accepted, the pre-state was not a real observed 2xx
+    body, or the response carries no new identity.
+    """
+    if not (200 <= _raw_http_status(write) < 300):
+        return 0
+    if not (200 <= _raw_http_status(before) < 300):
+        return 0
+    write_body = write.get("body")
+    before_body = before.get("body")
+    if not isinstance(write_body, (dict, list)) or not isinstance(before_body, (dict, list)):
+        return 0
+    write_ids = _identity_value_fingerprints(write_body)
+    if not write_ids:
+        return 0
+    known_ids = _identity_value_fingerprints(before_body)
+    known_ids |= _identity_value_fingerprints(request_body)
+    return 1 if write_ids - known_ids else 0
+
+
 def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
     if not steps:
         return {}, "BUSINESS_EFFECT_WRITE_MISSING"
@@ -1473,6 +1506,11 @@ def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
     write = _dict(last_governance.get("write"))
     write_status = _raw_http_status(write)
     response_bound_after = _dict(last_governance.get("response_bound_after"))
+    # The step's top-level ``body`` is the write RESPONSE. The exact request
+    # payload that reached transport is recorded on the governance receipt as
+    # ``materialized_request_body`` (when non-empty); it is the only faithful
+    # request-side surface for the write-response echo exclusion.
+    request_body = last_governance.get("materialized_request_body")
     if not (
         200 <= _raw_http_status(before) < 300
         and 200 <= _raw_http_status(after) < 300
@@ -1509,6 +1547,23 @@ def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
                     last_governance.get("response_bound_after_ref")
                 ),
             }, ""
+        # ── Write-response materialization evidence ──
+        # The readback could not be captured, but the write's own 2xx response
+        # carries identity values absent from the observed pre-state: the
+        # target materialized a new entity. The write response IS the after
+        # observation — decidable even when the readback surface cannot
+        # reflect the new row.
+        if _write_response_materialization_effect(write, before, request_body):
+            return {
+                "before_identity_count": 0,
+                "after_identity_count": 1,
+                "identity_effect_count": 1,
+                "business_field_change_count": 0,
+                "effect_count": 1,
+                "before_fingerprint": _fingerprint(before.get("body")),
+                "after_fingerprint": _fingerprint(write.get("body")),
+                "effect_basis": "write_response_new_identity",
+            }, ""
         # A failed observation is not an observation of zero effect. Reporting
         # all-zero counts here would make fabricated evidence indistinguishable
         # from a real "nothing changed" reading.
@@ -1522,7 +1577,22 @@ def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
         before.get("body"),
         after.get("body"),
     )
-    return {
+    # ── Write-response materialization evidence (ordinary path) ──
+    # A both-2xx window that reads as zero change may still have materialized
+    # a new entity the readback surface cannot reflect (LIMIT-capped
+    # collection, filtered projection). The write response itself — carrying
+    # identity values absent from the observed pre-state and from the request
+    # — is the target's own acceptance statement: the malformed input was
+    # accepted and an effect occurred. Fail-closed: no new identity, no
+    # effect claim.
+    write_response_effect = (
+        identity_effect_count == 0
+        and business_field_change_count == 0
+        and _write_response_materialization_effect(write, before, request_body)
+    )
+    if write_response_effect:
+        identity_effect_count = 1
+    window = {
         "before_identity_count": len(before_ids),
         "after_identity_count": len(after_ids),
         "identity_effect_count": identity_effect_count,
@@ -1530,7 +1600,10 @@ def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
         "effect_count": identity_effect_count + business_field_change_count,
         "before_fingerprint": _fingerprint(before.get("body")),
         "after_fingerprint": _fingerprint(after.get("body")),
-    }, ""
+    }
+    if write_response_effect:
+        window["effect_basis"] = "write_response_new_identity"
+    return window, ""
 
 
 def _observe_business_effect(
