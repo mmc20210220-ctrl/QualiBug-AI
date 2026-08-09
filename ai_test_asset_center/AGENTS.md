@@ -924,6 +924,39 @@ Contract. This section pins only the package-local anchors:
   the compile chain forwards `root`/`project`;
   `install_source_stability_obligation_binding` preserves outer install
   markers via `functools.wraps` so the chain cannot nest itself.
+- Message-chain verification (cross-service event consumption) is the
+  multi-hop extension of the single-hop event observer:
+  `message_chain_surface.py` registers observer
+  `message_chain_delivery_observer`, assertion kind
+  `message_chain_consistency` and protocol
+  `event_delivery_consistency:message_chain_verification` on the same
+  family; `message_chain_contract_overlay.py` admits source-bound
+  `message_chain_contracts` (schema `qualibug.formal-message-chain-
+  contract.v1`: event name / trigger source / consumers / expected effects)
+  and operator-declared `runtime_event_surfaces` (schema
+  `qualibug.runtime-event-surface.v1`, the degradation channel — no source
+  refs, no invented business rules) from scan-body fields
+  `message_chain_contracts` / `runtime_event_surfaces` or typed
+  `external_signal_requests`; `message_chain_binding.py` binds them into
+  Behavior IR invariants (expression kind `message_chain_consistency`) plus
+  a `produces` relation and compiles one
+  `event_delivery_consistency` obligation (wrapper installed after the
+  source_event wrapper). The chain observer polls the declared relative
+  event GET path WITHOUT collapsing duplicates (the single-hop observer
+  dedupes by event id, hiding duplicate deliveries): it counts distinct
+  expected-type deliveries, detects duplicate delivery (same event id twice
+  in one poll batch under `duplicate_mode=log`, or reappearance across
+  polls under `duplicate_mode=queue`), checks ordering (declared sequence
+  field strictly increasing / timestamp field non-decreasing / declared
+  expected type sequence) and reads every consumer's declared target state
+  back over a relative GET (`{correlation}` path placeholder or query
+  parameter) asserting the declared expected state. Pre-cleanup observation
+  (`install_message_chain_pre_cleanup_observer`) runs the chain observer
+  before cleanup compensation removes the correlated entity, and the
+  finalizer reuses that receipt. Chain evidence stays privacy-safe: event
+  ids fingerprinted, only declared identity/type/state fields kept, raw
+  payloads never included; transport failure or incomplete coverage is
+  INDETERMINATE, never PASS.
 - The `registered_observer_evidence_bridge` installer is a no-op: the
   evidence merge it once performed by replacing the finalizer's dispatcher
   is now first-class inside

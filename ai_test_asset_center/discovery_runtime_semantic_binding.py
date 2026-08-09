@@ -52,6 +52,19 @@ from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .job_async_protocol import register_job_async_protocol
 from .llm_reasoning import ReasoningConfig
+from .message_chain_binding import (
+    bind_source_message_chains,
+    install_message_chain_obligation_binding,
+)
+from .message_chain_contract_overlay import (
+    bind_message_chain_contract_context,
+    overlay_message_chain_contracts_with_external_signals,
+    reset_message_chain_contract_context,
+)
+from .message_chain_surface import (
+    install_message_chain_pre_cleanup_observer,
+    install_message_chain_surface,
+)
 from .non_http_observers import install_non_http_observers
 from .professional_ui_accessibility_contract_guard import (
     install_professional_ui_accessibility_contract_guard,
@@ -197,6 +210,14 @@ install_scan_ui_interaction_contract_guard()
 install_formal_event_surface()
 install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
+# Message-chain verification extends the single-hop event chain with
+# cross-service semantics (event name / trigger source / consumers / expected
+# effects): one new observer, one new assertion kind and one new protocol on
+# the same event_delivery_consistency family, plus a pre-cleanup observer so
+# the chain-effect state readback happens before cleanup compensation removes
+# the correlated entity.
+install_message_chain_surface()
+install_message_chain_pre_cleanup_observer()
 install_formal_performance_surface()
 install_formal_performance_attribution_guard()
 # The stability installer was never invoked anywhere: its observer, assertion
@@ -215,6 +236,7 @@ install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
 install_source_ui_family_vector_compat()
 install_source_event_obligation_binding()
+install_message_chain_obligation_binding()
 install_source_performance_obligation_binding()
 install_source_stability_obligation_binding()
 register_job_async_protocol()
@@ -386,6 +408,9 @@ def build_behavior_ir_with_semantic_operation_bindings(
     event_asset, scan_event_receipt = overlay_scan_event_contracts_with_external_signals(
         ui_asset
     )
+    chain_asset, scan_chain_receipt = (
+        overlay_message_chain_contracts_with_external_signals(event_asset)
+    )
     effective_asset, scan_performance_receipt = overlay_scan_performance_contracts(
         event_asset
     )
@@ -444,8 +469,9 @@ def build_behavior_ir_with_semantic_operation_bindings(
     observer_ir, _observer_receipt = bind_source_effect_observers(rule_contract_ir)
     ui_ir, _ui_receipt = bind_source_ui_contracts(observer_ir, effective_asset)
     event_ir, _event_receipt = bind_source_event_contracts(ui_ir, effective_asset)
+    chain_ir, _chain_receipt = bind_source_message_chains(event_ir, effective_asset)
     performance_ir, _performance_receipt = bind_source_performance_contracts(
-        event_ir,
+        chain_ir,
         effective_asset,
     )
     stability_ir, _stability_receipt = bind_source_stability_contracts(
@@ -458,6 +484,7 @@ def build_behavior_ir_with_semantic_operation_bindings(
     )
     job_ir["scan_ui_contract_overlay_receipt"] = dict(scan_ui_receipt)
     job_ir["scan_event_contract_overlay_receipt"] = dict(scan_event_receipt)
+    job_ir["scan_message_chain_contract_overlay_receipt"] = dict(scan_chain_receipt)
     job_ir["scan_performance_contract_overlay_receipt"] = dict(
         scan_performance_receipt
     )
@@ -480,6 +507,7 @@ def build_discovery_plan(inputs: Any, campaign_handle: Any) -> Any:
     context = _dict(getattr(effective_inputs, "campaign_context", {}))
     ui_token = bind_scan_ui_contract_context(context)
     event_token = bind_scan_event_contract_context(context)
+    chain_token = bind_message_chain_contract_context(context)
     performance_token = bind_scan_performance_contract_context(context)
     stability_token = bind_scan_stability_contract_context(context)
     try:
@@ -487,6 +515,7 @@ def build_discovery_plan(inputs: Any, campaign_handle: Any) -> Any:
     finally:
         reset_scan_stability_contract_context(stability_token)
         reset_scan_performance_contract_context(performance_token)
+        reset_message_chain_contract_context(chain_token)
         reset_scan_event_contract_context(event_token)
         reset_scan_ui_contract_context(ui_token)
 

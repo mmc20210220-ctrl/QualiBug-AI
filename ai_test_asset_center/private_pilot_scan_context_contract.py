@@ -87,6 +87,60 @@ def formal_event_contracts_from_scan_body(
     return contracts
 
 
+def _list_contract_field_from_scan_body(
+    body: dict[str, Any],
+    field: str,
+    *,
+    error_prefix: str,
+) -> list[dict[str, Any]] | None:
+    """Preserve explicit typed contract rows for the strict chain overlay.
+
+    Transport-shape validation only; source identity, trigger/actor identity,
+    observer fields, consumers, effects and windows remain owned by
+    ``message_chain_contract_overlay``. An explicit empty list is preserved;
+    malformed rows are rejected instead of disappearing.
+    """
+    if field not in body:
+        return None
+    raw = body.get(field)
+    if not isinstance(raw, list):
+        raise ValueError(f"{field}_not_list")
+    rows: list[dict[str, Any]] = []
+    for index, value in enumerate(raw):
+        if not isinstance(value, dict):
+            raise ValueError(f"{error_prefix}_not_object:{index}")
+        rows.append(dict(value))
+    return rows
+
+
+def message_chain_contracts_from_scan_body(
+    body: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """Explicit source-bound message-chain contracts (event name/trigger/effects)."""
+    return _list_contract_field_from_scan_body(
+        body,
+        "message_chain_contracts",
+        error_prefix="message_chain_contract",
+    )
+
+
+def runtime_event_surfaces_from_scan_body(
+    body: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """Operator-declared runtime event surfaces (degradation channel).
+
+    These rows carry no business semantics by default; the overlay admits them
+    without source refs and the receipt marks the channel as runtime
+    observation. They make the event face observable even when no written
+    event contract exists.
+    """
+    return _list_contract_field_from_scan_body(
+        body,
+        "runtime_event_surfaces",
+        error_prefix="runtime_event_surface",
+    )
+
+
 def _is_production_like_environment(environment_type: str = "") -> bool:
     # Use the same fail-closed classifier as the governed write executor.  The
     # TestOps helper intentionally recognizes only canonical environment names;
@@ -322,6 +376,14 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
     event_contracts = formal_event_contracts_from_scan_body(body)
     if event_contracts is not None:
         context["event_formal_contracts"] = event_contracts
+
+    chain_contracts = message_chain_contracts_from_scan_body(body)
+    if chain_contracts is not None:
+        context["message_chain_contracts"] = chain_contracts
+
+    runtime_surfaces = runtime_event_surfaces_from_scan_body(body)
+    if runtime_surfaces is not None:
+        context["runtime_event_surfaces"] = runtime_surfaces
 
     # These controls are consumed by discovery_runtime_planning, but previously
     # the product's only customer scan entry discarded them while building the
