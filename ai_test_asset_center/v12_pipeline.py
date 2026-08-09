@@ -275,11 +275,22 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
     store = EnterpriseCampaignStore(root, project)
     campaign, mode = store.open_or_create(candidate)
     # NOTE: the effective per-round budget / round limit are auto-scaled to the
-    # discovered candidate-pool size just before scheduling. Here we only align the
-    # persisted campaign ceilings with the (possibly env-overridden) starting
-    # settings; the auto-scaler may raise them further at scheduling time.
-    campaign.slice_budget = min(campaign.slice_budget, settings["slice_budget"])
-    campaign.automatic_round_limit = min(campaign.automatic_round_limit, settings["round_limit"])
+    # discovered candidate-pool size just before scheduling. Here we align the
+    # campaign ceilings with the (possibly env-overridden) starting settings.
+    # The CURRENT run's settings are the operator's declared authority for THIS
+    # run (explicit env still wins, per pipeline_slices). Persisted ceilings
+    # from prior runs are stale resume state and must never silently shrink the
+    # current run: ``min(persisted, settings)`` ratchets the campaign down
+    # forever — one resumed run that persisted a smaller round limit (e.g. a
+    # quick-scan with QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT=1) makes every
+    # later run skip all follow-on rounds (round_limit<=1 returns immediately in
+    # ``_consume_pending_obligation_rounds``) and starve budget-deferred
+    # obligations at OBLIGATION_BUDGET_REACHED (run16 measured: 1100 of 1200
+    # selected never re-offered to execution). Assign, never min.
+    campaign.slice_budget = max(1, int(settings["slice_budget"] or 1))
+    campaign.automatic_round_limit = max(
+        1, int(settings["round_limit"] or 1)
+    )
     return campaign, store, mode
 
 

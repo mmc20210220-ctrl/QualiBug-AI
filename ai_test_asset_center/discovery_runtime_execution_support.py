@@ -542,15 +542,36 @@ def _consume_pending_obligation_rounds(
 
     plan_row = dict(_dict(obligation_plan))
     budget = int(plan_row.get("budget") or 0)
-    if budget <= 0:
-        return [], plan_row
     round_limit = max(1, int(automatic_round_limit or 1))
     pending_rows = [
         dict(row)
         for row in _list(plan_row.get("pending_next_round"))
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     ]
-    if not pending_rows or round_limit <= 1:
+    if budget <= 0:
+        if pending_rows:
+            # Pending work exists but the plan carries no budget: receipt the
+            # skip instead of letting the manual terminal projector misread it
+            # as plain budget exhaustion.
+            plan_row["early_stop_reason"] = (
+                "PENDING_NEXT_ROUND_SKIPPED_PLAN_BUDGET_ZERO"
+            )
+            plan_row["pending_count"] = len(pending_rows)
+        return [], plan_row
+    if not pending_rows:
+        return [], plan_row
+    if round_limit <= 1:
+        # round_limit=1 means "round 1 only": budget-deferred rows stay pending
+        # and are sealed OBLIGATION_BUDGET_REACHED by manual terminals. That is
+        # a legitimate operator cap, but it must be visible in the receipt — a
+        # silent early return makes 1000+ compiled obligations look like a
+        # budget wall when the real cause is the resolved round limit (run16:
+        # persisted automatic_round_limit=1 ratcheted the env=3 run to 1).
+        plan_row["early_stop_reason"] = (
+            "PENDING_NEXT_ROUND_SKIPPED_ROUND_LIMIT_ONE"
+        )
+        plan_row["follow_on_round_limit"] = round_limit
+        plan_row["pending_count"] = len(pending_rows)
         return [], plan_row
 
     obligation_by_id = {

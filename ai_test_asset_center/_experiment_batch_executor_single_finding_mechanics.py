@@ -240,11 +240,23 @@ def _operation_coverage_budget(
     count (still bounded by the hard cap) makes the prioritizer's
     operation-fair tier able to fit every operation, so no operation can be
     excluded from a batch purely by global rank.
+
+    Operation identity is accepted on either carrier the mainline can hand
+    down: the planner row's ``operation_key`` or the intent row's
+    ``operation_refs`` (agent-intent rows carry operation_refs, not
+    operation_key; counting only operation_key silently disabled the floor
+    on the mainline batch path — run16: 1200 selected, per-batch budget
+    stayed at the phase default while 1100 compiled obligations deferred).
     """
     distinct_operations = len({
         _text(_dict(item).get("operation_key"))
         for item in _list(selected)
         if _text(_dict(item).get("operation_key"))
+    } | {
+        _text(ref)
+        for item in _list(selected)
+        for ref in _list(_dict(item).get("operation_refs"))
+        if _text(ref)
     })
     return max(int(budget), min(distinct_operations, int(hard_cap)))
 
@@ -274,6 +286,11 @@ def _family_coverage_budget(
         _text(_dict(item).get("operation_key"))
         for item in _list(selected)
         if _text(_dict(item).get("operation_key"))
+    } | {
+        _text(ref)
+        for item in _list(selected)
+        for ref in _list(_dict(item).get("operation_refs"))
+        if _text(ref)
     })
     distinct_families = len({
         _text(_dict(item).get("risk_family"))
