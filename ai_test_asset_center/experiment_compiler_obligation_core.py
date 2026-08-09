@@ -1050,13 +1050,54 @@ def compile_experiment_for_obligation(
                     "detail": protocol.get("detail") or "",
                 },
             )
+        # Every other family compiles its observer requirements through the
+        # observer-contract registry (compile_observer_requirements), which
+        # stamps adapter/surface/receipt identity onto each observer and fails
+        # closed when the required adapter is not declared. The UI branch used
+        # to attach the protocol's raw {"observer_id": "ui_browser"} rows
+        # verbatim: the experiment compiled with observers that carried no
+        # adapter identity (and without validating that the ui_browser adapter
+        # was operator-declared at all), so the agent-intent plan gate — which
+        # requires every observer to name an execution adapter — raised
+        # observer_contract_missing for the first selected UI obligation and
+        # the whole run died at planning. Stamp through the registry like every
+        # other family; an undeclared ui_browser adapter blocks visibly
+        # (BLOCKED_UNSUPPORTED_ADAPTER) instead of compiling an unobservable
+        # experiment.
+        _protocol_observers = [
+            dict(row)
+            for row in _list(protocol.get("observers"))
+            if isinstance(row, dict)
+        ]
+        _observer_requirements, _observer_reason, _observer_detail = (
+            compile_observer_requirements(
+                [
+                    _text(row.get("observer_id"))
+                    for row in _protocol_observers
+                    if _text(row.get("observer_id"))
+                ],
+                risk_family=family,
+                available_adapters=adapters,
+            )
+        )
+        if _observer_reason:
+            return blocked_experiment(oid, _observer_reason, _observer_detail)
+        _stamped_by_id = {
+            _text(row.get("observer_id")): dict(row)
+            for row in _observer_requirements
+            if _text(row.get("observer_id"))
+        }
+        observers = [
+            {**_stamped_by_id.get(_text(row.get("observer_id")), {}), **row}
+            for row in _protocol_observers
+        ]
         return make_experiment(
             obligation_id=oid,
             risk_family=family,
             control_plan=protocol.get("control_plan") or [],
             treatment_plan=protocol.get("treatment_plan") or [],
             assertions=[dict(protocol["assertion"])] if protocol.get("assertion") else [],
-            observers=protocol.get("observers") or [],
+            observers=observers,
             source_refs=[
                 ref for ref in _list(obl.get("source_refs"))
                 if isinstance(ref, dict)
