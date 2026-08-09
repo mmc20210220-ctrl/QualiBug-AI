@@ -541,11 +541,50 @@ def test_compile_baseline_semantics_locked() -> None:
     Any refactor of the compile phase (finalization dedup, batch index reuse,
     token-catalog reuse) must reproduce this exact pack: same experiments,
     same ids, same statuses, same reason codes, same plans.
+
+    The hash is computed in a FRESH interpreter: other test suites register
+    observers/protocols into module-level registries, which legitimately
+    changes compile output in a shared process (pre-existing cross-suite state
+    pollution, reproduced at the stage-1 commit). A subprocess isolates the
+    baseline from that noise.
     """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+    code = (
+        "import sys, copy, json, hashlib\n"
+        f"sys.path.insert(0, {repo_root!r})\n"
+        "from tests.test_task11_compile_rootcause import (\n"
+        "    _synthetic_behavior_ir, _synthetic_obligations,\n"
+        "    _canonical_hash, _compile_pack_fingerprint,\n"
+        ")\n"
+        "pack, fingerprint = _compile_pack_fingerprint(\n"
+        "    _synthetic_obligations(), _synthetic_behavior_ir()\n"
+        ")\n"
+        "print(json.dumps({\n"
+        "    'fingerprint': fingerprint,\n"
+        "    'compiled': pack['compiled_count'],\n"
+        "    'blocked': pack['blocked_count'],\n"
+        "    'abstract': pack['abstract_count'],\n"
+        "}))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    fingerprint = payload["fingerprint"]
+
+    # Same-process sanity surface (cheap, non-hash): outcome counts must be
+    # stable and the semantic projection must hold its shape.
     behavior_ir = _synthetic_behavior_ir()
     obligations = _synthetic_obligations()
-    pack, fingerprint = _compile_pack_fingerprint(obligations, behavior_ir)
-
+    pack, _ = _compile_pack_fingerprint(obligations, behavior_ir)
     assert pack["schema_version"] == "qualibug.experiment-compile.v1"
     assert pack["compiled_count"] + pack["blocked_count"] + pack["abstract_count"] > 0
     # Every experiment carries a deterministic receipt.
@@ -556,6 +595,9 @@ def test_compile_baseline_semantics_locked() -> None:
         assert isinstance(receipt, dict)
         assert exp.get("experiment_id")
         assert exp.get("obligation_id")
+    assert payload["compiled"] == pack["compiled_count"]
+    assert payload["blocked"] == pack["blocked_count"]
+    assert payload["abstract"] == pack["abstract_count"]
     # Baseline pin (compute and freeze once; any semantic drift breaks this).
     # Volatile wall-clock receipt fields (created_at) are normalized; verified
     # PYTHONHASHSEED-stable after the observer_plan_refs ordering fix.

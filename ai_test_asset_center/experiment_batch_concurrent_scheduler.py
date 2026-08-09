@@ -329,7 +329,13 @@ def _apply_global_budget(
             budget=budget,
             family_quota=family_quota,
         )
-        ordered_ids = _list(receipt.get("ordered_experiment_ids"))
+        # Canonical prioritizer output is the "prioritized" scored list; the
+        # scheduler must consume it or the ordering never reaches the budget.
+        ordered_ids = [
+            _text(_dict(row).get("obligation_id"))
+            for row in _list(receipt.get("prioritized"))
+            if _text(_dict(row).get("obligation_id"))
+        ]
         if ordered_ids:
             by_id = {_text(_dict(s).get("obligation_id")): s for s in selected}
             reordered = [by_id[oid] for oid in ordered_ids if oid in by_id]

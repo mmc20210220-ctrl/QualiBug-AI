@@ -234,20 +234,39 @@ def declared_effect_observers(
     # Source-declared observes/produces/consumes joins may name an effect-read
     # operation even when path heuristics miss the sibling GET.
     operation_ref = _text(operation.get("id"))
-    operations_by_id = {
-        _text(row.get("id")): row
-        for row in _list(_dict(behavior_ir).get("operations"))
-        if isinstance(row, dict) and _text(row.get("id"))
-    }
-    entity_ids = {
-        _text(row.get("id"))
-        for row in _list(_dict(behavior_ir).get("entities"))
-        if isinstance(row, dict) and _text(row.get("id"))
-    }
+    from .compile_batch_context import get_batch_indexes
+
+    _indexes = get_batch_indexes()
+    if _indexes is not None:
+        operations_by_id = _indexes.operations_by_id
+        entity_ids = _indexes.entity_ids
+        relations = _indexes.relations
+        # Without an operation identity the original loop scans every relation
+        # (the `operation_ref and ...` guard skips nothing).
+        relations_for_ref = (
+            _indexes.related_relations_by_ref.get(operation_ref, ())
+            if operation_ref
+            else relations
+        )
+        observes_relations_by_entity = _indexes.observes_relations_by_entity
+    else:
+        operations_by_id = {
+            _text(row.get("id")): row
+            for row in _list(_dict(behavior_ir).get("operations"))
+            if isinstance(row, dict) and _text(row.get("id"))
+        }
+        entity_ids = {
+            _text(row.get("id"))
+            for row in _list(_dict(behavior_ir).get("entities"))
+            if isinstance(row, dict) and _text(row.get("id"))
+        }
+        relations = _list(_dict(behavior_ir).get("relations"))
+        relations_for_ref = relations
+        observes_relations_by_entity = None
     # Entity ids produced/consumed/scoped by this write — join observers of the
     # same entity (produces X + observes X) without inventing paths.
     produced_entity_ids: set[str] = set()
-    for relation in _list(_dict(behavior_ir).get("relations")):
+    for relation in relations_for_ref:
         if not isinstance(relation, dict):
             continue
         relation_type = _text(relation.get("relation_type"))
@@ -284,7 +303,23 @@ def declared_effect_observers(
                 produced_entity_ids.add(ref)
 
     if produced_entity_ids:
-        for relation in _list(_dict(behavior_ir).get("relations")):
+        if observes_relations_by_entity is not None:
+            candidates_relations = [
+                row
+                for pid in produced_entity_ids
+                for row in observes_relations_by_entity.get(pid, ())
+            ]
+            seen_relations: set[int] = set()
+            relation_rows = []
+            for row in candidates_relations:
+                marker = id(row)
+                if marker in seen_relations:
+                    continue
+                seen_relations.add(marker)
+                relation_rows.append(row)
+        else:
+            relation_rows = _list(_dict(behavior_ir).get("relations"))
+        for relation in relation_rows:
             if not isinstance(relation, dict):
                 continue
             if _text(relation.get("relation_type")) not in {

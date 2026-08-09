@@ -45,6 +45,7 @@ from .database_state_transition_experiment_projection import (
 from .database_state_transition_finding_bridge import (
     install_database_state_transition_finding_bridge,
 )
+from .compile_batch_context import get_batch_indexes
 from .experiment_compiler_conflict_base import *  # noqa: F401,F403
 from .experiment_compiler_sod import attach_sod_fixture_owner_binding
 from .runtime_materialization_experiment_bridge import (
@@ -136,6 +137,7 @@ def _conflict_is_relevant(
     obligation_actor_refs: set[str] | None,
     obligation_actor_roles: set[str] | None,
     obligation_operation_refs: set[str] | None,
+    precomputed_refs: frozenset[str] | None = None,
 ) -> bool:
     if _text(conflict.get("status")) != "conflicting":
         return True
@@ -171,7 +173,10 @@ def _conflict_is_relevant(
             return False
     if permission_scope_present:
         return True
-    conflict_refs = _refs_from_mapping(_dict(conflict))
+    if precomputed_refs is not None:
+        conflict_refs = precomputed_refs
+    else:
+        conflict_refs = _refs_from_mapping(_dict(conflict))
     if not conflict_refs or not obligation_refs:
         return True
     return bool(conflict_refs.intersection(obligation_refs))
@@ -182,11 +187,17 @@ def _obligation_node_refs(
     obligation: dict[str, Any],
     collection: str,
 ) -> set[str] | None:
-    node_ids = {
-        _text(node.get("id"))
-        for node in _list(_dict(behavior_ir).get(collection))
-        if isinstance(node, dict) and _text(node.get("id"))
-    }
+    indexes = get_batch_indexes()
+    if indexes is not None:
+        node_ids = (
+            indexes.actor_ids if collection == "actors" else indexes.operation_ids
+        )
+    else:
+        node_ids = {
+            _text(node.get("id"))
+            for node in _list(_dict(behavior_ir).get(collection))
+            if isinstance(node, dict) and _text(node.get("id"))
+        }
     refs = _refs_from_mapping(_dict(obligation)).intersection(node_ids)
     return refs or None
 
@@ -195,13 +206,17 @@ def _obligation_actor_roles(
     behavior_ir: dict[str, Any],
     actor_refs: set[str] | None,
 ) -> set[str] | None:
-    actors = {
-        _text(actor.get("id")): _text(
-            actor.get("role_key") or actor.get("role")
-        ).lower()
-        for actor in _list(_dict(behavior_ir).get("actors"))
-        if isinstance(actor, dict) and _text(actor.get("id"))
-    }
+    indexes = get_batch_indexes()
+    if indexes is not None:
+        actors = indexes.actor_roles_by_id
+    else:
+        actors = {
+            _text(actor.get("id")): _text(
+                actor.get("role_key") or actor.get("role")
+            ).lower()
+            for actor in _list(_dict(behavior_ir).get("actors"))
+            if isinstance(actor, dict) and _text(actor.get("id"))
+        }
     if not actor_refs:
         return None
     roles = {actors[actor_ref] for actor_ref in actor_refs if actors[actor_ref]}
@@ -228,9 +243,18 @@ def _scoped_behavior_ir(
     obligation_operation_refs = _obligation_node_refs(
         behavior_ir, obligation, "operations"
     )
+    indexes = get_batch_indexes()
+    conflicts: list[Any]
+    conflict_refs: tuple[frozenset[str], ...] | None
+    if indexes is not None:
+        conflicts = list(indexes.conflicts)
+        conflict_refs = indexes.conflict_refs
+    else:
+        conflicts = _list(ir.get("conflicts"))
+        conflict_refs = None
     ir["conflicts"] = [
         dict(conflict)
-        for conflict in _list(ir.get("conflicts"))
+        for index, conflict in enumerate(conflicts)
         if isinstance(conflict, dict)
         and _conflict_is_relevant(
             conflict,
@@ -238,6 +262,9 @@ def _scoped_behavior_ir(
             obligation_actor_refs=obligation_actor_refs,
             obligation_actor_roles=obligation_actor_roles,
             obligation_operation_refs=obligation_operation_refs,
+            precomputed_refs=(
+                conflict_refs[index] if conflict_refs is not None else None
+            ),
         )
     ]
     return ir

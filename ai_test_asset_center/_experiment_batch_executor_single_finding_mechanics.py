@@ -426,7 +426,15 @@ def execute_selected_experiments(
             budget=_budget,
             family_quota=_family_quota,
         )
-        _ordered_ids = _list(_prioritization_receipt.get("ordered_experiment_ids"))
+        # The prioritizer's canonical output is the "prioritized" scored list
+        # (obligation_id per row); reading a non-existent key silently disabled
+        # the ordering — the budget cut then ran in planner order and the
+        # family-fair / operation-fair tiers never reached execution.
+        _ordered_ids = [
+            _text(_dict(row).get("obligation_id"))
+            for row in _list(_prioritization_receipt.get("prioritized"))
+            if _text(_dict(row).get("obligation_id"))
+        ]
         if _ordered_ids:
             # Reorder selected based on prioritizer output
             _id_to_item = {_text(_dict(s).get("obligation_id")): s for s in selected}

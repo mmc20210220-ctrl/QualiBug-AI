@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any, Callable, Iterable
 
 QUALIBUG_UNRESOLVED_ID = "QUALIBUG_UNRESOLVED_ID"
@@ -83,7 +84,12 @@ _PARAM_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+@lru_cache(maxsize=4096)
 def normalize_path_placeholders(path: str) -> str:
+    # Pure function of its input (module-constant placeholder patterns only);
+    # memoized because the compile chain normalizes the same operation paths
+    # tens of thousands of times per batch (SPEC-11 4.2). lru_cache is
+    # thread-safe and bounded.
     normalized = str(path or "")
     for pattern, replacer in _PLACEHOLDER_PATTERNS:
         normalized = pattern.sub(replacer, normalized)

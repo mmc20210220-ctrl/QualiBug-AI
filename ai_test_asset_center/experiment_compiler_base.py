@@ -147,6 +147,31 @@ def compile_experiment_for_obligation(
     )
 
 
+def _is_fully_finalized(experiment: dict[str, Any]) -> bool:
+    """True when the batch-loop finalizers are content no-ops on this experiment.
+
+    The per-obligation compiler (``compile_experiment_for_obligation``) already
+    applies ``_finalize_compiled_experiment`` internally, and the product
+    compile_one enriches AFTER that first freeze (sod fixture binding,
+    source-observed mutations, authorization comparison contract) without
+    touching the freeze surface (control/treatment/precondition/cleanup plans,
+    assertions, observers). Re-running the finalizers on such an experiment is
+    content-idempotent (verified byte-identical) but costs a second full
+    deepcopy + plan walk per experiment. COMPILED experiments count as
+    finalized when they carry both freeze receipts; every other status
+    short-circuits all finalizers to content no-ops, so skipping them is
+    byte-identical. A custom compile_one that does NOT finalize internally
+    still goes through the single finalization here.
+    """
+    receipt = _dict(experiment.get("compile_receipt"))
+    if _text(receipt.get("status")).upper() != "COMPILED":
+        return True
+    return (
+        isinstance(experiment.get("compile_freeze_receipt"), dict)
+        and isinstance(experiment.get("state_precondition_freeze_receipt"), dict)
+    )
+
+
 def compile_experiments(
     obligations: list[dict[str, Any]],
     *,
@@ -161,108 +186,32 @@ def compile_experiments(
     blocked: list[dict[str, Any]] = []
     abstract: list[dict[str, Any]] = []
     operations = _index_by_id(_list(_dict(behavior_ir).get("operations")))
-    for obl in obligations:
-        if not isinstance(obl, dict):
-            continue
-        prop = _dict(obl.get("property"))
-        operation_ref = (
-            next(
-                (
-                    _text(value)
-                    for value in _list(obl.get("required_operations"))
-                    if _text(value)
-                ),
-                "",
-            )
-            or _text(prop.get("operation_ref"))
-        )
-        if operation_ref and operation_ref not in operations:
-            source_locators = [
-                _text(source.get("locator"))
-                for source in _list(obl.get("source_refs"))
-                if isinstance(source, dict)
-                and _text(source.get("kind")) == "api_operation"
-                and _text(source.get("locator"))
-            ]
-            for locator in source_locators:
-                parts = locator.split(None, 1)
-                if len(parts) == 2:
-                    locator_method, locator_path = parts[0].upper(), parts[1].strip()
-                    for ir_id, ir_op in operations.items():
-                        if (
-                            isinstance(ir_op, dict)
-                            and _text(ir_op.get("method")).upper()
-                            == locator_method
-                            and normalize_path_placeholders(
-                                _text(ir_op.get("path") or ir_op.get("raw_path"))
-                            )
-                            == normalize_path_placeholders(locator_path)
-                        ):
-                            operation_ref = ir_id
-                            break
-                if operation_ref in operations:
-                    break
-        variants = expand_validation_obligation(
-            obl,
-            operation=operations.get(operation_ref) or {},
-        )
-        variant_compiled = 0
-        variant_blocked = 0
-        variant_abstract = 0
-        for variant in variants:
-            experiment = compiler(
-                variant,
+    # SPEC-11 4.2: precompute the IR-derived index bundle once for the batch;
+    # per-obligation scoping / observer joins / relation scans consume it via
+    # the context instead of rebuilding O(IR) indexes per obligation.
+    from .compile_batch_context import (
+        build_batch_indexes,
+        reset_batch_indexes,
+        set_batch_indexes,
+    )
+
+    _indexes_token = set_batch_indexes(build_batch_indexes(behavior_ir))
+    try:
+        for obl in obligations:
+            _compile_one_obligation_in_batch(
+                obl,
+                operations=operations,
                 behavior_ir=behavior_ir,
                 environment_type=environment_type,
                 policy_version=policy_version,
+                compiler=compiler,
                 available_adapters=available_adapters,
+                compiled=compiled,
+                blocked=blocked,
+                abstract=abstract,
             )
-            # A custom compile_one callback must still pass through the same
-            # deterministic final freezes. All finalizers are idempotent.
-            experiment = _finalize_compiled_experiment(
-                experiment,
-                behavior_ir=behavior_ir,
-            )
-            receipt = _dict(experiment.get("compile_receipt"))
-            status = _text(receipt.get("status")).upper()
-            reason = _text(receipt.get("reason_code"))
-            if status == "COMPILED":
-                compiled.append(experiment)
-                variant["compile_status"] = "COMPILED"
-                variant_compiled += 1
-            elif status == "ABSTRACT" or (
-                status == "BLOCKED" and is_capability_gap_reason(reason)
-            ):
-                if status != "ABSTRACT":
-                    from .abstract_experiment import promote_blocked_to_abstract
-
-                    experiment = promote_blocked_to_abstract(experiment, variant)
-                abstract.append(experiment)
-                variant["compile_status"] = "ABSTRACT"
-                variant["block_reason"] = reason
-                variant_abstract += 1
-            else:
-                blocked.append(experiment)
-                variant["compile_status"] = "BLOCKED"
-                variant["block_reason"] = receipt.get("reason_code")
-                variant_blocked += 1
-        if variant_compiled:
-            obl["compile_status"] = "COMPILED"
-        elif variant_abstract:
-            obl["compile_status"] = "ABSTRACT"
-        else:
-            obl["compile_status"] = "BLOCKED"
-        obl["expanded_experiment_count"] = len(variants)
-        obl["compiled_experiment_count"] = variant_compiled
-        obl["blocked_experiment_count"] = variant_blocked
-        obl["abstract_experiment_count"] = variant_abstract
-        if not variant_compiled:
-            source = abstract[-1] if variant_abstract and abstract else (
-                blocked[-1] if blocked else {}
-            )
-            obl["block_reason"] = _dict(source.get("compile_receipt")).get(
-                "reason_code"
-            )
+    finally:
+        reset_batch_indexes(_indexes_token)
     return {
         "schema_version": "qualibug.experiment-compile.v1",
         "compiled_count": len(compiled),
@@ -273,6 +222,130 @@ def compile_experiments(
         "abstract_experiments": abstract,
         "block_reason_counts": _count_reasons(blocked + abstract),
     }
+
+
+def _compile_one_obligation_in_batch(
+    obl: Any,
+    *,
+    operations: dict[str, dict[str, Any]],
+    behavior_ir: dict[str, Any],
+    environment_type: str,
+    policy_version: str,
+    compiler: Callable[..., dict[str, Any]],
+    available_adapters: Any,
+    compiled: list[dict[str, Any]],
+    blocked: list[dict[str, Any]],
+    abstract: list[dict[str, Any]],
+) -> None:
+    """Per-obligation body of the batch loop (SPEC-11 4.1 / 4.2 refactor keeps
+    the original serial semantics; extracted so the batch can set one index
+    context instead of rebuilding per obligation)."""
+    if not isinstance(obl, dict):
+        return
+    prop = _dict(obl.get("property"))
+    operation_ref = (
+        next(
+            (
+                _text(value)
+                for value in _list(obl.get("required_operations"))
+                if _text(value)
+            ),
+            "",
+        )
+        or _text(prop.get("operation_ref"))
+    )
+    if operation_ref and operation_ref not in operations:
+        source_locators = [
+            _text(source.get("locator"))
+            for source in _list(obl.get("source_refs"))
+            if isinstance(source, dict)
+            and _text(source.get("kind")) == "api_operation"
+            and _text(source.get("locator"))
+        ]
+        for locator in source_locators:
+            parts = locator.split(None, 1)
+            if len(parts) == 2:
+                locator_method, locator_path = parts[0].upper(), parts[1].strip()
+                for ir_id, ir_op in operations.items():
+                    if (
+                        isinstance(ir_op, dict)
+                        and _text(ir_op.get("method")).upper()
+                        == locator_method
+                        and normalize_path_placeholders(
+                            _text(ir_op.get("path") or ir_op.get("raw_path"))
+                        )
+                        == normalize_path_placeholders(locator_path)
+                    ):
+                        operation_ref = ir_id
+                        break
+            if operation_ref in operations:
+                break
+    variants = expand_validation_obligation(
+        obl,
+        operation=operations.get(operation_ref) or {},
+    )
+    variant_compiled = 0
+    variant_blocked = 0
+    variant_abstract = 0
+    for variant in variants:
+        experiment = compiler(
+            variant,
+            behavior_ir=behavior_ir,
+            environment_type=environment_type,
+            policy_version=policy_version,
+            available_adapters=available_adapters,
+        )
+        # A custom compile_one callback must still pass through the same
+        # deterministic final freezes. All finalizers are idempotent and
+        # the product compile_one already finalized internally (freeze
+        # receipts present), so re-freezing here is skipped when it would
+        # be a content no-op — this halves the finalization cost of the
+        # batch (SPEC-11 4.1).
+        if not _is_fully_finalized(experiment):
+            experiment = _finalize_compiled_experiment(
+                experiment,
+                behavior_ir=behavior_ir,
+            )
+        receipt = _dict(experiment.get("compile_receipt"))
+        status = _text(receipt.get("status")).upper()
+        reason = _text(receipt.get("reason_code"))
+        if status == "COMPILED":
+            compiled.append(experiment)
+            variant["compile_status"] = "COMPILED"
+            variant_compiled += 1
+        elif status == "ABSTRACT" or (
+            status == "BLOCKED" and is_capability_gap_reason(reason)
+        ):
+            if status != "ABSTRACT":
+                from .abstract_experiment import promote_blocked_to_abstract
+
+                experiment = promote_blocked_to_abstract(experiment, variant)
+            abstract.append(experiment)
+            variant["compile_status"] = "ABSTRACT"
+            variant["block_reason"] = reason
+            variant_abstract += 1
+        else:
+            blocked.append(experiment)
+            variant["compile_status"] = "BLOCKED"
+            variant["block_reason"] = receipt.get("reason_code")
+            variant_blocked += 1
+    if variant_compiled:
+        obl["compile_status"] = "COMPILED"
+    elif variant_abstract:
+        obl["compile_status"] = "ABSTRACT"
+    else:
+        obl["compile_status"] = "BLOCKED"
+    obl["expanded_experiment_count"] = len(variants)
+    obl["compiled_experiment_count"] = variant_compiled
+    obl["blocked_experiment_count"] = variant_blocked
+    obl["abstract_experiment_count"] = variant_abstract
+    if not variant_compiled:
+        source = abstract[-1] if variant_abstract and abstract else (
+            blocked[-1] if blocked else {}
+        )
+        obl["block_reason"] = _dict(source.get("compile_receipt")).get(
+            "reason_code"
+        )
 
 
 def _count_reasons(blocked: list[dict[str, Any]]) -> dict[str, int]:

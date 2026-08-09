@@ -100,18 +100,31 @@ def _score_candidate(
             reasons.append("identity_field_overlap")
 
     # Source relation strength
-    relations = _list(ir.get("relations"))
     op_id = _text(op.get("id"))
     primary_id = _text(primary.get("id"))
-    has_relation = any(
-        isinstance(r, dict)
-        and (
-            (_text(r.get("from_ref")) == op_id and _text(r.get("to_ref")) == primary_id)
-            or (_text(r.get("from_ref")) == primary_id and _text(r.get("to_ref")) == op_id)
-            or (_text(r.get("operation_ref")) == op_id)
+    from .compile_batch_context import get_batch_indexes
+
+    _indexes = get_batch_indexes()
+    if _indexes is not None and op_id:
+        # O(1) set lookups instead of an O(relations) scan per candidate
+        # (SPEC-11 4.2); identical membership semantics. An empty op_id falls
+        # back to the scan, which would match empty relation operation_refs.
+        has_relation = (
+            (op_id, primary_id) in _indexes.relation_pairs
+            or (primary_id, op_id) in _indexes.relation_pairs
+            or op_id in _indexes.relation_operation_refs
         )
-        for r in relations
-    )
+    else:
+        relations = _list(ir.get("relations"))
+        has_relation = any(
+            isinstance(r, dict)
+            and (
+                (_text(r.get("from_ref")) == op_id and _text(r.get("to_ref")) == primary_id)
+                or (_text(r.get("from_ref")) == primary_id and _text(r.get("to_ref")) == op_id)
+                or (_text(r.get("operation_ref")) == op_id)
+            )
+            for r in relations
+        )
     if has_relation:
         score += 0.2
         reasons.append("source_relation_exists")

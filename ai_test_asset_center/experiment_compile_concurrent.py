@@ -314,6 +314,7 @@ def _rescue_one_abstract(
     policy_version: str,
     available_adapters: Any,
     planning_context: dict[str, Any] | None,
+    _actor_tokens: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Serial-equivalent per-row rescue outcome.
 
@@ -340,6 +341,7 @@ def _rescue_one_abstract(
         abstract_experiment=abstract_exp,
         behavior_ir=behavior_ir,
         planning_context=planning_context,
+        _actor_tokens=_actor_tokens,
     )
     receipt = dict(resolution["materialization_receipt"])
     enriched = dict(abstract_exp)
@@ -525,6 +527,22 @@ def materialize_and_recompile_abstract_pack_concurrent(
     recompiled = 0
     rescue_failures: list[dict[str, Any]] = []
     outcomes: list[tuple[int, dict[str, Any]]] = []
+    # SPEC-11 4.3: load the token catalog once per rescue batch (per-row loads
+    # meant file parses and possible HTTP logins per actor per row).
+    from pathlib import Path
+
+    _actor_tokens: dict[str, str] | None = None
+    _root = context.get("root")
+    _project = _text(context.get("project"))
+    if _root and _project:
+        try:
+            from .experiment_runtime_support import load_actor_tokens
+
+            _actor_tokens = load_actor_tokens(
+                Path(_root), _project, base_url=_text(context.get("base_url"))
+            )
+        except Exception as exc:  # noqa: BLE001 - per-row fallback
+            logger.warning("concurrent rescue token catalog load failed: %s", exc)
     with ThreadPoolExecutor(
         max_workers=concurrency, thread_name_prefix="qualibug-rescue"
     ) as pool:
@@ -540,6 +558,7 @@ def materialize_and_recompile_abstract_pack_concurrent(
                 policy_version=policy_version,
                 available_adapters=available_adapters,
                 planning_context=context,
+                _actor_tokens=_actor_tokens,
             )
             for index, abstract_exp in enumerate(abstract)
         ]

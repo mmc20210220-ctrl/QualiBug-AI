@@ -370,6 +370,7 @@ def _resolve_actor_credentials(
     actor_id: str,
     actor: dict[str, Any],
     planning_context: dict[str, Any],
+    _actor_tokens: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     unresolved: list[dict[str, Any]] = []
     role = _text(actor.get("role")).lower()
@@ -403,9 +404,17 @@ def _resolve_actor_credentials(
     base_url = _text(planning_context.get("base_url"))
     if root and project:
         try:
-            from .experiment_runtime_support import load_actor_tokens
+            if _actor_tokens is None:
+                # SPEC-11 4.3: the rescue batch loads the token catalog ONCE and
+                # threads the map through every abstract row; a per-row load here
+                # is the fallback for direct callers (file parse + possible HTTP
+                # login per actor per row otherwise).
+                from .experiment_runtime_support import load_actor_tokens
 
-            tokens = load_actor_tokens(Path(root), project, base_url=base_url)
+                _actor_tokens = load_actor_tokens(
+                    Path(root), project, base_url=base_url
+                )
+            tokens = _actor_tokens
             account_ref = _text(actor.get("account_ref"))
             # Never persist token values — only presence for materialization gate.
             token_present = bool(
@@ -428,6 +437,7 @@ def _resolve_planning_materialization(
     abstract_experiment: dict[str, Any],
     behavior_ir: dict[str, Any],
     planning_context: dict[str, Any] | None = None,
+    _actor_tokens: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     context = _dict(planning_context)
     ops = _index_ops(behavior_ir)
@@ -478,6 +488,7 @@ def _resolve_planning_materialization(
             actor_id=actor_id,
             actor=actor,
             planning_context=context,
+            _actor_tokens=_actor_tokens,
         )
         actor_bindings[actor_id] = actor_binding
         if credential:
@@ -660,100 +671,136 @@ def materialize_and_recompile_abstract_pack(
     still_abstract: list[dict[str, Any]] = []
     recompiled = 0
 
-    for abstract_exp in abstract:
-        oid = _text(abstract_exp.get("obligation_id"))
-        obligation = deepcopy(_dict(obligations_by_id.get(oid)))
-        if not obligation:
-            still_abstract.append(abstract_exp)
-            continue
-        resolution = _resolve_planning_materialization(
-            obligation=obligation,
-            abstract_experiment=abstract_exp,
-            behavior_ir=behavior_ir,
-            planning_context=context,
-        )
-        receipt = dict(resolution["materialization_receipt"])
-        materialization_receipts.append(receipt)
-        enriched = dict(abstract_exp)
-        enriched["materialization_receipt"] = receipt
+    # SPEC-11 4.3: the token catalog is loaded ONCE per rescue batch and shared
+    # by every actor resolution (per-row loads meant file parses and possible
+    # HTTP logins per actor per row). Load failures fall back to per-row loads.
+    _actor_tokens: dict[str, str] | None = None
+    _root = context.get("root")
+    _project = _text(context.get("project"))
+    if _root and _project:
+        try:
+            from .experiment_runtime_support import load_actor_tokens
 
-        if not resolution.get("can_recompile"):
-            enriched["compile_receipt"] = {
-                **_dict(enriched.get("compile_receipt")),
-                "status": "ABSTRACT",
-                "awaiting_materialization": True,
-                "materialization_status": receipt.get("status"),
-            }
-            still_abstract.append(enriched)
-            continue
-
-        obligation = dict(obligation)
-        existing_bindings = [
-            dict(row)
-            for row in _list(obligation.get("binding_plan"))
-            if isinstance(row, dict)
-        ]
-        obligation["_planning_materialization"] = {
-            "schema_version": MATERIALIZATION_SCHEMA,
-            "receipt": receipt,
-            "binding_plan_extras": list(resolution.get("binding_plan_extras") or []),
-            "state_establishment_steps": list(
-                _list(receipt.get("state_establishment_steps"))
-            ),
-            "cleanup_plan": _dict(receipt.get("cleanup_plan")),
-        }
-        obligation["binding_plan"] = existing_bindings + list(
-            resolution.get("binding_plan_extras") or []
-        )
-        prop = dict(_dict(obligation.get("property")))
-        prop["planning_materialization_bindings"] = list(
-            resolution.get("binding_plan_extras") or []
-        )
-        if receipt.get("state_establishment_steps"):
-            prop["state_establishment_steps"] = list(
-                receipt.get("state_establishment_steps") or []
+            _actor_tokens = load_actor_tokens(
+                Path(_root), _project, base_url=_text(context.get("base_url"))
             )
-        obligation["property"] = prop
+        except Exception as exc:  # noqa: BLE001 - per-row fallback
+            logger.warning("rescue token catalog load failed: %s", exc)
 
-        concrete = compile_one(
-            obligation,
-            behavior_ir=behavior_ir,
-            environment_type=environment_type,
-            policy_version=policy_version,
-            available_adapters=available_adapters,
-        )
-        concrete_receipt = _dict(concrete.get("compile_receipt"))
-        concrete_status = _text(concrete_receipt.get("status")).upper()
-        if concrete_status == "COMPILED":
-            concrete = dict(concrete)
-            concrete["materialization_receipt"] = {
-                **receipt,
-                "status": "MATERIALIZED",
-                "recompiled": True,
-            }
-            concrete["experiment_phase"] = "CONCRETE"
-            concrete["abstract_experiment"] = _dict(
-                abstract_exp.get("abstract_experiment")
+    # SPEC-11 4.2: the rescue loop re-invokes compile_one per abstract row, so
+    # it activates the same per-batch index bundle the compile phase used.
+    from .compile_batch_context import (
+        build_batch_indexes,
+        reset_batch_indexes,
+        set_batch_indexes,
+    )
+
+    _indexes_token = set_batch_indexes(build_batch_indexes(behavior_ir))
+
+    def _rescue_loop() -> None:
+        nonlocal recompiled
+        for abstract_exp in abstract:
+            oid = _text(abstract_exp.get("obligation_id"))
+            obligation = deepcopy(_dict(obligations_by_id.get(oid)))
+            if not obligation:
+                still_abstract.append(abstract_exp)
+                continue
+            resolution = _resolve_planning_materialization(
+                obligation=obligation,
+                abstract_experiment=abstract_exp,
+                behavior_ir=behavior_ir,
+                planning_context=context,
+                _actor_tokens=_actor_tokens,
             )
-            compiled.append(concrete)
-            recompiled += 1
-            obl_row = obligations_by_id.get(oid)
-            if isinstance(obl_row, dict):
-                obl_row["compile_status"] = "COMPILED"
-                obl_row["block_reason"] = ""
-        elif is_capability_gap_reason(concrete_receipt.get("reason_code")):
-            retained = promote_blocked_to_abstract(concrete, obligation)
-            retained["materialization_receipt"] = {
-                **receipt,
-                "status": "NOT_MATERIALIZED",
-                "recompile_reason_code": concrete_receipt.get("reason_code"),
-                "recompile_detail": concrete_receipt.get("detail"),
+            receipt = dict(resolution["materialization_receipt"])
+            materialization_receipts.append(receipt)
+            enriched = dict(abstract_exp)
+            enriched["materialization_receipt"] = receipt
+
+            if not resolution.get("can_recompile"):
+                enriched["compile_receipt"] = {
+                    **_dict(enriched.get("compile_receipt")),
+                    "status": "ABSTRACT",
+                    "awaiting_materialization": True,
+                    "materialization_status": receipt.get("status"),
+                }
+                still_abstract.append(enriched)
+                continue
+
+            obligation = dict(obligation)
+            existing_bindings = [
+                dict(row)
+                for row in _list(obligation.get("binding_plan"))
+                if isinstance(row, dict)
+            ]
+            obligation["_planning_materialization"] = {
+                "schema_version": MATERIALIZATION_SCHEMA,
+                "receipt": receipt,
+                "binding_plan_extras": list(
+                    resolution.get("binding_plan_extras") or []
+                ),
+                "state_establishment_steps": list(
+                    _list(receipt.get("state_establishment_steps"))
+                ),
+                "cleanup_plan": _dict(receipt.get("cleanup_plan")),
             }
-            still_abstract.append(retained)
-        else:
-            concrete = dict(concrete)
-            concrete["materialization_receipt"] = receipt
-            remaining_blocked.append(concrete)
+            obligation["binding_plan"] = existing_bindings + list(
+                resolution.get("binding_plan_extras") or []
+            )
+            prop = dict(_dict(obligation.get("property")))
+            prop["planning_materialization_bindings"] = list(
+                resolution.get("binding_plan_extras") or []
+            )
+            if receipt.get("state_establishment_steps"):
+                prop["state_establishment_steps"] = list(
+                    receipt.get("state_establishment_steps") or []
+                )
+            obligation["property"] = prop
+
+            concrete = compile_one(
+                obligation,
+                behavior_ir=behavior_ir,
+                environment_type=environment_type,
+                policy_version=policy_version,
+                available_adapters=available_adapters,
+            )
+            concrete_receipt = _dict(concrete.get("compile_receipt"))
+            concrete_status = _text(concrete_receipt.get("status")).upper()
+            if concrete_status == "COMPILED":
+                concrete = dict(concrete)
+                concrete["materialization_receipt"] = {
+                    **receipt,
+                    "status": "MATERIALIZED",
+                    "recompiled": True,
+                }
+                concrete["experiment_phase"] = "CONCRETE"
+                concrete["abstract_experiment"] = _dict(
+                    abstract_exp.get("abstract_experiment")
+                )
+                compiled.append(concrete)
+                recompiled += 1
+                obl_row = obligations_by_id.get(oid)
+                if isinstance(obl_row, dict):
+                    obl_row["compile_status"] = "COMPILED"
+                    obl_row["block_reason"] = ""
+            elif is_capability_gap_reason(concrete_receipt.get("reason_code")):
+                retained = promote_blocked_to_abstract(concrete, obligation)
+                retained["materialization_receipt"] = {
+                    **receipt,
+                    "status": "NOT_MATERIALIZED",
+                    "recompile_reason_code": concrete_receipt.get("reason_code"),
+                    "recompile_detail": concrete_receipt.get("detail"),
+                }
+                still_abstract.append(retained)
+            else:
+                concrete = dict(concrete)
+                concrete["materialization_receipt"] = receipt
+                remaining_blocked.append(concrete)
+
+    try:
+        _rescue_loop()
+    finally:
+        reset_batch_indexes(_indexes_token)
 
     result["experiments"] = compiled
     result["blocked_experiments"] = remaining_blocked

@@ -1296,12 +1296,27 @@ def _build_compile_context(
             if isinstance(row, dict)
             and _text(row.get("id")) in operation_refs
         ]
-        relations = [
-            row
-            for row in all_relations
-            if isinstance(row, dict)
-            and _relation_mentions_operation(row, operation_refs)
-        ]
+        from .compile_batch_context import get_batch_indexes
+
+        _indexes = get_batch_indexes()
+        if _indexes is not None:
+            # Precomputed per-relation mention sets — equivalent membership to
+            # _relation_mentions_operation(row, operation_refs) without the
+            # per-call 11-key scan (SPEC-11 4.2).
+            relations = [
+                row
+                for row, mentions in zip(
+                    _indexes.relations, _indexes.relation_mentions
+                )
+                if isinstance(row, dict) and mentions & operation_refs
+            ]
+        else:
+            relations = [
+                row
+                for row in all_relations
+                if isinstance(row, dict)
+                and _relation_mentions_operation(row, operation_refs)
+            ]
     else:
         # Direct callers without an operation identity retain the old
         # fail-closed context rather than silently hashing an empty graph.
