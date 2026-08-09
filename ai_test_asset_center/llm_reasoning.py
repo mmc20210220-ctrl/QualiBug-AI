@@ -24,6 +24,7 @@ import logging
 import math
 import os
 import re
+import socket
 import threading
 import time
 import urllib.error
@@ -1474,7 +1475,32 @@ class ReasoningClient:
         _prompt_len = len(user_prompt)
         try:
             with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as resp:
-                response_text = resp.read().decode("utf-8")
+                # Application-level total-duration guard: the socket timeout
+                # is unreliable for chunked bodies on Windows (a half-open
+                # stream that trickles bytes never trips it — measured:
+                # a provider call hung 16+ minutes despite timeout=120).
+                # Read in bounded chunks and abort once the deadline passes;
+                # the timeout exception path stays identical (QB-L001).
+                # Sized reads are used when the transport supports them; a
+                # read() without a size argument (test doubles, simple
+                # responses) falls back to a single full read.
+                _deadline = _llm_start + self.config.timeout_seconds
+                try:
+                    _chunk = resp.read(65536)
+                except TypeError:
+                    _chunk = None
+                if _chunk is None:
+                    response_text = resp.read().decode("utf-8")
+                else:
+                    _chunks: list[bytes] = []
+                    while _chunk:
+                        if time.time() > _deadline:
+                            raise socket.timeout(
+                                "LLM read exceeded timeout_seconds"
+                            )
+                        _chunks.append(_chunk)
+                        _chunk = resp.read(65536)
+                    response_text = b"".join(_chunks).decode("utf-8")
                 _elapsed_ms = int((time.time() - _llm_start) * 1000)
                 self._record_usage(response_text)
                 usage = self._extract_usage(response_text)
