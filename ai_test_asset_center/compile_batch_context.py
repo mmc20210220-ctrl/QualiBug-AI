@@ -151,8 +151,7 @@ def build_batch_indexes(behavior_ir: dict[str, Any]) -> CompileBatchIndexes:
     observes_relations_by_entity: dict[str, list[dict[str, Any]]] = {}
     relation_pairs: set[tuple[str, str]] = set()
     relation_operation_refs: set[str] = set()
-    for row in relations:
-        mentions = _relation_mention_set(row)
+    for row, mentions in zip(relations, relation_mentions):
         for ref in mentions:
             relations_by_operation.setdefault(ref, []).append(row)
         # runtime_binding_graph.declared_effect_observers keys relation joins
