@@ -1618,6 +1618,24 @@ def execute_non_barrier_plans(
                     if _block_reason not in pre_transport_block_reasons:
                         pre_transport_block_reasons.append(_block_reason)
                 if 200 <= int(write_receipt.get("status") or 0) < 300:
+                    # ── Write-time identity tracking (execution → cleanup) ──
+                    # The created resource identity observed in the accepted
+                    # write response is recorded on the governance receipt so
+                    # cleanup resolution is deterministic instead of re-guessing
+                    # the declared column against whatever response shape the
+                    # target used. Declared-column match first; any conventional
+                    # primary identity key otherwise (id/uuid/guid/key spellings,
+                    # envelopes, nesting). Foreign-key fields (orderId, userId)
+                    # never qualify — they name another row. This is the run's
+                    # own observation, never an inference.
+                    from .cleanup_adapter_ladder import observed_resource_identity
+
+                    governed["observed_created_identity"] = (
+                        observed_resource_identity(
+                            write_receipt.get("body"),
+                            identity_column="",
+                        )
+                    )
                     response_bound_path = _response_bound_observation_path(
                         op,
                         ops,

@@ -563,12 +563,40 @@ def _cleanup_restores_governed_write(
         identity and identity in cleanup_path for identity in created_identities
     )
     cleanup_before = _observation_state(cleanup_row.get("before"))
-    return bool(
+    if (
         original_method == "POST"
         and identity_bound
         and 200 <= int(cleanup_before.get("status") or 0) < 300
         and int(cleanup_after.get("status") or 0) in {404, 410}
-    )
+    ):
+        return True
+    # ── Presence-removal proof (collection-observed deletes) ──
+    # A delete compensator observed through a collection path returns 200 with
+    # the surviving rows, never 404. Strict before==after equality then fails
+    # whenever the collection drifted between observations (concurrent rows,
+    # ordering, timestamps), and the 404 branch can never fire. The cleanup is
+    # still proven when the governed before observation contained the created
+    # row and the after observation no longer contains it — the run created
+    # the row and the run removed it. Absence of the identity in the after
+    # body is the removal evidence; a wrong-target delete leaves the row
+    # present and stays fail-closed.
+    if (
+        original_method == "POST"
+        and _text(cleanup_row.get("method")).upper() == "DELETE"
+        and created_identities
+        and 200 <= int(cleanup_before.get("status") or 0) < 300
+    ):
+        before_entity = _single_entity_for_restoration(
+            cleanup_before.get("body"),
+            created_identities,
+        )
+        after_entity = _single_entity_for_restoration(
+            cleanup_after.get("body"),
+            created_identities,
+        )
+        if before_entity and not after_entity:
+            return True
+    return False
 
 
 def _governed_write_attempts(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:

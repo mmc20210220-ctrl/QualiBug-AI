@@ -130,6 +130,77 @@ def identity_value_from_body(body: Any, identity_column: str) -> str:
     return unique[0] if len(unique) == 1 else ""
 
 
+def _identity_scalar_values(body: Any) -> list[tuple[str, str]]:
+    """Conventional primary-identity scalars in a body as (normalized_key, value).
+
+    Walks top-level fields, standard response envelopes, then deeper nested
+    dicts. Only primary resource identity keys (id/uuid/guid/key by normalized
+    name) qualify: foreign-key fields (orderId, userId, addressId) name another
+    row, never the created row itself, and must never masquerade as the
+    resource identity. Child collections are never descended into.
+    """
+    values: list[tuple[str, str]] = []
+    seen_values: set[str] = set()
+    stack: list[Any] = [body]
+
+    def _primary_key(normalized: str) -> bool:
+        return normalized in {"id", "uuid", "guid", "key"}
+
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key, child in node.items():
+                normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
+                if isinstance(child, dict):
+                    stack.append(child)
+                    continue
+                if isinstance(child, list):
+                    continue
+                if isinstance(child, bool) or not isinstance(
+                    child,
+                    (str, int, float),
+                ):
+                    continue
+                value = _text(child)
+                if not value or value in seen_values:
+                    continue
+                seen_values.add(value)
+                if _primary_key(normalized):
+                    values.append((normalized, value))
+        elif isinstance(node, list):
+            for child in node:
+                if isinstance(child, (dict, list)):
+                    stack.append(child)
+    return values
+
+
+def observed_resource_identity(body: Any, identity_column: str = "") -> str:
+    """Resolve the created resource identity from an observed response body.
+
+    Resolution order, each level fail-closed to the next:
+    1. the declared identity column (``identity_value_from_body`` semantics);
+    2. a conventional primary identity key (id/uuid/guid/key by normalized
+       name — case-insensitive, envelope and nesting tolerant) observed in the
+       same body.
+
+    Returns "" when nothing resolves or the body is ambiguous, so callers
+    (adapter cleanup identity, creation receipts) stay fail-closed. Only
+    conventional primary resource identity shape is used — never foreign-key
+    or domain field names — so a created row is resolvable no matter which
+    conventional spelling the target's create response used (``id``, ``Id``,
+    ``_id``, ``uuid``, …) as long as the run observed it.
+    """
+    if identity_column:
+        declared = identity_value_from_body(body, identity_column)
+        if declared:
+            return declared
+    scalars = _identity_scalar_values(body)
+    if not scalars:
+        return ""
+    unique = list(dict.fromkeys(value for _, value in scalars))
+    return unique[0] if len(unique) == 1 else ""
+
+
 def entity_storage_table(entity: Any) -> str:
     """Source-declared physical table for an entity, if any.
 
@@ -836,6 +907,23 @@ def execute_declared_adapter_cleanup(
             )
             if owned:
                 break
+        if not owned and _text(plan.get("owner_table")):
+            # Transitive run-ownership for dependent rows. A dependent row
+            # whose FK references the run-created owner row (verified by the
+            # owner-table ownership check below) cannot predate the owner —
+            # FK integrity forbids a row referencing a value that did not
+            # exist. The dependent is therefore run-created too. Without this,
+            # dependents of run-created rows whose identity carries no marker
+            # (UUID ids) are refused, survive the dependent delete, and trip
+            # ForeignKeyViolation on the owner row.
+            owner_owned, owner_basis = row_was_created_by_this_run(
+                identity_value,
+                creation_receipts=creation_receipts,
+                table=_text(plan.get("owner_table")),
+            )
+            if owner_owned:
+                owned = True
+                basis = f"transitive_owner_creation:{owner_basis}"
         receipt["ownership_basis"] = basis
         if not owned:
             receipt["reason_code"] = REASON_NOT_RUN_OWNED
@@ -888,13 +976,9 @@ def execute_declared_adapter_cleanup(
         )
         deleted = int(getattr(cursor, "rowcount", 0) or 0)
         receipt["rows_deleted"] = deleted
-        if deleted != 1:
-            connection.rollback()
-        if deleted > 1:
-            receipt["status"] = "FAILED"
-            receipt["reason_code"] = "CLEANUP_DB_DELETE_CARDINALITY_MISMATCH"
-            receipt["detail"] = f"identity_matched_rows={deleted}"
-            return receipt
+        is_dependent_step = (
+            _text(plan.get("delete_order")) == "dependent"
+        )
         if deleted == 0:
             # Row already absent means the cleanup objective is satisfied —
             # the environment is clean. This happens when two cleanup steps
@@ -903,6 +987,15 @@ def execute_declared_adapter_cleanup(
             receipt["status"] = "CLEANED"
             receipt["reason_code"] = "CLEANUP_ROW_ALREADY_ABSENT"
             receipt["rows_deleted"] = 0
+            return receipt
+        if deleted > 1 and not is_dependent_step:
+            # The owner row must be addressed exactly once. Multi-row matches
+            # on the owner identity are a scope failure — roll back rather
+            # than commit an ambiguous deletion.
+            connection.rollback()
+            receipt["status"] = "FAILED"
+            receipt["reason_code"] = "CLEANUP_DB_DELETE_CARDINALITY_MISMATCH"
+            receipt["detail"] = f"identity_matched_rows={deleted}"
             return receipt
         connection.commit()
         receipt["status"] = "CLEANED"
@@ -979,30 +1072,117 @@ def dependent_tables_for(
     return sorted(out)
 
 
+_SCHEMA_TABLE_RE = re.compile(
+    r"CREATE\s+TABLE\s+(\w+)\s*\((.*?)\)\s*;",
+    re.IGNORECASE | re.DOTALL,
+)
+_SCHEMA_FK_RE = re.compile(
+    r"(\w+)\s+[^,()]*?REFERENCES\s+(\w+)(?:\s*\(\s*(\w+)\s*\))?",
+    re.IGNORECASE,
+)
+
+
+def schema_fk_dependents(
+    declared_schema: str,
+    table: str,
+) -> list[dict[str, str]]:
+    """Dependents of *table* declared in the target's own schema, with FK columns.
+
+    Parses ``CREATE TABLE ... REFERENCES <table>(<column>)`` from the declared
+    schema text (visible source material the product already consumes). The FK
+    column is authoritative for the dependent delete: orders.id is referenced by
+    order_items.order_id / payments.order_id / refunds.order_id, so those rows
+    must be removed ``WHERE order_id = <value>``, never by the owner's id column.
+    The IR entity-graph heuristic cannot see tables the source docs do not model
+    as entities, and cannot know the FK column when it differs from the owner's
+    identity column — both gaps surface as ForeignKeyViolation on the owner row.
+
+    Returns only tables that reference *table* — never *table* itself.
+    """
+    target = _text(table).lower()
+    if not target or not _text(declared_schema):
+        return []
+    dependents: dict[str, str] = {}
+    for table_match in _SCHEMA_TABLE_RE.finditer(declared_schema):
+        dependent = _text(table_match.group(1)).lower()
+        if not dependent or dependent == target:
+            continue
+        body = table_match.group(2)
+        for fk_match in _SCHEMA_FK_RE.finditer(body):
+            fk_column = _text(fk_match.group(1))
+            referenced = _text(fk_match.group(2)).lower()
+            if referenced == target and fk_column:
+                dependents.setdefault(dependent, fk_column)
+    return [
+        {"table": name, "fk_column": column}
+        for name, column in sorted(dependents.items())
+    ]
+
+
 def build_ordered_delete_plan(
     *,
     table: str,
     identity_column: str,
     identity_value: Any,
     entities: Any,
+    declared_schema: str = "",
 ) -> list[dict[str, Any]]:
     """Delete steps for one row, dependents first, owner last.
 
     Every step carries the same ownership requirement as a single-table delete: the
     executor re-checks the identity and refuses a row this run did not create.
+
+    Dependents come from two sources: the IR entity graph (legacy heuristic) and the
+    target's declared schema ``REFERENCES`` clauses. Schema-derived dependents carry
+    their real FK column (``order_items.order_id`` for an orders owner), so the
+    dependent delete addresses the referencing rows instead of deleting zero rows by
+    the owner's id column and then tripping ForeignKeyViolation on the owner. Each
+    schema dependent also records the owner table so the executor can prove the
+    dependent rows are run-owned through the run-created owner row (FK integrity).
     """
     steps: list[dict[str, Any]] = []
+    schema_dependents = schema_fk_dependents(declared_schema, table)
+    schema_tables = {
+        _text(row.get("table")).lower(): row for row in schema_dependents
+    }
     for dependent in dependent_tables_for(table, identity_column, entities):
+        name = _text(dependent).lower()
+        schema_row = schema_tables.get(name)
+        fk_column = (
+            _text(schema_row.get("fk_column"))
+            if schema_row and _text(schema_row.get("fk_column"))
+            else _text(identity_column)
+        )
         steps.append({
             "adapter": "db_sql",
             "mode": "row_delete",
-            "table": dependent,
-            "identity_column": identity_column,
+            "table": _text(dependent),
+            "identity_column": fk_column,
             "identity_value": _text(identity_value),
             "scope": "run_created_only",
             "requires_ownership_proof": True,
             "delete_order": "dependent",
             "owner_table": _text(table),
+            "dependent_fk_column": fk_column,
+        })
+    for schema_row in schema_dependents:
+        name = _text(schema_row.get("table")).lower()
+        if name in {
+            _text(step.get("table")).lower() for step in steps
+        }:
+            continue
+        fk_column = _text(schema_row.get("fk_column")) or _text(identity_column)
+        steps.append({
+            "adapter": "db_sql",
+            "mode": "row_delete",
+            "table": _text(schema_row.get("table")),
+            "identity_column": fk_column,
+            "identity_value": _text(identity_value),
+            "scope": "run_created_only",
+            "requires_ownership_proof": True,
+            "delete_order": "dependent",
+            "owner_table": _text(table),
+            "dependent_fk_column": fk_column,
         })
     steps.append({
         "adapter": "db_sql",

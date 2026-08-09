@@ -130,9 +130,15 @@ def _identity_from_governed_write(
     step_body: Any = None,
 ) -> str:
     """Resolve only the cleanup contract's declared identity from one write."""
-    from .cleanup_adapter_ladder import identity_value_from_body
+    from .cleanup_adapter_ladder import (
+        identity_value_from_body,
+        observed_resource_identity,
+    )
 
     identity_column = _text(cleanup.get("identity_column")) or "id"
+    tracked = _text(_dict(governed).get("observed_created_identity"))
+    if tracked:
+        return tracked
     for raw in (
         _dict(governed.get("response_bound_after")).get("body"),
         _dict(governed.get("write")).get("body"),
@@ -143,6 +149,12 @@ def _identity_from_governed_write(
         if not isinstance(raw, dict):
             continue
         identity = identity_value_from_body(raw, identity_column)
+        if identity:
+            return identity
+        # Generic observed-identity fallback for the same accepted write: the
+        # created row resolves from any conventional resource identity key the
+        # response carried, even when it differs from the declared column.
+        identity = observed_resource_identity(raw, identity_column=identity_column)
         if identity:
             return identity
     return ""

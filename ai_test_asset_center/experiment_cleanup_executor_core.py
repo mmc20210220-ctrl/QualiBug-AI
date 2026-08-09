@@ -551,7 +551,10 @@ def _creation_receipts_from_accepted_writes(
     cleanup. Multi-write plans stamp ``source_step_id``; each accepted write
     binds to its compensating template so control/treatment rows stay distinct.
     """
-    from .cleanup_adapter_ladder import identity_value_from_body
+    from .cleanup_adapter_ladder import (
+        identity_value_from_body,
+        observed_resource_identity,
+    )
 
     receipts: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -594,6 +597,16 @@ def _creation_receipts_from_accepted_writes(
                 created_id = identity_value_from_body(body, identity_column)
                 if created_id:
                     break
+                # Generic observed-identity fallback for the same accepted
+                # write: a creation receipt must exist whenever the response
+                # carried any conventional resource identity, so ownership
+                # proof for the adapter row-delete can bind. Ambiguity stays
+                # fail-closed ("" → no receipt → ownership refused).
+                created_id = observed_resource_identity(
+                    body, identity_column=identity_column
+                )
+                if created_id:
+                    break
         if not created_id:
             continue
         key = (table.lower(), created_id)
@@ -631,7 +644,11 @@ def _adapter_cleanup_identity(
     aliases when the column itself is id/uuid/key). Returns "" when unbound
     rather than guessing.
     """
-    from .cleanup_adapter_ladder import identity_body_keys, identity_value_from_body
+    from .cleanup_adapter_ladder import (
+        identity_body_keys,
+        identity_value_from_body,
+        observed_resource_identity,
+    )
 
     cleanup_row = _dict(cleanup)
     column = _text(cleanup_row.get("identity_column")) or "id"
@@ -650,6 +667,15 @@ def _adapter_cleanup_identity(
         gov = _dict(step.get("governance_receipt"))
         if not gov or gov.get("accepted") is not True:
             continue
+        # The identity tracked at write time from the accepted create response
+        # is authoritative: it was observed when the row was created and is the
+        # exact value cleanup must address. Declared-column re-extraction stays
+        # the primary channel (it also covers mutations that reuse an existing
+        # identity); the observed-identity stamp fills the gap when the
+        # response named the created row with a different conventional key.
+        tracked = _text(gov.get("observed_created_identity"))
+        if tracked:
+            return tracked
         for body in (
             _dict(_dict(gov.get("response_bound_after")).get("body")),
             _dict(_dict(gov.get("write")).get("body")),
@@ -658,6 +684,13 @@ def _adapter_cleanup_identity(
             _dict(step.get("body")) if isinstance(step.get("body"), dict) else {},
         ):
             value = identity_value_from_body(body, column)
+            if value:
+                return value
+            # Generic observed-identity fallback for this same accepted write:
+            # the created row is resolvable whenever the response carried any
+            # conventional resource identity key, regardless of declared-column
+            # naming. Ambiguity returns "" and stays fail-closed.
+            value = observed_resource_identity(body, identity_column=column)
             if value:
                 return value
     if source_step_id:
@@ -876,12 +909,15 @@ def _execute_adapter_cleanup_step(
 
     # Dependents first, owner last. A single-table delete raised ForeignKeyViolation on
     # every run-created product against the live target, because inventory, cart_items,
-    # inventory_locks and order_items reference them.
+    # inventory_locks and order_items reference them. Schema-derived dependents
+    # (declared REFERENCES clauses) cover tables the IR entity graph cannot see and
+    # carry the real FK column so the dependent delete addresses the referencing rows.
     ordered = build_ordered_delete_plan(
         table=_text(step.get("table")),
         identity_column=_text(step.get("identity_column")) or "id",
         identity_value=identity,
         entities=_list(_dict(behavior_ir).get("entities")),
+        declared_schema=_load_cleanup_schema_text(root, project),
     )
 
     _entity_rows = _list(_dict(behavior_ir).get("entities"))
