@@ -17,10 +17,13 @@ from .oracle_expression_resolver import resolve_expression_from_invariant
 # through this module, so the evaluator exists before any experiment executes.
 from .validation_read_side_protocol import (
     install_owned_read_scope_protocol,
+    install_query_safety_injection_probe,
+    compile_query_safety_injection_probe as _compile_query_safety_injection_probe,
     is_ownership_key as _is_ownership_key_read_side,
 )
 
 install_owned_read_scope_protocol()
+install_query_safety_injection_probe()
 
 # Read-only audit protocol (additive): registers the readonly_numeric_audit /
 # readonly_uniqueness_audit assertion kinds and the (validation,
@@ -2826,6 +2829,21 @@ def compile_family_protocol(
         # structured material stays a visible BLOCKED below — it must never
         # silently degrade into a vacuous 2xx observation.
         if method in {"GET", "HEAD"}:
+            # ── Query-safety SQL-injection probe ──
+            # A rule declaring query-safety vocabulary (关键词必须参数化查询 /
+            # 表名拼接存在注入风险) on a read operation governs the query
+            # parameters, not a request body. Compile the injection probe
+            # first so the read surface is actually probed; without it the
+            # rule dies below as read_side_rule_lacks_decidable_assertion
+            # and a concatenating target is never exercised.
+            _injection_probe = _compile_query_safety_injection_probe(
+                operation=operation,
+                operation_ref=operation_ref,
+                property_spec=property_spec,
+                actor_ref=treatment_actor_ref or control_actor_ref,
+            )
+            if _injection_probe is not None:
+                return _injection_probe
             _read_projection = _read_side_owned_scope_projection(
                 operation=operation,
                 operation_ref=operation_ref,

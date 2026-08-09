@@ -531,6 +531,39 @@
       "在售",
       "可售",
       "启用"
+    ],
+    "COMPLETED": [
+      "completed",
+      "complete",
+      "confirmed",
+      "received",
+      "delivered",
+      "done",
+      "finished",
+      "settled",
+      "已完成",
+      "确认收货",
+      "完成"
+    ],
+    "CANCELLED": [
+      "cancelled",
+      "canceled",
+      "cancel",
+      "取消",
+      "已取消"
+    ],
+    "SHIPPED": [
+      "shipped",
+      "ship",
+      "delivered",
+      "发货",
+      "已发货"
+    ],
+    "PAID": [
+      "paid",
+      "pay",
+      "已支付",
+      "支付"
     ]
   },
   "state_tokens": [

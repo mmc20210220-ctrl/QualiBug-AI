@@ -747,6 +747,216 @@ def _bound_statements_by_interface(
     return result
 
 
+def _norm_action_token(value: Any) -> str:
+    """Normalize an action/state token for lexicon-level comparison."""
+    return re.sub(r"[\s_\-/]+", "", _text(value)).lower()
+
+
+def _state_form_tokens(tokens: set[str]) -> set[str]:
+    """Generic English past-participle forms of action tokens.
+
+    State synonyms are past participles (confirmed/received/delivered) while
+    interface action phrases are base verbs (confirm/receive/deliver). The
+    bridge derives the participle forms generically (e/i/y spelling rules)
+    so both sides compare in the same inflection; irregular forms that the
+    morphology misses are covered by the state aliases on the target side.
+    """
+    expanded = set(tokens)
+    for token in tokens:
+        if token.endswith("e"):
+            expanded.add(token + "d")
+        elif token.endswith("y") and len(token) > 2:
+            expanded.add(token[:-1] + "ied")
+        elif len(token) >= 3 and token[-1] not in "aeiou" and token[-2] not in "aeiou":
+            expanded.add(token + "ed")
+        else:
+            expanded.add(token + "ed")
+    return expanded
+
+
+def _interface_write_endpoints(
+    interface_index: dict[str, dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Project interfaces into the endpoint rows the state router consumes.
+
+    Only mutating interfaces (POST/PUT/PATCH/DELETE) can perform a state
+    transition. The interface's self-declared action phrase rides as
+    ``summary`` so the verb-action lexicon channel can read it.
+    """
+    rows: list[dict[str, str]] = []
+    for interface_id, interface in interface_index.items():
+        method = _text(interface.get("method")).upper()
+        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            continue
+        rows.append({
+            "method": method,
+            "path": _text(interface.get("path")),
+            "action": _text(interface.get("action")),
+            "summary": _text(interface.get("summary")),
+            "entity": _text(interface.get("entity") or ""),
+            "_interface_id": interface_id,
+        })
+    return rows
+
+
+def _bind_transition_by_verb_action_bridge(
+    *,
+    transition: dict[str, Any],
+    to_name: str,
+    endpoints: list[dict[str, str]],
+    interface_index: dict[str, dict[str, Any]],
+) -> tuple[str, dict[str, Any]] | None:
+    """Generic TO-state → operation routing through language resources.
+
+    The transition's TO state is expanded into comparable action tokens:
+    (1) English morphology stems of the state token itself (cancelled→cancel,
+    shipped→ship, paid→pay, refunded→refund — the documented path tail of the
+    performing operation), and (2) generic state synonyms from the language
+    lexicon (completed ≈ confirmed/received/done/finished — the completion
+    family a "confirm receipt" action performs). Each documented write
+    interface contributes its own action tokens: the self-declared action
+    field, the documented path tail, and the English action tokens of the
+    Chinese action phrases in its summary resolved through the verb-action
+    lexicon (发货→ship, 取消→cancel, 确认收货→confirm, 支付→pay, 退款→refund).
+
+    A unique best interface whose tokens meet the TO-state tokens is bound.
+    The bridge is language data (morphology + lexicon), never an industry or
+    project keyword table, and it only ranks already documented endpoints.
+    """
+    from ..business_state_graph import (
+        _state_action_candidates,
+        _state_aliases,
+        _verb_action_lexicon,
+    )
+
+    target_tokens: set[str] = set()
+    for stem in _state_action_candidates(to_name):
+        target_tokens.add(_norm_action_token(stem))
+    for alias in _state_aliases().get(to_name.upper(), set()):
+        target_tokens.add(_norm_action_token(alias))
+    if not target_tokens:
+        return None
+
+    scored: list[tuple[int, int, int, str, list[str]]] = []
+    for endpoint in endpoints:
+        interface = interface_index.get(endpoint.get("_interface_id"))
+        if not interface:
+            continue
+        tokens: set[str] = set()
+        identity_tokens: set[str] = set()
+        action = _norm_action_token(endpoint.get("action"))
+        if action:
+            tokens.add(action)
+            identity_tokens.add(action)
+        path = _text(endpoint.get("path"))
+        path_tail = path.rstrip("/").split("/")[-1] if path else ""
+        if path_tail:
+            tokens.add(_norm_action_token(path_tail))
+            identity_tokens.add(_norm_action_token(path_tail))
+        summary = _text(endpoint.get("summary"))
+        for verb, english in _verb_action_lexicon().items():
+            if _text(verb) and _text(verb) in summary:
+                tokens.add(_norm_action_token(verb))
+                tokens.update(_norm_action_token(item) for item in english)
+        tokens.update(_state_form_tokens(set(tokens)))
+        overlap = sorted(tokens & target_tokens)
+        if not overlap:
+            continue
+        identity_overlap = len(sorted(identity_tokens & target_tokens))
+        # Path-tail / action-field matches are the operation's documented
+        # identity; summary-verb matches are softer evidence. Rank by
+        # identity overlap first, then by overlap size, then by specificity
+        # (fewer distinct tokens), then by a stable interface-id tie-break.
+        scored.append((
+            identity_overlap,
+            len(overlap),
+            -len(tokens),
+            endpoint.get("_interface_id", ""),
+            overlap,
+        ))
+    if not scored:
+        return None
+    scored.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+    best_identity = scored[-1][0]
+    best_count = scored[-1][1]
+    best_ids = [
+        row[3]
+        for row in scored
+        if row[0] == best_identity and row[1] == best_count
+    ]
+    if len(best_ids) != 1:
+        return None
+    interface_id = best_ids[0]
+    return interface_id, {
+        "to_state": to_name,
+        "interface_id": interface_id,
+        "derivation": "to_state_verb_action_bridge",
+        "matched_tokens": scored[-1][4],
+        "candidate_interface_ids": sorted({row[3] for row in scored}),
+    }
+
+
+def _entry_states_of_machine(machine: dict[str, Any]) -> set[str]:
+    """States with a declared outgoing edge but no declared incoming edge."""
+    sources: set[str] = set()
+    reachable: set[str] = set()
+    for key in ("transitions", "forbidden_transitions"):
+        for transition in _list(machine.get(key)):
+            if not isinstance(transition, dict):
+                continue
+            from_name = _text(transition.get("from") or transition.get("from_state"))
+            to_name = _text(transition.get("to") or transition.get("to_state"))
+            if from_name:
+                sources.add(from_name.upper())
+            if to_name and _text(to_name) != "任":
+                reachable.add(to_name.upper())
+    return {state for state in sources if state not in reachable}
+
+
+def _bind_entry_transition_to_collection_create(
+    *,
+    transition: dict[str, Any],
+    from_name: str,
+    entity: str,
+    endpoints: list[dict[str, str]],
+    interface_index: dict[str, dict[str, Any]],
+) -> tuple[str, dict[str, Any]] | None:
+    """Bind an entry-state transition to the entity's collection create.
+
+    A transition whose source state is the machine's entry state (nothing
+    leads into it) is materialized by the entity's own collection-create
+    operation: creating the entity puts it into its first lifecycle state.
+    The operation is the documented ``POST /api/<entity>`` write interface of
+    the same module with no path parameters — only a documented endpoint is
+    ever bound, never an invented route.
+    """
+    entity_token = _norm_action_token(entity)
+    if not entity_token:
+        return None
+    candidates: list[tuple[str, str]] = []
+    for endpoint in endpoints:
+        method = _text(endpoint.get("method")).upper()
+        if method != "POST":
+            continue
+        path = _text(endpoint.get("path"))
+        if not path or "{" in path or ":" in path:
+            continue
+        tail = _norm_action_token(path.rstrip("/").split("/")[-1]) if path else ""
+        if not tail:
+            continue
+        if tail == entity_token or tail == entity_token + "s":
+            candidates.append((endpoint.get("_interface_id", ""), path))
+    if len(candidates) != 1:
+        return None
+    interface_id, path = candidates[0]
+    return interface_id, {
+        "from_state": from_name,
+        "interface_id": interface_id,
+        "path": path,
+        "derivation": "entry_state_collection_create",
+    }
+
+
 def _bind_state_transitions_to_operations(asset: dict[str, Any]) -> int:
     """Bind transitions whose TO state is mentioned by the interface's rules.
 
@@ -756,6 +966,11 @@ def _bind_state_transitions_to_operations(asset: dict[str, Any]) -> int:
     evidence (most mentions, stable interface-id tie-break). A unique hit
     writes ``operation_ref`` so the IR builder resolves the operation by
     exact source identity.
+
+    Transitions no effect-marker statement covers fall back to generic
+    language-resource routing (verb-action bridge, entry-state collection
+    create) so a declared machine stays executable end-to-end instead of
+    dying as an unresolved gap.
     """
     bound_statements = _bound_statements_by_interface(asset)
     interface_index = _interface_by_id(_list(asset.get("interfaces")))
@@ -837,6 +1052,66 @@ def _bind_state_transitions_to_operations(asset: dict[str, Any]) -> int:
                     "entity": entity,
                     "derivation": "to_state_contract_mention",
                     "candidate_interface_ids": sorted(candidates),
+                }
+                bound_count += 1
+
+    # ── Fallback channels for still-unbound transitions ──
+    # The effect-marker channel above needs a bound statement that names the
+    # TO state. Terse machine declarations (``PAID -> SHIPPED``) and terse
+    # operation summaries (``取消订单。``/``发货，warehouse/admin 可用。``)
+    # carry no such statement, so every order-lifecycle transition stayed
+    # unbound and the whole state family compiled nothing. The fallbacks are
+    # language-resource routing, never domain tables:
+    #   * verb-action bridge — TO-state morphology stems / generic state
+    #     synonyms vs the interface's own action tokens (path tail, action
+    #     field, Chinese verb lexicon tokens of its summary);
+    #   * entry-state collection create — the transition out of the machine's
+    #     entry state is materialized by the entity's own documented
+    #     collection-create POST.
+    _write_endpoints = _interface_write_endpoints(interface_index)
+    for machine in _list(asset.get("state_machines")):
+        if not isinstance(machine, dict):
+            continue
+        entity = _text(machine.get("entity") or machine.get("object") or "").lower()
+        entry_states = _entry_states_of_machine(machine)
+        for key in ("transitions", "forbidden_transitions"):
+            for transition in _list(machine.get(key)):
+                if not isinstance(transition, dict):
+                    continue
+                if _text(
+                    transition.get("operation_ref")
+                    or transition.get("operation_id")
+                    or transition.get("operation")
+                ):
+                    continue
+                to_name = _text(transition.get("to") or transition.get("to_state")).upper()
+                if not to_name or "任" in to_name:
+                    continue
+                bound = _bind_transition_by_verb_action_bridge(
+                    transition=transition,
+                    to_name=to_name,
+                    endpoints=_write_endpoints,
+                    interface_index=interface_index,
+                )
+                if not bound:
+                    from_name = _text(
+                        transition.get("from") or transition.get("from_state")
+                    ).upper()
+                    if from_name and from_name in entry_states:
+                        bound = _bind_entry_transition_to_collection_create(
+                            transition=transition,
+                            from_name=from_name,
+                            entity=entity,
+                            endpoints=_write_endpoints,
+                            interface_index=interface_index,
+                        )
+                if not bound:
+                    continue
+                interface_id, evidence = bound
+                transition["operation_ref"] = interface_id
+                transition["bound_operation_evidence"] = {
+                    **_dict(evidence),
+                    "entity": entity,
                 }
                 bound_count += 1
     return bound_count

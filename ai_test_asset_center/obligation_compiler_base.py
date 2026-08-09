@@ -193,6 +193,40 @@ def _path_has_resource_placeholder(path: str) -> bool:
     return "{" in normalized or "/:" in _text(path)
 
 
+def _entity_state_field(entities: list[dict[str, Any]], entity_ref: str) -> str:
+    """Resolve the entity's state field name from its declared fields.
+
+    The IR marks the field whose values the machine governs with
+    ``semantic_type == "STATE"`` or the generic lifecycle field names
+    (status/state/stage/phase/lifecycle_state / *_status / *_state). The
+    resolved name rides on the obligation so the state-precondition freeze
+    can bind one authoritative state field to every establishment step.
+    Entity identity is tolerant of the plural/singular forms the different
+    IR builders emit (``orders`` vs ``order``); unrelated prefixed entities
+    (``order_items``) never match.
+    """
+    target = _text(entity_ref).lower()
+    if not target:
+        return ""
+    for entity in entities:
+        name = _text(entity.get("name") or entity.get("id")).lower()
+        if not (name == target or name == target + "s" or target == name + "s"):
+            continue
+        for field in _list(entity.get("fields")):
+            if not isinstance(field, dict):
+                continue
+            fname = _text(field.get("name") or field.get("field") or field.get("field_name")).lower()
+            is_state_field = (
+                _text(field.get("semantic_type")) == "STATE"
+                or fname in {"status", "state", "stage", "phase", "lifecycle_state"}
+                or fname.endswith("_status")
+                or fname.endswith("_state")
+            )
+            if is_state_field:
+                return fname
+    return ""
+
+
 def _ownership_params_declared_on_operation(operation: dict[str, Any]) -> list[str]:
     """Return ownership identity params declared on one operation."""
 
@@ -1228,6 +1262,7 @@ def compile_obligations_from_behavior_ir(
     states_by_id = {_text(state.get("id")): state for state in states if _text(state.get("id"))}
     operations_by_id = {_text(op.get("id")): op for op in operations if _text(op.get("id"))}
     state_entities_with_transition: set[str] = set()
+    state_relations: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     for relation in relations:
         if _text(relation.get("relation_type")) != "transitions":
             continue
@@ -1238,6 +1273,7 @@ def compile_obligations_from_behavior_ir(
             continue
         entity_ref = _text(from_state.get("entity_ref") or to_state.get("entity_ref"))
         state_entities_with_transition.add(entity_ref)
+        state_relations.append((relation, from_state, to_state, op))
         obligations.append(make_obligation(
             risk_family="state",
             subject_refs=[
@@ -1253,6 +1289,7 @@ def compile_obligations_from_behavior_ir(
                 "to_state_ref": _text(to_state.get("id")),
                 "operation_ref": _text(op.get("id")),
                 "operation_path_prefix": _operation_path_prefix(op),
+                "state_field": _entity_state_field(entities, entity_ref),
             },
             required_operations=[_text(op.get("id"))],
             required_fixtures=[f"entity_in_state:{_text(from_state.get('id'))}"],
@@ -1265,6 +1302,80 @@ def compile_obligations_from_behavior_ir(
                 float(op.get("confidence") or 0.7),
             ),
         ))
+
+    # ── Wrong-source-state probes (runtime-observed machine conformance) ──
+    # A declared transition ``A --op--> B`` names the ONLY legal source state
+    # for ``op``. The machine says nothing about running ``op`` from an
+    # adjacent state S (its direct predecessor or successor): the same
+    # operation is not a declared transition from S, so reaching B from S is
+    # a machine violation. For every allowed edge we therefore also probe
+    # ``op`` from each adjacent alternative source state S (S != A, S != B)
+    # and assert the forbidden transition ``S --op--> B``: PASS when the
+    # target rejects the operation (state unchanged), VIOLATION when the
+    # operation still moves the entity to B. The alternative source comes
+    # exclusively from the machine's own declared adjacency — never a
+    # guessed state — and the establishment chain for S is planned by the
+    # same precondition planner as the allowed edge.
+    _state_adjacency: dict[str, set[str]] = {}
+    for _rel, _from_state, _to_state, _op in state_relations:
+        _state_adjacency.setdefault(_text(_from_state.get("id")), set()).add(_text(_to_state.get("id")))
+        _state_adjacency.setdefault(_text(_to_state.get("id")), set()).add(_text(_from_state.get("id")))
+    for _rel, _from_state, _to_state, _op in state_relations:
+        _from_id = _text(_from_state.get("id"))
+        _to_id = _text(_to_state.get("id"))
+        _alt_ids = sorted(
+            (neighbor for neighbor in _state_adjacency.get(_from_id, set())
+             if neighbor != _from_id and neighbor != _to_id)
+        )
+        for _alt_id in _alt_ids:
+            _alt_state = states_by_id.get(_alt_id)
+            if not _alt_state:
+                continue
+            _entity_ref = _text(_from_state.get("entity_ref") or _to_state.get("entity_ref"))
+            obligations.append(make_obligation(
+                risk_family="state",
+                subject_refs=[
+                    _text(_op.get("id")),
+                    _entity_ref,
+                    _alt_id,
+                    _to_id,
+                ],
+                property_spec={
+                    "template": "state_transition",
+                    "entity_ref": _entity_ref,
+                    "from_state_ref": _alt_id,
+                    "to_state_ref": _to_id,
+                    "operation_ref": _text(_op.get("id")),
+                    "operation_path_prefix": _operation_path_prefix(_op),
+                    "state_field": _entity_state_field(entities, _entity_ref),
+                    "expression": {
+                        "kind": "forbidden_state_transition",
+                        "operator": "must_not_transition",
+                        "operands": [{
+                            "entity_ref": _entity_ref,
+                            "from_state": _text(_alt_state.get("name") or _alt_state.get("value")),
+                            "to_state": _text(_to_state.get("name") or _to_state.get("value")),
+                        }],
+                        "raw": (
+                            f"{_text(_alt_state.get('name') or _alt_state.get('value'))} "
+                            f"--{_text(_op.get('id'))}--> "
+                            f"{_text(_to_state.get('name') or _to_state.get('value'))} "
+                            f"(forbidden: wrong source state)"
+                        ),
+                    },
+                    "wrong_source_of": _from_id,
+                },
+                required_operations=[_text(_op.get("id"))],
+                required_fixtures=[f"entity_in_state:{_alt_id}"],
+                required_observers=["before_state", "after_state"],
+                cleanup_requirement=_cleanup_requirement(_op, operations, relations, required=True),
+                source_refs=_combined_source_refs(_rel, _from_state, _to_state, _op),
+                relation_refs=[_text(_rel.get("id"))],
+                confidence=min(
+                    float(_rel.get("confidence") or 0.6),
+                    float(_op.get("confidence") or 0.7),
+                ),
+            ))
     states_by_entity: dict[str, list[dict[str, Any]]] = {}
     for state in states:
         states_by_entity.setdefault(_text(state.get("entity_ref")), []).append(state)
@@ -1685,6 +1796,20 @@ def compile_obligations_from_behavior_ir(
                         property_spec["from_state"] = _text(_op.get("from_state"))
                     if _text(_op.get("to_state")) and not _text(property_spec.get("to_state")):
                         property_spec["to_state"] = _text(_op.get("to_state"))
+                # State-field authority for the precondition freeze: resolve
+                # the entity's declared state field (status/state/…) so every
+                # establishment step binds the same field the assertion reads.
+                _inv_entity_ref = ""
+                for _op in _list(_dict(expr).get("operands")):
+                    if isinstance(_op, dict) and _text(_op.get("entity_ref")):
+                        _inv_entity_ref = _text(_op.get("entity_ref"))
+                        break
+                if not _inv_entity_ref:
+                    _inv_entity_ref = _text(inv.get("entity_ref"))
+                if _inv_entity_ref and not _text(property_spec.get("state_field")):
+                    property_spec["state_field"] = _entity_state_field(
+                        entities, _inv_entity_ref
+                    )
             if family == "idempotency":
                 property_spec.update({
                     "compare": "business_effect_not_http_status",
