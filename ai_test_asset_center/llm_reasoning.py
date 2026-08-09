@@ -1475,6 +1475,17 @@ class ReasoningClient:
         _prompt_len = len(user_prompt)
         try:
             with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as resp:
+                # Force the underlying socket timeout explicitly: urllib's
+                # timeout argument does not always reach the TLS socket on
+                # Windows, so a provider that stops sending bytes hangs the
+                # recv forever (measured: 14+ minutes despite timeout=120).
+                try:
+                    _raw = getattr(getattr(resp, "fp", None), "raw", None)
+                    _sock = getattr(_raw, "_sock", None)
+                    if _sock is not None:
+                        _sock.settimeout(self.config.timeout_seconds)
+                except Exception:
+                    pass
                 # Application-level total-duration guard: the socket timeout
                 # is unreliable for chunked bodies on Windows (a half-open
                 # stream that trickles bytes never trips it — measured:
