@@ -142,7 +142,9 @@ def refresh_regression_suite_after_scan(
         return result
 
     try:
-        _write_json(root / "platform_outputs" / safe_project / "scan_result.json", result)
+        from .scan_result_store import write_scan_result
+
+        write_scan_result(root / "platform_outputs" / safe_project / "scan_result.json", result)
     except Exception:
         # Never mask the original scan result just because a post-processing write failed.
         pass

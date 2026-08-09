@@ -182,7 +182,9 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
         _write_json(report_path, {"project": project, "real_findings": [], "risk_clues": [], "campaign": campaign, "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "execution_status": "blocked", "evidence_bundle": evidence_bundle, "release_gate": release_gate})
         result["report_path"] = str(report_path)
     output_root = root / "platform_outputs" / _safe_project(project)
-    _write_json(output_root / "scan_result.json", result)
+    from .scan_result_store import write_scan_result
+
+    write_scan_result(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")
     _persist_customer_ready_static_artifacts(project, root, result)
 

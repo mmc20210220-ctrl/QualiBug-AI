@@ -92,11 +92,22 @@ def _persist_customer_ready_static_artifacts(project: str, root: Path, result: O
     clue_count = len(snapshot.get("clues") or [])
 
     scan_result_path = root / "platform_outputs" / project_key / "scan_result.json"
-    scan_payload = _read_json(scan_result_path) or (dict(result) if isinstance(result, dict) else {})
-    scan_payload["customer_ready_snapshot"] = snapshot
-    scan_payload["customer_ready_defect_count"] = defect_count
-    scan_payload["customer_ready_clue_count"] = clue_count
-    _write_json(scan_result_path, scan_payload)
+    from .scan_result_store import is_sharded_scan_result, update_scan_result_index
+
+    if is_sharded_scan_result(scan_result_path):
+        # 分片 store：只重写索引新增小键，分片文件不动 —— O(索引) 成本，
+        # 不再整读 4GB 级产物回读-重写。
+        update_scan_result_index(scan_result_path, {
+            "customer_ready_snapshot": snapshot,
+            "customer_ready_defect_count": defect_count,
+            "customer_ready_clue_count": clue_count,
+        })
+    else:
+        scan_payload = _read_json(scan_result_path) or (dict(result) if isinstance(result, dict) else {})
+        scan_payload["customer_ready_snapshot"] = snapshot
+        scan_payload["customer_ready_defect_count"] = defect_count
+        scan_payload["customer_ready_clue_count"] = clue_count
+        _write_json(scan_result_path, scan_payload)
 
     real_project_path = root / "platform_outputs" / project_key / "real_project" / "real_project_defect_data.json"
     real_project_payload = _read_json(real_project_path)

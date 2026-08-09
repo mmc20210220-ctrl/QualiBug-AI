@@ -457,9 +457,10 @@ def assess_benchmark_runtime_cleanup(
             reason_code="SCAN_RESULT_MISSING",
         )
     try:
-        raw = path.read_bytes()
-        document = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        from .scan_result_store import load_scan_result
+
+        document = load_scan_result(path, keys=None)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, KeyError) as exc:
         return _not_measured(
             project=project,
             source_path=str(path),

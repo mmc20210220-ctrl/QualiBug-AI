@@ -96,11 +96,13 @@ def _scan_result_path(root: Path, project_id: str) -> Path:
 
 
 def load_scan_result(root: Path, project_id: str) -> dict[str, Any]:
+    from .scan_result_store import load_scan_result as _load_scan_result_store
+
     path = _scan_result_path(root, project_id)
     if not path.is_file():
         raise CampaignContractError(f"scan result not found for project {project_id!r}: {path}")
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = _load_scan_result_store(path, keys=None)
     except (OSError, json.JSONDecodeError) as exc:
         raise CampaignContractError(f"invalid scan result for project {project_id!r}: {exc}") from exc
     if not isinstance(value, dict):

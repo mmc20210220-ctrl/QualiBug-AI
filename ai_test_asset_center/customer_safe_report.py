@@ -215,7 +215,16 @@ def release_gate_from_suite_refresh(report: dict[str, Any], scan_result: dict[st
 
 
 def _scan_result(project: str, root: Path) -> dict[str, Any]:
-    value = read_json_file(root / "platform_outputs" / project / "scan_result.json", {})
+    from .scan_result_store import load_scan_result
+
+    value = load_scan_result(
+        root / "platform_outputs" / project / "scan_result.json",
+        keys=[
+            "release_gate", "findings", "candidate_findings",
+            "delivery_occurrences", "campaign", "runtime_contract",
+            "total_findings", "pipeline_health",
+        ],
+    )
     return value if isinstance(value, dict) else {}
 
 

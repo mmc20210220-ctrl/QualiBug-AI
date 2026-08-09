@@ -182,6 +182,7 @@ from .scan_execution_outcome import (  # noqa: F401
 )
 
 from .scan_impl_prepare import prepare_scan_before_pipeline  # noqa: F401
+from .scan_result_store import write_scan_result  # noqa: F401
 
 
 def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -1019,7 +1020,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "reason": f"{type(_llm_obs_exc).__name__}:{str(_llm_obs_exc)[:160]}",
         }
     output_root = root / "platform_outputs" / _safe_project(project)
-    _write_json(output_root / "scan_result.json", result)
+    write_scan_result(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")
     _persist_customer_ready_static_artifacts(project, root, result)
 

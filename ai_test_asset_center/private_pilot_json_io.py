@@ -7,20 +7,25 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .scan_result_store import load_scan_result
+
 
 def _read_json_safe(path: Path, default: Any) -> Any:
     try:
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8", errors="replace") or "null")
+            return load_scan_result(path, keys=None)
     except Exception:
         return default
     return default
 
 
 def _read_json_artifact(path: Path) -> Any:
-    """Read a present JSON artifact or fail with its identity in the error."""
+    """Read a present JSON artifact or fail with its identity in the error.
+
+    scan_result 分片 store 自动组装；普通 JSON 文件行为与 json.loads 一致。
+    """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return load_scan_result(path, keys=None)
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid JSON artifact: {path}") from exc
 

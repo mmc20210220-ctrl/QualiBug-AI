@@ -28,6 +28,20 @@ from benchmark_evaluator.miss_diagnosis import (  # noqa: E402
 
 
 def _load_scan_result(path: Path) -> dict:
+    from ai_test_asset_center.scan_result_store import is_sharded_scan_result, load_scan_result
+
+    if is_sharded_scan_result(path):
+        # 分片 store：只加载诊断所需的键/分片（v12 执行步骤大证据按需取），
+        # 不整读 4GB 级产物；不存在的可选键按 .get() 语义容错。
+        return load_scan_result(
+            path,
+            keys=[
+                "findings", "candidate_findings", "delivery_occurrences",
+                "discovery_funnel", "behavior_slice_ledger",
+                "v12.experiment_execution.results", "trace_ledger",
+                "obligation_attempt_ledger",
+            ],
+        )
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"run envelope must be a JSON object: {path}")

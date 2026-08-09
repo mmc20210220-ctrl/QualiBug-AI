@@ -253,19 +253,24 @@ def load_prior_planning_history_receipt(
     except OSError:
         return {}
     if size > _MAX_PLANNING_HISTORY_LOAD_BYTES:
-        # Planning history needs only the receipt sub-field, but a full
-        # json.loads of a multi-hundred-MB scan_result (findings + ledger +
-        # occurrences) exhausts memory before the receipt is reached. Skip
-        # with a visible reason (fail-open, cold-start semantics) instead of
-        # MemoryError; the run proceeds and writes a fresh scan_result.
-        return {
-            "status": "SKIPPED",
-            "reason_code": "scan_result_too_large",
-            "bytes": size,
-            "limit_bytes": _MAX_PLANNING_HISTORY_LOAD_BYTES,
-        }
+        from .scan_result_store import is_sharded_scan_result
+
+        if not is_sharded_scan_result(path):
+            # 旧单文件超大产物：规划历史只需要 receipt 子字段，全量 json.loads 会
+            # 先于 receipt 耗尽内存。跳过并给出可见原因（fail-open 冷启动语义）。
+            # 分片 store 索引很小，不受该限制（keys 流式只取所需子字段）。
+            return {
+                "status": "SKIPPED",
+                "reason_code": "scan_result_too_large",
+                "bytes": size,
+                "limit_bytes": _MAX_PLANNING_HISTORY_LOAD_BYTES,
+            }
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        from .scan_result_store import load_scan_result
+
+        value = load_scan_result(
+            path, keys=["v12.adaptive_planning_history_receipt"]
+        )
     except (OSError, json.JSONDecodeError) as exc:
         raise AdaptivePlanningHistoryError(
             f"planning_history_scan_result_invalid:{type(exc).__name__}"

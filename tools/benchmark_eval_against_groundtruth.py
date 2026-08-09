@@ -15,6 +15,12 @@ from pathlib import Path
 
 
 def _load(p: Path):
+    # scan_result 分片 store 自动组装（findings 为小分片，按需加载）；GT 等
+    # 普通 JSON 行为与 json.loads 一致。
+    if p.name == "scan_result.json":
+        from ai_test_asset_center.scan_result_store import load_scan_result
+
+        return load_scan_result(p, keys=["findings"])
     return json.loads(p.read_text(encoding="utf-8"))
 
 

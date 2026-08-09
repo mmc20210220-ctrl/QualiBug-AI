@@ -228,7 +228,13 @@ def _artifact_snapshot(
     ):
         return {}, metadata, "ARTIFACT_CHANGED_DURING_READ"
     try:
-        payload = json.loads(raw.decode("utf-8"))
+        if path.name == "scan_result.json":
+            # 分片 store 自动组装（索引文件本身仍是有效 JSON；旧单文件等同 json.loads）
+            from .scan_result_store import load_scan_result
+
+            payload = load_scan_result(path, keys=None)
+        else:
+            payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return {}, metadata, f"INVALID_JSON_ARTIFACT:{type(exc).__name__}:{exc}"
     if not isinstance(payload, dict):

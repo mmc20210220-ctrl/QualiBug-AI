@@ -328,8 +328,11 @@ def attach_job_formal_planning_proof(
     # product artifact through the existing redaction authority so a POST /api/v1/scan
     # has a durable proof even though the customer HTTP envelope remains intentionally
     # compact. This does not alter any execution, finding or evaluator record.
+    # Sharded store keeps the same content; big keys stay in scan_result.parts/.
     scan_result_path = Path(root) / "platform_outputs" / safe_project / "scan_result.json"
-    write_json_redacted(scan_result_path, projected)
+    from .scan_result_store import write_scan_result
+
+    write_scan_result(scan_result_path, projected)
     return projected
 
 

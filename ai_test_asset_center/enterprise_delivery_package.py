@@ -33,6 +33,21 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _read_scan_result(path: Path) -> dict[str, Any]:
+    """Read scan_result via the sharded store loader（分片/旧单文件自动兼容）。"""
+    from .scan_result_store import load_scan_result
+
+    if not path.is_file():
+        raise DeliveryPackageError(f"delivery_json_unreadable:{path.name}")
+    try:
+        payload = load_scan_result(path, keys=["findings", "candidate_findings", "delivery_occurrences", "evidence_bundle", "release_gate", "campaign", "runtime_contract", "total_findings"])
+    except (OSError, json.JSONDecodeError, ValueError, KeyError) as exc:
+        raise DeliveryPackageError(f"delivery_json_unreadable:{path.name}") from exc
+    if not isinstance(payload, dict):
+        raise DeliveryPackageError(f"delivery_json_invalid:{path.name}")
+    return payload
+
+
 def _hash_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -51,7 +66,7 @@ def create_delivery_package(
     """Create ZIP only when evidence bundle verification and release facts exist."""
     workspace = Path(root)
     project = _safe(project_id)
-    result = scan_result or _read_json(workspace / "platform_outputs" / project / "scan_result.json")
+    result = scan_result or _read_scan_result(workspace / "platform_outputs" / project / "scan_result.json")
     evidence = result.get("evidence_bundle") if isinstance(result.get("evidence_bundle"), dict) else {}
     bundle_id = str(evidence.get("bundle_id") or "")
     if str(evidence.get("status") or "") != "persisted" or not bundle_id:

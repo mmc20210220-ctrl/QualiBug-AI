@@ -349,7 +349,16 @@ class AutoLearningTrigger:
         latest = self.output_dir / "scan_result.json"
         if latest.exists():
             try:
-                data = json.loads(latest.read_text(encoding="utf-8"))
+                from .scan_result_store import load_scan_result
+
+                data = load_scan_result(
+                    latest,
+                    keys=[
+                        "findings", "candidate_findings", "delivery_occurrences",
+                        "canonical_defect_registry", "formal_count_projection",
+                        "trace_ledger", "obligation_attempt_ledger",
+                    ],
+                )
                 if isinstance(data, dict):
                     scans.append(data)
             except Exception as e:

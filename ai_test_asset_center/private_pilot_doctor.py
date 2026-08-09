@@ -813,7 +813,11 @@ def export_support_bundle(root: str | Path | None = None) -> Path:
         scan_file = _find_latest_scan_result(resolved_root)
         if scan_file and scan_file.is_file():
             try:
-                scan_data = json.loads(scan_file.read_text(encoding="utf-8", errors="replace"))
+                from .scan_result_store import load_scan_result
+
+                # 只取索引摘要级信息（分片 store 骨架 + 小键）；大分片不装入
+                # 支持包，避免 4GB 级产物整读（_bundle_redact_dict 全量递归）。
+                scan_data = load_scan_result(scan_file, keys=[])
                 # Only include summary-level info, redact sensitive parts
                 scan_summary = _bundle_redact_dict(scan_data)
                 (tmp / "last_scan_result.json").write_text(

@@ -285,7 +285,14 @@ def main() -> None:
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    raw = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    input_path = Path(args.input)
+    from ai_test_asset_center.scan_result_store import is_sharded_scan_result, load_scan_result
+
+    if is_sharded_scan_result(input_path):
+        # 输入可能是分片 store（如直接传 scan_result.json 产物）
+        raw = load_scan_result(input_path, keys=None)
+    else:
+        raw = json.loads(input_path.read_text(encoding="utf-8"))
     envelope = normalize_envelope(raw)
     write_json_redacted(
         Path(args.output),

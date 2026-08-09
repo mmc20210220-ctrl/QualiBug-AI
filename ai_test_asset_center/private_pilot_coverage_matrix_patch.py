@@ -216,7 +216,16 @@ def _load_benchmark_metrics(project: str, root: Path) -> dict[str, Any]:
 def _load_scan_result(project: str, root: Path) -> dict[str, Any]:
     if not project:
         return {}
-    return _read_json(root / "platform_outputs" / _safe_project(project) / "scan_result.json")
+    from .scan_result_store import load_scan_result
+
+    return load_scan_result(
+        root / "platform_outputs" / _safe_project(project) / "scan_result.json",
+        keys=[
+            "coverage_steering", "behavior_slice_ledger", "phases",
+            "v12.coverage_steering", "v12.behavior_slice_ledger", "v12.phases",
+            "benchmark_metrics", "pipeline_health", "discovery_funnel",
+        ],
+    )
 
 
 def _coverage_steering_from(data: dict[str, Any], scan_result: dict[str, Any]) -> dict[str, Any]:
