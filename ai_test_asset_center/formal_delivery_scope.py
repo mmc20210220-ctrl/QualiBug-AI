@@ -11,6 +11,11 @@ from typing import Any
 
 from . import _formal_delivery_scope_single_occurrence_mechanics as _core
 from ._formal_delivery_scope_single_occurrence_mechanics import *  # noqa: F401,F403
+from ._delivery_validation_cache import (
+    GATE_INDEX_CACHE,
+    _MISSING,
+    content_fingerprint,
+)
 from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
@@ -54,6 +59,18 @@ def validated_deliverable_gate_index(
 ) -> dict[str, dict[str, Any]]:
     if ledger is None:
         return {}
+    # The gate index is a pure function of the sealed obligation-attempt
+    # ledger content: the same content always yields the same index, and the
+    # whole formal findings path re-derives it ~7 times per run.  The key is
+    # the ledger's own content address, recomputed from the CURRENT input, so
+    # any content change (including an in-place mutation of the ledger dict)
+    # produces a different key and forces full re-validation — the mutated
+    # ledger then fails its fingerprint check exactly as it would without the
+    # cache.  Failures are never cached, so no fail-closed gate is relaxed.
+    cache_key = content_fingerprint(ledger)
+    cached = GATE_INDEX_CACHE.get(cache_key)
+    if cached is not _MISSING:
+        return dict(cached)
     try:
         validated = validate_obligation_attempt_ledger(_dict(ledger))
     except ObligationAttemptLedgerError as exc:
@@ -115,6 +132,7 @@ def validated_deliverable_gate_index(
                     f"formal_finding_id_duplicate:{occurrence_id}"
                 )
             index[occurrence_id] = validated_gate
+    GATE_INDEX_CACHE.put(cache_key, index)
     return index
 
 

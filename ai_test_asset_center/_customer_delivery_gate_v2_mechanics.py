@@ -21,6 +21,12 @@ from .contract_oracles import (
 from .discovery_mainline_contract import validate_mainline_run_contract
 from .observer_contracts_base import validate_observer_receipt
 from .operational_receipts import validate_execution_operational_receipt
+from ._delivery_validation_cache import (
+    FINDING_FINGERPRINT_CACHE,
+    GATE_VALIDATION_CACHE,
+    _MISSING,
+    content_fingerprint,
+)
 
 
 DELIVERY_EXECUTION_RECEIPT_SCHEMA = "qualibug.delivery-execution-receipt.v1"
@@ -149,6 +155,19 @@ def _finding_payload(finding: dict[str, Any]) -> dict[str, Any]:
 def finding_payload_fingerprint(finding: dict[str, Any]) -> str:
     if not isinstance(finding, dict) or not finding:
         raise DeliveryGateV2Error("finding_payload_missing")
+    # Redaction is deterministic and idempotent: identical finding content
+    # always yields the identical fingerprint, so the result is cached by the
+    # finding's own content address.  Any content change changes the address
+    # and forces recomputation, so caching never weakens validation semantics.
+    # Within one run the same finding payload is validated many times (every
+    # delivery path re-fingerprints every occurrence), which is why this hot
+    # path is memoized instead of re-running the full deep copy + regex scan.
+    # The cache address covers the stripped payload only (derived fields are
+    # stripped after redaction, so they never influence the result).
+    cache_key = content_fingerprint(_finding_payload(finding))
+    cached = FINDING_FINGERPRINT_CACHE.get(cache_key)
+    if cached is not _MISSING:
+        return cached
     # The fingerprint must be computed on the exact form the evaluator
     # receives: every persistence boundary runs the artifact redactor, which
     # deterministically rewrites sensitive values (a response body field named
@@ -162,7 +181,9 @@ def finding_payload_fingerprint(finding: dict[str, Any]) -> str:
 
     redacted, _redaction_receipt = redact_artifact(finding)
     stable = redacted if isinstance(redacted, dict) else finding
-    return _fingerprint(_finding_payload(stable))
+    result = _fingerprint(_finding_payload(stable))
+    FINDING_FINGERPRINT_CACHE.put(cache_key, result)
+    return result
 
 
 def _receipt_ref(receipt: dict[str, Any], *, id_field: str = "receipt_id") -> dict[str, str]:
@@ -1418,6 +1439,31 @@ def validate_customer_delivery_gate_receipt_v2(
     finding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     row = _dict(receipt)
+    # The validator is a deterministic pure function of (receipt, finding):
+    # identical inputs always yield the identical validated receipt, so the
+    # result is cached by the content address of both inputs.  A content
+    # change changes the address and forces recomputation; failed
+    # validations are never cached and re-raise on every call, so no
+    # fail-closed gate is relaxed.  Within one run every occurrence's gate is
+    # validated many times (formal findings path runs ~7 times per run), and
+    # each validation re-fingerprints the whole finding payload, which is why
+    # this hot path is memoized instead of re-deriving everything.
+    finding_key = None
+    if finding is not None:
+        finding_row = _dict(finding)
+        finding_id = _text(finding_row.get("finding_id") or finding_row.get("id"))
+        try:
+            finding_fp = finding_payload_fingerprint(finding_row)
+        except DeliveryGateV2Error:
+            # Empty/invalid finding: the validator below decides (it may
+            # raise finding_payload_missing); never cache a decision made
+            # without the fingerprint.
+            finding_fp = ""
+        finding_key = (finding_id, finding_fp)
+    cache_key = (finding_key, content_fingerprint(row))
+    cached = GATE_VALIDATION_CACHE.get(cache_key)
+    if cached is not _MISSING:
+        return copy.deepcopy(cached)
     required = {
         "schema_version",
         "status",
@@ -1589,7 +1635,9 @@ def validate_customer_delivery_gate_receipt_v2(
     )
     if row != expected:
         raise DeliveryGateV2Error("delivery_gate_output_fingerprint_invalid")
-    return dict(expected)
+    validated = dict(expected)
+    GATE_VALIDATION_CACHE.put(cache_key, validated)
+    return validated
 
 
 def validate_customer_delivery_gate_bundle(

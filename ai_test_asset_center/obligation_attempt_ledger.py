@@ -22,6 +22,11 @@ from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
     validate_customer_delivery_gate_bundle,
 )
+from ._delivery_validation_cache import (
+    LEDGER_VALIDATION_CACHE,
+    _MISSING,
+    content_fingerprint,
+)
 
 _original_build_obligation_attempt_ledger = _core.build_obligation_attempt_ledger
 _original_validate_obligation_attempt_ledger = _core.validate_obligation_attempt_ledger
@@ -248,6 +253,19 @@ def build_obligation_attempt_ledger(
 def validate_obligation_attempt_ledger(
     ledger: dict[str, Any],
 ) -> dict[str, Any]:
+    # The ledger is validated (with full per-attempt and per-occurrence gate
+    # rebuilds) at every delivery stage — formal findings path, formal
+    # delivery authority, canonical defect registry and redaction chain each
+    # re-validate the SAME sealed ledger several times per run.  Validation is
+    # a deterministic pure function of the ledger content, so the result is
+    # cached by the ledger's own content address.  A content change changes
+    # the address and forces recomputation; failures are never cached and
+    # re-raise on every call, so no fail-closed gate is relaxed.  Callers
+    # treat the validated ledger as read-only (sealed attempt authority).
+    cache_key = content_fingerprint(_dict(ledger))
+    cached = LEDGER_VALIDATION_CACHE.get(cache_key)
+    if cached is not _MISSING:
+        return dict(cached)
     value = _original_validate_obligation_attempt_ledger(ledger)
     for raw_attempt in _list(value.get("attempts")):
         attempt = _dict(raw_attempt)
@@ -278,6 +296,7 @@ def validate_obligation_attempt_ledger(
             raise _core.ObligationAttemptLedgerError(
                 "primary_delivery_occurrence_missing"
             )
+    LEDGER_VALIDATION_CACHE.put(cache_key, value)
     return value
 
 

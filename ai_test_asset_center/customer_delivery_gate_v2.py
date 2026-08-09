@@ -6,6 +6,7 @@ assertion, observer receipts, Oracle receipt, and Gate receipt to agree on one `
 """
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from . import assertion_dsl as _assertions
@@ -13,6 +14,11 @@ from . import contract_oracles as _oracles
 from . import observer_contracts as _observers
 from . import _customer_delivery_gate_v2_mechanics as _core
 from ._customer_delivery_gate_v2_mechanics import *  # noqa: F401,F403
+from ._delivery_validation_cache import (
+    GATE_BUNDLE_VALIDATION_CACHE,
+    _MISSING,
+    content_fingerprint,
+)
 
 _original_validate_active_chain = _core._validate_active_chain
 _original_build_customer_delivery_gate_receipt_v2 = (
@@ -244,6 +250,25 @@ def validate_customer_delivery_gate_bundle(
     oracle_receipt: dict[str, Any],
     reproduction_receipt: dict[str, Any],
 ) -> dict[str, Any]:
+    # Bundle validation re-derives the ENTIRE gate from the evidence bundle
+    # (validate + rebuild + compare).  It is a deterministic pure function of
+    # its inputs, so identical bundle content is cached by content address.
+    # Within one run the ledger validation validates the same bundle once per
+    # attempt and once per occurrence view; without memoization every delivery
+    # pass re-ran the full rebuild per occurrence.  Content change changes the
+    # address and forces recomputation; failures are never cached.
+    cache_key = (
+        content_fingerprint(_dict(gate_receipt)),
+        content_fingerprint(_dict(finding)),
+        content_fingerprint(_dict(execution_receipt)),
+        content_fingerprint(_list(contract_evidence_receipts)),
+        content_fingerprint(_list(observer_receipts)),
+        content_fingerprint(_dict(oracle_receipt)),
+        content_fingerprint(_dict(reproduction_receipt)),
+    )
+    cached = GATE_BUNDLE_VALIDATION_CACHE.get(cache_key)
+    if cached is not _MISSING:
+        return copy.deepcopy(cached)
     validated = validate_customer_delivery_gate_receipt_v2(
         gate_receipt,
         finding=finding
@@ -283,8 +308,10 @@ def validate_customer_delivery_gate_bundle(
                 fingerprint_field="output_fingerprint",
             )
         ):
+            GATE_BUNDLE_VALIDATION_CACHE.put(cache_key, validated)
             return validated
         raise _core.DeliveryGateV2Error("delivery_gate_bundle_mismatch")
+    GATE_BUNDLE_VALIDATION_CACHE.put(cache_key, validated)
     return validated
 
 
