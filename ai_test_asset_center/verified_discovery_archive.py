@@ -479,6 +479,26 @@ def merge_run_deliveries(
     return archive
 
 
+def _representative_rank(row: dict[str, Any]) -> tuple[float, str]:
+    """Deterministic representative rank of a delivered finding.
+
+    Mirrors the canonical registry's ``_representative_finding_id`` choice:
+    highest confidence first, ties by smallest occurrence finding_id — so the
+    archive's collision handling never depends on list order and never
+    silently drops the strongest evidence of a defect surface.
+    """
+    try:
+        confidence = float(row.get("confidence_score") or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    occurrence_id = _text(
+        row.get("delivery_occurrence_finding_id")
+        or row.get("finding_id")
+        or row.get("id")
+    )
+    return (-confidence, occurrence_id)
+
+
 def apply_archive_to_run(
     archive: dict[str, Any],
     *,
@@ -496,7 +516,21 @@ def apply_archive_to_run(
     """
     merged: dict[str, dict[str, Any]] = {}
     for finding in findings:
-        merged[finding_stable_identity(finding)] = finding
+        identity = finding_stable_identity(finding)
+        existing = merged.get(identity)
+        if existing is None:
+            merged[identity] = finding
+            continue
+        # Collision among this run's own findings: the aggregation contract
+        # delivers one representative per defect surface, so a collision
+        # should not happen once the upstream canonical registry collapses
+        # role/obligation variants. Defensively, keep the strongest evidence
+        # (highest confidence, ties by smallest occurrence finding_id — the
+        # same deterministic choice the canonical registry makes), so an
+        # arbitrary last-wins dedup can never silently drop a verified true
+        # positive.
+        if _representative_rank(finding) < _representative_rank(existing):
+            merged[identity] = finding
     held = 0
     for identity, entry in (archive.get("entries") or {}).items():
         if identity in merged:

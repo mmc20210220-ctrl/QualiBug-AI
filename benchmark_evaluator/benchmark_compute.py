@@ -286,7 +286,16 @@ def _explicit_family(item: dict[str, Any]) -> str:
     # authorization alias on the shared assertion kind / category label.
     if _isolation_owner_visibility_signal(item):
         return "tenant_isolation"
-    for key in ("risk_family", "family", "defect_family", "risk_type", "category", "type"):
+    # The assertion-kind category (owner_tenant_visibility → authorization,
+    # ...) is part of the defect surface identity under role-variant
+    # aggregation, while the obligation's compile-time risk_family is
+    # explicitly NOT (the same surface is compiled under authorization /
+    # visibility / isolation obligations across runs). Resolving the
+    # surface-stable class first keeps the family signal stable for one
+    # defect surface regardless of which obligation compiled it; the
+    # obligation family still resolves below for kinds without a definitive
+    # category alias.
+    for key in ("category", "type", "risk_family", "family", "defect_family", "risk_type"):
         value = str(item.get(key) or "").strip().lower()
         if value in ontology:
             return value

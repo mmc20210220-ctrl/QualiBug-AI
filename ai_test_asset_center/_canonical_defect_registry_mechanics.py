@@ -267,6 +267,43 @@ def _source_ref_projection(values: Any) -> list[dict[str, str]]:
     return [unique[key] for key in sorted(unique)]
 
 
+def _normalized_locator_path(locator: Any) -> str:
+    """Path portion of a normalized locator (verb prefix stripped)."""
+    text = _text(locator)
+    match = re.match(r"^([A-Za-z][A-Za-z0-9_.-]*)\s+(.+)$", text)
+    return match.group(2) if match else text
+
+
+def _treatment_surface_locators(
+    treatment_locator: Any,
+    source_refs: list[dict[str, str]],
+) -> set[str]:
+    """Source-ref locators of the treatment operation surface only.
+
+    The resource-identity class of a defect names the interface the rule
+    governs — the treatment operation. Source-ref locators that name OTHER
+    interfaces (precondition steps, sibling endpoints cited by the same
+    source document) are obligation-origin noise: the same defect surface
+    probed under different obligations (role variants, different rules
+    citing the same endpoint) must collapse into one canonical defect
+    (role-variant aggregation), and a stray locator must never fragment it.
+    """
+    treatment = _normalized_locator(treatment_locator)
+    treatment_path = _normalized_locator_path(treatment)
+    kept = {treatment}
+    for item in source_refs:
+        raw = _text(_dict(item).get("locator"))
+        if not raw or not _is_operation_locator(raw):
+            continue
+        try:
+            normalized = _normalized_locator(raw)
+        except Exception:
+            continue
+        if _normalized_locator_path(normalized) == treatment_path:
+            kept.add(normalized)
+    return kept
+
+
 def _one_step(reproduction: dict[str, Any], phase: str) -> dict[str, Any]:
     step = _optional_step(reproduction, phase)
     if step is None:
@@ -547,11 +584,9 @@ def derive_canonical_identity_evidence(
             treatment_actor_class=treatment_actor,
         ),
         "resource_identity_class": {
-            "source_locators": sorted({
-                item["locator"]
-                for item in source_refs
-                if _is_operation_locator(item["locator"])
-            } | {_normalized_locator(locator)}),
+            "source_locators": sorted(
+                _treatment_surface_locators(locator, source_refs)
+            ),
         },
         "mutation": {
             "class": mutation_class,
@@ -716,11 +751,9 @@ def derive_legacy_champion_canonical_identity_evidence(
             ),
         ),
         "resource_identity_class": {
-            "source_locators": sorted({
-                item["locator"]
-                for item in source_refs
-                if _is_operation_locator(item["locator"])
-            } | {locator}),
+            "source_locators": sorted(
+                _treatment_surface_locators(locator, source_refs)
+            ),
         },
         "mutation": {
             "class": "legacy_treatment",
