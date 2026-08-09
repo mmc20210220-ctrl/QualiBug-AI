@@ -86,7 +86,20 @@ def _is_safe_placeholder(value: Any) -> bool:
     return bool(SAFE_PLACEHOLDER_RE.search(text))
 
 
+# String redaction is bounded: pattern scanning must stay O(prefix), never
+# O(whole multi-MB captured payload). Anything beyond the window is dropped.
+_MAX_REDACT_STRING_CHARS = 256 * 1024  # 256KB
+
 def _redact_string(text: str) -> tuple[str, list[str]]:
+    # Oversized strings (captured response bodies, raw evidence dumps) are
+    # truncated before pattern scanning: eight regex search+sub passes over a
+    # multi-MB string stall the delivery path (measured: delivery stuck in
+    # _redact_value for 17+ minutes). Truncating preserves the redaction
+    # guarantee for the retained prefix — the same secret patterns apply to
+    # the kept portion, and anything beyond the window is dropped, not
+    # emitted. The truncation marker is itself inert.
+    if len(text) > _MAX_REDACT_STRING_CHARS:
+        text = text[:_MAX_REDACT_STRING_CHARS] + "<REDACTED_TRUNCATED>"
     hits: list[str] = []
     out = text
 
