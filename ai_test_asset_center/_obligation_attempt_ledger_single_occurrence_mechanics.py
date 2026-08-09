@@ -69,6 +69,21 @@ def _object(value: Any, *, field: str) -> dict[str, Any]:
         raise ObligationAttemptLedgerError(f"{field}_not_object")
     return dict(value)
 
+def _attempt_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Resolve an obligation-attempt row in either persisted shape.
+
+    ``build_obligation_attempt_ledger`` writes FLAT rows (fields directly on
+    the row, e.g. ``executed_obligation_id``), while historical rows nest the
+    attempt under ``obligation_attempt``. Reseal/validate must accept both —
+    the nested shape wins when present, otherwise the row itself is the
+    attempt (fingerprint and identity fields live at the same level).
+    """
+    nested = row.get("obligation_attempt")
+    if isinstance(nested, dict):
+        return nested
+    return row
+
+
 
 def _fingerprint(value: Any) -> str:
     canonical = json.dumps(
@@ -1162,7 +1177,7 @@ def reseal_obligation_attempt_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
     for row in raw_attempts:
         attempt = {
             key: item
-            for key, item in _object(row, field="obligation_attempt").items()
+            for key, item in _attempt_row(row).items()
             if key != "attempt_fingerprint"
         }
         attempt = reseal_obligation_attempt_nested_receipts(attempt)
@@ -1270,7 +1285,7 @@ def validate_obligation_attempt_ledger(
             "obligation_attempt_terminal_coverage_invalid"
         )
     obligation_ids = [
-        _text(_object(row, field="obligation_attempt").get("obligation_id"))
+        _text(_attempt_row(row).get("obligation_id"))
         for row in attempts
     ]
     if not all(obligation_ids) or len(obligation_ids) != len(set(obligation_ids)):
@@ -1278,7 +1293,7 @@ def validate_obligation_attempt_ledger(
             "obligation_attempt_identity_invalid"
         )
     terminal_statuses = [
-        _text(_object(row, field="obligation_attempt").get("terminal_status"))
+        _text(_attempt_row(row).get("terminal_status"))
         .upper()
         for row in attempts
     ]
@@ -1292,7 +1307,7 @@ def validate_obligation_attempt_ledger(
             "obligation_terminal_status_counts_invalid"
         )
     selection_statuses = [
-        _text(_object(row, field="obligation_attempt").get("selection_status")).upper()
+        _text(_attempt_row(row).get("selection_status")).upper()
         or "SELECTED"
         for row in attempts
     ]
@@ -1312,7 +1327,7 @@ def validate_obligation_attempt_ledger(
             "obligation_selected_count_mismatch"
         )
     for row in attempts:
-        attempt = _object(row, field="obligation_attempt")
+        attempt = _attempt_row(row)
         obligation_id = _text(attempt.get("obligation_id"))
         attempt_identity = _object(
             attempt.get("identity"),
@@ -1583,7 +1598,7 @@ def derive_campaign_terminal_status(ledger: dict[str, Any]) -> str:
         return "active"
     if selected_count == 0:
         return "blocked"
-    statuses = [_text(_object(row, field="obligation_attempt").get("terminal_status")).upper() for row in attempts]
+    statuses = [_text(_attempt_row(row).get("terminal_status")).upper() for row in attempts]
     if any(status not in TERMINAL_STATUSES for status in statuses):
         raise ObligationAttemptLedgerError("obligation_terminal_status_invalid")
     if "HARNESS_FAILED" in statuses:
