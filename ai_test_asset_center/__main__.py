@@ -185,6 +185,50 @@ from .scan_impl_prepare import prepare_scan_before_pipeline  # noqa: F401
 from .scan_result_store import write_scan_result  # noqa: F401
 
 
+def _verified_archive_chain(
+    project: str,
+    root: Optional[Path],
+    *,
+    v12: dict[str, Any],
+    campaign: dict[str, Any],
+    findings: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Verified Discovery Archive 主链收尾：merge + apply + save + receipt。
+
+    scan 收尾的单一调用点（无论 save_report 与否都执行）：本 run 交付并入
+    档案，输出 findings = 本 run 新交付 ∪ 档案未退休历史发现。异常绝不
+    静默：失败时返回 FAILED receipt（含原因）并记录 error 日志，扫描继续
+    ——档案永不阻塞扫描，但断链必须可见、可追溯。
+    """
+    try:
+        from .verified_discovery_archive import (
+            apply_verified_discovery_archive_to_run,
+        )
+
+        run_identity = _first_text(
+            _as_dict(v12.get("mainline_run")).get("run_id")
+        ) or _first_text(campaign.get("campaign_id"))
+        return apply_verified_discovery_archive_to_run(
+            project,
+            root,
+            run_id=run_identity,
+            campaign_id=_first_text(campaign.get("campaign_id")),
+            findings=findings,
+        )
+    except Exception as _archive_exc:
+        _LOGGER.error(
+            "verified_discovery_archive_merge_failed error_type=%s error=%s",
+            type(_archive_exc).__name__,
+            str(_archive_exc)[:200],
+            exc_info=True,
+        )
+        return findings, {
+            "schema_version": "qualibug.verified-discovery-archive.v1",
+            "status": "FAILED",
+            "reason": f"{type(_archive_exc).__name__}:{str(_archive_exc)[:160]}",
+        }
+
+
 def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Run the single enterprise-safe discovery and evidence pipeline."""
     prepared = prepare_scan_before_pipeline(
@@ -362,38 +406,14 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     # 不得因单次扫描的覆盖波动而丢失：本 run 交付并入档案，输出 findings =
     # 本 run 新交付 ∪ 档案中未退休的历史发现（archive_entry 标记）。只有
     # 「目标已修复」信号（连续多 run 确认）才退休——届时没发现才是正常的。
-    try:
-        from .verified_discovery_archive import (
-            apply_archive_to_run,
-            load_verified_discovery_archive,
-            merge_run_deliveries,
-            save_verified_discovery_archive,
-        )
-
-        run_identity = _text(
-            _dict(v12.get("mainline_run")).get("run_id")
-        ) or _text(campaign.get("campaign_id"))
-        archive = load_verified_discovery_archive(project, root)
-        archive = merge_run_deliveries(
-            archive,
-            run_id=run_identity,
-            campaign_id=_text(campaign.get("campaign_id")),
-            findings=confirmed,
-        )
-        confirmed, verified_archive_receipt = apply_archive_to_run(
-            archive,
-            run_id=run_identity,
-            findings=confirmed,
-        )
-        save_verified_discovery_archive(project, root, archive)
-    except Exception as _archive_exc:
-        # The archive must never block the scan; a failure is recorded
-        # visibly and the run proceeds with its own findings only.
-        verified_archive_receipt = {
-            "schema_version": "qualibug.verified-discovery-archive.v1",
-            "status": "FAILED",
-            "reason": f"{type(_archive_exc).__name__}:{str(_archive_exc)[:160]}",
-        }
+    # 无论 save_report 与否都执行；失败时 receipt 为 FAILED（带原因，绝不静默）。
+    confirmed, verified_archive_receipt = _verified_archive_chain(
+        project,
+        root,
+        v12=v12,
+        campaign=campaign,
+        findings=confirmed,
+    )
     delivery_occurrences = list(canonical_scope["delivery_occurrences"])
     canonical_registry = dict(canonical_scope["canonical_defect_registry"])
     dedupe_input_count = int(
@@ -767,6 +787,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         "db_verification": db_verification,
         "benchmark_metrics": benchmark_metrics,
         "dedupe_report": dedupe_report,
+        "verified_archive_receipt": verified_archive_receipt,
         "discovery_verdict": _discovery_verdict(confirmed, db_verification),
         "discovery_funnel": discovery_funnel,
         "discovery_funnel_report": discovery_funnel_report,

@@ -149,6 +149,13 @@ def authority_scoped_findings(scan_result: dict[str, Any]) -> dict[str, Any]:
                 f"finding_authority_fingerprint_missing:{finding_id}"
             )
         if observed_fingerprint != expected_fingerprint:
+            # Verified Discovery Archive holdover（archive_entry=true）：
+            # 历史已验证证据在先前已验证 run 的权威下交付，携带的是其交付 run
+            # 自己的指纹（来源证明）。本 run 并未重新验证它们，强制匹配当前
+            # run 指纹等于伪造本 run 权威——因此豁免相等性校验（仍要求非空
+            # 指纹）。本 run 新交付与 candidate 仍必须严格匹配当前指纹。
+            if item.get("archive_entry") is True:
+                continue
             raise MainlineContractError(
                 f"finding_authority_fingerprint_mismatch:{finding_id}"
             )

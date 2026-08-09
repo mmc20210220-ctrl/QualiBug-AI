@@ -555,6 +555,38 @@ def apply_archive_to_run(
     return output, receipt
 
 
+def apply_verified_discovery_archive_to_run(
+    project: str,
+    root: Path,
+    *,
+    run_id: str,
+    campaign_id: str,
+    findings: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Scan 主链收尾一站式入口：load → merge → apply → save（单点闭环）。
+
+    这是已验证发现档案跨 run 单调保持的**唯一**主链入口：本 run 交付并入
+    档案（新身份追加 / 已知身份刷新，绝不丢弃），输出 findings = 本 run
+    新交付 ∪ 档案中未退休的历史发现（``archive_entry=true`` 标记），随后
+    落盘。失败时直接抛出 —— 由调用方（scan 收尾）记录可见的 FAILED
+    receipt；档案永不静默吞错，也永不阻塞扫描。
+    """
+    archive = load_verified_discovery_archive(project, root)
+    archive = merge_run_deliveries(
+        archive,
+        run_id=run_id,
+        campaign_id=campaign_id,
+        findings=findings,
+    )
+    output, receipt = apply_archive_to_run(
+        archive,
+        run_id=run_id,
+        findings=findings,
+    )
+    save_verified_discovery_archive(project, root, archive)
+    return output, receipt
+
+
 def record_target_fix_signals(
     archive: dict[str, Any],
     *,
