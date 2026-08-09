@@ -108,5 +108,36 @@ class MaterializeUniqueCreateFieldsFkGuardTest(unittest.TestCase):
         self.assertEqual(materialized, ["products[0].sku"])
 
 
+class ValidationBodyOwnershipStripTest(unittest.TestCase):
+    """Session H: validation arms must isolate the field under test."""
+
+    def test_ownership_identity_fields_stripped(self):
+        from ai_test_asset_center.experiment_protocols_base import (
+            _strip_ownership_identity_fields,
+        )
+
+        body = {"sku": "SKU-PHONE-001", "qty": -1, "userId": "00000000-0000-0000-0000-000000000001"}
+        stripped = _strip_ownership_identity_fields(body)
+        self.assertEqual(stripped, {"sku": "SKU-PHONE-001", "qty": -1})
+
+    def test_mutation_field_preserved_when_ownership_key(self):
+        from ai_test_asset_center.experiment_protocols_base import (
+            _strip_ownership_identity_fields,
+        )
+
+        body = {"userId": "abc", "qty": 1}
+        stripped = _strip_ownership_identity_fields(body, keep={"userId"})
+        self.assertEqual(stripped, body)
+
+    def test_nested_detail_arrays_stripped(self):
+        from ai_test_asset_center.experiment_protocols_base import (
+            _strip_ownership_identity_fields,
+        )
+
+        body = {"items": [{"sku": "S1", "qty": 1, "userId": "x"}], "couponCode": "C1"}
+        stripped = _strip_ownership_identity_fields(body)
+        self.assertEqual(stripped, {"items": [{"sku": "S1", "qty": 1}], "couponCode": "C1"})
+
+
 if __name__ == "__main__":
     unittest.main()
