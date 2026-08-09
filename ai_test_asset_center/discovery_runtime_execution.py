@@ -44,6 +44,7 @@ from .discovery_runtime_execution_result import (  # noqa: F401
     RUNTIME_SCHEMA, _assemble_experiment_candidate_result)  # noqa: E501
 from .discovery_runtime_execution_support import (  # noqa: F401
     _authority_findings,
+    _campaign_automatic_round_limit,
     _consume_pending_obligation_rounds,
     _dict,
     _empty_execution_batch,
@@ -511,8 +512,8 @@ def run_experiment_candidate(
             runtime_contract=runtime_contract,
             mainline_run=plan.mainline_run,
             campaign_id=plan.mainline_run["campaign_id"],
-            automatic_round_limit=int(
-                getattr(campaign_handle, "automatic_round_limit", 16) or 16
+            automatic_round_limit=_campaign_automatic_round_limit(
+                campaign_handle
             ),
             execute_batch=execute_selected_experiments,
             exclude_obligation_ids=round_two_executed_ids,
@@ -572,8 +573,8 @@ def run_experiment_candidate(
                 runtime_contract=runtime_contract,
                 mainline_run=plan.mainline_run,
                 campaign_id=plan.mainline_run["campaign_id"],
-                automatic_round_limit=int(
-                    getattr(campaign_handle, "automatic_round_limit", 16) or 16
+                automatic_round_limit=_campaign_automatic_round_limit(
+                    campaign_handle
                 ),
                 execute_batch=execute_selected_experiments,
                 exclude_obligation_ids=round_two_executed_ids,

@@ -6,6 +6,7 @@ Extracted from ``discovery_runtime_execution``. Symbols are re-exported from
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -24,6 +25,9 @@ from .discovery_runtime_execution_terminal import _manual_terminal_receipts  # n
 from .operational_receipts import (
     aggregate_execution_operational_receipts,
 )
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -466,6 +470,30 @@ def _finalize_campaign(handle: Any, ledger: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _campaign_automatic_round_limit(handle: Any, fallback: int = 16) -> int:
+    """Resolve the configured follow-on round limit from the campaign object.
+
+    The mainline passes a dict wrapper (``{"campaign_id", "campaign",
+    "store", "mode"}``) as the campaign handle — not the ``EnterpriseCampaign``
+    object itself. Reading ``automatic_round_limit`` off the wrapper with
+    ``getattr(handle, ...)`` always fell back to the default 16, silently
+    ignoring the operator-configured ``QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT``
+    (run10 measured effect: 15 follow-on rounds ran instead of the configured 3,
+    consuming ~40 min of replanning CPU with no new obligations in the tail
+    rounds). Unwrap exactly like ``_finalize_campaign`` does.
+    """
+    try:
+        campaign = _campaign_object(handle)
+        value = getattr(campaign, "automatic_round_limit", None)
+    except Exception:
+        value = None
+    try:
+        parsed = int(value) if value is not None else fallback
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(1, parsed)
+
+
 def _empty_execution_batch() -> dict[str, Any]:
     return {
         "selected_count": 0,
@@ -667,6 +695,14 @@ def _consume_pending_obligation_rounds(
                 })
         follow_on_batches.append(dict(_dict(next_batch)))
         _round_executed = int(_dict(next_batch).get("executed_count") or 0)
+        _LOGGER.info(
+            "follow-on round %d: selected=%s pending=%s executed=%s budget=%s",
+            planning_round,
+            next_plan.get("selected_count"),
+            next_plan.get("pending_count"),
+            _round_executed,
+            budget,
+        )
         follow_on_receipts.append({
             "planning_round": planning_round,
             "selected_count": int(next_plan.get("selected_count") or 0),
