@@ -30,6 +30,9 @@ from .runtime_binding_materializer import (
     materialize_body_template,
     materialize_path,
 )
+from .runtime_binding_materializer_base import (
+    runtime_setup_value_from_response as _runtime_setup_value_from_response,
+)
 from .sandbox_write_executor import execute_governed_control_write
 
 
@@ -93,10 +96,17 @@ def _target_verdict(
 ) -> dict[str, Any]:
     target_state = _text(step.get("to_state") or step.get("target_state"))
     state_field = _state_field(step)
-    after = _dict(
-        governed.get("response_bound_after")
-        or governed.get("after")
-    )
+    # A subject-establishment create has no prior identity to GET before the
+    # write; the create RESPONSE is the observation of the created entity.
+    # The planner marks such steps with observe_response_body so the verdict
+    # reads the governed write response instead of a post-write readback GET.
+    if step.get("observe_response_body") is True:
+        after = _dict(governed.get("write"))
+    else:
+        after = _dict(
+            governed.get("response_bound_after")
+            or governed.get("after")
+        )
     after_status = int(after.get("status") or after.get("status_code") or 0)
     if not target_state or not state_field:
         return {
@@ -179,6 +189,7 @@ def execute_precondition_plan(
 
     receipts: list[dict[str, Any]] = []
     governed_write_steps: list[dict[str, Any]] = []
+    identity_bindings: dict[str, Any] = {}
     for ordinal, step in enumerate(plan, 1):
         step_id = _text(step.get("step_id") or step.get("id"))
         operation_ref = _text(step.get("operation_ref"))
@@ -242,18 +253,25 @@ def execute_precondition_plan(
             runtime_bindings=runtime_bindings,
             request_body=body,
         )
-        readback_contract = _dict(step.get("readback_contract"))
-        resolver_operations = [
-            _dict(row)
-            for row in _list(readback_contract.get("resolver_operations"))
-            if isinstance(row, dict)
-        ]
-        if resolver_operations:
-            candidate = _text(resolver_operations[0].get("path"))
-            if candidate:
-                candidate = materialize_path(candidate, runtime_bindings)
-                if not _unresolved_path_placeholders(candidate):
-                    observation_path = candidate
+        if step.get("observe_response_body") is True:
+            # Subject-establishment create: the create response is the
+            # observation of the created entity. No readback GET is possible
+            # before the write (no identity yet), so the observation path is
+            # the write path itself and the verdict reads the response body.
+            observation_path = path_template
+        else:
+            readback_contract = _dict(step.get("readback_contract"))
+            resolver_operations = [
+                _dict(row)
+                for row in _list(readback_contract.get("resolver_operations"))
+                if isinstance(row, dict)
+            ]
+            if resolver_operations:
+                candidate = _text(resolver_operations[0].get("path"))
+                if candidate:
+                    candidate = materialize_path(candidate, runtime_bindings)
+                    if not _unresolved_path_placeholders(candidate):
+                        observation_path = candidate
         if not observation_path.startswith("/"):
             return {
                 "schema_version": SCHEMA_VERSION,
@@ -301,6 +319,70 @@ def execute_precondition_plan(
             "target_state": _text(step.get("to_state")),
             "observed_values": [],
         }
+        # ── Money-family subject identity capture ──
+        # A precondition step that creates the subject entity of a money
+        # obligation (order before pay) declares ``identity_binding_target``
+        # (e.g. orderId). When the governed write is accepted, capture the
+        # created entity identity from the write response body into
+        # runtime_bindings so the control/treatment bodies materialize the
+        # same created subject (pay the order that was just created).
+        # Registration mirrors the fixture materializer's setup capture and
+        # is therefore exactly one source: the create response itself.
+        _identity_target = _text(step.get("identity_binding_target"))
+        if (
+            _identity_target
+            and accepted
+            and verdict.get("reached") is not False
+        ):
+            _identity_value = _runtime_setup_value_from_response(
+                write.get("body"),
+                _identity_target,
+            )
+            if _identity_value in (None, "", [], {}):
+                # Final fallback: the response may wrap the created entity
+                # (data/result/entity) or name the id differently (order_id
+                # vs orderId). The helper's wrapper scan already covers the
+                # common shapes; keep the binding unresolved otherwise — the
+                # control arm then fails visibly instead of guessing.
+                pass
+            else:
+                runtime_bindings[_identity_target] = _identity_value
+                identity_bindings[_identity_target] = _identity_value
+                # The request-body placeholder may carry either spelling
+                # (``<order_id>`` token form vs ``{orderId}`` field form);
+                # register both so body materialization binds either shape.
+                import re as _re
+
+                _snake_form = _re.sub(
+                    r"(?<=[a-z0-9])(?=[A-Z])", "_", _identity_target
+                ).lower()
+                if _snake_form and _snake_form != _identity_target:
+                    runtime_bindings[_snake_form] = _identity_value
+                    identity_bindings[_snake_form] = _identity_value
+                receipt_id_identity = "precond_identity_" + _fingerprint(
+                    {
+                        "step_id": step_id,
+                        "target": _identity_target,
+                        "value": _identity_value,
+                    }
+                )[:24]
+                receipts.append({
+                    "schema_version": SCHEMA_VERSION,
+                    "receipt_id": receipt_id_identity,
+                    "step_id": step_id,
+                    "source_step_id": step_id,
+                    "step_ordinal": ordinal,
+                    "phase": "precondition_identity",
+                    "operation_ref": operation_ref,
+                    "actor_ref": actor_ref,
+                    "status_code": status_code,
+                    "accepted": True,
+                    "target": _identity_target,
+                    "identity_value": _identity_value,
+                    "status": "COMPLETED",
+                    "reason_code": "",
+                    "detail": "money_subject_identity_captured",
+                })
         receipt_id = "precond_" + _fingerprint(
             {
                 "step_id": step_id,
@@ -362,6 +444,8 @@ def execute_precondition_plan(
         "steps": plan,
         "receipts": receipts,
         "governed_write_steps": governed_write_steps,
+        "runtime_bindings": runtime_bindings,
+        "identity_bindings": identity_bindings,
         "reason_code": "",
         "detail": "",
     }

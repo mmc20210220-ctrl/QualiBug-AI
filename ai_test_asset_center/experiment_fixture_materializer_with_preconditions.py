@@ -148,6 +148,20 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     state["precondition_execution_receipt"] = precondition
     state["state_precondition_established"] = precondition.get("established") is True
 
+    # ── Money-family subject identity capture ──
+    # Precondition steps that create the subject entity of a money obligation
+    # (order before pay) register the created identity into runtime_bindings.
+    # Merge them back into the fixture state so control/treatment body
+    # materialization binds the created subject (pay the order just created).
+    _precondition_bindings = dict(
+        precondition.get("runtime_bindings") or {}
+    )
+    if _precondition_bindings:
+        merged = dict(state.get("runtime_bindings") or {})
+        merged.update(_precondition_bindings)
+        state["runtime_bindings"] = merged
+        exp["runtime_bindings"] = merged
+
     steps_out = list(_list(state.get("steps_out")))
     steps_out.extend(_list(precondition.get("governed_write_steps")))
     state["steps_out"] = steps_out

@@ -520,6 +520,24 @@ def materialize_experiment_fixtures(
         elif kind == "runtime_read_binding":
             target = _text(_dict(node).get("target"))
             binding = binding_plan.get(target) or {}
+            # ── Money-family precondition-provided binding ──
+            # The subject entity (order before pay) is created by a fixture-
+            # phase precondition step (money_precondition_chain). The created
+            # identity is captured by the precondition executor into
+            # runtime_bindings, so this binding must NOT be resolved here via
+            # list-read/auto-create (empty on a fresh target → false
+            # BLOCKED_MISSING_BINDING). Skip it; the control/treatment body
+            # materializes the placeholder from the precondition identity.
+            if binding.get("precondition_provided") is True:
+                fixture_receipts.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "status": "resolved",
+                    "target": target,
+                    "source": "money_precondition_chain",
+                    "detail": "deferred_to_precondition_identity",
+                })
+                continue
             # ── Source-grounded pre-materialized binding ──
             # source_declared_path_example: the operation's own path-parameter
             # example (part of the declared contract). owner_identity_runtime_

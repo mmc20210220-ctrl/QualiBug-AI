@@ -68,6 +68,7 @@ from .runtime_binding_graph import (
     unresolved_placeholders,
 )
 from .assertion_dsl_base import unproducible_assertion_evidence
+from .money_precondition_chain import MONEY_PRECONDITION_FAMILIES as _MONEY_PRECONDITION_FAMILIES
 from .cleanup_plan_validator import validate_cleanup_plan
 from .experiment_compiler_support import (
     _actor_is_executable,
@@ -1393,6 +1394,74 @@ def compile_experiment_for_obligation(
         for field in (_primary_example.keys() if isinstance(_primary_example, dict) else [])
         if _is_reference_field(field)
     ]
+    # ── Money-family subject-establishment precondition chain ──
+    # Conservation/idempotency write obligations consume a subject entity
+    # (order before pay) whose documented example reference fields (orderId)
+    # point at entities that may not exist. Instead of deferring the body to
+    # a runtime observed-entity projection (reuse an existing row — empty on
+    # a fresh target → BLOCKED_CONTROL_ARM_NOT_PROVEN), plan a fixture-phase
+    # chain that creates the subject through its source-declared create
+    # operation and binds the created identity into the control/treatment
+    # bodies. Generic: subject entity + create op + cleanup all resolve from
+    # the IR; nothing is hardcoded. NOT_APPLICABLE keeps the existing
+    # observed-body fallback; BLOCKED surfaces a named gap.
+    _money_precondition_plan: list[dict[str, Any]] = []
+    _money_identity_target = ""
+    if (
+        is_write
+        and family in _MONEY_PRECONDITION_FAMILIES
+        and not permit_only
+        and _example_reference_fields
+    ):
+        try:
+            from .money_precondition_chain import (
+                BLOCKED as _MONEY_CHAIN_BLOCKED,
+                PLANNED as _MONEY_CHAIN_PLANNED,
+                plan_money_family_precondition as _plan_money_chain,
+            )
+
+            _money_chain = _plan_money_chain(
+                behavior_ir=ir,
+                operation=primary_op,
+                actor_refs=[_text(a) for a in required_actors if _text(a)],
+                property_spec=prop,
+                family=family,
+            )
+            _money_chain_status = _text(_money_chain.get("status"))
+            if _money_chain_status == _MONEY_CHAIN_PLANNED:
+                _money_precondition_plan = [
+                    dict(row)
+                    for row in _list(_money_chain.get("steps"))
+                    if isinstance(row, dict)
+                ]
+                _money_identity_target = _text(
+                    _money_chain.get("identity_binding_target")
+                )
+                # The chain creates the subject; do not also defer the body
+                # to a runtime observed-entity projection (which would reuse
+                # an unrelated existing row or block on an empty collection).
+                if _money_identity_target:
+                    _observed_body_resolver = {}
+                    _example_reference_fields = [
+                        field
+                        for field in _example_reference_fields
+                        if _text(field).lower() != _money_identity_target.lower()
+                    ]
+            elif _money_chain_status == _MONEY_CHAIN_BLOCKED:
+                logger.warning(
+                    "money precondition chain blocked for %s family=%s "
+                    "reason=%s target=%s",
+                    oid[:30], family,
+                    _text(_money_chain.get("reason_code")),
+                    _text(_money_chain.get("identity_binding_target")),
+                )
+        except Exception as _money_exc:  # noqa: BLE001 - surfaced visibly
+            logger.warning(
+                "money precondition chain raised for %s: %s: %s",
+                oid[:30],
+                type(_money_exc).__name__,
+                str(_money_exc)[:200],
+            )
     _needs_observed_body = (
         is_write
         and (
@@ -2781,6 +2850,125 @@ def compile_experiment_for_obligation(
     # families, that no built-in result carries the marker.
     _registry_protocol_id = _text(protocol.get("_registry_protocol_id"))
     _precondition_plan: list[dict[str, Any]] = []
+    # ── Money-family subject-establishment chain ──
+    # Planned earlier from the source-declared create operation for the
+    # subject entity (order before pay). Attach it here, after the protocol
+    # compiled, so the experiment carries fixture-phase establishment steps
+    # that create the subject and bind its identity into the control/
+    # treatment bodies. Registered protocols and the state family keep their
+    # own precondition planning; the money chain only fills the gap when
+    # nothing else established a precondition plan.
+    if _money_precondition_plan and not _precondition_plan:
+        _precondition_plan = [
+            dict(row) for row in _money_precondition_plan if isinstance(row, dict)
+        ]
+        # Cleanup coverage for the fixture-phase subject create: the chain
+        # creates a persistent entity (order) through its source-declared
+        # create op, so that op must be compensated when the experiment ends.
+        # Derive the compensator from the same declared-cleanup authority the
+        # primary-write cleanup uses; a chain without one would leave residue.
+        _money_create_op_ref = _text(
+            _money_precondition_plan[0].get("operation_ref")
+            if _money_precondition_plan else ""
+        )
+        if _money_create_op_ref and not any(
+            isinstance(row, dict)
+            and _text(row.get("operation_ref")) == _money_create_op_ref
+            and _text(row.get("compensates_operation_ref"))
+            == _money_create_op_ref
+            for row in cleanup_plan
+        ):
+            from .runtime_binding_graph import _declared_cleanup_operations
+
+            _money_create_path = _text(
+                _money_precondition_plan[0].get("path")
+                or _dict(ops.get(_money_create_op_ref)).get("path")
+                or _dict(ops.get(_money_create_op_ref)).get("raw_path")
+            )
+            _money_cleanup_ops = [
+                row
+                for row in _declared_cleanup_operations(
+                    _money_create_path,
+                    behavior_ir=ir,
+                )
+                if _text(row.get("operation_ref")) != _money_create_op_ref
+            ]
+            if len(_money_cleanup_ops) == 1:
+                _money_cleanup_op = _money_cleanup_ops[0]
+                _money_cleanup_method = _text(
+                    _money_cleanup_op.get("method")
+                    or _dict(
+                        ops.get(_text(_money_cleanup_op.get("operation_ref")))
+                    ).get("method")
+                ).upper()
+                cleanup_plan = [
+                    *cleanup_plan,
+                    {
+                        "action": "source_declared_compensation",
+                        "mode": (
+                            "reverse_order"
+                            if _money_cleanup_method == "DELETE"
+                            else "compensating_transition"
+                        ),
+                        "operation_ref": _text(
+                            _money_cleanup_op.get("operation_ref")
+                        ),
+                        "compensates_operation_ref": _money_create_op_ref,
+                        "path": _text(_money_cleanup_op.get("path")),
+                        "method": _money_cleanup_method or "POST",
+                        "runtime_response_binding_required": (
+                            "{"
+                            in _text(_money_cleanup_op.get("path"))
+                        ),
+                    },
+                ]
+        if _money_identity_target:
+            # Identity binding: the runtime materializes the created subject
+            # id into the request body reference field (orderId) from the
+            # precondition step's governed-write response. Mark the existing
+            # binding entry (body placeholder) as precondition-provided so the
+            # fixture materializer skips list-read resolution (empty on a
+            # fresh target) and the value arrives from the fixture-phase
+            # create instead.
+            _existing_identity_entry = next(
+                (
+                    row
+                    for row in binding_plan
+                    if isinstance(row, dict)
+                    and _text(row.get("target")).lower()
+                    == _money_identity_target.lower()
+                ),
+                None,
+            )
+            if _existing_identity_entry is not None:
+                _existing_identity_entry.update({
+                    "status": "runtime_resolvable",
+                    "source_priority": "money_precondition_chain",
+                    "identity_binding_target": _money_identity_target,
+                    "precondition_step_id": _text(
+                        _precondition_plan[0].get("step_id")
+                        if _precondition_plan else ""
+                    ),
+                    "precondition_provided": True,
+                    "resolver_operations": [],
+                    "value_fingerprint": "",
+                })
+                _existing_identity_entry.pop("blocked_reason", None)
+            else:
+                binding_plan.append({
+                    "target": _money_identity_target,
+                    "target_path": f"/{{{_money_identity_target}}}",
+                    "status": "runtime_resolvable",
+                    "source_priority": "money_precondition_chain",
+                    "identity_binding_target": _money_identity_target,
+                    "precondition_step_id": _text(
+                        _precondition_plan[0].get("step_id")
+                        if _precondition_plan else ""
+                    ),
+                    "precondition_provided": True,
+                    "resolver_operations": [],
+                    "value_fingerprint": "",
+                })
     if _registry_protocol_id:
         # Establish the declared source state before the measured window.
         #
