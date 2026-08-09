@@ -288,7 +288,9 @@ def build_oracle_input_contract(
             "required_relations": required_relations,
             "required_identity_fields": required_identity_fields,
             "required_time_window": None,
-            "observer_plan_refs": list(observer_ids),
+            # observer_ids is a set — emit in sorted order so compile output is
+            # deterministic across processes (PYTHONHASHSEED-independent).
+            "observer_plan_refs": sorted(observer_ids),
             "coverage_status": coverage_status,
             "missing_inputs": missing_inputs,
             "fingerprint": fingerprint,
