@@ -14,6 +14,7 @@ function assert(condition, message) {
 
 const guide = read('src/components/settings/SettingsOnboardingGuide.tsx');
 const materialsHandoff = read('src/components/materials/MaterialsOnboardingHandoff.tsx');
+const materials = read('src/pages/Materials.tsx');
 const journey = read('src/components/dashboard/JourneyStrip.tsx');
 const customerSection = read('src/components/settings/SettingsCustomerSection.tsx');
 const sidebar = read('src/components/Sidebar.tsx');
@@ -31,10 +32,15 @@ for (const label of ['1. 系统地址', '2. 测试账号', '3. 企业资料', '4
 assert(guide.includes('getKnowledgeAsset(project)'), 'settings onboarding must read real material status');
 assert(guide.includes('getServiceCredentials(project)'), 'settings onboarding must read real credential status');
 assert(guide.includes('listConnectors(project)'), 'settings onboarding must read real connector status');
+assert(guide.includes('onlineMaterialCount'), 'settings onboarding must distinguish online materials from uploaded supplements');
+assert(guide.includes('uploadedMaterialCount'), 'settings onboarding must preserve uploaded supplements as a secondary source');
+assert(guide.includes("String(source.source_origin || '').toUpperCase() === 'ONLINE_CONNECTOR'"), 'online material detection must use backend source origin');
+assert(guide.includes("String(source.source_ref || '').startsWith('connector://')"), 'online material detection must preserve connector-ref compatibility');
 assert(guide.includes('const setupReady = requiredCompleted === 3 && !loadWarning;'), 'settings onboarding must require all trusted required states before declaring setup ready');
 assert(guide.includes("? { label: '先接入系统地址', kind: 'system' as const }"), 'settings onboarding must route missing system access to the real system section');
 assert(guide.includes("? { label: '补充测试账号', kind: 'system' as const }"), 'settings onboarding must route missing auth to the real system section');
-assert(guide.includes("? { label: '导入企业资料', kind: 'materials' as const }"), 'settings onboarding must route missing materials to the materials page');
+assert(guide.includes("? { label: '连接企业在线资料', kind: 'materials' as const }"), 'missing materials must route to the online-first materials entry');
+assert(guide.includes("已有文件补充，可继续运行前检查；建议连接企业在线资料"), 'uploaded-only readiness must remain usable while recommending online sources');
 assert(guide.includes("{ label: '继续运行前检查', kind: 'campaigns' as const }"), 'completed setup must expose an actionable run-preflight handoff');
 assert(guide.includes("navigateToProjectPath('/campaigns', project);"), 'setup completion must preserve project context when entering run preflight');
 assert(guide.includes('重新核对接入状态'), 'partial readiness read failures must be rechecked instead of treated as missing setup');
@@ -42,23 +48,38 @@ assert(guide.includes('role="alert"'), 'readiness read warning must be announced
 assert(metadata.includes('<SettingsOnboardingGuide project={project} />'), 'settings page must render onboarding guide');
 assert(topology.includes('id="settings-system-access"'), 'system access section must expose onboarding anchor');
 
-assert(customerSection.includes('企业资料统一在“企业资料”页面接入和维护'), 'settings must explain that enterprise materials have one canonical entry');
+assert(customerSection.includes('在线资料源作为主入口持续同步，文件上传只用于补充'), 'settings must explain online-first enterprise materials');
 assert(customerSection.includes("navigateToProjectPath('/materials', project)"), 'settings customer section must route to the canonical materials page');
-assert(customerSection.includes('打开企业资料'), 'settings must expose the canonical materials navigation action');
+assert(customerSection.includes('连接企业资料'), 'settings must expose the canonical online-first materials navigation action');
 assert(!customerSection.includes('ingestKnowledgeFiles'), 'settings must not keep a duplicate enterprise-material upload implementation');
 assert(!customerSection.includes('type="file"'), 'settings must not render a second enterprise-material file input');
 
 assert(materialsHandoff.includes("location.pathname !== '/materials'"), 'materials onboarding handoff must stay scoped to the materials page');
 assert(materialsHandoff.includes('getKnowledgeAsset(project)'), 'materials handoff must read real knowledge asset state');
+assert(materialsHandoff.includes('onlineActive'), 'materials handoff must distinguish online active sources');
+assert(materialsHandoff.includes('uploadedActive'), 'materials handoff must distinguish uploaded supplement sources');
 assert(materialsHandoff.includes('const cleanReady = snapshot.active > 0 && snapshot.processing === 0 && snapshot.failed === 0 && !readError;'), 'materials handoff must not call processing or failed materials clean-ready');
+assert(materialsHandoff.includes('const onlyUploadedReady = cleanReady && snapshot.onlineActive === 0 && snapshot.uploadedActive > 0;'), 'uploaded-only materials must stay ready but visibly secondary');
+assert(materialsHandoff.includes('连接在线资料（推荐）'), 'uploaded-only customers must be guided toward online materials without being blocked');
+assert(materialsHandoff.includes('暂用补充资料，继续系统与环境'), 'uploaded supplements must remain a valid non-blocking fallback');
+assert(materialsHandoff.includes("document.querySelector('.materials-primary-card')"), 'online-first recommendation must navigate to the real online connector section');
 assert(materialsHandoff.includes('不把读取失败解释为资料缺失'), 'materials read failure must not collapse into a missing-material state');
 assert(materialsHandoff.includes("navigateToProjectPath('/settings', project)"), 'materials handoff must preserve project context when moving to system setup');
 assert(materialsHandoff.includes("navigateToProjectPath('/campaigns', project)"), 'previously configured customers must be able to enter real run preflight from materials');
-assert(materialsHandoff.includes('重新核对资料状态'), 'materials handoff must allow immediate recheck while parsing or degraded');
 assert(layout.includes('<MaterialsOnboardingHandoff />'), 'layout must mount the materials onboarding handoff above the materials page');
 
+const onlineSection = materials.indexOf('<h2>在线连接器</h2>');
+const uploadSection = materials.indexOf('<h2>离线资料上传</h2>');
+assert(onlineSection >= 0, 'materials page must expose online connectors as the primary materials surface');
+assert(uploadSection > onlineSection, 'file upload must remain after the online connector surface');
+assert(materials.includes('<span className="settings-hero-kicker">补充方式</span>'), 'file upload must be explicitly framed as a supplement');
+assert(materials.includes('用于补充在线资料没有的 PRD、接口文档、历史缺陷、数据库说明或设计稿'), 'upload copy must explain that files supplement missing online materials');
+assert(materials.includes('接入在线资料'), 'materials page primary CTA must remain online-source connection');
+
 assert(journey.includes("title: '接入被测系统'"), 'first-run journey must start from real system setup');
-assert(journey.includes("title: '导入企业资料'"), 'first-run journey must expose enterprise materials');
+assert(journey.includes("title: '连接企业资料'"), 'first-run journey must use online-first enterprise materials wording');
+assert(journey.includes('优先连接企业在线文档或知识库持续同步，缺失资料再用文件上传补充'), 'journey must explain online-first and upload-second materials strategy');
+assert(journey.includes("path: '/materials', action: '连接资料源'"), 'journey materials action must enter the canonical connection surface');
 assert(journey.includes("title: '运行前检查并检测'"), 'first-run journey must describe the preflight boundary before scanning');
 assert(journey.includes("path: '/campaigns', action: '检查并运行'"), 'first-run run step must enter the real run center');
 assert(journey.includes("title: '查看结果与发布建议'"), 'first-run journey must be result-first after scanning');
