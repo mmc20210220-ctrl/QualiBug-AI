@@ -124,11 +124,35 @@ export function Dashboard() {
   const pipelineFailedSafe = pipelineHealthStatus === 'FAILED_SAFE';
   const pipelineBlocked = pipelineHealthStatus === 'BLOCKED';
   const pipelineUnhealthy = pipelineFailedSafe || pipelineBlocked;
+  const campaignBlocked = campaignStatus === 'blocked';
+  const coverageDeferred = campaignStatus === 'coverage_deferred';
+  const resultIncomplete = pipelineUnhealthy || campaignBlocked || coverageDeferred;
 
   const executiveHeadline = getExecutiveHeadline(currentScanDefects, currentScanDefects, currentScanP0Count, clueCount, campaignStatus, campaignDeferredReason);
-  const conclusion = pipelineFailedSafe ? '检测异常（非"无问题"）' : pipelineBlocked ? '检测执行被阻断' : campaignStatus === 'blocked' ? '检测暂停' : campaignStatus === 'coverage_deferred' ? '部分范围待后续检测' : currentScanP0Count > 0 ? `发现 ${currentScanDefects} 个已确认缺陷，拦截 ${currentScanP0Count} 个 P0 阻断发布` : currentScanDefects > 0 ? '建议进入整改验收' : '当前未发现阻断性问题';
+  const conclusion = pipelineFailedSafe ? '检测异常（非"无问题"）' : pipelineBlocked ? '检测执行被阻断' : campaignBlocked ? '检测暂停' : coverageDeferred ? '部分范围待后续检测' : currentScanP0Count > 0 ? `发现 ${currentScanDefects} 个已确认缺陷，拦截 ${currentScanP0Count} 个 P0 阻断发布` : currentScanDefects > 0 ? '建议进入整改验收' : '当前未发现阻断性问题';
   const level = riskLevel(conclusion);
-  const decision = releaseDecision(currentScanP0Count, currentScanDefects, pipelineUnhealthy, campaignStatus === 'blocked');
+  const decision = releaseDecision(currentScanP0Count, currentScanDefects, pipelineUnhealthy, campaignBlocked || coverageDeferred);
+  const nextAction = pipelineUnhealthy
+    ? { title: '先恢复检测链路，再判断风险', label: '查看运行状态', path: '/campaigns' }
+    : campaignBlocked
+      ? { title: '补齐阻断条件后重新检测', label: '处理阻断条件', path: '/settings' }
+      : coverageDeferred
+        ? { title: '继续覆盖剩余范围', label: '继续检测', path: '/campaigns' }
+        : currentScanDefects > 0
+          ? { title: '先处理已确认问题', label: '处理问题', path: '/findings' }
+          : { title: '确认发布结论', label: '查看发布门禁', path: '/release' };
+  const riskInterceptValue = resultIncomplete && currentScanP0Count === 0 ? '结论待确认' : `${currentScanP0Count} 个 P0`;
+  const riskInterceptDetail = pipelineUnhealthy
+    ? '检测链路异常或被阻断，当前 0 个 P0 不能解释为系统安全。先恢复检测链路再判断发布风险。'
+    : campaignBlocked
+      ? '本轮检测尚未进入完整执行，当前没有 P0 结论不等于没有阻断风险。'
+      : coverageDeferred
+        ? '本轮存在明确未覆盖范围，当前 0 个 P0 只代表已覆盖部分，不能直接推导为安全。'
+        : currentScanP0Count > 0
+          ? '阻断性问题已在发布前暴露，需优先安排修复。'
+          : p1Count > 0
+            ? `当前已覆盖范围无 P0，另有 ${p1Count} 个 P1 待评估。`
+            : '本轮已完成范围内未发现 P0 阻断问题。';
 
   const hasMaterializedMetrics = totalRiskCount > 0 || clueCount > 0 || asNum(asRecord(record.business_flow_summary).total, 0) > 0 || Boolean(campaignStatus) || Object.keys(asRecord(record.discovery_funnel)).length > 0;
 
@@ -275,18 +299,22 @@ export function Dashboard() {
       <DecisionCards cards={[
         { role: 'CTO / 技术VP', title: '发布决策', value: decision.label, detail: decision.advice },
         { role: '测试 / 质量负责人', title: '证据与验收', value: evidencePackCount > 0 ? `${evidencePackCount} 个证据包` : '待生成', detail: evidencePackCount > 0 ? '每个已确认问题都附原始请求、响应与复现路径，可直接进入整改验收' : '形成已确认问题后，这里会出现可回放、可验收的证据包' },
-        { role: '项目经理', title: '风险拦截', value: `${currentScanP0Count} 个 P0`, detail: currentScanP0Count > 0 ? '阻断性问题已在发布前暴露，需优先安排修复' : `当前无阻断性问题${p1Count > 0 ? `，另有 ${p1Count} 个 P1 待评估` : ''}` },
+        { role: '项目经理', title: '风险拦截', value: riskInterceptValue, detail: riskInterceptDetail },
       ]} />
 
       {/* 行动区 */}
       <div className="action-bar">
-        <span className="action-bar-title">下一步该做什么</span>
-        <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>查看问题清单</button>
-        <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据</button>
-        <button className="btn btn-secondary" onClick={handleExport}>导出报告</button>
-        <button className="btn btn-secondary" onClick={() => void handleRegressionRun('release')} disabled={regressionRunningMode !== ''}>
-          {regressionRunningMode === 'release' ? '回归中...' : '执行回归'}
-        </button>
+        <span className="action-bar-title">下一步：{nextAction.title}</span>
+        <button className="btn btn-primary" onClick={() => navigateToProjectPath(nextAction.path, project)}>{nextAction.label}</button>
+        {currentScanDefects > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据</button>}
+        {resultIncomplete && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/coverage', project)}>查看未覆盖范围</button>}
+        {!resultIncomplete && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/campaigns', project)}>再次检测</button>}
+        <button className="btn btn-secondary" onClick={handleExport}>{resultIncomplete ? '导出当前报告' : '导出报告'}</button>
+        {currentScanDefects > 0 && (
+          <button className="btn btn-secondary" onClick={() => void handleRegressionRun('release')} disabled={regressionRunningMode !== ''}>
+            {regressionRunningMode === 'release' ? '回归中...' : '执行回归'}
+          </button>
+        )}
       </div>
 
       {/* 重点关注 Top 3 */}
@@ -298,7 +326,7 @@ export function Dashboard() {
         {focusFindings.length === 0 ? (
           <div className="focus-list">
             <div className="focus-card">
-              <p>{clueCount > 0 ? `本轮仅有 ${clueCount} 条内部线索仍在补证，当前无已确认问题。` : '当前没有需要优先处理的问题。'}</p>
+              <p>{clueCount > 0 ? `本轮仅有 ${clueCount} 条内部线索仍在补证，当前无已确认问题。` : resultIncomplete ? '本轮没有已确认问题，但检测尚未完整，不能把空结果解释为系统没有问题。' : '本轮已完成范围内没有需要优先处理的问题。'}</p>
             </div>
           </div>
         ) : (
