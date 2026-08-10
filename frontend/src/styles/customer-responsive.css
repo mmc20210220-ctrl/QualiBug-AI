@@ -17,6 +17,10 @@
   overflow-wrap: anywhere;
 }
 
+.focus-card .settings-actions {
+  flex-wrap: wrap;
+}
+
 .findings-page-head {
   min-width: 0;
 }
@@ -111,7 +115,8 @@
 
   .findings-page-head > div:last-child .btn,
   .action-bar .btn,
-  .findings-empty-state .settings-actions .btn {
+  .findings-empty-state .settings-actions .btn,
+  .focus-card .settings-actions .btn {
     width: 100%;
     justify-content: center;
   }
