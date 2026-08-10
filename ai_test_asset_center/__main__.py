@@ -1281,6 +1281,21 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     """Public scan entry — runs core discovery then first-class post-hooks."""
     from .scan_post_hooks import apply_scan_post_hooks
 
+    # ── Scan-result retention: cleanup transients at start, archive the
+    # previous scan_result after the new one is persisted (only RETAIN
+    # archives are kept; otherwise GB-scale products accumulate unbounded).
+    try:
+        from .scan_result_retention import (
+            cleanup_transient_artifacts,
+            rotate_scan_result_archive,
+        )
+
+        cleanup_transient_artifacts(str(project or "").strip(), root or Path.cwd())
+    except Exception:
+        # Retention must never block the scan; failures are visible in the
+        # receipt only if the run completes far enough to attach it.
+        pass
+
     result = _scan_impl(
         project,
         root,
@@ -1295,7 +1310,25 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         campaign_context=campaign_context,
     )
     resolved_root = Path(root or Path.cwd())
-    return apply_scan_post_hooks(result, project=str(project or "").strip(), root=resolved_root)
+    applied = apply_scan_post_hooks(
+        result, project=str(project or "").strip(), root=resolved_root
+    )
+    # Archive the previous scan_result (index + parts) now that the new one
+    # has been persisted; only RETAIN archives are kept.
+    if save_report:
+        try:
+            from .scan_result_retention import rotate_scan_result_archive
+
+            applied["scan_result_retention_receipt"] = (
+                rotate_scan_result_archive(
+                    str(project or "").strip(),
+                    resolved_root,
+                )
+            )
+        except Exception:
+            # Non-blocking; the run result is already complete.
+            pass
+    return applied
 
 
 def main() -> None:
