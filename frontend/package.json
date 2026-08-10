@@ -32,6 +32,7 @@
     "test:finding-validation-boundary": "node scripts/finding-validation-boundary-contract.mjs",
     "test:finding-verification-timeline": "node scripts/finding-verification-timeline-contract.mjs",
     "test:finding-verification-focus": "node scripts/finding-verification-focus-contract.mjs",
+    "test:finding-decision-snapshot": "node scripts/finding-decision-snapshot-contract.mjs",
     "test:evidence-distribution": "node scripts/evidence-distribution-contract.mjs",
     "test:evidence-share": "node scripts/evidence-share-contract.mjs",
     "test:materials-coverage": "node scripts/materials-coverage-contract.mjs",
