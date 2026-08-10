@@ -1473,76 +1473,93 @@ class ReasoningClient:
         )
         _llm_start = time.time()
         _prompt_len = len(user_prompt)
-        try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as resp:
-                # Force the underlying socket timeout explicitly: urllib's
-                # timeout argument does not always reach the TLS socket on
-                # Windows, so a provider that stops sending bytes hangs the
-                # recv forever (measured: 14+ minutes despite timeout=120).
-                try:
-                    _raw = getattr(getattr(resp, "fp", None), "raw", None)
-                    _sock = getattr(_raw, "_sock", None)
-                    if _sock is not None:
-                        _sock.settimeout(self.config.timeout_seconds)
-                except Exception:
-                    pass
-                # Application-level total-duration guard: the socket timeout
-                # is unreliable for chunked bodies on Windows (a half-open
-                # stream that trickles bytes never trips it — measured:
-                # a provider call hung 16+ minutes despite timeout=120).
-                # Read in bounded chunks and abort once the deadline passes;
-                # the timeout exception path stays identical (QB-L001).
-                # Sized reads are used when the transport supports them; a
-                # read() without a size argument (test doubles, simple
-                # responses) falls back to a single full read.
-                _deadline = _llm_start + self.config.timeout_seconds
-                try:
-                    _chunk = resp.read(65536)
-                except TypeError:
-                    _chunk = None
-                if _chunk is None:
-                    response_text = resp.read().decode("utf-8")
-                else:
-                    _chunks: list[bytes] = []
-                    while _chunk:
-                        if time.time() > _deadline:
-                            raise socket.timeout(
-                                "LLM read exceeded timeout_seconds"
-                            )
-                        _chunks.append(_chunk)
+        # ── Final transport guard: the provider may accept the connection
+        # and then never send a byte (half-open stream). Neither urllib's
+        # socket timeout nor the application deadline can interrupt a recv
+        # that never returns — the daemon worker + join(deadline) is the
+        # last boundary. A hung worker is discarded (daemon, process can
+        # exit); the failure path below records a visible timeout.
+        _transport: dict[str, Any] = {}
+
+        def _do_transport() -> None:
+            try:
+                with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as resp:
+                    try:
+                        _raw = getattr(getattr(resp, "fp", None), "raw", None)
+                        _sock = getattr(_raw, "_sock", None)
+                        if _sock is not None:
+                            _sock.settimeout(self.config.timeout_seconds)
+                    except Exception:
+                        pass
+                    # Application-level total-duration guard (half-open
+                    # streams that trickle bytes); sized reads with a
+                    # single-full-read fallback for test doubles.
+                    _deadline = time.time() + self.config.timeout_seconds
+                    try:
                         _chunk = resp.read(65536)
-                    response_text = b"".join(_chunks).decode("utf-8")
-                _elapsed_ms = int((time.time() - _llm_start) * 1000)
-                self._record_usage(response_text)
-                usage = self._extract_usage(response_text)
-                input_tokens, output_tokens = self._usage_token_counts(usage)
-                tokens_estimated = input_tokens is None or output_tokens is None
-                if input_tokens is None:
-                    input_tokens = max(1, math.ceil(_prompt_len / 4))
-                if output_tokens is None:
-                    output_tokens = max(0, math.ceil(len(response_text) / 4))
-                self._record_observation(
-                    call_point=call_point,
-                    kind="chat",
-                    model=resolved_model,
-                    success=True,
-                    http_status=200,
-                    latency_ms=_elapsed_ms,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    tokens_estimated=tokens_estimated,
-                )
-                _llm_logger.info(
-                    f"LLM call OK: model={resolved_model} prompt={_prompt_len}c resp={len(response_text)}c {_elapsed_ms}ms",
-                    extra={"context": {
-                        "model": resolved_model,
-                        "prompt_chars": _prompt_len,
-                        "response_chars": len(response_text),
-                        "elapsed_ms": _elapsed_ms,
-                        "timeout_seconds": self.config.timeout_seconds,
-                    }},
-                )
-                return response_text
+                    except TypeError:
+                        _chunk = None
+                    if _chunk is None:
+                        _text_resp = resp.read().decode("utf-8")
+                    else:
+                        _chunks: list[bytes] = []
+                        while _chunk:
+                            if time.time() > _deadline:
+                                raise socket.timeout(
+                                    "LLM read exceeded timeout_seconds"
+                                )
+                            _chunks.append(_chunk)
+                            _chunk = resp.read(65536)
+                        _text_resp = b"".join(_chunks).decode("utf-8")
+                    _transport["value"] = _text_resp
+            except Exception as _exc:
+                _transport["error"] = _exc
+
+        _worker = threading.Thread(target=_do_transport, daemon=True)
+        _worker.start()
+        _worker.join(self.config.timeout_seconds + 10)
+        if _worker.is_alive():
+            # Transport hung beyond every deadline — discard the worker and
+            # fail with the same timeout semantics as QB-L001.
+            _elapsed_ms = int((time.time() - _llm_start) * 1000)
+            raise socket.timeout(
+                f"LLM transport exceeded timeout_seconds={self.config.timeout_seconds}"
+            )
+        try:
+            if "error" in _transport:
+                raise _transport["error"]
+            response_text = _transport["value"]
+            _elapsed_ms = int((time.time() - _llm_start) * 1000)
+            self._record_usage(response_text)
+            usage = self._extract_usage(response_text)
+            input_tokens, output_tokens = self._usage_token_counts(usage)
+            tokens_estimated = input_tokens is None or output_tokens is None
+            if input_tokens is None:
+                input_tokens = max(1, math.ceil(_prompt_len / 4))
+            if output_tokens is None:
+                output_tokens = max(0, math.ceil(len(response_text) / 4))
+            self._record_observation(
+                call_point=call_point,
+                kind="chat",
+                model=resolved_model,
+                success=True,
+                http_status=200,
+                latency_ms=_elapsed_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                tokens_estimated=tokens_estimated,
+            )
+            _llm_logger.info(
+                f"LLM call OK: model={resolved_model} prompt={_prompt_len}c resp={len(response_text)}c {_elapsed_ms}ms",
+                extra={"context": {
+                    "model": resolved_model,
+                    "prompt_chars": _prompt_len,
+                    "response_chars": len(response_text),
+                    "elapsed_ms": _elapsed_ms,
+                    "timeout_seconds": self.config.timeout_seconds,
+                }},
+            )
+            return response_text
         except urllib.error.HTTPError as exc:
             _elapsed_ms = int((time.time() - _llm_start) * 1000)
             error_body = exc.read().decode("utf-8", errors="replace")
