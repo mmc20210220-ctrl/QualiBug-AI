@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { deriveFindingVerification } from '../../lib/finding-verification';
 import { FindingVerificationPanel } from './FindingVerificationPanel';
+import { FindingVerificationStatus } from './FindingVerificationStatus';
 import type { Finding } from '../../types';
 
 interface FindingCardProps {
@@ -15,23 +17,8 @@ function moduleName(finding: Finding): string {
   return String(finding.business_impact?.module || finding.source_entity || finding.defect_family_label || '未归类').trim() || '未归类';
 }
 
-function regressionStatusLabel(finding: Finding): string {
-  const regression = finding.regression;
-  if (!regression?.included_in_suite) return '暂无重新验证义务';
-  if (regression.latest_status === 'passed' || regression.latest_status === 'verified_fixed') return '修复验证通过';
-  if (regression.latest_status === 'failed' || regression.latest_status === 'reopened') return '重新验证仍失败';
-  if (['blocked', 'error', 'failed_safe', 'indeterminate', 'needs_review', 'not_executed', 'not_ready', 'skipped', 'unverifiable'].includes(String(regression.latest_status || '').toLowerCase())) return '本轮无法确认';
-  return '等待修复后重新验证';
-}
-
-function regressionTone(finding: Finding): string {
-  const status = String(finding.regression?.latest_status || '').toLowerCase();
-  if (status === 'passed' || status === 'verified_fixed') return 'success';
-  if (status === 'failed' || status === 'reopened') return 'danger';
-  return '';
-}
-
 function findingSummary(finding: Finding): string {
+  const verification = deriveFindingVerification(finding);
   const lines = [
     `[${finding.severity}] ${finding.title}`,
     `问题 ID：${finding.id}`,
@@ -41,7 +28,7 @@ function findingSummary(finding: Finding): string {
     `实际：${finding.actual || '未捕获'}`,
     `证据质量：${finding.evidence_quality?.label || '未评分'}${finding.evidence_quality?.score != null ? `（${finding.evidence_quality.score}）` : ''}`,
     `复现率：${finding.proof?.repro_rate != null ? `${finding.proof.repro_rate}%` : '未上报'}`,
-    `QualiBug 验证状态：${finding.regression?.lifecycle_label || regressionStatusLabel(finding)}`,
+    `QualiBug 验证状态：${verification.label}`,
   ];
 
   if (finding.reproduction?.steps?.length) {
@@ -64,7 +51,6 @@ export function FindingCard({
 }: FindingCardProps) {
   const quality = finding.evidence_quality;
   const impact = finding.business_summary || finding.business_impact?.summary || finding.actual || '该问题已形成可交付缺陷。';
-  const regTone = regressionTone(finding);
   const [copyStatus, setCopyStatus] = useState('');
 
   const copySummary = async () => {
@@ -88,7 +74,7 @@ export function FindingCard({
           <span>模块 <b>{moduleName(finding)}</b></span>
           <span>证据 <b>{quality?.label || '未评分'}</b></span>
           <span>复现 <b>{finding.proof?.repro_rate != null ? `${finding.proof.repro_rate}%` : '未上报'}</b></span>
-          <span>验证 <b className={regTone}>{regressionStatusLabel(finding)}</b></span>
+          <FindingVerificationStatus finding={finding} compact />
         </div>
         <div className="finding-card-actions" onClick={(event) => event.stopPropagation()}>
           <button className="btn btn-secondary btn-sm" onClick={onViewEvidence}>查看证据</button>
