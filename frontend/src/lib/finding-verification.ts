@@ -53,6 +53,23 @@ export type FindingVerificationTimelineEvent = {
   run: RegressionHistoryItem | null;
 };
 
+export type LatestVerificationRunFinding = {
+  finding: Finding;
+  event: FindingVerificationTimelineEvent;
+};
+
+export type LatestVerificationRunSummary = {
+  runAt: string;
+  matchedCount: number;
+  changedCount: number;
+  fixedCount: number;
+  reopenedCount: number;
+  stillFailingCount: number;
+  inconclusiveCount: number;
+  keptFixedCount: number;
+  rows: LatestVerificationRunFinding[];
+};
+
 const INCONCLUSIVE_STATUSES = new Set([
   'blocked',
   'error',
@@ -221,6 +238,40 @@ export function buildFindingVerificationTimeline(finding: Finding): FindingVerif
 export function latestFindingConclusionChange(finding: Finding): FindingVerificationTimelineEvent | null {
   const changed = buildFindingVerificationTimeline(finding).filter((event) => event.changedConclusion);
   return changed[changed.length - 1] || null;
+}
+
+export function deriveLatestVerificationRunSummary(
+  findings: Finding[],
+  runAt: string,
+): LatestVerificationRunSummary | null {
+  const normalizedRunAt = String(runAt || '').trim();
+  if (!normalizedRunAt) return null;
+
+  const rows: LatestVerificationRunFinding[] = [];
+  for (const finding of findings) {
+    const event = buildFindingVerificationTimeline(finding).find(
+      (item) => item.kind === 'verification' && item.generatedAt === normalizedRunAt,
+    );
+    if (event) rows.push({ finding, event });
+  }
+
+  const fixedCount = rows.filter(({ event }) => event.changedConclusion && event.outcome === 'fixed').length;
+  const reopenedCount = rows.filter(({ event }) => event.changedConclusion && event.outcome === 'open').length;
+  const stillFailingCount = rows.filter(({ event }) => !event.changedConclusion && event.outcome === 'open').length;
+  const inconclusiveCount = rows.filter(({ event }) => event.outcome === 'unknown').length;
+  const keptFixedCount = rows.filter(({ event }) => !event.changedConclusion && event.outcome === 'fixed').length;
+
+  return {
+    runAt: normalizedRunAt,
+    matchedCount: rows.length,
+    changedCount: fixedCount + reopenedCount,
+    fixedCount,
+    reopenedCount,
+    stillFailingCount,
+    inconclusiveCount,
+    keptFixedCount,
+    rows,
+  };
 }
 
 export function hasFindingReverificationObligation(finding: Finding): boolean {
