@@ -15,6 +15,7 @@ function assert(condition, message) {
 const guide = read('src/components/settings/SettingsOnboardingGuide.tsx');
 const materialsHandoff = read('src/components/materials/MaterialsOnboardingHandoff.tsx');
 const journey = read('src/components/dashboard/JourneyStrip.tsx');
+const customerSection = read('src/components/settings/SettingsCustomerSection.tsx');
 const layout = read('src/components/Layout.tsx');
 const metadata = read('src/components/settings/SettingsMetadataSection.tsx');
 const topology = read('src/components/settings/SettingsTopologySection.tsx');
@@ -39,6 +40,12 @@ assert(guide.includes('重新核对接入状态'), 'partial readiness read failu
 assert(guide.includes('role="alert"'), 'readiness read warning must be announced as an alert');
 assert(metadata.includes('<SettingsOnboardingGuide project={project} />'), 'settings page must render onboarding guide');
 assert(topology.includes('id="settings-system-access"'), 'system access section must expose onboarding anchor');
+
+assert(customerSection.includes('企业资料统一在“企业资料”页面接入和维护'), 'settings must explain that enterprise materials have one canonical entry');
+assert(customerSection.includes("navigateToProjectPath('/materials', project)"), 'settings customer section must route to the canonical materials page');
+assert(customerSection.includes('打开企业资料'), 'settings must expose the canonical materials navigation action');
+assert(!customerSection.includes('ingestKnowledgeFiles'), 'settings must not keep a duplicate enterprise-material upload implementation');
+assert(!customerSection.includes('type="file"'), 'settings must not render a second enterprise-material file input');
 
 assert(materialsHandoff.includes("location.pathname !== '/materials'"), 'materials onboarding handoff must stay scoped to the materials page');
 assert(materialsHandoff.includes('getKnowledgeAsset(project)'), 'materials handoff must read real knowledge asset state');
