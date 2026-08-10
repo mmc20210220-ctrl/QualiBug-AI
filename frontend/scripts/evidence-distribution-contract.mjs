@@ -18,11 +18,12 @@ for (const secretPattern of ['authorization', 'cookie', 'set-cookie', 'token', '
 assert(evidencePackage.includes(".replace(/&/g, '&amp;')"), 'printable evidence must HTML-escape ampersands');
 assert(evidencePackage.includes(".replace(/</g, '&lt;')"), 'printable evidence must HTML-escape angle brackets');
 assert(evidencePackage.includes('打印 / 保存为 PDF'), 'printable evidence package must support browser PDF export');
-assert(evidencePackage.includes('该页面不会生成公开链接，也不会自动上传到第三方服务'), 'evidence package must not imply server-side sharing');
+assert(evidencePackage.includes('该页面不会生成公开链接，也不会自动上传到第三方服务'), 'local printable package must not imply server-side sharing');
 assert(drawer.includes('buildFindingEvidencePackageText(finding)'), 'drawer copy action must use redacted evidence builder');
 assert(drawer.includes('buildFindingEvidencePackageHtml(finding)'), 'drawer print action must use redacted evidence builder');
-assert(drawer.includes('复制/打印外发包会重新执行脱敏，不直接复用该原始文本'), 'raw curl must be kept separate from external package');
-assert(!evidencePackage.includes('finding.reproduction.curl_command'), 'external evidence package must not directly include raw curl commands');
+assert(drawer.includes('复制/打印/只读分享都会重新执行服务端或前端脱敏，不直接外发该原始文本'), 'raw curl must remain separated from every external distribution path');
+assert(drawer.includes('公开链接只能读取创建当刻冻结的脱敏快照'), 'drawer must distinguish server-side readonly sharing from local copies');
+assert(!evidencePackage.includes('finding.reproduction.curl_command'), 'local external evidence package must not directly include raw curl commands');
 
 assert(report.includes("import { escapeEvidenceHtml } from '../lib/finding-evidence-package';"), 'aggregate report must reuse external redaction and escaping');
 assert(report.includes('<title>QualiBug AI 风险评级报告 — ${h(d.projectName)}</title>'), 'aggregate report title must escape project name');
