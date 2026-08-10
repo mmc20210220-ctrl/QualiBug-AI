@@ -28,6 +28,7 @@
     "test:live-scan-status": "node scripts/live-scan-status-contract.mjs",
     "test:dashboard-role-views": "node scripts/dashboard-role-views-contract.mjs",
     "test:customer-action-guidance": "node scripts/customer-action-guidance-contract.mjs",
+    "test:finding-context-navigation": "node scripts/finding-context-navigation-contract.mjs",
     "test:finding-collaboration": "node scripts/finding-collaboration-contract.mjs",
     "test:evidence-distribution": "node scripts/evidence-distribution-contract.mjs",
     "test:evidence-share": "node scripts/evidence-share-contract.mjs",
