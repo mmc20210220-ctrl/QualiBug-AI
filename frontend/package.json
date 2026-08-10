@@ -29,6 +29,7 @@
     "test:live-scan-status": "node scripts/live-scan-status-contract.mjs",
     "test:dashboard-role-views": "node scripts/dashboard-role-views-contract.mjs",
     "test:dashboard-decision-first": "node scripts/dashboard-decision-first-contract.mjs",
+    "test:release-decision-first": "node scripts/release-decision-first-contract.mjs",
     "test:customer-action-guidance": "node scripts/customer-action-guidance-contract.mjs",
     "test:finding-context-navigation": "node scripts/finding-context-navigation-contract.mjs",
     "test:finding-validation-boundary": "node scripts/finding-validation-boundary-contract.mjs",
