@@ -14,6 +14,7 @@ function assert(condition, message) {
 
 const guide = read('src/components/settings/SettingsOnboardingGuide.tsx');
 const materialsHandoff = read('src/components/materials/MaterialsOnboardingHandoff.tsx');
+const journey = read('src/components/dashboard/JourneyStrip.tsx');
 const layout = read('src/components/Layout.tsx');
 const metadata = read('src/components/settings/SettingsMetadataSection.tsx');
 const topology = read('src/components/settings/SettingsTopologySection.tsx');
@@ -47,6 +48,13 @@ assert(materialsHandoff.includes("navigateToProjectPath('/settings', project)"),
 assert(materialsHandoff.includes("navigateToProjectPath('/campaigns', project)"), 'previously configured customers must be able to enter real run preflight from materials');
 assert(materialsHandoff.includes('重新核对资料状态'), 'materials handoff must allow immediate recheck while parsing or degraded');
 assert(layout.includes('<MaterialsOnboardingHandoff />'), 'layout must mount the materials onboarding handoff above the materials page');
+
+assert(journey.includes("title: '接入被测系统'"), 'first-run journey must start from real system setup');
+assert(journey.includes("title: '导入企业资料'"), 'first-run journey must expose enterprise materials');
+assert(journey.includes("title: '运行前检查并检测'"), 'first-run journey must describe the preflight boundary before scanning');
+assert(journey.includes("path: '/campaigns', action: '检查并运行'"), 'first-run run step must enter the real run center');
+assert(journey.includes("title: '查看结果与发布建议'"), 'first-run journey must be result-first after scanning');
+assert(journey.includes("path: '/dashboard', action: '查看价值总览'"), 'first-run result step must lead to dashboard instead of assuming findings exist');
 
 assert(runCenter.includes('const preflightReady = Boolean(preflight?.ready);'), 'run center must keep backend preflight as execution authority');
 assert(runCenter.includes('if (!preflightReady) {'), 'run center handler must remain fail-closed after frontend onboarding completion');
