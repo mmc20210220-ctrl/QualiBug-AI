@@ -13,6 +13,10 @@ const releaseGate = read('src/pages/ReleaseGate.tsx');
 const runCenter = read('src/pages/EnterpriseCampaigns.tsx');
 const findings = read('src/pages/Findings.tsx');
 const evidence = read('src/pages/EvidenceChain.tsx');
+const coverage = read('src/pages/CoverageMatrix.tsx');
+const layout = read('src/components/Layout.tsx');
+const sidebar = read('src/components/Sidebar.tsx');
+const topbar = read('src/components/Topbar.tsx');
 const main = read('src/main.tsx');
 const responsive = read('src/styles/customer-responsive.css');
 const packageJson = read('package.json');
@@ -93,6 +97,30 @@ assert(evidence.includes('customerFindings.length === 0'), 'evidence center must
 assert(evidence.includes('customerFindings.length > 0 && withEvidence.length === 0'), 'confirmed findings without evidence packages must be a distinct state');
 assert(evidence.includes('个已确认问题当前没有可展示证据包'), 'missing evidence for confirmed findings must be visible and actionable');
 assert(evidence.includes("onClick={() => navigateToProjectPath('/coverage', project)}>查看覆盖范围</button>"), 'zero-finding evidence state must expose coverage');
+
+assert(coverage.includes('function finiteNumber(value: unknown): number | null'), 'coverage must preserve missing numeric values instead of coercing them to zero');
+assert(coverage.includes("return parsed == null ? '未上报'"), 'missing coverage rates must be shown as unreported, not 0%');
+assert(!coverage.includes('Math.max(4, Math.round(clamped * 100))'), 'zero coverage must not be painted as a synthetic non-zero bar');
+assert(coverage.includes('width: `${percent}%`'), 'coverage bar width must reflect the real percentage exactly');
+assert(coverage.includes("aria-label={parsed == null ? '覆盖率未上报' : `覆盖率 ${percent}%`}"), 'coverage progress must expose truthful accessible semantics');
+assert(coverage.includes('const canRunRegression = regressionProbeCount > 0;'), 'coverage must derive regression readiness from real persisted probes');
+assert(coverage.includes("toast.show('当前没有可执行的回归义务；先形成回归探针后再运行回归。', 'warning');"), 'coverage regression handler must fail closed without real probes');
+assert(coverage.includes('disabled={regressionRunning || !canRunRegression}'), 'coverage regression controls must disable without real obligations');
+assert(coverage.includes("? { title: `继续关闭 ${gaps.length} 个风险家族缺口`, label: '继续检测剩余范围', path: '/campaigns' }"), 'coverage gaps must produce a direct continued-detection action');
+assert(coverage.includes("onClick={() => navigateToProjectPath('/campaigns', project)}>启动标准扫描</button>"), 'empty coverage state must let the customer start the scan');
+assert(coverage.includes("onClick={() => navigateToProjectPath('/settings', project)}>检查接入条件</button>"), 'empty coverage state must expose setup remediation');
+assert(coverage.includes('下一步：{nextAction.title}'), 'coverage must surface one state-driven next action');
+
+assert(layout.includes("if (event.key === 'Escape') setMobileNavOpen(false);"), 'mobile navigation must close with Escape');
+assert(sidebar.includes('id="primary-sidebar"'), 'sidebar must expose a stable control target');
+assert(sidebar.includes('aria-label="主导航"'), 'sidebar landmark must be named');
+assert(sidebar.includes('aria-label="客户项目导航"'), 'project navigation landmark must be named');
+assert(sidebar.includes('aria-hidden="true"'), 'sidebar backdrop must stay out of the accessibility tree');
+assert(topbar.includes("'/jobs': '后台任务'"), 'topbar must label the background jobs page correctly');
+assert(topbar.includes('aria-expanded={navOpen} aria-controls="primary-sidebar"'), 'mobile nav toggle must expose expanded state and controlled sidebar');
+assert(topbar.includes("if (event.key === 'Escape') setShowTenantMenu(false);"), 'customer switcher must close with Escape');
+assert(topbar.includes('aria-controls="tenant-switcher-menu"'), 'customer switcher trigger must reference its menu');
+assert(topbar.includes('id="tenant-switcher-menu"'), 'customer switcher menu must expose a stable control target');
 
 assert(main.indexOf("import './index.css';") < main.indexOf("import './styles/customer-responsive.css';"), 'customer responsive overrides must load after legacy index styles');
 assert(responsive.includes('.evidence-layout {'), 'responsive layer must target the actual evidence page class');
