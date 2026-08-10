@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   createEvidenceShare,
   listEvidenceShares,
@@ -8,6 +9,8 @@ import {
 import type { CollaborativeFindingProjection } from '../../api/finding-collaboration';
 import type { Finding } from '../../types';
 import { buildFindingEvidencePackageHtml, buildFindingEvidencePackageText } from '../../lib/finding-evidence-package';
+import { buildProjectPath } from '../../lib/project-navigation';
+import { evidenceDeepLinkSearch, evidenceScoreLabel } from '../../lib/evidence-presentation';
 import { EvidenceTimeline } from '../EvidenceTimeline';
 
 interface EvidenceDrawerProps {
@@ -67,6 +70,7 @@ export function EvidenceDrawer({ finding, project, onClose }: EvidenceDrawerProp
   if (!finding) return null;
   const quality = finding.evidence_quality;
   const chain = finding.evidence_chain || [];
+  const evidenceCenterHref = buildProjectPath('/evidence', project, evidenceDeepLinkSearch(finding.id));
 
   const refreshShares = async () => {
     if (!project || !persistenceId) return;
@@ -148,6 +152,7 @@ export function EvidenceDrawer({ finding, project, onClose }: EvidenceDrawerProp
             <strong style={{ marginLeft: 8, fontSize: 14 }}>{finding.title}</strong>
           </div>
           <div className="settings-actions">
+            <Link className="btn btn-primary btn-sm" to={evidenceCenterHref} onClick={onClose}>证据中心完整查看</Link>
             <button className="btn btn-secondary btn-sm" onClick={() => void copyEvidencePackage()}>复制脱敏证据包</button>
             <button className="btn btn-secondary btn-sm" onClick={openPrintableEvidencePackage}>打印 / PDF</button>
             <button className="btn btn-secondary btn-sm" onClick={onClose}>关闭</button>
@@ -248,8 +253,8 @@ export function EvidenceDrawer({ finding, project, onClose }: EvidenceDrawerProp
 
           <div className="quality-score">
             <div className="quality-score-info">
-              <h4>证据质量：{quality?.label || '已归档'}</h4>
-              <p>{quality?.summary || ''} · 评分 {quality?.score ?? 0}/100</p>
+              <h4>证据质量：{quality?.label || '未评分'}</h4>
+              <p>{quality?.summary || '当前未提供证据质量摘要'} · 评分 {evidenceScoreLabel(finding)}</p>
               <div className="quality-dimensions">
                 {(quality?.verified || []).map((v) => <span key={v} className="quality-dim">{v}</span>)}
                 {(quality?.missing || []).map((m) => <span key={m} className="quality-dim missing">{m}</span>)}
