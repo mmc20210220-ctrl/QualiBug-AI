@@ -182,9 +182,11 @@ export function Findings() {
         <FindingCard
           key={finding.id}
           finding={finding}
+          project={project}
           expanded={expandedId === finding.id}
           onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
           onViewEvidence={() => setDrawerFinding(finding)}
+          onCollaborationUpdated={refetch}
         />
       ))}
 
