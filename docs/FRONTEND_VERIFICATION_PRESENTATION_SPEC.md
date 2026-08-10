@@ -1,7 +1,7 @@
 # QualiBug 前端验证状态统一呈现 SPEC
 
 状态：已实现  
-范围：仅前端状态解释、视觉表达、关注排序与客户下一步提示；不改变 Finding、Replay、Regression 或 Release Gate 的后端判定。
+范围：仅前端状态解释、视觉表达、关注排序、验证历史与客户下一步提示；不改变 Finding、Replay、Regression 或 Release Gate 的后端判定。
 
 ## 1. 目标
 
@@ -116,9 +116,56 @@ Evidence 中的 Replay 结果仍必须遵守：一次“未复现”不等于 ve
 
 单 Finding 的状态、优先级和 `nextActionLabel` 都不得覆盖项目级发布结论。
 
-## 7. 身份连续性
+## 7. 真实验证历史时间线
 
-统一状态呈现不能破坏既有：
+前端使用 `buildFindingVerificationTimeline(finding)` 将后端已经返回的 `regression.history` 转换为客户可读时间线。
+
+时间线必须从 **原始 Finding 已确认** 开始，然后按 `generated_at` 正序展示每一次真实修复后验证：
+
+`原始 Finding -> 第 1 次验证 -> 第 2 次验证 -> ... -> 最新验证`
+
+每一轮最多展示后端真实存在的：
+
+- `generated_at`；
+- `suite_mode / suite_mode_label`；
+- `status / status_label`；
+- `gate_status`；
+- `reason / ci_message`；
+- `regression_probe_id`；
+- `method + path`。
+
+后端没有 history 时，只显示原始 Finding 基线和“尚无真实修复后验证历史”，不得补造轮次。
+
+### 7.1 结论变化规则
+
+验证历史把问题结论抽象为：
+
+- `open`：问题仍成立；
+- `fixed`：真实验证明确通过；
+- `unknown`：本轮无法确认。
+
+只有真实终态在 `open <-> fixed` 之间切换时，当前验证轮次才显示 **“结论变化”**：
+
+- `open -> fixed`：这一次真实验证使问题从成立变为验证通过；
+- `fixed -> open`：这一次真实验证重新复现问题 / reopened。
+
+`blocked / unknown / skipped / not_ready / unverifiable` 等 `unknown` 结果：
+
+- 只能显示“本轮未形成可确认结论”；
+- 不得覆盖上一轮已知 open / fixed 结论；
+- 不得被标记成“已修复”或“重新打开”。
+
+### 7.2 页面呈现
+
+- Findings 展开 Finding：展示完整真实验证时间线；
+- Evidence：通过 `FindingVerificationPanel` 展示同一完整时间线；
+- Release Gate 单 Finding 上下文：展示紧凑时间线；
+- Release 紧凑时间线必须始终保留原始 Finding 基线，并展示最近 3 次真实验证；中间历史折叠时明确显示折叠数量；
+- 时间线只解释单 Finding 历史，不改变项目级 Release Gate。
+
+## 8. 身份连续性
+
+统一状态呈现和验证历史不能破坏既有：
 
 `project + finding`
 
@@ -126,7 +173,7 @@ Evidence 中的 Replay 结果仍必须遵守：一次“未复现”不等于 ve
 
 Dashboard / Findings / Evidence / Release 必须始终通过 Finding ID 精确识别问题；旧 Finding 不存在时明确提示，不按标题猜测替代。
 
-## 8. CI 合同
+## 9. CI 合同
 
 现有 `test:finding-validation-boundary` 必须锁定：
 
@@ -138,9 +185,21 @@ Dashboard / Findings / Evidence / Release 必须始终通过 Finding ID 精确�
 - Dashboard focus、Evidence、Release 均使用共享状态组件；
 - Release 仍使用 `deriveReleasePresentation()` 作为项目级发布权威。
 
+`test:finding-verification-timeline` 必须锁定：
+
+- 历史运行复用统一状态解释规则；
+- 原始 Finding 永远作为时间线基线；
+- `regression.history` 按真实时间正序展示；
+- 只有 open / fixed 真实终态切换才能标记“结论变化”；
+- unknown 不覆盖上一轮已知结论；
+- 时间线保留 probe ID、method/path 等真实验证身份；
+- Evidence 展示完整时间线；
+- Release 展示保留基线的紧凑时间线；
+- Release 项目级 Gate 权威不变。
+
 `test:finding-context-navigation` 与 `test:customer-action-guidance` 必须适配 `DashboardFocusFindingCard` 的组件拆分，不得依赖旧的 Dashboard 内联实现。
 
-## 9. 非目标
+## 10. 非目标
 
 本 SPEC 不定义：
 
