@@ -31,7 +31,9 @@ for (const label of ['1. 系统地址', '2. 测试账号', '3. 企业资料', '4
 }
 assert(guide.includes('getKnowledgeAsset(project)'), 'settings onboarding must read real material status');
 assert(guide.includes('getServiceCredentials(project)'), 'settings onboarding must read real credential status');
-assert(guide.includes('listConnectors(project)'), 'settings onboarding must read real connector status');
+assert(guide.includes('listConnectors(project)'), 'settings onboarding must read real system connector status');
+assert(guide.includes('listKnowledgeConnectors(project)'), 'settings onboarding must distinguish connected online knowledge sources before first materialization');
+assert(guide.includes('knowledgeConnectorCount'), 'settings onboarding must expose connected online knowledge source state');
 assert(guide.includes('onlineMaterialCount'), 'settings onboarding must distinguish online materials from uploaded supplements');
 assert(guide.includes('uploadedMaterialCount'), 'settings onboarding must preserve uploaded supplements as a secondary source');
 assert(guide.includes("String(source.source_origin || '').toUpperCase() === 'ONLINE_CONNECTOR'"), 'online material detection must use backend source origin');
@@ -39,8 +41,9 @@ assert(guide.includes("String(source.source_ref || '').startsWith('connector://'
 assert(guide.includes('const setupReady = requiredCompleted === 3 && !loadWarning;'), 'settings onboarding must require all trusted required states before declaring setup ready');
 assert(guide.includes("? { label: '先接入系统地址', kind: 'system' as const }"), 'settings onboarding must route missing system access to the real system section');
 assert(guide.includes("? { label: '补充测试账号', kind: 'system' as const }"), 'settings onboarding must route missing auth to the real system section');
-assert(guide.includes("? { label: '连接企业在线资料', kind: 'materials' as const }"), 'missing materials must route to the online-first materials entry');
-assert(guide.includes("已有文件补充，可继续运行前检查；建议连接企业在线资料"), 'uploaded-only readiness must remain usable while recommending online sources');
+assert(guide.includes("snapshot.knowledgeConnectorCount > 0 ? '查看在线资料同步' : '连接企业在线资料'"), 'missing ready materials must distinguish an already-connected online source from a truly missing connection');
+assert(guide.includes('在线资料源已经连接，但首次同步尚未形成真实可读资料'), 'connected-but-not-materialized online sources must not be called ready');
+assert(guide.includes('已有文件补充，可继续运行前检查；建议连接企业在线资料'), 'uploaded-only readiness must remain usable while recommending online sources');
 assert(guide.includes("{ label: '继续运行前检查', kind: 'campaigns' as const }"), 'completed setup must expose an actionable run-preflight handoff');
 assert(guide.includes("navigateToProjectPath('/campaigns', project);"), 'setup completion must preserve project context when entering run preflight');
 assert(guide.includes('重新核对接入状态'), 'partial readiness read failures must be rechecked instead of treated as missing setup');
