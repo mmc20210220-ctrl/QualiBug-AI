@@ -8,6 +8,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 const app = read('src/App.tsx');
 const dashboard = read('src/pages/Dashboard.tsx');
+const dashboardFocus = read('src/components/dashboard/DashboardFocusFindingCard.tsx');
 const releasePresentation = read('src/lib/release-presentation.ts');
 const releaseGate = read('src/pages/ReleaseGate.tsx');
 const runCenter = read('src/pages/EnterpriseCampaigns.tsx');
@@ -33,14 +34,15 @@ assert(dashboard.includes("const coverageDeferred = campaignStatus === 'coverage
 assert(dashboard.includes('const resultIncomplete = pipelineUnhealthy || campaignBlocked || coverageDeferred;'), 'dashboard must have one incomplete-result authority');
 assert(dashboard.includes('当前 0 个 P0 只代表已覆盖部分，不能直接推导为安全'), 'partial coverage must never imply safety');
 assert(dashboard.includes('下一步：{nextAction.title}'), 'dashboard must expose one state-driven next action');
-assert(dashboard.includes("import { hasFindingReverificationObligation } from '../lib/finding-verification';"), 'dashboard must reuse the shared re-verification obligation helper');
+assert(dashboard.includes('hasFindingReverificationObligation'), 'dashboard must reuse the shared re-verification obligation helper');
 assert(dashboard.includes('const regressionEligible = findings.some(hasFindingReverificationObligation);'), 'dashboard validation readiness must come from real obligations');
 assert(dashboard.includes('const hasRegressionObligation = regressionFindings.some(hasFindingReverificationObligation);'), 'dashboard validation handler must recompute current obligations');
 assert(dashboard.includes('if (!hasRegressionObligation) {'), 'dashboard validation handler must fail closed');
 assert(dashboard.includes('不会提交空验证请求'), 'dashboard must explain empty validation rejection');
 assert(dashboard.includes("? { title: '查看已确认问题与验证状态', label: '查看验证', path: '/findings' }"), 'dashboard confirmed findings must lead into the validation surface');
-assert(dashboard.includes('查看这条验证'), 'dashboard exact finding action must use validation language');
-assert(!dashboard.includes('处理这条问题'), 'dashboard must not frame a finding as an enterprise task');
+assert(dashboard.includes('<DashboardFocusFindingCard key={finding.id} finding={finding} project={project} />'), 'dashboard must render exact finding focus cards through the shared component');
+assert(dashboardFocus.includes('查看这条验证'), 'dashboard exact finding action must use validation language');
+assert(!dashboardFocus.includes('处理这条问题'), 'dashboard must not frame a finding as an enterprise task');
 
 assert(releasePresentation.includes('export function deriveReleasePresentation'), 'release truth must use one shared interpreter');
 assert(releasePresentation.includes("gateOverall === 'pass'"), 'green release state must require explicit pass');
@@ -72,12 +74,14 @@ assert(findings.includes("{ label: `仍失败 (${failedRegression.length})`, val
 assert(findings.includes("{ label: `无法确认 (${inconclusiveRegression.length})`, value: 'verify:inconclusive' }"), 'findings must expose an inconclusive filter');
 assert(findings.includes("{ label: `验证通过 (${passedRegression.length})`, value: 'verify:verified_fixed' }"), 'findings must expose a verified-fixed filter');
 assert(findings.includes("filter.startsWith('verify:')"), 'validation filters must resolve through the shared finding interpreter');
+assert(findings.includes('deriveFindingVerification(right).priority - deriveFindingVerification(left).priority'), 'findings must prioritize unresolved validation risk consistently');
 
 assert(evidence.includes("const requestedFindingId = params.get('finding')?.trim() || '';"), 'evidence must accept exact finding deep links');
 assert(evidence.includes("? withEvidence.find((finding) => finding.id === requestedFindingId) || null"), 'evidence must select only the requested finding');
 assert(evidence.includes('证据中心不会静默切换到另一条问题来冒充当前证据'), 'missing requested evidence must not fall back silently');
 assert(evidence.includes('setParams(next, { replace: true });'), 'evidence selection must stay in URL state');
 assert(evidence.includes('evidenceScoreLabel(finding)'), 'evidence list must preserve unknown scores');
+assert(evidence.includes('<FindingVerificationStatus finding={finding} compact />'), 'evidence list must expose the shared verification state');
 assert(evidence.includes('<FindingVerificationPanel finding={selected} />'), 'evidence must show repair verification comparison');
 assert(evidence.includes('回到这条问题并重新验证'), 'evidence must return to the exact finding for revalidation');
 assert(evidenceDrawer.includes('证据中心完整查看'), 'drawer must expose full exact evidence navigation');
