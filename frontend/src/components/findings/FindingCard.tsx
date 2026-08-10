@@ -1,12 +1,47 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import {
+  updateFindingCollaboration,
+  type CollaborativeFindingProjection,
+  type FindingDisposition,
+  type FindingHandlingStatus,
+} from '../../api/finding-collaboration';
 import type { Finding } from '../../types';
 
 interface FindingCardProps {
   finding: Finding;
+  project: string;
   expanded: boolean;
   onToggle: () => void;
   onViewEvidence: () => void;
+  onCollaborationUpdated?: () => Promise<void> | void;
 }
+
+type CollaborativeFinding = Finding & CollaborativeFindingProjection;
+
+type CollaborationDraft = {
+  handling_status: FindingHandlingStatus;
+  assignee: string;
+  fix_version: string;
+  developer_feedback: string;
+  disposition: FindingDisposition;
+  disposition_note: string;
+  external_issue_url: string;
+};
+
+const HANDLING_STATUS_OPTIONS: Array<{ value: FindingHandlingStatus; label: string }> = [
+  { value: 'new', label: '待分诊' },
+  { value: 'triaged', label: '已分诊' },
+  { value: 'in_progress', label: '修复中' },
+  { value: 'fix_ready', label: '待回归' },
+  { value: 'risk_review', label: '风险评审' },
+  { value: 'false_positive_review', label: '误报评审' },
+];
+
+const DISPOSITION_OPTIONS: Array<{ value: FindingDisposition; label: string }> = [
+  { value: 'none', label: '未作人工处置' },
+  { value: 'accepted_risk', label: '已接受风险' },
+  { value: 'false_positive', label: '已标记误报' },
+];
 
 function moduleName(finding: Finding): string {
   return String(finding.business_impact?.module || finding.source_entity || finding.defect_family_label || '未归类').trim() || '未归类';
@@ -27,6 +62,36 @@ function regressionTone(finding: Finding): string {
   if (r.latest_status === 'passed') return 'success';
   if (r.latest_status === 'failed') return 'danger';
   return '';
+}
+
+function verificationStatusLabel(status: string): string {
+  switch (status) {
+    case 'resolved': return '真实回放确认已修复';
+    case 'falsified': return '真实验证已证伪';
+    case 'open': return '真实验证仍打开';
+    default: return status || '尚未绑定持久化状态';
+  }
+}
+
+function initialDraft(finding: CollaborativeFinding): CollaborationDraft {
+  const collaboration = finding.collaboration || {};
+  const handlingStatus = collaboration.handling_status;
+  const disposition = collaboration.disposition;
+  return {
+    handling_status: handlingStatus === 'triaged'
+      || handlingStatus === 'in_progress'
+      || handlingStatus === 'fix_ready'
+      || handlingStatus === 'risk_review'
+      || handlingStatus === 'false_positive_review'
+      ? handlingStatus
+      : 'new',
+    assignee: collaboration.assignee || '',
+    fix_version: collaboration.fix_version || '',
+    developer_feedback: collaboration.developer_feedback || '',
+    disposition: disposition === 'accepted_risk' || disposition === 'false_positive' ? disposition : 'none',
+    disposition_note: collaboration.disposition_note || '',
+    external_issue_url: collaboration.external_issue_url || '',
+  };
 }
 
 function handoffSummary(finding: Finding): string {
@@ -62,11 +127,38 @@ function handoffSummary(finding: Finding): string {
   return lines.join('\n');
 }
 
-export function FindingCard({ finding, expanded, onToggle, onViewEvidence }: FindingCardProps) {
+export function FindingCard({
+  finding,
+  project,
+  expanded,
+  onToggle,
+  onViewEvidence,
+  onCollaborationUpdated,
+}: FindingCardProps) {
+  const collaborativeFinding = finding as CollaborativeFinding;
+  const persistenceId = collaborativeFinding.finding_persistence_id || '';
+  const verificationStatus = collaborativeFinding.verification_status || '';
   const quality = finding.evidence_quality;
   const impact = finding.business_summary || finding.business_impact?.summary || finding.actual || '该问题已形成可交付缺陷。';
   const regTone = regressionTone(finding);
   const [copyStatus, setCopyStatus] = useState('');
+  const [collaborationDraft, setCollaborationDraft] = useState<CollaborationDraft>(() => initialDraft(collaborativeFinding));
+  const [collaborationStatus, setCollaborationStatus] = useState('');
+  const [collaborationSaving, setCollaborationSaving] = useState(false);
+
+  useEffect(() => {
+    setCollaborationDraft(initialDraft(collaborativeFinding));
+    setCollaborationStatus('');
+  }, [
+    finding.id,
+    collaborativeFinding.collaboration?.handling_status,
+    collaborativeFinding.collaboration?.assignee,
+    collaborativeFinding.collaboration?.fix_version,
+    collaborativeFinding.collaboration?.developer_feedback,
+    collaborativeFinding.collaboration?.disposition,
+    collaborativeFinding.collaboration?.disposition_note,
+    collaborativeFinding.collaboration?.external_issue_url,
+  ]);
 
   const copyHandoff = async () => {
     try {
@@ -76,6 +168,35 @@ export function FindingCard({ finding, expanded, onToggle, onViewEvidence }: Fin
       setCopyStatus('复制失败，请展开后手动复制问题信息');
     }
     window.setTimeout(() => setCopyStatus(''), 2500);
+  };
+
+  const saveCollaboration = async () => {
+    if (!persistenceId || !project || collaborationSaving) return;
+    setCollaborationSaving(true);
+    setCollaborationStatus('保存中…');
+    try {
+      const saved = await updateFindingCollaboration(project, persistenceId, collaborationDraft);
+      setCollaborationDraft({
+        handling_status: saved.handling_status,
+        assignee: saved.assignee,
+        fix_version: saved.fix_version,
+        developer_feedback: saved.developer_feedback,
+        disposition: saved.disposition,
+        disposition_note: saved.disposition_note,
+        external_issue_url: saved.external_issue_url,
+      });
+      setCollaborationStatus('已保存到项目协作记录');
+      await onCollaborationUpdated?.();
+    } catch (error: unknown) {
+      setCollaborationStatus(error instanceof Error ? error.message : '协作记录保存失败');
+    } finally {
+      setCollaborationSaving(false);
+    }
+  };
+
+  const updateDraft = <K extends keyof CollaborationDraft>(key: K, value: CollaborationDraft[K]) => {
+    setCollaborationDraft((current) => ({ ...current, [key]: value }));
+    if (collaborationStatus && collaborationStatus !== '保存中…') setCollaborationStatus('有未保存修改');
   };
 
   return (
@@ -90,6 +211,7 @@ export function FindingCard({ finding, expanded, onToggle, onViewEvidence }: Fin
           <span>证据 <b>{quality?.label || '未评分'}</b></span>
           <span>复现 <b>{finding.proof?.repro_rate != null ? `${finding.proof.repro_rate}%` : '未上报'}</b></span>
           <span>回归 <b className={regTone}>{regressionStatusLabel(finding)}</b></span>
+          {persistenceId && <span>处理 <b>{HANDLING_STATUS_OPTIONS.find((option) => option.value === collaborationDraft.handling_status)?.label || '待分诊'}</b></span>}
         </div>
         <div className="finding-card-actions" onClick={(e) => e.stopPropagation()}>
           <button className="btn btn-secondary btn-sm" onClick={onViewEvidence}>查看证据</button>
@@ -152,9 +274,109 @@ export function FindingCard({ finding, expanded, onToggle, onViewEvidence }: Fin
             </article>
           </section>
 
-          <p className="settings-hint mt-3">
-            负责人、处理状态、修复版本、研发反馈、风险接受和误报结论需要后端持久化协作合同；当前前端不使用浏览器本地状态伪装这些企业协作字段。
-          </p>
+          <section className="card mt-3" aria-label="Finding 企业协作记录">
+            <div className="settings-card-head">
+              <div>
+                <span className="panel-kicker">企业协作</span>
+                <h3>处理记录与自动验证状态分离</h3>
+                <p className="muted">人工协作可以记录负责人、修复版本和处置意见，但不能把真实执行失败手工改成“已修复”。</p>
+              </div>
+              <span className={`summary-pill ${verificationStatus === 'resolved' ? 'strong' : ''}`}>
+                自动验证状态：{verificationStatusLabel(verificationStatus)}
+              </span>
+            </div>
+
+            {!persistenceId ? (
+              <div className="settings-card-note mt-3">
+                当前 Finding 未能唯一绑定 SQLite 持久化记录，协作字段保持只读。系统不会通过标题猜测并写入相似 Bug；需要下一轮身份映射成功后再编辑。
+              </div>
+            ) : (
+              <>
+                <div className="settings-grid mt-3">
+                  <label className="form-field">
+                    <span>人工处理状态</span>
+                    <select
+                      value={collaborationDraft.handling_status}
+                      onChange={(event) => updateDraft('handling_status', event.target.value as FindingHandlingStatus)}
+                    >
+                      {HANDLING_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="form-field">
+                    <span>负责人</span>
+                    <input
+                      value={collaborationDraft.assignee}
+                      onChange={(event) => updateDraft('assignee', event.target.value)}
+                      placeholder="例如：张三 / 支付研发组"
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>修复版本</span>
+                    <input
+                      value={collaborationDraft.fix_version}
+                      onChange={(event) => updateDraft('fix_version', event.target.value)}
+                      placeholder="例如：v1.8.2 / 2026.08 Release"
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>人工处置</span>
+                    <select
+                      value={collaborationDraft.disposition}
+                      onChange={(event) => updateDraft('disposition', event.target.value as FindingDisposition)}
+                    >
+                      {DISPOSITION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="form-field">
+                    <span>外部任务链接（可选）</span>
+                    <input
+                      value={collaborationDraft.external_issue_url}
+                      onChange={(event) => updateDraft('external_issue_url', event.target.value)}
+                      placeholder="https://jira.example/... 或 GitHub/GitLab Issue"
+                    />
+                  </label>
+                </div>
+
+                <label className="form-field mt-3">
+                  <span>研发反馈</span>
+                  <textarea
+                    rows={3}
+                    value={collaborationDraft.developer_feedback}
+                    onChange={(event) => updateDraft('developer_feedback', event.target.value)}
+                    placeholder="记录定位结果、修复说明或需要测试补充的上下文"
+                  />
+                </label>
+                <label className="form-field mt-3">
+                  <span>风险接受 / 误报说明</span>
+                  <textarea
+                    rows={3}
+                    value={collaborationDraft.disposition_note}
+                    onChange={(event) => updateDraft('disposition_note', event.target.value)}
+                    placeholder="仅在人工选择风险接受或误报时记录理由；不会改变自动验证结论"
+                  />
+                </label>
+
+                <div className="settings-actions mt-3">
+                  <button
+                    type="button"
+                    className="btn btn-primary settings-btn-compact"
+                    onClick={() => void saveCollaboration()}
+                    disabled={collaborationSaving}
+                  >
+                    {collaborationSaving ? '保存中…' : '保存协作记录'}
+                  </button>
+                  {collaborativeFinding.collaboration?.updated_at && (
+                    <span className="muted">最近保存 {collaborativeFinding.collaboration.updated_at}</span>
+                  )}
+                </div>
+                {collaborationStatus && <p className="settings-inline-feedback" role="status">{collaborationStatus}</p>}
+              </>
+            )}
+
+            <p className="settings-hint mt-3">
+              “自动验证状态”来自真实执行 / Replay 的 SQLite Finding 状态；“人工处理状态”和协作字段保存在独立项目协作表。两者互不覆盖。
+            </p>
+          </section>
         </div>
       )}
     </article>
