@@ -26,6 +26,7 @@ import {
 import { ConnectorAcceptancePanel } from '../components/ConnectorAcceptancePanel';
 import { ConnectorCoverage } from '../components/ConnectorCoverage';
 import { useToast } from '../components/useToast';
+import { materialSourceTypeLabel, normalizeMaterialSourceType } from '../lib/material-type-presentation';
 import { usePageTitle } from '../lib/page-title';
 import { asArray, asOptionalNumber, asRecord, asString } from '../lib/value-guards';
 import './Materials.css';
@@ -53,7 +54,6 @@ type QuickConnectResult = { values: ScopeValues; manifest: ConnectorManifest };
 
 const DEFAULT_CONNECTOR_ID = 'connector-main';
 const DEFAULT_CONNECTOR_NAME = '在线资料连接器';
-const EXECUTABLE_SOURCE_TYPES = new Set(['prd', 'openapi', 'database_schema', 'collaboration_document', 'historical_bug']);
 
 function sourcePermissionScope(value: unknown): ConnectorPermissionScope | undefined {
   const row = asRecord(value);
@@ -832,19 +832,19 @@ export function Materials() {
     );
   }
 
-  const activeCount = sources.filter((item) => item.status === 'active').length;
+  const activeSources = sources.filter((item) => item.status === 'active');
+  const activeCount = activeSources.length;
   const processingCount = sources.filter((item) => item.status === 'processing').length;
   const failedCount = sources.filter((item) => ['failed', 'degraded'].includes(String(item.status || ''))).length;
-  const executableCount = sources.filter((item) => EXECUTABLE_SOURCE_TYPES.has(String(item.source_type || '').trim())).length;
-  const prdCount = sources.filter((item) => String(item.source_type || '').trim() === 'prd').length;
-  const apiCount = sources.filter((item) => String(item.source_type || '').trim() === 'openapi').length;
-  const dbCount = sources.filter((item) => ['database_schema', 'db_design'].includes(String(item.source_type || '').trim())).length;
   const sourceTypeCounts = new Map<string, number>();
-  sources.forEach((item) => {
-    const key = String(item.source_type || '').trim() || '自动识别';
+  activeSources.forEach((item) => {
+    const key = normalizeMaterialSourceType(item.source_type);
     sourceTypeCounts.set(key, (sourceTypeCounts.get(key) || 0) + 1);
   });
-  const topSourceTypes = [...sourceTypeCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const observedTypeCount = sourceTypeCounts.size;
+  const topSourceTypes = [...sourceTypeCounts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 6);
   const parseHeadline = sources.length === 0
     ? '等待接入资料'
     : failedCount > 0
@@ -875,8 +875,8 @@ export function Materials() {
       <section className="customer-summary-grid materials-readiness-grid">
         {[
           { label: '资料总数', value: sources.length, tone: sources.length > 0 ? 'primary' : 'neutral', note: '已进入企业知识主链的资料数量' },
-          { label: '已生效', value: activeCount, tone: activeCount > 0 ? 'success' : 'neutral', note: '当前可被扫描链直接消费的资料' },
-          { label: '可执行资料', value: executableCount, tone: executableCount > 0 ? 'success' : 'warning', note: executableCount > 0 ? '已具备驱动测试执行的核心上下文' : '建议补齐 PRD / API / DB 设计' },
+          { label: '已生效', value: activeCount, tone: activeCount > 0 ? 'success' : 'neutral', note: '当前可被后续链路消费的真实 active 资料' },
+          { label: '资料类型', value: observedTypeCount, tone: observedTypeCount > 0 ? 'success' : 'neutral', note: observedTypeCount > 0 ? '由真实 active source 动态统计，不设固定类型白名单' : '形成 active 资料后自动展示实际类型' },
           { label: '异常资料', value: failedCount, tone: failedCount > 0 ? 'danger' : 'neutral', note: failedCount > 0 ? '解析失败会直接影响后续执行' : '当前无失败资料' },
         ].map((item) => (
           <article key={item.label} className={`customer-summary-card tone-${item.tone}`}>
@@ -897,9 +897,9 @@ export function Materials() {
         </div>
         <div className="customer-secondary-grid">
           <article className="customer-secondary-card">
-            <span className="customer-value-kicker">核心资料覆盖</span>
-            <h3>{prdCount > 0 && apiCount > 0 ? 'PRD + API 已就绪' : '核心资料待补齐'}</h3>
-            <p>PRD {prdCount} 份，接口文档 {apiCount} 份，数据库资料 {dbCount} 份。核心资料越完整，运行中心越容易形成真实可执行路径。</p>
+            <span className="customer-value-kicker">资料来源结构</span>
+            <h3>在线 {onlineSources.length} 份 · 文件补充 {uploadedSources.length} 份</h3>
+            <p>在线资料作为默认主来源持续更新，文件上传用于补充在线来源没有覆盖的内容；两者最终进入同一企业知识主链。</p>
           </article>
           <article className="customer-secondary-card">
             <span className="customer-value-kicker">解析状态</span>
@@ -907,9 +907,13 @@ export function Materials() {
             <p>处理中 {processingCount} 份，失败 {failedCount} 份。</p>
           </article>
           <article className="customer-secondary-card">
-            <span className="customer-value-kicker">资料结构</span>
-            <h3>{topSourceTypes.length > 0 ? topSourceTypes.map(([label]) => label).join('、') : '等待导入'}</h3>
-            <p>{topSourceTypes.length > 0 ? topSourceTypes.map(([label, count]) => `${label} ${count} 份`).join('，') : '导入后会在这里展示当前项目的资料分布。'}</p>
+            <span className="customer-value-kicker">资料类型结构</span>
+            <h3>{topSourceTypes.length > 0 ? topSourceTypes.map(([type]) => materialSourceTypeLabel(type)).join('、') : '等待可读资料'}</h3>
+            <p>
+              {topSourceTypes.length > 0
+                ? `${topSourceTypes.map(([type, count]) => `${materialSourceTypeLabel(type)} ${count} 份`).join('，')}。类型来自后端真实 source_type，未知类型会原样展示。`
+                : '形成真实 active 资料后会在这里展示当前项目的动态资料类型分布。'}
+            </p>
           </article>
         </div>
       </section>
@@ -1404,7 +1408,7 @@ export function Materials() {
           <div>
             <span className="settings-hero-kicker">补充方式</span>
             <h2>离线资料上传</h2>
-            <p>用于补充在线资料没有的 PRD、接口文档、历史缺陷、数据库说明或设计稿。</p>
+            <p>用于补充在线资料没有覆盖的需求、接口、UI/UX、历史缺陷、数据库说明或设计资料；当前上传分类只代表后端已提供的显式入口，不代表企业资料类型全集。</p>
           </div>
         </div>
         <div className="materials-upload-row">
@@ -1413,7 +1417,7 @@ export function Materials() {
             <option value="openapi">OpenAPI / 接口文档</option>
             <option value="historical_bug">历史缺陷</option>
             <option value="database_schema">数据库结构</option>
-            <option value="ui_ux">原型 / 设计稿</option>
+            <option value="ui_ux">UI / UX 设计 / 原型</option>
           </select>
           <input id="materials-upload-file" className="form-input" type="file" onChange={(event) => setUploadFile(event.target.files?.[0] || null)} />
           <button className="btn btn-secondary" type="button" onClick={() => void uploadSupplement()} disabled={uploading}>
@@ -1444,7 +1448,7 @@ export function Materials() {
                   <div className="materials-source-copy">
                     <strong>{source.original_name || '企业资料'}</strong>
                     <span>
-                      {online ? '在线资料' : '离线补充资料'} · {source.source_type || '自动识别'}
+                      {online ? '在线资料' : '离线补充资料'} · {materialSourceTypeLabel(normalizeMaterialSourceType(source.source_type))}
                       {source.version ? ` · v${source.version}` : ''}
                     </span>
                     <span>
