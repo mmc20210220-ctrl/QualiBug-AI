@@ -42,6 +42,7 @@ export function ReleaseGate() {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const requestedFindingId = params.get('finding')?.trim() || '';
+  const requestedVerificationAt = params.get('verification_at')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
   const { data: releaseData, loading } = useReleaseData(project);
   const { data: pipelineData, error: pipelineError, refetch: refetchPipeline } = usePipelineData(project);
@@ -61,7 +62,7 @@ export function ReleaseGate() {
     ? customerFindings.find((finding) => finding.id === requestedFindingId) || null
     : null;
   const requestedVerification = requestedFinding ? deriveFindingVerification(requestedFinding) : null;
-  const findingContextSearch = evidenceDeepLinkSearch(requestedFindingId);
+  const findingContextSearch = evidenceDeepLinkSearch(requestedFindingId, requestedVerificationAt);
   const requestedFindingHasEvidence = Boolean(requestedFinding && (requestedFinding.evidence_chain?.length || 0) > 0);
   const p0Count = customerFindings.filter((finding) => finding.severity === 'P0').length;
   const evidenceCount = customerFindings.filter((finding) => (finding.evidence_chain?.length || 0) > 0).length;
@@ -164,7 +165,11 @@ export function ReleaseGate() {
                 <span><em>验证下一步</em><b>{requestedVerification.nextActionLabel}</b></span>
               </div>
               <p className="muted">发布门禁仍按整个项目的真实 Gate 判定；单条 Finding 的修复后验证状态只是发布依据之一，不会覆盖项目级门禁。</p>
-              <FindingVerificationTimeline finding={requestedFinding} compact />
+              <FindingVerificationTimeline
+                finding={requestedFinding}
+                compact
+                focusGeneratedAt={requestedVerificationAt}
+              />
               <div className="settings-actions mt-3">
                 <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project, findingContextSearch)}>返回这条问题</button>
                 {requestedFindingHasEvidence && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project, findingContextSearch)}>查看这条证据</button>}
