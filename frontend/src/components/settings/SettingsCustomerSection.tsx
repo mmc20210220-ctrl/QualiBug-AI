@@ -43,7 +43,7 @@ export function SettingsCustomerSection({
         </div>
       </div>
       <div className="settings-card-note">
-        这里仅负责选择或创建客户工作区。企业资料统一在“企业资料”页面接入和维护，避免同一份资料出现两套上传入口。
+        这里仅负责选择或创建客户工作区。企业资料统一在“企业资料”页面接入和维护：在线资料源作为主入口持续同步，文件上传只用于补充在线来源没有覆盖的资料。
       </div>
 
       <div className="settings-compact-row">
@@ -63,12 +63,12 @@ export function SettingsCustomerSection({
           <div className="settings-card-head">
             <div>
               <span className="panel-kicker">企业资料</span>
-              <h3>统一在资料中心管理</h3>
-              <p className="settings-card-sub">PRD、接口文档、数据库设计、权限资料、历史缺陷和 UI 设计统一从一个入口接入；Settings 不再维护第二套上传流程。</p>
+              <h3>优先连接企业在线资料</h3>
+              <p className="settings-card-sub">在线文档、知识库等资料源统一从资料中心连接并保持更新；PRD、接口文档、历史缺陷、数据库说明或设计稿缺失时，再用文件上传补充。Settings 不维护第二套资料流程。</p>
             </div>
           </div>
           <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/materials', project)}>
-            打开企业资料
+            连接企业资料
           </button>
         </section>
       )}
