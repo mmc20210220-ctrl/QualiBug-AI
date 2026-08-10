@@ -17,6 +17,8 @@ const ciGate = read('scripts/ci-gate.mjs');
 assert(dashboardUtils.includes('return deriveReleasePresentation({'), 'dashboard release decision must delegate to the shared release presentation authority');
 assert(!dashboardUtils.includes("return { color: 'green', label: '可以发布', advice: '当前未发现阻断性问题，可正常推进发布' }"), 'dashboard must not restore a zero-finding green release fallback');
 assert(releasePresentation.includes('尚未取得完整发布门禁回执，不能仅凭 0 个已确认问题推导为可以发布'), 'shared release authority must remain fail-closed when gate data is missing');
+assert(dashboardUtils.includes('客户修复后由 QualiBug 重新验证'), 'dashboard headline must remain inside the product-owned validation loop');
+assert(!dashboardUtils.includes('可直接进入整改'), 'dashboard must not present customer internal remediation workflow as a QualiBug-owned state');
 
 assert(dashboard.includes("const level = decision.color === 'red' ? 'blocked' : decision.color === 'yellow' ? 'attention' : 'safe';"), 'dashboard risk ring must follow the shared release decision color');
 assert(dashboard.includes("decision.color === 'green'\n                  ? '当前未发现阻断性问题'\n                  : '当前无已确认阻断问题，发布结论待确认'"), 'zero confirmed blockers must not become a positive release conclusion without a green gate decision');
