@@ -172,3 +172,129 @@ class TestReportCompaction:
         assert report_embed_max_bytes() == 12345
         monkeypatch.delenv("QUALIBUG_REPORT_EMBED_MAX_BYTES")
         assert report_embed_max_bytes() == 256 * 1024
+
+
+class TestReportRedactionContract:
+    """SPEC §46: the report payload must be redacted before it enters the
+    write path; compact_intelligence_report fails closed on unredacted
+    material instead of persisting it.
+
+    Regression (run25): the scan report assembled the raw obligation-attempt
+    ledger — whose before_ref/after_ref observation refs carry
+    password-assignment evidence (``control_before:/api/auth/debug/token:
+    <plaintext>``) — into the payload, so the first store-mode run died with
+    ``report_payload_unredacted:obligation_attempt_ledger`` after a full
+    45-minute planning run. The fix redacts the assembled payload before the
+    write path (reseal keeps the ledger fingerprint self-consistent).
+    """
+
+    @staticmethod
+    def _ledger_with_password_assignment() -> dict:
+        return {
+            "schema_version": "qualibug.obligation-attempt-ledger.v1",
+            "run_id": "RUN_x",
+            "campaign_id": "CMP_x",
+            "identity": {
+                "run_id": "RUN_x",
+                "campaign_id": "CMP_x",
+                "target_id": "target",
+                "environment_id": "test",
+                "policy_version": "v1",
+                "evaluation_mode": "operational",
+                "source_snapshot_hash": "hash",
+                "mainline_contract_fingerprint": "fp",
+                "missing_fields": [],
+                "status": "COMPLETE",
+            },
+            "selected_count": 1,
+            "terminal_count": 1,
+            "accounted_count": 1,
+            "complete": True,
+            "terminal_status_counts": {"DELIVERABLE": 1},
+            "selection_status_counts": {"SELECTED": 1},
+            "attempts": [
+                {
+                    "candidate_id": "C-x",
+                    "obligation_id": "obl-x",
+                    "selection_status": "SELECTED",
+                    "terminal_status": "DELIVERABLE",
+                    "terminal_stage": "gate",
+                    "finding_id": "F-x",
+                    "stages": [
+                        {"stage": "compile", "status": "completed"},
+                        {"stage": "execution", "status": "completed"},
+                        {"stage": "gate", "status": "completed"},
+                    ],
+                    "delivery_evidence_bundle": {
+                        "finding": {
+                            "finding_id": "F-x",
+                            "raw_evidence": {
+                                "steps": [
+                                    {
+                                        "governance_receipt": {
+                                            "before_ref": (
+                                                "control_before:/api/auth/debug/token:"
+                                                "eyJhbGciOiJIUzI1NiJ9.example.plaintext"
+                                            ),
+                                            "after_ref": (
+                                                "control_after:/api/auth/debug/token:"
+                                                "eyJhbGciOiJIUzI1NiJ9.example.plaintext"
+                                            ),
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                }
+            ],
+        }
+
+    @staticmethod
+    def _payload_with_ledger() -> dict:
+        return {
+            "project": "proj",
+            "obligation_attempt_ledger": (
+                TestReportRedactionContract._ledger_with_password_assignment()
+            ),
+            "canonical_defect_registry": {},
+            "formal_delivery_authority": {},
+            "delivery_occurrences": [],
+            "real_findings": [],
+            "findings": [],
+        }
+
+    def test_unredacted_ledger_fails_closed(self, store, monkeypatch):
+        """The guard must keep rejecting unredacted material: the scan-side
+        fix is upstream redaction, never a relaxation of this fail-closed
+        check. A small embed threshold forces the artifactize branch for the
+        minimal fixture (the real ledger is tens of MB)."""
+        monkeypatch.setenv("QUALIBUG_REPORT_EMBED_MAX_BYTES", "1024")
+        payload = self._payload_with_ledger()
+        with pytest.raises(
+            ValueError, match="report_payload_unredacted:obligation_attempt_ledger"
+        ):
+            compact_intelligence_report(payload, store)
+
+    def test_redacted_payload_compacts_and_stores_clean_ledger(
+        self, store, monkeypatch
+    ):
+        """The upstream fix: redact_and_validate the assembled payload before
+        the write path. The compacted report stores the resealed ledger
+        artifact with the plaintext password-assignment evidence gone and the
+        ledger schema preserved."""
+        from ai_test_asset_center.artifact_redactor import redact_and_validate
+
+        monkeypatch.setenv("QUALIBUG_REPORT_EMBED_MAX_BYTES", "1024")
+        payload = self._payload_with_ledger()
+        redacted, _receipt = redact_and_validate(payload)
+        compact, refs, stats = compact_intelligence_report(redacted, store)
+        ledger_ref = compact.get("obligation_attempt_ledger_ref")
+        assert ledger_ref
+        stored = store.get_json(ledger_ref)
+        assert stored.get("schema_version") == "qualibug.obligation-attempt-ledger.v1"
+        text = json.dumps(stored, ensure_ascii=False)
+        assert "eyJhbGciOiJIUzI1NiJ9.example.plaintext" not in text
+        # Heavy payload artifactized, not embedded.
+        assert "obligation_attempt_ledger" not in compact
+        assert "obligation_attempt_ledger_ref" in compact
