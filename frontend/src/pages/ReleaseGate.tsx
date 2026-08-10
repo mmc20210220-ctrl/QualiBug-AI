@@ -1,5 +1,6 @@
 import { useSearchParams } from 'react-router-dom';
 import { getCommercialAssets, isCustomerReadyFinding, usePipelineData, useReleaseData } from '../api/data';
+import { evidenceDeepLinkSearch } from '../lib/evidence-presentation';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { deriveReleasePresentation } from '../lib/release-presentation';
@@ -37,6 +38,7 @@ export function ReleaseGate() {
   usePageTitle('发布门禁');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
+  const requestedFindingId = params.get('finding')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
   const { data: releaseData, loading } = useReleaseData(project);
   const { data: pipelineData, error: pipelineError, refetch: refetchPipeline } = usePipelineData(project);
@@ -52,6 +54,11 @@ export function ReleaseGate() {
 
   const pipelineRecord = asRecord(pipelineData);
   const customerFindings = ((pipelineRecord.defects || pipelineRecord.risks || []) as Finding[]).filter(isCustomerReadyFinding);
+  const requestedFinding = requestedFindingId
+    ? customerFindings.find((finding) => finding.id === requestedFindingId) || null
+    : null;
+  const findingContextSearch = evidenceDeepLinkSearch(requestedFindingId);
+  const requestedFindingHasEvidence = Boolean(requestedFinding && (requestedFinding.evidence_chain?.length || 0) > 0);
   const p0Count = customerFindings.filter((finding) => finding.severity === 'P0').length;
   const evidenceCount = customerFindings.filter((finding) => (finding.evidence_chain?.length || 0) > 0).length;
   const scanMeta = asRecord(pipelineRecord.scan_meta);
@@ -123,6 +130,7 @@ export function ReleaseGate() {
               : !hasGateData
                 ? { label: '启动检测', path: '/campaigns' }
                 : { label: '返回价值总览', path: '/dashboard' };
+  const nextActionSearch = nextAction.path === '/findings' && requestedFinding ? findingContextSearch : '';
 
   return (
     <div>
@@ -139,6 +147,28 @@ export function ReleaseGate() {
           {' · '}交付状态：{deliveryLabel}
         </p>
       </section>
+
+      {requestedFindingId && !loading && pipelineData && (
+        <section className={`card mb-4 status-card status-${requestedFinding ? 'warning' : 'neutral'}`} aria-label="当前发布评审问题上下文">
+          <span className="panel-kicker">当前评审问题</span>
+          {requestedFinding ? (
+            <>
+              <h2><span className={`severity-badge ${requestedFinding.severity.toLowerCase()}`}>{requestedFinding.severity}</span> {requestedFinding.title}</h2>
+              <p className="muted">发布门禁仍按整个项目的真实 Gate 判定；这里仅保留你从 Dashboard / Evidence 带来的单问题上下文，不把单条问题改写成项目级发布结论。</p>
+              <div className="settings-actions">
+                <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project, findingContextSearch)}>返回这条问题</button>
+                {requestedFindingHasEvidence && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project, findingContextSearch)}>查看这条证据</button>}
+              </div>
+            </>
+          ) : (
+            <>
+              <h2>原问题已不在当前已确认结果中</h2>
+              <p className="muted">链接中的 Finding 标识可能来自旧扫描或状态已经变化。发布页不会按标题猜测替代问题；项目级门禁结论仍按当前真实数据展示。</p>
+              <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看当前问题清单</button>
+            </>
+          )}
+        </section>
+      )}
 
       {loading && <div className="state-panel"><div className="spinner spinner-centered" /><p>评估发布就绪状态...</p></div>}
 
@@ -192,11 +222,11 @@ export function ReleaseGate() {
 
       <div className="action-bar">
         <span className="action-bar-title">下一步：{nextAction.label}</span>
-        <button className="btn btn-primary" onClick={() => navigateToProjectPath(nextAction.path, project)}>{nextAction.label}</button>
+        <button className="btn btn-primary" onClick={() => navigateToProjectPath(nextAction.path, project, nextActionSearch)}>{nextAction.label}</button>
         {customerFindings.length > 0 && nextAction.path !== '/findings' && (
-          <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看问题清单</button>
+          <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project, requestedFinding ? findingContextSearch : '')}>查看问题清单</button>
         )}
-        {evidenceCount > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据</button>}
+        {evidenceCount > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project, requestedFindingHasEvidence ? findingContextSearch : '')}>查看证据</button>}
         {releasePresentation.incomplete && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/coverage', project)}>查看未覆盖范围</button>}
         {nextAction.path !== '/dashboard' && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>}
       </div>
