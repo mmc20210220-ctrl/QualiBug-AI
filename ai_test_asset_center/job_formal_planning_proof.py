@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 from .artifact_redactor import write_json_redacted
 from .product_scan_mainline import _safe_project
 from .scan_post_hooks import register_scan_post_hook
+
+_logger = logging.getLogger("qualibug.job_formal_planning_proof")
 
 SCHEMA_VERSION = "qualibug.job-formal-planning-proof.v1"
 HOOK_NAME = "job_formal_planning_proof"
@@ -324,15 +327,25 @@ def attach_job_formal_planning_proof(
     projected["job_planning_proof"] = proof
     projected["job_planning_proof_ref"] = proof_ref
 
-    # _scan_impl persists scan_result.json before post-hooks run. Re-write the same
-    # product artifact through the existing redaction authority so a POST /api/v1/scan
-    # has a durable proof even though the customer HTTP envelope remains intentionally
-    # compact. This does not alter any execution, finding or evaluator record.
-    # Sharded store keeps the same content; big keys stay in scan_result.parts/.
+    # _scan_impl persists scan_result.json before post-hooks run. The proof
+    # must be durably visible on the product artifact, but re-running
+    # write_scan_result on the whole result re-copies the multi-GB tree
+    # (second deepcopy at ~9.6GB peak) and, with the parts cleanup,
+    # destroys the primary run's shards if the re-write dies mid-way. The
+    # proof is small: update the already-sharded skeleton in place (add the
+    # proof keys), never rewrite the shards.
     scan_result_path = Path(root) / "platform_outputs" / safe_project / "scan_result.json"
-    from .scan_result_store import write_scan_result
+    try:
+        from .scan_result_store import attach_skeleton_keys
 
-    write_scan_result(scan_result_path, projected)
+        attach_skeleton_keys(
+            scan_result_path,
+            {"job_planning_proof": proof, "job_planning_proof_ref": proof_ref},
+        )
+    except Exception as exc:  # noqa: BLE001 - the proof file is already durable
+        _logger.warning(
+            "job_formal_planning_proof skeleton attach failed: %s", exc
+        )
     return projected
 
 

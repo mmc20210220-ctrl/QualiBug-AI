@@ -225,3 +225,64 @@ class TestConsumerCompatibility:
         plain = tmp_path / "plain.json"
         plain.write_text(json.dumps({"a": 1}), encoding="utf-8")
         assert _read_json_object(plain) == {"a": 1}
+
+
+class TestPostWriteSkeletonAttach:
+    """Post-hook proof attach must not re-copy or destroy the sharded result."""
+
+    def test_attach_skeleton_keys_preserves_shards(self, tmp_path):
+        from ai_test_asset_center.scan_result_store import (
+            attach_skeleton_keys,
+            load_scan_result,
+            write_scan_result,
+        )
+
+        result = {
+            "project": "p",
+            "findings": [{"finding_id": "F-1", "title": "t", "evidence": {"request": "x" * 20000}}],
+        }
+        target = tmp_path / "scan_result.json"
+        write_scan_result(target, result, threshold_bytes=1024)
+        parts = tmp_path / "scan_result.parts"
+        shard_count = len(list(parts.glob("*.json")))
+        assert shard_count >= 1
+
+        # Post-hook attach: skeleton-only, shards untouched.
+        attach_skeleton_keys(target, {"job_planning_proof": {"proof_id": "proof-1"}, "job_planning_proof_ref": "r"})
+        assert len(list(parts.glob("*.json"))) == shard_count
+
+        loaded = load_scan_result(target)
+        assert loaded.get("job_planning_proof", {}).get("proof_id") == "proof-1"
+        assert loaded.get("job_planning_proof_ref") == "r"
+        assert loaded["findings"][0]["finding_id"] == "F-1"
+
+    def test_rewrite_keeps_manifest_shards_cleans_stale(self, tmp_path):
+        """A second write of the same content must not delete the active shards;
+        stale shards from an older run are removed after the write."""
+        from ai_test_asset_center.scan_result_store import (
+            load_scan_result,
+            write_scan_result,
+        )
+
+        result = {
+            "project": "p",
+            "findings": [{"finding_id": "F-1", "title": "t", "evidence": {"request": "x" * 20000}}],
+        }
+        target = tmp_path / "scan_result.json"
+        write_scan_result(target, result, threshold_bytes=1024)
+        parts = tmp_path / "scan_result.parts"
+        count_after_first = len(list(parts.glob("*.json")))
+
+        # Simulate a stale shard from an older run.
+        stale = parts / "stale_old_run.json"
+        stale.write_text("{}", encoding="utf-8")
+
+        # Second write (post-hook rewrite path): active shards survive,
+        # the stale file is cleaned.
+        write_scan_result(target, dict(result), threshold_bytes=1024)
+        names = {p.name for p in parts.glob("*.json")}
+        assert "stale_old_run.json" not in names
+        assert len(names) >= 1
+        loaded = load_scan_result(target)
+        assert loaded["findings"][0]["finding_id"] == "F-1"
+        assert count_after_first >= 1

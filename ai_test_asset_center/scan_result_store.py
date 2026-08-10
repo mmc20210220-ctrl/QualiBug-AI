@@ -446,10 +446,6 @@ def write_scan_result(
     else:
         work = result
     parts_dir = target.parent / SHARD_DIR_NAME
-    if parts_dir.exists():
-        # 分片是单 run 产物（骨架引用本 run 分片）：清掉跨 run 残留
-        # （失败 run 的中间分片、历史版本），避免目录无限膨胀。
-        shutil.rmtree(parts_dir, ignore_errors=True)
     parts_dir.mkdir(parents=True, exist_ok=True)
     temps: list[Path] = []
     pieces: list[tuple[str, Path, int]] = []
@@ -532,6 +528,20 @@ def write_scan_result(
     redacted_skeleton[SHARD_MARKER] = manifest
     _atomic_write_json(target, redacted_skeleton, indent=indent)
     _mark("atomic_write")
+    # 写后清理：删除不属于本 manifest 的旧分片（跨 run 残留 / 失败 run 的
+    # 中间分片）。不能写前清空——post-hook 会在主流程之后以同一路径重写
+    # 同一内容（job formal planning proof），写前清空会让重写的中途失败
+    # 毁掉主流程的完整分片（run25c 实测：12 分片被二次写入的清空毁成 3 个）。
+    _active_files = {
+        (parts_dir / _shard_file_name(dotted)).resolve()
+        for dotted in manifest_shards
+    }
+    for stale in parts_dir.glob("*"):
+        if stale.is_file() and stale.resolve() not in _active_files:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
     # 分阶段计时（可观测性）：大 result 的落盘各阶段耗时，帮助定位
     # 性能瓶颈（实测多 GB 内容时 copy/normalize/redact 各占分钟级）。
     _start = _stage_marks[0][1]
@@ -747,6 +757,31 @@ def _combine_redaction_receipt(
 # ═════════════════════════════════════════════════════════════════════════════
 # 读取（兼容加载：自动识别分片 / 旧单文件；keys 流式 API）
 # ═════════════════════════════════════════════════════════════════════════════
+
+def attach_skeleton_keys(path: Path | str, keys: dict[str, Any]) -> dict[str, Any]:
+    """Lightweight post-write update of a sharded scan_result skeleton.
+
+    Adds small top-level keys (e.g. post-hook proof refs) without re-running
+    the full write path — a second ``write_scan_result`` on a multi-GB result
+    re-copies the whole tree (second deepcopy peak) and, when it dies
+    mid-shard, destroys the primary run's complete shard set. The skeleton
+    JSON is read, extended and atomically rewritten; shards are untouched.
+    Non-sharded files fall back to the same in-place JSON update.
+    """
+    target = Path(path)
+    if not target.is_file():
+        raise FileNotFoundError(f"scan_result missing: {target}")
+    try:
+        skeleton = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"scan_result skeleton unreadable: {target}") from exc
+    if not isinstance(skeleton, dict):
+        raise ValueError(f"scan_result skeleton must be an object: {target}")
+    for key, value in keys.items():
+        skeleton[str(key)] = value
+    _atomic_write_json(target, skeleton, indent=2)
+    return skeleton
+
 
 def is_sharded_scan_result(path: Path | str) -> bool:
     """文件是否为分片 store 索引。旧单文件（含 4GB 级）返回 False。
