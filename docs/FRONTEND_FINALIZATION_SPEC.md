@@ -44,6 +44,8 @@ Dashboard 第一屏优先回答：
 - 尚未执行；
 - 正在准备；
 - 服务端已确认真实扫描；
+- 主链真实阶段进行中；
+- 某阶段尚未进入或尚未实时上报；
 - 正在等待最终回执；
 - 部分覆盖；
 - 执行被阻断；
@@ -51,7 +53,7 @@ Dashboard 第一屏优先回答：
 - 未发现已确认问题；
 - 已发现并形成客户可交付证据。
 
-空结果不得展示为“没有问题”。服务端未提供的内部阶段不得根据计时器伪造进度。
+空结果不得展示为“没有问题”。服务端未提供的内部阶段不得根据计时器或百分比伪造进度。
 
 ### 2.4 动作必须真实
 
@@ -166,7 +168,7 @@ Dashboard 第一屏优先回答：
 - 高级配置保持折叠；
 - `test:settings-onboarding` 已进入统一门禁。
 
-### P1-2 运行过程可视化 — 可信子集已实现
+### P1-2 运行过程可视化 — 四个真实主链阶段已实时化
 
 已完成：
 
@@ -177,20 +179,25 @@ Dashboard 第一屏优先回答：
 - 前端在 `submitted` 状态每秒读取服务端真实状态；
 - 明确区分“请求已提交但服务端尚未登记扫描”和“服务端已确认真实扫描”；
 - dead/stale lease 不再显示成正在运行；
-- completed 后依据真实 `campaign_status / test_data_plan / execution_status / HAR evidence / grade / coverage` 展示结果；
+- 新增 `qualibug.scan-stage-progress.v1` 项目级原子阶段快照，只有真实主链函数可以推进状态；
+- `enterprise_understanding` 与 `scenario_planning` 由真实 `build_discovery_plan()` 主链调用进入/返回时上报；二者在同一规划函数内真实重叠，因此 UI 不伪装成顺序百分比；
+- `runtime_execution` 与 `evidence_collection` 由真实 `run_experiment_candidate()` 进入时上报；experiment runner 返回后执行阶段完成，证据阶段继续保持 active，因为后续 UI 执行、证据归一化与持久化尚未结束；
+- stage snapshot 只有在 live scan lease 存在时才通过状态 API 暴露，历史 stage 文件不会冒充当前扫描；
+- 未知 stage / 非法百分比状态会被后端拒绝；pending 阶段不会因为时间经过自动推进；
+- completed 后依据真实 `campaign_status / test_data_plan / execution_status / HAR evidence / grade / coverage` 展示最终结果；
 - blocked、partial、plan_only、有 Finding 等结果不会因为 HTTP 200 被错误显示为绿色成功；
-- `test:run-lifecycle`、`test:live-scan-status` 和后端 lease 投影测试已建立。
+- `test:run-lifecycle`、`test:live-scan-status`、`tests/test_live_scan_status_projection.py` 与 `tests/test_scan_stage_progress.py` 已建立。
 
-当前明确未伪造：
+当前实时阶段口径：
 
-- 企业资料理解；
-- 场景与义务生成；
-- 测试数据准备；
-- 真实探针执行；
-- 结果观察与证据收集；
-- 交付门禁和报告生成。
+- **企业资料理解**：真实主链实时上报；
+- **场景与义务生成**：真实主链实时上报；
+- **真实探针执行**：真实主链实时上报；
+- **结果观察与证据收集**：真实主链实时上报开始状态，最终完成以扫描回执为准；
+- **测试数据准备 / 就绪核验**：当前仍由总控函数汇总，运行中保持“尚未进入 / 尚未实时上报”，最终由 `test_data_plan` 回执确认；
+- **交付门禁与报告**：当前仍由总控函数完成，运行中保持“尚未进入 / 尚未实时上报”，最终由 grade / coverage / delivery 结果确认。
 
-后端目前尚未对这六个内部阶段暴露实时事件，因此运行中统一显示“等待服务端回执”。若后续需要阶段级实时推进，应由扫描引擎在真实阶段边界提供 SSE / WebSocket / 可轮询阶段事件；不得由前端计时器模拟。
+原则：任何缺少真实函数边界的阶段都不根据计时器、固定秒数或百分比推测。后续如果继续细分，应从拥有真实阶段权威的扫描模块上报，而不是在前端造进度。
 
 ### P1-3 角色化价值视图 — 已实现
 
@@ -266,7 +273,7 @@ Dashboard 第一屏优先回答：
 - 白标或联合品牌报告；
 - 邀请漏斗、分享访问漏斗和报告转化漏斗；
 - 第三方协作 Connector 的组织级配置与审计；
-- 扫描引擎六阶段真实实时事件。
+- 补齐 `test_data_assessment` 与 `delivery_finalization` 两个总控阶段的独立真实实时边界，并按需要继续细分而不引入假百分比。
 
 ## 7. 非目标
 
@@ -294,6 +301,8 @@ Dashboard 第一屏优先回答：
 - ReleaseGate 操作名称与真实行为一致；
 - README 可按实际命令启动项目；
 - 服务端真实持有 scan lease 时前端能确认运行，lease 未出现时不冒充正在扫描；
+- planning / experiment 主链进入与返回时，前端能读取对应真实阶段；
+- 尚未独立打点的测试数据与交付阶段保持“未实时上报”，不按时间自动推进；
 - Finding 无稳定持久化身份时，协作写入、明确 Replay 状态写回和只读分享都 fail closed；
 - 人工协作不能修改自动验证状态；
 - 分享链接过期 / 撤销后不可解析；
@@ -320,7 +329,7 @@ npm run ci:gate
 - 前端最终收口契约；
 - Settings 接入向导契约；
 - 运行生命周期契约；
-- 服务端 live scan 状态契约；
+- 服务端 live scan / 主链 stage 状态契约；
 - Dashboard 角色视图契约；
 - Finding 协作契约；
 - 证据分发与脱敏契约；
@@ -332,6 +341,10 @@ npm run ci:gate
 后端新增独立测试覆盖：
 
 - project scan lease 的 live/stale 外部投影；
+- `scan_stage_progress` 显式阶段迁移与非法伪进度拒绝；
+- `build_discovery_plan()` 对企业理解/场景规划真实边界的驱动；
+- `run_experiment_candidate()` 对真实执行/证据采集边界的驱动；
+- stage snapshot 只在真实 live lease 期间进入 HTTP 状态；
 - Finding 人工协作与自动验证状态分权；
 - display ID → SQLite persistence ID crosswalk；
 - 只读分享 Token hash-only 持久化；
@@ -358,6 +371,7 @@ npm run ci:gate
 - 资料导入完成率；
 - 首次扫描启动率；
 - 服务端扫描租约确认率；
+- 主链阶段实时上报率；
 - 首次扫描完成率；
 - 问题详情打开率；
 - Finding 持久化身份绑定率；
