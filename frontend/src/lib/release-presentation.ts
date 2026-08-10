@@ -14,6 +14,7 @@ export type ReleasePresentationInput = {
   gateOverall?: string;
   gateChecks?: ReleasePresentationCheck[];
   hasGateData?: boolean;
+  regressionGateStatus?: string;
 };
 
 export type ReleasePresentation = {
@@ -48,6 +49,7 @@ export function deriveReleasePresentation(input: ReleasePresentationInput): Rele
   const pipelineHealthStatus = normalized(input.pipelineHealthStatus);
   const campaignStatus = normalized(input.campaignStatus);
   const gateOverall = normalized(input.gateOverall);
+  const regressionGateStatus = normalized(input.regressionGateStatus);
   const gateChecks = Array.isArray(input.gateChecks) ? input.gateChecks : [];
   const failingChecks = gateChecks.filter((check) => normalized(check.status) === 'fail');
   const pendingChecks = gateChecks.filter((check) => normalized(check.status) === 'pending');
@@ -58,12 +60,25 @@ export function deriveReleasePresentation(input: ReleasePresentationInput): Rele
     && failingChecks.every(isCampaignCoverageCheck);
   const hasIndependentGateFailure = gateOverall === 'fail'
     && (!incomplete || !gateFailureOnlyExplainsIncomplete || failingChecks.length === 0);
+  const regressionFailed = regressionGateStatus === 'failed';
+  const regressionPending = ['pending', 'not_ready', 'manual_approval_required'].includes(regressionGateStatus);
 
   if (p0Count > 0) {
     return {
       color: 'red',
       label: '建议阻断',
       advice: `${p0Count} 个已确认 P0 需优先修复；即使本轮覆盖尚未完整，也不能降低已知阻断风险。`,
+      incomplete,
+      blockingCheckCount: failingChecks.length,
+      pendingCheckCount: pendingChecks.length,
+    };
+  }
+
+  if (regressionFailed) {
+    return {
+      color: 'red',
+      label: '不建议发布',
+      advice: '最新回归门禁已明确失败，请先处理回归失败项并重新验证。',
       incomplete,
       blockingCheckCount: failingChecks.length,
       pendingCheckCount: pendingChecks.length,
@@ -96,6 +111,17 @@ export function deriveReleasePresentation(input: ReleasePresentationInput): Rele
     };
   }
 
+  if (regressionPending) {
+    return {
+      color: 'yellow',
+      label: '待处理',
+      advice: '回归门禁尚未完成或仍需人工确认，完成回归闭环后再决定是否发布。',
+      incomplete: false,
+      blockingCheckCount: failingChecks.length,
+      pendingCheckCount: pendingChecks.length,
+    };
+  }
+
   if (gateOverall === 'pending' || pendingChecks.length > 0) {
     return {
       color: 'yellow',
@@ -111,7 +137,7 @@ export function deriveReleasePresentation(input: ReleasePresentationInput): Rele
     return {
       color: 'green',
       label: '可以发布',
-      advice: '当前发布门禁已通过；仍应以本轮已上报范围和商业交付守卫为边界。',
+      advice: '当前发布门禁已通过；仍应以本轮已上报范围、最新回归状态和商业交付守卫为边界。',
       incomplete: false,
       blockingCheckCount: failingChecks.length,
       pendingCheckCount: pendingChecks.length,
