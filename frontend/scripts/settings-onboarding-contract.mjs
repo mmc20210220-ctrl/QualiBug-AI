@@ -193,7 +193,7 @@ assert(sidebar.includes("? '本轮暂无已确认问题'\n              : '等�
 
 assert(runCenter.includes('const preflightReady = Boolean(preflight?.ready);'), 'run center must keep backend preflight as execution authority');
 assert(runCenter.includes('if (!preflightReady) {'), 'run center handler must remain fail-closed after frontend onboarding completion');
-assert(runCenter.includes('disabled={runDisabled}'), 'run center button must remain disabled when real preflight blocks execution');
+assert(runCenter.includes('runDisabled={runDisabled}'), 'run preflight snapshot must receive the same real submission lock');
 
 assert(serviceForm.includes('window.sessionStorage.setItem'), 'service setup must autosave a session draft');
 assert(serviceForm.includes('window.sessionStorage.removeItem'), 'successful service setup must clear its session draft');
