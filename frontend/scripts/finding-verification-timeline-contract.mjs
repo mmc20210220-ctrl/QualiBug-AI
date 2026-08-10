@@ -59,6 +59,16 @@ assert(dashboardDelta.includes('<em>仍失败</em><b>{summary.stillFailingCount}
 assert(dashboardDelta.includes('<em>无法确认</em><b>{summary.inconclusiveCount}</b>'), 'dashboard must expose inconclusive latest-run findings');
 assert(dashboardDelta.includes('<em>保持通过</em><b>{summary.keptFixedCount}</b>'), 'dashboard must distinguish already-fixed findings that stayed fixed');
 assert(dashboardDelta.includes('“刚验证修复 / 重新出现”只来自真实 open ↔ fixed 结论变化'), 'dashboard delta must explain its strict conclusion-change rule');
+assert(dashboardDelta.includes('const sortedRows = [...summary.rows].sort((left, right) => rowPriority(right) - rowPriority(left));'), 'dashboard drilldown must prioritize unresolved verification risk');
+assert(dashboardDelta.includes('查看本轮具体 Finding（{summary.matchedCount}）'), 'dashboard must expose the concrete findings behind latest-run counts');
+assert(dashboardDelta.includes('Finding {finding.id}'), 'dashboard drilldown must retain exact finding identity');
+assert(dashboardDelta.includes('Probe {event.run.regression_probe_id}'), 'dashboard drilldown must retain exact regression probe identity');
+assert(dashboardDelta.includes('{event.run.method} {event.run.path}'), 'dashboard drilldown must retain the real validation target');
+assert(dashboardDelta.includes('evidenceDeepLinkSearch(finding.id)'), 'dashboard drilldown must deep-link by exact finding ID');
+assert(dashboardDelta.includes("navigateToProjectPath('/findings', project, findingSearch)"), 'dashboard drilldown must open the exact finding validation context');
+assert(dashboardDelta.includes("navigateToProjectPath('/evidence', project, findingSearch)"), 'dashboard drilldown must open the exact finding evidence context');
+assert(dashboardDelta.includes('const hasEvidence = (finding.evidence_chain?.length || 0) > 0;'), 'evidence CTA must only appear when the exact finding has evidence');
+assert(dashboardDelta.includes('首屏仅展示风险最高的 8 条'), 'large latest-run result sets must disclose first-screen folding');
 
 assert(gateBanner.includes('<DashboardVerificationDeltaPanel record={record} project={project} />'), 'dashboard gate area must surface the latest-run finding delta');
 assert(gateBanner.includes('{deltaPanel}'), 'verification delta must remain visible alongside blocking gate facts');
@@ -72,6 +82,8 @@ assert(release.includes('单条 Finding 的修复后验证状态只是发布依�
 
 assert(styles.includes('.finding-verification-timeline {'), 'timeline styles missing');
 assert(styles.includes('.verification-change-badge {'), 'conclusion-change marker styles missing');
+assert(styles.includes('.verification-delta-row {'), 'dashboard delta drilldown styles missing');
+assert(styles.includes('.verification-delta-row .settings-actions .btn'), 'dashboard delta actions must remain usable on mobile');
 assert(styles.includes('@media (max-width: 560px)'), 'timeline must remain usable on mobile');
 
 assert(packageJson.includes('"test:finding-verification-timeline": "node scripts/finding-verification-timeline-contract.mjs"'), 'package script missing verification timeline contract');
