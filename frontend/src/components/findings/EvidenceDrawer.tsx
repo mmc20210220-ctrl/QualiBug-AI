@@ -17,6 +17,7 @@ interface EvidenceDrawerProps {
   finding: Finding | null;
   project: string;
   onClose: () => void;
+  focusGeneratedAt?: string;
 }
 
 type ShareableFinding = Finding & CollaborativeFindingProjection;
@@ -28,7 +29,7 @@ const TTL_OPTIONS = [
   { value: 7 * 24 * 60 * 60, label: '7 天' },
 ];
 
-export function EvidenceDrawer({ finding, project, onClose }: EvidenceDrawerProps) {
+export function EvidenceDrawer({ finding, project, onClose, focusGeneratedAt = '' }: EvidenceDrawerProps) {
   const [exportStatus, setExportStatus] = useState('');
   const [shareStatus, setShareStatus] = useState('');
   const [shareTtl, setShareTtl] = useState(24 * 60 * 60);
@@ -70,7 +71,7 @@ export function EvidenceDrawer({ finding, project, onClose }: EvidenceDrawerProp
   if (!finding) return null;
   const quality = finding.evidence_quality;
   const chain = finding.evidence_chain || [];
-  const evidenceCenterHref = buildProjectPath('/evidence', project, evidenceDeepLinkSearch(finding.id));
+  const evidenceCenterHref = buildProjectPath('/evidence', project, evidenceDeepLinkSearch(finding.id, focusGeneratedAt));
 
   const refreshShares = async () => {
     if (!project || !persistenceId) return;
