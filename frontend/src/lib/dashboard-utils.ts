@@ -84,7 +84,7 @@ export function releaseDecision(
   hasGateData = false,
   regressionGateStatus = '',
 ): { color: 'red' | 'yellow' | 'green'; label: string; advice: string } {
-  const prioritized = deriveReleasePresentation({
+  return deriveReleasePresentation({
     p0Count: p0,
     confirmedDefectCount: defects,
     pipelineHealthStatus: unhealthy ? 'FAILED_SAFE' : '',
@@ -94,11 +94,6 @@ export function releaseDecision(
     hasGateData,
     regressionGateStatus,
   });
-  if (p0 > 0) return prioritized;
-  if (unhealthy || blocked) return prioritized;
-  if (hasGateData || regressionGateStatus) return prioritized;
-  if (defects > 0) return { color: 'yellow', label: '有条件发布', advice: `${defects} 个已确认问题建议评估后决策` };
-  return { color: 'green', label: '可以发布', advice: '当前未发现阻断性问题，可正常推进发布' };
 }
 
 // ─── Campaign helpers ────────────────────────────────────────────────────────
