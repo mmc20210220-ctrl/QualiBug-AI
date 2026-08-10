@@ -8,6 +8,9 @@ from ai_test_asset_center.scan_execution_outcome import (
     _persist_execution_evidence,
     _test_data_receipt_verifier,
 )
+from ai_test_asset_center.scan_stage_finalization_hook import (
+    _finalize_scan_stage_progress,
+)
 from ai_test_asset_center.scan_stage_progress import (
     begin_scan_stage_progress,
     read_scan_stage_progress,
@@ -94,7 +97,7 @@ def test_evidence_persistence_failure_marks_stage_failed(
     assert state["stages"]["evidence_collection"]["status"] == "failed"
 
 
-def test_release_gate_owns_test_data_completion_and_delivery_active(
+def test_release_gate_stays_active_until_final_report_receipt(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -110,6 +113,7 @@ def test_release_gate_owns_test_data_completion_and_delivery_active(
 
     monkeypatch.setattr(release_gate, "evaluate_release_gate", fake_gate)
 
+    test_data_plan = {"status": "ready", "strategy": "reuse_verified_existing"}
     gate = _evaluate_release_gate(
         project=project,
         root=tmp_path,
@@ -117,7 +121,7 @@ def test_release_gate_owns_test_data_completion_and_delivery_active(
         execution_status="completed",
         runtime_contract={},
         evidence_bundle={"status": "not_created"},
-        test_data_plan={"status": "ready", "strategy": "reuse_verified_existing"},
+        test_data_plan=test_data_plan,
         findings=[],
         coverage_gaps=[],
     )
@@ -125,9 +129,30 @@ def test_release_gate_owns_test_data_completion_and_delivery_active(
 
     state = read_scan_stage_progress(tmp_path, project)
     assert state["stages"]["test_data_assessment"]["status"] == "completed"
-    # A business release verdict of FAIL is still a successfully executed gate.
-    assert state["stages"]["delivery_finalization"]["status"] == "completed"
+    # Gate evaluation has returned, but report/result finalization still runs.
+    assert state["stages"]["delivery_finalization"]["status"] == "active"
     assert "verdict=fail" in state["stages"]["delivery_finalization"]["detail"]
+    assert "正在收口" in state["stages"]["delivery_finalization"]["detail"]
+
+    _finalize_scan_stage_progress(
+        {
+            "success": True,
+            "execution_status": "completed",
+            "evidence_bundle": {"status": "persisted", "bundle_id": "EV_NATIVE"},
+            "test_data_plan": test_data_plan,
+            "release_gate": gate,
+            "report_path": str(tmp_path / "intelligence_report.json"),
+        },
+        project=project,
+        root=tmp_path,
+    )
+
+    finalized = read_scan_stage_progress(tmp_path, project)
+    # A business release verdict of FAIL is still a successfully executed gate;
+    # only final report/result completion closes this stage.
+    assert finalized["stages"]["delivery_finalization"]["status"] == "completed"
+    assert "verdict=fail" in finalized["stages"]["delivery_finalization"]["detail"]
+    assert "report=persisted" in finalized["stages"]["delivery_finalization"]["detail"]
 
 
 def test_release_gate_failure_marks_delivery_execution_failed(
