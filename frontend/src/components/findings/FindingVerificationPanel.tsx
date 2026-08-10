@@ -7,6 +7,7 @@ type Props = {
   finding: Finding;
   running?: boolean;
   onReverify?: () => void;
+  focusGeneratedAt?: string;
 };
 
 function runLabel(finding: Finding): string {
@@ -16,7 +17,7 @@ function runLabel(finding: Finding): string {
   return latest.generated_at || finding.regression?.last_run_at || '时间未上报';
 }
 
-export function FindingVerificationPanel({ finding, running = false, onReverify }: Props) {
+export function FindingVerificationPanel({ finding, running = false, onReverify, focusGeneratedAt = '' }: Props) {
   const presentation = deriveFindingVerification(finding);
   const latest = presentation.latestRun;
   const hasObligation = hasFindingReverificationObligation(finding);
@@ -78,7 +79,7 @@ export function FindingVerificationPanel({ finding, running = false, onReverify 
         <p className="settings-hint mt-3">当前没有真实可执行回归义务，因此 QualiBug 不显示虚假的“重新验证”操作。</p>
       )}
 
-      <FindingVerificationTimeline finding={finding} />
+      <FindingVerificationTimeline finding={finding} focusGeneratedAt={focusGeneratedAt} />
     </section>
   );
 }
