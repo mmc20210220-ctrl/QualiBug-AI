@@ -11,6 +11,7 @@ interface FindingCardProps {
   onViewEvidence: () => void;
   reverifyRunning?: boolean;
   onReverify?: () => void;
+  focusGeneratedAt?: string;
 }
 
 function moduleName(finding: Finding): string {
@@ -48,6 +49,7 @@ export function FindingCard({
   onViewEvidence,
   reverifyRunning = false,
   onReverify,
+  focusGeneratedAt = '',
 }: FindingCardProps) {
   const quality = finding.evidence_quality;
   const impact = finding.business_summary || finding.business_impact?.summary || finding.actual || '该问题已形成可交付缺陷。';
@@ -122,7 +124,12 @@ export function FindingCard({
             </article>
           </section>
 
-          <FindingVerificationPanel finding={finding} running={reverifyRunning} onReverify={onReverify} />
+          <FindingVerificationPanel
+            finding={finding}
+            running={reverifyRunning}
+            onReverify={onReverify}
+            focusGeneratedAt={focusGeneratedAt}
+          />
         </div>
       )}
     </article>
