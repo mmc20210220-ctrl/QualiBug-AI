@@ -17,10 +17,11 @@ import {
 type Props = {
   record: JsonRecord;
   regressionRunningMode: string;
+  regressionEligible: boolean;
   onRunRegression: (mode: 'smoke' | 'release') => void;
 };
 
-export function RegressionClosurePanel({ record, regressionRunningMode, onRunRegression }: Props) {
+export function RegressionClosurePanel({ record, regressionRunningMode, regressionEligible, onRunRegression }: Props) {
   const regressionSummary = asRecord(record.regression_summary);
   const regressionCovered = asNum(regressionSummary.covered_defect_count);
   const regressionFailed = asNum(regressionSummary.failed_defect_count);
@@ -77,13 +78,14 @@ export function RegressionClosurePanel({ record, regressionRunningMode, onRunReg
             <span><em>最近回归</em><b>{regressionRunAt ? formatScanTime(regressionRunAt) : '暂无'}</b></span>
           </div>
           <div className="customer-showcase-actions">
-            <button className="btn btn-primary" onClick={() => onRunRegression('release')} disabled={regressionRunningMode !== ''}>
-              {regressionRunningMode === 'release' ? 'Release 回归中' : '执行 Release 回归'}
+            <button className="btn btn-primary" onClick={() => onRunRegression('release')} disabled={regressionRunningMode !== '' || !regressionEligible}>
+              {regressionRunningMode === 'release' ? 'Release 回归中' : regressionEligible ? '执行 Release 回归' : '暂无可执行回归'}
             </button>
-            <button className="btn btn-secondary" onClick={() => onRunRegression('smoke')} disabled={regressionRunningMode !== ''}>
-              {regressionRunningMode === 'smoke' ? 'Smoke 回归中' : '执行 Smoke 回归'}
+            <button className="btn btn-secondary" onClick={() => onRunRegression('smoke')} disabled={regressionRunningMode !== '' || !regressionEligible}>
+              {regressionRunningMode === 'smoke' ? 'Smoke 回归中' : regressionEligible ? '执行 Smoke 回归' : '暂无可执行回归'}
             </button>
           </div>
+          {!regressionEligible && <p className="settings-hint mt-3">当前没有已确认 Finding 处于真实回归套件中，因此前端不会提交空回归请求。</p>}
         </article>
       )}
 
