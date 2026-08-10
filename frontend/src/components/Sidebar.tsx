@@ -14,6 +14,7 @@ const sections: NavSection[] = [
       { to: 'campaigns', icon: 'campaign', label: '运行中心' },
       { to: 'findings', icon: 'bug', label: '问题清单', badgeKey: 'findings' },
       { to: 'evidence', icon: 'shield', label: '证据中心' },
+      { to: 'release', icon: 'release', label: '发布门禁' },
     ],
   },
   {
@@ -27,7 +28,6 @@ const sections: NavSection[] = [
     label: '高级视图',
     items: [
       { to: 'coverage', icon: 'matrix', label: '覆盖矩阵' },
-      { to: 'release', icon: 'release', label: '发布门禁' },
       { to: 'jobs', icon: 'workflow', label: '后台任务' },
     ],
   },
