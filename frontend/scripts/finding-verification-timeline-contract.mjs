@@ -9,6 +9,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const verification = read('src/lib/finding-verification.ts');
 const evidencePresentation = read('src/lib/evidence-presentation.ts');
 const timeline = read('src/components/findings/FindingVerificationTimeline.tsx');
+const runSummary = read('src/components/findings/FindingVerificationRunSummary.tsx');
 const verificationPanel = read('src/components/findings/FindingVerificationPanel.tsx');
 const findingCard = read('src/components/findings/FindingCard.tsx');
 const evidenceDrawer = read('src/components/findings/EvidenceDrawer.tsx');
@@ -33,6 +34,15 @@ assert(verification.includes('const changedConclusion = isKnownOutcome && presen
 assert(verification.includes("presentation.outcome === 'unknown'\n        ? '本轮未形成可确认结论'"), 'inconclusive runs must not be presented as conclusion changes');
 assert(verification.includes('if (isKnownOutcome) lastKnownOutcome = presentation.outcome;'), 'unknown runs must not overwrite the last known issue conclusion');
 
+assert(verification.includes('export function deriveFocusedVerificationRunSummary('), 'focused verification run summary must have one shared derivation helper');
+assert(verification.includes("event.kind === 'verification' && event.generatedAt === normalizedGeneratedAt"), 'focused summary must resolve only the exact real verification run');
+assert(verification.includes("if (outcome === 'fixed' || outcome === 'open')"), 'focused summary must walk back to the previous known terminal conclusion');
+assert(verification.includes("previousKnownOutcome = outcome;"), 'focused summary must preserve the last known fixed/open conclusion across unknown runs');
+assert(verification.includes("event.outcome === 'open'"), 'focused summary must distinguish a still-open finding');
+assert(verification.includes("event.outcome === 'fixed'"), 'focused summary must distinguish a verified fixed finding');
+assert(verification.includes('单条问题通过不等于项目可以发布'), 'focused summary must not convert one fixed finding into project release approval');
+assert(verification.includes('不能作为放行依据；项目级 Release Gate 仍需其他真实事实'), 'inconclusive focused runs must not become release evidence');
+
 assert(verification.includes('export function deriveLatestVerificationRunSummary('), 'dashboard latest-run delta must have one shared derivation helper');
 assert(verification.includes("item.kind === 'verification' && item.generatedAt === normalizedRunAt"), 'latest-run delta must only match finding history from the exact project run timestamp');
 assert(verification.includes("event.changedConclusion && event.outcome === 'fixed'"), 'newly fixed count must require a real open-to-fixed transition');
@@ -55,6 +65,16 @@ assert(timeline.includes('中间 ${collapsedCount} 次已折叠'), 'collapsed hi
 assert(timeline.includes('Probe {event.run.regression_probe_id}'), 'timeline must retain the exact regression probe identity');
 assert(timeline.includes('{event.run.method} {event.run.path}'), 'timeline must retain the real validation target');
 
+assert(runSummary.includes('deriveFocusedVerificationRunSummary(finding, normalizedGeneratedAt)'), 'focused summary component must consume the shared exact-run interpreter');
+assert(runSummary.includes('上一已知结论'), 'focused summary must surface the previous known conclusion');
+assert(runSummary.includes('本轮真实结果'), 'focused summary must surface the exact run result');
+assert(runSummary.includes('是否改变结论'), 'focused summary must explain whether the finding conclusion actually changed');
+assert(runSummary.includes('对发布的含义'), 'focused summary must explain the run impact without replacing project release authority');
+assert(runSummary.includes('指定时间 {normalizedGeneratedAt} 不在当前 Finding 的真实验证历史中'), 'stale focused summary must fail closed');
+assert(runSummary.includes('项目是否可以发布仍以项目级 Release Gate 为唯一权威'), 'focused summary must preserve project-level release authority');
+assert(runSummary.includes('Probe {event.run.regression_probe_id}'), 'focused summary must retain exact probe identity');
+assert(runSummary.includes('{event.run.method} {event.run.path}'), 'focused summary must retain exact validation target');
+
 assert(dashboardDelta.includes('asText(regressionRun.generated_at) || asText(latestRun.generated_at)'), 'dashboard delta must anchor to the latest persisted project regression run');
 assert(dashboardDelta.includes('deriveLatestVerificationRunSummary(findings, runAt)'), 'dashboard delta must use the shared exact-run finding derivation');
 assert(dashboardDelta.includes('逐问题变化暂不可对齐'), 'missing per-finding run linkage must remain explicit');
@@ -72,6 +92,7 @@ assert(findings.includes("params.get('verification_at')?.trim() || ''"), 'findin
 assert(findings.includes("focusGeneratedAt={finding.id === requestedFindingId ? requestedVerificationAt : ''}"), 'only the exact requested finding may receive the requested run focus');
 assert(findings.includes('requestedContextSearch = evidenceDeepLinkSearch(requestedFindingId, requestedVerificationAt)'), 'findings navigation must preserve exact finding and run context');
 assert(findingCard.includes('focusGeneratedAt={focusGeneratedAt}'), 'finding card must pass exact run focus into the verification panel');
+assert(verificationPanel.includes('<FindingVerificationRunSummary finding={finding} generatedAt={focusGeneratedAt} />'), 'finding and evidence detail must show the focused run change summary');
 assert(verificationPanel.includes('<FindingVerificationTimeline finding={finding} focusGeneratedAt={focusGeneratedAt} />'), 'finding verification panel must pass exact run focus into the real timeline');
 assert(evidenceDrawer.includes('evidenceDeepLinkSearch(finding.id, focusGeneratedAt)'), 'evidence drawer must preserve exact run when opening the full evidence center');
 
@@ -82,6 +103,7 @@ assert(evidence.includes("navigateToProjectPath('/release', project, findingCont
 
 assert(release.includes("params.get('verification_at')?.trim() || ''"), 'release review must consume the exact requested verification run');
 assert(release.includes('findingContextSearch = evidenceDeepLinkSearch(requestedFindingId, requestedVerificationAt)'), 'release navigation must preserve exact finding and run context');
+assert(release.includes('<FindingVerificationRunSummary finding={requestedFinding} generatedAt={requestedVerificationAt} />'), 'release review must show the same focused run change summary');
 assert(release.includes('focusGeneratedAt={requestedVerificationAt}'), 'release compact timeline must focus the requested real verification run');
 assert(release.includes('单条 Finding 的修复后验证状态只是发布依据之一，不会覆盖项目级门禁'), 'focused timeline must never replace project-level release authority');
 
@@ -91,6 +113,9 @@ assert(gateBanner.includes('验证变化不是发布结论，发布 Gate 也不�
 assert(styles.includes('.verification-timeline-item.verification-focused'), 'focused verification run styles missing');
 assert(styles.includes('.verification-focus-badge'), 'focused verification run badge styles missing');
 assert(styles.includes('.verification-focus-hint.warning'), 'stale run focus warning styles missing');
+assert(styles.includes('.verification-run-summary {'), 'focused verification summary styles missing');
+assert(styles.includes('.verification-run-summary-grid {'), 'focused verification summary grid styles missing');
+assert(styles.includes('grid-template-columns: minmax(0, 1fr);'), 'focused verification summary must collapse to one column on mobile');
 assert(styles.includes('.verification-delta-row .settings-actions .btn'), 'dashboard delta actions must remain usable on mobile');
 assert(styles.includes('@media (max-width: 560px)'), 'timeline must remain usable on mobile');
 
