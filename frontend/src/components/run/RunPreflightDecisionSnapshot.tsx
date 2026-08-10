@@ -4,7 +4,7 @@ import './RunPreflightDecisionSnapshot.css';
 type Props = {
   presentation: RunPreflightPresentation;
   running: boolean;
-  runDisabled: boolean;
+  disabled: boolean;
   onRun: () => void;
   onRefresh: () => void;
   onReview: () => void;
@@ -13,7 +13,7 @@ type Props = {
 export function RunPreflightDecisionSnapshot({
   presentation,
   running,
-  runDisabled,
+  disabled,
   onRun,
   onRefresh,
   onReview,
@@ -26,7 +26,7 @@ export function RunPreflightDecisionSnapshot({
 
   const primaryDisabled = running
     || presentation.primaryAction === 'wait'
-    || (presentation.primaryAction === 'run' && runDisabled);
+    || (presentation.primaryAction === 'run' && disabled);
   const primaryLabel = running && presentation.primaryAction === 'run'
     ? '正在自主验证…'
     : presentation.primaryActionLabel;
