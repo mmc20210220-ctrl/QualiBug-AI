@@ -76,6 +76,26 @@ assert(materialsHandoff.includes('3. 业务理解输入'), 'materials page must 
 assert(materialsHandoff.includes('连接成功不等于资料已经完成同步'), 'connector-ready and material-ready must remain distinct');
 assert(materialsHandoff.includes('这里只代表输入可用，不代表理解正确率或完整性'), 'business-understanding input readiness must not claim understanding quality');
 assert(materialsHandoff.includes('必须先形成真实 active source'), 'business-understanding input readiness must require a real active material source');
+
+assert(materialsHandoff.includes('type BusinessInputCounts = {'), 'materials readiness must preserve typed category counts for business inputs');
+assert(materialsHandoff.includes('businessInputCategoryCount'), 'materials readiness must count observed business-input categories separately from source count');
+assert(materialsHandoff.includes('businessInputCounts'), 'materials readiness must retain per-category active source counts');
+assert(materialsHandoff.includes("prd: activeSources.filter((source) => sourceType(source) === 'prd').length"), 'PRD input coverage must come from real active PRD sources');
+assert(materialsHandoff.includes("api: activeSources.filter((source) => sourceType(source) === 'openapi').length"), 'API input coverage must come from real active OpenAPI sources');
+assert(materialsHandoff.includes("['database_schema', 'db_design'].includes(sourceType(source))"), 'DB input coverage must combine the real DB source types');
+assert(materialsHandoff.includes("collaboration: activeSources.filter((source) => sourceType(source) === 'collaboration_document').length"), 'collaboration input coverage must come from real active collaboration sources');
+assert(materialsHandoff.includes("historicalBug: activeSources.filter((source) => sourceType(source) === 'historical_bug').length"), 'historical-bug input coverage must come from real active historical bug sources');
+for (const label of ['PRD / 需求', 'API / 接口', 'DB / 数据结构', '协作文档', '历史 Bug']) {
+  assert(materialsHandoff.includes(label), `business input coverage missing customer category: ${label}`);
+}
+assert(materialsHandoff.includes('核心输入覆盖'), 'materials page must expose explainable business-input coverage');
+assert(materialsHandoff.includes('已观察到 ${snapshot.businessInputCategoryCount}/5 类核心输入'), 'coverage headline must describe observed categories instead of completion percentage');
+assert(materialsHandoff.includes('— 未观察到'), 'unseen input categories must be presented as unobserved rather than mandatory failures');
+assert(materialsHandoff.includes('“未观察到”不等于企业必须补充'), 'missing category copy must not convert the five categories into mandatory requirements');
+assert(materialsHandoff.includes('它不是完成率、理解准确率或新的运行门禁'), 'business input coverage must not impersonate understanding quality or execution authority');
+assert(!materialsHandoff.includes('businessInputCategoryCount < 5'), 'five-category input coverage must never become a frontend readiness gate');
+assert(!materialsHandoff.includes('理解完成率'), 'business input coverage must not be labeled as understanding completion rate');
+
 assert(materialsHandoff.includes('function readConnectorSnapshot(connectors'), 'materials readiness must derive connector attention from typed connector records');
 assert(materialsHandoff.includes('AUTHORIZATION_HEALTH.has(healthStatus)'), 'authorization attention must come from connector health truth');
 assert(materialsHandoff.includes("String(connector.health?.status || '').toUpperCase() === 'DOWNSTREAM_DEGRADED'"), 'downstream semantic refresh degradation must remain explicit');
