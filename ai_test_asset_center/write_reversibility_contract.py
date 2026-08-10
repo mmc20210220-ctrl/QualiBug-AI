@@ -1215,12 +1215,35 @@ def _proof_id(op_ref: str, method: str, path: str, authority: str) -> str:
     return "wrp_" + hashlib.sha256(content.encode()).hexdigest()[:24]
 
 
+_SHA256_STABLE_CACHE: dict[str, str] = {}
+
+
 def _sha256_stable(obj: Any) -> str:
-    """Stable SHA256 of a JSON-serializable object."""
+    """Stable SHA256 of a JSON-serializable object.
+
+    Memoized by the serialized form: the write-proof context serializes
+    operation/relation projections per obligation, and repeated identical
+    projections (same graph, same obligation shape) were re-serialized on
+    every compile — an O(obligations × projection) JSON cost that dominated
+    the compile phase once the obligation pool grew. The cache is bounded to
+    the run's distinct projections (content-addressed; identical input →
+    identical digest, semantics unchanged).
+    """
     if obj is None:
         return ""
-    raw = json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+    try:
+        raw = json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        # Non-serializable object (should not happen for proof inputs); fall
+        # back to the object's stable string form without caching.
+        raw = str(obj)
+    cached = _SHA256_STABLE_CACHE.get(raw)
+    if cached is not None:
+        return cached
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:32]
+    if len(raw) <= (256 << 20):  # bound cache memory to reasonable entries
+        _SHA256_STABLE_CACHE[raw] = digest
+    return digest
 
 
 def _relation_mentions_operation(
