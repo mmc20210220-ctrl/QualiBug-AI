@@ -1,5 +1,6 @@
 import { deriveFindingVerification, hasFindingReverificationObligation } from '../../lib/finding-verification';
 import { FindingVerificationStatus } from './FindingVerificationStatus';
+import { FindingVerificationTimeline } from './FindingVerificationTimeline';
 import type { Finding } from '../../types';
 
 type Props = {
@@ -77,23 +78,7 @@ export function FindingVerificationPanel({ finding, running = false, onReverify 
         <p className="settings-hint mt-3">当前没有真实可执行回归义务，因此 QualiBug 不显示虚假的“重新验证”操作。</p>
       )}
 
-      {finding.regression?.history?.length ? (
-        <details className="mt-3">
-          <summary><strong>查看验证历史（{finding.regression.history.length}）</strong></summary>
-          <ul className="mt-3">
-            {[...finding.regression.history]
-              .sort((left, right) => String(right.generated_at || '').localeCompare(String(left.generated_at || '')))
-              .slice(0, 8)
-              .map((item, index) => (
-                <li key={`${item.generated_at || 'run'}-${item.regression_probe_id || index}`}>
-                  [{item.generated_at || '时间未上报'}] {item.status_label || item.status || item.gate_status || '状态未上报'}
-                  {item.method && item.path ? ` · ${item.method} ${item.path}` : ''}
-                  {item.reason ? ` · ${item.reason}` : ''}
-                </li>
-              ))}
-          </ul>
-        </details>
-      ) : null}
+      <FindingVerificationTimeline finding={finding} />
     </section>
   );
 }
