@@ -14,6 +14,7 @@ const stageProgress = read('../ai_test_asset_center/scan_stage_progress.py');
 const stageFinalization = read('../ai_test_asset_center/scan_stage_finalization_hook.py');
 const scanPostHooks = read('../ai_test_asset_center/scan_post_hooks.py');
 const discoveryRuntime = read('../ai_test_asset_center/discovery_runtime.py');
+const scanOutcome = read('../ai_test_asset_center/scan_execution_outcome.py');
 const routing = read('../ai_test_asset_center/private_pilot_http_routing.py');
 const packageJson = read('package.json');
 const ciGate = read('scripts/ci-gate.mjs');
@@ -31,15 +32,20 @@ assert(banner.includes("detail?.phase !== 'submitted'"), 'live scan polling must
 assert(banner.includes('getLiveScanStatus(detail.projectId)'), 'banner must poll the server-confirmed scan status');
 assert(banner.includes('window.setInterval(() => void refreshLiveStatus(), 1000)'), 'submitted scan should refresh live server status once per second');
 assert(banner.includes("liveStatus?.active_scan_live === true"), 'banner must distinguish server-confirmed scanning from request setup');
-assert(banner.includes('不会按计时器或百分比推测'), 'banner must explicitly reject timer/percentage-invented progress');
-assert(banner.includes("['enterprise_understanding', '企业资料理解']"), 'banner must render the real enterprise-understanding stage');
-assert(banner.includes("['scenario_planning', '场景与义务生成']"), 'banner must render the real scenario-planning stage');
-assert(banner.includes("['runtime_execution', '真实探针执行']"), 'banner must render the real execution stage');
-assert(banner.includes("['evidence_collection', '结果观察与证据收集']"), 'banner must render the real evidence stage');
-assert(banner.includes("['test_data_assessment', '测试数据准备 / 就绪核验']"), 'banner must render test-data completion receipts');
-assert(banner.includes("['delivery_finalization', '交付门禁与报告']"), 'banner must render delivery completion receipts');
-assert(banner.includes('权威结果对象形成后补充真实完成态回执'), 'late stages must be described as completion-only authoritative receipts');
-assert(banner.includes('后两类目前不反推开始时间'), 'late-stage start time must not be inferred');
+assert(banner.includes('任何阶段都不会按计时器或百分比推测'), 'banner must explicitly reject timer/percentage-invented progress');
+for (const stage of [
+  "['enterprise_understanding', '企业资料理解']",
+  "['scenario_planning', '场景与义务生成']",
+  "['test_data_assessment', '测试数据准备 / 就绪核验']",
+  "['runtime_execution', '真实探针执行']",
+  "['evidence_collection', '结果观察与证据收集']",
+  "['delivery_finalization', '交付门禁与报告']",
+]) {
+  assert(banner.includes(stage), `banner must render server stage: ${stage}`);
+}
+assert(banner.includes('六个阶段都来自服务端真实执行边界'), 'banner must disclose the six native server boundaries');
+assert(banner.includes('发布门禁已经给出 fail/blocked 结论时'), 'banner must distinguish gate verdict from report finalization');
+assert(banner.includes('只有最终结果收口后才显示完成'), 'delivery stage must not finish before report/result finalization');
 
 assert(routing.includes('parsed.path == "/api/v1/continuous/status"'), 'backend must expose the live status endpoint');
 assert(routing.includes('_get_continuous_state(root, project)'), 'live status route must use the durable scan-state authority');
@@ -53,28 +59,39 @@ assert(stageProgress.includes('Only code that actually owns a stage boundary may
 assert(stageProgress.includes('Persistence is observability-only'), 'stage persistence must be explicitly non-authoritative');
 assert(stageProgress.includes('def _persist_best_effort'), 'stage writes must be isolated from the scan outcome');
 assert(stageProgress.includes('scan_stage_progress_persist_failed'), 'stage persistence failure must stay visible in logs');
-assert(stageProgress.includes('"enterprise_understanding"'), 'stage authority missing enterprise-understanding stage');
-assert(stageProgress.includes('"scenario_planning"'), 'stage authority missing scenario-planning stage');
-assert(stageProgress.includes('"runtime_execution"'), 'stage authority missing runtime execution stage');
-assert(stageProgress.includes('"evidence_collection"'), 'stage authority missing evidence collection stage');
-assert(stageProgress.includes('"test_data_assessment"'), 'stage authority missing test-data stage');
-assert(stageProgress.includes('"delivery_finalization"'), 'stage authority missing delivery stage');
+for (const stage of [
+  '"enterprise_understanding"',
+  '"scenario_planning"',
+  '"runtime_execution"',
+  '"evidence_collection"',
+  '"test_data_assessment"',
+  '"delivery_finalization"',
+]) {
+  assert(stageProgress.includes(stage), `stage authority missing ${stage}`);
+}
 
 assert(discoveryRuntime.includes('build_discovery_plan as _build_discovery_plan'), 'stage telemetry must wrap the real planning authority');
 assert(discoveryRuntime.includes('run_experiment_candidate as _run_experiment_candidate'), 'stage telemetry must wrap the real execution authority');
 assert(discoveryRuntime.includes('plan = _build_discovery_plan(inputs, campaign_handle)'), 'planning stage must be driven by the actual plan call');
 assert(discoveryRuntime.includes('result = _run_experiment_candidate(inputs, campaign_handle, plan)'), 'execution stage must be driven by the actual experiment runner');
 assert(discoveryRuntime.includes('"runtime_execution",\n        "completed"'), 'real experiment return must complete runtime execution');
-assert(discoveryRuntime.includes('"evidence_collection",\n        "active"'), 'evidence telemetry must become active only when the real runner begins producing observations');
+
+assert(scanOutcome.includes('def _test_data_receipt_verifier(root: Path, project: str)'), 'test-data stage must use the real verifier boundary');
+assert(scanOutcome.includes('"test_data_assessment",\n        "active"'), 'test-data verifier entry must activate the real stage');
+assert(scanOutcome.includes('def _persist_execution_evidence('), 'evidence stage must use the real persistence boundary');
+assert(scanOutcome.includes('执行观察、证据图与客户可交付证据正在归一化持久化'), 'evidence persistence must publish an active receipt');
+assert(scanOutcome.includes('detail=f"evidence_bundle={bundle_status}"[:240]'), 'evidence persistence result must close the stage from the real bundle');
+assert(scanOutcome.includes('def _evaluate_release_gate('), 'delivery stage must use the real release-gate boundary');
+assert(scanOutcome.includes('发布门禁正在核验证据、测试数据、覆盖缺口与发布策略'), 'release gate entry must activate delivery finalization');
+assert(scanOutcome.includes('报告与最终结果正在收口'), 'successful gate evaluation must remain active until final report/result closure');
+assert(scanOutcome.includes('if gate_status in {"failed", "error", "invalid"}'), 'only gate execution failure may fail the delivery stage');
 
 assert(scanPostHooks.includes('"ai_test_asset_center.scan_stage_finalization_hook"'), 'stage finalization must use the first-class scan post-hook convention');
 assert(scanPostHooks.includes('"install_scan_stage_finalization_hook"'), 'stage finalization installer must be registered');
-assert(stageFinalization.includes('result.get("evidence_bundle")'), 'evidence completion must come from the authoritative evidence bundle');
-assert(stageFinalization.includes('result.get("test_data_plan")'), 'test-data completion must come from the authoritative test-data plan');
-assert(stageFinalization.includes('result.get("release_gate")'), 'delivery completion must come from the authoritative release gate');
-assert(stageFinalization.includes('test_data_status.startswith("blocked")'), 'test-data testability gaps must remain visibly blocked');
-assert(stageFinalization.includes('delivery_stage_status = ('), 'delivery telemetry must explicitly derive its own execution status');
-assert(stageFinalization.includes('if release_status in {"failed", "error", "invalid"}'), 'only gate execution failure may fail the delivery stage');
+assert(stageFinalization.includes('result.get("evidence_bundle")'), 'final evidence state must come from the authoritative evidence bundle');
+assert(stageFinalization.includes('result.get("test_data_plan")'), 'final test-data state must come from the authoritative test-data plan');
+assert(stageFinalization.includes('result.get("release_gate")'), 'final delivery state must come from the authoritative release gate');
+assert(stageFinalization.includes('report_state = "persisted" if _text(result.get("report_path")) else "not_persisted"'), 'delivery completion must record whether the report persisted');
 assert(stageFinalization.includes('verdict={release_verdict or \'unspecified\'}'), 'release verdict must stay detail, not be confused with telemetry failure');
 
 const projectionStart = backendContinuous.indexOf('def _public_scan_owner');
