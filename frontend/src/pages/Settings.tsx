@@ -19,6 +19,13 @@ import {
   type TenantCreateResponse, type SavedServiceConfig,
 } from '../lib/settings-utils';
 
+function createSecureTemporaryPassword(length = 24): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+  const values = new Uint32Array(length);
+  window.crypto.getRandomValues(values);
+  return Array.from(values, (value) => alphabet[value % alphabet.length]).join('');
+}
+
 export function Settings() {
   usePageTitle('设置');
   const [params] = useSearchParams();
@@ -186,6 +193,7 @@ export function Settings() {
     setWsStatus('创建中...');
     try {
       const tenantId = buildTenantId(name);
+      const temporaryPassword = createSecureTemporaryPassword();
       const response = await fetch('/api/tenants/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -193,13 +201,13 @@ export function Settings() {
           tenant_id: tenantId,
           name,
           username: tenantId,
-          password: `${tenantId}123`,
+          password: temporaryPassword,
         }),
       });
       const payload = (await response.json()) as TenantCreateResponse;
 
       if (payload.ok) {
-        const loginOk = await login(tenantId, `${tenantId}123`);
+        const loginOk = await login(tenantId, temporaryPassword);
         const items = await refreshWorkspaces(true);
         setImportId('');
         const nextProjectId = items.find((item) => item.project_id === tenantId)?.project_id || tenantId;
@@ -471,7 +479,7 @@ export function Settings() {
       onAuthTypeChange={setCAuthType}
       onLoginApiChange={setCLoginApi}
       onRoleAccountsChange={setCRoleAccounts}
-      onBearerTokenChange={setCBearerToken}
+      onBearerTokenChange={setCBearToken}
       onApiKeyChange={setCApiKey}
       onToggleDbPanel={toggleDbPanel}
       onDbTypeChange={handleDbTypeChange}
