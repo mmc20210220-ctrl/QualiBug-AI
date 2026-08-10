@@ -9,6 +9,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const presentation = read('src/lib/finding-decision-presentation.ts');
 const snapshot = read('src/components/findings/FindingDecisionSnapshot.tsx');
 const card = read('src/components/findings/FindingCard.tsx');
+const drawer = read('src/components/findings/EvidenceDrawer.tsx');
 const evidence = read('src/pages/EvidenceChain.tsx');
 const styles = read('src/components/findings/FindingDecisionSnapshot.css');
 const packageJson = read('package.json');
@@ -36,6 +37,12 @@ assert(snapshot.includes('替代项目级 Release Gate'), 'decision snapshot mus
 assert(card.includes('<FindingDecisionSnapshot finding={finding} />'), 'expanded Finding must show the decision snapshot before detailed verification');
 assert(card.indexOf('<FindingDecisionSnapshot finding={finding} />') < card.indexOf('<FindingVerificationPanel'), 'Finding decision snapshot must precede the full verification panel');
 assert(card.includes('查看预期 / 实际与复现细节'), 'detailed reproduction facts must remain available after the first-screen summary');
+
+assert(drawer.includes('<FindingDecisionSnapshot finding={finding} compact />'), 'Evidence Drawer must reuse the shared decision snapshot');
+assert(drawer.indexOf('<FindingDecisionSnapshot finding={finding} compact />') < drawer.indexOf('先核对问题为什么成立'), 'Evidence Drawer must show decision context before core evidence details');
+assert(drawer.includes('<FindingVerificationRunSummary finding={finding} generatedAt={focusGeneratedAt} />'), 'Evidence Drawer must preserve exact historical run context when requested');
+assert(drawer.includes('Drawer 不会用质量分或摘要替代缺失的真实证据链'), 'Evidence Drawer must fail closed when the real evidence chain is absent');
+assert(drawer.indexOf('先核对问题为什么成立') < drawer.indexOf('<EvidenceDistributionTools finding={finding} project={project} />'), 'Evidence Drawer distribution tools must stay after evidence review');
 
 assert(evidence.includes('<FindingDecisionSnapshot finding={selected} compact />'), 'Evidence Center must reuse the same decision snapshot for the selected Finding');
 assert(evidence.indexOf('<FindingDecisionSnapshot finding={selected} compact />') < evidence.indexOf('<QualityScore finding={selected} />'), 'Evidence Center must show customer decision context before detailed evidence scoring');
