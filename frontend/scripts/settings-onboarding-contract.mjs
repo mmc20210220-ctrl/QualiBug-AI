@@ -65,36 +65,32 @@ assert(materialsHandoff.includes('materialReadError'), 'material readiness failu
 assert(materialsHandoff.includes('connectorReadError'), 'connector inventory failure must remain distinct from material readiness failure');
 assert(materialsHandoff.includes('onlineActive'), 'materials handoff must distinguish online active sources');
 assert(materialsHandoff.includes('uploadedActive'), 'materials handoff must distinguish uploaded supplement sources');
-assert(materialsHandoff.includes('businessContextActive'), 'materials handoff must distinguish active business-context inputs from generic readable materials');
-assert(materialsHandoff.includes('const BUSINESS_CONTEXT_TYPES = new Set(['), 'business-understanding input readiness must use an explicit frontend presentation allowlist');
-for (const sourceType of ['prd', 'openapi', 'database_schema', 'collaboration_document', 'historical_bug']) {
-  assert(materialsHandoff.includes(`'${sourceType}'`), `business-understanding input readiness missing source type: ${sourceType}`);
-}
+assert(materialsHandoff.includes('observedTypeCount'), 'materials readiness must expose observed source-type diversity without a fixed denominator');
+assert(materialsHandoff.includes('activeTypeCounts'), 'materials readiness must retain dynamic active source-type counts');
+assert(materialsHandoff.includes('function normalizeSourceType('), 'materials readiness must normalize backend source_type values dynamically');
+assert(materialsHandoff.includes('activeSources.forEach((source) => {'), 'materials readiness must derive type distribution from every real active source');
+assert(materialsHandoff.includes('activeTypeCounts[type] = (activeTypeCounts[type] || 0) + 1;'), 'dynamic source types must be counted without an allowlist');
+assert(materialsHandoff.includes('const MATERIAL_TYPE_LABELS: Record<string, string> = {'), 'materials readiness may keep friendly display aliases');
+assert(materialsHandoff.includes("ui_ux: 'UI / UX 设计'"), 'UI/UX design must be recognized as a friendly display alias when that backend type appears');
+assert(materialsHandoff.includes('return MATERIAL_TYPE_LABELS[type] || type;'), 'unknown backend source types must remain visible instead of being filtered out');
+assert(!materialsHandoff.includes('BUSINESS_CONTEXT_TYPES'), 'materials readiness must not use a fixed business-context source-type allowlist');
+assert(!materialsHandoff.includes('BusinessInputCounts'), 'materials readiness must not hard-code a finite business-input category model');
+assert(!materialsHandoff.includes('businessInputCategoryCount'), 'materials readiness must not use a fixed category count denominator');
+assert(!materialsHandoff.includes('businessContextActive'), 'material readiness/blocking must not depend on a fixed business-context type subset');
+
 assert(materialsHandoff.includes('1. 在线来源已连接'), 'materials page must expose online-source connection as readiness stage one');
 assert(materialsHandoff.includes('2. 资料已同步'), 'materials page must expose material sync as readiness stage two');
 assert(materialsHandoff.includes('3. 业务理解输入'), 'materials page must expose business-understanding input as readiness stage three');
 assert(materialsHandoff.includes('连接成功不等于资料已经完成同步'), 'connector-ready and material-ready must remain distinct');
-assert(materialsHandoff.includes('这里只代表输入可用，不代表理解正确率或完整性'), 'business-understanding input readiness must not claim understanding quality');
 assert(materialsHandoff.includes('必须先形成真实 active source'), 'business-understanding input readiness must require a real active material source');
-
-assert(materialsHandoff.includes('type BusinessInputCounts = {'), 'materials readiness must preserve typed category counts for business inputs');
-assert(materialsHandoff.includes('businessInputCategoryCount'), 'materials readiness must count observed business-input categories separately from source count');
-assert(materialsHandoff.includes('businessInputCounts'), 'materials readiness must retain per-category active source counts');
-assert(materialsHandoff.includes("prd: activeSources.filter((source) => sourceType(source) === 'prd').length"), 'PRD input coverage must come from real active PRD sources');
-assert(materialsHandoff.includes("api: activeSources.filter((source) => sourceType(source) === 'openapi').length"), 'API input coverage must come from real active OpenAPI sources');
-assert(materialsHandoff.includes("['database_schema', 'db_design'].includes(sourceType(source))"), 'DB input coverage must combine the real DB source types');
-assert(materialsHandoff.includes("collaboration: activeSources.filter((source) => sourceType(source) === 'collaboration_document').length"), 'collaboration input coverage must come from real active collaboration sources');
-assert(materialsHandoff.includes("historicalBug: activeSources.filter((source) => sourceType(source) === 'historical_bug').length"), 'historical-bug input coverage must come from real active historical bug sources');
-for (const label of ['PRD / 需求', 'API / 接口', 'DB / 数据结构', '协作文档', '历史 Bug']) {
-  assert(materialsHandoff.includes(label), `business input coverage missing customer category: ${label}`);
-}
-assert(materialsHandoff.includes('核心输入覆盖'), 'materials page must expose explainable business-input coverage');
-assert(materialsHandoff.includes('已观察到 ${snapshot.businessInputCategoryCount}/5 类核心输入'), 'coverage headline must describe observed categories instead of completion percentage');
-assert(materialsHandoff.includes('— 未观察到'), 'unseen input categories must be presented as unobserved rather than mandatory failures');
-assert(materialsHandoff.includes('“未观察到”不等于企业必须补充'), 'missing category copy must not convert the five categories into mandatory requirements');
-assert(materialsHandoff.includes('它不是完成率、理解准确率或新的运行门禁'), 'business input coverage must not impersonate understanding quality or execution authority');
-assert(!materialsHandoff.includes('businessInputCategoryCount < 5'), 'five-category input coverage must never become a frontend readiness gate');
-assert(!materialsHandoff.includes('理解完成率'), 'business input coverage must not be labeled as understanding completion rate');
+assert(materialsHandoff.includes('${snapshot.active} 份资料已进入输入主链'), 'all real active sources must be allowed to enter the presentation input mainline');
+assert(materialsHandoff.includes('不设固定类型白名单'), 'business-understanding input presentation must explicitly reject a fixed source-type whitelist');
+assert(materialsHandoff.includes('资料类型分布'), 'materials page must expose dynamic source-type distribution');
+assert(materialsHandoff.includes('已观察到 ${snapshot.observedTypeCount} 类 active 资料'), 'type distribution must use a dynamic observed count without a fixed denominator');
+assert(materialsHandoff.includes('未知类型会原样展示'), 'unknown backend source types must remain visible to the customer');
+assert(!materialsHandoff.includes('/5 类核心输入'), 'materials page must not present a fixed five-type denominator');
+assert(!materialsHandoff.includes('核心输入覆盖'), 'materials page must not frame a fixed source subset as canonical enterprise input coverage');
+assert(!materialsHandoff.includes('理解完成率'), 'materials type distribution must not be labeled as understanding completion rate');
 
 assert(materialsHandoff.includes('function readConnectorSnapshot(connectors'), 'materials readiness must derive connector attention from typed connector records');
 assert(materialsHandoff.includes('AUTHORIZATION_HEALTH.has(healthStatus)'), 'authorization attention must come from connector health truth');
@@ -109,9 +105,9 @@ const syncFailurePriority = materialsHandoff.indexOf('if (snapshot.syncFailureCo
 const downstreamPriority = materialsHandoff.indexOf('if (snapshot.downstreamDegradedCount > 0)');
 const syncingPriority = materialsHandoff.indexOf('if (snapshot.syncingConnectorCount > 0 || snapshot.processing > 0)');
 const partialCoveragePriority = materialsHandoff.indexOf('if (snapshot.partialCoverageConnectorCount > 0)');
-const missingSourcePriority = materialsHandoff.indexOf('if (snapshot.connectorCount === 0 && snapshot.uploadedActive === 0)');
+const missingSourcePriority = materialsHandoff.indexOf('if (snapshot.connectorCount === 0 && snapshot.active === 0)');
+const connectedNoMaterialPriority = materialsHandoff.indexOf('if (snapshot.connectorCount > 0 && snapshot.active === 0)');
 const uploadedOnlyPriority = materialsHandoff.indexOf('if (snapshot.onlineActive === 0 && snapshot.uploadedActive > 0)');
-const coreInputPriority = materialsHandoff.indexOf('if (snapshot.businessContextActive === 0)');
 assert(
   readFailurePriority >= 0
   && authorizationPriority > readFailurePriority
@@ -121,10 +117,12 @@ assert(
   && syncingPriority > downstreamPriority
   && partialCoveragePriority > syncingPriority
   && missingSourcePriority > partialCoveragePriority
-  && uploadedOnlyPriority > missingSourcePriority
-  && coreInputPriority > uploadedOnlyPriority,
-  'materials blocker priority must keep state-read/auth/sync/coverage issues ahead of lower-priority input guidance',
+  && connectedNoMaterialPriority > missingSourcePriority
+  && uploadedOnlyPriority > connectedNoMaterialPriority,
+  'materials blocker priority must keep state-read/auth/sync/coverage issues ahead of lower-priority source guidance',
 );
+assert(!materialsHandoff.includes('if (snapshot.observedTypeCount'), 'source-type diversity must never become a readiness blocker');
+assert(!materialsHandoff.includes('if (snapshot.activeTypeCounts'), 'source-type membership must never become a readiness blocker');
 
 assert(materialsHandoff.includes('当前至少一个真实状态接口不可用'), 'read failures must fail closed instead of synthesizing readiness');
 assert(materialsHandoff.includes('这是当前最高优先级阻塞'), 'authorization failure must be surfaced as the highest actionable connector blocker');
@@ -132,7 +130,7 @@ assert(materialsHandoff.includes('失败项不会被包装成可用输入'), 'fa
 assert(materialsHandoff.includes('前端只说明下游刷新未完成'), 'downstream degradation must not imply completed business understanding');
 assert(materialsHandoff.includes('部分资源未覆盖'), 'partial connector coverage must remain visible');
 assert(materialsHandoff.includes('文件补充已经可用，不会阻塞首次运行'), 'uploaded-only materials must remain a non-blocking fallback');
-assert(materialsHandoff.includes('这里只提示输入缺口，不推断后端理解质量'), 'core-input guidance must not claim backend understanding quality');
+assert(materialsHandoff.includes('任何后端真实识别并成功接入的资料都可以成为输入'), 'ready input presentation must remain open-ended across source types');
 assert(materialsHandoff.includes('当前最重要动作'), 'materials page must expose one clear highest-priority next action');
 assert(materialsHandoff.includes('只显示当前最高优先级动作'), 'materials page must explain that the CTA is prioritized rather than exhaustive');
 assert(materialsHandoff.includes('<button type="button" className="btn btn-primary" onClick={handleNextAction}'), 'materials readiness surface must expose exactly one primary prioritized action');
