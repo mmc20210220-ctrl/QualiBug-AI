@@ -71,6 +71,7 @@ import json
 import mmap
 import os
 import re
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -176,8 +177,13 @@ def _atomic_write_json(path: Path, payload: dict[str, Any], *, indent: int = 2) 
             time.sleep(_ARTIFACT_REPLACE_RETRY_SECONDS)
 
 
-def _stream_dump(value: Any, target: Path, *, indent: int) -> int:
-    """流式序列化 value 到文件，返回字节数（峰值内存与 json.dump 一致，不产生大字符串）。"""
+def _stream_dump(value: Any, target: Path, *, indent: int | None) -> int:
+    """流式序列化 value 到文件，返回字节数（峰值内存与 json.dump 一致，不产生大字符串）。
+
+    ``indent=None`` 写紧凑 JSON：分片是产品内部产物（非客户可读契约），
+    紧凑写盘让物理大小减半（实测 indent=2 的 1.9GB 分片 → ~950MB），读回
+    与 redact 阶段同步减半；骨架仍保留缩进便于诊断。
+    """
     with open(target, "w", encoding="utf-8") as handle:
         json.dump(value, handle, ensure_ascii=False, indent=indent, default=str)
         handle.flush()
@@ -440,6 +446,10 @@ def write_scan_result(
     else:
         work = result
     parts_dir = target.parent / SHARD_DIR_NAME
+    if parts_dir.exists():
+        # 分片是单 run 产物（骨架引用本 run 分片）：清掉跨 run 残留
+        # （失败 run 的中间分片、历史版本），避免目录无限膨胀。
+        shutil.rmtree(parts_dir, ignore_errors=True)
     parts_dir.mkdir(parents=True, exist_ok=True)
     temps: list[Path] = []
     pieces: list[tuple[str, Path, int]] = []
@@ -495,7 +505,7 @@ def write_scan_result(
         if post_redaction_validator is not None:
             post_redaction_validator(redacted)
         final_path = parts_dir / _shard_file_name(dotted)
-        _stream_dump(redacted, final_path, indent=indent)
+        _stream_dump(redacted, final_path, indent=None)
         manifest_shards[dotted] = _shard_spec(dotted, final_path, final_path.stat().st_size)
         piece_events.extend(list(piece_receipt.get("events") or []))
         piece_scans.append(piece_scan)
@@ -1185,6 +1195,10 @@ def shard_legacy_scan_result(
     if is_sharded_scan_result(target):
         return {"status": "already_sharded", "path": str(target)}
     parts_dir = target.parent / SHARD_DIR_NAME
+    if parts_dir.exists():
+        # 分片是单 run 产物（骨架引用本 run 分片）：清掉跨 run 残留
+        # （失败 run 的中间分片、历史版本），避免目录无限膨胀。
+        shutil.rmtree(parts_dir, ignore_errors=True)
     parts_dir.mkdir(parents=True, exist_ok=True)
     shards: list[tuple[str, int, int]] = []
     with open(target, "rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as mm:
