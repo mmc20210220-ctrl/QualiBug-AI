@@ -4,7 +4,7 @@ import { EvidenceTimeline } from '../components/EvidenceTimeline';
 import { hasRealReplayAsset, isCustomerReadyFinding, useFindingsData } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
-import { evidenceScoreLabel } from '../lib/evidence-presentation';
+import { evidenceDeepLinkSearch, evidenceScoreLabel } from '../lib/evidence-presentation';
 import { AssertionDiff } from '../components/evidence/AssertionDiff';
 import { QualityScore } from '../components/evidence/QualityScore';
 import { ReplayPanel } from '../components/evidence/ReplayPanel';
@@ -38,6 +38,7 @@ export function EvidenceChain() {
     ? withEvidence.find((f) => f.id === requestedFindingId) || null
     : withEvidence[0] || null;
   const confirmedWithoutEvidence = Math.max(0, customerFindings.length - withEvidence.length);
+  const findingContextSearch = evidenceDeepLinkSearch(selected?.id || requestedFindingId);
 
   const selectFinding = (findingId: string) => {
     const next = new URLSearchParams(params);
@@ -62,7 +63,7 @@ export function EvidenceChain() {
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {customerFindings.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>问题清单</button>}
+          {customerFindings.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project, findingContextSearch)}>问题清单</button>}
           <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project)}>发布门禁</button>
         </div>
       </div>
@@ -119,7 +120,7 @@ export function EvidenceChain() {
           <h3>{customerFindings.length} 个已确认问题当前没有可展示证据包</h3>
           <p>这里不会把“有已确认问题但证据包不可展示”降级成普通空态。请先回到问题清单核对问题状态，或重新读取证据数据。</p>
           <div className="settings-actions">
-            <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>查看问题清单</button>
+            <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project, findingContextSearch)}>查看问题清单</button>
             <button className="btn btn-secondary" onClick={refetch}>重新读取</button>
             <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>
           </div>
@@ -163,7 +164,7 @@ export function EvidenceChain() {
                   : '链接中的问题标识可能来自旧结果。当前不会用其他 Finding 的证据替代它。'}
                 </p>
                 <div className="settings-actions">
-                  <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>返回问题清单</button>
+                  <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project, findingContextSearch)}>返回问题清单</button>
                   <button className="btn btn-secondary" onClick={showFirstEvidence}>查看第一条真实证据</button>
                 </div>
               </section>
