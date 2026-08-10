@@ -163,6 +163,42 @@ Evidence 中的 Replay 结果仍必须遵守：一次“未复现”不等于 ve
 - Release 紧凑时间线必须始终保留原始 Finding 基线，并展示最近 3 次真实验证；中间历史折叠时明确显示折叠数量；
 - 时间线只解释单 Finding 历史，不改变项目级 Release Gate。
 
+### 7.3 Dashboard 最新一轮验证变化
+
+Dashboard 首屏必须回答一个独立问题：**最新一次真实修复后验证，对哪些 Finding 的结论造成了什么变化？**
+
+该口径与“当前各 Finding 的最新状态”不同，严禁把不同轮次的当前状态拼成所谓“本轮变化”。
+
+项目最新真实轮次锚点只允许来自：
+
+1. `regression_run.generated_at`；
+2. 若上者不存在，则 `regression_summary.latest_run.generated_at`。
+
+`deriveLatestVerificationRunSummary(findings, runAt)` 只统计 `Finding.regression.history` 中 `generated_at === runAt` 的真实回执。
+
+如果项目级最新 Run 已存在，但 Finding history 没有同一个 `generated_at`：
+
+- Dashboard 必须明确显示“逐问题变化暂不可对齐”；
+- 不得拿每条 Finding 的最新历史替代；
+- 不得补造“本轮修复 X 个”等数字。
+
+同一真实 Run 内的 Finding 必须互斥归类：
+
+- **刚验证修复**：该轮发生真实 `open -> fixed`；
+- **重新出现**：该轮发生真实 `fixed -> open`；
+- **仍失败**：该轮结果为 `open`，但没有发生 fixed -> open 变化；
+- **无法确认**：该轮结果为 `unknown`；
+- **保持通过**：该轮结果为 `fixed`，但之前已经是 fixed，不得重复计算成“刚验证修复”。
+
+Dashboard 变化卡只表达验证价值事实；它不能改变项目级 Release Gate。
+
+`RegressionGateBanner` 首屏区域必须同时容纳两类独立事实：
+
+- `DashboardVerificationDeltaPanel`：这次验证改变了什么；
+- Release / Regression Gate Banner：这些事实对发布意味着什么。
+
+即使 Gate 通过，也不能隐藏有价值的最新 Finding 变化；即使 Gate 阻塞，也不能用 Gate 总数伪装成逐 Finding 变化。
+
 ## 8. 身份连续性
 
 统一状态呈现和验证历史不能破坏既有：
@@ -195,6 +231,10 @@ Dashboard / Findings / Evidence / Release 必须始终通过 Finding ID 精确�
 - 时间线保留 probe ID、method/path 等真实验证身份；
 - Evidence 展示完整时间线；
 - Release 展示保留基线的紧凑时间线；
+- Dashboard 最新一轮变化必须按项目级 `generated_at` 精确锚定；
+- “刚验证修复 / 重新出现 / 仍失败 / 无法确认 / 保持通过”必须互斥；
+- 项目 Run 与 Finding history 无法精确关联时必须 fail-closed，不得补造变化数字；
+- Dashboard 验证变化与项目级 Gate 权威必须保持分离；
 - Release 项目级 Gate 权威不变。
 
 `test:finding-context-navigation` 与 `test:customer-action-guidance` 必须适配 `DashboardFocusFindingCard` 的组件拆分，不得依赖旧的 Dashboard 内联实现。
