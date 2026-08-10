@@ -373,10 +373,27 @@ def _rederive_redaction_sensitive_authority(value: Any) -> Any:
             # ledger grows large. Semantics unchanged — the ledger is still
             # fully validated, once per object.
             from .obligation_attempt_ledger import (
+                ObligationAttemptLedgerError as _ObligationAttemptLedgerError,
+                reseal_obligation_attempt_ledger as _reseal_obligation_attempt_ledger,
                 validate_obligation_attempt_ledger,
             )
 
-            ledger_validated = validate_obligation_attempt_ledger(ledger)
+            # A hydrated envelope (scan-result shard reload) expands ref/blob
+            # markers into their real subtrees AFTER the ledger was sealed —
+            # the content changes while the fingerprint still reflects the
+            # marker-bearing bytes, so fail-closed validation would reject a
+            # perfectly redacted envelope. Reseal from the current content so
+            # fingerprint and content stay self-consistent before the
+            # fingerprint-bound authority artifacts are rebuilt. Reseal is a
+            # pure re-derivation (idempotent on an already-consistent ledger);
+            # a ledger that fails reseal is genuinely corrupt and still fails
+            # closed here.
+            try:
+                ledger_validated = validate_obligation_attempt_ledger(ledger)
+            except _ObligationAttemptLedgerError:
+                ledger = _reseal_obligation_attempt_ledger(ledger)
+                scope["obligation_attempt_ledger"] = ledger
+                ledger_validated = validate_obligation_attempt_ledger(ledger)
             scope["formal_delivery_authority"] = (
                 build_formal_delivery_authority_receipt(
                     mainline_run=mainline,
