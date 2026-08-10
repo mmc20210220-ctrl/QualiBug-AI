@@ -1077,7 +1077,14 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "reason": f"{type(_llm_obs_exc).__name__}:{str(_llm_obs_exc)[:160]}",
         }
     output_root = root / "platform_outputs" / _safe_project(project)
-    write_scan_result(output_root / "scan_result.json", result)
+    write_scan_result(
+        output_root / "scan_result.json",
+        result,
+        # 编译产物（v12 实验/义务计划快照）占 result ~90% 且与执行结果无关：
+        # 落盘只保留身份行（findings/ledger/执行结果全量），落盘从 ~30min
+        # 压到 ~2min。内存 result 不变（剪枝只发生在持久化副本）。
+        prune_compiled_experiments=True,
+    )
     increment_scan_counter(output_root / "scan_counter.json")
     _persist_customer_ready_static_artifacts(project, root, result)
 

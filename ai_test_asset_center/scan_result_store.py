@@ -383,6 +383,7 @@ def write_scan_result(
     normalize: bool = True,
     dedup_threshold_bytes: int = DEFAULT_DEDUP_THRESHOLD_BYTES,
     blob_threshold_bytes: int = DEFAULT_BLOB_THRESHOLD_BYTES,
+    prune_compiled_experiments: bool = False,
 ) -> dict[str, Any]:
     """分片持久化 scan_result（内容 == 旧单文件，redaction 契约不变）。
 
@@ -400,6 +401,18 @@ def write_scan_result(
          已脱敏分片加载并 hydrate 引用后执行 ``_rederive_redaction_sensitive_authority``，
          重建产物就地写回骨架并单独 redact+scan，然后所有分片占位还原；
       7. 原子写索引（含分片清单）。
+
+    ``prune_compiled_experiments``（主链默认开启）：编译产物（v12 下
+    experiments/experiment_compile/by_obligation/obligations 的全部实验与
+    义务对象）只落盘轻量身份行（experiment_id/obligation_id/status/家族/
+    编译状态 + 断言数/计划长度计数），删除 binding_plan/control_plan/
+    treatment_plan/fixture_dag/assertions 等重量字段。实测编译产物占
+    result 的 ~90%（run25c：4-5GB 中实验/义务计划快照 ~3GB+，执行结果与
+    findings 仅 ~300MB）——落盘成本（copy/normalize/partition/redact）与
+    产物体积线性相关，剪枝把落盘从 ~30min 压到 ~2min。剪枝只发生在
+    持久化副本（deepcopy 后），内存中的调用方 result 不变；执行结果、
+    findings、ledger（权威执行台账）不受影响，评估器读 findings/ledger
+    不受影响。默认 False 保留完整产物契约，调用方显式开启。
 
     返回 redaction receipt（与 ``write_json_redacted`` 一致）。非 dict 载荷回退为
     旧单文件写路径（scan_result 产品契约恒为 dict）。
@@ -446,6 +459,9 @@ def write_scan_result(
         except (TypeError, ValueError, RecursionError):
             work = json.loads(json.dumps(result))
         _mark("copy")
+        if prune_compiled_experiments:
+            _prune_compiled_experiment_payload(work)
+            _mark("prune_compiled")
         registry = normalize_scan_result(
             work,
             dedup_threshold_bytes=dedup_threshold_bytes,
@@ -769,6 +785,89 @@ def _combine_redaction_receipt(
 # ═════════════════════════════════════════════════════════════════════════════
 # 读取（兼容加载：自动识别分片 / 旧单文件；keys 流式 API）
 # ═════════════════════════════════════════════════════════════════════════════
+
+# Compiled-experiment identity rows keep enough to diagnose the pool without
+# the multi-hundred-KB plan snapshots (binding/control/treatment plans,
+# fixture DAGs, assertion lists) that dominate the persisted size.
+_EXPERIMENT_KEEP_FIELDS = frozenset({
+    "experiment_id", "obligation_id", "risk_family", "compile_status",
+    "status", "reason_code", "block_reason", "arm_of", "candidate_id",
+    "adapter", "execution_status", "gate_passed", "bug_status",
+})
+_EXPERIMENT_COUNT_FIELDS = {
+    "assertions": "assertion_count",
+    "binding_plan": "binding_plan_length",
+    "control_plan": "control_plan_length",
+    "treatment_plan": "treatment_plan_length",
+}
+_OBLIGATION_KEEP_FIELDS = frozenset({
+    "obligation_id", "risk_family", "candidate_id", "status", "reason_code",
+    "compile_status",
+})
+_PRUNED_COMPILED_BUCKETS = (
+    "all_experiments", "experiments", "blocked_experiments",
+    "abstract_experiments", "compile_all_experiments", "compile_experiments",
+    "by_obligation",
+)
+
+
+def _prune_experiment_row(row: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for _field in _EXPERIMENT_KEEP_FIELDS:
+        if row.get(_field) is not None:
+            out[_field] = row[_field]
+    for _src, _count_key in _EXPERIMENT_COUNT_FIELDS.items():
+        _val = row.get(_src)
+        if isinstance(_val, (list, dict)):
+            out[_count_key] = len(_val)
+    return out
+
+
+def _prune_obligation_row(row: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for _field in _OBLIGATION_KEEP_FIELDS:
+        if row.get(_field) is not None:
+            out[_field] = row[_field]
+    return out
+
+
+def _prune_compiled_experiment_payload(work: dict[str, Any]) -> dict[str, Any]:
+    """Replace compiled experiment/obligation plan snapshots with identity rows.
+
+    Walks the ``v12`` subtree only. The persisted copy keeps each experiment's
+    identity, statuses and plan-size counts; heavy plan fields are dropped.
+    Execution results, findings, the obligation-attempt ledger and the
+    behavior-slice ledger are untouched (they are the authoritative runtime
+    record). Mutates ``work`` in place and returns it.
+    """
+    v12 = work.get("v12")
+    if not isinstance(v12, dict):
+        return work
+    for _bucket_name, _bucket in list(v12.items()):
+        if not isinstance(_bucket, dict):
+            continue
+        for _list_key, _value in list(_bucket.items()):
+            _short = _text_key(_list_key)
+            if _short in _PRUNED_COMPILED_BUCKETS and isinstance(_value, (list, dict)):
+                if isinstance(_value, list):
+                    _bucket[_list_key] = [
+                        _prune_experiment_row(row)
+                        for row in _value
+                        if isinstance(row, dict)
+                    ]
+                elif _short == "by_obligation":
+                    _bucket[_list_key] = {
+                        _k: _prune_experiment_row(_row)
+                        for _k, _row in _value.items()
+                        if isinstance(_row, dict)
+                    }
+                else:
+                    _bucket[_list_key] = _prune_obligation_row(_value)
+    return work
+
+
+def _text_key(value: Any) -> str:
+    return str(value or "").strip()
 
 def attach_skeleton_keys(path: Path | str, keys: dict[str, Any]) -> dict[str, Any]:
     """Lightweight post-write update of a sharded scan_result skeleton.

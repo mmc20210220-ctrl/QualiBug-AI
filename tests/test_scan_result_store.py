@@ -289,3 +289,67 @@ class TestPostWriteSkeletonAttach:
             write_scan_result(target, dict(result), threshold_bytes=1024)
         loaded = load_scan_result(target)
         assert loaded["findings"][0]["finding_id"] == "F-1"
+
+
+class TestCompiledPayloadPruning:
+    """Compiled experiment/obligation plan snapshots are pruned on the
+    persisted copy (identity rows only), while execution records survive."""
+
+    def test_prune_compiled_experiments_shrinks_payload(self, tmp_path):
+        from ai_test_asset_center.scan_result_store import (
+            _prune_compiled_experiment_payload,
+        )
+
+        def big_experiment(i):
+            return {
+                "experiment_id": f"exp_{i}", "obligation_id": f"obl_{i}",
+                "risk_family": "authorization", "compile_status": "COMPILED",
+                "status": "selected",
+                "control_plan": [{"path": "/x", "body": "y" * 2000}],
+                "treatment_plan": [{"path": "/x", "body": "y" * 2000}],
+                "binding_plan": [{"target": "id", "resolver": "x" * 500} for _ in range(10)],
+                "fixture_dag": {"nodes": [{"node_id": "n1"}]},
+                "assertions": [{"kind": "validation_rejection"} for _ in range(8)],
+            }
+
+        result = {"v12": {
+            "experiments": {"all_experiments": [big_experiment(i) for i in range(5)],
+                            "experiments": [big_experiment(i) for i in range(5)]},
+            "experiment_compile": {"all_experiments": [big_experiment(i) for i in range(5)]},
+            "experiments_by_obligation": {f"obl_{i}": big_experiment(i) for i in range(5)},
+            "obligations": {"obligations": [
+                {"obligation_id": f"o{i}", "risk_family": "x", "property": {"big": "z" * 2000}}
+                for i in range(5)]},
+            "obligation_attempt_ledger": {"attempts": [{"candidate_id": "c1", "status": "EXECUTED"}]},
+            "execution_results": {"executed": [{"experiment_id": "e1", "finding": {"evidence": "x" * 500}}]},
+        }}
+        import json
+        before = len(json.dumps(result))
+        _prune_compiled_experiment_payload(result)
+        after = len(json.dumps(result))
+        assert after < before
+        # Identity + plan-size counts survive; heavy plans are dropped.
+        e = result["v12"]["experiments"]["all_experiments"][0]
+        assert e["experiment_id"] == "exp_0"
+        assert e["binding_plan_length"] == 10
+        assert e["assertion_count"] == 8
+        assert "binding_plan" not in e and "control_plan" not in e
+        # Execution records untouched.
+        assert len(result["v12"]["obligation_attempt_ledger"]["attempts"]) == 1
+        assert len(result["v12"]["execution_results"]["executed"]) == 1
+
+    def test_prune_leaves_non_compiled_v12_intact(self, tmp_path):
+        from ai_test_asset_center.scan_result_store import (
+            _prune_compiled_experiment_payload,
+        )
+
+        result = {"v12": {
+            "obligation_attempt_ledger": {"attempts": [{"candidate_id": "c1"}]},
+            "execution_results": {"executed": [{"experiment_id": "e1"}]},
+            "behavior_slice_ledger": {"slices": [{"slice_id": "s1"}]},
+        }}
+        snapshot = dict(result["v12"])
+        _prune_compiled_experiment_payload(result)
+        assert result["v12"]["obligation_attempt_ledger"] == snapshot["obligation_attempt_ledger"]
+        assert result["v12"]["execution_results"] == snapshot["execution_results"]
+        assert result["v12"]["behavior_slice_ledger"] == snapshot["behavior_slice_ledger"]
