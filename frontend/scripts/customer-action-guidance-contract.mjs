@@ -30,6 +30,8 @@ const releaseDecisionStart = dashboardUtils.indexOf('export function releaseDeci
 const releaseDecisionEnd = dashboardUtils.indexOf('\n}\n\n// ─── Campaign helpers', releaseDecisionStart);
 assert(releaseDecisionStart >= 0 && releaseDecisionEnd > releaseDecisionStart, 'release decision helper must exist');
 const releaseDecisionBody = dashboardUtils.slice(releaseDecisionStart, releaseDecisionEnd);
+assert(dashboardUtils.includes("import { deriveReleasePresentation } from './release-presentation';"), 'dashboard release decision must reuse the shared release presentation priority');
+assert(releaseDecisionBody.includes('const prioritized = deriveReleasePresentation({'), 'dashboard high-risk release states must flow through the shared interpreter');
 assert(releaseDecisionBody.indexOf('if (p0 > 0)') < releaseDecisionBody.indexOf('if (unhealthy || blocked)'), 'confirmed P0 must outrank incomplete coverage or unhealthy scan status in release advice');
 
 assert(releasePresentation.includes('export function deriveReleasePresentation'), 'release presentation must have one frontend priority interpreter');
