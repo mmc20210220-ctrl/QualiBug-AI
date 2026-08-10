@@ -1199,7 +1199,12 @@ Anchors (update together with the code):
   ACTUALLY has in the forbidden state (status non-public, validity date
   passed, a declared min/cap boundary, or a declared scope) — resolved at
   runtime, never guessed. Mutations: `runtime_entity_state_violation` (with
-  `violation_mode` status/expiry/any), `runtime_amount_boundary_violation`
+  `violation_mode` status/expiry/usage/any — usage selects a row whose
+  declared usage reached its limit, reading the limit from the rule's OWN
+  constrained limit fields carried as `usage_limit_fields` and the used count
+  from the remaining numeric fields, so a user_limit value is never misread
+  as a used count; rows without usage data never match, fail closed),
+  `runtime_amount_boundary_violation`
   (min_amount → boundary − 1; max_cap → cap × 100 / rate + 1 on a percent-
   type row) and `runtime_scope_violation` (a scope-declaring row + a
   distinct scope value observed in the same collection for the line-item
@@ -1209,6 +1214,29 @@ Anchors (update together with the code):
   `BLOCKED_RUNTIME_AMOUNT_BOUNDARY_ROW_MISSING` /
   `BLOCKED_RUNTIME_SCOPE_ROW_MISSING`) — a treatment must never silently
   equal the control body.
+- **Decision input surface gate (obligation compiler)** —
+  `obligation_compiler_base` (`_decision_input_surface` + the
+  `explicit_body_validation` exemption): the historical read-drop that keeps
+  body-schema validation rules (format/required/type) off read operations
+  with no body to validate must NOT swallow an ENTITY-ELIGIBILITY rule
+  (expression operands carry entity fields) on its entity's own decision
+  input surface (POST/PUT/PATCH whose path/summary carries the generic
+  decision vocabulary 校验/验证/使用/领取/可用/模拟/试算/计算/预估/报价/
+  validate/check/use/claim/simulate/estimate) — the decision response IS the
+  effect, so the rule is decidable there even when the operation is
+  read-like. Without this gate the decision-surface obligations for
+  状态必须为 ACTIVE / 必须满足最低订单金额 / 类目券只能用于指定类目 /
+  折扣券必须遵守封顶金额 silently vanish as coverage gaps.
+- **Usage-limit decision-surface binding** — `behavior_ir_core`: a quota
+  rule (使用次数/限用/只能使用 + 不能超过/限制/上限) keeps its idempotency
+  replay invariant on the CONSUMPTION operations AND gains a second
+  `validation`-kind invariant (`operator=under_limit`,
+  `constraint_kind=USAGE_LIMIT`, `derived_invariant_kind=
+  usage_decision_surface`) on the remaining DECISION operations — a decision
+  surface that certifies an exhausted entity as usable violates the quota
+  even though no consumption happens in that call. The runtime usage
+  resolver fails closed when the environment exposes no usage data; never a
+  fabricated finding.
 - **Decision endpoints** — an operation whose path/summary carries
   validation vocabulary (校验/验证/使用/领取/模拟/validate/check/use/claim/
   simulate/estimate) is a decision surface: it does not mutate the entity,

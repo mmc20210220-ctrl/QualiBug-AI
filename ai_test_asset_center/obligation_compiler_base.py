@@ -500,6 +500,38 @@ def _operation_path_prefix(operation: dict[str, Any]) -> str:
     return ""
 
 
+# Decision input surfaces: operations that decide an entity's eligibility
+# (validate/check/use/claim/simulate/estimate — 校验/验证/使用/领取/可用/模拟/
+# 试算/计算/预估/报价) and echo the decision in their response. For such
+# operations the response body IS the effect — an entity-eligibility rule is
+# decidable on them even when the operation is read-like, and the decision
+# oracle's response_decision channel already treats an acceptance decision for
+# a violating entity as the violation. GET/HEAD list reads are never decision
+# input surfaces (they return collections, not a decision). Generic technical
+# verbs, never industry terms.
+_DECISION_INPUT_SURFACE_TOKENS = (
+    "validate", "check", "verify", "eligible", "usable", "consume",
+    "apply", "simulate", "quote", "estimate", "calculate", "use",
+    "claim", "校验", "验证", "使用", "领取", "可用", "模拟", "计算",
+    "预估", "报价", "试算",
+)
+
+
+def _decision_input_surface(operation: dict[str, Any]) -> bool:
+    """True when the operation is a decision input surface (POST/PUT/PATCH
+    whose path or summary carries the generic decision vocabulary)."""
+    if not isinstance(operation, dict):
+        return False
+    method = _text(operation.get("method")).upper()
+    if method not in {"POST", "PUT", "PATCH"}:
+        return False
+    combined = " ".join([
+        _text(operation.get("path") or operation.get("raw_path")),
+        _text(operation.get("summary") or operation.get("title") or ""),
+    ]).casefold()
+    return any(token in combined for token in _DECISION_INPUT_SURFACE_TOKENS)
+
+
 def _authorization_pair_incomplete_gap(
     *,
     operation: dict[str, Any],
@@ -1778,14 +1810,34 @@ def compile_obligations_from_behavior_ir(
                     "验证",
                 )
             )
+            # Entity-eligibility rules (优惠券状态必须为 ACTIVE → status,
+            # 必须在有效期内 → expires_at, 必须满足最低订单金额 →
+            # min_order_amount) carry ENTITY-SCOPED operands; a decision INPUT
+            # surface (validate/check/use/claim/simulate — 校验/验证/使用/领取/
+            # 模拟/试算 on POST/PUT/PATCH) decides an entity's eligibility and
+            # echoes the decision in its response. For such operations the
+            # response IS the effect, so the rule is decidable there even when
+            # the operation is read-like (read_write=read). The
+            # explicit-body-validation drop exists for body-schema rules
+            # (format/required/type) on reads that have no body to validate;
+            # entity-eligibility rules on their entity's own decision surface
+            # are exactly the cases the drop must not swallow — otherwise the
+            # defect class (a decision endpoint accepting a violating entity)
+            # stays invisible. Generic vocabulary, never industry terms.
+            _entity_eligibility_rule = any(
+                isinstance(_operand, dict)
+                and (_text(_operand.get("entity_ref")) or _text(_operand.get("field")))
+                for _operand in _list(expr.get("operands"))
+            )
             if explicit_body_validation and _text(
                 op.get("read_write") or op.get("side_effect_class")
             ) != "write":
-                coverage_gaps.append(_compile_gap(
-                    subject_ref=invariant_ref,
-                    relation_types=relation_types,
-                ))
-                continue
+                if not (_entity_eligibility_rule and _decision_input_surface(op)):
+                    coverage_gaps.append(_compile_gap(
+                        subject_ref=invariant_ref,
+                        relation_types=relation_types,
+                    ))
+                    continue
             template_by_family = {
                 "idempotency": "idempotent_effect_cardinality",
                 "concurrency": "concurrent_final_invariant",

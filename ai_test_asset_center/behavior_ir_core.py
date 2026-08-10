@@ -6253,6 +6253,71 @@ def build_behavior_ir_from_knowledge_asset(
             confidence=float(rule.get("confidence") or 0.7),
             derivation="explicit",
         ))
+        # ── Usage-limit decision-surface invariant ──
+        # A quota rule (用户使用次数不能超过限制 / 使用次数/限用/只能使用一次)
+        # binds its CONSUMPTION operations as the idempotency replay invariant
+        # above. The same rule ALSO constrains the entity's DECISION surfaces
+        # (validate/check/use/claim/simulate — 校验/验证/使用/领取/模拟/试算):
+        # a decision surface that certifies an exhausted entity as usable
+        # violates the quota even though no consumption happens in that call.
+        # The consumption-only narrowing above deliberately keeps the replay
+        # obligation off read-only eligibility endpoints (a replay there would
+        # misreport correct targets); this second invariant carries the
+        # remaining DECISION surfaces with kind=validation so the decision arm
+        # (runtime_entity_state_violation, violation_mode=usage) can test it.
+        # The runtime resolver selects a row whose declared usage has reached
+        # its limit; when the environment exposes no usage data the treatment
+        # fails closed — never a fabricated finding.
+        _usage_decision_ops = [
+            _text(value)
+            for value in _list(_subject_decision_ops)
+            if _text(value) and _text(value) not in set(_usage_limit_op_ids)
+        ]
+        if (
+            _has_usage_limit_signal
+            and _rule_kind == "idempotency"
+            and _usage_decision_ops
+            and _subject_field_operands
+        ):
+            _usage_decision_inv_id = _stable_id(
+                "inv", rid, "usage_decision_surface"
+            )
+            model["invariants"].append(_fact_node(
+                node_id=_usage_decision_inv_id,
+                typed_fields={
+                    "description": statement,
+                    "expression": {
+                        "kind": "validation",
+                        "operator": "under_limit",
+                        "constraint_kind": "USAGE_LIMIT",
+                        "operands": [
+                            dict(row) for row in _subject_field_operands
+                        ],
+                        "raw": statement,
+                    },
+                    "operation_refs": _usage_decision_ops,
+                    "source_rule_refs": list(dict.fromkeys(
+                        _text(value)
+                        for value in (rule.get("rule_id"), rule.get("id"))
+                        if _text(value)
+                    )),
+                    "derived_from_rule_refs": [rid],
+                    "derived_invariant_kind": "usage_decision_surface",
+                    "subject_entity_refs": [
+                        _text(value)
+                        for value in _list(_subject_channel.get("subject_objects"))
+                        if _text(value)
+                    ],
+                },
+                source_refs=[_source_ref(
+                    _text(rule.get("source_id")) or "rule_library",
+                    locator=_text(rule.get("source_locator")),
+                    quote=statement[:200],
+                )],
+                confidence=float(rule.get("confidence") or 0.7),
+                derivation="explicit",
+            ))
+            _record_fallback("USAGE_LIMIT_DECISION_SURFACE_BINDING", 1)
         # ── P0-5: create causal postcondition invariant from conservation rules ──
         # When a conservation rule has extracted field operands AND the statement
         # contains causal delta language, create an additional postcondition

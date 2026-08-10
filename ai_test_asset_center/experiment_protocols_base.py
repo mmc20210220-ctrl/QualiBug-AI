@@ -1048,9 +1048,12 @@ _ENTITY_STATE_CONSUMPTION_MARKERS = (
 )
 # Which violation dimension the rule constrains: date-expiry rules (有效期/
 # 过期/失效/生效) need a row whose validity DATE has passed even when its
-# status is still public; status rules need a row whose status is non-public.
+# status is still public; status rules need a row whose status is non-public;
+# usage rules (次数/限额/超限) need a row whose declared usage has reached
+# its limit.
 _ENTITY_STATE_EXPIRY_MARKERS = ("有效期", "过期", "失效", "生效", "到期", "有效期内")
 _ENTITY_STATE_STATUS_MARKERS = ("状态", "ACTIVE", "ENABLED", "停用", "禁用")
+_ENTITY_STATE_USAGE_MARKERS = ("次数", "限额", "超限", "限用", "只能使用", "使用一次")
 
 # Entity-state precondition vocabulary: a rule like 已取消订单不能支付 /
 # 已支付订单不能直接取消 names a subject in a non-public state (取消/退款/
@@ -1198,6 +1201,8 @@ def _entity_state_violation_mode(semantic_text: str) -> str:
         return "expiry"
     if any(marker in semantic_text for marker in _ENTITY_STATE_STATUS_MARKERS):
         return "status"
+    if any(marker in semantic_text for marker in _ENTITY_STATE_USAGE_MARKERS):
+        return "usage"
     return "any"
 
 
@@ -1361,6 +1366,7 @@ def _non_public_entity_treatment(
     if not resolver:
         return None
     treatment = deepcopy(control)
+    _violation_mode = _entity_state_violation_mode(semantic_text)
     mutation = {
         "class": "runtime_entity_state_violation",
         "json_path": identity_path or f"$.{identity_field}",
@@ -1370,9 +1376,27 @@ def _non_public_entity_treatment(
         # The runtime resolver picks the violating row by the rule's own
         # dimension: date-expiry rules need a row whose validity date has
         # passed (status may still be public); status rules need a row whose
-        # status is non-public; anything else takes either.
-        "violation_mode": _entity_state_violation_mode(semantic_text),
+        # status is non-public; usage rules need a row whose declared usage
+        # reached its limit; anything else takes either.
+        "violation_mode": _violation_mode,
     }
+    if _violation_mode == "usage":
+        # The quota fields the rule itself constrains (user_limit/
+        # global_limit — operand fields carrying limit/usage vocabulary).
+        # The runtime reads the row's limit from exactly these declared
+        # fields and its usage from the remaining numeric fields, so a
+        # user_limit value can never be mistaken for a used count.
+        _usage_limit_fields: list[str] = []
+        for _operand in _list(_dict(property_spec).get("expression", {}).get("operands")):
+            _ofield = _text(_dict(_operand).get("field"))
+            if _ofield and re.search(
+                r"(?:limit|count|quota|usage|uses|次数|限额|上限)",
+                _ofield,
+                re.IGNORECASE,
+            ):
+                _usage_limit_fields.append(_ofield)
+        if _usage_limit_fields:
+            mutation["usage_limit_fields"] = _usage_limit_fields
     return treatment, mutation
 
 

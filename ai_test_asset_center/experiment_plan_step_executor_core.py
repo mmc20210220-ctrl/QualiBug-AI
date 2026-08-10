@@ -151,6 +151,63 @@ def _entity_row_expiry_violating(row: Any, *, identity_field: str) -> bool:
     return False
 
 
+def _entity_row_usage_violating(
+    row: Any,
+    *,
+    identity_field: str,
+    limit_fields: tuple[str, ...] = (),
+) -> bool:
+    """True when the row's declared usage has reached a declared limit.
+
+    A quota rule (用户使用次数不能超过限制) is violated by an entity row whose
+    usage count (used/used_count/use_count/usage/times_used) is >= its
+    declared limit. The limit is read from the rule's OWN constrained fields
+    (user_limit/global_limit — the mutation's usage_limit_fields) when the
+    compile-time operand named them, otherwise from any field carrying a
+    limit token. Fields carrying a limit token are never read as usage, so a
+    user_limit value can never be mistaken for a used count. A row that
+    declares no usage data is not a violation — the caller fails closed when
+    nothing matches (systems that do not expose usage stay honestly
+    uncovered). Generic relational naming, never industry terms.
+    """
+    if not isinstance(row, dict):
+        return False
+    if _entity_row_identity(row, identity_field) is None:
+        return False
+    limit_fields_norm = {
+        re.sub(r"[^a-z0-9]+", "", _text(f).lower())
+        for f in limit_fields
+        if _text(f)
+    }
+    limit: float | None = None
+    used: float | None = None
+    for key, value in row.items():
+        normalized = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+        if value in (None, ""):
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        is_limit_key = (
+            "limit" in normalized
+            or bool(limit_fields_norm and (normalized in limit_fields_norm))
+        )
+        if is_limit_key:
+            if limit is None:
+                limit = numeric
+            continue
+        if any(
+            token in normalized
+            for token in ("used", "usage", "times", "usecount")
+        ):
+            if used is None:
+                used = numeric
+    if limit is None or used is None:
+        return False
+    return used >= limit
+
+
 def _resolve_runtime_violating_row_identity(
     mutation: dict[str, Any],
     *,
@@ -201,6 +258,17 @@ def _resolve_runtime_violating_row_identity(
     def _expiry_violating(row: Any) -> bool:
         return _entity_row_expiry_violating(row, identity_field=identity_field)
 
+    def _usage_violating(row: Any) -> bool:
+        return _entity_row_usage_violating(
+            row,
+            identity_field=identity_field,
+            limit_fields=tuple(
+                _text(value)
+                for value in _list(mutation.get("usage_limit_fields"))
+                if _text(value)
+            ),
+        )
+
     violating = None
     if violation_mode == "expiry":
         violating = next(
@@ -215,6 +283,14 @@ def _resolve_runtime_violating_row_identity(
     elif violation_mode == "status":
         violating = next(
             (row for row in candidates if _status_violating(row)),
+            None,
+        )
+    elif violation_mode == "usage":
+        # A quota rule needs a row whose declared usage reached its limit.
+        # Only such a row makes the treatment a genuine quota violation; a
+        # row with no usage data is never substituted (fail closed).
+        violating = next(
+            (row for row in candidates if _usage_violating(row)),
             None,
         )
     else:

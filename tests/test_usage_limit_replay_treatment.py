@@ -7,8 +7,18 @@ measured on the TREATMENT (replay) window: a correct target observes 0 new
 effects whether it refuses the replay (enforced quota) or accepts it as a
 no-op, while a buggy target that applies the effect again observes 1.
 
-Covers (a) the quota rekind: such rules bind to the CONSUMPTION operations
-only and compile as idempotency, (b) the assertion contract
+The same quota rule ALSO constrains the entity's DECISION surfaces
+(validate/check/claim/simulate — 校验/验证/领取/模拟/试算): a decision
+surface that certifies an exhausted entity as usable violates the quota even
+though no consumption happens in that call. Such rules therefore produce TWO
+invariants: the idempotency replay invariant bound to the CONSUMPTION
+operations, and a validation-kind decision-surface invariant bound to the
+remaining decision operations (runtime_entity_state_violation,
+violation_mode=usage — fails closed when the environment exposes no usage
+data).
+
+Covers (a) the quota rekind: consumption binding + idempotency family AND the
+decision-surface validation invariant, (b) the assertion contract
 (expected_effect_count 0 on primary and secondary idempotency assertions),
 and (c) the observer semantics: replay-accepted-noop → 0, replay-refused →
 0, buggy replay → 1, replay-never-executed → INDETERMINATE (never a
@@ -93,12 +103,15 @@ def _ir(statement: str, project_id: str, *, runtime_actors: list[dict] | None = 
     )
 
 
-def _ir_invariant(ir: dict, statement: str) -> dict:
+def _ir_invariant(ir: dict, statement: str, *, kind: str | None = None) -> dict:
     matches = [
         row for row in ir.get("invariants", [])
         if isinstance(row, dict) and row.get("description") == statement
+        and (kind is None or (row.get("expression") or {}).get("kind") == kind)
     ]
-    assert len(matches) == 1, f"expected one invariant for {statement!r}, got {len(matches)}"
+    assert len(matches) == 1, (
+        f"expected one {kind or 'any'} invariant for {statement!r}, got {len(matches)}"
+    )
     return matches[0]
 
 
@@ -119,35 +132,49 @@ def _bound_paths(ir: dict, inv: dict) -> list[str]:
     )
 
 
-# ── (a) quota rekind: consumption-op binding + idempotency family ──
+# ── (a) quota rekind: consumption binding + decision-surface invariant ──
 
 def test_usage_limit_rule_rekinds_to_idempotency_and_binds_use_only():
     statement = "每张优惠券每个用户限用1次"
     ir = _ir(statement, "usage-limit-rekind")
-    inv = _ir_invariant(ir, statement)
+    inv = _ir_invariant(ir, statement, kind="idempotency")
     assert inv["expression"]["kind"] == "idempotency"
     assert inv["expression"]["operator"] == "business_effect_count"
     operand = inv["expression"]["operands"][0]
     assert operand["expected_effect_count"] == 0
-    # Bound to the consumption operation only — never the read-only
-    # eligibility (validate) or claim surface the statement does not name.
+    # The replay invariant binds the consumption operation only — never the
+    # read-only eligibility surface the replay cannot consume.
     assert _bound_paths(ir, inv) == ["/api/coupons/use"]
+    # The same quota rule also binds the DECISION surfaces as a validation
+    # contract (an exhausted entity must not be certified usable).
+    decision_inv = _ir_invariant(ir, statement, kind="validation")
+    assert decision_inv["expression"]["operator"] == "under_limit"
+    assert decision_inv["expression"]["constraint_kind"] == "USAGE_LIMIT"
+    assert decision_inv["derived_invariant_kind"] == "usage_decision_surface"
+    assert "/api/coupons/validate" in _bound_paths(ir, decision_inv)
+    assert "/api/coupons/use" not in _bound_paths(ir, decision_inv)
 
 
 def test_claim_quota_rule_binds_claim_only():
     statement = "每张优惠券每个用户限领1次"
     ir = _ir(statement, "usage-limit-claim")
-    inv = _ir_invariant(ir, statement)
+    inv = _ir_invariant(ir, statement, kind="idempotency")
     assert inv["expression"]["kind"] == "idempotency"
     assert _bound_paths(ir, inv) == ["/api/coupons/claim"]
+    decision_inv = _ir_invariant(ir, statement, kind="validation")
+    assert "/api/coupons/claim" not in _bound_paths(ir, decision_inv)
+    assert "/api/coupons/validate" in _bound_paths(ir, decision_inv)
 
 
 def test_usage_count_restriction_rule_rekinds():
     statement = "优惠券使用次数不能超过限制"
     ir = _ir(statement, "usage-limit-count")
-    inv = _ir_invariant(ir, statement)
+    inv = _ir_invariant(ir, statement, kind="idempotency")
     assert inv["expression"]["kind"] == "idempotency"
     assert _bound_paths(ir, inv) == ["/api/coupons/use"]
+    decision_inv = _ir_invariant(ir, statement, kind="validation")
+    assert decision_inv["expression"]["constraint_kind"] == "USAGE_LIMIT"
+    assert "/api/coupons/validate" in _bound_paths(ir, decision_inv)
 
 
 def test_eligibility_rule_keeps_validation_family():
