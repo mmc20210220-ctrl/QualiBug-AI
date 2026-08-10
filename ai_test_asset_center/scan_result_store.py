@@ -846,6 +846,26 @@ def _prune_compiled_experiment_payload(work: dict[str, Any]) -> dict[str, Any]:
     for _bucket_name, _bucket in list(v12.items()):
         if not isinstance(_bucket, dict):
             continue
+        # v12.experiments_by_obligation is itself {obligation_id: experiment}
+        # (no inner bucket key) — prune every value.
+        if _bucket_name in {"experiments_by_obligation", "by_obligation"}:
+            v12[_bucket_name] = {
+                _k: _prune_experiment_row(_row)
+                for _k, _row in _bucket.items()
+                if isinstance(_row, dict)
+            }
+            continue
+        # v12.obligations.obligations / v12.test_obligations.obligations:
+        # obligation rows (compiled input snapshots) prune to identity too.
+        if _bucket_name in {"obligations", "test_obligations"}:
+            for _list_key, _value in list(_bucket.items()):
+                if isinstance(_value, list):
+                    _bucket[_list_key] = [
+                        _prune_obligation_row(row)
+                        for row in _value
+                        if isinstance(row, dict)
+                    ]
+            continue
         for _list_key, _value in list(_bucket.items()):
             _short = _text_key(_list_key)
             if _short in _PRUNED_COMPILED_BUCKETS and isinstance(_value, (list, dict)):

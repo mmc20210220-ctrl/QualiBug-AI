@@ -338,6 +338,36 @@ class TestCompiledPayloadPruning:
         assert len(result["v12"]["obligation_attempt_ledger"]["attempts"]) == 1
         assert len(result["v12"]["execution_results"]["executed"]) == 1
 
+    def test_prune_covers_v12_direct_buckets(self, tmp_path):
+        """v12.experiments_by_obligation (obligation→experiment map) and
+        v12.obligations.obligations (obligation rows) are pruned too — they
+        are v12 direct keys, not nested experiment buckets."""
+        from ai_test_asset_center.scan_result_store import (
+            _prune_compiled_experiment_payload,
+        )
+
+        result = {"v12": {
+            "experiments_by_obligation": {
+                "obl_1": {"experiment_id": "e1", "obligation_id": "obl_1",
+                          "binding_plan": [{"target": "id"} for _ in range(5)],
+                          "control_plan": [{"path": "/x"}]},
+            },
+            "obligations": {"obligations": [
+                {"obligation_id": "o1", "risk_family": "x",
+                 "property": {"big": "z" * 2000}},
+            ]},
+            "obligation_attempt_ledger": {"attempts": [{"candidate_id": "c1"}]},
+        }}
+        _prune_compiled_experiment_payload(result)
+        by_obl = result["v12"]["experiments_by_obligation"]["obl_1"]
+        assert by_obl["experiment_id"] == "e1"
+        assert by_obl["binding_plan_length"] == 5
+        assert "binding_plan" not in by_obl
+        obl = result["v12"]["obligations"]["obligations"][0]
+        assert obl["obligation_id"] == "o1"
+        assert "property" not in obl
+        assert len(result["v12"]["obligation_attempt_ledger"]["attempts"]) == 1
+
     def test_prune_leaves_non_compiled_v12_intact(self, tmp_path):
         from ai_test_asset_center.scan_result_store import (
             _prune_compiled_experiment_payload,
