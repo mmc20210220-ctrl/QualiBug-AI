@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { emitScanCompleted, isCustomerReadyFinding, useFindingsData } from '../api/data';
 import { runRegression } from '../api/client';
 import { useToast } from '../components/useToast';
+import { deriveFindingVerification, hasFindingReverificationObligation } from '../lib/finding-verification';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { FindingCard } from '../components/findings/FindingCard';
@@ -15,10 +16,6 @@ import type { Finding } from '../types';
 
 function moduleName(finding: Finding): string {
   return String(finding.business_impact?.module || finding.source_entity || finding.defect_family_label || '未归类').trim() || '未归类';
-}
-
-function regressionLifecycleLabel(finding: Finding): string {
-  return String(finding.regression?.lifecycle_label || (finding.regression?.included_in_suite ? '待回归' : '待纳入回归')).trim() || '待纳入回归';
 }
 
 export function Findings() {
@@ -45,14 +42,14 @@ export function Findings() {
 
   const confirmed = findings.filter(isCustomerReadyFinding);
   const bySeverity = {
-    P0: confirmed.filter((f) => f.severity === 'P0').length,
-    P1: confirmed.filter((f) => f.severity === 'P1').length,
-    P2: confirmed.filter((f) => f.severity === 'P2').length,
+    P0: confirmed.filter((finding) => finding.severity === 'P0').length,
+    P1: confirmed.filter((finding) => finding.severity === 'P1').length,
+    P2: confirmed.filter((finding) => finding.severity === 'P2').length,
   };
 
   const moduleStats = new Map<string, number>();
-  for (const f of confirmed) {
-    const mod = moduleName(f);
+  for (const finding of confirmed) {
+    const mod = moduleName(finding);
     moduleStats.set(mod, (moduleStats.get(mod) || 0) + 1);
   }
 
@@ -64,51 +61,54 @@ export function Findings() {
     ...Array.from(moduleStats.entries()).slice(0, 4).map(([mod, count]) => ({ label: `${mod} (${count})`, value: `mod:${mod}` })),
   ];
 
-  const display = confirmed.filter((f) => {
+  const display = confirmed.filter((finding) => {
     if (filter === 'P0' || filter === 'P1' || filter === 'P2') {
-      if (f.severity !== filter) return false;
+      if (finding.severity !== filter) return false;
     } else if (filter.startsWith('mod:')) {
-      if (moduleName(f) !== filter.slice(4)) return false;
+      if (moduleName(finding) !== filter.slice(4)) return false;
     }
     if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
-      const haystack = `${f.title} ${moduleName(f)} ${f.business_summary || ''} ${f.actual || ''}`.toLowerCase();
-      if (!haystack.includes(q)) return false;
+      const query = searchQuery.trim().toLowerCase();
+      const haystack = `${finding.title} ${moduleName(finding)} ${finding.business_summary || ''} ${finding.actual || ''}`.toLowerCase();
+      if (!haystack.includes(query)) return false;
     }
     return true;
   });
   const hasActiveFilter = filter !== 'all' || Boolean(searchQuery.trim());
 
-  const regressionEligible = confirmed.some((f) => Boolean(f.regression?.included_in_suite));
-  const pendingRegression = confirmed.filter((f) => f.regression && f.regression.included_in_suite && f.regression.latest_status !== 'passed');
-  const passedRegression = confirmed.filter((f) => f.regression?.latest_status === 'passed');
-  const failedRegression = confirmed.filter((f) => f.regression?.latest_status === 'failed');
+  const regressionEligible = confirmed.some(hasFindingReverificationObligation);
+  const verificationRows = confirmed.map((finding) => ({ finding, verification: deriveFindingVerification(finding) }));
+  const pendingRegression = verificationRows.filter(({ verification }) => verification.state === 'pending');
+  const passedRegression = verificationRows.filter(({ verification }) => verification.state === 'verified_fixed');
+  const failedRegression = verificationRows.filter(({ verification }) => verification.state === 'still_failing');
+  const inconclusiveRegression = verificationRows.filter(({ verification }) => verification.state === 'inconclusive');
   const regressionHistory = confirmed
-    .flatMap((f) => (f.regression?.history || []).map((item) => ({ finding: f, item })))
-    .sort((a, b) => String(b.item.generated_at || '').localeCompare(String(a.item.generated_at || '')))
+    .flatMap((finding) => (finding.regression?.history || []).map((item) => ({ finding, item })))
+    .sort((left, right) => String(right.item.generated_at || '').localeCompare(String(left.item.generated_at || '')))
     .slice(0, 6);
-  const hasRegressionFact = confirmed.some((f) => Boolean(f.regression));
+  const hasRegressionFact = confirmed.some((finding) => Boolean(finding.regression));
 
   const runReleaseRegression = async (): Promise<void> => {
     if (!project || regressionRunning) return;
-    if (!regressionEligible) {
-      toast.show('当前没有已纳入回归套件的真实缺陷义务；不会提交空回归请求。', 'warning');
+    const currentEligible = confirmed.some(hasFindingReverificationObligation);
+    if (!currentEligible) {
+      toast.show('当前没有已纳入真实回归套件的验证义务；不会提交空验证请求。', 'warning');
       return;
     }
     setRegressionRunning(true);
     try {
-      toast.show('正在执行 Release 回归…', 'info');
+      toast.show('正在重新验证客户修复结果…', 'info');
       const result = await runRegression(project, { mode: 'release' });
       emitScanCompleted(project);
       await refetch();
       const gateStatus = String(result.ci_feedback?.gate_status || 'unknown');
       const failedCount = Number(result.summary?.failed_count || 0);
       toast.show(
-        `Release 回归完成：${gateStatus}${failedCount > 0 ? `，失败 ${failedCount} 项` : ''}`,
+        `修复后验证完成：${gateStatus}${failedCount > 0 ? `，仍失败 ${failedCount} 项` : ''}`,
         gateStatus === 'failed' ? 'danger' : gateStatus === 'passed' ? 'success' : 'warning',
       );
     } catch (caught: unknown) {
-      toast.show(caught instanceof Error ? caught.message : '回归执行失败', 'danger');
+      toast.show(caught instanceof Error ? caught.message : '修复后验证失败', 'danger');
     } finally {
       setRegressionRunning(false);
     }
@@ -131,8 +131,8 @@ export function Findings() {
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn btn-secondary" onClick={() => void runReleaseRegression()} disabled={!project || regressionRunning || !regressionEligible} title={regressionEligible ? '运行当前已纳入套件的 Release 回归' : '当前没有已纳入回归套件的缺陷'}>
-            {regressionRunning ? 'Release 回归中' : regressionEligible ? '执行 Release 回归' : '暂无可执行回归'}
+          <button className="btn btn-secondary" onClick={() => void runReleaseRegression()} disabled={!project || regressionRunning || !regressionEligible} title={regressionEligible ? '执行当前已纳入真实回归套件的修复后验证' : '当前没有真实可执行回归义务'}>
+            {regressionRunning ? '正在重新验证' : regressionEligible ? '修复后重新验证' : '暂无可执行验证'}
           </button>
           <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>证据中心</button>
           <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project)}>发布门禁</button>
@@ -149,27 +149,38 @@ export function Findings() {
       )}
 
       {hasRegressionFact && (
-        <section className="customer-secondary-grid findings-regression-grid" aria-label="回归验证">
+        <section className="customer-secondary-grid findings-regression-grid" aria-label="QualiBug 修复后验证">
           <article className="customer-secondary-card">
-            <span className="customer-value-kicker">回归验证</span>
-            <h3>{failedRegression.length > 0 ? `${failedRegression.length} 个缺陷回归仍失败` : pendingRegression.length > 0 ? `${pendingRegression.length} 个缺陷待执行回归` : passedRegression.length > 0 ? '已纳入缺陷回归均通过' : '尚无回归结果'}</h3>
-            <p>已通过 {passedRegression.length} · 待执行 {pendingRegression.length} · 仍失败 {failedRegression.length}。客户修复后由真实回归验证是否闭环。</p>
+            <span className="customer-value-kicker">验证闭环</span>
+            <h3>{failedRegression.length > 0
+              ? `${failedRegression.length} 个问题重新验证仍失败`
+              : inconclusiveRegression.length > 0
+                ? `${inconclusiveRegression.length} 个问题本轮无法确认`
+                : pendingRegression.length > 0
+                  ? `${pendingRegression.length} 个问题等待修复后验证`
+                  : passedRegression.length > 0
+                    ? '已执行的问题验证均通过'
+                    : '尚无修复后验证结果'}
+            </h3>
+            <p>验证通过 {passedRegression.length} · 等待验证 {pendingRegression.length} · 仍失败 {failedRegression.length} · 无法确认 {inconclusiveRegression.length}。QualiBug 只验证修复后的系统行为，不记录企业内部研发进度。</p>
           </article>
+
           <article className="customer-secondary-card">
-            <span className="customer-value-kicker">待执行回归</span>
-            <h3>{pendingRegression.length > 0 ? pendingRegression.slice(0, 3).map((f) => f.title).join('、') : '当前无待执行项'}</h3>
+            <span className="customer-value-kicker">等待重新验证</span>
+            <h3>{pendingRegression.length > 0 ? pendingRegression.slice(0, 3).map(({ finding }) => finding.title).join('、') : '当前无等待验证项'}</h3>
             <p>{pendingRegression.length > 0
-              ? pendingRegression.slice(0, 3).map((f) => `${f.title}（生命周期：${regressionLifecycleLabel(f)}）`).join('；')
-              : '纳入回归套件后，这里会列出尚未验证闭环的缺陷。'}
+              ? '客户完成修复后直接执行真实回归即可；不需要先在 QualiBug 中登记负责人、版本或“修复中”状态。'
+              : '有真实回归义务且尚未形成终态结果的问题会出现在这里。'}
             </p>
           </article>
+
           <article className="customer-secondary-card">
-            <span className="customer-value-kicker">回归历史</span>
-            <h3>{regressionHistory.length > 0 ? `最近 ${regressionHistory.length} 条回归记录` : '暂无回归记录'}</h3>
+            <span className="customer-value-kicker">验证历史</span>
+            <h3>{regressionHistory.length > 0 ? `最近 ${regressionHistory.length} 条真实验证记录` : '暂无验证记录'}</h3>
             {regressionHistory.length > 0 ? (
-              <p>{regressionHistory.map(({ finding, item }) => `[${item.generated_at || '未知时间'}] ${finding.title} · ${item.status_label || item.gate_status || '回归'}`).join('；')}</p>
+              <p>{regressionHistory.map(({ finding, item }) => `[${item.generated_at || '未知时间'}] ${finding.title} · ${item.status_label || item.gate_status || '状态未上报'}`).join('；')}</p>
             ) : (
-              <p>执行回归后，历史记录会在这里展示。</p>
+              <p>执行修复后验证后，真实回归记录会在这里展示。</p>
             )}
           </article>
         </section>
@@ -181,8 +192,8 @@ export function Findings() {
 
       {loading && (
         <div aria-busy="true" aria-label="正在整理问题清单">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="finding-card">
+          {[1, 2, 3].map((index) => (
+            <div key={index} className="finding-card">
               <div className="finding-card-main">
                 <Skeleton h={14} w={72} br={4} />
                 <div style={{ marginTop: 10 }}><Skeleton h={18} w="68%" br={4} /></div>
@@ -192,6 +203,7 @@ export function Findings() {
           ))}
         </div>
       )}
+
       {!loading && error && display.length === 0 && (
         <section className="findings-empty-state danger">
           <span className="findings-empty-kicker">连接异常</span>
@@ -200,6 +212,7 @@ export function Findings() {
           <button className="btn btn-primary" onClick={refetch}>重新连接</button>
         </section>
       )}
+
       {!loading && !error && display.length === 0 && (
         <section className="findings-empty-state compact">
           <span className="findings-empty-kicker">{hasActiveFilter ? '筛选结果' : '当前结论'}</span>
@@ -228,11 +241,11 @@ export function Findings() {
         <FindingCard
           key={finding.id}
           finding={finding}
-          project={project}
           expanded={expandedId === finding.id}
           onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
           onViewEvidence={() => setDrawerFinding(finding)}
-          onCollaborationUpdated={refetch}
+          reverifyRunning={regressionRunning}
+          onReverify={hasFindingReverificationObligation(finding) ? () => void runReleaseRegression() : undefined}
         />
       ))}
 
