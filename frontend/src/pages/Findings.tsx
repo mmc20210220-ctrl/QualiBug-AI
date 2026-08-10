@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { emitScanCompleted, isCustomerReadyFinding, useFindingsData } from '../api/data';
 import { runRegression } from '../api/client';
 import { useToast } from '../components/useToast';
+import { evidenceDeepLinkSearch } from '../lib/evidence-presentation';
 import { deriveFindingVerification, hasFindingReverificationObligation } from '../lib/finding-verification';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
@@ -23,6 +24,8 @@ export function Findings() {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const requestedFindingId = params.get('finding')?.trim() || '';
+  const requestedVerificationAt = params.get('verification_at')?.trim() || '';
+  const requestedContextSearch = evidenceDeepLinkSearch(requestedFindingId, requestedVerificationAt);
   const { navigateToProjectPath } = useProjectNavigation();
   const { findings, clues, loading, error, refetch } = useFindingsData(project);
   const toast = useToast();
@@ -38,7 +41,7 @@ export function Findings() {
       setFilter('all');
       setSearchQuery('');
     }
-  }, [requestedFindingId]);
+  }, [requestedFindingId, requestedVerificationAt]);
 
   const confirmed = findings.filter(isCustomerReadyFinding);
   const bySeverity = {
@@ -142,8 +145,8 @@ export function Findings() {
           <button className="btn btn-secondary" onClick={() => void runReleaseRegression()} disabled={!project || regressionRunning || !regressionEligible} title={regressionEligible ? '执行当前已纳入真实回归套件的修复后验证' : '当前没有真实可执行回归义务'}>
             {regressionRunning ? '正在重新验证' : regressionEligible ? '修复后重新验证' : '暂无可执行验证'}
           </button>
-          <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>证据中心</button>
-          <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project)}>发布门禁</button>
+          <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project, requestedFindingId ? requestedContextSearch : '')}>证据中心</button>
+          <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project, requestedFindingId ? requestedContextSearch : '')}>发布门禁</button>
         </div>
       </div>
 
@@ -254,10 +257,16 @@ export function Findings() {
           onViewEvidence={() => setDrawerFinding(finding)}
           reverifyRunning={regressionRunning}
           onReverify={hasFindingReverificationObligation(finding) ? () => void runReleaseRegression() : undefined}
+          focusGeneratedAt={finding.id === requestedFindingId ? requestedVerificationAt : ''}
         />
       ))}
 
-      <EvidenceDrawer finding={drawerFinding} project={project} onClose={() => setDrawerFinding(null)} />
+      <EvidenceDrawer
+        finding={drawerFinding}
+        project={project}
+        onClose={() => setDrawerFinding(null)}
+        focusGeneratedAt={drawerFinding?.id === requestedFindingId ? requestedVerificationAt : ''}
+      />
     </div>
   );
 }
