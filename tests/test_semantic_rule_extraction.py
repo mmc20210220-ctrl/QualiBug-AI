@@ -838,3 +838,43 @@ def test_integration_augment_merges_promoted_rules_into_rule_library(
         if isinstance(row, dict) and row.get("kind") == "rule"
     ]
     assert len(rules) == 1
+
+
+def test_extraction_cache_reuses_result_without_llm(monkeypatch, tmp_path):
+    """Semantic extraction results are cached per (source_id, text digest):
+    a second build does not re-invoke the LLM, and a failed attempt is not
+    retried on every build (measured: 12/13 sources FAILED every run)."""
+    import os
+
+    from ai_test_asset_center import llm_reasoning
+    from ai_test_asset_center.enterprise_knowledge_center import (
+        _semantic_extraction as se,
+    )
+
+    os.environ["QUALIBUG_SEMANTIC_CACHE_DIR"] = str(tmp_path)
+    calls = {"n": 0}
+
+    class FakeClient:
+        config = type("C", (), {"enabled": True})()
+
+        def chat_json(self, *_args, **_kwargs):
+            calls["n"] += 1
+            raise ValueError("LLM response did not include JSON content")
+
+    monkeypatch.setattr(llm_reasoning, "_get_client", lambda: FakeClient())
+    monkeypatch.delenv("QUALIBUG_SEMANTIC_EXTRACTION_FORCE", raising=False)
+
+    text = "源材料文本 alpha beta gamma"
+    r1 = se.run_semantic_extraction(text, source_id="src_cache_test", filename="PRD.md")
+    r2 = se.run_semantic_extraction(text, source_id="src_cache_test", filename="PRD.md")
+    assert r1.status == r2.status == "FAILED_LLM_ERROR"
+    assert calls["n"] == 1  # second call served from cache
+
+    # Source edit changes the digest → LLM is invoked again.
+    se.run_semantic_extraction(text + " CHANGED", source_id="src_cache_test", filename="PRD.md")
+    assert calls["n"] == 2
+
+    # FORCE bypass re-invokes the LLM even for the cached digest.
+    monkeypatch.setenv("QUALIBUG_SEMANTIC_EXTRACTION_FORCE", "1")
+    se.run_semantic_extraction(text, source_id="src_cache_test", filename="PRD.md")
+    assert calls["n"] == 3

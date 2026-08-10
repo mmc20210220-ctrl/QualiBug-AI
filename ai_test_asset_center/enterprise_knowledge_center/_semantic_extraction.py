@@ -11,8 +11,11 @@ validation promotes it.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import os
 import re
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -908,6 +911,13 @@ def run_semantic_extraction(
     By default the legacy zero-structured-output trigger is preserved. ``force``
     is available to coverage-ledger callers that need semantic extraction for an
     uncovered span even when another part of the source produced a table or field.
+
+    Results are cached per (source_id, source-text digest) under the semantic
+    cache directory — successes are reused verbatim, failures are NOT retried
+    on every build (measured: 12 of 13 sources FAILED_LLM_ERROR every run,
+    each retried at minutes of latency; the model output is deterministic
+    until the environment changes). ``QUALIBUG_SEMANTIC_EXTRACTION_FORCE=1``
+    bypasses the cache for diagnosis.
     """
     receipt = SemanticExtractionReceipt(source_id)
     receipt.source_char_count = len(str(text or ""))
@@ -926,6 +936,18 @@ def run_semantic_extraction(
     chunks, skipped = _source_chunks(text)
     receipt.chunks_total = len(chunks)
     receipt.unprocessed_ranges = skipped
+
+    # ── Extraction result cache ──
+    # Keyed by source identity + content digest: source edits change the key,
+    # LLM/model upgrades force a rebuild via the FORCE env (diagnostic only).
+    _force_bypass = (
+        str(os.environ.get("QUALIBUG_SEMANTIC_EXTRACTION_FORCE") or "").strip()
+        in {"1", "true", "yes"}
+    )
+    if not _force_bypass:
+        _cached = _load_extraction_cache(source_id, text)
+        if _cached is not None:
+            return _cached
 
     try:
         from ..llm_reasoning import _get_client
@@ -1155,7 +1177,59 @@ def run_semantic_extraction(
         len(receipt.rejected_candidates),
         receipt.status,
     )
+    if not _force_bypass:
+        _store_extraction_cache(source_id, text, receipt)
     return receipt
+
+
+def _extraction_cache_path(source_id: str, text: str) -> Path | None:
+    """Cache file for (source_id, text digest), under the semantic cache dir."""
+    cache_root = str(os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR") or "").strip()
+    if not cache_root:
+        return None
+    import hashlib as _hashlib
+
+    digest = _hashlib.sha256(
+        f"{source_id}\n{text}".encode("utf-8")
+    ).hexdigest()
+    return Path(cache_root) / "semantic_extraction" / f"{digest}.json"
+
+
+def _load_extraction_cache(source_id: str, text: str) -> SemanticExtractionReceipt | None:
+    path = _extraction_cache_path(source_id, text)
+    if path is None or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    receipt = SemanticExtractionReceipt(source_id)
+    for _field, _value in payload.items():
+        if hasattr(receipt, _field):
+            setattr(receipt, _field, _value)
+    receipt.source_id = source_id
+    logger.info("Semantic extraction cache hit for %s (status=%s)", source_id, receipt.status)
+    return receipt
+
+
+def _store_extraction_cache(
+    source_id: str, text: str, receipt: SemanticExtractionReceipt
+) -> None:
+    path = _extraction_cache_path(source_id, text)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(receipt.to_dict(), ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    except OSError:
+        logger.warning("Semantic extraction cache write failed for %s", source_id)
 
 
 def validate_semantic_candidates(
