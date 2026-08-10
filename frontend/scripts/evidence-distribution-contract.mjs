@@ -9,6 +9,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const evidencePackage = read('src/lib/finding-evidence-package.ts');
 const drawer = read('src/components/findings/EvidenceDrawer.tsx');
 const distributionTools = read('src/components/evidence/EvidenceDistributionTools.tsx');
+const responsive = read('src/styles/customer-responsive.css');
 const report = read('src/api/report.ts');
 const packageJson = read('package.json');
 const ciGate = read('scripts/ci-gate.mjs');
@@ -26,12 +27,18 @@ assert(drawer.includes('<EvidenceDistributionTools finding={finding} project={pr
 assert(drawer.indexOf('<FindingDecisionSnapshot finding={finding} compact />') < drawer.indexOf('<EvidenceDistributionTools finding={finding} project={project} />'), 'distribution tools must appear after customer decision context');
 assert(drawer.includes('先核对问题为什么成立'), 'drawer must prioritize evidence review before distribution');
 
+assert(distributionTools.includes('evidence-distribution-tools'), 'evidence tools need a dedicated responsive scope');
 assert(distributionTools.includes('buildFindingEvidencePackageText(finding)'), 'copy action must use redacted evidence builder');
 assert(distributionTools.includes('buildFindingEvidencePackageHtml(finding)'), 'print action must use redacted evidence builder');
 assert(distributionTools.includes('复制/打印/只读分享都会重新执行服务端或前端脱敏，不直接外发该原始文本'), 'raw curl must remain separated from every external distribution path');
 assert(distributionTools.includes('公开链接只能读取创建当刻冻结的脱敏快照'), 'readonly sharing must remain distinct from local copies');
 assert(distributionTools.includes('这些是证据核对后的分发工具，不参与问题是否成立或是否修复的判断'), 'distribution must remain secondary to validation truth');
 assert(!evidencePackage.includes('finding.reproduction.curl_command'), 'local external evidence package must not directly include raw curl commands');
+
+assert(responsive.includes('.evidence-drawer-head .settings-actions'), 'drawer header actions must wrap responsively');
+assert(responsive.includes('.evidence-distribution-tools .settings-actions'), 'distribution actions must wrap responsively');
+assert(responsive.includes('@media (max-width: 560px)'), 'evidence distribution needs a narrow-screen breakpoint');
+assert(responsive.includes('.evidence-distribution-tools .settings-actions .btn'), 'distribution buttons must become touch-friendly on narrow screens');
 
 assert(report.includes("import { escapeEvidenceHtml } from '../lib/finding-evidence-package';"), 'aggregate report must reuse external redaction and escaping');
 assert(report.includes('<title>QualiBug AI 风险评级报告 — ${h(d.projectName)}</title>'), 'aggregate report title must escape project name');
