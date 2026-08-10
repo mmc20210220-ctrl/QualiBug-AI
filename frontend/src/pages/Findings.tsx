@@ -190,7 +190,7 @@ export function Findings() {
         />
       ))}
 
-      <EvidenceDrawer finding={drawerFinding} onClose={() => setDrawerFinding(null)} />
+      <EvidenceDrawer finding={drawerFinding} project={project} onClose={() => setDrawerFinding(null)} />
     </div>
   );
 }
