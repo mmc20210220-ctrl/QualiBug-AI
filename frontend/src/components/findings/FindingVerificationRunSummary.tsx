@@ -40,7 +40,7 @@ export function FindingVerificationRunSummary({ finding, generatedAt = '' }: Pro
           <span className="panel-kicker">{isLatestRun ? '当前最新验证' : '历史验证轮次'}</span>
           <h3>{summary.transitionLabel}</h3>
         </div>
-        <div className="verification-run-summary-context">
+        <div className="verification-timeline-meta">
           <span className="summary-pill">{isLatestRun ? '最新' : '历史'}</span>
           <span className="summary-pill">{summary.generatedAt}</span>
         </div>
