@@ -5,6 +5,7 @@ import { runRegression } from '../api/client';
 import { useToast } from '../components/useToast';
 import { buildReportData, renderReportHTML } from '../api/report';
 import { formatDurationMs } from '../lib/display';
+import { evidenceDeepLinkSearch } from '../lib/evidence-presentation';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { TechnicalDiagnostics } from '../components/TechnicalDiagnostics';
@@ -373,6 +374,24 @@ export function Dashboard() {
                   <span>模块 <b>{getFindingModule(f)}</b></span>
                   <span>证据 <b>{f.evidence_quality?.label || '未评分'}</b></span>
                   <span>复现 <b>{f.proof?.repro_rate != null ? `${f.proof.repro_rate}%` : '未上报'}</b></span>
+                </div>
+                <div className="settings-actions mt-3">
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => navigateToProjectPath('/findings', project, evidenceDeepLinkSearch(f.id))}
+                  >
+                    处理这条问题
+                  </button>
+                  {(f.evidence_chain?.length || 0) > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => navigateToProjectPath('/evidence', project, evidenceDeepLinkSearch(f.id))}
+                    >
+                      查看这条证据
+                    </button>
+                  )}
                 </div>
               </article>
             ))}
