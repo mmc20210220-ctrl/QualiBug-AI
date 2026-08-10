@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getLiveScanStatus, type LiveScanStatus } from '../../api/live-scan-status';
+import {
+  getLiveScanStatus,
+  type LiveScanStatus,
+  type ScanStageProgressItem,
+} from '../../api/live-scan-status';
 import { RUN_LIFECYCLE_EVENT, type RunLifecycleDetail } from '../../api/run-center';
 
 function elapsedSeconds(detail: RunLifecycleDetail, now: number): number {
@@ -31,6 +35,28 @@ function scanModeLabel(mode?: string): string {
     case 'regression':
     case 'regression_scan': return '回归扫描';
     default: return mode || '项目扫描';
+  }
+}
+
+const LIVE_STAGE_DEFINITIONS = [
+  ['enterprise_understanding', '企业资料理解'],
+  ['scenario_planning', '场景与义务生成'],
+  ['test_data_assessment', '测试数据准备 / 就绪核验'],
+  ['runtime_execution', '真实探针执行'],
+  ['evidence_collection', '结果观察与证据收集'],
+  ['delivery_finalization', '交付门禁与报告'],
+] as const;
+
+function liveStageLabel(item?: ScanStageProgressItem): string {
+  if (!item) return '等待服务端阶段上报';
+  const detail = item.detail ? ` · ${item.detail}` : '';
+  switch (item.status) {
+    case 'active': return `进行中${detail}`;
+    case 'completed': return `已完成${detail}`;
+    case 'failed': return `失败${detail}`;
+    case 'blocked': return `已阻断${detail}`;
+    case 'unreported': return '服务端未实时上报';
+    default: return '尚未进入 / 尚未实时上报';
   }
 }
 
@@ -94,39 +120,34 @@ export function RunLifecycleBanner() {
   const stages = useMemo(() => {
     if (!detail) return [];
     if (detail.phase === 'submitted') {
-      return [
-        ['企业资料理解', '等待服务端回执'],
-        ['场景与义务生成', '等待服务端回执'],
-        ['测试数据准备', '等待服务端回执'],
-        ['真实探针执行', '等待服务端回执'],
-        ['结果观察与证据收集', '等待服务端回执'],
-        ['交付门禁与报告', '等待服务端回执'],
-      ];
+      const stageMap = liveStatus?.scan_stage_progress?.stages || {};
+      return LIVE_STAGE_DEFINITIONS.map(([key, label]) => [label, liveStageLabel(stageMap[key])]);
     }
     if (detail.phase === 'failed') {
       return [
         ['企业资料理解', '未确认'],
         ['场景与义务生成', '未确认'],
-        ['测试数据准备', '未确认'],
+        ['测试数据准备 / 就绪核验', '未确认'],
         ['真实探针执行', '未确认'],
         ['结果观察与证据收集', '未确认'],
         ['交付门禁与报告', '未确认'],
       ];
     }
     return [
-      ['企业资料理解', '服务端未单独报告'],
-      ['场景与义务生成', detail.campaignStatus || '未单独报告'],
-      ['测试数据准备', detail.testDataStatus || '未报告'],
+      ['企业资料理解', '本轮规划主链已返回'],
+      ['场景与义务生成', detail.campaignStatus || '本轮计划已返回'],
+      ['测试数据准备 / 就绪核验', detail.testDataStatus || '未报告'],
       ['真实探针执行', detail.executionStatus || '未报告'],
       ['结果观察与证据收集', `${detail.evidenceCount} 条真实请求证据`],
       ['交付门禁与报告', detail.grade ? `${detail.grade} · 覆盖 ${detail.coverage}` : `覆盖 ${detail.coverage}`],
     ];
-  }, [detail]);
+  }, [detail, liveStatus?.scan_stage_progress?.stages]);
 
   if (!detail) return null;
 
   const tone = lifecycleTone(detail);
   const serverConfirmed = detail.phase === 'submitted' && liveStatus?.active_scan_live === true;
+  const realStageReported = Boolean(liveStatus?.scan_stage_progress);
   const title = detail.phase === 'submitted'
     ? serverConfirmed ? '服务端正在执行真实验证' : '检测请求正在建立运行上下文'
     : detail.phase === 'completed'
@@ -167,12 +188,12 @@ export function RunLifecycleBanner() {
               <p>{serverConfirmed ? scanModeLabel(liveStatus?.active_scan.mode) : '等待确认'}</p>
             </div>
             <div>
-              <span className="muted">服务端开始时间</span>
-              <p>{serverConfirmed ? (liveStatus?.active_scan.started_at_utc || '已启动') : '尚未确认'}</p>
+              <span className="muted">阶段遥测</span>
+              <p>{realStageReported ? '已收到主链真实阶段回执' : '等待主链阶段回执'}</p>
             </div>
           </div>
           <p className="settings-hint mt-3">
-            服务端现在提供真实的项目扫描租约状态，但尚未暴露企业资料理解、场景生成、测试数据准备等内部阶段的实时事件；这里不会根据计时器推测内部进度，六个阶段只在真实回执返回后确认。
+            企业理解/场景规划、正式实验执行和证据观察已经由真实主链函数上报。测试数据就绪核验与交付门禁目前仍由总控函数完成，尚未拆出独立实时边界，因此它们在运行中保持“尚未实时上报”，最终状态以扫描回执为准。任何阶段都不会按计时器或百分比推测。
           </p>
           {liveStatusError && (
             <p className="settings-inline-feedback">
