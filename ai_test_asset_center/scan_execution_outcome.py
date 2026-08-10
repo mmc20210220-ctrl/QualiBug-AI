@@ -13,6 +13,7 @@ from .product_scan_mainline import _as_dict, _first_text, _safe_project, _sha256
 from .scan_customer_ready_artifacts import _persist_customer_ready_static_artifacts
 from .scan_diagnostics import increment_scan_counter
 from .scan_source_runtime import _scan_preflight_guide
+from .scan_stage_progress import mark_scan_stage
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -30,7 +31,16 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         )
         raise
 
+
 def _test_data_receipt_verifier(root: Path, project: str):
+    mark_scan_stage(
+        root,
+        project,
+        "test_data_assessment",
+        "active",
+        detail="测试数据合同、来源与不可变收据正在核验",
+    )
+
     def verify(kind: str, receipt_id: str, campaign_id: str, scope_id: str, environment_ref: str) -> bool:
         try:
             from .enterprise_test_data_receipts import verify_test_data_receipt
@@ -51,6 +61,14 @@ def _test_data_receipt_verifier(root: Path, project: str):
 def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign: dict[str, Any], runtime_contract: dict[str, Any], execution_status: str, v12: dict[str, Any]) -> dict[str, Any]:
     from .artifact_store import artifact_store_enabled
     from .evidence_artifact_store import persist_evidence_bundle
+
+    mark_scan_stage(
+        root,
+        project,
+        "evidence_collection",
+        "active",
+        detail="执行观察、证据图与客户可交付证据正在归一化持久化",
+    )
 
     findings = v12.get("findings") if isinstance(v12.get("findings"), list) else []
     formal_projection = _as_dict(v12.get("formal_count_projection"))
@@ -89,54 +107,102 @@ def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign
         for item in [*runtime_candidates, *external_findings]
         if isinstance(item, dict)
     ]
-    if artifact_store_enabled():
-        # ── P0-4 Phase 3: Single Write — new evidence goes through the
-        # content-addressed ArtifactStore as fine-grained parts (SPEC §12/§13);
-        # old bundles remain readable through the legacy layout (Dual Read).
-        from .evidence_artifactization import persist_evidence_bundle_artifactized
 
-        return persist_evidence_bundle_artifactized(
+    try:
+        if artifact_store_enabled():
+            # ── P0-4 Phase 3: Single Write — new evidence goes through the
+            # content-addressed ArtifactStore as fine-grained parts (SPEC §12/§13);
+            # old bundles remain readable through the legacy layout (Dual Read).
+            from .evidence_artifactization import persist_evidence_bundle_artifactized
+
+            bundle = persist_evidence_bundle_artifactized(
+                project,
+                root=root,
+                run_id=scan_id,
+                campaign=campaign,
+                runtime_contract=runtime_contract,
+                execution_status=execution_status,
+                auto_har=_as_dict(v12.get("auto_har")),
+                evidence_graphs=v12.get("evidence_graphs") if isinstance(v12.get("evidence_graphs"), list) else [],
+                findings=persisted_findings,
+                candidate_findings=persisted_candidates,
+                canonical_defect_registry=registry,
+                delivery_occurrences=(
+                    v12.get("delivery_occurrences")
+                    if isinstance(v12.get("delivery_occurrences"), list)
+                    else []
+                ),
+                ui_execution=_as_dict(v12.get("ui_execution")),
+            )
+        else:
+            bundle = persist_evidence_bundle(
+                project,
+                root=root,
+                run_id=scan_id,
+                campaign=campaign,
+                runtime_contract=runtime_contract,
+                execution_status=execution_status,
+                auto_har=_as_dict(v12.get("auto_har")),
+                evidence_graphs=v12.get("evidence_graphs") if isinstance(v12.get("evidence_graphs"), list) else [],
+                findings=persisted_findings,
+                candidate_findings=persisted_candidates,
+                canonical_defect_registry=registry,
+                delivery_occurrences=(
+                    v12.get("delivery_occurrences")
+                    if isinstance(v12.get("delivery_occurrences"), list)
+                    else []
+                ),
+                ui_execution=_as_dict(v12.get("ui_execution")),
+            )
+    except Exception as exc:
+        mark_scan_stage(
+            root,
             project,
-            root=root,
-            run_id=scan_id,
-            campaign=campaign,
-            runtime_contract=runtime_contract,
-            execution_status=execution_status,
-            auto_har=_as_dict(v12.get("auto_har")),
-            evidence_graphs=v12.get("evidence_graphs") if isinstance(v12.get("evidence_graphs"), list) else [],
-            findings=persisted_findings,
-            candidate_findings=persisted_candidates,
-            canonical_defect_registry=registry,
-            delivery_occurrences=(
-                v12.get("delivery_occurrences")
-                if isinstance(v12.get("delivery_occurrences"), list)
-                else []
-            ),
-            ui_execution=_as_dict(v12.get("ui_execution")),
+            "evidence_collection",
+            "failed",
+            detail=f"{type(exc).__name__}: {str(exc)[:180]}",
         )
-    return persist_evidence_bundle(
+        raise
+
+    bundle_status = str(_as_dict(bundle).get("status") or "reported").strip().lower()
+    mark_scan_stage(
+        root,
         project,
-        root=root,
-        run_id=scan_id,
-        campaign=campaign,
-        runtime_contract=runtime_contract,
-        execution_status=execution_status,
-        auto_har=_as_dict(v12.get("auto_har")),
-        evidence_graphs=v12.get("evidence_graphs") if isinstance(v12.get("evidence_graphs"), list) else [],
-        findings=persisted_findings,
-        candidate_findings=persisted_candidates,
-        canonical_defect_registry=registry,
-        delivery_occurrences=(
-            v12.get("delivery_occurrences")
-            if isinstance(v12.get("delivery_occurrences"), list)
-            else []
-        ),
-        ui_execution=_as_dict(v12.get("ui_execution")),
+        "evidence_collection",
+        "failed" if bundle_status in {"failed", "error", "invalid"} else "completed",
+        detail=f"evidence_bundle={bundle_status}"[:240],
     )
+    return bundle
 
 
 def _evaluate_release_gate(*, project: str, root: Path, campaign: dict[str, Any], execution_status: str, runtime_contract: dict[str, Any], evidence_bundle: dict[str, Any], test_data_plan: dict[str, Any], findings: list[dict[str, Any]], coverage_gaps: list[dict[str, Any]], policy: dict[str, Any] | None = None) -> dict[str, Any]:
     from .release_gate import evaluate_release_gate
+
+    test_data_status = str(test_data_plan.get("status") or "reported").strip().lower()
+    mark_scan_stage(
+        root,
+        project,
+        "test_data_assessment",
+        (
+            "failed"
+            if test_data_status in {"failed", "error", "invalid"}
+            else "blocked"
+            if test_data_status.startswith("blocked")
+            else "completed"
+        ),
+        detail=(
+            f"test_data_plan={test_data_status}"
+            f" strategy={str(test_data_plan.get('strategy') or 'unspecified').strip()}"
+        )[:240],
+    )
+    mark_scan_stage(
+        root,
+        project,
+        "delivery_finalization",
+        "active",
+        detail="发布门禁正在核验证据、测试数据、覆盖缺口与发布策略",
+    )
+
     gate_policy = {"campaign_not_closed_verdict": "not_ready"}
     gate_policy.update(_as_dict(policy))
     verification: dict[str, Any] = {}
@@ -146,17 +212,39 @@ def _evaluate_release_gate(*, project: str, root: Path, campaign: dict[str, Any]
             verification = verify_evidence_bundle(project, str(evidence_bundle["bundle_id"]), root=root)
         except Exception as exc:
             verification = {"valid": False, "code": f"EVIDENCE_BUNDLE_VERIFICATION_ERROR:{type(exc).__name__}"}
-    return evaluate_release_gate(
-        campaign=campaign,
-        execution_status=execution_status,
-        runtime_contract=runtime_contract,
-        evidence_bundle=evidence_bundle,
-        evidence_bundle_verification=verification,
-        test_data_plan=test_data_plan,
-        findings=findings,
-        coverage_gaps=coverage_gaps,
-        policy=gate_policy,
+
+    try:
+        gate = evaluate_release_gate(
+            campaign=campaign,
+            execution_status=execution_status,
+            runtime_contract=runtime_contract,
+            evidence_bundle=evidence_bundle,
+            evidence_bundle_verification=verification,
+            test_data_plan=test_data_plan,
+            findings=findings,
+            coverage_gaps=coverage_gaps,
+            policy=gate_policy,
+        )
+    except Exception as exc:
+        mark_scan_stage(
+            root,
+            project,
+            "delivery_finalization",
+            "failed",
+            detail=f"{type(exc).__name__}: {str(exc)[:180]}",
+        )
+        raise
+
+    gate_status = str(_as_dict(gate).get("status") or "reported").strip().lower()
+    gate_verdict = str(_as_dict(gate).get("verdict") or "unspecified").strip().lower()
+    mark_scan_stage(
+        root,
+        project,
+        "delivery_finalization",
+        "failed" if gate_status in {"failed", "error", "invalid"} else "completed",
+        detail=f"release_gate={gate_status} verdict={gate_verdict}"[:240],
     )
+    return gate
 
 
 def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[str, str]], runtime_contract: dict[str, Any], context: dict[str, Any], save_report: bool, output_dir: Optional[Path]) -> dict[str, Any]:
