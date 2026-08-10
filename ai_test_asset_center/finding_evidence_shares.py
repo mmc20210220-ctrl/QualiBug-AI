@@ -24,18 +24,46 @@ _DEFAULT_TTL_SECONDS = 24 * 60 * 60
 
 _SENSITIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+", re.I), r"\1[REDACTED]"),
+    (re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]{8,}", re.I), "Bearer [REDACTED]"),
     (re.compile(r"\b(cookie\s*[:=]\s*)[^\n]+", re.I), r"\1[REDACTED]"),
     (re.compile(r"\b(set-cookie\s*[:=]\s*)[^\n]+", re.I), r"\1[REDACTED]"),
-    (re.compile(r"\b((?:access|refresh|id)?_?token\s*[:=]\s*)[^\s,;}&]+", re.I), r"\1[REDACTED]"),
-    (re.compile(r"\b(api[_-]?key\s*[:=]\s*)[^\s,;}&]+", re.I), r"\1[REDACTED]"),
-    (re.compile(r"\b(password\s*[:=]\s*)[^\s,;}&]+", re.I), r"\1[REDACTED]"),
+    (
+        re.compile(
+            r"([\"']?(?:access_token|refresh_token|id_token|token|api[_-]?key|apikey|password)[\"']?\s*[:=]\s*)"
+            r"([\"'])(.*?)\2",
+            re.I,
+        ),
+        r"\1[REDACTED]",
+    ),
+    (
+        re.compile(
+            r"([\"']?(?:access_token|refresh_token|id_token|token|api[_-]?key|apikey|password)[\"']?\s*[:=]\s*)"
+            r"[^\s,;}&]+",
+            re.I,
+        ),
+        r"\1[REDACTED]",
+    ),
     (re.compile(r"([?&](?:token|access_token|refresh_token|api_key|apikey|password)=)[^&#\s]+", re.I), r"\1[REDACTED]"),
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+        "[REDACTED_JWT]",
+    ),
 )
 
 
 def _text(value: Any, limit: int = 0) -> str:
     text = str(value or "").strip()
     return text[:limit] if limit > 0 else text
+
+
+def _number(value: Any) -> int:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    if not (number == number and abs(number) != float("inf")):
+        return 0
+    return max(0, min(100, int(round(number))))
 
 
 def redact_external_text(value: Any, *, limit: int = 4000) -> str:
@@ -67,6 +95,13 @@ def _ensure_table(db: Any) -> None:
         "CREATE INDEX IF NOT EXISTS idx_finding_evidence_shares_scope "
         "ON finding_evidence_shares(tenant_id, project_id, finding_id, expires_unix)"
     )
+
+
+def _share_table_exists(db: Any) -> bool:
+    row = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'finding_evidence_shares'"
+    ).fetchone()
+    return row is not None
 
 
 def _module_name(finding: dict[str, Any]) -> str:
@@ -136,9 +171,9 @@ def build_external_finding_snapshot(
         ),
         "evidence_quality": {
             "label": redact_external_text(quality.get("label"), limit=200),
-            "score": int(quality.get("score") or 0) if str(quality.get("score") or "").isdigit() else 0,
+            "score": _number(quality.get("score")),
         },
-        "repro_rate": int(proof.get("repro_rate") or 0) if str(proof.get("repro_rate") or "").isdigit() else 0,
+        "repro_rate": _number(proof.get("repro_rate")),
         "reproduction_steps": [redact_external_text(item, limit=1200) for item in steps[:20]],
         "evidence_chain": safe_chain,
         "relevant_apis": [redact_external_text(item, limit=600) for item in relevant_apis[:50]],
@@ -295,7 +330,10 @@ def resolve_finding_evidence_share(root: Path, token: str) -> dict[str, Any] | N
     db_persist.init_db(root)
     now = int(time.time())
     with db_persist._conn(root) as db:
-        _ensure_table(db)
+        # Public resolution is strictly read-only. Table creation/migration is
+        # performed only by authenticated create/list/revoke paths.
+        if not _share_table_exists(db):
+            return None
         row = db.execute(
             """
             SELECT share_id, snapshot_json, expires_unix
