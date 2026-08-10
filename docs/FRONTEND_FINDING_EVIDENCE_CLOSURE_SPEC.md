@@ -52,6 +52,15 @@ QualiBug 只记录和表达自身拥有权威的状态：
 
 禁止将 blocked / unknown / skipped 等状态包装成通过。
 
+Findings 筛选必须复用同一个解释器，不允许再写第二套状态判断。客户至少可以直接筛选：
+
+- 等待验证；
+- 仍失败；
+- 无法确认；
+- 验证通过。
+
+这四组互斥，不能把 `failed` 同时重复统计到“等待验证”。
+
 ## 4. 修复前 / 修复后证据真实性
 
 Finding 验证面板必须区分：
@@ -98,23 +107,24 @@ Replay 规则：
 
 Findings / Dashboard / Coverage 使用同一 fail-closed 原则：
 
-- 只有存在真实 `regression.included_in_suite` / persisted regression obligation 才允许执行回归；
-- 没有真实回归义务时按钮 disabled；
+- 只有存在真实 `regression.included_in_suite` / persisted regression obligation 才允许执行验证；
+- 没有真实验证义务时按钮 disabled；
 - handler 即使被程序调用也必须再次检查真实义务；
 - 不允许为了让按钮可用而构造 synthetic regression probe；
-- 项目级 Release Regression 可以同时验证多个已纳入 Finding，UI 必须明确这是当前项目已纳入的真实回归义务，而不是企业研发流程操作。
+- 项目级 Release / Smoke Regression 可以同时验证多个已纳入 Finding，但客户 UI 统一表达为 QualiBug 的“修复后验证”，不是企业研发流程操作；
+- 后端字段和协议名称仍可保留 `regression_*`，前端不得因为文案调整篡改技术合同。
 
 ## 7. Dashboard 精确 Finding 入口
 
 Dashboard `重点关注 Top 3` 每条真实 Finding 必须：
 
-- 提供“处理这条问题”，进入 `/findings?project=...&finding=...`；
+- 提供“查看这条验证”，进入 `/findings?project=...&finding=...`；
 - 仅当本 Finding 存在真实 `evidence_chain` 时提供“查看这条证据”；
 - 证据入口进入 `/evidence?project=...&finding=...`；
 - 不允许通过标题、模块、severity 猜测 Finding 身份；
 - 移动端按钮必须保持可点击。
 
-这里的“处理”只表示进入 QualiBug 的验证闭环，不代表任务分配或研发工单处理。
+Dashboard 主行动区有已确认问题时统一使用“查看验证 / 修复后验证”语言；不得使用“处理问题 / 处理这条问题”等容易被解释为研发任务管理的词语。
 
 ## 8. Finding 身份连续性
 
@@ -157,16 +167,18 @@ Dashboard `重点关注 Top 3` 每条真实 Finding 必须：
 
 ## 11. CI 回归契约
 
-`test:customer-action-guidance`：基础结果真实性与空态。  
-`test:finding-context-navigation`：`project + finding` 身份连续性。  
+`test:customer-action-guidance`：基础结果真实性、验证状态筛选与客户行动语言。  
+`test:finding-context-navigation`：`project + finding` 身份连续性与 Dashboard 精确验证入口。  
 `test:finding-validation-boundary`：产品验证边界与修复后重新验证语义。
 
-`test:finding-validation-boundary` 至少锁定：
+门禁至少锁定：
 
 - FindingCard 不出现负责人、修复版本、研发反馈、外部任务链接、人工处理状态等企业流程字段；
 - FindingCard 不调用 `updateFindingCollaboration`；
 - `deriveFindingVerification()` 区分 verified / failed / inconclusive / pending / not-enrolled；
-- 没有真实回归义务时 fail-closed；
+- Findings 的四类验证筛选复用 `deriveFindingVerification()`；
+- Dashboard 不出现“处理这条问题”，精确入口使用“查看这条验证”；
+- Dashboard / Findings 没有真实验证义务时均 fail-closed；
 - 验证面板不伪造修复后原始证据；
 - Replay “仍可复现”不能包装成成功；
 - Replay “本次未复现”不能自动变成已修复；
