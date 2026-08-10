@@ -27,6 +27,32 @@ export type FindingVerificationPresentation = {
   latestRun: RegressionHistoryItem | null;
 };
 
+export type FindingVerificationOutcome = 'fixed' | 'open' | 'unknown';
+
+export type VerificationRunPresentation = {
+  state: Exclude<FindingVerificationState, 'not_enrolled'>;
+  label: string;
+  tone: 'success' | 'danger' | 'warning';
+  priority: number;
+  nextAction: Exclude<FindingVerificationNextAction, 'none'>;
+  nextActionLabel: string;
+  detail: string;
+  outcome: FindingVerificationOutcome;
+};
+
+export type FindingVerificationTimelineEvent = {
+  kind: 'baseline' | 'verification';
+  key: string;
+  generatedAt: string;
+  label: string;
+  tone: 'success' | 'danger' | 'warning' | 'neutral';
+  detail: string;
+  outcome: FindingVerificationOutcome;
+  changedConclusion: boolean;
+  transitionLabel: string;
+  run: RegressionHistoryItem | null;
+};
+
 const INCONCLUSIVE_STATUSES = new Set([
   'blocked',
   'error',
@@ -44,6 +70,65 @@ function latestHistory(finding: Finding): RegressionHistoryItem | null {
   const history = finding.regression?.history || [];
   if (history.length === 0) return null;
   return [...history].sort((left, right) => String(right.generated_at || '').localeCompare(String(left.generated_at || '')))[0] || null;
+}
+
+export function deriveVerificationRunPresentation(
+  rawStatus: unknown,
+  rawGateStatus: unknown,
+  reason = '',
+): VerificationRunPresentation {
+  const latestStatus = String(rawStatus || '').trim().toLowerCase();
+  const gateStatus = String(rawGateStatus || '').trim().toLowerCase();
+
+  if (latestStatus === 'passed' || latestStatus === 'verified_fixed') {
+    return {
+      state: 'verified_fixed',
+      label: '修复验证通过',
+      tone: 'success',
+      priority: 10,
+      nextAction: 'review_release',
+      nextActionLabel: '查看发布门禁',
+      detail: reason || '该轮真实回归探针已通过；该结论只代表 QualiBug 已验证的行为恢复。',
+      outcome: 'fixed',
+    };
+  }
+
+  if (latestStatus === 'failed' || latestStatus === 'reopened' || gateStatus === 'failed') {
+    return {
+      state: 'still_failing',
+      label: '重新验证仍失败',
+      tone: 'danger',
+      priority: 50,
+      nextAction: 'review_failure',
+      nextActionLabel: '查看失败证据',
+      detail: reason || '该轮真实回归仍复现该问题，当前不能关闭验证结论。',
+      outcome: 'open',
+    };
+  }
+
+  if (INCONCLUSIVE_STATUSES.has(latestStatus) || INCONCLUSIVE_STATUSES.has(gateStatus)) {
+    return {
+      state: 'inconclusive',
+      label: '本轮无法确认修复',
+      tone: 'warning',
+      priority: 40,
+      nextAction: 'restore_verification',
+      nextActionLabel: '恢复验证条件后重试',
+      detail: reason || '该轮回归没有形成可确认的通过/失败结论，需要恢复验证条件后再次执行。',
+      outcome: 'unknown',
+    };
+  }
+
+  return {
+    state: 'pending',
+    label: '等待修复后重新验证',
+    tone: 'warning',
+    priority: 30,
+    nextAction: 'reverify_after_fix',
+    nextActionLabel: '客户修复后重新验证',
+    detail: reason || '该轮回执尚未形成终态验证结果。',
+    outcome: 'unknown',
+  };
 }
 
 export function deriveFindingVerification(finding: Finding): FindingVerificationPresentation {
@@ -64,56 +149,78 @@ export function deriveFindingVerification(finding: Finding): FindingVerification
 
   const latestStatus = String(regression.latest_status || latestRun?.status || '').trim().toLowerCase();
   const gateStatus = String(regression.gate_status || latestRun?.gate_status || '').trim().toLowerCase();
-
-  if (latestStatus === 'passed' || latestStatus === 'verified_fixed') {
-    return {
-      state: 'verified_fixed',
-      label: '修复验证通过',
-      tone: 'success',
-      priority: 10,
-      nextAction: 'review_release',
-      nextActionLabel: '查看发布门禁',
-      detail: regression.reason || '最新真实回归探针已通过；该结论只代表 QualiBug 已验证的行为恢复。',
-      latestRun,
-    };
-  }
-
-  if (latestStatus === 'failed' || latestStatus === 'reopened' || gateStatus === 'failed') {
-    return {
-      state: 'still_failing',
-      label: '重新验证仍失败',
-      tone: 'danger',
-      priority: 50,
-      nextAction: 'review_failure',
-      nextActionLabel: '查看失败证据',
-      detail: regression.reason || latestRun?.reason || '最新真实回归仍复现该问题，当前不能关闭验证结论。',
-      latestRun,
-    };
-  }
-
-  if (INCONCLUSIVE_STATUSES.has(latestStatus) || INCONCLUSIVE_STATUSES.has(gateStatus)) {
-    return {
-      state: 'inconclusive',
-      label: '本轮无法确认修复',
-      tone: 'warning',
-      priority: 40,
-      nextAction: 'restore_verification',
-      nextActionLabel: '恢复验证条件后重试',
-      detail: regression.reason || latestRun?.reason || '本轮回归没有形成可确认的通过/失败结论，需要恢复验证条件后再次执行。',
-      latestRun,
-    };
-  }
+  const runPresentation = deriveVerificationRunPresentation(
+    latestStatus,
+    gateStatus,
+    regression.reason || latestRun?.reason || '',
+  );
 
   return {
-    state: 'pending',
-    label: '等待修复后重新验证',
-    tone: 'warning',
-    priority: 30,
-    nextAction: 'reverify_after_fix',
-    nextActionLabel: '客户修复后重新验证',
-    detail: regression.reason || '该 Finding 已纳入真实回归义务；客户完成修复后可直接重新验证，不需要在 QualiBug 维护研发状态。',
+    ...runPresentation,
+    detail: runPresentation.detail || regression.reason || latestRun?.reason || '',
     latestRun,
   };
+}
+
+function outcomeLabel(outcome: FindingVerificationOutcome): string {
+  if (outcome === 'fixed') return '修复验证通过';
+  if (outcome === 'open') return '问题仍成立';
+  return '结论待确认';
+}
+
+export function buildFindingVerificationTimeline(finding: Finding): FindingVerificationTimelineEvent[] {
+  const timeline: FindingVerificationTimelineEvent[] = [{
+    kind: 'baseline',
+    key: `baseline:${finding.id}`,
+    generatedAt: finding.timestamp || '',
+    label: '原始问题已确认',
+    tone: 'danger',
+    detail: finding.actual || finding.business_summary || finding.business_impact?.summary || '该 Finding 已形成真实问题结论。',
+    outcome: 'open',
+    changedConclusion: false,
+    transitionLabel: '验证基线',
+    run: null,
+  }];
+
+  const history = [...(finding.regression?.history || [])]
+    .sort((left, right) => String(left.generated_at || '').localeCompare(String(right.generated_at || '')));
+  let lastKnownOutcome: Exclude<FindingVerificationOutcome, 'unknown'> = 'open';
+
+  history.forEach((run, index) => {
+    const presentation = deriveVerificationRunPresentation(run.status, run.gate_status, run.reason || '');
+    const isKnownOutcome = presentation.outcome === 'fixed' || presentation.outcome === 'open';
+    const changedConclusion = isKnownOutcome && presentation.outcome !== lastKnownOutcome;
+    const previousOutcome = lastKnownOutcome;
+    const transitionLabel = changedConclusion
+      ? `${outcomeLabel(previousOutcome)} → ${outcomeLabel(presentation.outcome)}`
+      : presentation.outcome === 'unknown'
+        ? '本轮未形成可确认结论'
+        : presentation.outcome === 'fixed'
+          ? '修复结论保持通过'
+          : '问题结论仍成立';
+
+    timeline.push({
+      kind: 'verification',
+      key: `${run.generated_at || 'run'}:${run.regression_probe_id || index}`,
+      generatedAt: run.generated_at || '',
+      label: presentation.label,
+      tone: presentation.tone,
+      detail: run.reason || run.ci_message || presentation.detail,
+      outcome: presentation.outcome,
+      changedConclusion,
+      transitionLabel,
+      run,
+    });
+
+    if (isKnownOutcome) lastKnownOutcome = presentation.outcome;
+  });
+
+  return timeline;
+}
+
+export function latestFindingConclusionChange(finding: Finding): FindingVerificationTimelineEvent | null {
+  const changed = buildFindingVerificationTimeline(finding).filter((event) => event.changedConclusion);
+  return changed[changed.length - 1] || null;
 }
 
 export function hasFindingReverificationObligation(finding: Finding): boolean {
