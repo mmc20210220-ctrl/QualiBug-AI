@@ -479,7 +479,7 @@ export function Settings() {
       onAuthTypeChange={setCAuthType}
       onLoginApiChange={setCLoginApi}
       onRoleAccountsChange={setCRoleAccounts}
-      onBearerTokenChange={setCBearToken}
+      onBearerTokenChange={setCBearerToken}
       onApiKeyChange={setCApiKey}
       onToggleDbPanel={toggleDbPanel}
       onDbTypeChange={handleDbTypeChange}
