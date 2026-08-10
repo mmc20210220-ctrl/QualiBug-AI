@@ -70,22 +70,55 @@ assert(materialsHandoff.includes('const BUSINESS_CONTEXT_TYPES = new Set(['), 'b
 for (const sourceType of ['prd', 'openapi', 'database_schema', 'collaboration_document', 'historical_bug']) {
   assert(materialsHandoff.includes(`'${sourceType}'`), `business-understanding input readiness missing source type: ${sourceType}`);
 }
-assert(materialsHandoff.includes('const cleanReady = snapshot.active > 0 && snapshot.processing === 0 && snapshot.failed === 0 && !materialReadError;'), 'materials handoff must not call processing, failed, or unreadable materials clean-ready');
-assert(materialsHandoff.includes('const onlyUploadedReady = cleanReady && snapshot.onlineActive === 0 && snapshot.uploadedActive > 0;'), 'uploaded-only materials must stay ready but visibly secondary');
 assert(materialsHandoff.includes('1. 在线来源已连接'), 'materials page must expose online-source connection as readiness stage one');
 assert(materialsHandoff.includes('2. 资料已同步'), 'materials page must expose material sync as readiness stage two');
 assert(materialsHandoff.includes('3. 业务理解输入'), 'materials page must expose business-understanding input as readiness stage three');
 assert(materialsHandoff.includes('连接成功不等于资料已经完成同步'), 'connector-ready and material-ready must remain distinct');
-assert(materialsHandoff.includes('不会提前把“连接成功”解释成“资料已同步”'), 'connected sources must not imply a materialized sync result');
 assert(materialsHandoff.includes('这里只代表输入可用，不代表理解正确率或完整性'), 'business-understanding input readiness must not claim understanding quality');
-assert(materialsHandoff.includes('不代表业务理解已经正确或完整'), 'materialized sources must not be presented as completed understanding');
 assert(materialsHandoff.includes('必须先形成真实 active source'), 'business-understanding input readiness must require a real active material source');
-assert(materialsHandoff.includes('连接在线资料（推荐）'), 'uploaded-only customers must be guided toward online materials without being blocked');
-assert(materialsHandoff.includes('暂用补充资料，继续系统与环境'), 'uploaded supplements must remain a valid non-blocking fallback');
-assert(materialsHandoff.includes("document.querySelector('.materials-primary-card')"), 'online-first recommendation must navigate to the real online connector section');
-assert(materialsHandoff.includes('不把读取失败解释为资料缺失或业务理解完成'), 'materials read failure must not collapse into missing materials or completed understanding');
-assert(materialsHandoff.includes("navigateToProjectPath('/settings', project)"), 'materials handoff must preserve project context when moving to system setup');
-assert(materialsHandoff.includes("navigateToProjectPath('/campaigns', project)"), 'previously configured customers must be able to enter real run preflight from materials');
+assert(materialsHandoff.includes('function readConnectorSnapshot(connectors'), 'materials readiness must derive connector attention from typed connector records');
+assert(materialsHandoff.includes('AUTHORIZATION_HEALTH.has(healthStatus)'), 'authorization attention must come from connector health truth');
+assert(materialsHandoff.includes("String(connector.health?.status || '').toUpperCase() === 'DOWNSTREAM_DEGRADED'"), 'downstream semantic refresh degradation must remain explicit');
+assert(materialsHandoff.includes("String(connector.coverage?.status || '').toUpperCase() === 'PARTIAL_UNSUPPORTED'"), 'partial unsupported connector coverage must remain explicit');
+assert(materialsHandoff.includes('function deriveCurrentBlocker('), 'materials page must derive one prioritized current blocker');
+
+const readFailurePriority = materialsHandoff.indexOf('if (materialReadError || connectorReadError)');
+const authorizationPriority = materialsHandoff.indexOf('if (snapshot.authorizationAttentionCount > 0)');
+const inactivePriority = materialsHandoff.indexOf('if (snapshot.inactiveConnectorCount > 0)');
+const syncFailurePriority = materialsHandoff.indexOf('if (snapshot.syncFailureConnectorCount > 0 || snapshot.failed > 0)');
+const downstreamPriority = materialsHandoff.indexOf('if (snapshot.downstreamDegradedCount > 0)');
+const syncingPriority = materialsHandoff.indexOf('if (snapshot.syncingConnectorCount > 0 || snapshot.processing > 0)');
+const partialCoveragePriority = materialsHandoff.indexOf('if (snapshot.partialCoverageConnectorCount > 0)');
+const missingSourcePriority = materialsHandoff.indexOf('if (snapshot.connectorCount === 0 && snapshot.uploadedActive === 0)');
+const uploadedOnlyPriority = materialsHandoff.indexOf('if (snapshot.onlineActive === 0 && snapshot.uploadedActive > 0)');
+const coreInputPriority = materialsHandoff.indexOf('if (snapshot.businessContextActive === 0)');
+assert(
+  readFailurePriority >= 0
+  && authorizationPriority > readFailurePriority
+  && inactivePriority > authorizationPriority
+  && syncFailurePriority > inactivePriority
+  && downstreamPriority > syncFailurePriority
+  && syncingPriority > downstreamPriority
+  && partialCoveragePriority > syncingPriority
+  && missingSourcePriority > partialCoveragePriority
+  && uploadedOnlyPriority > missingSourcePriority
+  && coreInputPriority > uploadedOnlyPriority,
+  'materials blocker priority must keep state-read/auth/sync/coverage issues ahead of lower-priority input guidance',
+);
+
+assert(materialsHandoff.includes('当前至少一个真实状态接口不可用'), 'read failures must fail closed instead of synthesizing readiness');
+assert(materialsHandoff.includes('这是当前最高优先级阻塞'), 'authorization failure must be surfaced as the highest actionable connector blocker');
+assert(materialsHandoff.includes('失败项不会被包装成可用输入'), 'failed sync or material processing must not become usable input');
+assert(materialsHandoff.includes('前端只说明下游刷新未完成'), 'downstream degradation must not imply completed business understanding');
+assert(materialsHandoff.includes('部分资源未覆盖'), 'partial connector coverage must remain visible');
+assert(materialsHandoff.includes('文件补充已经可用，不会阻塞首次运行'), 'uploaded-only materials must remain a non-blocking fallback');
+assert(materialsHandoff.includes('这里只提示输入缺口，不推断后端理解质量'), 'core-input guidance must not claim backend understanding quality');
+assert(materialsHandoff.includes('当前最重要动作'), 'materials page must expose one clear highest-priority next action');
+assert(materialsHandoff.includes('只显示当前最高优先级动作'), 'materials page must explain that the CTA is prioritized rather than exhaustive');
+assert(materialsHandoff.includes('<button type="button" className="btn btn-primary" onClick={handleNextAction}'), 'materials readiness surface must expose exactly one primary prioritized action');
+assert(materialsHandoff.includes("document.querySelector('.materials-primary-card')"), 'online-source actions must navigate to the real connector section');
+assert(materialsHandoff.includes("document.querySelector('.materials-inventory-card')"), 'material failure actions must navigate to the real material inventory');
+assert(materialsHandoff.includes("navigateToProjectPath('/settings', project)"), 'ready material flow must preserve project context when moving to system setup');
 assert(layout.includes('<MaterialsOnboardingHandoff />'), 'layout must mount the materials readiness surface above the materials page');
 
 const onlineSection = materials.indexOf('<h2>在线连接器</h2>');
