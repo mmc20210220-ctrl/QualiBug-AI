@@ -5,6 +5,7 @@ import { deriveFindingVerification } from '../lib/finding-verification';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { deriveReleasePresentation } from '../lib/release-presentation';
+import { FindingVerificationStatus } from '../components/findings/FindingVerificationStatus';
 import { TermHint } from '../components/TermHint';
 import { GLOSSARY } from '../lib/glossary';
 import { asRecord } from '../lib/value-guards';
@@ -156,9 +157,10 @@ export function ReleaseGate() {
           {requestedFinding && requestedVerification ? (
             <>
               <h2><span className={`severity-badge ${requestedFinding.severity.toLowerCase()}`}>{requestedFinding.severity}</span> {requestedFinding.title}</h2>
+              <div className="mt-3"><FindingVerificationStatus finding={requestedFinding} /></div>
               <div className="customer-secondary-meta mt-3">
-                <span><em>QualiBug 验证</em><b className={requestedVerification.tone === 'neutral' ? '' : requestedVerification.tone}>{requestedVerification.label}</b></span>
-                <span><em>最近回归</em><b>{requestedFinding.regression?.last_run_at || requestedVerification.latestRun?.generated_at || '尚未执行'}</b></span>
+                <span><em>最近验证</em><b>{requestedFinding.regression?.last_run_at || requestedVerification.latestRun?.generated_at || '尚未执行'}</b></span>
+                <span><em>验证下一步</em><b>{requestedVerification.nextActionLabel}</b></span>
               </div>
               <p className="muted">发布门禁仍按整个项目的真实 Gate 判定；单条 Finding 的修复后验证状态只是发布依据之一，不会覆盖项目级门禁。</p>
               <div className="settings-actions">
