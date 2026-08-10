@@ -24,6 +24,14 @@ const SYNC_FAILURE_HEALTH = new Set([
   'CALIBRATION_REQUIRED',
 ]);
 
+type BusinessInputCounts = {
+  prd: number;
+  api: number;
+  database: number;
+  collaboration: number;
+  historicalBug: number;
+};
+
 type MaterialSnapshot = {
   connectorCount: number;
   authorizationAttentionCount: number;
@@ -37,6 +45,8 @@ type MaterialSnapshot = {
   onlineActive: number;
   uploadedActive: number;
   businessContextActive: number;
+  businessInputCategoryCount: number;
+  businessInputCounts: BusinessInputCounts;
   processing: number;
   failed: number;
 };
@@ -63,7 +73,15 @@ function isOnlineSource(source: Record<string, unknown>): boolean {
 }
 
 function readMaterialSnapshot(payload: unknown): Pick<MaterialSnapshot,
-  'total' | 'active' | 'onlineActive' | 'uploadedActive' | 'businessContextActive' | 'processing' | 'failed'> {
+  | 'total'
+  | 'active'
+  | 'onlineActive'
+  | 'uploadedActive'
+  | 'businessContextActive'
+  | 'businessInputCategoryCount'
+  | 'businessInputCounts'
+  | 'processing'
+  | 'failed'> {
   const root = asRecord(payload);
   const asset = asRecord(root.knowledge_asset || root.data || root);
   const inventory = Array.isArray(asset.sources)
@@ -76,9 +94,16 @@ function readMaterialSnapshot(payload: unknown): Pick<MaterialSnapshot,
     .filter((source) => String(source.status || 'active').toLowerCase() !== 'deleted');
   const activeSources = sources.filter((source) => String(source.status || 'active').toLowerCase() === 'active');
   const onlineActive = activeSources.filter(isOnlineSource).length;
-  const businessContextActive = activeSources.filter((source) => (
-    BUSINESS_CONTEXT_TYPES.has(String(source.source_type || '').trim().toLowerCase())
-  )).length;
+  const sourceType = (source: Record<string, unknown>) => String(source.source_type || '').trim().toLowerCase();
+  const businessContextActive = activeSources.filter((source) => BUSINESS_CONTEXT_TYPES.has(sourceType(source))).length;
+  const businessInputCounts: BusinessInputCounts = {
+    prd: activeSources.filter((source) => sourceType(source) === 'prd').length,
+    api: activeSources.filter((source) => sourceType(source) === 'openapi').length,
+    database: activeSources.filter((source) => ['database_schema', 'db_design'].includes(sourceType(source))).length,
+    collaboration: activeSources.filter((source) => sourceType(source) === 'collaboration_document').length,
+    historicalBug: activeSources.filter((source) => sourceType(source) === 'historical_bug').length,
+  };
+  const businessInputCategoryCount = Object.values(businessInputCounts).filter((count) => count > 0).length;
 
   return {
     total: sources.length,
@@ -86,6 +111,8 @@ function readMaterialSnapshot(payload: unknown): Pick<MaterialSnapshot,
     onlineActive,
     uploadedActive: Math.max(0, activeSources.length - onlineActive),
     businessContextActive,
+    businessInputCategoryCount,
+    businessInputCounts,
     processing: sources.filter((source) => String(source.status || '').toLowerCase() === 'processing').length,
     failed: sources.filter((source) => ['failed', 'degraded'].includes(String(source.status || '').toLowerCase())).length,
   };
@@ -276,6 +303,14 @@ export function MaterialsOnboardingHandoff() {
     onlineActive: 0,
     uploadedActive: 0,
     businessContextActive: 0,
+    businessInputCategoryCount: 0,
+    businessInputCounts: {
+      prd: 0,
+      api: 0,
+      database: 0,
+      collaboration: 0,
+      historicalBug: 0,
+    },
     processing: 0,
     failed: 0,
   });
@@ -344,6 +379,14 @@ export function MaterialsOnboardingHandoff() {
         ? { value: '输入主链已建立', note: '已有资料可读，但 PRD / API / DB / 协作文档 / 历史缺陷等核心输入仍待补齐。', tone: 'warning' }
         : { value: '等待可读资料', note: '必须先形成真实 active source，前端才会显示业务理解输入已建立。', tone: 'warning' };
 
+  const businessInputCoverage = [
+    { key: 'prd', label: 'PRD / 需求', count: snapshot.businessInputCounts.prd, note: '需求规则、业务流程与约束输入' },
+    { key: 'api', label: 'API / 接口', count: snapshot.businessInputCounts.api, note: '接口能力、字段与调用契约输入' },
+    { key: 'database', label: 'DB / 数据结构', count: snapshot.businessInputCounts.database, note: '数据库结构与状态证据输入' },
+    { key: 'collaboration', label: '协作文档', count: snapshot.businessInputCounts.collaboration, note: '在线知识库与协作文档输入' },
+    { key: 'historicalBug', label: '历史 Bug', count: snapshot.businessInputCounts.historicalBug, note: '历史缺陷与质量经验输入' },
+  ];
+
   const currentBlocker = deriveCurrentBlocker(snapshot, materialReadError, connectorReadError);
 
   const scrollToOnlineMaterials = () => {
@@ -393,6 +436,30 @@ export function MaterialsOnboardingHandoff() {
           <small>{understandingStage.note}</small>
         </article>
       </div>
+
+      <section className="status-card status-neutral settings-mt-10" aria-label="核心业务理解输入覆盖">
+        <span className="panel-kicker">核心输入覆盖</span>
+        <strong>
+          {materialReadError
+            ? '当前无法确认输入类型覆盖'
+            : `已观察到 ${snapshot.businessInputCategoryCount}/5 类核心输入`}
+        </strong>
+        <p className="muted">
+          这里只统计真实 active source 的输入类型；“未观察到”不等于企业必须补充，也不代表业务理解不正确。它不是完成率、理解准确率或新的运行门禁。
+        </p>
+        <div className="customer-summary-grid settings-mt-10">
+          {businessInputCoverage.map((item) => {
+            const observed = !materialReadError && item.count > 0;
+            return (
+              <article key={item.key} className={`customer-summary-card tone-${materialReadError ? 'warning' : observed ? 'success' : 'neutral'}`}>
+                <span>{item.label}</span>
+                <strong>{materialReadError ? '无法确认' : observed ? `✓ ${item.count} 份` : '— 未观察到'}</strong>
+                <small>{materialReadError ? '资料状态不可读时不推导该输入类型是否存在。' : item.note}</small>
+              </article>
+            );
+          })}
+        </div>
+      </section>
 
       <div className={`status-card status-${currentBlocker.tone} settings-mt-10`} aria-label="企业资料当前最重要动作">
         <span className="panel-kicker">当前最重要动作</span>
