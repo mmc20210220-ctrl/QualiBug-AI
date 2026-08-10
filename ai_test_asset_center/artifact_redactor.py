@@ -50,6 +50,56 @@ COOKIE_HEADER_RE = re.compile(r"(?i)(?:^|[\r\n])Cookie:\s*[^\r\n]+")
 PASSWORD_ASSIGN_RE = re.compile(
     r'(?i)("?(?:password|passwd|pwd|client_secret|api_key|access_token|token)"?\s*[:=]\s*)(["\']?)([^"\'\s,}\]]+)(\2)'
 )
+# Single-pass alternation over the per-type patterns (branch order = the
+# original sequential substitution order). Used by _redact_string; each
+# branch keeps its own replacement and hit label. Inline ``(?i)`` prefixes
+# are stripped and re-applied as branch-local ``(?i:...)`` groups so no
+# global flag leaks across branches; each branch keeps its original
+# case-sensitivity.
+def _combined_branch(label: str, pattern: re.Pattern[str]) -> str:
+    body = str(pattern.pattern)
+    if body.startswith("(?i)"):
+        body = body[4:]
+    if label == "password_assignment":
+        # The sealed pattern's trailing ``(\2)`` back-reference would shift
+        # group numbers inside the named alternation branch, so the value
+        # run is matched without the closing-quote back-reference (the
+        # optional quote group is still captured for the replacement).
+        body = (
+            r'(?P<__pw_prefix>"?(?:password|passwd|pwd|client_secret|'
+            r'api_key|access_token|token)"?\s*[:=]\s*)'
+            r'(?P<__pw_quote>["\']?)'
+            r'(?P<__pw_value>[^"\'\s,}\]]+)'
+        )
+    if pattern.flags & re.IGNORECASE:
+        return f"(?P<{label}>(?i:{body}))"
+    return f"(?P<{label}>{body})"
+
+
+_REDACT_COMBINED_RE = re.compile(
+    "|".join(
+        _combined_branch(label, pattern)
+        for label, pattern in (
+            ("private_key", PRIVATE_KEY_RE),
+            ("jwt", JWT_RE),
+            ("bearer", BEARER_RE),
+            ("basic", BASIC_RE),
+            ("api_key", API_KEY_RE),
+            ("dsn_credential", DSN_CRED_RE),
+            ("cookie", COOKIE_HEADER_RE),
+            ("password_assignment", PASSWORD_ASSIGN_RE),
+        )
+    )
+)
+_REDACT_REPLACEMENTS: dict[str, str] = {
+    "private_key": "<REDACTED_PRIVATE_KEY>",
+    "jwt": "<REDACTED_JWT>",
+    "bearer": "Bearer <REDACTED>",
+    "basic": "Basic <REDACTED>",
+    "api_key": "<REDACTED_API_KEY>",
+    "dsn_credential": "<REDACTED_DSN>",
+    "cookie": "\nCookie: <REDACTED>",
+}
 SAFE_PLACEHOLDER_RE = re.compile(
     r"(?:<\s*(?:FILL|REDACTED|TODO|REPLACE|SANDBOX)[^>]*>|\*\*\*|redacted|placeholder|secret_ref:)",
     re.I,
@@ -112,29 +162,33 @@ def _redact_string(text: str) -> tuple[str, list[str]]:
     # emitted. The truncation marker is itself inert.
     if len(text) > _MAX_REDACT_STRING_CHARS:
         text = text[:_MAX_REDACT_STRING_CHARS] + "<REDACTED_TRUNCATED>"
-    hits: list[str] = []
-    out = text
+    hits: set[str] = set()
 
-    def _sub(pattern: re.Pattern[str], label: str, replacement: str) -> None:
-        nonlocal out
-        if pattern.search(out):
-            hits.append(label)
-            out = pattern.sub(replacement, out)
+    def _replace(match: re.Match[str]) -> str:
+        label = str(match.lastgroup or "")
+        hits.add(label)
+        if label == "password_assignment":
+            quote = match.group("__pw_quote") or ""
+            return match.group("__pw_prefix") + quote + "<REDACTED>" + quote
+        return _REDACT_REPLACEMENTS.get(label, match.group(0))
 
-    _sub(PRIVATE_KEY_RE, "private_key", "<REDACTED_PRIVATE_KEY>")
-    _sub(JWT_RE, "jwt", "<REDACTED_JWT>")
-    _sub(BEARER_RE, "bearer", "Bearer <REDACTED>")
-    _sub(BASIC_RE, "basic", "Basic <REDACTED>")
-    _sub(API_KEY_RE, "api_key", "<REDACTED_API_KEY>")
-    _sub(DSN_CRED_RE, "dsn_credential", "<REDACTED_DSN>")
-    _sub(COOKIE_HEADER_RE, "cookie", "\nCookie: <REDACTED>")
-    if PASSWORD_ASSIGN_RE.search(out):
-        hits.append("password_assignment")
-        out = PASSWORD_ASSIGN_RE.sub(r'\1\2<REDACTED>\2', out)
-    return out, hits
+    # One alternation pass instead of eight sequential scan+sub passes: each
+    # pass rescanned the whole string, and the pattern loop was the measured
+    # redaction hotspot on multi-GB shards. Branch order preserves the
+    # original substitution order (private_key → jwt → bearer → basic →
+    # api_key → dsn → cookie → password_assignment), so later patterns only
+    # see the earlier replacements exactly as before.
+    out = _REDACT_COMBINED_RE.sub(_replace, text)
+    return out, sorted(hits)
 
 
-def _redact_value(value: Any, *, key: str = "", depth: int = 0) -> tuple[Any, list[dict[str, Any]]]:
+def _redact_value(
+    value: Any,
+    *,
+    key: str = "",
+    depth: int = 0,
+    inplace: bool = False,
+) -> tuple[Any, list[dict[str, Any]]]:
     events: list[dict[str, Any]] = []
     if depth > 64:
         return value, events
@@ -155,6 +209,18 @@ def _redact_value(value: Any, *, key: str = "", depth: int = 0) -> tuple[Any, li
         sensitive_key = False
 
     if isinstance(value, dict):
+        if inplace:
+            # In-place mode is for freshly loaded transient payloads (shard
+            # reloads): the caller keeps no reference to the old tree, so the
+            # container reuse is safe and halves the allocation cost (the
+            # measured redaction hotspot on multi-GB shards).
+            for child_key, child_val in list(value.items()):
+                redacted, child_events = _redact_value(
+                    child_val, key=str(child_key), depth=depth + 1, inplace=True
+                )
+                value[str(child_key)] = redacted
+                events.extend(child_events)
+            return value, events
         out: dict[str, Any] = {}
         for child_key, child_val in value.items():
             redacted, child_events = _redact_value(child_val, key=str(child_key), depth=depth + 1)
@@ -163,6 +229,17 @@ def _redact_value(value: Any, *, key: str = "", depth: int = 0) -> tuple[Any, li
         return out, events
 
     if isinstance(value, list):
+        if inplace:
+            for index, item in enumerate(value):
+                redacted, child_events = _redact_value(
+                    item, key=key, depth=depth + 1, inplace=True
+                )
+                value[index] = redacted
+                events.extend(child_events)
+                if index >= 5000 and key not in _NO_TRUNCATE_LIST_KEYS:
+                    value.append("<REDACTED_LIST_TRUNCATED>")
+                    break
+            return value, events
         out_list: list[Any] = []
         for index, item in enumerate(value):
             redacted, child_events = _redact_value(item, key=key, depth=depth + 1)
@@ -197,10 +274,19 @@ def _redact_value(value: Any, *, key: str = "", depth: int = 0) -> tuple[Any, li
     return value, events
 
 
-def redact_artifact(payload: Any) -> tuple[Any, dict[str, Any]]:
-    """Return a deep-copied redacted payload plus a redaction receipt."""
-    cloned = copy.deepcopy(payload)
-    redacted, events = _redact_value(cloned)
+def redact_artifact(payload: Any, *, inplace: bool = False) -> tuple[Any, dict[str, Any]]:
+    """Return a deep-copied redacted payload plus a redaction receipt.
+
+    ``inplace=True`` redacts a transient payload in place (containers reused,
+    halving allocation): only for freshly loaded objects the caller keeps no
+    reference to — shard reloads in the scan-result writer. The copy mode is
+    the default contract for every other caller.
+    """
+    if inplace:
+        redacted, events = _redact_value(payload, inplace=True)
+    else:
+        cloned = copy.deepcopy(payload)
+        redacted, events = _redact_value(cloned)
     receipt = {
         "schema_version": SCHEMA_VERSION,
         "redaction_applied": bool(events),

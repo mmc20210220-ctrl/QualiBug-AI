@@ -410,16 +410,30 @@ def write_scan_result(
             scan_result={"cycle_path": cycle_path},
         )
     registry_stats: dict[str, int] | None = None
+    _stage_marks: list[tuple[str, float]] = [("start", time.time())]
+
+    def _mark(name: str) -> None:
+        _stage_marks.append((name, time.time()))
+
     if normalize:
         # 规范化在 deepcopy 副本上进行：调用方在 write 之后仍会继续读写 result
         # （__main__ / scan_execution_outcome 的 customer-ready 静态产物、
         #  job_formal_planning_proof 的返回值），副本保证其看到的树不被改动。
-        work = copy.deepcopy(result)
+        # deepcopy 保留对象共享（v12 内多个键引用同一实验/ledger 对象）——
+        # normalize 的收编 walk 因此对每份唯一内容只走一次（实测共享场景
+        # deepcopy+normalize 38s vs json round-trip 展开别名后 129s）；
+        # round-trip 副本只在载荷非 deepcopy-able 时作为回退。
+        try:
+            work = copy.deepcopy(result)
+        except (TypeError, ValueError, RecursionError):
+            work = json.loads(json.dumps(result))
+        _mark("copy")
         registry = normalize_scan_result(
             work,
             dedup_threshold_bytes=dedup_threshold_bytes,
             blob_threshold_bytes=blob_threshold_bytes,
         )
+        _mark("normalize")
         if not registry.is_empty():
             work[REGISTRY_KEY] = registry.as_payload()
         registry_stats = dict(registry.stats)
@@ -447,6 +461,7 @@ def write_scan_result(
     finally:
         for tmp in list(temps):
             _discard_temp(tmp, temps)
+    _mark("partition")
     # ── 逐片脱敏（A）：分片先行、逐片 redact，完整性校验逐片 fail-closed ──
     manifest_shards: dict[str, dict[str, Any]] = {}
     piece_events: list[dict[str, Any]] = []
@@ -460,7 +475,10 @@ def write_scan_result(
                 tmp.unlink()
             except OSError:
                 pass
-        redacted, piece_receipt = redact_artifact(value)
+        # In-place redaction: the shard payload is a freshly loaded transient,
+        # so containers are reused instead of re-allocated (measured hotspot
+        # on multi-GB shards; copy mode halves throughput).
+        redacted, piece_receipt = redact_artifact(value, inplace=True)
         # 密封 ledger 分片在这里完成 reseal（attempt/ledger 指纹链自洽）。
         redacted = _reseal_attempt_ledgers(redacted)
         piece_scan = scan_for_secrets(redacted)
@@ -481,10 +499,12 @@ def write_scan_result(
         manifest_shards[dotted] = _shard_spec(dotted, final_path, final_path.stat().st_size)
         piece_events.extend(list(piece_receipt.get("events") or []))
         piece_scans.append(piece_scan)
+    _mark("shard_redact")
     # ── 骨架脱敏（小；内联 ledger 的 reseal 与内联 authority 重建在此完成）──
     redacted_skeleton, skeleton_receipt = redact_and_validate(skeleton)
     if post_redaction_validator is not None:
         post_redaction_validator(redacted_skeleton)
+    _mark("skeleton_redact")
     # ── authority 重建（B 兼容）：被分片切开的 envelope 键加载后重建 ──
     _rederive_authority_artifacts(
         redacted_skeleton,
@@ -492,6 +512,7 @@ def write_scan_result(
         parts_dir,
         indent=indent,
     )
+    _mark("authority_rederive")
     manifest: dict[str, Any] = {
         "schema_version": SCAN_RESULT_SHARD_SCHEMA,
         "threshold_bytes": threshold_bytes,
@@ -500,11 +521,18 @@ def write_scan_result(
     }
     redacted_skeleton[SHARD_MARKER] = manifest
     _atomic_write_json(target, redacted_skeleton, indent=indent)
+    _mark("atomic_write")
+    # 分阶段计时（可观测性）：大 result 的落盘各阶段耗时，帮助定位
+    # 性能瓶颈（实测多 GB 内容时 copy/normalize/redact 各占分钟级）。
+    _start = _stage_marks[0][1]
+    timing = {name: round(stamp - _start, 1) for name, stamp in _stage_marks[1:]}
+    timing["total_seconds"] = round(time.time() - _start, 1)
     return _combine_redaction_receipt(
         skeleton_receipt,
         piece_events,
         piece_scans,
         normalization=registry_stats,
+        timing=timing,
     )
 
 
@@ -662,6 +690,7 @@ def _combine_redaction_receipt(
     piece_scans: list[dict[str, Any]],
     *,
     normalization: dict[str, int] | None = None,
+    timing: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """聚合骨架与各分片的脱敏 receipt（与整树 receipt 契约一致）。"""
     events = list(skeleton_receipt.get("redaction", {}).get("events") or [])
@@ -701,6 +730,7 @@ def _combine_redaction_receipt(
         },
         "safe_to_persist": safe,
         "normalization": normalization,
+        "timing": timing,
     }
 
 
