@@ -4276,6 +4276,18 @@ def build_behavior_ir_from_knowledge_asset(
             _fd_fname = _text(_fd_entry.get("field") or _fd_entry.get("name")).lower()
             if _fd_fname:
                 _table_db_columns.setdefault(_dt_name, {})[_fd_fname] = _fd_entry
+        # Supplement table-level column names (data_tables[].columns) so
+        # constraint columns (user_limit / max_discount / category_scope /
+        # global_limit / min_order_amount / expires_at …) reach the entity
+        # field list even when the table has no field_dictionary rows. The
+        # column declaration itself is source material: it states the
+        # constraint's existence even without a prose rule.
+        for _col in _list(_dt.get("columns")):
+            _col_name = _text(_col).strip().lower()
+            if _col_name:
+                _table_db_columns.setdefault(_dt_name, {}).setdefault(
+                    _col_name, {"name": _col}
+                )
 
     # Supplement from top-level field_dictionary (has table→field mappings)
     for _fd_top in _list(data.get("field_dictionary")):
@@ -6544,6 +6556,138 @@ def build_behavior_ir_from_knowledge_asset(
                 source_refs=[_source_ref(source_id, quote=_text(rule.get("statement"))[:200], kind="causal_postcondition")],
                 confidence=float(rule.get("confidence") or 0.7),
                 derivation="explicit",
+            ))
+
+    # ── Schema-declared constraint invariants ──
+    # A table column whose name declares a business constraint (user_limit /
+    # global_limit / max_discount / category_scope / min_order_amount /
+    # expires_at …) is source material: the schema states the constraint's
+    # existence even when no prose rule documents it — enterprise documents
+    # are never complete and implicit rules surface at runtime. When the
+    # entity has a decision or consumption operation (claim/use/validate/
+    # simulate — 领取/使用/校验/验证/试算/模拟), compile a constraint
+    # verification invariant on that surface so the declared constraint is
+    # actually exercised. Violations are runtime-observed (the target accepts
+    # what the declared column forbids). Column-name patterns are generic
+    # SQL/enterprise vocabulary, never industry terms.
+    _constraint_column_suffixes = (
+        ("limit", "USAGE_LIMIT"), ("cap", "USAGE_LIMIT"), ("quota", "USAGE_LIMIT"),
+        ("threshold", "USAGE_LIMIT"), ("uses", "USAGE_LIMIT"),
+        ("scope", "CATEGORY_SCOPE"), ("category", "CATEGORY_SCOPE"),
+        ("expires", "VALIDITY_WINDOW"), ("valid", "VALIDITY_WINDOW"),
+        ("start", "VALIDITY_WINDOW"), ("effective", "VALIDITY_WINDOW"),
+    )
+    _constraint_column_prefixes = (
+        ("max", "AMOUNT_BOUND"), ("min", "AMOUNT_BOUND"),
+        ("expires", "VALIDITY_WINDOW"), ("valid", "VALIDITY_WINDOW"),
+    )
+    _constraint_decision_tokens = (
+        "use", "consume", "redeem", "claim", "apply", "validate", "check",
+        "verify", "simulate", "核销", "使用", "领取", "兑换", "校验", "验证",
+        "试算", "模拟",
+    )
+    _derived_constraint_ids: set[str] = set()
+    for _ent in _list(model.get("entities")):
+        if not isinstance(_ent, dict):
+            continue
+        _ent_name = _text(_ent.get("name") or _ent.get("id"))
+        if not _ent_name:
+            continue
+        _constraint_cols: list[tuple[str, str]] = []
+        for _fld in _list(_ent.get("fields")):
+            if not isinstance(_fld, dict):
+                continue
+            _fname = _text(_fld.get("name") or _fld.get("field")).lower()
+            if not _fname:
+                continue
+            for _suffix, _kind in _constraint_column_suffixes:
+                if _fname.endswith(_suffix) and len(_fname) > len(_suffix):
+                    _constraint_cols.append((_fname, _kind))
+                    break
+            else:
+                for _prefix, _kind in _constraint_column_prefixes:
+                    if _fname.startswith(_prefix) and len(_fname) > len(_prefix):
+                        _constraint_cols.append((_fname, _kind))
+                        break
+        if not _constraint_cols:
+            continue
+        # Entity-scoped decision/consumption operations (by entity_refs, then
+        # path-token fallback on the entity's own name — never a global scan).
+        _ent_ops = [
+            row for row in _list(model.get("operations"))
+            if isinstance(row, dict)
+            and (
+                _ent_name in set(_text(v) for v in _list(row.get("entity_refs")))
+                or _op_text_has_token(
+                    " ".join((
+                        _text(row.get("path") or row.get("raw_path")),
+                        _text(row.get("summary") or ""),
+                    )),
+                    str(_ent_name),
+                )
+            )
+        ]
+        _decision_ops = [
+            row for row in _ent_ops
+            if any(
+                _op_text_has_token(
+                    " ".join((
+                        _text(row.get("path") or row.get("raw_path")),
+                        _text(row.get("operation_id") or row.get("id")),
+                    )),
+                    token,
+                )
+                for token in _constraint_decision_tokens
+            )
+            and _text(row.get("method") or "").upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        ]
+        if not _decision_ops:
+            continue
+        _decision_op_refs = [
+            _text(row.get("operation_id") or row.get("id"))
+            for row in _decision_ops
+            if _text(row.get("operation_id") or row.get("id"))
+        ]
+        for _col_name, _kind in _constraint_cols:
+            _inv_id = _stable_id("inv", "schema_constraint", _ent_name, _col_name)
+            if _inv_id in _derived_constraint_ids:
+                continue
+            _derived_constraint_ids.add(_inv_id)
+            model["invariants"].append(_fact_node(
+                node_id=_inv_id,
+                typed_fields={
+                    "description": (
+                        f"声明列约束 {_ent_name}.{_col_name} 必须在实体决策面上生效"
+                    ),
+                    "expression": {
+                        "kind": "validation",
+                        "operator": {
+                            "USAGE_LIMIT": "under_limit",
+                            "AMOUNT_BOUND": "within_bound",
+                            "CATEGORY_SCOPE": "scope_restricted",
+                            "VALIDITY_WINDOW": "within_window",
+                        }.get(_kind, "within_bound"),
+                        "constraint_kind": _kind,
+                        "operands": [{
+                            "entity_ref": _ent_name,
+                            "field": _col_name,
+                            "source": "schema_declared_column",
+                        }],
+                        "raw": f"schema column {_ent_name}.{_col_name}",
+                    },
+                    "operation_refs": list(dict.fromkeys(_decision_op_refs)),
+                    "subject_entity_refs": [_ent_name],
+                    "derived_invariant_kind": "schema_declared_constraint",
+                    "constraint_source": "data_tables.columns",
+                },
+                source_refs=[_source_ref(
+                    "schema.sql",
+                    locator=f"table:{_ent_name}.{_col_name}",
+                    quote=f"column {_col_name}",
+                    kind="schema_declared_constraint",
+                )],
+                confidence=0.6,
+                derivation="schema-derived",
             ))
 
     # Runtime V2 relations are the only semantic joins used by the compiler.
