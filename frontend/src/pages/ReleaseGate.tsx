@@ -1,6 +1,7 @@
 import { useSearchParams } from 'react-router-dom';
 import { getCommercialAssets, isCustomerReadyFinding, usePipelineData, useReleaseData } from '../api/data';
 import { evidenceDeepLinkSearch } from '../lib/evidence-presentation';
+import { deriveFindingVerification } from '../lib/finding-verification';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { deriveReleasePresentation } from '../lib/release-presentation';
@@ -47,9 +48,9 @@ export function ReleaseGate() {
 
   const checks = (releaseData?.checks || []) as GateCheck[];
   const overall = releaseData?.overall || '';
-  const passCount = checks.filter(c => c.status === 'pass').length;
-  const failCount = checks.filter(c => c.status === 'fail').length;
-  const pendingCount = checks.filter(c => c.status === 'pending').length;
+  const passCount = checks.filter((check) => check.status === 'pass').length;
+  const failCount = checks.filter((check) => check.status === 'fail').length;
+  const pendingCount = checks.filter((check) => check.status === 'pending').length;
   const hasGateData = checks.length > 0;
 
   const pipelineRecord = asRecord(pipelineData);
@@ -57,6 +58,7 @@ export function ReleaseGate() {
   const requestedFinding = requestedFindingId
     ? customerFindings.find((finding) => finding.id === requestedFindingId) || null
     : null;
+  const requestedVerification = requestedFinding ? deriveFindingVerification(requestedFinding) : null;
   const findingContextSearch = evidenceDeepLinkSearch(requestedFindingId);
   const requestedFindingHasEvidence = Boolean(requestedFinding && (requestedFinding.evidence_chain?.length || 0) > 0);
   const p0Count = customerFindings.filter((finding) => finding.severity === 'P0').length;
@@ -114,10 +116,10 @@ export function ReleaseGate() {
     : commercialAssets?.commercial_handoff.safe_for_customer ? '交付已放行' : '交付未放行';
 
   const nextAction = p0Count > 0
-    ? { label: '处理 P0 问题', path: '/findings' }
+    ? { label: '查看 P0 验证', path: '/findings' }
     : regressionFailed
       ? customerFindings.length > 0
-        ? { label: '处理回归失败', path: '/findings' }
+        ? { label: '查看失败验证', path: '/findings' }
         : { label: '查看回归闭环', path: '/dashboard' }
       : pipelineUnhealthy
         ? { label: '查看运行状态', path: '/campaigns' }
@@ -126,7 +128,7 @@ export function ReleaseGate() {
           : coverageDeferred
             ? { label: '继续检测剩余范围', path: '/campaigns' }
             : releasePresentation.color === 'red' && customerFindings.length > 0
-              ? { label: '处理已确认问题', path: '/findings' }
+              ? { label: '查看已确认问题', path: '/findings' }
               : !hasGateData
                 ? { label: '启动检测', path: '/campaigns' }
                 : { label: '返回价值总览', path: '/dashboard' };
@@ -151,10 +153,14 @@ export function ReleaseGate() {
       {requestedFindingId && !loading && pipelineData && (
         <section className={`card mb-4 status-card status-${requestedFinding ? 'warning' : 'neutral'}`} aria-label="当前发布评审问题上下文">
           <span className="panel-kicker">当前评审问题</span>
-          {requestedFinding ? (
+          {requestedFinding && requestedVerification ? (
             <>
               <h2><span className={`severity-badge ${requestedFinding.severity.toLowerCase()}`}>{requestedFinding.severity}</span> {requestedFinding.title}</h2>
-              <p className="muted">发布门禁仍按整个项目的真实 Gate 判定；这里仅保留你从 Dashboard / Evidence 带来的单问题上下文，不把单条问题改写成项目级发布结论。</p>
+              <div className="customer-secondary-meta mt-3">
+                <span><em>QualiBug 验证</em><b className={requestedVerification.tone === 'neutral' ? '' : requestedVerification.tone}>{requestedVerification.label}</b></span>
+                <span><em>最近回归</em><b>{requestedFinding.regression?.last_run_at || requestedVerification.latestRun?.generated_at || '尚未执行'}</b></span>
+              </div>
+              <p className="muted">发布门禁仍按整个项目的真实 Gate 判定；单条 Finding 的修复后验证状态只是发布依据之一，不会覆盖项目级门禁。</p>
               <div className="settings-actions">
                 <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project, findingContextSearch)}>返回这条问题</button>
                 {requestedFindingHasEvidence && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project, findingContextSearch)}>查看这条证据</button>}
@@ -163,7 +169,7 @@ export function ReleaseGate() {
           ) : (
             <>
               <h2>原问题已不在当前已确认结果中</h2>
-              <p className="muted">链接中的 Finding 标识可能来自旧扫描或状态已经变化。发布页不会按标题猜测替代问题；项目级门禁结论仍按当前真实数据展示。</p>
+              <p className="muted">它可能来自旧扫描，也可能在重新验证后退出当前已确认列表。仅凭“列表中消失”不能断言已修复；发布页不会按标题猜测替代问题，项目级门禁仍按当前真实数据展示。</p>
               <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看当前问题清单</button>
             </>
           )}
@@ -190,13 +196,13 @@ export function ReleaseGate() {
             <span className="check-detail">当前不能把 0 条门禁数据解释为“可以发布”；请完成检测后再查看发布结论。</span>
           </div>
         )}
-        {checks.map((c, i) => (
-          <div key={`${c.name}-${i}`} className="release-check-item">
-            <span className={`release-check-icon ${c.status}`}>
-              {c.status === 'pass' ? '✓' : c.status === 'fail' ? '✗' : '⏳'}
+        {checks.map((check, index) => (
+          <div key={`${check.name}-${index}`} className="release-check-item">
+            <span className={`release-check-icon ${check.status}`}>
+              {check.status === 'pass' ? '✓' : check.status === 'fail' ? '✗' : '⏳'}
             </span>
-            <strong>{c.name}</strong>
-            <span className="check-detail">{c.detail}</span>
+            <strong>{check.name}</strong>
+            <span className="check-detail">{check.detail}</span>
           </div>
         ))}
       </section>
