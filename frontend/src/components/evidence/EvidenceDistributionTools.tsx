@@ -131,7 +131,7 @@ export function EvidenceDistributionTools({ finding, project }: Props) {
   };
 
   return (
-    <details className="settings-auth-section mt-3" aria-label="证据导出与安全分发工具">
+    <details className="settings-auth-section mt-3 evidence-distribution-tools" aria-label="证据导出与安全分发工具">
       <summary>
         <strong>证据工具</strong>
         <span className="muted">复制 / PDF / 临时只读分享</span>
