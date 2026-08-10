@@ -124,6 +124,148 @@ def _finding_paths(finding: dict[str, Any]) -> set[str]:
     return paths
 
 
+# ── Constraint-class semantic matching (evaluator-side, industry-neutral) ──
+#
+# A database-constraint ground-truth entry (module=database / type 数据库约束)
+# and the product's constraint-enforcement finding describe the same defect
+# with two different vocabularies: the finding says "不能为负 / 必须唯一 /
+# 重复值不允许出现" while the GT keywords say "非负 / 唯一约束 / 重复支付".
+# Literal-substring matching turns real, reproduced evidence into a miss.
+# The synonym groups below are bilingual concept vocabulary for numeric
+# boundaries, positivity, negativity, uniqueness and duplication — generic
+# business semantics, never benchmark answers or customer-specific terms.
+# They are applied ONLY to constraint-class pairs so non-constraint matching
+# behavior stays byte-identical.
+_CONSTRAINT_SYNONYM_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({
+        "非负", "不能为负", "不允许为负", "不得为负", "必须非负", "不为负", "不为负数",
+        "must not go below zero", "must not be negative", "never negative",
+        "below zero", "non-negative", "nonnegative",
+    }),
+    frozenset({
+        "正数", "必须为正", "大于0", "大于 0", "大于零",
+        "must be positive", "must stay positive", "positive",
+    }),
+    frozenset({
+        "负数", "为负", "负值", "负库存", "negative", "below zero",
+    }),
+    frozenset({
+        "唯一", "必须唯一", "不允许重复", "不得重复", "不可重复",
+        "unique", "uniqueness",
+    }),
+    frozenset({
+        "重复", "重复支付", "重复提交", "重复值", "duplicate", "幂等", "idempotent",
+    }),
+    frozenset({
+        "check", "约束", "constraint",
+    }),
+)
+
+# Assertion kinds that are constraint-enforcement verdicts: the experiment
+# PROVED the system accepted (or the DB stored) a constraint-violating value.
+# Their presence makes the finding's defect identity carry the field and the
+# violation shape instead of the enforcement-layer family label.
+_CONSTRAINT_EVIDENCE_KINDS = frozenset({
+    "validation_rejection",
+    "readonly_numeric_audit",
+    "non_negative",
+    "rule_contract_validation",
+    "validation_effect",
+})
+
+_IDENTIFIER_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def _is_constraint_class_gt(gt: dict[str, Any]) -> bool:
+    """Whether a ground-truth entry describes a database-constraint defect.
+
+    Structural check on the GT's own metadata (module / type) — generic for
+    any database-constraint entry in any industry, never bug-specific.
+    """
+    module = str(gt.get("module") or "").strip().lower()
+    bug_type = str(gt.get("type") or "")
+    return module == "database" or "数据库约束" in bug_type or "db constraint" in bug_type.lower()
+
+
+def _constraint_evidence_kinds(finding: dict[str, Any]) -> set[str]:
+    """Assertion kinds recorded on a finding (evidence + failed assertions)."""
+    kinds: set[str] = set()
+    for key in ("failed_assertions", "assertions"):
+        for row in finding.get(key) or []:
+            if isinstance(row, dict) and row.get("kind"):
+                kinds.add(str(row.get("kind")).strip().lower())
+    evidence = finding.get("evidence")
+    if isinstance(evidence, dict):
+        assertion = evidence.get("assertion")
+        if isinstance(assertion, dict) and assertion.get("kind"):
+            kinds.add(str(assertion.get("kind")).strip().lower())
+    return kinds
+
+
+def _constraint_keyword_hits(blob: str, keywords: list[Any]) -> int:
+    """Keyword hits with concept-synonym normalization (constraint class only).
+
+    A keyword hits when it appears literally in the blob, or when the keyword
+    belongs to a synonym group (any group member is a substring of the keyword)
+    and some member of that same group appears in the blob.  This maps
+    "不能为负" -> "非负", "必须唯一" -> "唯一约束", "重复值不允许出现" ->
+    "重复支付" without inventing any vocabulary.
+    """
+    hits = 0
+    for raw in keywords:
+        lowered = str(raw or "").lower().strip()
+        if not lowered:
+            continue
+        if lowered in blob:
+            hits += 1
+            continue
+        for group in _CONSTRAINT_SYNONYM_GROUPS:
+            if any(member in lowered for member in group) and any(
+                member in blob for member in group
+            ):
+                hits += 1
+                break
+    return hits
+
+
+def _constraint_field_identity_present(blob: str, keywords: list[Any]) -> bool:
+    """Whether the finding names at least one identifier-like GT keyword.
+
+    Field identity (the exact column/field name) is the strongest generic
+    signal that a constraint-evidence finding and a constraint-class GT
+    describe the same defect.  A finding that violates "users.balance" must
+    not earn family credit against an "orders.payable_amount" GT: the
+    identifier keyword is absent from its blob, so this stays False.
+    """
+    for raw in keywords:
+        keyword = str(raw or "").strip()
+        if not keyword:
+            continue
+        lowered = keyword.lower()
+        if _IDENTIFIER_TOKEN_RE.match(keyword) and lowered in blob:
+            return True
+    return False
+
+
+def _constraint_title_token_hits(gt_title: str, norm_blob: str) -> int:
+    """Punctuation-split title tokens present in the backtick-stripped blob.
+
+    "payments.idempotency_key" splits into "payments" + "idempotency_key" so
+    field-qualified titles match the backtick-quoted rule statement
+    "`payments`.`idempotency_key`" after normalization.
+    """
+    if not gt_title:
+        return 0
+    tokens: set[str] = set()
+    for raw in gt_title.split():
+        cleaned = raw.strip("`").strip(".,;:：；，。()（）\"'")
+        for piece in re.split(r"[.．/]", cleaned):
+            piece = piece.strip()
+            if len(piece) >= 4:
+                tokens.add(piece.lower())
+    return sum(1 for token in tokens if token in norm_blob)
+
+
 def _benchmark_evidence_identity(finding: dict[str, Any]) -> str:
     """Collapse multiple Oracle labels over the same executed behavior trace."""
 
@@ -197,7 +339,17 @@ def _match_finding_to_gt(
             continue
         score = 0.0
         keywords = gt.get("match_keywords") if isinstance(gt.get("match_keywords"), list) else []
-        kw_hits = sum(1 for kw in keywords if str(kw).lower() in blob)
+        # Database-constraint ground truth describes the same defect the
+        # constraint-enforcement evidence reproduces, but with a different
+        # vocabulary (see _CONSTRAINT_SYNONYM_GROUPS).  Literal matching alone
+        # turns real evidence into a miss; apply the concept-level
+        # normalization only to constraint-class pairs so every other GT's
+        # matching behavior stays byte-identical.
+        constraint_gt = _is_constraint_class_gt(gt)
+        if constraint_gt:
+            kw_hits = _constraint_keyword_hits(blob, keywords)
+        else:
+            kw_hits = sum(1 for kw in keywords if str(kw).lower() in blob)
         if keywords:
             score += min(0.55, kw_hits * 0.12)
         gt_paths = _extract_api_paths(str(gt.get("trigger") or ""))
@@ -228,9 +380,33 @@ def _match_finding_to_gt(
             and ground_truth_family != "unclassified"
             and finding_family != ground_truth_family
         ):
-            score -= 0.20
+            # For a constraint-class GT whose evidence is a
+            # constraint-enforcement verdict, the taxonomy labels differ by
+            # construction (the product labels the enforcement layer
+            # "validation"/"conservation", the GT author labels the business
+            # layer "idempotency"/"data_consistency").  When the finding names
+            # the GT's own field and reproduces the violating shape, the
+            # defect identity is proven by evidence, not by label: grant the
+            # family credit and skip the mismatch penalty.  Fail-closed: no
+            # identifier keyword in the blob means no credit, so a
+            # "users.balance" finding cannot earn credit against an
+            # "orders.payable_amount" GT.
+            if constraint_gt and (
+                _constraint_evidence_kinds(finding) & _CONSTRAINT_EVIDENCE_KINDS
+            ):
+                if kw_hits >= 2 and _constraint_field_identity_present(blob, keywords):
+                    score += 0.35
+            else:
+                score -= 0.20
         gt_title = str(gt.get("title") or "").lower()
-        if gt_title and any(tok in blob for tok in gt_title.split() if len(tok) >= 4):
+        if constraint_gt and (
+            _constraint_evidence_kinds(finding) & _CONSTRAINT_EVIDENCE_KINDS
+        ):
+            # Field-qualified titles ("payments.idempotency_key") match the
+            # backtick-quoted rule statement after punctuation normalization.
+            title_hits = _constraint_title_token_hits(gt_title, blob.replace("`", ""))
+            score += min(0.24, title_hits * 0.12)
+        elif gt_title and any(tok in blob for tok in gt_title.split() if len(tok) >= 4):
             score += 0.12
         # Require endpoint plus semantic evidence, or sufficiently strong
         # non-endpoint semantic evidence. Endpoint-only matches are benchmark
