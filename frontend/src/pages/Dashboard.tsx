@@ -127,11 +127,30 @@ export function Dashboard() {
   const campaignBlocked = campaignStatus === 'blocked';
   const coverageDeferred = campaignStatus === 'coverage_deferred';
   const resultIncomplete = pipelineUnhealthy || campaignBlocked || coverageDeferred;
+  const releaseGate = asRecord(record.release_gate);
+  const releaseGateChecks = (Array.isArray(releaseGate.checks) ? releaseGate.checks : []).map((value) => {
+    const check = asRecord(value);
+    return {
+      name: asText(check.name),
+      status: asText(check.status),
+      detail: asText(check.detail),
+    };
+  });
+  const releaseGateOverall = asText(releaseGate.overall_status || releaseGate.verdict || releaseGate.status);
+  const hasReleaseGateData = Object.keys(releaseGate).length > 0;
 
   const executiveHeadline = getExecutiveHeadline(currentScanDefects, currentScanDefects, currentScanP0Count, clueCount, campaignStatus, campaignDeferredReason);
   const conclusion = pipelineFailedSafe ? '检测异常（非"无问题"）' : pipelineBlocked ? '检测执行被阻断' : campaignBlocked ? '检测暂停' : coverageDeferred ? '部分范围待后续检测' : currentScanP0Count > 0 ? `发现 ${currentScanDefects} 个已确认缺陷，拦截 ${currentScanP0Count} 个 P0 阻断发布` : currentScanDefects > 0 ? '建议进入整改验收' : '当前未发现阻断性问题';
   const level = riskLevel(conclusion);
-  const decision = releaseDecision(currentScanP0Count, currentScanDefects, pipelineUnhealthy, campaignBlocked || coverageDeferred);
+  const decision = releaseDecision(
+    currentScanP0Count,
+    currentScanDefects,
+    pipelineUnhealthy,
+    campaignBlocked || coverageDeferred,
+    releaseGateOverall,
+    releaseGateChecks,
+    hasReleaseGateData,
+  );
   const nextAction = pipelineUnhealthy
     ? { title: '先恢复检测链路，再判断风险', label: '查看运行状态', path: '/campaigns' }
     : campaignBlocked
