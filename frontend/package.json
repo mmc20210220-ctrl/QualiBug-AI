@@ -26,6 +26,7 @@
     "test:run-lifecycle": "node scripts/run-lifecycle-contract.mjs",
     "test:live-scan-status": "node scripts/live-scan-status-contract.mjs",
     "test:dashboard-role-views": "node scripts/dashboard-role-views-contract.mjs",
+    "test:customer-action-guidance": "node scripts/customer-action-guidance-contract.mjs",
     "test:finding-collaboration": "node scripts/finding-collaboration-contract.mjs",
     "test:evidence-distribution": "node scripts/evidence-distribution-contract.mjs",
     "test:evidence-share": "node scripts/evidence-share-contract.mjs",
@@ -56,7 +57,6 @@
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^15.15.0",
     "openapi-typescript": "7.13.0",
-    "playwright": "^1.61.1",
     "typescript": "^5",
     "typescript-eslint": "^8.35.1",
     "vite": "^8.1.1"
