@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getProjectMetadata, saveProjectMetadata, type ProjectMetadata } from '../../api/client';
 import { SettingsIdentityAnnotationWorkflow } from './SettingsIdentityAnnotationWorkflow';
 import { SettingsIdentityBenchmarkSection } from './SettingsIdentityBenchmarkSection';
+import { SettingsOnboardingGuide } from './SettingsOnboardingGuide';
 import { SettingsVisualBaselineContractSection } from './SettingsVisualBaselineContractSection';
 import { SettingsVisualBaselineSection } from './SettingsVisualBaselineSection';
 
@@ -93,6 +94,7 @@ export function SettingsMetadataSection({ project }: SettingsMetadataSectionProp
 
   return (
     <>
+      <SettingsOnboardingGuide project={project} />
       <details className="section-card settings-span-2">
         <summary>
           <strong>异常覆盖：业务范围与绝对禁触边界</strong>
