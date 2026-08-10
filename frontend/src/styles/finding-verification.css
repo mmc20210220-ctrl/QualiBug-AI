@@ -158,6 +158,87 @@
   font-weight: 700;
 }
 
+.verification-delta-details {
+  border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  padding-top: 12px;
+}
+
+.verification-delta-details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.verification-delta-details > summary span {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.verification-delta-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.verification-delta-row {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.verification-delta-row.verification-danger {
+  border-left-color: var(--danger);
+}
+
+.verification-delta-row.verification-warning {
+  border-left-color: var(--warning);
+}
+
+.verification-delta-row.verification-success {
+  border-left-color: var(--success);
+}
+
+.verification-delta-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.verification-delta-row-head > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.verification-delta-row-head strong {
+  overflow-wrap: anywhere;
+}
+
+.verification-delta-label {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.verification-delta-row p {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 @media (max-width: 560px) {
   .finding-verification-status {
     max-width: 100%;
@@ -165,11 +246,26 @@
   }
 
   .finding-verification-timeline-head,
-  .verification-timeline-title-row {
+  .verification-timeline-title-row,
+  .verification-delta-details > summary,
+  .verification-delta-row-head {
     flex-direction: column;
   }
 
   .verification-timeline-time {
     word-break: break-word;
+  }
+
+  .verification-delta-details > summary span {
+    text-align: left;
+  }
+
+  .verification-delta-row-head > div {
+    align-items: flex-start;
+  }
+
+  .verification-delta-row .settings-actions,
+  .verification-delta-row .settings-actions .btn {
+    width: 100%;
   }
 }
