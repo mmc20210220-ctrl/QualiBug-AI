@@ -87,6 +87,7 @@ function resultTone(result: V12ScanResult | null): 'success' | 'warning' | 'dang
 function executionStatusLabel(status: string): string {
   const map: Record<string, string> = {
     executed: '已真实执行',
+    completed: '已完成真实验证',
     plan_only: '仅生成计划（未执行）',
     partial: '部分执行',
     partial_coverage: '部分覆盖',
@@ -208,6 +209,18 @@ export function EnterpriseCampaigns() {
   const resolvedSourceId = selectedSourceId || apiSources[0]?.source_id || '';
   const blockers = preflight?.reasons || [];
   const preflightReady = Boolean(preflight?.ready);
+  const runBlockedByPreflight = !loadingPreflight && !preflightReady;
+  const runBlockedByScenario = !forceReadOnly && (scenarioState.loading || Boolean(scenarioState.error));
+  const runDisabled = running || loadingPreflight || loadingFixtures || runBlockedByPreflight || runBlockedByScenario;
+  const runButtonLabel = running
+    ? '正在自主验证…'
+    : loadingPreflight
+      ? '正在检查运行条件…'
+      : runBlockedByPreflight
+        ? blockers.length > 0 ? `先处理 ${blockers.length} 项阻断` : '运行前检查未通过'
+        : runBlockedByScenario
+          ? scenarioState.loading ? '正在同步审批场景…' : '审批场景同步失败'
+          : '执行标准扫描';
 
   const readinessCards = [
     {
@@ -258,6 +271,10 @@ export function EnterpriseCampaigns() {
 
   const runStandardScan = useCallback(async () => {
     if (!project) { setError('请先选择客户项目。'); return; }
+    if (!preflightReady) {
+      setError(blockers.length > 0 ? `运行前检查仍有 ${blockers.length} 项阻断，请先处理后重新检查。` : '运行前检查尚未通过，请重新检查运行条件。');
+      return;
+    }
     if (!forceReadOnly && scenarioState.loading) {
       setError('审批上传场景仍在可信同步中，请同步完成后再运行。');
       return;
@@ -287,10 +304,10 @@ export function EnterpriseCampaigns() {
       if (response.ok) {
         emitScanCompleted(project);
         void refreshContext();
-        const status = asText(response.execution_status).toLowerCase();
+        const tone = resultTone(response);
         toast.show(
           `验证完成：${executionStatusLabel(asText(response.execution_status))}，发现 ${response.total_findings || 0} 条`,
-          status !== 'executed' ? 'warning' : (response.total_findings ? 'warning' : 'success'),
+          tone === 'danger' ? 'danger' : tone === 'success' ? 'success' : 'warning',
         );
       } else {
         toast.show(response.message || response.error || '验证未成功执行', 'danger');
@@ -303,7 +320,7 @@ export function EnterpriseCampaigns() {
     } finally {
       setRunning(false);
     }
-  }, [environmentRef, forceReadOnly, project, refreshContext, resolvedSourceId, resolvedTargetBaseUrl, scenarioState, scopeId, selectedFixtureRefs, toast]);
+  }, [blockers.length, environmentRef, forceReadOnly, preflightReady, project, refreshContext, resolvedSourceId, resolvedTargetBaseUrl, scenarioState, scopeId, selectedFixtureRefs, toast]);
 
   if (!project) {
     return <section className="state-panel"><div className="state-panel-badge">客户选择</div><h2>请先选择客户项目</h2><p>选择客户后，系统会自动读取接入信息、企业资料和历史运行上下文。</p></section>;
@@ -358,10 +375,10 @@ export function EnterpriseCampaigns() {
           <div><span className="muted">安全边界</span><p>{forceReadOnly ? '强制只读已开启，后台不会发送写请求' : '环境类型、审批、before/after 与 cleanup 由后台门禁控制'}</p></div>
         </div>
         <div className="settings-actions">
-          <button type="button" className="btn btn-primary" onClick={() => void runStandardScan()} disabled={running || loadingPreflight || loadingFixtures || (!forceReadOnly && (scenarioState.loading || Boolean(scenarioState.error)))}>{running ? '正在自主验证…' : '执行标准扫描'}</button>
+          <button type="button" className="btn btn-primary" onClick={() => void runStandardScan()} disabled={runDisabled} aria-describedby="run-readiness-hint">{runButtonLabel}</button>
           <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>查看系统总览</button>
         </div>
-        <p className="muted">阻断、仅计划和部分覆盖会如实展示，不会被包装成通过；发现结果会自动进入问题清单和证据中心。</p>
+        <p className="muted" id="run-readiness-hint">{runBlockedByPreflight ? '运行前检查未通过时不会提交扫描请求；请先处理上方阻断项并重新检查。' : '阻断、仅计划和部分覆盖会如实展示，不会被包装成通过；发现结果会自动进入问题清单和证据中心。'}</p>
       </section>
 
       <details className="card mb-4">
@@ -427,8 +444,9 @@ export function EnterpriseCampaigns() {
 
           <div className="settings-actions">
             <button type="button" className="btn btn-primary" onClick={() => navigateToProjectPath('/dashboard', project)}>查看系统总览</button>
-            <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看问题清单</button>
-            <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据链</button>
+            {(result.total_findings || 0) > 0 && <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看问题清单</button>}
+            {(result.total_findings || 0) > 0 && <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据链</button>}
+            {coverageGaps.length > 0 && <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/coverage', project)}>查看未覆盖范围</button>}
           </div>
         </section>
       )}
