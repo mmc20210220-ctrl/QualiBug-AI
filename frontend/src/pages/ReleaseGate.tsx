@@ -6,6 +6,7 @@ import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { deriveReleasePresentation } from '../lib/release-presentation';
 import { FindingVerificationStatus } from '../components/findings/FindingVerificationStatus';
+import { FindingVerificationTimeline } from '../components/findings/FindingVerificationTimeline';
 import { TermHint } from '../components/TermHint';
 import { GLOSSARY } from '../lib/glossary';
 import { asRecord } from '../lib/value-guards';
@@ -163,7 +164,8 @@ export function ReleaseGate() {
                 <span><em>验证下一步</em><b>{requestedVerification.nextActionLabel}</b></span>
               </div>
               <p className="muted">发布门禁仍按整个项目的真实 Gate 判定；单条 Finding 的修复后验证状态只是发布依据之一，不会覆盖项目级门禁。</p>
-              <div className="settings-actions">
+              <FindingVerificationTimeline finding={requestedFinding} compact />
+              <div className="settings-actions mt-3">
                 <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project, findingContextSearch)}>返回这条问题</button>
                 {requestedFindingHasEvidence && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project, findingContextSearch)}>查看这条证据</button>}
               </div>
