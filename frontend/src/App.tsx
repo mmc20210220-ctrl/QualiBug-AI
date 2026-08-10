@@ -13,6 +13,7 @@ import { SystemJobs } from './pages/SystemJobs';
 import { Materials } from './pages/Materials';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
+import { SharedEvidence } from './pages/SharedEvidence';
 
 function RequireAuth() {
   const location = useLocation();
@@ -30,6 +31,7 @@ export default function App() {
         <ScrollToTop />
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/shared-evidence" element={<SharedEvidence />} />
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
