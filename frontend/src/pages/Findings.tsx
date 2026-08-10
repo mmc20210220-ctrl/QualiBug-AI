@@ -46,6 +46,11 @@ export function Findings() {
     P1: confirmed.filter((finding) => finding.severity === 'P1').length,
     P2: confirmed.filter((finding) => finding.severity === 'P2').length,
   };
+  const verificationRows = confirmed.map((finding) => ({ finding, verification: deriveFindingVerification(finding) }));
+  const pendingRegression = verificationRows.filter(({ verification }) => verification.state === 'pending');
+  const passedRegression = verificationRows.filter(({ verification }) => verification.state === 'verified_fixed');
+  const failedRegression = verificationRows.filter(({ verification }) => verification.state === 'still_failing');
+  const inconclusiveRegression = verificationRows.filter(({ verification }) => verification.state === 'inconclusive');
 
   const moduleStats = new Map<string, number>();
   for (const finding of confirmed) {
@@ -58,12 +63,18 @@ export function Findings() {
     { label: `P0 (${bySeverity.P0})`, value: 'P0' },
     { label: `P1 (${bySeverity.P1})`, value: 'P1' },
     { label: `P2 (${bySeverity.P2})`, value: 'P2' },
+    { label: `等待验证 (${pendingRegression.length})`, value: 'verify:pending' },
+    { label: `仍失败 (${failedRegression.length})`, value: 'verify:still_failing' },
+    { label: `无法确认 (${inconclusiveRegression.length})`, value: 'verify:inconclusive' },
+    { label: `验证通过 (${passedRegression.length})`, value: 'verify:verified_fixed' },
     ...Array.from(moduleStats.entries()).slice(0, 4).map(([mod, count]) => ({ label: `${mod} (${count})`, value: `mod:${mod}` })),
   ];
 
   const display = confirmed.filter((finding) => {
     if (filter === 'P0' || filter === 'P1' || filter === 'P2') {
       if (finding.severity !== filter) return false;
+    } else if (filter.startsWith('verify:')) {
+      if (deriveFindingVerification(finding).state !== filter.slice('verify:'.length)) return false;
     } else if (filter.startsWith('mod:')) {
       if (moduleName(finding) !== filter.slice(4)) return false;
     }
@@ -77,11 +88,6 @@ export function Findings() {
   const hasActiveFilter = filter !== 'all' || Boolean(searchQuery.trim());
 
   const regressionEligible = confirmed.some(hasFindingReverificationObligation);
-  const verificationRows = confirmed.map((finding) => ({ finding, verification: deriveFindingVerification(finding) }));
-  const pendingRegression = verificationRows.filter(({ verification }) => verification.state === 'pending');
-  const passedRegression = verificationRows.filter(({ verification }) => verification.state === 'verified_fixed');
-  const failedRegression = verificationRows.filter(({ verification }) => verification.state === 'still_failing');
-  const inconclusiveRegression = verificationRows.filter(({ verification }) => verification.state === 'inconclusive');
   const regressionHistory = confirmed
     .flatMap((finding) => (finding.regression?.history || []).map((item) => ({ finding, item })))
     .sort((left, right) => String(right.item.generated_at || '').localeCompare(String(left.item.generated_at || '')))
