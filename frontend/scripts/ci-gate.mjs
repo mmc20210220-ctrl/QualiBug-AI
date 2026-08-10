@@ -52,6 +52,7 @@ for (const script of [
   "test:dashboard-role-views",
   "test:finding-collaboration",
   "test:evidence-distribution",
+  "test:evidence-share",
   "test:materials-coverage",
   "test:materials-acceptance",
   "test:materials-remote-lifecycle",
