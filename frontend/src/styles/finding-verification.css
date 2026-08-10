@@ -46,9 +46,130 @@
   color: var(--muted);
 }
 
+.finding-verification-timeline {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.finding-verification-timeline-head,
+.verification-timeline-title-row,
+.verification-timeline-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.finding-verification-timeline-head h3 {
+  margin-top: 4px;
+  font-size: 15px;
+}
+
+.verification-timeline-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.verification-timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  padding-bottom: 16px;
+}
+
+.verification-timeline-item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 15px;
+  bottom: 0;
+  width: 2px;
+  background: var(--line);
+}
+
+.verification-timeline-marker {
+  position: relative;
+  z-index: 1;
+  width: 14px;
+  height: 14px;
+  margin-top: 4px;
+  border: 3px solid var(--surface);
+  border-radius: 50%;
+  background: var(--subtle);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.verification-timeline-item.verification-success .verification-timeline-marker {
+  background: var(--success);
+}
+
+.verification-timeline-item.verification-danger .verification-timeline-marker {
+  background: var(--danger);
+}
+
+.verification-timeline-item.verification-warning .verification-timeline-marker {
+  background: var(--warning);
+}
+
+.verification-timeline-content {
+  min-width: 0;
+}
+
+.verification-timeline-title-row strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.verification-timeline-mode,
+.verification-timeline-time,
+.verification-timeline-meta {
+  color: var(--subtle);
+  font-size: 11px;
+}
+
+.verification-timeline-content p {
+  margin: 7px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.verification-timeline-meta {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.verification-change-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--primary-muted);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 @media (max-width: 560px) {
   .finding-verification-status {
     max-width: 100%;
     white-space: normal;
+  }
+
+  .finding-verification-timeline-head,
+  .verification-timeline-title-row {
+    flex-direction: column;
+  }
+
+  .verification-timeline-time {
+    word-break: break-word;
   }
 }
