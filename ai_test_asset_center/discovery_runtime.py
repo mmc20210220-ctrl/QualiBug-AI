@@ -15,8 +15,15 @@ registers capability only; it opens no browser and performs no target I/O.
 """
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
+from .scan_stage_progress import (
+    begin_scan_stage_progress,
+    mark_scan_stage,
+)
 
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -35,8 +42,8 @@ from .discovery_runtime_planning import (  # noqa: E402,F401
     _contract,
     _runtime_actors,
 )
-from .discovery_runtime_semantic_binding import (  # noqa: E402,F401
-    build_discovery_plan,
+from .discovery_runtime_semantic_binding import (  # noqa: E402
+    build_discovery_plan as _build_discovery_plan,
 )
 from .formal_event_execution_outcome_bridge import (  # noqa: E402
     install_formal_event_execution_outcome_bridge,
@@ -62,9 +69,97 @@ install_formal_event_observation_count_bridge()
 install_formal_event_verdict_reason_bridge()
 install_formal_event_execution_outcome_bridge()
 
-from .discovery_runtime_quality_projection import (  # noqa: E402,F401
-    run_experiment_candidate,
+from .discovery_runtime_quality_projection import (  # noqa: E402
+    run_experiment_candidate as _run_experiment_candidate,
 )
+
+
+def _progress_scope(inputs: Any) -> tuple[Path, str]:
+    return Path(getattr(inputs, "root")), str(getattr(inputs, "project", "")).strip()
+
+
+def build_discovery_plan(inputs: Any, campaign_handle: Any) -> Any:
+    """Run the real semantic/planning authority and publish only observed boundaries."""
+
+    root, project = _progress_scope(inputs)
+    begin_scan_stage_progress(root, project)
+    mark_scan_stage(
+        root,
+        project,
+        "enterprise_understanding",
+        "active",
+        detail="企业资料正在进入统一语义与行为 IR 规划主链",
+    )
+    # Semantic binding and obligation/scenario compilation occur inside the same
+    # governed planning call. They overlap in one function boundary, so both are
+    # active together instead of inventing a false sequential percentage.
+    mark_scan_stage(
+        root,
+        project,
+        "scenario_planning",
+        "active",
+        detail="行为义务、场景与实验计划正在同一规划主链编译",
+    )
+    try:
+        plan = _build_discovery_plan(inputs, campaign_handle)
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {str(exc)[:180]}"
+        mark_scan_stage(root, project, "enterprise_understanding", "failed", detail=detail)
+        mark_scan_stage(root, project, "scenario_planning", "failed", detail=detail)
+        raise
+    mark_scan_stage(
+        root,
+        project,
+        "enterprise_understanding",
+        "completed",
+        detail="企业资料已完成本轮统一规划输入解析",
+    )
+    mark_scan_stage(
+        root,
+        project,
+        "scenario_planning",
+        "completed",
+        detail="本轮义务、场景与实验计划已编译",
+    )
+    return plan
+
+
+def run_experiment_candidate(inputs: Any, campaign_handle: Any, plan: Any) -> dict[str, Any]:
+    """Run the real experiment authority and expose execution/evidence activity."""
+
+    root, project = _progress_scope(inputs)
+    mark_scan_stage(
+        root,
+        project,
+        "runtime_execution",
+        "active",
+        detail="正式实验 runner 正在执行真实探针与受控操作",
+    )
+    mark_scan_stage(
+        root,
+        project,
+        "evidence_collection",
+        "active",
+        detail="Observer、断言与运行回执随真实实验同步采集",
+    )
+    try:
+        result = _run_experiment_candidate(inputs, campaign_handle, plan)
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {str(exc)[:180]}"
+        mark_scan_stage(root, project, "runtime_execution", "failed", detail=detail)
+        mark_scan_stage(root, project, "evidence_collection", "failed", detail=detail)
+        raise
+    mark_scan_stage(
+        root,
+        project,
+        "runtime_execution",
+        "completed",
+        detail="正式实验 runner 已返回真实执行回执",
+    )
+    # Evidence remains ACTIVE here because the caller still performs UI execution,
+    # evidence graph normalization and final evidence persistence after the runner.
+    return result
+
 
 __all__ = [
     "RUNTIME_SCHEMA",
