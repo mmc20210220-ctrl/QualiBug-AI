@@ -73,9 +73,12 @@ _ID_FIELD_MAPS: tuple[tuple[str, str], ...] = (
     ("attempt_id", "attempts_by_id"),
 )
 
-# Defaults: 64 KiB container floor, 256 KiB string blob floor (aligned with the
-# redactor's own 256 KiB string truncation cap).
-DEFAULT_DEDUP_THRESHOLD_BYTES = 64 * 1024
+# Defaults: 16 KiB container floor (measured on run16: the duplicated units —
+# experiment receipts, execution evidence, gate bundles — are ~18 KiB each;
+# a 64 KiB floor left three byte-identical 277MB experiment lists fully
+# duplicated; 16 KiB collapses them), 256 KiB string blob floor (aligned with
+# the redactor's own 256 KiB string truncation cap).
+DEFAULT_DEDUP_THRESHOLD_BYTES = 16 * 1024
 DEFAULT_BLOB_THRESHOLD_BYTES = 256 * 1024
 
 # dict/list structural overhead estimate used for the floor filter only.
