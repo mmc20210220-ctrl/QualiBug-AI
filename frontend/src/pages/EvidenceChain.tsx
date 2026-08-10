@@ -4,6 +4,7 @@ import { EvidenceTimeline } from '../components/EvidenceTimeline';
 import { hasRealReplayAsset, isCustomerReadyFinding, useFindingsData } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
+import { evidenceScoreLabel } from '../lib/evidence-presentation';
 import { AssertionDiff } from '../components/evidence/AssertionDiff';
 import { QualityScore } from '../components/evidence/QualityScore';
 import { ReplayPanel } from '../components/evidence/ReplayPanel';
@@ -20,18 +21,34 @@ function moduleName(finding: Finding): string {
 
 export function EvidenceChain() {
   usePageTitle('证据中心');
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const project = params.get('project')?.trim() || '';
+  const requestedFindingId = params.get('finding')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
   const { findings, clues, loading, error, refetch } = useFindingsData(project);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replayFinding, setReplayFinding] = useState<Finding | null>(null);
 
   const customerFindings = findings.filter(isCustomerReadyFinding);
   const withEvidence = customerFindings.filter((f) => f.evidence_chain?.length > 0);
   const replayReady = withEvidence.filter((f) => hasRealReplayAsset(f)).length;
-  const selected = withEvidence.find((f) => f.id === selectedId) || withEvidence[0] || null;
+  const requestedFinding = requestedFindingId
+    ? customerFindings.find((f) => f.id === requestedFindingId) || null
+    : null;
+  const selected = requestedFindingId
+    ? withEvidence.find((f) => f.id === requestedFindingId) || null
+    : withEvidence[0] || null;
   const confirmedWithoutEvidence = Math.max(0, customerFindings.length - withEvidence.length);
+
+  const selectFinding = (findingId: string) => {
+    const next = new URLSearchParams(params);
+    next.set('finding', findingId);
+    setParams(next, { replace: true });
+  };
+
+  const showFirstEvidence = () => {
+    const first = withEvidence[0];
+    if (first) selectFinding(first.id);
+  };
 
   return (
     <div>
@@ -119,11 +136,11 @@ export function EvidenceChain() {
                 tabIndex={0}
                 aria-pressed={selected?.id === f.id}
                 className={`evidence-list-item${selected?.id === f.id ? ' active' : ''}`}
-                onClick={() => setSelectedId(f.id)}
+                onClick={() => selectFinding(f.id)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    setSelectedId(f.id);
+                    selectFinding(f.id);
                   }
                 }}
               >
@@ -131,12 +148,26 @@ export function EvidenceChain() {
                   <span className={`severity-badge ${f.severity.toLowerCase()}`} style={{ marginRight: 6 }}>{f.severity}</span>
                   {f.title}
                 </h4>
-                <span>{moduleName(f)} · 证据 {f.evidence_quality?.score ?? 0}/100 · {hasRealReplayAsset(f) ? '可回放' : '待补充'}</span>
+                <span>{moduleName(f)} · 证据 {evidenceScoreLabel(f)} · {hasRealReplayAsset(f) ? '可回放' : '待补充'}</span>
               </div>
             ))}
           </div>
 
           <div className="evidence-detail-panel">
+            {!selected && requestedFindingId && (
+              <section className="findings-empty-state compact">
+                <span className="findings-empty-kicker">指定问题</span>
+                <h3>{requestedFinding ? '该问题当前还没有可展示证据包' : '指定问题已不在当前已确认结果中'}</h3>
+                <p>{requestedFinding
+                  ? '证据中心不会静默切换到另一条问题来冒充当前证据。可以回到问题清单核对该问题，或查看当前第一条真实证据包。'
+                  : '链接中的问题标识可能来自旧结果。当前不会用其他 Finding 的证据替代它。'}
+                </p>
+                <div className="settings-actions">
+                  <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>返回问题清单</button>
+                  <button className="btn btn-secondary" onClick={showFirstEvidence}>查看第一条真实证据</button>
+                </div>
+              </section>
+            )}
             {selected && (
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
