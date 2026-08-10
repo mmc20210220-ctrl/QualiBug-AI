@@ -8,6 +8,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 const evidencePackage = read('src/lib/finding-evidence-package.ts');
 const drawer = read('src/components/findings/EvidenceDrawer.tsx');
+const distributionTools = read('src/components/evidence/EvidenceDistributionTools.tsx');
 const report = read('src/api/report.ts');
 const packageJson = read('package.json');
 const ciGate = read('scripts/ci-gate.mjs');
@@ -19,10 +20,17 @@ assert(evidencePackage.includes(".replace(/&/g, '&amp;')"), 'printable evidence 
 assert(evidencePackage.includes(".replace(/</g, '&lt;')"), 'printable evidence must HTML-escape angle brackets');
 assert(evidencePackage.includes('打印 / 保存为 PDF'), 'printable evidence package must support browser PDF export');
 assert(evidencePackage.includes('该页面不会生成公开链接，也不会自动上传到第三方服务'), 'local printable package must not imply server-side sharing');
-assert(drawer.includes('buildFindingEvidencePackageText(finding)'), 'drawer copy action must use redacted evidence builder');
-assert(drawer.includes('buildFindingEvidencePackageHtml(finding)'), 'drawer print action must use redacted evidence builder');
-assert(drawer.includes('复制/打印/只读分享都会重新执行服务端或前端脱敏，不直接外发该原始文本'), 'raw curl must remain separated from every external distribution path');
-assert(drawer.includes('公开链接只能读取创建当刻冻结的脱敏快照'), 'drawer must distinguish server-side readonly sharing from local copies');
+
+assert(drawer.includes('<FindingDecisionSnapshot finding={finding} compact />'), 'drawer must lead with the shared finding decision snapshot');
+assert(drawer.includes('<EvidenceDistributionTools finding={finding} project={project} />'), 'drawer must delegate export/share behavior to secondary evidence tools');
+assert(drawer.indexOf('<FindingDecisionSnapshot finding={finding} compact />') < drawer.indexOf('<EvidenceDistributionTools finding={finding} project={project} />'), 'distribution tools must appear after customer decision context');
+assert(drawer.includes('先核对问题为什么成立'), 'drawer must prioritize evidence review before distribution');
+
+assert(distributionTools.includes('buildFindingEvidencePackageText(finding)'), 'copy action must use redacted evidence builder');
+assert(distributionTools.includes('buildFindingEvidencePackageHtml(finding)'), 'print action must use redacted evidence builder');
+assert(distributionTools.includes('复制/打印/只读分享都会重新执行服务端或前端脱敏，不直接外发该原始文本'), 'raw curl must remain separated from every external distribution path');
+assert(distributionTools.includes('公开链接只能读取创建当刻冻结的脱敏快照'), 'readonly sharing must remain distinct from local copies');
+assert(distributionTools.includes('这些是证据核对后的分发工具，不参与问题是否成立或是否修复的判断'), 'distribution must remain secondary to validation truth');
 assert(!evidencePackage.includes('finding.reproduction.curl_command'), 'local external evidence package must not directly include raw curl commands');
 
 assert(report.includes("import { escapeEvidenceHtml } from '../lib/finding-evidence-package';"), 'aggregate report must reuse external redaction and escaping');
