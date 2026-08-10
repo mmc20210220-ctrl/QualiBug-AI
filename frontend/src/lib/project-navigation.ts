@@ -22,8 +22,8 @@ export function useProjectNavigation() {
     navigate(target);
   }, [location.pathname, location.search, navigate]);
 
-  const navigateToProjectPath = useCallback((pathname: string, projectId?: string) => {
-    const target = buildProjectPath(pathname, projectId, '');
+  const navigateToProjectPath = useCallback((pathname: string, projectId?: string, currentSearch = '') => {
+    const target = buildProjectPath(pathname, projectId, currentSearch);
     navigate(target);
   }, [navigate]);
 
