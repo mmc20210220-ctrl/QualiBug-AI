@@ -97,7 +97,15 @@ class TestShardedWriteAndLoad:
         # 未请求的分片保持 null 占位（fail-loud，不静默缺失）
         assert partial["v12"]["outer"]["huge"]["k0"] is None
         assert partial["v12"]["outer"]["arr"] is None
-        assert partial["obligation_attempt_ledger"] is None
+        # P0-3：整体注册的子树在骨架中保持轻量引用标记（未加载，但可解析）；
+        # 请求该键时解析为完整内容（与旧格式一致）。
+        ledger_slot = partial["obligation_attempt_ledger"]
+        assert ledger_slot is None or (
+            isinstance(ledger_slot, dict)
+            and ledger_slot.get("$qualibug_artifact_ref")
+        )
+        full_ledger = load_scan_result(index, keys=["obligation_attempt_ledger"])
+        assert full_ledger["obligation_attempt_ledger"] == result["obligation_attempt_ledger"]
 
     def test_keys_deep_leaf_and_whole_shard(self, tmp_path):
         index = _write_store(tmp_path)

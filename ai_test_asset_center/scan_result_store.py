@@ -1,11 +1,37 @@
-"""Sharded scan_result store — 通用分片持久化与兼容加载（scan_result 产物膨胀治理）。
+"""Sharded scan_result store — 分片先行、逐片脱敏 + 对象树引用化（P0-3）。
 
 Problem
 -------
 一个完整扫描的 ``scan_result.json`` 会把 v12 企业级 campaign 结果（experiments /
 experiment_execution / experiment_compile / 大证据）、obligation_attempt_ledger、
-delivery_occurrences 等全部塞进单文件。实测 run10 端到端产物达 4GB，全量
-``json.loads`` 直接 MemoryError，读 / 写 / 评分全部被阻塞。
+delivery_occurrences 等全部塞进单文件。实测 run16 端到端产物达 4GB
+（4,015,228,861 B；v12 占 90.1%，其中 experiments 48.6%、experiment_execution
+19.4%、experiment_compile 18.4%）。两个独立瓶颈：
+
+  1. 4GB 根因：同一对象树被嵌套复制多处（Experiment 同时出现在
+     ``v12.experiments.by_obligation`` / ``experiments`` / ``all_experiments`` /
+     ``experiment_compile.*``；Execution Result 内嵌完整 Experiment/Evidence/
+     Finding；Attempt Ledger 内嵌完整 Execution Receipt/Gate/Finding；
+     Delivery Occurrence 内嵌完整 Finding/Gate/Evidence）。
+  2. redact 性能墙：旧写入流程先对整体 4GB 树做 ``redact_and_validate``
+     （deepcopy + 逐字段正则 + reseal + authority 重建 + 全量 scan）再分片，
+     实测卡 1 小时+。
+
+修复（都是存储形态变化，执行/交付语义与消费者可见内容不变）：
+
+A. redact 分片化：先分片、逐片脱敏。redact 逐字段，分片后逐片 == 整体；
+   peak 内存从"整树 deepcopy + 整树脱敏副本"降为"单片"。完整性校验不变：
+   每个分片与骨架都经过 redact_artifact + _reseal_attempt_ledgers +
+   scan_for_secrets，authority 指纹链在重建步骤中保持自洽（fail-closed）。
+
+B. 对象树引用化：写入时对树做 in-place 规范化（在 deepcopy 副本上），
+   每个 >= dedup floor 的子树只保留一份在 ``_artifact_registry``
+   （operations_by_id / experiments_by_id / executions_by_id /
+   evidence_by_id / findings_by_id / gate_receipts_by_id / …），树中全部变为
+   轻量引用标记；大响应体/证据字符串进 sha256-addressed blob。
+   密封 ledger（obligation-attempt-ledger）内部排除去重：其指纹契约要求
+   持久化内容完整。加载时 ``hydrate_refs`` 还原完整对象树，消费者看到的内容
+   与旧格式逐字节等价；canonical_defect_id / finding_id 等身份不变。
 
 Storage layout（分片是存储形态变化，内容与旧单文件完全一致）
 -----------------------------------------------------------
@@ -19,22 +45,27 @@ Storage layout（分片是存储形态变化，内容与旧单文件完全一致
   * 顶层键序列化后 >= threshold 且为 dict/list → 分片；
   * dict 值过大时先看其直接子键：任一子键 >= threshold → 递归下钻（父键保留为骨架，
     大子键各自分片）；没有任何大子键 → 该 dict 整体作为一个分片；
+  * 大标量子键（如 >= 4MiB 的 blob 字符串）也整体分片；
+  * 密封 ledger（schema_version == qualibug.obligation-attempt-ledger.v1）作为
+    原子单元整体分片（attempt 指纹封印契约要求内容完整、一次脱敏/重新封印）；
   * list 值过大 → 整体分片；
   * 子键数量超过 ``_CHILD_MEASURE_CAP`` 的 dict 不做逐子测量（避免数万临时文件），
     直接按整体分片决策。
   * 分片文件、索引都经过统一递归脱敏（redact_and_validate），与旧
-    ``write_json_redacted`` 契约一致。
+    ``write_json_redacted`` 契约一致；大分片逐个脱敏，不再整树脱敏。
 
 Compatibility
 -------------
   * 旧单文件格式（无分片标记）自动识别，行为等同 ``json.loads``；
-  * ``load_scan_result(path, keys=None)`` 全量组装；``keys=[...]`` 只组装请求的
-    点分路径（流式 API），大产物消费方按需加载，不再全量入内存；
+  * 旧分片 store（无 ``_artifact_registry``）自动识别，行为与 task-20 一致；
+  * 规范化 store 全量加载（``keys=None``）时自动 hydrate 引用并移除 registry
+    段 —— 返回树与旧格式等价；``keys=[...]`` 只组装+hydrate 请求的路径；
   * ``update_scan_result_index`` 支持只重写索引（新增小键）而保留分片文件，
     供读-改-写场景（如 customer_ready_snapshot 挂载）以 O(索引) 成本完成。
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import mmap
@@ -48,7 +79,25 @@ from typing import Any, Callable, Iterable
 from .artifact_redactor import (
     ArtifactSecretLeakError,
     _find_cycle,
+    _rederive_redaction_sensitive_authority,
+    _reseal_attempt_ledgers,
     redact_and_validate,
+    redact_artifact,
+    scan_for_secrets,
+)
+from .scan_result_normalizer import (
+    BLOB_KEY,
+    DEFAULT_BLOB_THRESHOLD_BYTES,
+    DEFAULT_DEDUP_THRESHOLD_BYTES,
+    NORMALIZED_SCHEMA,
+    REF_KEY,
+    REGISTRY_KEY,
+    blob_to_dotted,
+    hydrate_refs,
+    is_blob_marker,
+    is_ref_marker,
+    normalize_scan_result,
+    ref_to_dotted,
 )
 
 # 分片清单在索引文件中的标记键（顶层键，天然不会与产品键冲突）。
@@ -65,12 +114,29 @@ _DIRECT_LOAD_LIMIT_BYTES = 256 * 1024 * 1024
 # dict 直接子键数量超过该值时不做逐子测量，整体分片决策。
 _CHILD_MEASURE_CAP = 1500
 
+# 标量子键独立分片下限：字符串（如 blob）>= 该值才整体分片；小于该值内联进骨架。
+# 与容器分片阈值（threshold_bytes）解耦——小阈值测试下字符串保持内联，
+# 生产环境大响应体仍能分片出索引。
+_SCALAR_PIECE_MIN_BYTES = 1024 * 1024
+
 _ARTIFACT_REPLACE_ATTEMPTS = 4
 _ARTIFACT_REPLACE_RETRY_SECONDS = 0.25
 
 # 结构字符快速扫描（C 速度），用于大文件顶层键探测与离线转换。
 _STRUCT_RE = re.compile(rb'["{}\[\],:]')
 _WS = frozenset((0x20, 0x09, 0x0A, 0x0D))
+
+# 密封 ledger：整体原子分片（指纹封印契约；attempt 内容必须完整脱敏/重新封印）。
+_LEDGER_SCHEMA = "qualibug.obligation-attempt-ledger.v1"
+
+# authority 重建所需的 envelope 键（root 与 v12 两个 scope）。
+_AUTHORITY_SCOPE_KEYS = (
+    "obligation_attempt_ledger",
+    "delivery_occurrences",
+    "canonical_defect_registry",
+    "mainline_run",
+    "formal_delivery_authority",
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -153,13 +219,6 @@ def _temp_path(parts_dir: Path) -> Path:
     return Path(handle.name)
 
 
-def _promote_temp(tmp: Path, final_path: Path, temps: list[Path]) -> None:
-    """临时测量文件提升为正式分片（同目录 rename，失败即爆出——绝不静默丢数据）。"""
-    tmp.replace(final_path)
-    if tmp in temps:
-        temps.remove(tmp)
-
-
 def _discard_temp(tmp: Path, temps: list[Path]) -> None:
     try:
         tmp.unlink()
@@ -182,13 +241,14 @@ def _whole_or_inline(
     parts_dir: Path,
     path: str,
     temps: list[Path],
-    shards: list[tuple[str, dict[str, Any]]],
+    pieces: list[tuple[str, Path, int]],
     known_size: int | None = None,
     known_tmp: Path | None = None,
 ) -> Any:
     """整体分片 or 内联：优先复用父级已测量的临时文件；否则流式测量。
 
-    返回值 None 表示已整体分片（调用方以 null 占位）。
+    返回值 None 表示已整体分片（调用方以 null 占位；临时文件移交调用方，
+    脱敏后写为最终分片文件）。标量（含大字符串）同样适用。
     """
     tmp = known_tmp
     size = known_size
@@ -197,9 +257,9 @@ def _whole_or_inline(
         temps.append(tmp)
         size = _stream_dump(value, tmp, indent=indent)
     if size >= threshold_bytes:
-        final_path = parts_dir / _shard_file_name(path)
-        _promote_temp(tmp, final_path, temps)
-        shards.append((path, _shard_spec(path, final_path, size)))
+        if tmp in temps:
+            temps.remove(tmp)
+        pieces.append((path, tmp, size))
         return None
     _discard_temp(tmp, temps)
     return value
@@ -213,20 +273,29 @@ def _partition(
     parts_dir: Path,
     path: str,
     temps: list[Path],
-    shards: list[tuple[str, dict[str, Any]]],
+    pieces: list[tuple[str, Path, int]],
     known_size: int | None = None,
     known_tmp: Path | None = None,
 ) -> Any:
     """递归分片。返回骨架值（None 表示该值已整体分片为叶分片）。
 
-    每个候选值先流式写临时文件精确测量；>= 阈值的 dict/list 要么递归下钻
-    （父键变骨架），要么整体提升为分片文件（临时文件 rename 即分片，零重复写）。
+    每个候选值先流式写临时文件精确测量；>= 阈值的 dict/list/大标量要么递归
+    下钻（父键变骨架），要么整体记入 ``pieces``（临时文件移交调用方逐片脱敏，
+    零重复写）。密封 ledger 作为原子单元整体分片。
     """
     if isinstance(value, dict):
+        if value.get("schema_version") == _LEDGER_SCHEMA:
+            # 密封 ledger：attempt 指纹封印契约要求内容完整。整体作为单片，
+            # 逐片脱敏时一次完成 redact + reseal + scan，指纹链保持自洽。
+            return _whole_or_inline(
+                value, threshold_bytes=threshold_bytes, indent=indent,
+                parts_dir=parts_dir, path=path, temps=temps, pieces=pieces,
+                known_size=known_size, known_tmp=known_tmp,
+            )
         if len(value) > _CHILD_MEASURE_CAP:
             return _whole_or_inline(
                 value, threshold_bytes=threshold_bytes, indent=indent,
-                parts_dir=parts_dir, path=path, temps=temps, shards=shards,
+                parts_dir=parts_dir, path=path, temps=temps, pieces=pieces,
                 known_size=known_size, known_tmp=known_tmp,
             )
         measured: list[tuple[Any, Any, Path, int]] = []
@@ -246,14 +315,20 @@ def _partition(
                         sub_inline = _partition(
                             child, threshold_bytes=threshold_bytes, indent=indent,
                             parts_dir=parts_dir, path=_join_path(path, key),
-                            temps=temps, shards=shards,
+                            temps=temps, pieces=pieces,
                             known_size=size, known_tmp=tmp,
                         )
                         # sub_inline is None ⇔ 该子键整体分片 → null 占位；
                         # 否则是骨架 dict（其大子键已分片）→ 保留骨架。
                         inline[key] = sub_inline if sub_inline is not None else None
-                        if tmp.exists():
+                        if tmp in temps and tmp.exists():
                             _discard_temp(tmp, temps)
+                    elif size >= max(threshold_bytes, _SCALAR_PIECE_MIN_BYTES):
+                        # 大标量子键（如 >= 4MiB 的 blob 字符串）整体分片。
+                        if tmp in temps:
+                            temps.remove(tmp)
+                        pieces.append((_join_path(path, key), tmp, size))
+                        inline[key] = None
                     else:
                         inline[key] = child
                         _discard_temp(tmp, temps)
@@ -261,9 +336,9 @@ def _partition(
             # 无大子键
             if known_size is not None and known_size >= threshold_bytes:
                 # 父级已精确测量且足够大 → 复用父级临时文件整体分片
-                final_path = parts_dir / _shard_file_name(path)
-                _promote_temp(known_tmp, final_path, temps)
-                shards.append((path, _shard_spec(path, final_path, known_size)))
+                if known_tmp in temps:
+                    temps.remove(known_tmp)
+                pieces.append((path, known_tmp, known_size))
                 return None
             total = sum(size for _, _, _, size in measured)
             for _, _, tmp, _ in measured:
@@ -271,23 +346,25 @@ def _partition(
             if total >= threshold_bytes:
                 return _whole_or_inline(
                     value, threshold_bytes=threshold_bytes, indent=indent,
-                    parts_dir=parts_dir, path=path, temps=temps, shards=shards,
+                    parts_dir=parts_dir, path=path, temps=temps, pieces=pieces,
                 )
             return value
         finally:
             for _, _, tmp, _ in measured:
-                if tmp.exists():
+                if tmp in temps and tmp.exists():
                     _discard_temp(tmp, temps)
     if isinstance(value, list):
         return _whole_or_inline(
             value, threshold_bytes=threshold_bytes, indent=indent,
-            parts_dir=parts_dir, path=path, temps=temps, shards=shards,
+            parts_dir=parts_dir, path=path, temps=temps, pieces=pieces,
             known_size=known_size, known_tmp=known_tmp,
         )
-    # 标量永不分片
-    if known_tmp is not None:
-        _discard_temp(known_tmp, temps)
-    return value
+    # 标量（含大字符串）：>= 阈值整体分片，否则内联
+    return _whole_or_inline(
+        value, threshold_bytes=threshold_bytes, indent=indent,
+        parts_dir=parts_dir, path=path, temps=temps, pieces=pieces,
+        known_size=known_size, known_tmp=known_tmp,
+    )
 
 
 def write_scan_result(
@@ -297,8 +374,26 @@ def write_scan_result(
     threshold_bytes: int = DEFAULT_SHARD_THRESHOLD_BYTES,
     indent: int = 2,
     post_redaction_validator: Callable[[Any], None] | None = None,
+    normalize: bool = True,
+    dedup_threshold_bytes: int = DEFAULT_DEDUP_THRESHOLD_BYTES,
+    blob_threshold_bytes: int = DEFAULT_BLOB_THRESHOLD_BYTES,
 ) -> dict[str, Any]:
     """分片持久化 scan_result（内容 == 旧单文件，redaction 契约不变）。
+
+    P0-3 写入流程（从根因修复 4GB + redact 性能墙）：
+      1. ``_find_cycle`` 预检；
+      2. 规范化（可选，默认开）：在 deepcopy 副本上把 >= dedup floor 的子树
+         收进 ``_artifact_registry``（by-id maps / content hash / blob），
+         树中只留引用标记 —— 调用方树不被改动，同一子树只持久化一次；
+      3. 分片先行：``_partition`` 只测量+切分（临时文件），不做整体脱敏；
+      4. 逐片脱敏：每个分片独立 ``redact_artifact`` + ``_reseal_attempt_ledgers``
+         + ``scan_for_secrets``（fail-closed），peak 内存 = 单片；
+      5. 骨架整体脱敏（``redact_and_validate``，内联场景的 reseal/re-derive
+         在这里完成）；
+      6. authority 重建：被分片切开的 envelope 键（ledger/occurrences）从
+         已脱敏分片加载并 hydrate 引用后执行 ``_rederive_redaction_sensitive_authority``，
+         重建产物就地写回骨架并单独 redact+scan，然后所有分片占位还原；
+      7. 原子写索引（含分片清单）。
 
     返回 redaction receipt（与 ``write_json_redacted`` 一致）。非 dict 载荷回退为
     旧单文件写路径（scan_result 产品契约恒为 dict）。
@@ -314,22 +409,35 @@ def write_scan_result(
             f"artifact payload is not serializable (cycle at {cycle_path})",
             scan_result={"cycle_path": cycle_path},
         )
-    redacted, receipt = redact_and_validate(result)
-    if post_redaction_validator is not None:
-        post_redaction_validator(redacted)
+    registry_stats: dict[str, int] | None = None
+    if normalize:
+        # 规范化在 deepcopy 副本上进行：调用方在 write 之后仍会继续读写 result
+        # （__main__ / scan_execution_outcome 的 customer-ready 静态产物、
+        #  job_formal_planning_proof 的返回值），副本保证其看到的树不被改动。
+        work = copy.deepcopy(result)
+        registry = normalize_scan_result(
+            work,
+            dedup_threshold_bytes=dedup_threshold_bytes,
+            blob_threshold_bytes=blob_threshold_bytes,
+        )
+        if not registry.is_empty():
+            work[REGISTRY_KEY] = registry.as_payload()
+        registry_stats = dict(registry.stats)
+    else:
+        work = result
     parts_dir = target.parent / SHARD_DIR_NAME
     parts_dir.mkdir(parents=True, exist_ok=True)
     temps: list[Path] = []
-    shards: list[tuple[str, dict[str, Any]]] = []
+    pieces: list[tuple[str, Path, int]] = []
     try:
         skeleton = _partition(
-            redacted,
+            work,
             threshold_bytes=threshold_bytes,
             indent=indent,
             parts_dir=parts_dir,
             path="",
             temps=temps,
-            shards=shards,
+            pieces=pieces,
         )
         if skeleton is None:
             raise ArtifactSecretLeakError(
@@ -339,15 +447,261 @@ def write_scan_result(
     finally:
         for tmp in list(temps):
             _discard_temp(tmp, temps)
+    # ── 逐片脱敏（A）：分片先行、逐片 redact，完整性校验逐片 fail-closed ──
+    manifest_shards: dict[str, dict[str, Any]] = {}
+    piece_events: list[dict[str, Any]] = []
+    piece_scans: list[dict[str, Any]] = []
+    for dotted, tmp, raw_size in pieces:
+        try:
+            with open(tmp, "r", encoding="utf-8") as handle:
+                value = json.load(handle)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        redacted, piece_receipt = redact_artifact(value)
+        # 密封 ledger 分片在这里完成 reseal（attempt/ledger 指纹链自洽）。
+        redacted = _reseal_attempt_ledgers(redacted)
+        piece_scan = scan_for_secrets(redacted)
+        if not piece_scan.get("safe"):
+            raise ArtifactSecretLeakError(
+                f"artifact secret scan failed with {piece_scan.get('issue_count')} issue(s) "
+                f"in shard {dotted}",
+                scan_result={
+                    "shard": dotted,
+                    "secret_scan": piece_scan,
+                    "redaction": piece_receipt,
+                },
+            )
+        if post_redaction_validator is not None:
+            post_redaction_validator(redacted)
+        final_path = parts_dir / _shard_file_name(dotted)
+        _stream_dump(redacted, final_path, indent=indent)
+        manifest_shards[dotted] = _shard_spec(dotted, final_path, final_path.stat().st_size)
+        piece_events.extend(list(piece_receipt.get("events") or []))
+        piece_scans.append(piece_scan)
+    # ── 骨架脱敏（小；内联 ledger 的 reseal 与内联 authority 重建在此完成）──
+    redacted_skeleton, skeleton_receipt = redact_and_validate(skeleton)
+    if post_redaction_validator is not None:
+        post_redaction_validator(redacted_skeleton)
+    # ── authority 重建（B 兼容）：被分片切开的 envelope 键加载后重建 ──
+    _rederive_authority_artifacts(
+        redacted_skeleton,
+        manifest_shards,
+        parts_dir,
+        indent=indent,
+    )
     manifest: dict[str, Any] = {
         "schema_version": SCAN_RESULT_SHARD_SCHEMA,
         "threshold_bytes": threshold_bytes,
         "indent": indent,
-        "shards": {dotted: spec for dotted, spec in shards},
+        "shards": manifest_shards,
     }
-    skeleton[SHARD_MARKER] = manifest
-    _atomic_write_json(target, skeleton, indent=indent)
-    return receipt
+    redacted_skeleton[SHARD_MARKER] = manifest
+    _atomic_write_json(target, redacted_skeleton, indent=indent)
+    return _combine_redaction_receipt(
+        skeleton_receipt,
+        piece_events,
+        piece_scans,
+        normalization=registry_stats,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 写入辅助：引用解析 / authority 重建 / receipt 组合
+# ═════════════════════════════════════════════════════════════════════════════
+
+class _RegistryResolver:
+    """按 ref key 加载 registry entry（惰性、带缓存）。
+
+    ref key（``<map>:<id>`` / ``sha256:<hex>``）→ 索引点分路径 → 骨架下钻；
+    遇 null 占位自动加载分片。同一 entry 被多处引用时共享同一对象。
+    """
+
+    def __init__(
+        self,
+        skeleton: dict[str, Any],
+        shards: dict[str, dict[str, Any]],
+        parts_dir: Path,
+    ) -> None:
+        self._skeleton = skeleton
+        self._shards = shards
+        self._parts_dir = parts_dir
+        self._cache: dict[str, Any] = {}
+
+    def resolve(self, key: str) -> Any:
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        dotted = _resolve_ref_dotted(key)
+        node = _descend_and_fill(self._skeleton, self._shards, self._parts_dir, dotted)
+        if node is None:
+            raise ValueError(f"scan_result artifact registry entry missing: {key}")
+        self._cache[key] = node
+        return node
+
+
+def _resolve_ref_dotted(key: str) -> str:
+    if key.startswith("sha256:"):
+        return blob_to_dotted(key)
+    return ref_to_dotted(key)
+
+
+def _path_node(
+    skeleton: dict[str, Any],
+    dotted: str,
+    shards: dict[str, dict[str, Any]],
+    parts_dir: Path,
+) -> Any:
+    """返回点分路径上的节点（沿途自动加载分片）；缺失返回 None。"""
+    parts = dotted.split(".")
+    node: Any = skeleton
+    for i, part in enumerate(parts):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        value = node[part]
+        if value is None:
+            prefix = ".".join(parts[: i + 1])
+            spec = shards.get(prefix)
+            if spec is None:
+                return None
+            value = _load_shard_value(parts_dir, spec, prefix)
+            node[part] = value
+        node = value
+    return node
+
+
+def _set_path_none(skeleton: dict[str, Any], dotted: str) -> None:
+    """把点分路径的叶子键还原为 null（写索引前还原分片占位）。"""
+    parts = dotted.split(".")
+    node: Any = skeleton
+    for part in parts[:-1]:
+        if not isinstance(node, dict) or part not in node:
+            return
+        node = node[part]
+    if isinstance(node, dict) and parts[-1] in node:
+        node[parts[-1]] = None
+
+
+def _set_path_value(skeleton: dict[str, Any], dotted: str, value: Any) -> None:
+    parts = dotted.split(".")
+    node: Any = skeleton
+    for part in parts[:-1]:
+        if not isinstance(node, dict):
+            return
+        child = node.get(part)
+        if not isinstance(child, dict):
+            node[part] = {}
+        node = node[part]
+    if isinstance(node, dict):
+        node[parts[-1]] = value
+
+
+def _rederive_authority_artifacts(
+    redacted_skeleton: dict[str, Any],
+    manifest_shards: dict[str, dict[str, Any]],
+    parts_dir: Path,
+    *,
+    indent: int = 2,
+) -> None:
+    """分片 store 上的 authority 指纹链重建（与整树 redaction 语义等价）。
+
+    骨架 ``redact_and_validate`` 内部的重建只覆盖全部内联的 envelope；这里补齐
+    被分片切开的 envelope（root / v12 的 ledger、occurrences）：从已脱敏分片
+    加载 + hydrate 引用 → ``_rederive_redaction_sensitive_authority`` →
+    重建的 formal_delivery_authority / canonical_defect_registry 单独
+    redact+scan 后写回骨架 → 所有分片占位与整体注册的引用标记还原
+    （索引保持骨架形态，不内联大内容）。
+    """
+    scope_dots = list(_AUTHORITY_SCOPE_KEYS) + [
+        f"v12.{key}" for key in _AUTHORITY_SCOPE_KEYS
+    ]
+    if not any(dotted in manifest_shards for dotted in scope_dots):
+        # 全部内联：骨架 redact_and_validate 已重建过，无需重复。
+        return
+    resolver = _RegistryResolver(redacted_skeleton, manifest_shards, parts_dir)
+    restored_refs: dict[str, dict[str, Any]] = {}
+    for dotted in scope_dots:
+        node = _path_node(redacted_skeleton, dotted, manifest_shards, parts_dir)
+        if node is None:
+            continue
+        if is_ref_marker(node) or is_blob_marker(node):
+            # 整体注册的输入：快照引用标记，重建期间用解析内容，之后还原。
+            restored_refs[dotted] = node
+            marker_key = node.get(REF_KEY) or node.get(BLOB_KEY)
+            resolved = resolver.resolve(marker_key)
+            _set_path_value(redacted_skeleton, dotted, resolved)
+            node = resolved
+        if isinstance(node, (dict, list)):
+            hydrate_refs(node, resolver.resolve)
+    _rederive_redaction_sensitive_authority(redacted_skeleton)
+    # 重建产物是新内容：单独 redact + scan（小对象；fail-closed）。
+    for dotted in (
+        "formal_delivery_authority",
+        "canonical_defect_registry",
+        "v12.formal_delivery_authority",
+        "v12.canonical_defect_registry",
+    ):
+        node = _path_node(redacted_skeleton, dotted, manifest_shards, parts_dir)
+        if not isinstance(node, dict):
+            continue
+        redacted, _receipt = redact_and_validate(node)
+        _set_path_value(redacted_skeleton, dotted, redacted)
+    # 还原整体注册输入的引用标记；再还原所有分片占位（含 re-derivation 期间
+    # hydrate 的 ledger/occurrences/registry entries），索引保持骨架形态。
+    for dotted, marker in restored_refs.items():
+        _set_path_value(redacted_skeleton, dotted, marker)
+    for dotted in sorted(manifest_shards):
+        _set_path_none(redacted_skeleton, dotted)
+
+
+def _combine_redaction_receipt(
+    skeleton_receipt: dict[str, Any],
+    piece_events: list[dict[str, Any]],
+    piece_scans: list[dict[str, Any]],
+    *,
+    normalization: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """聚合骨架与各分片的脱敏 receipt（与整树 receipt 契约一致）。"""
+    events = list(skeleton_receipt.get("redaction", {}).get("events") or [])
+    events.extend(piece_events)
+    scans = [skeleton_receipt.get("secret_scan")] + list(piece_scans)
+    issues = [
+        issue
+        for scan in scans
+        if isinstance(scan, dict)
+        for issue in list(scan.get("issues") or [])
+    ]
+    safe = all(
+        isinstance(scan, dict) and scan.get("safe") is True for scan in scans
+    )
+    return {
+        "schema_version": skeleton_receipt.get("schema_version"),
+        "redaction": {
+            "schema_version": skeleton_receipt.get("redaction", {}).get(
+                "schema_version"
+            ),
+            "redaction_applied": bool(events),
+            "event_count": len(events),
+            "events": events[:200],
+            "secret_types": sorted({
+                hit
+                for event in events
+                for hit in (event.get("hits") or [])
+            }),
+        },
+        "secret_scan": {
+            "schema_version": skeleton_receipt.get("secret_scan", {}).get(
+                "schema_version"
+            ),
+            "safe": safe,
+            "issue_count": len(issues),
+            "issues": issues[:100],
+        },
+        "safe_to_persist": safe,
+        "normalization": normalization,
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -456,12 +810,15 @@ def _descend_and_fill(
     dotted: str,
     *,
     strict: bool = False,
+    resolve: Callable[[str], Any] | None = None,
 ) -> Any:
     """按点分路径下钻骨架；遇到 null 占位时加载对应分片并继续下钻。返回目标节点。
 
     ``strict=False``（默认）：请求路径在 store 中不存在时返回 None（消费方按
     ``.get()`` 语义容错）；``strict=True``：缺失即爆出（完整性断言用）。
     分片清单存在但分片文件缺失时无论何种模式都 fail-loud。
+    ``resolve`` 提供时，下钻途中穿过引用标记（整体注册的子树 / blob）会先解析
+    引用再继续（部分加载路径穿过 ref 也能得到完整内容）。
     """
     parts = dotted.split(".")
     node: Any = skeleton
@@ -482,7 +839,33 @@ def _descend_and_fill(
                 raise FileNotFoundError(f"scan_result shard spec missing: {prefix}")
             value = _load_shard_value(parts_dir, spec, prefix)
             node[part] = value
+        if resolve is not None and i < len(parts) - 1 and (
+            is_ref_marker(value) or is_blob_marker(value)
+        ):
+            marker_key = value.get(REF_KEY) or value.get(BLOB_KEY)
+            resolved = resolve(marker_key)
+            if resolved is None:
+                raise FileNotFoundError(
+                    f"scan_result artifact ref unresolvable: {marker_key}"
+                )
+            node[part] = resolved
+            value = resolved
         node = value
+    # 最终节点是引用标记（整体注册的子树 / blob）且提供了 resolve 时同样解析，
+    # 并把解析结果写回骨架（部分加载请求整体注册键时返回完整内容）。
+    if (
+        resolve is not None
+        and (is_ref_marker(node) or is_blob_marker(node))
+        and parts
+    ):
+        marker_key = node.get(REF_KEY) or node.get(BLOB_KEY)
+        resolved = resolve(marker_key)
+        if resolved is None:
+            raise FileNotFoundError(
+                f"scan_result artifact ref unresolvable: {marker_key}"
+            )
+        _set_path_value(skeleton, dotted, resolved)
+        node = resolved
     if node is None:
         raise FileNotFoundError(f"scan_result shard unresolved: {dotted}")
     return node
@@ -498,19 +881,42 @@ def _assemble(
 
     精确路径语义：下钻骨架，遇整体分片占位则加载该分片并继续下钻；请求路径
     指向骨架时返回骨架本身（其子分片不自动加载，避免误载 3.6GB 级子树）。
+    规范化 store（带 ``_artifact_registry``）自动 hydrate 引用：
+    keys=None 全量 hydrate 后移除 registry 段（返回树与旧格式等价）；
+    keys=[...] 只 hydrate 请求的子树（registry 段保留在树中）；
+    keys=[] 不加载、不 hydrate（纯索引检查）。
     """
     manifest = payload.get(SHARD_MARKER)
     if not isinstance(manifest, dict):
         return payload  # 旧单文件（或任意普通 JSON 对象）
     skeleton = {key: value for key, value in payload.items() if key != SHARD_MARKER}
     shards = manifest.get("shards") if isinstance(manifest.get("shards"), dict) else {}
+    resolver: _RegistryResolver | None = None
+    registry_section = skeleton.get(REGISTRY_KEY)
+    normalized = isinstance(registry_section, dict) and (
+        registry_section.get("schema_version") == NORMALIZED_SCHEMA
+    )
+    if normalized:
+        resolver = _RegistryResolver(skeleton, shards, parts_dir)
     if keys is None:
         for dotted in shards:
             _descend_and_fill(skeleton, shards, parts_dir, dotted)
+        if normalized:
+            hydrate_refs(skeleton, resolver.resolve)
+            skeleton.pop(REGISTRY_KEY, None)
     else:
         for dotted in keys:
             if isinstance(dotted, str) and dotted:
-                _descend_and_fill(skeleton, shards, parts_dir, dotted)
+                _descend_and_fill(
+                    skeleton, shards, parts_dir, dotted, resolve=resolver.resolve if normalized else None,
+                )
+        if normalized and keys:
+            for dotted in keys:
+                if not isinstance(dotted, str) or not dotted:
+                    continue
+                node = _path_node(skeleton, dotted, shards, parts_dir)
+                if isinstance(node, (dict, list)):
+                    hydrate_refs(node, resolver.resolve)
     return skeleton
 
 def load_scan_result(path: Path | str, *, keys: Iterable[str] | None = None) -> dict[str, Any]:
