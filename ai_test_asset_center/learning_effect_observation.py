@@ -87,8 +87,18 @@ def load_round_ledgers(project: str, root: Path | None = None) -> list[dict[str,
 
     Trace ledgers are per-round immutable (persisted by the scan close hook),
     so this is the authoritative round history for effect observation.
+
+    P0-4 Dual Read (SPEC §33): artifactized ledgers (referenced by Run
+    Manifests) are hydrated from the ArtifactStore first; legacy
+    ``*.trace-ledger.json`` files remain the fallback for older runs.
     """
     root = root or Path(__file__).resolve().parents[1]
+    try:
+        from .trace_artifactization import load_round_trace_ledgers
+
+        return load_round_trace_ledgers(project, root)
+    except Exception:
+        pass
     base = _ledger_dir(root, project)
     ledgers: list[dict[str, Any]] = []
     if not base.exists():

@@ -843,7 +843,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     # summaries; raw bodies, credentials, and benchmark ground truth are never
     # copied into the evolution artifacts.
     try:
-        from .discovery_trace_ledger import build_discovery_trace_ledger, persist_trace_ledger
+        from .discovery_trace_ledger import build_discovery_trace_ledger
         from .discovery_weakness_miner import mine_discovery_weaknesses, persist_weakness_report
         from .discovery_harness_proposer import propose_harness_candidates, persist_harness_proposals
         from .enterprise_project_config import MultiServiceProject
@@ -885,7 +885,16 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             _effective_policy_strategy,
         )
         _evolution_root = root / "platform_outputs" / _safe_project(project) / "discovery_evolution"
-        _trace_path = persist_trace_ledger(_trace_ledger, _evolution_root / "trace_ledgers")
+        # P0-4 Phase 4: Single Write — artifact store when enabled (trace
+        # payload → TRACE_EVENT artifacts + TRACE_LEDGER metadata ref),
+        # legacy trace_ledgers file only in the store-disabled fallback mode.
+        from .trace_artifactization import persist_trace_ledger_output
+
+        _trace_output = persist_trace_ledger_output(
+            _trace_ledger,
+            _evolution_root,
+            root=root,
+        )
         _weakness_path = persist_weakness_report(_weakness_report, _evolution_root / "weakness_reports")
         _proposal_path = persist_harness_proposals(_proposal_report, _evolution_root / "harness_proposals")
         result["discovery_evolution"] = {
@@ -901,7 +910,8 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "selected_patterns_for_proposal": list(_weakness_report.get("selected_patterns_for_proposal") or []),
             "harness_proposal_count": int(_proposal_report.get("proposal_count") or 0),
             "blocked_proposal_pattern_count": int(_proposal_report.get("blocked_pattern_count") or 0),
-            "trace_ledger_ref": str(_trace_path.relative_to(root)).replace("\\", "/"),
+            "trace_ledger_ref": _trace_output["ref"],
+            "trace_ledger_mode": _trace_output["mode"],
             "weakness_report_ref": str(_weakness_path.relative_to(root)).replace("\\", "/"),
             "harness_proposals_ref": str(_proposal_path.relative_to(root)).replace("\\", "/"),
         }
@@ -966,43 +976,59 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"
-        _write_json(report_path, {
-            "project": project,
-            "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "real_findings": confirmed,
-            "findings": confirmed,
-            "candidate_findings": candidates,
-            "risk_clues": candidates,
-            "mainline_run": v12.get("mainline_run"),
-            "obligation_attempt_ledger": v12.get("obligation_attempt_ledger"),
-            "canonical_defect_registry": canonical_registry,
-            "formal_delivery_authority": v12.get("formal_delivery_authority"),
-            "formal_count_projection": result.get("formal_count_projection"),
-            "run_delivery_readiness": result.get("run_delivery_readiness"),
-            "commercial_readiness": result.get("commercial_readiness"),
-            "external_evaluation": result.get("external_evaluation"),
-            "defect_identity_consistency": result.get("defect_identity_consistency"),
-            "delivery_occurrences": delivery_occurrences,
-            "campaign": campaign,
-            "coverage_gaps": coverage_gaps,
-            "scan_preflight_guide": preflight_guide,
-            "runtime_contract": runtime_contract,
-            "test_data_plan": test_data_plan,
-            "test_data_bootstrap": test_data_bootstrap,
-            "behavior_slice_ledger": result["behavior_slice_ledger"],
-            "execution_status": execution_status,
-            "coverage_honesty": coverage_honesty,
-            "verified_archive_receipt": verified_archive_receipt,
-            "evidence_bundle": evidence_bundle,
-            "release_gate": result.get("release_gate"),
-            "ui_execution_summary": ui_execution_summary,
-            "execution_evidence_summary": ui_execution_summary,
-            "ui_followup_assets": ui_followup_assets,
-            "external_reproduction_assets": external_reproduction_assets,
-            "external_commercial_assets": external_commercial_assets,
-            "discovery_funnel": result.get("discovery_funnel"),
-            "discovery_funnel_report": result.get("discovery_funnel_report"),
-        })
+        # P0-4 Phase 6: Single Write — the report is a logical read model.
+        # Heavy payloads (obligation_attempt_ledger, delivery_occurrences, …)
+        # and finding raw evidence are stored as artifacts and referenced;
+        # only summary + artifact_refs land in the file (SPEC §25/§43).
+        from .intelligence_report_artifactization import write_intelligence_report
+
+        _report_bundle_ref = (
+            evidence_bundle.get("artifact_manifest_ref")
+            if isinstance(evidence_bundle, dict)
+            else None
+        )
+        result["report_artifactization"] = write_intelligence_report(
+            report_path,
+            {
+                "project": project,
+                "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "real_findings": confirmed,
+                "findings": confirmed,
+                "candidate_findings": candidates,
+                "risk_clues": candidates,
+                "mainline_run": v12.get("mainline_run"),
+                "obligation_attempt_ledger": v12.get("obligation_attempt_ledger"),
+                "canonical_defect_registry": canonical_registry,
+                "formal_delivery_authority": v12.get("formal_delivery_authority"),
+                "formal_count_projection": result.get("formal_count_projection"),
+                "run_delivery_readiness": result.get("run_delivery_readiness"),
+                "commercial_readiness": result.get("commercial_readiness"),
+                "external_evaluation": result.get("external_evaluation"),
+                "defect_identity_consistency": result.get("defect_identity_consistency"),
+                "delivery_occurrences": delivery_occurrences,
+                "campaign": campaign,
+                "coverage_gaps": coverage_gaps,
+                "scan_preflight_guide": preflight_guide,
+                "runtime_contract": runtime_contract,
+                "test_data_plan": test_data_plan,
+                "test_data_bootstrap": test_data_bootstrap,
+                "behavior_slice_ledger": result["behavior_slice_ledger"],
+                "execution_status": execution_status,
+                "coverage_honesty": coverage_honesty,
+                "verified_archive_receipt": verified_archive_receipt,
+                "evidence_bundle": evidence_bundle,
+                "release_gate": result.get("release_gate"),
+                "ui_execution_summary": ui_execution_summary,
+                "execution_evidence_summary": ui_execution_summary,
+                "ui_followup_assets": ui_followup_assets,
+                "external_reproduction_assets": external_reproduction_assets,
+                "external_commercial_assets": external_commercial_assets,
+                "discovery_funnel": result.get("discovery_funnel"),
+                "discovery_funnel_report": result.get("discovery_funnel_report"),
+            },
+            root=root,
+            bundle_manifest_ref=_report_bundle_ref,
+        )
         result["report_path"] = str(report_path)
         result["discovery_funnel_report_paths"] = write_funnel_report_files(
             result,
@@ -1280,21 +1306,27 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
 def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Public scan entry — runs core discovery then first-class post-hooks."""
     from .scan_post_hooks import apply_scan_post_hooks
+    from .artifact_store import artifact_store_enabled
 
-    # ── Scan-result retention: cleanup transients at start, archive the
-    # previous scan_result after the new one is persisted (only RETAIN
-    # archives are kept; otherwise GB-scale products accumulate unbounded).
+    # ── Scan-result lifecycle: cleanup transients at start (always); the
+    # legacy scan_result_archive rotation is the store-disabled fallback only
+    # (SPEC §32). With the artifact store active, Run history is described by
+    # Run Manifests and the RunRetentionManager owns the lifecycle — new runs
+    # must not depend on scan_result_archive_* (SPEC AC-10).
     try:
-        from .scan_result_retention import (
-            cleanup_transient_artifacts,
-            rotate_scan_result_archive,
-        )
+        from .scan_result_retention import cleanup_transient_artifacts
 
         cleanup_transient_artifacts(str(project or "").strip(), root or Path.cwd())
     except Exception:
         # Retention must never block the scan; failures are visible in the
         # receipt only if the run completes far enough to attach it.
         pass
+    try:
+        from .run_retention_manager import cleanup_stale_scratch
+
+        applied_scratch_receipt = cleanup_stale_scratch(root or Path.cwd())
+    except Exception:
+        applied_scratch_receipt = None
 
     result = _scan_impl(
         project,
@@ -1313,9 +1345,13 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     applied = apply_scan_post_hooks(
         result, project=str(project or "").strip(), root=resolved_root
     )
-    # Archive the previous scan_result (index + parts) now that the new one
-    # has been persisted; only RETAIN archives are kept.
-    if save_report:
+    if applied_scratch_receipt is not None:
+        applied["scratch_ttl_receipt"] = applied_scratch_receipt
+    # Legacy fallback (store disabled): archive the previous scan_result
+    # (index + parts) now that the new one has been persisted; only RETAIN
+    # archives are kept. Store-enabled runs skip this — history lives in
+    # manifests + artifacts.
+    if save_report and not artifact_store_enabled():
         try:
             from .scan_result_retention import rotate_scan_result_archive
 

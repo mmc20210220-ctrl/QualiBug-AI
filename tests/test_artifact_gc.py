@@ -104,3 +104,105 @@ class TestReferenceGC:
         gc.run(dry_run=False)
         assert knowledge.read_bytes() == b"SQLITE-CONTENT"
         assert knowledge.is_file()
+
+
+class TestReferenceContainerExpansion:
+    """Transitive mark through reference containers (SPEC §12/§14/§26)."""
+
+    def test_bundle_parts_live_while_any_run_references_the_bundle(self, store, manifest_store):
+        part = store.put({"evidence": "payload"}, "HTTP_RESPONSE").artifact_id
+        bundle = store.put(
+            {"schema_version": "qualibug.evidence-bundle-manifest.v1",
+             "parts": {"response_ref": part}},
+            "EVIDENCE_BUNDLE_MANIFEST",
+        ).artifact_id
+        manifest_store.commit_success("run_1", evidence_bundle_refs=[bundle])
+        manifest_store.commit_success("run_2", evidence_bundle_refs=[bundle])
+        manifest_store.delete("run_1")
+        gc = ArtifactGarbageCollector(store, manifest_store, grace_hours=0.0)
+        plan = gc.plan()
+        assert part in plan["live"]
+        assert plan["garbage"] == []
+        outcome = gc.run(dry_run=False)
+        assert outcome["deleted_count"] == 0
+        assert store.exists(part)
+        # Deleting the last referencing run makes the part garbage too.
+        manifest_store.delete("run_2")
+        plan = gc.plan()
+        assert part in plan["garbage"]
+        assert bundle in plan["garbage"]
+
+    def test_trace_attempt_refs_live_via_metadata(self, store, manifest_store):
+        event = store.put({"obligation_id": "OB-1"}, "TRACE_EVENT").artifact_id
+        metadata = store.put(
+            {"schema_version": "qualibug.discovery-trace-ledger.v3",
+             "attempt_refs": [event]},
+            "TRACE_LEDGER",
+        ).artifact_id
+        manifest_store.commit_success("run_1", trace_refs=[metadata])
+        gc = ArtifactGarbageCollector(store, manifest_store, grace_hours=0.0)
+        plan = gc.plan()
+        assert event in plan["live"]
+        assert plan["garbage"] == []
+        manifest_store.delete("run_1")
+        plan = gc.plan()
+        assert event in plan["garbage"]
+
+    def test_report_artifact_refs_live_via_declared_list(self, store, manifest_store):
+        heavy = store.put({"ledger": "x" * 1000}, "OBLIGATION_ATTEMPT_LEDGER").artifact_id
+        report = store.put(
+            {"schema_version": "qualibug.intelligence-report.v1",
+             "artifact_refs": [heavy]},
+            "INTELLIGENCE_REPORT",
+        ).artifact_id
+        manifest_store.commit_success("run_1", intelligence_report_ref=report)
+        gc = ArtifactGarbageCollector(store, manifest_store, grace_hours=0.0)
+        plan = gc.plan()
+        assert heavy in plan["live"]
+        assert plan["garbage"] == []
+
+    def test_unparseable_live_container_aborts_gc(self, store, manifest_store):
+        # Corrupt the bundle-manifest payload after commit: the GC must fail
+        # closed (delete nothing) rather than sweep its unknown refs.
+        bundle = store.put(
+            {"schema_version": "qualibug.evidence-bundle-manifest.v1",
+             "parts": {"response_ref": "sha256:" + "c" * 64}},
+            "EVIDENCE_BUNDLE_MANIFEST",
+        ).artifact_id
+        manifest_store.commit_success("run_1", evidence_bundle_refs=[bundle])
+        from ai_test_asset_center.artifact_store import parse_artifact_id, artifact_id_from_hash
+
+        digest = parse_artifact_id(bundle)
+        payload_path = store.root / "artifacts" / "sha256" / digest[:2] / f"{digest}.zst"
+        payload_path.write_bytes(b"NOT-JSON-CORRUPTED")
+        orphan = store.put({"o": 1}, "EXECUTION_OUTPUT").artifact_id
+        gc = ArtifactGarbageCollector(store, manifest_store, grace_hours=0.0)
+        plan = gc.plan()
+        assert plan["status"] == "ABORTED"
+        assert plan["deleted_count"] == 0
+        outcome = gc.run(dry_run=False)
+        assert outcome["deleted_count"] == 0
+        assert store.exists(orphan)
+        assert store.exists(bundle)
+
+    def test_gc_env_gate_defaults_to_dry_run(self, store, manifest_store, monkeypatch):
+        orphan = store.put({"orphan": "y"}, "EXECUTION_OUTPUT").artifact_id
+        gc = ArtifactGarbageCollector(store, manifest_store, grace_hours=0.0)
+        monkeypatch.delenv("QUALIBUG_ARTIFACT_GC_ENABLE", raising=False)
+        outcome = gc.run()
+        assert outcome["dry_run"] is True
+        assert outcome["deleted_count"] == 0
+        assert store.exists(orphan)
+        monkeypatch.setenv("QUALIBUG_ARTIFACT_GC_ENABLE", "true")
+        outcome = gc.run()
+        assert outcome["dry_run"] is False
+        assert outcome["deleted_count"] == 1
+        assert not store.exists(orphan)
+
+    def test_explicit_dry_run_flag_overrides_env(self, store, manifest_store, monkeypatch):
+        orphan = store.put({"orphan": "y"}, "EXECUTION_OUTPUT").artifact_id
+        gc = ArtifactGarbageCollector(store, manifest_store, grace_hours=0.0)
+        monkeypatch.setenv("QUALIBUG_ARTIFACT_GC_ENABLE", "true")
+        outcome = gc.run(dry_run=True)
+        assert outcome["deleted_count"] == 0
+        assert store.exists(orphan)

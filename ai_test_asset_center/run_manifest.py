@@ -330,7 +330,11 @@ class RunManifestStore:
             (success_runs, run_retain),
             (failed_runs, failed_run_retain),
         ):
-            for manifest in group[:-limit] if limit < len(group) else []:
+            # Keep the newest `limit`; remove the oldest overflow. `group[:-limit]`
+            # is a Python trap for limit=0 (`-0 == 0` keeps everything), so the
+            # overflow slice is computed explicitly.
+            overflow = max(0, len(group) - limit)
+            for manifest in group[:overflow]:
                 outcome = self.delete(manifest.run_id)
                 if outcome.get("deleted"):
                     removed.append(manifest.run_id)

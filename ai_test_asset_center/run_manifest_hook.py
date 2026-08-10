@@ -7,9 +7,12 @@ this hook artifactizes the run outputs and atomically commits the Run
 Manifest with the SPEC §15 ordering — put artifacts -> verify every reference
 exists -> write manifest.tmp -> atomic rename -> Run=SUCCESS.
 
-- SUCCESS runs: scan_result index, evidence bundle manifest ref, intelligence
-  report index are referenced; trace artifactization is Phase 4 (trace_refs
-  stay empty here).
+- SUCCESS runs: scan_result index, evidence bundle manifest ref, trace ledger
+  metadata ref, intelligence report index are referenced; trace payloads live
+  as content-addressed TRACE_EVENT artifacts (Phase 4), heavy report payloads
+  are deduplicated into the store (Phase 6), and after the commit the
+  RunRetentionManager runs the unified Run lifecycle (Phase 8: retention →
+  reference GC → quota; GC dry-run unless QUALIBUG_ARTIFACT_GC_ENABLE=true).
 - FAILED/ABORTED runs (SPEC §16): only metadata + error summary + the small
   failed scan_result index — never large evidence.
 
@@ -115,6 +118,21 @@ def _commit(result: dict[str, Any], *, project: str, root: Path) -> dict[str, An
         if manifest_ref and store.exists(str(manifest_ref)):
             evidence_refs.append(str(manifest_ref))
 
+    # ── Phase 4: artifactize the redacted trace ledger (metadata + event
+    # payload refs) so per-run trace_ledgers stop accumulating on disk. ──
+    trace_refs: list[str] = []
+    trace_error = None
+    trace_ledger = result.get("trace_ledger")
+    if isinstance(trace_ledger, dict):
+        try:
+            from .trace_artifactization import artifactize_trace_ledger
+
+            trace_outcome = artifactize_trace_ledger(store, trace_ledger)
+            trace_refs = [trace_outcome["metadata_ref"]]
+        except Exception as exc:
+            # Visible, non-masking: the run still commits without the trace.
+            trace_error = f"{type(exc).__name__}:{str(exc)[:200]}"
+
     lifecycle = merge_lifecycle_deltas(
         _evidence_lifecycle(evidence),
         _lifecycle_delta(stats_before, store.snapshot_stats()),
@@ -128,20 +146,31 @@ def _commit(result: dict[str, Any], *, project: str, root: Path) -> dict[str, An
         manifest = manifest_store.commit_success(
             run_id,
             scan_result_ref=scan_result_ref,
+            trace_refs=trace_refs,
             evidence_bundle_refs=evidence_refs,
             intelligence_report_ref=report_ref,
             lifecycle=lifecycle,
         )
-        return {
+        receipt = {
             "schema_version": "qualibug.run-manifest-receipt.v1",
             "status": "committed",
             "run_id": run_id,
             "manifest_status": manifest.status,
             "scan_result_ref": scan_result_ref,
+            "trace_refs": trace_refs,
             "evidence_bundle_refs": evidence_refs,
             "intelligence_report_ref": report_ref,
             "lifecycle": lifecycle,
         }
+        if trace_error:
+            receipt["trace_artifactization"] = {"status": "failed", "error": trace_error}
+        elif trace_refs:
+            receipt["trace_artifactization"] = {
+                "status": "artifactized",
+                "metadata_ref": trace_refs[0],
+            }
+        _attach_retention_receipt(result, store, manifest_store, root)
+        return receipt
 
     error_summary = str(
         result.get("error")
@@ -156,7 +185,7 @@ def _commit(result: dict[str, Any], *, project: str, root: Path) -> dict[str, An
         error_summary=error_summary,
         scan_result_ref=scan_result_ref,
     )
-    return {
+    receipt = {
         "schema_version": "qualibug.run-manifest-receipt.v1",
         "status": "committed",
         "run_id": run_id,
@@ -165,6 +194,32 @@ def _commit(result: dict[str, Any], *, project: str, root: Path) -> dict[str, An
         "error_summary": error_summary[:160],
         "lifecycle": lifecycle,
     }
+    _attach_retention_receipt(result, store, manifest_store, root)
+    return receipt
+
+
+def _attach_retention_receipt(
+    result: dict[str, Any],
+    store: Any,
+    manifest_store: Any,
+    root: Path,
+) -> None:
+    """Phase 8: unified Run lifecycle (retention → GC → quota) after commit.
+
+    The receipt is attached to the result — visible, never masking the scan
+    outcome; a retention failure must not raise into the scan.
+    """
+    try:
+        from .run_retention_manager import RunRetentionManager
+
+        retention = RunRetentionManager(store, manifest_store, root).run()
+    except Exception as exc:
+        retention = {
+            "status": "failed",
+            "error": f"{type(exc).__name__}:{str(exc)[:200]}",
+        }
+    if isinstance(result, dict):
+        result["run_retention_receipt"] = retention
 
 
 def _evidence_lifecycle(evidence: Any) -> dict[str, Any] | None:

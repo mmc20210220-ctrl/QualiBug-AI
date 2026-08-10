@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Scan-result retention — 产物生命周期轮转与垃圾清理。
+"""Scan-result retention — DEPRECATED legacy fallback (SPEC P0-4 §32).
 
-每次扫描的 scan_result（含分片 parts）可达 GB 级；不轮转时历史产物、legacy
-备份、中断残留（.q-*.tmp）无限累积（实测单项目 11GB+）。本模块提供：
+``RunRetentionManager`` (``run_retention_manager.py``) is now the unified
+owner of the Run lifecycle: Run Manifests describe history, and reference GC
+deletes only artifacts that truly lost their last reference. This module is
+kept exclusively as the fallback for the **store-disabled** mode
+(``QUALIBUG_ARTIFACT_STORE_ENABLED=false``); the mainline no longer calls it
+when the artifact store is active. It must not be extended — new lifecycle
+behavior belongs to the artifact architecture.
 
-- ``rotate_scan_result_archive``：扫描写入后调用——把旧 scan_result 归档为
-  ``scan_result_archive_<ts>/`` 并只保留最近 N 份（``RETAIN``，默认 3，
-  可配置 ``QUALIBUG_SCAN_RESULT_RETAIN``），更旧的归档整目录删除；
-- ``cleanup_transient_artifacts``：扫描启动时调用——删除写入中断残留的
-  ``.q-*.tmp`` 与转换遗留的 ``scan_result.json.legacy``（分片 store 转换
-  后 legacy 不再需要；P0-3 引用化后产物更小，legacy 更无价值）。
-
-通用机制：任何项目的 scan_result 产物都走同一轮转策略；轮转只删历史副本，
-永不触碰当前索引/分片/脱敏边界。
+Legacy behavior (unchanged): scan_result archives rotate by count
+(``QUALIBUG_SCAN_RESULT_RETAIN``, default 3); ``cleanup_transient_artifacts``
+removes interrupt leftovers (``.q-*.tmp``) and conversion legacy backups.
 """
 from __future__ import annotations
 

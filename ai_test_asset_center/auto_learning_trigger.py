@@ -324,8 +324,23 @@ class AutoLearningTrigger:
         plus the latest ``scan_result.json`` — the real persisted history.
         The previous glob of ``scan_*.json`` matched only the overwritten
         ``scan_result.json``, so ``rounds_analyzed`` was always 1.
+
+        P0-4 Dual Read (SPEC §33): artifactized ledgers (Run Manifest
+        trace_refs → ArtifactStore) are loaded first; legacy files remain the
+        fallback for older runs.
         """
         scans: list[dict] = []
+        try:
+            from .trace_artifactization import load_round_trace_ledgers
+
+            store_ledgers = load_round_trace_ledgers(
+                self.project, self.root, limit=limit
+            )
+            scans.extend(store_ledgers[-limit:])
+        except Exception as e:
+            logger.warning("Failed to load artifactized trace ledgers: %s", e)
+        if len(scans) >= limit:
+            return scans[:limit]
         ledger_dir = (
             self.output_dir
             / "discovery_evolution"
