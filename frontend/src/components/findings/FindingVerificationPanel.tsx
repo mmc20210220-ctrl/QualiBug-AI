@@ -17,7 +17,8 @@ function runLabel(finding: Finding): string {
 export function FindingVerificationPanel({ finding, running = false, onReverify }: Props) {
   const presentation = deriveFindingVerification(finding);
   const latest = presentation.latestRun;
-  const canReverify = hasFindingReverificationObligation(finding) && Boolean(onReverify);
+  const hasObligation = hasFindingReverificationObligation(finding);
+  const canReverifyHere = hasObligation && Boolean(onReverify);
 
   return (
     <section className="card mt-3" aria-label="修复后重新验证">
@@ -60,7 +61,7 @@ export function FindingVerificationPanel({ finding, running = false, onReverify 
         修复前基线来自当前 Finding 的原始证据；最新侧只展示后端真实 regression 回执。当前回归合同没有返回新的原始响应 / DB / UI 证据时，前端不会伪造“修复前后 Diff”。
       </p>
 
-      {canReverify && (
+      {canReverifyHere && (
         <div className="settings-actions mt-3">
           <button type="button" className="btn btn-primary" onClick={onReverify} disabled={running}>
             {running ? '正在重新验证…' : '客户修复后，重新验证'}
@@ -69,7 +70,11 @@ export function FindingVerificationPanel({ finding, running = false, onReverify 
         </div>
       )}
 
-      {!canReverify && (
+      {hasObligation && !onReverify && (
+        <p className="settings-hint mt-3">该 Finding 已有真实重新验证义务；当前页面只展示验证证据，重新执行请回到问题清单。</p>
+      )}
+
+      {!hasObligation && (
         <p className="settings-hint mt-3">当前没有真实可执行回归义务，因此 QualiBug 不显示虚假的“重新验证”操作。</p>
       )}
 
