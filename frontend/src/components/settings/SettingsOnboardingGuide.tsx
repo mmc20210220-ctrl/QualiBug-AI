@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getKnowledgeAsset, getServiceCredentials, listConnectors, type ConnectorRecord } from '../../api/client';
+import { listKnowledgeConnectors } from '../../api/knowledge-connectors';
 import { useProjectNavigation } from '../../lib/project-navigation';
 import { hasConfiguredAuthMaterial, hasConfiguredDbMaterial, type SavedServiceConfig } from '../../lib/settings-utils';
 
@@ -11,6 +12,7 @@ type SettingsOnboardingGuideProps = {
 type SetupSnapshot = {
   connectors: ConnectorRecord[];
   services: SavedServiceConfig[];
+  knowledgeConnectorCount: number;
   materialCount: number;
   onlineMaterialCount: number;
   uploadedMaterialCount: number;
@@ -54,22 +56,25 @@ function extractMaterialStatus(payload: unknown): MaterialStatus {
   };
 }
 
+const EMPTY_SNAPSHOT: SetupSnapshot = {
+  connectors: [],
+  services: [],
+  knowledgeConnectorCount: 0,
+  materialCount: 0,
+  onlineMaterialCount: 0,
+  uploadedMaterialCount: 0,
+};
+
 export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProps) {
   const { navigateToProjectPath } = useProjectNavigation();
-  const [snapshot, setSnapshot] = useState<SetupSnapshot>({
-    connectors: [],
-    services: [],
-    materialCount: 0,
-    onlineMaterialCount: 0,
-    uploadedMaterialCount: 0,
-  });
+  const [snapshot, setSnapshot] = useState<SetupSnapshot>(EMPTY_SNAPSHOT);
   const [loading, setLoading] = useState(false);
   const [loadWarning, setLoadWarning] = useState('');
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     if (!project) {
-      setSnapshot({ connectors: [], services: [], materialCount: 0, onlineMaterialCount: 0, uploadedMaterialCount: 0 });
+      setSnapshot(EMPTY_SNAPSHOT);
       setLoadWarning('');
       return;
     }
@@ -83,10 +88,11 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
         setLoadWarning('');
       }
 
-      const [connectorsResult, servicesResult, materialsResult] = await Promise.allSettled([
+      const [connectorsResult, servicesResult, materialsResult, knowledgeConnectorsResult] = await Promise.allSettled([
         listConnectors(project),
         getServiceCredentials(project),
         getKnowledgeAsset(project),
+        listKnowledgeConnectors(project),
       ]);
       if (cancelled) return;
 
@@ -95,9 +101,13 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
       const materialStatus = materialsResult.status === 'fulfilled'
         ? extractMaterialStatus(materialsResult.value)
         : { materialCount: 0, onlineMaterialCount: 0, uploadedMaterialCount: 0 };
-      const failedReads = [connectorsResult, servicesResult, materialsResult].filter((result) => result.status === 'rejected').length;
+      const knowledgeConnectorCount = knowledgeConnectorsResult.status === 'fulfilled'
+        ? knowledgeConnectorsResult.value.connectors.length
+        : 0;
+      const failedReads = [connectorsResult, servicesResult, materialsResult, knowledgeConnectorsResult]
+        .filter((result) => result.status === 'rejected').length;
 
-      setSnapshot({ connectors, services, ...materialStatus });
+      setSnapshot({ connectors, services, knowledgeConnectorCount, ...materialStatus });
       setLoadWarning(failedReads > 0 ? '部分接入状态暂时无法读取，请重新核对后再判断是否已经完成接入。' : '');
       if (firstLoad) {
         firstLoad = false;
@@ -157,14 +167,18 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
 
   const materialValue = snapshot.onlineMaterialCount > 0
     ? `${snapshot.onlineMaterialCount} 份在线资料已接入`
-    : snapshot.materialCount > 0
-      ? `${snapshot.uploadedMaterialCount} 份文件补充已接入`
-      : '待连接';
+    : snapshot.knowledgeConnectorCount > 0
+      ? `${snapshot.knowledgeConnectorCount} 个在线来源已连接`
+      : snapshot.materialCount > 0
+        ? `${snapshot.uploadedMaterialCount} 份文件补充已接入`
+        : '待连接';
   const materialNote = snapshot.onlineMaterialCount > 0
     ? `在线资料作为主来源持续同步${snapshot.uploadedMaterialCount > 0 ? `，另有 ${snapshot.uploadedMaterialCount} 份文件补充` : ''}。`
-    : snapshot.materialCount > 0
-      ? '已有文件补充，可继续运行前检查；建议连接企业在线资料以保持内容持续更新。'
-      : '优先连接企业在线文档、知识库等在线资料源；文件上传只作为缺失资料的补充方式。';
+    : snapshot.knowledgeConnectorCount > 0
+      ? `在线资料源已经连接，正在等待首次读取形成可用资料${snapshot.uploadedMaterialCount > 0 ? `；当前另有 ${snapshot.uploadedMaterialCount} 份文件补充` : ''}。`
+      : snapshot.materialCount > 0
+        ? '已有文件补充，可继续运行前检查；建议连接企业在线资料以保持内容持续更新。'
+        : '优先连接企业在线文档、知识库等在线资料源；文件上传只作为缺失资料的补充方式。';
 
   const steps = [
     {
@@ -189,7 +203,7 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
       value: materialValue,
       note: materialNote,
       tone: snapshot.materialCount > 0 ? 'success' : 'warning',
-      action: <Link className="btn btn-secondary settings-btn-mini" to={materialsHref}>{snapshot.onlineMaterialCount > 0 ? '管理资料源' : '连接在线资料'}</Link>,
+      action: <Link className="btn btn-secondary settings-btn-mini" to={materialsHref}>{snapshot.onlineMaterialCount > 0 || snapshot.knowledgeConnectorCount > 0 ? '查看资料源' : '连接在线资料'}</Link>,
     },
     {
       key: 'database',
@@ -208,7 +222,7 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
       : authCount === 0
         ? { label: '补充测试账号', kind: 'system' as const }
         : snapshot.materialCount === 0
-          ? { label: '连接企业在线资料', kind: 'materials' as const }
+          ? { label: snapshot.knowledgeConnectorCount > 0 ? '查看在线资料同步' : '连接企业在线资料', kind: 'materials' as const }
           : { label: '继续运行前检查', kind: 'campaigns' as const };
 
   const handleMainAction = () => {
@@ -234,7 +248,7 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
           <span className="panel-kicker">首次接入向导</span>
           <h2>{setupReady ? '基础接入已完成' : `完成 ${requiredCompleted}/3 个必需步骤`}</h2>
           <p className="settings-card-sub">
-            企业资料以在线资料源接入为主，文件上传仅作补充；任一真实可读资料都可以满足首次运行的资料条件，最终仍由运行前检查判定是否可执行。
+            企业资料以在线资料源接入为主，文件上传仅作补充；只有真实可读资料形成后才计入首次资料完成状态，最终仍由运行前检查判定是否可执行。
           </p>
         </div>
         <span className={`summary-pill ${setupReady ? 'strong' : ''}`}>
@@ -267,7 +281,9 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
           ? snapshot.onlineMaterialCount > 0
             ? '下一步进入运行中心。在线资料会继续按连接器能力保持更新；运行前检查仍会使用后端真实门禁核对必要条件。'
             : '当前通过文件补充资料已满足首次资料条件，可以进入运行中心；后续建议连接在线资料源以减少人工维护。运行前检查仍是最终执行门禁。'
-          : '接入表单会自动保存本次浏览器会话中的非敏感草稿；账号密码、Token、API Key 和数据库认证信息不会写入草稿。'}
+          : snapshot.knowledgeConnectorCount > 0 && snapshot.materialCount === 0
+            ? '在线资料源已经连接，但首次同步尚未形成真实可读资料，因此当前不会提前标记资料步骤完成。'
+            : '接入表单会自动保存本次浏览器会话中的非敏感草稿；账号密码、Token、API Key 和数据库认证信息不会写入草稿。'}
       </p>
       {loadWarning && <p className="settings-inline-feedback" role="alert">{loadWarning}</p>}
     </section>
