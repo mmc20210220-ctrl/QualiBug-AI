@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { getKnowledgeAsset } from '../../api/client';
 import { listKnowledgeConnectors, type KnowledgeConnectorRecord } from '../../api/knowledge-connectors';
+import { materialSourceTypeLabel, normalizeMaterialSourceType } from '../../lib/material-type-presentation';
 import { useProjectNavigation } from '../../lib/project-navigation';
 
 const AUTHORIZATION_HEALTH = new Set([
@@ -14,36 +15,6 @@ const SYNC_FAILURE_HEALTH = new Set([
   'DEGRADED',
   'CALIBRATION_REQUIRED',
 ]);
-
-// Display aliases only. This is intentionally NOT an allowlist: unknown backend
-// source_type values are preserved and rendered automatically.
-const MATERIAL_TYPE_LABELS: Record<string, string> = {
-  prd: 'PRD / 需求',
-  requirement: '需求文档',
-  requirements: '需求文档',
-  openapi: 'API / 接口',
-  api: 'API / 接口',
-  database_schema: 'DB / 数据结构',
-  db_design: 'DB / 数据设计',
-  collaboration_document: '协作文档',
-  historical_bug: '历史 Bug',
-  ui_ux: 'UI / UX 设计',
-  ui_design: 'UI 设计',
-  ux_design: 'UX 设计',
-  prototype: '原型 / 交互稿',
-  design_spec: '设计规范',
-  test_plan: '测试方案',
-  test_case: '测试用例',
-  architecture: '架构文档',
-  architecture_design: '架构设计',
-  permission: '权限说明',
-  permission_design: '权限设计',
-  business_process: '业务流程',
-  data_dictionary: '数据字典',
-  user_manual: '用户手册',
-  deployment: '部署文档',
-  release_note: '发布说明',
-};
 
 type MaterialSnapshot = {
   connectorCount: number;
@@ -84,15 +55,6 @@ function isOnlineSource(source: Record<string, unknown>): boolean {
     || String(source.source_ref || '').startsWith('connector://');
 }
 
-function normalizeSourceType(value: unknown): string {
-  return String(value || '').trim().toLowerCase() || 'unclassified';
-}
-
-function sourceTypeLabel(type: string): string {
-  if (type === 'unclassified') return '未分类资料';
-  return MATERIAL_TYPE_LABELS[type] || type;
-}
-
 function readMaterialSnapshot(payload: unknown): Pick<MaterialSnapshot,
   | 'total'
   | 'active'
@@ -117,7 +79,7 @@ function readMaterialSnapshot(payload: unknown): Pick<MaterialSnapshot,
   const activeTypeCounts: Record<string, number> = {};
 
   activeSources.forEach((source) => {
-    const type = normalizeSourceType(source.source_type);
+    const type = normalizeMaterialSourceType(source.source_type);
     activeTypeCounts[type] = (activeTypeCounts[type] || 0) + 1;
   });
 
@@ -379,7 +341,7 @@ export function MaterialsOnboardingHandoff() {
 
   const observedTypes = Object.entries(snapshot.activeTypeCounts)
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-    .map(([type, count]) => ({ type, label: sourceTypeLabel(type), count }));
+    .map(([type, count]) => ({ type, label: materialSourceTypeLabel(type), count }));
 
   const currentBlocker = deriveCurrentBlocker(snapshot, materialReadError, connectorReadError);
 
