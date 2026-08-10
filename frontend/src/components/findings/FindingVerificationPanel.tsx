@@ -1,4 +1,5 @@
 import { deriveFindingVerification, hasFindingReverificationObligation } from '../../lib/finding-verification';
+import { deriveFindingVerificationFocusContext } from '../../lib/finding-verification-focus';
 import { FindingVerificationRunSummary } from './FindingVerificationRunSummary';
 import { FindingVerificationStatus } from './FindingVerificationStatus';
 import { FindingVerificationTimeline } from './FindingVerificationTimeline';
@@ -23,16 +24,26 @@ export function FindingVerificationPanel({ finding, running = false, onReverify,
   const latest = presentation.latestRun;
   const hasObligation = hasFindingReverificationObligation(finding);
   const canReverifyHere = hasObligation && Boolean(onReverify);
+  const focusContext = focusGeneratedAt
+    ? deriveFindingVerificationFocusContext(finding, focusGeneratedAt)
+    : null;
+  const viewingHistoricalRun = Boolean(focusContext && !focusContext.isLatestRun);
 
   return (
     <section className="card mt-3" aria-label="修复后重新验证">
       <div className="settings-card-head">
         <div>
           <span className="panel-kicker">QualiBug 验证闭环</span>
+          <span className="customer-value-kicker">当前最新结论</span>
           <FindingVerificationStatus finding={finding} />
           <p className="muted mt-3">{presentation.detail}</p>
+          {viewingHistoricalRun && (
+            <p className="verification-focus-hint">
+              你当前定位的是历史验证轮次；上方状态始终表示这条 Finding 的当前最新结论，历史轮次仅用于追溯。
+            </p>
+          )}
         </div>
-        <span className="summary-pill">最近验证：{runLabel(finding)}</span>
+        <span className="summary-pill">当前最近验证：{runLabel(finding)}</span>
       </div>
 
       <FindingVerificationRunSummary finding={finding} generatedAt={focusGeneratedAt} />
@@ -49,7 +60,7 @@ export function FindingVerificationPanel({ finding, running = false, onReverify,
         </article>
 
         <article className="customer-secondary-card">
-          <span className="customer-value-kicker">最新修复后验证</span>
+          <span className="customer-value-kicker">当前最新修复后验证</span>
           <FindingVerificationStatus finding={finding} compact />
           <p className="mt-3">{latest?.status_label || finding.regression?.latest_status_label || presentation.detail}</p>
           <div className="customer-secondary-meta">
