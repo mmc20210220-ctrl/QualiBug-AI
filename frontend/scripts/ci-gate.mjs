@@ -49,6 +49,7 @@ for (const script of [
   "test:settings-onboarding",
   "test:run-lifecycle",
   "test:dashboard-role-views",
+  "test:finding-collaboration",
   "test:materials-coverage",
   "test:materials-acceptance",
   "test:materials-remote-lifecycle",
