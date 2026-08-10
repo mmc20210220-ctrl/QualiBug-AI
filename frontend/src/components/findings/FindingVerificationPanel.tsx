@@ -1,4 +1,5 @@
 import { deriveFindingVerification, hasFindingReverificationObligation } from '../../lib/finding-verification';
+import { FindingVerificationStatus } from './FindingVerificationStatus';
 import type { Finding } from '../../types';
 
 type Props = {
@@ -25,12 +26,10 @@ export function FindingVerificationPanel({ finding, running = false, onReverify 
       <div className="settings-card-head">
         <div>
           <span className="panel-kicker">QualiBug 验证闭环</span>
-          <h3 className={presentation.tone === 'neutral' ? '' : presentation.tone}>{presentation.label}</h3>
-          <p className="muted">{presentation.detail}</p>
+          <FindingVerificationStatus finding={finding} />
+          <p className="muted mt-3">{presentation.detail}</p>
         </div>
-        <span className={`summary-pill ${presentation.tone === 'success' ? 'strong' : ''}`}>
-          最近验证：{runLabel(finding)}
-        </span>
+        <span className="summary-pill">最近验证：{runLabel(finding)}</span>
       </div>
 
       <div className="customer-secondary-grid mt-3">
@@ -46,8 +45,8 @@ export function FindingVerificationPanel({ finding, running = false, onReverify 
 
         <article className="customer-secondary-card">
           <span className="customer-value-kicker">最新修复后验证</span>
-          <h3 className={presentation.tone === 'neutral' ? '' : presentation.tone}>{presentation.label}</h3>
-          <p>{latest?.status_label || finding.regression?.latest_status_label || presentation.detail}</p>
+          <FindingVerificationStatus finding={finding} compact />
+          <p className="mt-3">{latest?.status_label || finding.regression?.latest_status_label || presentation.detail}</p>
           <div className="customer-secondary-meta">
             <span><em>验证时间</em><b>{runLabel(finding)}</b></span>
             <span><em>验证探针</em><b>{finding.regression?.regression_probe_id || latest?.regression_probe_id || '未上报'}</b></span>
