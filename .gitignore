@@ -27,6 +27,8 @@ build/
 dist/
 *.log
 *.db
+qualibug.db-shm
+qualibug.db-wal
 *.sqlite
 *.sqlite3
 
