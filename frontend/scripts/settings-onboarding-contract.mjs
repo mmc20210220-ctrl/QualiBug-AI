@@ -59,17 +59,34 @@ assert(!customerSection.includes('type="file"'), 'settings must not render a sec
 
 assert(materialsHandoff.includes("location.pathname !== '/materials'"), 'materials onboarding handoff must stay scoped to the materials page');
 assert(materialsHandoff.includes('getKnowledgeAsset(project)'), 'materials handoff must read real knowledge asset state');
+assert(materialsHandoff.includes('listKnowledgeConnectors(project)'), 'materials readiness must read real online connector inventory');
+assert(materialsHandoff.includes('Promise.allSettled(['), 'materials readiness must preserve partial truth when one readiness source cannot be read');
+assert(materialsHandoff.includes('materialReadError'), 'material readiness failure must remain distinct from connector inventory failure');
+assert(materialsHandoff.includes('connectorReadError'), 'connector inventory failure must remain distinct from material readiness failure');
 assert(materialsHandoff.includes('onlineActive'), 'materials handoff must distinguish online active sources');
 assert(materialsHandoff.includes('uploadedActive'), 'materials handoff must distinguish uploaded supplement sources');
-assert(materialsHandoff.includes('const cleanReady = snapshot.active > 0 && snapshot.processing === 0 && snapshot.failed === 0 && !readError;'), 'materials handoff must not call processing or failed materials clean-ready');
+assert(materialsHandoff.includes('businessContextActive'), 'materials handoff must distinguish active business-context inputs from generic readable materials');
+assert(materialsHandoff.includes('const BUSINESS_CONTEXT_TYPES = new Set(['), 'business-understanding input readiness must use an explicit frontend presentation allowlist');
+for (const sourceType of ['prd', 'openapi', 'database_schema', 'collaboration_document', 'historical_bug']) {
+  assert(materialsHandoff.includes(`'${sourceType}'`), `business-understanding input readiness missing source type: ${sourceType}`);
+}
+assert(materialsHandoff.includes('const cleanReady = snapshot.active > 0 && snapshot.processing === 0 && snapshot.failed === 0 && !materialReadError;'), 'materials handoff must not call processing, failed, or unreadable materials clean-ready');
 assert(materialsHandoff.includes('const onlyUploadedReady = cleanReady && snapshot.onlineActive === 0 && snapshot.uploadedActive > 0;'), 'uploaded-only materials must stay ready but visibly secondary');
+assert(materialsHandoff.includes('1. 在线来源已连接'), 'materials page must expose online-source connection as readiness stage one');
+assert(materialsHandoff.includes('2. 资料已同步'), 'materials page must expose material sync as readiness stage two');
+assert(materialsHandoff.includes('3. 业务理解输入'), 'materials page must expose business-understanding input as readiness stage three');
+assert(materialsHandoff.includes('连接成功不等于资料已经完成同步'), 'connector-ready and material-ready must remain distinct');
+assert(materialsHandoff.includes('不会提前把“连接成功”解释成“资料已同步”'), 'connected sources must not imply a materialized sync result');
+assert(materialsHandoff.includes('这里只代表输入可用，不代表理解正确率或完整性'), 'business-understanding input readiness must not claim understanding quality');
+assert(materialsHandoff.includes('不代表业务理解已经正确或完整'), 'materialized sources must not be presented as completed understanding');
+assert(materialsHandoff.includes('必须先形成真实 active source'), 'business-understanding input readiness must require a real active material source');
 assert(materialsHandoff.includes('连接在线资料（推荐）'), 'uploaded-only customers must be guided toward online materials without being blocked');
 assert(materialsHandoff.includes('暂用补充资料，继续系统与环境'), 'uploaded supplements must remain a valid non-blocking fallback');
 assert(materialsHandoff.includes("document.querySelector('.materials-primary-card')"), 'online-first recommendation must navigate to the real online connector section');
-assert(materialsHandoff.includes('不把读取失败解释为资料缺失'), 'materials read failure must not collapse into a missing-material state');
+assert(materialsHandoff.includes('不把读取失败解释为资料缺失或业务理解完成'), 'materials read failure must not collapse into missing materials or completed understanding');
 assert(materialsHandoff.includes("navigateToProjectPath('/settings', project)"), 'materials handoff must preserve project context when moving to system setup');
 assert(materialsHandoff.includes("navigateToProjectPath('/campaigns', project)"), 'previously configured customers must be able to enter real run preflight from materials');
-assert(layout.includes('<MaterialsOnboardingHandoff />'), 'layout must mount the materials onboarding handoff above the materials page');
+assert(layout.includes('<MaterialsOnboardingHandoff />'), 'layout must mount the materials readiness surface above the materials page');
 
 const onlineSection = materials.indexOf('<h2>在线连接器</h2>');
 const uploadSection = materials.indexOf('<h2>离线资料上传</h2>');
