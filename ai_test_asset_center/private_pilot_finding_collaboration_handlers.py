@@ -1,8 +1,8 @@
-"""Finding collaboration HTTP/projection layer.
+"""Finding collaboration, evidence sharing and replay identity HTTP layer.
 
-This mixin is intentionally orthogonal to finding evidence authority. It exposes
-human workflow metadata, projects the stable SQLite finding id onto display-ready
-rows, and makes replay status persistence use that stable id instead of a UI id.
+Human workflow metadata is orthogonal to automated finding evidence authority.
+Public evidence shares are frozen redacted snapshots behind opaque expiring
+capabilities; they never authorize access to the tenant/project runtime.
 """
 from __future__ import annotations
 
@@ -17,10 +17,20 @@ from .finding_collaboration import (
     list_finding_collaboration,
     update_finding_collaboration,
 )
+from .finding_evidence_shares import (
+    build_external_finding_snapshot,
+    create_finding_evidence_share,
+    list_finding_evidence_shares,
+    resolve_finding_evidence_share,
+    revoke_finding_evidence_share,
+)
 from .private_pilot_json_io import _write_json_object_atomic
 from .real_project_onboarding import _safe_project_id
 
 _COLLABORATION_PATH = "/api/v1/findings/collaboration"
+_EVIDENCE_SHARES_PATH = "/api/v1/findings/evidence-shares"
+_EVIDENCE_SHARE_REVOKE_PATH = "/api/v1/findings/evidence-shares/revoke"
+_PUBLIC_EVIDENCE_SHARE_RESOLVE_PATH = "/api/public/v1/evidence-share/resolve"
 
 
 def _text(value: Any) -> str:
@@ -65,7 +75,7 @@ class FindingCollaborationHandlersMixin:
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        if parsed.path != _COLLABORATION_PATH:
+        if parsed.path not in {_COLLABORATION_PATH, _EVIDENCE_SHARES_PATH}:
             return super().do_GET()
 
         self._init_request_context()
@@ -82,6 +92,44 @@ class FindingCollaborationHandlersMixin:
             return self._json({"ok": False, "error": "PROJECT_NOT_FOUND"}, 404)
         if not self._require_project_scope(project):
             return None
+
+        if parsed.path == _EVIDENCE_SHARES_PATH:
+            finding_id = _text((query.get("finding_persistence_id") or [""])[0])
+            if not finding_id:
+                return self._json(
+                    {
+                        "ok": False,
+                        "error": "MISSING_FINDING_PERSISTENCE_ID",
+                        "message": "finding_persistence_id is required",
+                    },
+                    400,
+                )
+            try:
+                items = list_finding_evidence_shares(
+                    root,
+                    self._request_tenant(),
+                    project,
+                    finding_id,
+                )
+                return self._json(
+                    {
+                        "ok": True,
+                        "schema_version": "qualibug.finding-evidence-share-list.v1",
+                        "project_id": project,
+                        "finding_persistence_id": finding_id,
+                        "items": items,
+                    }
+                )
+            except Exception as exc:
+                return self._json(
+                    {
+                        "ok": False,
+                        "error": "EVIDENCE_SHARE_LIST_FAILED",
+                        "message": str(exc)[:300],
+                    },
+                    500,
+                )
+
         try:
             items = list_finding_collaboration(
                 root,
@@ -108,7 +156,39 @@ class FindingCollaborationHandlersMixin:
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        if parsed.path != _COLLABORATION_PATH:
+
+        if parsed.path == _PUBLIC_EVIDENCE_SHARE_RESOLVE_PATH:
+            self._init_request_context()
+            try:
+                body = self._body()
+                resolved = resolve_finding_evidence_share(
+                    self._root(),
+                    _text(body.get("token")),
+                )
+            except (ValueError, TypeError):
+                resolved = None
+            if not resolved:
+                return self._json(
+                    {
+                        "ok": False,
+                        "error": "SHARE_NOT_FOUND_OR_EXPIRED",
+                        "message": "该分享链接不存在、已过期或已被撤销。",
+                    },
+                    404,
+                )
+            return self._json(
+                {
+                    "ok": True,
+                    "schema_version": "qualibug.public-finding-evidence-share.v1",
+                    **resolved,
+                }
+            )
+
+        if parsed.path not in {
+            _COLLABORATION_PATH,
+            _EVIDENCE_SHARES_PATH,
+            _EVIDENCE_SHARE_REVOKE_PATH,
+        }:
             return super().do_POST()
 
         self._init_request_context()
@@ -121,7 +201,7 @@ class FindingCollaborationHandlersMixin:
         if not self._require_role(
             actor,
             service.CONFIG_MANAGER_ROLES,
-            "finding collaboration update",
+            "finding collaboration or evidence sharing",
         ):
             return None
         try:
@@ -131,9 +211,81 @@ class FindingCollaborationHandlersMixin:
             )
             if not self._require_project_scope(project):
                 return None
+
+            if parsed.path == _EVIDENCE_SHARE_REVOKE_PATH:
+                revoked = revoke_finding_evidence_share(
+                    root,
+                    self._request_tenant(),
+                    project,
+                    _text(body.get("share_id")),
+                )
+                if not revoked:
+                    return self._json(
+                        {
+                            "ok": False,
+                            "error": "SHARE_NOT_FOUND",
+                            "message": "分享记录不存在、已撤销或不属于当前项目。",
+                        },
+                        404,
+                    )
+                return self._json({"ok": True, "revoked": True})
+
             finding_id = _text(
                 body.get("finding_persistence_id") or body.get("finding_id")
             )
+
+            if parsed.path == _EVIDENCE_SHARES_PATH:
+                if not finding_id:
+                    raise ValueError("finding_persistence_id is required")
+                command_center = self._build_command_center(project, root)
+                data = command_center.get("data") if isinstance(command_center, dict) and isinstance(command_center.get("data"), dict) else {}
+                defects = data.get("defects") if isinstance(data.get("defects"), list) else []
+                selected = next(
+                    (
+                        item
+                        for item in defects
+                        if isinstance(item, dict)
+                        and _text(item.get("finding_persistence_id")) == finding_id
+                    ),
+                    None,
+                )
+                if not isinstance(selected, dict):
+                    return self._json(
+                        {
+                            "ok": False,
+                            "error": "FINDING_SHARE_SOURCE_UNRESOLVED",
+                            "message": (
+                                "当前问题未能唯一绑定到可交付 Finding；"
+                                "系统不会通过标题猜测生成外部分享。"
+                            ),
+                        },
+                        409,
+                    )
+                snapshot = build_external_finding_snapshot(
+                    selected,
+                    project_name=_text(data.get("project_name") or project),
+                )
+                share = create_finding_evidence_share(
+                    root,
+                    self._request_tenant(),
+                    project,
+                    finding_id,
+                    snapshot,
+                    ttl_seconds=int(body.get("ttl_seconds") or 24 * 60 * 60),
+                    actor_name=_text(actor.get("name") or actor.get("username")),
+                )
+                return self._json(
+                    {
+                        "ok": True,
+                        "schema_version": "qualibug.finding-evidence-share.v1",
+                        "share": {
+                            **share,
+                            "share_path": f"/shared-evidence#{share['token']}",
+                        },
+                    },
+                    201,
+                )
+
             patch = body.get("patch") if isinstance(body.get("patch"), dict) else {
                 key: body[key]
                 for key in (
@@ -185,7 +337,7 @@ class FindingCollaborationHandlersMixin:
             return self._json(
                 {
                     "ok": False,
-                    "error": "FINDING_COLLABORATION_UPDATE_FAILED",
+                    "error": "FINDING_COLLABORATION_OR_SHARE_UPDATE_FAILED",
                     "message": str(exc)[:300],
                 },
                 500,
