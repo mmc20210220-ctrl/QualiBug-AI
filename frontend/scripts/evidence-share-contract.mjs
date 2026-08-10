@@ -30,6 +30,7 @@ assert(distributionTools.includes('撤销'), 'evidence tools must expose revocat
 assert(distributionTools.includes('明文 Token 仅本次可见'), 'evidence tools must explain one-time plaintext token handling');
 assert(distributionTools.includes('finding_persistence_id'), 'share creation must be bound to a stable finding identity');
 assert(distributionTools.includes('当前 Finding 尚未唯一绑定持久化 ID'), 'unresolved finding identity must fail closed for sharing');
+assert(!distributionTools.includes('finding-collaboration'), 'evidence sharing UI must not depend on enterprise collaboration workflow types');
 assert(!distributionTools.includes('localStorage.setItem'), 'share token must never be persisted in localStorage');
 assert(!distributionTools.includes('sessionStorage.setItem'), 'share token must never be persisted in sessionStorage');
 
