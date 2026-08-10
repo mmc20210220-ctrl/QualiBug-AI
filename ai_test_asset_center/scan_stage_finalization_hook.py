@@ -1,10 +1,11 @@
 """Finalize scan-stage telemetry from the completed authoritative scan result.
 
-The planning/execution path publishes real ACTIVE boundaries while the scan is
-running. Some late phases are still owned by the monolithic scan coordinator.
-This post-hook therefore publishes completion-only receipts for those phases
-from their already-produced authoritative result objects; it never invents a
-start time, percentage, or duration.
+Native planning, execution, test-data, evidence-persistence and release-gate
+functions publish their real ACTIVE/terminal boundaries while the scan runs.
+This post-hook is the final closure authority: it reconciles the already-produced
+``evidence_bundle``, ``test_data_plan``, ``release_gate`` and report/result state
+before the public scan call returns. It never invents time, percentage or stage
+success, and it never changes the scan's business verdict.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ def _text(value: Any) -> str:
 
 
 def install_scan_stage_finalization_hook() -> None:
-    """Register completion-only stage projection idempotently."""
+    """Register final stage reconciliation idempotently."""
     from .scan_post_hooks import register_scan_post_hook
 
     register_scan_post_hook(HOOK_NAME, _finalize_scan_stage_progress)
