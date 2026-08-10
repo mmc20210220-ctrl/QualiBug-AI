@@ -68,6 +68,7 @@ export function Findings() {
     }
     return true;
   });
+  const hasActiveFilter = filter !== 'all' || Boolean(searchQuery.trim());
 
   const pendingRegression = confirmed.filter((f) => f.regression && f.regression.included_in_suite && f.regression.latest_status !== 'passed');
   const passedRegression = confirmed.filter((f) => f.regression?.latest_status === 'passed');
@@ -97,6 +98,11 @@ export function Findings() {
     } finally {
       setRegressionRunning(false);
     }
+  };
+
+  const clearFilters = (): void => {
+    setFilter('all');
+    setSearchQuery('');
   };
 
   return (
@@ -146,7 +152,9 @@ export function Findings() {
         </section>
       )}
 
-      <FindingFilter filters={filterOptions} active={filter} onChange={setFilter} searchQuery={searchQuery} onSearchChange={setSearchQuery} />
+      {(loading || confirmed.length > 0) && (
+        <FindingFilter filters={filterOptions} active={filter} onChange={setFilter} searchQuery={searchQuery} onSearchChange={setSearchQuery} />
+      )}
 
       {loading && (
         <div aria-busy="true" aria-label="正在整理问题清单">
@@ -171,10 +179,25 @@ export function Findings() {
       )}
       {!loading && !error && display.length === 0 && (
         <section className="findings-empty-state compact">
-          <span className="findings-empty-kicker">当前结论</span>
-          <h3>{filter === 'all' && !searchQuery ? '当前暂无已确认缺陷' : '没有匹配的问题'}</h3>
-          <p>{clues.length > 0 ? `本轮存在 ${clues.length} 条待验证线索，尚不足以进入客户交付。` : '系统尚未检测到具备真实运行证据的可交付缺陷。'}</p>
-          <button className="btn btn-primary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>
+          <span className="findings-empty-kicker">{hasActiveFilter ? '筛选结果' : '当前结论'}</span>
+          <h3>{hasActiveFilter ? '没有匹配的问题' : '当前暂无已确认缺陷'}</h3>
+          <p>{hasActiveFilter
+            ? '当前筛选条件没有命中已确认问题。清除筛选后可返回完整问题清单。'
+            : clues.length > 0
+              ? `本轮存在 ${clues.length} 条待验证线索，尚不足以进入客户交付；可继续检测或查看当前覆盖范围。`
+              : '当前没有具备真实运行证据的可交付缺陷。若本轮覆盖尚未完成，请继续检测或查看覆盖范围，不要把空列表直接解释为系统没有问题。'}
+          </p>
+          <div className="settings-actions">
+            {hasActiveFilter ? (
+              <button className="btn btn-primary" onClick={clearFilters}>清除筛选</button>
+            ) : (
+              <>
+                <button className="btn btn-primary" onClick={() => navigateToProjectPath('/campaigns', project)}>继续检测</button>
+                <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/coverage', project)}>查看覆盖范围</button>
+              </>
+            )}
+            <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>
+          </div>
         </section>
       )}
 
