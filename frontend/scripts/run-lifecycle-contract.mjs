@@ -20,14 +20,18 @@ assert(runCenter.includes('evidenceCount: evidenceCountOf(record)'), 'completed 
 assert(runCenter.includes('campaignStatus: textOf(campaign.campaign_status)'), 'completed lifecycle must report campaign status');
 assert(runCenter.includes('testDataStatus: textOf(testDataPlan.status)'), 'completed lifecycle must report test data status');
 
-for (const label of ['企业资料理解', '场景与义务生成', '测试数据准备', '真实探针执行', '结果观察与证据收集', '交付门禁与报告']) {
+for (const label of ['企业资料理解', '场景与义务生成', '测试数据准备 / 就绪核验', '真实探针执行', '结果观察与证据收集', '交付门禁与报告']) {
   assert(banner.includes(label), `run lifecycle stage missing: ${label}`);
 }
-assert(banner.includes('不会用计时器伪造阶段推进'), 'run lifecycle must explicitly reject fake staged progress');
-assert(banner.includes('等待服务端回执'), 'running stages must stay pending until a real server response exists');
+assert(banner.includes('liveStatus?.scan_stage_progress?.stages || {}'), 'submitted lifecycle must render server stage telemetry when available');
+assert(banner.includes('尚未进入 / 尚未实时上报'), 'unobserved live stages must remain explicitly pending/unreported');
+assert(banner.includes('不会按计时器或百分比推测'), 'run lifecycle must explicitly reject fake staged progress');
+assert(banner.includes('测试数据就绪核验与交付门禁目前仍由总控函数完成'), 'uninstrumented stage boundaries must be disclosed honestly');
 assert(banner.includes("['blocked', 'failed', 'error'].includes(executionStatus)"), 'blocked/failed execution must not render as success');
 assert(banner.includes("['plan_only', 'partial', 'partial_coverage', 'coverage_deferred', 'not_executed'].includes(executionStatus)"), 'partial or non-executed results must render as warning');
 assert(banner.includes('detail.totalFindings > 0'), 'confirmed findings must not render as clean success');
+assert(banner.includes('detail.testDataStatus || \'未报告\''), 'final lifecycle must continue using the real test-data receipt');
+assert(banner.includes('detail.executionStatus || \'未报告\''), 'final lifecycle must continue using the real execution receipt');
 assert(layout.includes('<RunLifecycleBanner />'), 'layout must surface run lifecycle banner');
 assert(packageJson.includes('"test:run-lifecycle": "node scripts/run-lifecycle-contract.mjs"'), 'package script missing run lifecycle contract');
 assert(ciGate.includes('"test:run-lifecycle"'), 'ci gate missing run lifecycle contract');
