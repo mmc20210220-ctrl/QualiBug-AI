@@ -24,10 +24,11 @@ for (const label of ['企业资料理解', '场景与义务生成', '测试数�
   assert(banner.includes(label), `run lifecycle stage missing: ${label}`);
 }
 assert(banner.includes('liveStatus?.scan_stage_progress?.stages || {}'), 'submitted lifecycle must render server stage telemetry when available');
-assert(banner.includes('尚未进入 / 尚未实时上报'), 'unobserved live stages must remain explicitly pending/unreported');
-assert(banner.includes('不会按计时器或百分比推测'), 'run lifecycle must explicitly reject fake staged progress');
-assert(banner.includes('权威结果对象形成后补充真实完成态回执'), 'late lifecycle stages must use authoritative completion receipts');
-assert(banner.includes('后两类目前不反推开始时间'), 'late lifecycle start time must remain uninferred');
+assert(banner.includes('尚未进入 / 尚未实时上报'), 'a stage must remain pending before its real server boundary is entered');
+assert(banner.includes('六个阶段都来自服务端真实执行边界'), 'all six lifecycle stages must be grounded in server boundaries');
+assert(banner.includes('发布门禁已经给出 fail/blocked 结论时'), 'release verdict and delivery finalization must stay distinct');
+assert(banner.includes('只有最终结果收口后才显示完成'), 'delivery completion must wait for final report/result closure');
+assert(banner.includes('任何阶段都不会按计时器或百分比推测'), 'run lifecycle must explicitly reject fake staged progress');
 assert(banner.includes("['blocked', 'failed', 'error'].includes(executionStatus)"), 'blocked/failed execution must not render as success');
 assert(banner.includes("['plan_only', 'partial', 'partial_coverage', 'coverage_deferred', 'not_executed'].includes(executionStatus)"), 'partial or non-executed results must render as warning');
 assert(banner.includes('detail.totalFindings > 0'), 'confirmed findings must not render as clean success');
