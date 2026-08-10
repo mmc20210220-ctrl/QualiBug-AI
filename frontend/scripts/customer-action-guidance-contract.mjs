@@ -12,6 +12,8 @@ const dashboardFocus = read('src/components/dashboard/DashboardFocusFindingCard.
 const releasePresentation = read('src/lib/release-presentation.ts');
 const releaseGate = read('src/pages/ReleaseGate.tsx');
 const runCenter = read('src/pages/EnterpriseCampaigns.tsx');
+const runPreflight = read('src/lib/run-preflight-presentation.ts');
+const runPreflightSnapshot = read('src/components/run/RunPreflightDecisionSnapshot.tsx');
 const findings = read('src/pages/Findings.tsx');
 const evidence = read('src/pages/EvidenceChain.tsx');
 const evidenceDrawer = read('src/components/findings/EvidenceDrawer.tsx');
@@ -44,9 +46,15 @@ assert(releaseGate.includes('deriveReleasePresentation({'), 'release page must r
 assert(releaseGate.includes('单条 Finding 的修复后验证状态只是发布依据之一，不会覆盖项目级门禁'), 'single finding validation must not replace release authority');
 assert(releaseGate.includes('仅凭“列表中消失”不能断言已修复'), 'missing finding must not be inferred as fixed');
 
-assert(runCenter.includes('const runBlockedByPreflight = !loadingPreflight && !preflightReady;'), 'run center must model preflight blocking');
-assert(runCenter.includes('disabled={runDisabled}'), 'run action must use real readiness');
-assert(runCenter.includes('运行前检查未通过时不会提交扫描请求'), 'run center must explain fail-closed readiness');
+assert(runCenter.includes('const runBlockedByPreflight = !loadingPreflight && !preflightReady;'), 'run center must retain explicit preflight blocking');
+assert(runCenter.includes('deriveRunPreflightPresentation({'), 'run center must delegate customer-facing readiness wording to the shared preflight interpreter');
+assert(runCenter.includes('runDisabled={runDisabled}'), 'run snapshot must receive the same submission lock used by the run center');
+assert(runCenter.includes("if (!preflightReady)"), 'run submission handler must still fail closed on backend preflight');
+assert(runPreflight.includes('const preflightReady = Boolean(input.preflight?.ready);'), 'shared preflight presentation must derive authority from backend ready only');
+assert(runPreflight.includes('submissionAllowed = preflightReady'), 'auxiliary facts must never independently unlock submission');
+assert(runPreflight.includes("headline: '当前无法确认是否可以开始检测'"), 'preflight read failure must stay fail-closed');
+assert(runPreflight.includes("headline: '运行前检查未通过，暂不启动检测'"), 'backend not-ready must stay a blocked customer state');
+assert(runPreflightSnapshot.includes('只有后端 Preflight 的 <code>ready=true</code> 可以解释为“运行条件已通过”'), 'run snapshot must explain the single readiness authority');
 
 assert(findings.includes("const requestedFindingId = params.get('finding')?.trim() || '';"), 'findings must accept exact finding context');
 assert(findings.includes("const requestedVerificationAt = params.get('verification_at')?.trim() || '';"), 'findings must accept exact verification-run context');
