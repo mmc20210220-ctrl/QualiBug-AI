@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
+import { RunLifecycleBanner } from './run/RunLifecycleBanner';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 
@@ -26,6 +27,7 @@ export function Layout() {
       <main className="main">
         <Topbar navOpen={mobileNavOpen} onToggleNav={() => setMobileNavOpen((open) => !open)} />
         <div className="content">
+          <RunLifecycleBanner />
           <Outlet />
         </div>
       </main>
