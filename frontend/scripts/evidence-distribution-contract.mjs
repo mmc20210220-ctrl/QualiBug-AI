@@ -8,6 +8,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 const evidencePackage = read('src/lib/finding-evidence-package.ts');
 const drawer = read('src/components/findings/EvidenceDrawer.tsx');
+const report = read('src/api/report.ts');
 const packageJson = read('package.json');
 const ciGate = read('scripts/ci-gate.mjs');
 
@@ -22,6 +23,17 @@ assert(drawer.includes('buildFindingEvidencePackageText(finding)'), 'drawer copy
 assert(drawer.includes('buildFindingEvidencePackageHtml(finding)'), 'drawer print action must use redacted evidence builder');
 assert(drawer.includes('复制/打印外发包会重新执行脱敏，不直接复用该原始文本'), 'raw curl must be kept separate from external package');
 assert(!evidencePackage.includes('finding.reproduction.curl_command'), 'external evidence package must not directly include raw curl commands');
+
+assert(report.includes("import { escapeEvidenceHtml } from '../lib/finding-evidence-package';"), 'aggregate report must reuse external redaction and escaping');
+assert(report.includes('<title>QualiBug AI 风险评级报告 — ${h(d.projectName)}</title>'), 'aggregate report title must escape project name');
+assert(report.includes('${h(f.title)}'), 'aggregate report must escape finding titles');
+assert(report.includes('${h(f.expected.slice(0,150))}'), 'aggregate report must escape expected behavior');
+assert(report.includes('${h(f.actual.slice(0,150))}'), 'aggregate report must escape actual behavior');
+assert(report.includes('${h(f.desc)}'), 'aggregate report must escape DB finding text');
+assert(report.includes('${h(c.name)}'), 'aggregate report must escape release check names');
+assert(report.includes('${h(c.detail)}'), 'aggregate report must escape release check detail');
+assert(report.includes('打印 / 保存为 PDF'), 'aggregate report must support browser PDF export');
+
 assert(packageJson.includes('"test:evidence-distribution": "node scripts/evidence-distribution-contract.mjs"'), 'package script missing evidence distribution contract');
 assert(ciGate.includes('"test:evidence-distribution"'), 'ci gate missing evidence distribution contract');
 
