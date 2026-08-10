@@ -5,11 +5,10 @@ import {
   revokeEvidenceShare,
   type EvidenceShareMetadata,
 } from '../../api/evidence-share';
-import type { CollaborativeFindingProjection } from '../../api/finding-collaboration';
 import { buildFindingEvidencePackageHtml, buildFindingEvidencePackageText } from '../../lib/finding-evidence-package';
 import type { Finding } from '../../types';
 
-type ShareableFinding = Finding & CollaborativeFindingProjection;
+type ShareableFinding = Finding & { finding_persistence_id?: string };
 
 type Props = {
   finding: Finding;
