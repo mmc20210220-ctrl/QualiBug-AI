@@ -5,8 +5,7 @@ import { runRegression } from '../api/client';
 import { useToast } from '../components/useToast';
 import { buildReportData, renderReportHTML } from '../api/report';
 import { formatDurationMs } from '../lib/display';
-import { evidenceDeepLinkSearch } from '../lib/evidence-presentation';
-import { hasFindingReverificationObligation } from '../lib/finding-verification';
+import { deriveFindingVerification, hasFindingReverificationObligation } from '../lib/finding-verification';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { TechnicalDiagnostics } from '../components/TechnicalDiagnostics';
@@ -22,6 +21,7 @@ import { ChainPositioningPanel } from '../components/dashboard/ChainPositioningP
 import { MainChainContractPanel } from '../components/dashboard/MainChainContractPanel';
 import { RegressionClosurePanel } from '../components/dashboard/RegressionClosurePanel';
 import { RegressionGateBanner } from '../components/dashboard/RegressionGateBanner';
+import { DashboardFocusFindingCard } from '../components/dashboard/DashboardFocusFindingCard';
 import {
   asRecord, asText, asNum, firstNum, formatScanTime,
   getSeverityWeight, getFindingModule, riskLevel, releaseDecision,
@@ -247,7 +247,12 @@ export function Dashboard() {
       unreported: evidenceTrust <= 0,
     },
   ];
-  const topFindings = [...findings].sort((left, right) => { const severityGap = getSeverityWeight(right.severity) - getSeverityWeight(left.severity); return severityGap !== 0 ? severityGap : (right.evidence_quality?.score || 0) - (left.evidence_quality?.score || 0); }).slice(0, 3);
+  const topFindings = [...findings].sort((left, right) => {
+    const verificationGap = deriveFindingVerification(right).priority - deriveFindingVerification(left).priority;
+    if (verificationGap !== 0) return verificationGap;
+    const severityGap = getSeverityWeight(right.severity) - getSeverityWeight(left.severity);
+    return severityGap !== 0 ? severityGap : (right.evidence_quality?.score || 0) - (left.evidence_quality?.score || 0);
+  }).slice(0, 3);
   const focusFindings = currentScanDefects > 0 ? topFindings : [];
   const scopeFacts = [
     { label: '本轮可交付', val: currentScanDefects, tone: 'primary', note: currentScanDefects > 0 ? `当前确认 ${currentScanDefects} 条，均通过正式交付门禁` : '当前没有已确认问题' },
@@ -364,38 +369,7 @@ export function Dashboard() {
           </div>
         ) : (
           <div className="focus-list">
-            {focusFindings.map((finding) => (
-              <article key={finding.id} className={`focus-card severity-${finding.severity.toLowerCase()}`}>
-                <div className="focus-card-head">
-                  <span className={`severity-badge ${finding.severity.toLowerCase()}`}>{finding.severity}</span>
-                  <strong>{finding.title}</strong>
-                </div>
-                <p>{finding.business_summary || finding.business_impact?.summary || finding.actual || '该问题已形成确认结论。'}</p>
-                <div className="focus-card-meta">
-                  <span>模块 <b>{getFindingModule(finding)}</b></span>
-                  <span>证据 <b>{finding.evidence_quality?.label || '未评分'}</b></span>
-                  <span>复现 <b>{finding.proof?.repro_rate != null ? `${finding.proof.repro_rate}%` : '未上报'}</b></span>
-                </div>
-                <div className="settings-actions mt-3">
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={() => navigateToProjectPath('/findings', project, evidenceDeepLinkSearch(finding.id))}
-                  >
-                    查看这条验证
-                  </button>
-                  {(finding.evidence_chain?.length || 0) > 0 && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => navigateToProjectPath('/evidence', project, evidenceDeepLinkSearch(finding.id))}
-                    >
-                      查看这条证据
-                    </button>
-                  )}
-                </div>
-              </article>
-            ))}
+            {focusFindings.map((finding) => <DashboardFocusFindingCard key={finding.id} finding={finding} project={project} />)}
           </div>
         )}
       </section>
