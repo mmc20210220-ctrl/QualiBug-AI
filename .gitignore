@@ -20,6 +20,7 @@ workspace/
 platform_outputs/
 platform_inputs/
 platform_workspace/
+runs/
 _funnel_runs/benchmark_mall_test_accounts_tokens.json
 /node_modules/
 reports/
