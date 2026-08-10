@@ -25,6 +25,9 @@ for (const label of ['企业资料理解', '场景与义务生成', '测试数�
 }
 assert(banner.includes('不会用计时器伪造阶段推进'), 'run lifecycle must explicitly reject fake staged progress');
 assert(banner.includes('等待服务端回执'), 'running stages must stay pending until a real server response exists');
+assert(banner.includes("['blocked', 'failed', 'error'].includes(executionStatus)"), 'blocked/failed execution must not render as success');
+assert(banner.includes("['plan_only', 'partial', 'partial_coverage', 'coverage_deferred', 'not_executed'].includes(executionStatus)"), 'partial or non-executed results must render as warning');
+assert(banner.includes('detail.totalFindings > 0'), 'confirmed findings must not render as clean success');
 assert(layout.includes('<RunLifecycleBanner />'), 'layout must surface run lifecycle banner');
 assert(packageJson.includes('"test:run-lifecycle": "node scripts/run-lifecycle-contract.mjs"'), 'package script missing run lifecycle contract');
 assert(ciGate.includes('"test:run-lifecycle"'), 'ci gate missing run lifecycle contract');
