@@ -6,6 +6,7 @@ const root = process.cwd();
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
+const app = read('src/App.tsx');
 const dashboard = read('src/pages/Dashboard.tsx');
 const dashboardUtils = read('src/lib/dashboard-utils.ts');
 const releasePresentation = read('src/lib/release-presentation.ts');
@@ -21,6 +22,15 @@ const main = read('src/main.tsx');
 const responsive = read('src/styles/customer-responsive.css');
 const packageJson = read('package.json');
 const ciGate = read('scripts/ci-gate.mjs');
+
+assert(app.includes('function PreserveSearchRedirect({ to }: { to: string })'), 'route fallbacks must use one search-preserving redirect helper');
+assert(app.includes('return <Navigate to={`${to}${location.search}`} replace />;'), 'redirect helper must preserve project and other query context');
+assert(app.includes('<Route path="/" element={<PreserveSearchRedirect to="/dashboard" />} />'), 'root redirect must preserve selected project');
+assert(app.includes('<Route path="/behavior-space" element={<PreserveSearchRedirect to="/coverage" />} />'), 'legacy behavior-space route must preserve project context');
+assert(app.includes('<Route path="/test-tasks" element={<PreserveSearchRedirect to="/campaigns" />} />'), 'legacy test-tasks route must preserve project context');
+assert(app.includes('<Route path="/clues" element={<PreserveSearchRedirect to="/settings" />} />'), 'legacy clues route must preserve project context');
+assert(app.includes('<Route path="/products" element={<PreserveSearchRedirect to="/dashboard" />} />'), 'legacy products route must preserve project context');
+assert(app.includes('<Route path="*" element={<PreserveSearchRedirect to="/dashboard" />} />'), 'unknown authenticated routes must fail safe to the current project dashboard');
 
 assert(dashboard.includes("const coverageDeferred = campaignStatus === 'coverage_deferred';"), 'dashboard must distinguish deferred coverage from a clean completed scan');
 assert(dashboard.includes('const resultIncomplete = pipelineUnhealthy || campaignBlocked || coverageDeferred;'), 'dashboard must use one incomplete-result authority for customer actions');
