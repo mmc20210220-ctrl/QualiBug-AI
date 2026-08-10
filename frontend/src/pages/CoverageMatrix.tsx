@@ -4,14 +4,26 @@ import { runRegression } from '../api/client';
 import { usePipelineData } from '../api/data';
 import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
+import { useProjectNavigation } from '../lib/project-navigation';
 import { TermHint } from '../components/TermHint';
 import { GLOSSARY } from '../lib/glossary';
 import { asNum, asRecord, asText } from '../lib/value-guards';
 
 type JsonRecord = Record<string, unknown>;
+type CoverageNextAction = { title: string; label: string; path?: string; runRegression?: boolean };
+
+function finiteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
 
 function pct(value: unknown): string {
-  return `${Math.round(asNum(value) * 100)}%`;
+  const parsed = finiteNumber(value);
+  return parsed == null ? '未上报' : `${Math.round(parsed * 100)}%`;
 }
 
 function statusLabel(status: string): string {
@@ -123,11 +135,20 @@ function normalizeInvariantEntries(matrix: JsonRecord): Array<[string, JsonRecor
   });
 }
 
-function CoverageBar({ value }: { value: number }) {
-  const clamped = Math.max(0, Math.min(1, value));
+function CoverageBar({ value }: { value: unknown }) {
+  const parsed = finiteNumber(value);
+  const clamped = parsed == null ? 0 : Math.max(0, Math.min(1, parsed));
+  const percent = Math.round(clamped * 100);
   return (
-    <div style={{ height: 8, background: '#e2e8f0', borderRadius: 999, overflow: 'hidden' }}>
-      <div style={{ width: `${Math.max(4, Math.round(clamped * 100))}%`, height: '100%', background: clamped >= 0.8 ? '#16a34a' : clamped >= 0.4 ? '#d97706' : '#dc2626' }} />
+    <div
+      role="progressbar"
+      aria-label={parsed == null ? '覆盖率未上报' : `覆盖率 ${percent}%`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={parsed == null ? undefined : percent}
+      style={{ height: 8, background: '#e2e8f0', borderRadius: 999, overflow: 'hidden' }}
+    >
+      <div style={{ width: `${percent}%`, height: '100%', background: clamped >= 0.8 ? '#16a34a' : clamped >= 0.4 ? '#d97706' : '#dc2626' }} />
     </div>
   );
 }
@@ -137,11 +158,16 @@ export function CoverageMatrix() {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { data, loading, error, refetch } = usePipelineData(project);
+  const { navigateToProjectPath } = useProjectNavigation();
   const toast = useToast();
   const [regressionRunning, setRegressionRunning] = useState(false);
 
   const handleRunRegression = async () => {
     if (!project || regressionRunning) return;
+    if (!canRunRegression) {
+      toast.show('当前没有可执行的回归义务；先形成回归探针后再运行回归。', 'warning');
+      return;
+    }
     setRegressionRunning(true);
     try {
       const result = await runRegression(project, { mode: 'release' });
@@ -198,9 +224,12 @@ export function CoverageMatrix() {
   const regressionSummary = asRecord(regressionRefresh.summary || record.regression_suite);
   const regressionStatus = asText(regressionRefresh.status);
   const regressionReason = asText(regressionRefresh.reason);
+  const regressionProbeCount = asNum(regressionSummary.total_probe_count);
+  const canRunRegression = regressionProbeCount > 0;
   const regressionRun = asRecord(record.regression_run || scanMeta.regression_run);
   const regressionRunStatus = asText(regressionRun.status);
   const regressionGateStatus = asText(regressionRun.gate_status);
+  const regressionFailed = regressionGateStatus === 'failed';
   const regressionFailures = Array.isArray(regressionRun.failures) ? regressionRun.failures.map(asRecord) : [];
   const regressionNeedsReview = Array.isArray(regressionRun.needs_review) ? regressionRun.needs_review.map(asRecord) : [];
   const hasRegressionRun = Boolean(regressionRunStatus || regressionGateStatus);
@@ -217,9 +246,26 @@ export function CoverageMatrix() {
   const externalMeasured = qualityClaimStatus === 'MEASURED' && asText(externalEvaluation.measurement_status) === 'MEASURED';
   const qualitySuppressed = !externalMeasured || Boolean(asRecord(externalEvaluation.display).suppress_quality_score) || Boolean(benchmark.commercial_quality_suppressed);
   const benchmarkActive = Boolean(benchmark.benchmark_active && benchmark.ground_truth_available) && !qualitySuppressed;
+  const nextAction: CoverageNextAction = regressionFailed
+    ? { title: '先处理最新回归失败，再判断发布', label: '查看问题清单', path: '/findings' }
+    : gaps.length > 0
+      ? { title: `继续关闭 ${gaps.length} 个风险家族缺口`, label: '继续检测剩余范围', path: '/campaigns' }
+      : canRunRegression && regressionGateStatus !== 'passed'
+        ? { title: '覆盖信息已形成，完成修复后回归验证', label: '运行回归验证', runRegression: true }
+        : { title: '覆盖与回归状态已形成', label: '查看发布门禁', path: '/release' };
 
   if (families.length === 0 && invariants.length === 0 && !steeringStatus && !regressionStatus && !hasRegressionRun) {
-    return <section className="state-panel"><div className="state-panel-badge">覆盖矩阵</div><h2>当前尚未生成风险覆盖矩阵</h2><p>运行一次标准扫描后，系统会根据真实 findings/candidates 生成风险家族与业务不变量覆盖矩阵。</p></section>;
+    return (
+      <section className="state-panel">
+        <div className="state-panel-badge">覆盖矩阵</div>
+        <h2>当前尚未生成风险覆盖矩阵</h2>
+        <p>运行一次标准扫描后，系统会根据真实 findings/candidates 生成风险家族与业务不变量覆盖矩阵。</p>
+        <div className="state-panel-actions">
+          <button className="btn btn-primary" onClick={() => navigateToProjectPath('/campaigns', project)}>启动标准扫描</button>
+          <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>检查接入条件</button>
+        </div>
+      </section>
+    );
   }
 
   return (
@@ -231,10 +277,28 @@ export function CoverageMatrix() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className="btn btn-secondary" onClick={refetch} disabled={regressionRunning}>刷新矩阵</button>
-          <button className="btn btn-primary" onClick={handleRunRegression} disabled={regressionRunning || !project}>
-            {regressionRunning ? '回归执行中…' : '运行回归验证'}
+          <button
+            className="btn btn-secondary"
+            onClick={handleRunRegression}
+            disabled={regressionRunning || !canRunRegression}
+            title={canRunRegression ? '运行当前已生成的 release 回归探针' : '当前没有可执行的回归义务'}
+          >
+            {regressionRunning ? '回归执行中…' : canRunRegression ? '运行回归验证' : '暂无回归义务'}
           </button>
         </div>
+      </div>
+
+      <div className="action-bar mb-4">
+        <span className="action-bar-title">下一步：{nextAction.title}</span>
+        {nextAction.runRegression ? (
+          <button className="btn btn-primary" onClick={handleRunRegression} disabled={regressionRunning || !canRunRegression}>
+            {regressionRunning ? '回归执行中…' : nextAction.label}
+          </button>
+        ) : (
+          <button className="btn btn-primary" onClick={() => navigateToProjectPath(nextAction.path || '/dashboard', project)}>{nextAction.label}</button>
+        )}
+        {gaps.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>检查资料与环境</button>}
+        <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>
       </div>
 
       <div className="customer-summary-grid mb-4">
@@ -242,8 +306,8 @@ export function CoverageMatrix() {
         <article className="customer-summary-card tone-success"><span>确认覆盖</span><strong>{pct(summary.confirmed_family_rate)}</strong><small>{asNum(summary.confirmed_family_count)} 个家族已有 confirmed 证据</small></article>
         <article className="customer-summary-card tone-danger"><span><TermHint label="覆盖缺口" hint={GLOSSARY.coverageGap} /></span><strong>{asNum(summary.gap_family_count, gaps.length)}</strong><small>缺口不等于无风险，需要补资料/账号/环境/测试数据</small></article>
         <article className={`customer-summary-card tone-${steeringTone(steeringStatus)}`}><span>缺口调度</span><strong>{steeringStatus === 'applied' ? '已启用' : '待启用'}</strong><small>{steeringStatus ? steeringStatusLabel(steeringStatus, steeringReason) : '暂无调度诊断'}</small></article>
-        <article className={`customer-summary-card tone-${regressionRefreshTone(regressionStatus)}`}><span><TermHint label="回归义务" hint={GLOSSARY.regressionObligation} /></span><strong>{regressionStatus === 'refreshed' ? asNum(regressionSummary.total_probe_count) : '待生成'}</strong><small>{regressionStatus ? regressionRefreshLabel(regressionStatus, regressionReason) : '暂无回归刷新诊断'}</small></article>
-        <article className={`customer-summary-card tone-${regressionRunTone(regressionGateStatus)}`}><span>最近回归</span><strong>{hasRegressionRun ? regressionRunLabel(regressionGateStatus, regressionRunStatus) : '未执行'}</strong><small>{hasRegressionRun ? `通过 ${asNum(regressionRun.passed_count)} · 失败 ${asNum(regressionRun.failed_count)} · 复核 ${asNum(regressionRun.needs_review_count)}` : '客户运行回归后显示结果'}</small></article>
+        <article className={`customer-summary-card tone-${regressionRefreshTone(regressionStatus)}`}><span><TermHint label="回归义务" hint={GLOSSARY.regressionObligation} /></span><strong>{regressionStatus === 'refreshed' ? regressionProbeCount : '待生成'}</strong><small>{regressionStatus ? regressionRefreshLabel(regressionStatus, regressionReason) : '暂无回归刷新诊断'}</small></article>
+        <article className={`customer-summary-card tone-${regressionRunTone(regressionGateStatus)}`}><span>最近回归</span><strong>{hasRegressionRun ? regressionRunLabel(regressionGateStatus, regressionRunStatus) : '未执行'}</strong><small>{hasRegressionRun ? `通过 ${asNum(regressionRun.passed_count)} · 失败 ${asNum(regressionRun.failed_count)} · 复核 ${asNum(regressionRun.needs_review_count)}` : '形成回归义务后可执行回归验证'}</small></article>
         <article className={`customer-summary-card ${benchmarkActive ? 'tone-success' : 'tone-warning'}`}><span><TermHint label="外部质量评测" hint={GLOSSARY.externalEvaluation} /></span><strong>{qualitySuppressed ? '尚未评测' : (benchmarkActive ? '已启用' : '未启用')}</strong><small>{qualitySuppressed ? (asText(asRecord(externalEvaluation.display).quality_label) || '尚未完成外部质量评测；不显示召回/精度') : (benchmarkActive ? `召回率 ${pct(benchmark.recall)} · 精度 ${pct(benchmark.precision)}` : '当前矩阵不能当作召回率或商业能力证明')}</small></article>
       </div>
 
@@ -251,8 +315,8 @@ export function CoverageMatrix() {
         <article className="customer-value-card"><span className="customer-value-kicker">诚实边界</span><h2>覆盖矩阵 ≠ 召回率</h2><p>{asText(summary.honesty_note) || asText(contract.honesty_rule) || '该矩阵来自真实扫描输出，用于说明哪些风险家族被触达、确认或仍是缺口；没有 ground truth 时不能计算 recall。'}</p></article>
         <article className="customer-value-card"><span className="customer-value-kicker">客户下一步</span><h2>{gaps.length > 0 ? `优先关闭 ${gaps.length} 个风险家族缺口` : '当前风险家族已有覆盖信号'}</h2><p>{gaps.length > 0 ? '优先补齐对应业务资料、接口规范、多角色账号、租户数据、测试数据和执行授权，再运行下一轮 Campaign。' : '继续查看 confirmed 缺陷和回归状态，确认是否可以进入整改和验收闭环。'}</p></article>
         <article className="customer-value-card"><span className="customer-value-kicker">调度反馈</span><h2>{steeringStatus === 'applied' ? `已优先调度 ${asNum(steering.steered_slice_count)} 个 slice` : steeringStatus ? steeringStatusLabel(steeringStatus, steeringReason) : '等待下一轮调度诊断'}</h2><p>{asText(steering.honesty_rule) || asText(steeringContract.honesty_rule) || '调度反馈只说明系统如何重排行为 slice，不代表发现了新 bug，也不会生成 synthetic coverage。'}</p></article>
-        <article className="customer-value-card"><span className="customer-value-kicker">修复后回归</span><h2>{regressionStatus === 'refreshed' ? `已沉淀 ${asNum(regressionSummary.total_probe_count)} 个探针` : regressionStatus ? regressionRefreshLabel(regressionStatus, regressionReason) : '等待回归套件刷新'}</h2><p>{asText(regressionRefresh.honesty_rule) || asText(regressionContract.honesty_rule) || '回归套件刷新只把已有证据支持的 confirmed 缺陷变成后续发布前必须执行的探针，不代表修复已经通过。'}</p></article>
-        <article className="customer-value-card"><span className="customer-value-kicker">最新回归结果</span><h2>{hasRegressionRun ? regressionRunLabel(regressionGateStatus, regressionRunStatus) : '尚未执行回归'}</h2><p>{hasRegressionRun ? (asText(regressionRun.ci_message) || `最近一次回归：通过 ${asNum(regressionRun.passed_count)}，失败 ${asNum(regressionRun.failed_count)}，需复核 ${asNum(regressionRun.needs_review_count)}。`) : (asText(regressionRunContract.honesty_rule) || '客户点击运行回归后，这里会显示最新 persisted regression run verdict。')}</p></article>
+        <article className="customer-value-card"><span className="customer-value-kicker">修复后回归</span><h2>{regressionStatus === 'refreshed' ? `已沉淀 ${regressionProbeCount} 个探针` : regressionStatus ? regressionRefreshLabel(regressionStatus, regressionReason) : '等待回归套件刷新'}</h2><p>{asText(regressionRefresh.honesty_rule) || asText(regressionContract.honesty_rule) || '回归套件刷新只把已有证据支持的 confirmed 缺陷变成后续发布前必须执行的探针，不代表修复已经通过。'}</p></article>
+        <article className="customer-value-card"><span className="customer-value-kicker">最新回归结果</span><h2>{hasRegressionRun ? regressionRunLabel(regressionGateStatus, regressionRunStatus) : '尚未执行回归'}</h2><p>{hasRegressionRun ? (asText(regressionRun.ci_message) || `最近一次回归：通过 ${asNum(regressionRun.passed_count)}，失败 ${asNum(regressionRun.failed_count)}，需复核 ${asNum(regressionRun.needs_review_count)}。`) : (asText(regressionRunContract.honesty_rule) || '形成真实回归探针后，客户可以运行回归并在这里查看最新 persisted regression run verdict。')}</p></article>
         <article className="customer-value-card"><span className="customer-value-kicker">度量口径</span><h2>{asNum(summary.ontology_invariant_count, invariants.length)} 个不变量基线</h2><p>系统按业务不变量而不是固定 20 种 bug type 观察覆盖面。confirmed 需要真实请求、响应、断言和证据链支撑。</p></article>
       </section>
 
@@ -289,7 +353,7 @@ export function CoverageMatrix() {
               <h3>{regressionRefreshLabel(regressionStatus, regressionReason)}</h3>
               <p>{regressionStatus === 'refreshed' ? '扫描后已自动刷新 smoke / release / full 回归套件；客户修复后可以直接运行回归验证这些 confirmed bug 是否复现。' : '当前没有形成新的 confirmed bug 回归义务，或回归套件刷新被跳过。'}</p>
               <div className="customer-secondary-meta">
-                <span><em>回归探针</em><b>{asNum(regressionSummary.total_probe_count)}</b></span>
+                <span><em>回归探针</em><b>{regressionProbeCount}</b></span>
                 <span><em>确认缺陷台账</em><b>{asNum(regressionSummary.confirmed_ledger_probe_count)}</b></span>
                 <span><em>发布套件</em><b>{asNum(regressionSummary.release_count)}</b></span>
                 <span><em>CI 门禁建议</em><b>{asText(regressionSummary.ci_gate_recommendation) || '未上报'}</b></span>
@@ -343,14 +407,13 @@ export function CoverageMatrix() {
           <div style={{ display: 'grid', gap: 10 }}>
             {families.map(([family, item]) => {
               const status = asText(item.coverage_status);
-              const rate = asNum(item.coverage_rate);
               return (
                 <div key={family} style={{ padding: '10px 12px', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: 10, background: '#f8fafc' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
                     <strong>{asText(item.display_name) || family.replace(/_/g, ' ')}</strong>
                     <span className={`summary-pill tone-${statusTone(status)}`}>{statusLabel(status)}</span>
                   </div>
-                  <CoverageBar value={rate} />
+                  <CoverageBar value={item.coverage_rate} />
                   <div className="customer-secondary-meta" style={{ marginTop: 8 }}>
                     <span><em>覆盖</em><b>{asNum(item.covered_items)} / {asNum(item.total_items)}</b></span>
                     <span><em>confirmed</em><b>{asNum(item.confirmed_count)}</b></span>
