@@ -15,6 +15,7 @@ from .private_pilot_scan_coordinator import (
     active_scan_owner,
     project_scan_lease,
 )
+from .scan_stage_progress import read_scan_stage_progress
 
 
 def _read_json_artifact(path: Path) -> Any:
@@ -488,6 +489,7 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
             )
         except (TypeError, ValueError):
             elapsed_seconds = 0
+    stage_progress = read_scan_stage_progress(root, project) if live_owner else {}
 
     return {
         "status": status,
@@ -502,6 +504,7 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
         "active_scan": visible_owner,
         "active_scan_live": bool(live_owner),
         "active_scan_elapsed_seconds": elapsed_seconds,
+        "scan_stage_progress": stage_progress,
         "message": message,
     }
 
