@@ -137,7 +137,7 @@ class FindingCollaborationHandlersMixin:
             patch = body.get("patch") if isinstance(body.get("patch"), dict) else {
                 key: body[key]
                 for key in (
-                    "workflow_status",
+                    "handling_status",
                     "assignee",
                     "fix_version",
                     "developer_feedback",
