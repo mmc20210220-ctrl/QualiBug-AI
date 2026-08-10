@@ -8,6 +8,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 const api = read('src/api/evidence-share.ts');
 const drawer = read('src/components/findings/EvidenceDrawer.tsx');
+const distributionTools = read('src/components/evidence/EvidenceDistributionTools.tsx');
 const publicPage = read('src/pages/SharedEvidence.tsx');
 const app = read('src/App.tsx');
 const backend = read('../ai_test_asset_center/finding_evidence_shares.py');
@@ -22,13 +23,15 @@ assert(api.includes("credentials: 'omit'"), 'public share resolution must not se
 assert(api.includes("credentials: 'include'"), 'share creation/revocation must use the authenticated session');
 assert(api.includes("cache: 'no-store'"), 'share APIs must be non-cacheable');
 
-assert(drawer.includes('生成只读链接'), 'evidence drawer must expose explicit share creation');
-assert(drawer.includes('撤销'), 'evidence drawer must expose revocation');
-assert(drawer.includes('明文 Token 仅本次可见'), 'drawer must explain one-time plaintext token handling');
-assert(drawer.includes('finding_persistence_id'), 'share creation must be bound to a stable finding identity');
-assert(drawer.includes('当前 Finding 尚未唯一绑定持久化 ID'), 'unresolved finding identity must fail closed for sharing');
-assert(!drawer.includes('localStorage.setItem'), 'share token must never be persisted in localStorage');
-assert(!drawer.includes('sessionStorage.setItem'), 'share token must never be persisted in sessionStorage');
+assert(drawer.includes('<EvidenceDistributionTools finding={finding} project={project} />'), 'evidence drawer must expose sharing only through the secondary tools surface');
+assert(drawer.indexOf('<FindingDecisionSnapshot finding={finding} compact />') < drawer.indexOf('<EvidenceDistributionTools finding={finding} project={project} />'), 'sharing must not precede the finding decision context');
+assert(distributionTools.includes('生成只读链接'), 'evidence tools must expose explicit share creation');
+assert(distributionTools.includes('撤销'), 'evidence tools must expose revocation');
+assert(distributionTools.includes('明文 Token 仅本次可见'), 'evidence tools must explain one-time plaintext token handling');
+assert(distributionTools.includes('finding_persistence_id'), 'share creation must be bound to a stable finding identity');
+assert(distributionTools.includes('当前 Finding 尚未唯一绑定持久化 ID'), 'unresolved finding identity must fail closed for sharing');
+assert(!distributionTools.includes('localStorage.setItem'), 'share token must never be persisted in localStorage');
+assert(!distributionTools.includes('sessionStorage.setItem'), 'share token must never be persisted in sessionStorage');
 
 assert(publicPage.includes('window.location.hash.slice(1)'), 'public page must read the capability from the URL fragment');
 assert(publicPage.includes('resolveEvidenceShare(token)'), 'public page must resolve only the supplied snapshot capability');
