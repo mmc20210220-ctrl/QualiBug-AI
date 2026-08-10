@@ -33,7 +33,10 @@ class TestResponseStructureExtraction:
     def test_top_level_object(self):
         body = {"id": 123, "name": "Product A"}
         entities = _extract_entity_candidates(body)
-        assert len(entities) == 0  # single dict → returned as-is by bind_entity_fields
+        # A dict that carries its own identity field IS the entity candidate
+        # (its list children are child relations, not envelopes).
+        assert len(entities) == 1
+        assert entities[0]["id"] == 123
         result = bind_entity_fields(body, "/{id}")
         assert result["id"] == "123"
 
@@ -281,6 +284,62 @@ class TestEntityRowsExtraction:
 
 class TestRealFailureRegression:
     """Regression tests matching the benchmark_mall_131 failure patterns."""
+
+    def test_order_create_with_items_binds_order_id_not_sku(self):
+        """run24: POST /api/orders 201 = {…order, items:[{sku,…}]}. The
+        cleanup cancel path /api/orders/{id}/cancel must bind the order uuid,
+        never a line item's product sku (which 500s as invalid uuid)."""
+        body = {
+            "id": "0e70000f-443a-407f-b7f3-050c4d6cbffb",
+            "order_no": "BM111",
+            "user_id": "u-1",
+            "status": "PENDING_PAYMENT",
+            "items": [
+                {"sku": "SKU-PHONE-001", "title": "Phone",
+                 "price": "6999.00", "qty": 1, "lineAmount": "6999.00"},
+            ],
+        }
+        entities = _extract_entity_candidates(body)
+        assert len(entities) == 1
+        assert "id" in entities[0]  # the order object, not the line item
+        result = bind_entity_fields(body, "/{id}")
+        assert result["id"] == "0e70000f-443a-407f-b7f3-050c4d6cbffb"
+        value = runtime_value_from_response(body, "id", "/{id}")
+        assert value == "0e70000f-443a-407f-b7f3-050c4d6cbffb"
+
+    def test_wrapped_order_create_with_items_binds_order_id(self):
+        """Same shape under a data wrapper: the wrapped object's own identity
+        wins over its child-relation items list."""
+        body = {"data": {"id": "aaaa-1111", "items": [{"sku": "SKU-X"}]}}
+        result = bind_entity_fields(body, "/{id}")
+        assert result["id"] == "aaaa-1111"
+
+    def test_bare_id_never_binds_cross_entity_natural_key(self):
+        """sku/code/business_no name other entity kinds and must never satisfy
+        a bare {id}: a line item's sku is not the order's resource identity."""
+        candidates = param_field_candidates("id")
+        assert "sku" not in candidates
+        assert "code" not in candidates
+        assert "business_no" not in candidates
+        # A row with sku only → {id} stays unresolvable (honest block), not a
+        # sku masquerade that 500s on the target.
+        result = bind_entity_fields([{"sku": "SKU-PHONE-001"}], "/{id}")
+        assert result.get("id") is None
+
+    def test_child_row_binds_same_resource_fk_into_id(self):
+        """A child row's order_id IS the order resource identity — it remains
+        a valid candidate for bare {id} and outranks the product sku."""
+        rows = [{"sku": "SKU-PHONE-001", "order_id": "0e70000f-443a-407f-b7f3-050c4d6cbffb"}]
+        result = bind_entity_fields(rows, "/{id}")
+        assert result["id"] == "0e70000f-443a-407f-b7f3-050c4d6cbffb"
+
+    def test_items_envelope_without_identity_still_envelope(self):
+        """{"items": [...]} with no identity at top stays a list envelope:
+        sku-addressed params keep working."""
+        body = {"items": [{"sku": "SKU-001"}]}
+        assert _extract_entity_candidates(body)[0]["sku"] == "SKU-001"
+        result = bind_entity_fields(body, "/{sku}")
+        assert result["sku"] == "SKU-001"
 
     def test_orders_list_extraction(self):
         """Pattern: GET /api/orders → 76 orders, extract id."""

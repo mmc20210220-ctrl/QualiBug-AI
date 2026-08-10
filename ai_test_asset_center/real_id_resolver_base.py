@@ -119,14 +119,32 @@ def collection_path(path: str) -> str:
 
 
 def param_field_candidates(param_name: str) -> list[str]:
-    """Return response-field names that can satisfy a path parameter."""
+    """Return response-field names that can satisfy a path parameter.
+
+    A bare generic identity placeholder (``{id}``/``{uuid}``/``{pk}``/``{key}``)
+    may only be satisfied by generic identity fields (``id``/``uuid``/``pk``)
+    or a same-resource foreign key (``order_id``): cross-entity natural keys
+    (``sku``/``code``/``business_no``) name *other* entity kinds and must never
+    masquerade as the resource identity — binding a product SKU into a
+    uuid-typed ``{id}`` path makes the target reject the cleanup/read with a
+    500 (invalid uuid syntax). Explicitly-named params (``{sku}``, ``{code}``,
+    ``{couponId}``…) keep their natural-key aliases, which are unambiguous.
+    """
     name = str(param_name or "").strip()
     if not name:
         return ["id"]
     key = re.sub(r"[^a-z0-9_]+", "", name.lower())
     aliases = list(_PARAM_FIELD_ALIASES.get(key, ()))
-    # Always include the literal param name and common id fallbacks.
-    ordered = [name, *aliases, "id", "uuid", "code", "sku", "business_no", "order_id"]
+    # Always include the literal param name and generic identity fallbacks.
+    ordered = [name, *aliases, "id", "uuid", "pk"]
+    if key in {"id", "uuid", "pk", "key"}:
+        # Generic resource identity: the same-resource FK (order_id) is the
+        # resource's own identity when bound from a child row; cross-entity
+        # natural keys are excluded.
+        ordered.append("order_id")
+    elif key in {"code", "sku", "business_no", "businessno"}:
+        # Explicit natural-key params keep their natural-key fallbacks.
+        ordered.extend(("code", "sku", "business_no"))
     seen: set[str] = set()
     result: list[str] = []
     for item in ordered:
@@ -640,17 +658,55 @@ def resolve_real_id_from_documented_list(
     return QUALIBUG_UNRESOLVED_ID
 
 
+# Field keys that look like ``*id`` but are not identity fields.
+_NON_IDENTITY_ID_KEYS = frozenset({
+    "paid", "said", "avoid", "laid", "maid", "raid", "valid", "solid",
+    "fluid", "void", "grid", "acid", "avid", "noid", "ibid", "hybrid",
+})
+
+
+def _dict_has_own_identity(value: dict[str, Any]) -> bool:
+    """True when a dict carries its own direct identity scalar field.
+
+    Structural discriminator between a *resource object* (whose list children
+    are child relations — order ``items``, user ``addresses``…) and a *list
+    envelope* (``{"items": [...]}``, ``{"data": {"content": [...]}}``).
+    Pagination metadata (total/page/size/count) never matches.
+    """
+    for key, child in value.items():
+        if isinstance(child, (dict, list, bool)) or child in (None, ""):
+            continue
+        normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+        if not normalized:
+            continue
+        if normalized in {"id", "uuid", "uid", "pk", "guid", "sku"}:
+            return True
+        if normalized.endswith("id") and normalized not in _NON_IDENTITY_ID_KEYS:
+            return True
+        if normalized.endswith("_no") or (
+            normalized.endswith("no") and len(normalized) > 5
+        ):
+            return True
+    return False
+
+
 def _extract_raw_entity_candidates(body: Any) -> list[dict[str, Any]]:
     """Extract entity objects from a response body.
 
     Handles top-level arrays, envelope-wrapped lists, pagination wrappers
     (``{"data": {"content": [...]}}``), and deeply nested structures.
     Never returns pagination metadata, error objects, or statistics nodes.
+    A dict that carries its own identity field is the entity itself — its
+    list children (``items``/``orders``/…) are child relations, not envelopes,
+    so a create/detail response must never bind a child row's natural key
+    (e.g. product ``sku``) as the resource identity.
     """
     if isinstance(body, list):
         return [item for item in body if isinstance(item, dict)]
     if not isinstance(body, dict):
         return []
+    if _dict_has_own_identity(body):
+        return [body]
     # Phase 1: Try all extended envelope keys (common + domain-specific).
     for field_name in _EXTENDED_LIST_FIELDS:
         value = body.get(field_name)
@@ -659,6 +715,8 @@ def _extract_raw_entity_candidates(body: Any) -> list[dict[str, Any]]:
         if isinstance(value, dict):
             # Check for pagination wrapper: {"data": {"content": [...]}}
             if field_name in _PAGINATION_WRAPPERS:
+                if _dict_has_own_identity(value):
+                    return [value]
                 for inner_key in _INNER_LIST_KEYS:
                     inner = value.get(inner_key)
                     if isinstance(inner, list) and inner and isinstance(inner[0], dict):
