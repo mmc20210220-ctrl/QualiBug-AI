@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getKnowledgeAsset, getServiceCredentials, listConnectors, type ConnectorRecord } from '../../api/client';
+import { useProjectNavigation } from '../../lib/project-navigation';
 import { hasConfiguredAuthMaterial, hasConfiguredDbMaterial, type SavedServiceConfig } from '../../lib/settings-utils';
 
 type SettingsOnboardingGuideProps = {
@@ -41,9 +42,11 @@ function extractMaterialCount(payload: unknown): number {
 }
 
 export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProps) {
+  const { navigateToProjectPath } = useProjectNavigation();
   const [snapshot, setSnapshot] = useState<SetupSnapshot>({ connectors: [], services: [], materialCount: 0 });
   const [loading, setLoading] = useState(false);
   const [loadWarning, setLoadWarning] = useState('');
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     if (!project) {
@@ -74,7 +77,7 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
       const failedReads = [connectorsResult, servicesResult, materialsResult].filter((result) => result.status === 'rejected').length;
 
       setSnapshot({ connectors, services, materialCount });
-      setLoadWarning(failedReads > 0 ? '部分接入状态暂时无法读取，请以对应配置区的真实结果为准。' : '');
+      setLoadWarning(failedReads > 0 ? '部分接入状态暂时无法读取，请重新核对后再判断是否已经完成接入。' : '');
       if (firstLoad) {
         firstLoad = false;
         setLoading(false);
@@ -94,7 +97,7 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
       window.clearInterval(timer);
       window.removeEventListener('qualibug:settings-onboarding-refresh', handleRefresh);
     };
-  }, [project]);
+  }, [project, refreshNonce]);
 
   const enabledServices = useMemo(
     () => snapshot.connectors.filter((connector) => connector.enabled).length,
@@ -110,10 +113,15 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
   );
 
   const requiredCompleted = [enabledServices > 0, authCount > 0, snapshot.materialCount > 0].filter(Boolean).length;
+  const setupReady = requiredCompleted === 3 && !loadWarning;
   const materialsHref = project ? `/materials?project=${encodeURIComponent(project)}` : '/materials';
 
   const scrollToSystemAccess = () => {
     document.getElementById('settings-system-access')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const recheck = () => {
+    setRefreshNonce((value) => value + 1);
   };
 
   if (!project) {
@@ -161,18 +169,44 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
     },
   ];
 
+  const mainAction = loadWarning
+    ? { label: '重新核对接入状态', kind: 'refresh' as const }
+    : enabledServices === 0
+      ? { label: '先接入系统地址', kind: 'system' as const }
+      : authCount === 0
+        ? { label: '补充测试账号', kind: 'system' as const }
+        : snapshot.materialCount === 0
+          ? { label: '导入企业资料', kind: 'materials' as const }
+          : { label: '继续运行前检查', kind: 'campaigns' as const };
+
+  const handleMainAction = () => {
+    if (mainAction.kind === 'refresh') {
+      recheck();
+      return;
+    }
+    if (mainAction.kind === 'system') {
+      scrollToSystemAccess();
+      return;
+    }
+    if (mainAction.kind === 'materials') {
+      navigateToProjectPath('/materials', project);
+      return;
+    }
+    navigateToProjectPath('/campaigns', project);
+  };
+
   return (
     <section className="section-card settings-span-2">
       <div className="settings-card-head">
         <div>
           <span className="panel-kicker">首次接入向导</span>
-          <h2>{requiredCompleted === 3 ? '基础接入已完成' : `完成 ${requiredCompleted}/3 个必需步骤`}</h2>
+          <h2>{setupReady ? '基础接入已完成' : `完成 ${requiredCompleted}/3 个必需步骤`}</h2>
           <p className="settings-card-sub">
             按真实完成状态推进，不要求客户维护后台已经能够自动理解的结构；数据库属于增强证据能力，不阻塞首次体验。
           </p>
         </div>
-        <span className={`summary-pill ${requiredCompleted === 3 ? 'strong' : ''}`}>
-          {loading ? '正在核对状态…' : requiredCompleted === 3 ? '可以继续运行前检查' : '继续完成接入'}
+        <span className={`summary-pill ${setupReady ? 'strong' : ''}`}>
+          {loading ? '正在核对状态…' : setupReady ? '已具备运行前检查条件' : loadWarning ? '状态需要重新核对' : '继续完成接入'}
         </span>
       </div>
 
@@ -187,10 +221,21 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
         ))}
       </div>
 
+      <div className="settings-actions settings-mt-10">
+        <button type="button" className="btn btn-primary" onClick={handleMainAction} disabled={loading}>
+          {loading ? '正在核对接入状态…' : mainAction.label}
+        </button>
+        {!loading && !loadWarning && (
+          <button type="button" className="btn btn-secondary" onClick={recheck}>重新核对状态</button>
+        )}
+      </div>
+
       <p className="settings-hint settings-mt-10">
-        接入表单会自动保存本次浏览器会话中的非敏感草稿；账号密码、Token、API Key 和数据库认证信息不会写入草稿。
+        {setupReady
+          ? '下一步进入运行中心。运行前检查会再次使用后端真实门禁核对必要条件；前端不会因为这里显示完成就绕过扫描门禁。'
+          : '接入表单会自动保存本次浏览器会话中的非敏感草稿；账号密码、Token、API Key 和数据库认证信息不会写入草稿。'}
       </p>
-      {loadWarning && <p className="settings-inline-feedback">{loadWarning}</p>}
+      {loadWarning && <p className="settings-inline-feedback" role="alert">{loadWarning}</p>}
     </section>
   );
 }
