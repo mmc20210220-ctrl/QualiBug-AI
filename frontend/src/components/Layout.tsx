@@ -21,6 +21,15 @@ export function Layout() {
     setMobileNavOpen(false);
   }, [location.pathname, location.search]);
 
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileNavOpen(false);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [mobileNavOpen]);
+
   return (
     <div className="shell">
       <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
