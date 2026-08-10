@@ -45,14 +45,19 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
     }
 
     let cancelled = false;
-    setLoading(true);
-    setLoadWarning('');
+    let firstLoad = true;
 
-    Promise.allSettled([
-      listConnectors(project),
-      getServiceCredentials(project),
-      getKnowledgeAsset(project),
-    ]).then(([connectorsResult, servicesResult, materialsResult]) => {
+    const refreshSnapshot = async () => {
+      if (firstLoad) {
+        setLoading(true);
+        setLoadWarning('');
+      }
+
+      const [connectorsResult, servicesResult, materialsResult] = await Promise.allSettled([
+        listConnectors(project),
+        getServiceCredentials(project),
+        getKnowledgeAsset(project),
+      ]);
       if (cancelled) return;
 
       const connectors = connectorsResult.status === 'fulfilled' ? connectorsResult.value : [];
@@ -61,15 +66,25 @@ export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProp
       const failedReads = [connectorsResult, servicesResult, materialsResult].filter((result) => result.status === 'rejected').length;
 
       setSnapshot({ connectors, services, materialCount });
-      if (failedReads > 0) {
-        setLoadWarning('部分接入状态暂时无法读取，请以对应配置区的真实结果为准。');
+      setLoadWarning(failedReads > 0 ? '部分接入状态暂时无法读取，请以对应配置区的真实结果为准。' : '');
+      if (firstLoad) {
+        firstLoad = false;
+        setLoading(false);
       }
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
+    };
+
+    const handleRefresh = () => {
+      void refreshSnapshot();
+    };
+
+    void refreshSnapshot();
+    const timer = window.setInterval(refreshSnapshot, 15_000);
+    window.addEventListener('qualibug:settings-onboarding-refresh', handleRefresh);
 
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('qualibug:settings-onboarding-refresh', handleRefresh);
     };
   }, [project]);
 
