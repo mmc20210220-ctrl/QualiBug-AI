@@ -1,4 +1,4 @@
-import { deriveFocusedVerificationRunSummary } from '../../lib/finding-verification';
+import { deriveFindingVerificationFocusContext } from '../../lib/finding-verification-focus';
 import type { Finding } from '../../types';
 
 type Props = {
@@ -16,8 +16,8 @@ export function FindingVerificationRunSummary({ finding, generatedAt = '' }: Pro
   const normalizedGeneratedAt = String(generatedAt || '').trim();
   if (!normalizedGeneratedAt) return null;
 
-  const summary = deriveFocusedVerificationRunSummary(finding, normalizedGeneratedAt);
-  if (!summary) {
+  const context = deriveFindingVerificationFocusContext(finding, normalizedGeneratedAt);
+  if (!context) {
     return (
       <section className="verification-run-summary verification-warning" aria-label="指定验证轮次变化摘要">
         <span className="panel-kicker">指定验证轮次</span>
@@ -27,16 +27,30 @@ export function FindingVerificationRunSummary({ finding, generatedAt = '' }: Pro
     );
   }
 
+  const { summary, isLatestRun, latestGeneratedAt, latestLabel } = context;
   const { event } = summary;
+  const releaseMeaning = isLatestRun
+    ? summary.releaseMeaning
+    : '这是历史验证轮次，只用于追溯当时的验证事实。当前发布判断应结合该 Finding 的最新真实验证结论与项目级 Release Gate。';
+
   return (
     <section className={`verification-run-summary verification-${event.tone}`} aria-label="指定验证轮次变化摘要">
       <div className="verification-run-summary-head">
         <div>
-          <span className="panel-kicker">当前指定验证</span>
+          <span className="panel-kicker">{isLatestRun ? '当前最新验证' : '历史验证轮次'}</span>
           <h3>{summary.transitionLabel}</h3>
         </div>
-        <span className="summary-pill">{summary.generatedAt}</span>
+        <div className="verification-run-summary-context">
+          <span className="summary-pill">{isLatestRun ? '最新' : '历史'}</span>
+          <span className="summary-pill">{summary.generatedAt}</span>
+        </div>
       </div>
+
+      {!isLatestRun && (
+        <div className="verification-focus-hint">
+          你正在查看历史轮次。当前 Finding 的最新真实验证发生于 {latestGeneratedAt || '时间未上报'}，最新结论为“{latestLabel}”。下方本轮结果不会覆盖当前最新结论。
+        </div>
+      )}
 
       <div className="verification-run-summary-grid">
         <div>
@@ -44,16 +58,16 @@ export function FindingVerificationRunSummary({ finding, generatedAt = '' }: Pro
           <strong>{summary.previousKnownLabel}</strong>
         </div>
         <div>
-          <em>本轮真实结果</em>
+          <em>{isLatestRun ? '当前最新真实结果' : '历史本轮真实结果'}</em>
           <strong>{summary.currentLabel}</strong>
         </div>
         <div>
-          <em>是否改变结论</em>
+          <em>是否改变当时结论</em>
           <strong>{changeLabel(summary.changedConclusion, summary.currentOutcome)}</strong>
         </div>
         <div>
-          <em>对发布的含义</em>
-          <strong>{summary.releaseMeaning}</strong>
+          <em>{isLatestRun ? '对发布的含义' : '历史轮次的发布含义'}</em>
+          <strong>{releaseMeaning}</strong>
         </div>
       </div>
 
@@ -64,7 +78,11 @@ export function FindingVerificationRunSummary({ finding, generatedAt = '' }: Pro
         {event.changedConclusion && <strong className="verification-change-badge">结论变化</strong>}
       </div>
 
-      <p className="settings-hint mt-3">这里只解释这一条 Finding 在指定真实验证轮次中的变化；项目是否可以发布仍以项目级 Release Gate 为唯一权威。</p>
+      <p className="settings-hint mt-3">
+        {isLatestRun
+          ? '这是当前 Finding 的最新真实验证轮次；项目是否可以发布仍以项目级 Release Gate 为唯一权威。'
+          : '这里只追溯这一条 Finding 的历史真实验证轮次；当前 Finding 状态以最新真实验证为准，项目是否可以发布仍以项目级 Release Gate 为唯一权威。'}
+      </p>
     </section>
   );
 }
