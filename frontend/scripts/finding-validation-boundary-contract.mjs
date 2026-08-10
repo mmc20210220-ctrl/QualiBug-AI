@@ -8,6 +8,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 const card = read('src/components/findings/FindingCard.tsx');
 const verificationPanel = read('src/components/findings/FindingVerificationPanel.tsx');
+const verificationRunSummary = read('src/components/findings/FindingVerificationRunSummary.tsx');
 const verificationStatus = read('src/components/findings/FindingVerificationStatus.tsx');
 const dashboardFocus = read('src/components/dashboard/DashboardFocusFindingCard.tsx');
 const verificationStyles = read('src/styles/finding-verification.css');
@@ -62,6 +63,8 @@ assert(verification.includes("latestStatus === 'passed' || latestStatus === 'ver
 assert(verification.includes("latestStatus === 'failed' || latestStatus === 'reopened' || gateStatus === 'failed'"), 'still failing must come from backend regression truth');
 assert(verification.includes('INCONCLUSIVE_STATUSES.has(latestStatus)'), 'blocked or unverifiable runs must not become pass/fail');
 assert(verification.includes('当前 Finding 没有真实回归义务'), 'missing regression obligation must fail closed');
+assert(verification.includes('deriveFocusedVerificationRunSummary'), 'focused verification context must reuse the shared timeline truth');
+assert(verification.includes('单条问题通过不等于项目可以发布'), 'one verified finding must never imply project release approval');
 
 assert(verificationStatus.includes('deriveFindingVerification(finding)'), 'shared status component must consume the one verification interpreter');
 assert(verificationStatus.includes('verification-${presentation.tone}'), 'shared status component must derive visual tone from the interpreter');
@@ -79,6 +82,10 @@ assert(verificationPanel.includes('前端不会伪造“修复前后 Diff”'), 
 assert(verificationPanel.includes('客户修复后，重新验证'), 'validation surface must expose the product-owned closure action');
 assert(verificationPanel.includes('不会记录负责人、修复版本或企业内部研发状态'), 'validation action must state the enterprise workflow boundary');
 assert(verificationPanel.includes('<FindingVerificationStatus finding={finding} />'), 'verification panel header must use the shared status component');
+assert(verificationPanel.includes('<FindingVerificationRunSummary finding={finding} generatedAt={focusGeneratedAt} />'), 'focused finding/evidence context must explain the exact run before showing history');
+assert(verificationRunSummary.includes('上一已知结论'), 'focused run summary must explain prior validation truth');
+assert(verificationRunSummary.includes('本轮真实结果'), 'focused run summary must explain exact-run truth');
+assert(verificationRunSummary.includes('项目是否可以发布仍以项目级 Release Gate 为唯一权威'), 'focused run summary must remain validation-only');
 
 assert(findings.includes('const verificationRows = confirmed.map((finding) => ({ finding, verification: deriveFindingVerification(finding) }));'), 'findings summary must derive all validation buckets from one interpreter');
 assert(findings.includes("verification.state === 'verified_fixed'"), 'findings must count verified fixes from the shared interpreter');
@@ -96,9 +103,11 @@ assert(dashboardFocus.includes('<FindingVerificationStatus finding={finding} />'
 
 assert(evidence.includes('<FindingVerificationStatus finding={finding} compact />'), 'evidence list must expose the shared verification status');
 assert(evidence.includes('<FindingVerificationStatus finding={selected} />'), 'selected evidence detail must expose the shared verification status');
-assert(evidence.includes('<FindingVerificationPanel finding={selected} />'), 'evidence center must preserve the detailed verification comparison');
+assert(evidence.includes('<FindingVerificationPanel'), 'evidence must preserve the detailed verification comparison');
+assert(evidence.includes("focusGeneratedAt={preserveRequestedRun ? requestedVerificationAt : ''}"), 'evidence must pass the exact run focus into the shared verification panel');
 
 assert(release.includes('<FindingVerificationStatus finding={requestedFinding} />'), 'release finding context must expose the shared verification status');
+assert(release.includes('<FindingVerificationRunSummary finding={requestedFinding} generatedAt={requestedVerificationAt} />'), 'release review must reuse the focused run summary');
 assert(release.includes('requestedVerification.nextActionLabel'), 'release finding context must expose the shared validation next action');
 assert(release.includes('单条 Finding 的修复后验证状态只是发布依据之一，不会覆盖项目级门禁'), 'finding verification must never replace project-level release authority');
 assert(release.includes('deriveReleasePresentation({'), 'release gate must remain driven by the project-level release interpreter');
