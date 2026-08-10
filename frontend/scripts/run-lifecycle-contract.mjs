@@ -26,7 +26,8 @@ for (const label of ['企业资料理解', '场景与义务生成', '测试数�
 assert(banner.includes('liveStatus?.scan_stage_progress?.stages || {}'), 'submitted lifecycle must render server stage telemetry when available');
 assert(banner.includes('尚未进入 / 尚未实时上报'), 'unobserved live stages must remain explicitly pending/unreported');
 assert(banner.includes('不会按计时器或百分比推测'), 'run lifecycle must explicitly reject fake staged progress');
-assert(banner.includes('测试数据就绪核验与交付门禁目前仍由总控函数完成'), 'uninstrumented stage boundaries must be disclosed honestly');
+assert(banner.includes('权威结果对象形成后补充真实完成态回执'), 'late lifecycle stages must use authoritative completion receipts');
+assert(banner.includes('后两类目前不反推开始时间'), 'late lifecycle start time must remain uninferred');
 assert(banner.includes("['blocked', 'failed', 'error'].includes(executionStatus)"), 'blocked/failed execution must not render as success');
 assert(banner.includes("['plan_only', 'partial', 'partial_coverage', 'coverage_deferred', 'not_executed'].includes(executionStatus)"), 'partial or non-executed results must render as warning');
 assert(banner.includes('detail.totalFindings > 0'), 'confirmed findings must not render as clean success');
