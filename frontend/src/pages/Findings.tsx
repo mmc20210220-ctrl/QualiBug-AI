@@ -70,21 +70,23 @@ export function Findings() {
     ...Array.from(moduleStats.entries()).slice(0, 4).map(([mod, count]) => ({ label: `${mod} (${count})`, value: `mod:${mod}` })),
   ];
 
-  const display = confirmed.filter((finding) => {
-    if (filter === 'P0' || filter === 'P1' || filter === 'P2') {
-      if (finding.severity !== filter) return false;
-    } else if (filter.startsWith('verify:')) {
-      if (deriveFindingVerification(finding).state !== filter.slice('verify:'.length)) return false;
-    } else if (filter.startsWith('mod:')) {
-      if (moduleName(finding) !== filter.slice(4)) return false;
-    }
-    if (searchQuery.trim()) {
-      const query = searchQuery.trim().toLowerCase();
-      const haystack = `${finding.title} ${moduleName(finding)} ${finding.business_summary || ''} ${finding.actual || ''}`.toLowerCase();
-      if (!haystack.includes(query)) return false;
-    }
-    return true;
-  });
+  const display = [...confirmed]
+    .sort((left, right) => deriveFindingVerification(right).priority - deriveFindingVerification(left).priority)
+    .filter((finding) => {
+      if (filter === 'P0' || filter === 'P1' || filter === 'P2') {
+        if (finding.severity !== filter) return false;
+      } else if (filter.startsWith('verify:')) {
+        if (deriveFindingVerification(finding).state !== filter.slice('verify:'.length)) return false;
+      } else if (filter.startsWith('mod:')) {
+        if (moduleName(finding) !== filter.slice(4)) return false;
+      }
+      if (searchQuery.trim()) {
+        const query = searchQuery.trim().toLowerCase();
+        const haystack = `${finding.title} ${moduleName(finding)} ${finding.business_summary || ''} ${finding.actual || ''}`.toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
   const hasActiveFilter = filter !== 'all' || Boolean(searchQuery.trim());
 
   const regressionEligible = confirmed.some(hasFindingReverificationObligation);
