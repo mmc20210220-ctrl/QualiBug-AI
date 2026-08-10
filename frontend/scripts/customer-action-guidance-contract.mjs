@@ -31,7 +31,11 @@ assert(dashboard.includes('const releaseGate = asRecord(record.release_gate);'),
 assert(dashboard.includes('const releaseGateChecks = (Array.isArray(releaseGate.checks) ? releaseGate.checks : []).map'), 'dashboard must project release gate checks into the shared presentation interpreter');
 assert(dashboard.includes('const releaseGateOverall = asText(releaseGate.overall_status || releaseGate.verdict || releaseGate.status);'), 'dashboard must project the release gate terminal status');
 assert(dashboard.includes('const hasReleaseGateData = Object.keys(releaseGate).length > 0;'), 'dashboard must distinguish missing release gate data from an explicit result');
-assert(dashboard.includes('releaseGateOverall,\n    releaseGateChecks,\n    hasReleaseGateData,'), 'dashboard hero decision must pass release gate facts into the shared presentation priority');
+assert(dashboard.includes('const regressionCampaign = Object.keys(asRecord(record.regression_campaign)).length > 0'), 'dashboard must consume the same regression campaign family used by the gate banner');
+assert(dashboard.includes('const regressionGateStatus = asText(asRecord(regressionCampaign.ci_feedback).gate_status).toLowerCase();'), 'dashboard must project the latest regression gate status');
+assert(dashboard.includes('const regressionFailed = regressionGateStatus === \'failed\';'), 'dashboard must explicitly recognize a known regression failure');
+assert(dashboard.includes('releaseGateOverall,\n    releaseGateChecks,\n    hasReleaseGateData,\n    regressionGateStatus,'), 'dashboard hero decision must pass release and regression gate facts into the shared presentation priority');
+assert(dashboard.includes("? { title: '先处理回归失败，再考虑发布', label: '查看发布门禁', path: '/release' }"), 'dashboard must route a regression failure back to the release decision flow');
 
 const releaseDecisionStart = dashboardUtils.indexOf('export function releaseDecision');
 const releaseDecisionEnd = dashboardUtils.indexOf('\n}\n\n// ─── Campaign helpers', releaseDecisionStart);
@@ -41,18 +45,26 @@ assert(dashboardUtils.includes("import { deriveReleasePresentation, type Release
 assert(releaseDecisionBody.includes('const prioritized = deriveReleasePresentation({'), 'dashboard high-risk release states must flow through the shared interpreter');
 assert(releaseDecisionBody.includes('gateOverall,'), 'dashboard release helper must accept the real release gate status');
 assert(releaseDecisionBody.includes('gateChecks,'), 'dashboard release helper must accept the real release gate checks');
-assert(releaseDecisionBody.includes('if (hasGateData) return prioritized;'), 'explicit release gate data must override the dashboard fallback summary');
+assert(releaseDecisionBody.includes('regressionGateStatus,'), 'dashboard release helper must accept the latest regression gate status');
+assert(releaseDecisionBody.includes('if (hasGateData || regressionGateStatus) return prioritized;'), 'explicit release or regression gate data must override the dashboard fallback summary');
 assert(releaseDecisionBody.indexOf('if (p0 > 0)') < releaseDecisionBody.indexOf('if (unhealthy || blocked)'), 'confirmed P0 must outrank incomplete coverage or unhealthy scan status in release advice');
 
 assert(releasePresentation.includes('export function deriveReleasePresentation'), 'release presentation must have one frontend priority interpreter');
-assert(releasePresentation.indexOf('if (p0Count > 0)') < releasePresentation.indexOf('if (hasIndependentGateFailure)'), 'known P0 must stay ahead of other release presentation states');
+assert(releasePresentation.indexOf('if (p0Count > 0)') < releasePresentation.indexOf('if (regressionFailed)'), 'known P0 must stay ahead of regression state');
+assert(releasePresentation.indexOf('if (regressionFailed)') < releasePresentation.indexOf('if (hasIndependentGateFailure)'), 'known regression failure must be treated as an explicit blocker before incomplete-state fallbacks');
+assert(releasePresentation.includes("const regressionFailed = regressionGateStatus === 'failed';"), 'release presentation must recognize regression failure');
+assert(releasePresentation.includes("['pending', 'not_ready', 'manual_approval_required'].includes(regressionGateStatus)"), 'release presentation must recognize pending regression closure');
 assert(releasePresentation.includes('gateFailureOnlyExplainsIncomplete'), 'campaign-only incomplete coverage must be distinguished from an independent gate failure');
 assert(releasePresentation.includes("campaignStatus === 'coverage_deferred'"), 'release presentation must treat deferred coverage as incomplete');
 assert(releasePresentation.includes("gateOverall === 'pass'"), 'green release presentation must require an explicit pass branch');
+assert(releasePresentation.includes('最新回归状态'), 'green release copy must preserve the regression boundary');
 assert(releasePresentation.includes('尚未取得完整发布门禁回执'), 'missing gate data must not be presented as safe');
 
 assert(releaseGate.includes('deriveReleasePresentation({'), 'release page must use the shared frontend release priority interpreter');
+assert(releaseGate.includes('regressionGateStatus,'), 'release page must pass the latest regression gate into the shared interpreter');
+assert(releaseGate.includes("? '不建议发布：最新回归门禁失败'"), 'release page must name a known regression failure instead of showing a generic gate state');
 assert(releaseGate.includes("? { label: '处理 P0 问题', path: '/findings' }"), 'release page must route confirmed P0 to issue handling');
+assert(releaseGate.includes("? { label: '处理回归失败', path: '/findings' }"), 'release page must route regression failure to issue handling when current findings exist');
 assert(releaseGate.includes("? { label: '继续检测剩余范围', path: '/campaigns' }"), 'release page must route deferred coverage back to detection');
 assert(releaseGate.includes('当前不能把 0 条门禁数据解释为“可以发布”'), 'missing release checks must not imply release safety');
 assert(releaseGate.includes("releasePresentation.incomplete && <button className=\"btn btn-secondary\" onClick={() => navigateToProjectPath('/coverage', project)}>查看未覆盖范围</button>"), 'release page must expose coverage when the result is incomplete');
