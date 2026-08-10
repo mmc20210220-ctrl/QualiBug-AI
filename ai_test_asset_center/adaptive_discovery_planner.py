@@ -594,6 +594,13 @@ def _unit_representative_row(
     )
     return {
         "obligation_id": oid,
+        # Same compiled-experiment identity source as obligation planning:
+        # ``build_agent_intent_plan`` requires every selected row to carry the
+        # experiment_id of the compiled experiment registered under this
+        # obligation — omitting it made every coverage-unit representative row
+        # fail the intent binding gate with ``compiled_experiment_mismatch``
+        # (run22: obl_09706b33eb4cd2762a10).
+        "experiment_id": _text(experiment.get("experiment_id")),
         "coverage_unit_id": _text(unit.get("coverage_unit_id")),
         "canonical_obligation_key": _text(unit.get("canonical_obligation_key")),
         "variant_count": int(unit.get("variant_count") or 1),

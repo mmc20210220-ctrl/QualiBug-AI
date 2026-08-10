@@ -14,6 +14,8 @@ from __future__ import annotations
 import pytest
 
 from ai_test_asset_center.adaptive_discovery_planner import (
+    AgentIntentError,
+    build_agent_intent_plan,
     plan_coverage_unit_round,
 )
 from ai_test_asset_center.coverage_unit_registry import (
@@ -22,6 +24,9 @@ from ai_test_asset_center.coverage_unit_registry import (
     build_coverage_units,
     derive_arm_experiment,
     derive_canonical_obligation_key,
+)
+from ai_test_asset_center.discovery_runtime_planning import (
+    derive_unit_execution_arms,
 )
 from ai_test_asset_center.experiment_batch_concurrent_scheduler import (
     partition_serial_groups,
@@ -583,3 +588,463 @@ def test_non_unit_experiments_keep_previous_grouping() -> None:
     exp = _write_experiment("obl-x", actor_ref="buyer")  # no coverage_unit_id
     key = _write_group_key(exp, ir_ops)
     assert key[0] == "iface" and key[2] == "buyer"
+
+
+# ── 6. P0-1fix: multi-arm identity contract (compiled_experiment_mismatch) ────
+# run22 end-to-end failure: coverage-unit representative rows did not carry
+# ``experiment_id``, so ``build_agent_intent_plan`` raised
+# ``compiled_experiment_mismatch:obl_09706b33eb4cd2762a10`` on the first
+# selected row. These tests pin the identity contract end to end:
+# every selected row (representative / derived arm / own-compiled variant /
+# fallback-compiled variant) must reference exactly the COMPILED experiment
+# registered under its obligation_id in the identity index.
+
+IR_WITH_ACTORS = {
+    "model_id": "bir-arms",
+    "operations": [
+        _operation("op-orders", "POST", "/api/orders"),
+        _operation("op-orders-id", "GET", "/api/orders/{id}"),
+    ],
+    "actors": [
+        {"id": "admin"},
+        {"id": "buyer"},
+        {"id": "seller"},
+        {"id": "auditor"},
+        {"id": "finance"},
+        {"id": "owner-x"},
+    ],
+    "relations": [],
+}
+
+
+def _intent_compiled_experiment(
+    obligation_id: str, experiment_id: str, control: str, treatment: str
+) -> dict:
+    """Compiled experiment that satisfies the intent gate (observers carry
+    adapters, source_refs present, property carries operation_path_prefix)."""
+    return {
+        "schema_version": "qualibug.experiment-contract.v1",
+        "experiment_id": experiment_id,
+        "obligation_id": obligation_id,
+        "risk_family": "authorization",
+        "compile_receipt": {"status": "COMPILED", "reason_code": ""},
+        "actor_selection_contract": {
+            "control_actor_ref": control,
+            "treatment_actor_ref": treatment,
+        },
+        "property": {"operation_path_prefix": "/api/orders"},
+        "control_plan": [{
+            "step_id": "control_1",
+            "actor_ref": control,
+            "operation_ref": "op-orders",
+            "path": "/api/orders",
+            "method": "POST",
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "actor_ref": treatment,
+            "operation_ref": "op-orders",
+            "path": "/api/orders",
+            "method": "POST",
+        }],
+        "cleanup_plan": [{"step_id": "cleanup_1", "actor_ref": control}],
+        "precondition_plan": [],
+        "assertions": [{
+            "assertion_id": "as-1",
+            "kind": "authorization",
+            "property": {
+                "template": "authorization_control_treatment",
+                "control_actor_ref": control,
+                "treatment_actor_ref": treatment,
+            },
+        }],
+        "observers": [
+            {"observer_id": "http_response", "adapter": "http_api"},
+            {"observer_id": "actor_identity", "adapter": "actor_identity"},
+        ],
+        "source_refs": [{
+            "source_id": "api_spec",
+            "kind": "api_operation",
+            "locator": "POST /api/orders",
+        }],
+        "canonical_obligation_key": (
+            "op:POST api/orders|kind:authorization|shape:control_treatment_access|rel:denies"
+        ),
+        "coverage_unit_id": "cunit_repro",
+    }
+
+
+def _intent_chain_obligations() -> list[dict]:
+    return [
+        _auth_obligation(
+            "obl-a1", operation_ref="op-orders",
+            control_actor="admin", treatment_actor="buyer",
+        ),
+        _auth_obligation(
+            "obl-a2", operation_ref="op-orders",
+            control_actor="admin", treatment_actor="seller",
+        ),
+        _auth_obligation(
+            "obl-a3", operation_ref="op-orders",
+            control_actor="admin", treatment_actor="auditor",
+        ),
+    ]
+
+
+def _assert_identity_contract(plan, by_obligation) -> None:
+    """Every selected row references the COMPILED experiment registered under
+    its obligation_id — the contract build_agent_intent_plan enforces."""
+    for row in plan["selected"]:
+        exp = by_obligation.get(row["obligation_id"])
+        assert exp is not None, f"no compiled experiment for {row['obligation_id']}"
+        assert exp["experiment_id"] == row["experiment_id"], (
+            f"experiment_id mismatch for {row['obligation_id']}: "
+            f"index={exp['experiment_id']} row={row['experiment_id']}"
+        )
+        assert (
+            exp.get("compile_receipt", {}).get("status") == "COMPILED"
+        ), f"not compiled: {row['obligation_id']}"
+
+
+def _build_unit_plan(obligations, experiments) -> tuple[dict, list[dict], dict]:
+    annotated = attach_canonical_obligation_keys(obligations, behavior_ir=IR_WITH_ACTORS)
+    units = build_coverage_units(annotated, behavior_ir=IR_WITH_ACTORS)["coverage_units"]
+    by_id = {o["obligation_id"]: o for o in annotated}
+    plan = plan_coverage_unit_round(
+        units,
+        obligations_by_id=by_id,
+        experiments_by_obligation=experiments,
+        behavior_ir=IR_WITH_ACTORS,
+        budget=10,
+    )
+    return plan, units, by_id
+
+
+def test_unit_plan_selected_rows_carry_experiment_id() -> None:
+    """Regression for run22: representative rows must carry the compiled
+    experiment_id, exactly like obligation planning (plan_obligation_round)."""
+    obligations = _intent_chain_obligations()
+    annotated = attach_canonical_obligation_keys(obligations, behavior_ir=IR_WITH_ACTORS)
+    units = build_coverage_units(annotated, behavior_ir=IR_WITH_ACTORS)["coverage_units"]
+    by_id = {o["obligation_id"]: o for o in annotated}
+    compiled = {
+        "obl-a1": _intent_compiled_experiment("obl-a1", "exp-obl-a1", "admin", "buyer"),
+    }
+    plan = plan_coverage_unit_round(
+        units,
+        obligations_by_id=by_id,
+        experiments_by_obligation=compiled,
+        behavior_ir=IR_WITH_ACTORS,
+        budget=10,
+    )
+    assert len(plan["selected"]) == 1
+    row = plan["selected"][0]
+    assert row["experiment_id"] == compiled[row["obligation_id"]]["experiment_id"]
+    # pending rows carry the same identity source (follow-on rounds re-plan)
+    for pending in plan.get("pending_next_round") or []:
+        assert "experiment_id" in pending
+
+
+def test_run22_chain_intent_plan_passes_with_derived_arms() -> None:
+    """Offline replay of the run22 planning chain: unit plan -> multi-arm
+    derivation -> intent plan. Previously raised
+    ``compiled_experiment_mismatch`` on the first representative row."""
+    obligations = _intent_chain_obligations()
+    plan, units, by_id = _build_unit_plan(obligations, {
+        "obl-a1": _intent_compiled_experiment("obl-a1", "exp-obl-a1", "admin", "buyer"),
+    })
+    pack = {
+        "experiments": [_intent_compiled_experiment("obl-a1", "exp-obl-a1", "admin", "buyer")],
+        "blocked_experiments": [],
+        "abstract_experiments": [],
+        "compiled_count": 1,
+        "blocked_count": 0,
+        "abstract_count": 0,
+    }
+    all_experiments = [dict(r) for r in pack["experiments"]]
+    by_obligation = {r["obligation_id"]: r for r in all_experiments}
+    receipt = derive_unit_execution_arms(
+        obligation_plan=plan,
+        units=units,
+        obligations_by_id=by_id,
+        experiment_pack=pack,
+        all_experiments=all_experiments,
+        by_obligation=by_obligation,
+        behavior_ir=IR_WITH_ACTORS,
+        environment_type="test",
+        policy_version="",
+        available_adapters=frozenset({"http_api", "actor_identity"}),
+        planning_context={},
+    )
+    assert receipt["arms_derived"] == 2
+    assert receipt["arm_experiment_count"] == 2
+    assert receipt["arm_own_compile_count"] == 0
+    _assert_identity_contract(plan, by_obligation)
+    intent = build_agent_intent_plan(
+        plan,
+        obligations=obligations,
+        experiments_by_obligation=by_obligation,
+        behavior_ir=IR_WITH_ACTORS,
+    )
+    assert intent["status"] == "VERIFIED"
+    assert intent["intent_count"] == 3
+    assert {i["obligation_id"] for i in intent["intents"]} == {
+        "obl-a1", "obl-a2", "obl-a3"
+    }
+
+
+def test_derived_arm_identity_index_never_diverges_from_selected_row() -> None:
+    """A derived arm's experiment_id must be force-indexed under its
+    obligation_id — a stale/BLOCKED prior entry must not shadow the arm."""
+    obligations = _intent_chain_obligations()
+    plan, units, by_id = _build_unit_plan(obligations, {
+        "obl-a1": _intent_compiled_experiment("obl-a1", "exp-obl-a1", "admin", "buyer"),
+    })
+    pack = {
+        "experiments": [_intent_compiled_experiment("obl-a1", "exp-obl-a1", "admin", "buyer")],
+        "blocked_experiments": [],
+        "abstract_experiments": [],
+        "compiled_count": 1,
+        "blocked_count": 0,
+        "abstract_count": 0,
+    }
+    all_experiments = [dict(r) for r in pack["experiments"]]
+    by_obligation = {r["obligation_id"]: r for r in all_experiments}
+    # obl-a2 previously registered with a BLOCKED (non-compiled) experiment:
+    # the derived arm must supersede it in the identity index.
+    by_obligation["obl-a2"] = {
+        "obligation_id": "obl-a2",
+        "experiment_id": "exp-obl-a2-blocked",
+        "compile_receipt": {"status": "BLOCKED", "reason_code": "BLOCKED_MISSING_BINDING"},
+    }
+    derive_unit_execution_arms(
+        obligation_plan=plan,
+        units=units,
+        obligations_by_id=by_id,
+        experiment_pack=pack,
+        all_experiments=all_experiments,
+        by_obligation=by_obligation,
+        behavior_ir=IR_WITH_ACTORS,
+        environment_type="test",
+        policy_version="",
+        available_adapters=frozenset({"http_api", "actor_identity"}),
+        planning_context={},
+    )
+    assert by_obligation["obl-a2"]["experiment_id"] == "exp-obl-a1__arm_0"
+    _assert_identity_contract(plan, by_obligation)
+
+
+def test_variant_already_compiled_binds_own_experiment_not_an_arm() -> None:
+    """Promotion path: when a variant already has its own COMPILED experiment
+    (representative-compile fallback), deriving an arm would create a second
+    compiled experiment claiming the same obligation id. The plan row must
+    reference the variant's own experiment instead."""
+    obligations = _intent_chain_obligations()
+    annotated = attach_canonical_obligation_keys(obligations, behavior_ir=IR_WITH_ACTORS)
+    units = build_coverage_units(annotated, behavior_ir=IR_WITH_ACTORS)["coverage_units"]
+    by_id = {o["obligation_id"]: o for o in annotated}
+    # Promotion: obl-a2 becomes the unit's representative (compiled), and the
+    # fallback compile also produced obl-a3's own experiment.
+    unit = units[0]
+    unit["representative_obligation_id"] = "obl-a2"
+    compiled = {
+        "obl-a2": _intent_compiled_experiment("obl-a2", "exp-obl-a2", "admin", "seller"),
+        "obl-a3": _intent_compiled_experiment("obl-a3", "exp-obl-a3", "admin", "auditor"),
+    }
+    plan = plan_coverage_unit_round(
+        units,
+        obligations_by_id=by_id,
+        experiments_by_obligation=compiled,
+        behavior_ir=IR_WITH_ACTORS,
+        budget=10,
+    )
+    pack = {
+        "experiments": list(compiled.values()),
+        "blocked_experiments": [],
+        "abstract_experiments": [],
+        "compiled_count": len(compiled),
+        "blocked_count": 0,
+        "abstract_count": 0,
+    }
+    all_experiments = [dict(r) for r in pack["experiments"]]
+    by_obligation = {r["obligation_id"]: r for r in all_experiments}
+    receipt = derive_unit_execution_arms(
+        obligation_plan=plan,
+        units=units,
+        obligations_by_id=by_id,
+        experiment_pack=pack,
+        all_experiments=all_experiments,
+        by_obligation=by_obligation,
+        behavior_ir=IR_WITH_ACTORS,
+        environment_type="test",
+        policy_version="",
+        available_adapters=frozenset({"http_api", "actor_identity"}),
+        planning_context={},
+    )
+    # obl-a1 (not compiled) becomes a derived arm; obl-a3 stays on its own
+    # compiled experiment — no second experiment claiming obl-a3.
+    assert receipt["arms_derived"] == 1
+    assert receipt["arm_own_compile_count"] == 1
+    assert receipt["arm_experiment_count"] == 1
+    row_a3 = next(
+        row for row in plan["selected"] if row["obligation_id"] == "obl-a3"
+    )
+    assert row_a3["experiment_id"] == "exp-obl-a3"
+    assert row_a3["arm_origin"] == "own_compile"
+    assert by_obligation["obl-a3"]["experiment_id"] == "exp-obl-a3"
+    _assert_identity_contract(plan, by_obligation)
+    intent = build_agent_intent_plan(
+        plan,
+        obligations=obligations,
+        experiments_by_obligation=by_obligation,
+        behavior_ir=IR_WITH_ACTORS,
+    )
+    assert intent["status"] == "VERIFIED"
+
+
+def _stub_compile_factory(status: str = "COMPILED"):
+    def _stub_compile(obligations, **kwargs):
+        experiments = []
+        for obligation in obligations:
+            prop = obligation.get("property", {})
+            control = prop.get("control_actor_ref") or prop.get("actor_ref") or "admin"
+            treatment = prop.get("treatment_actor_ref") or control
+            exp = _intent_compiled_experiment(
+                obligation["obligation_id"],
+                f"exp-fb-{obligation['obligation_id']}",
+                control,
+                treatment,
+            )
+            exp["compile_receipt"] = {"status": status, "reason_code": ""}
+            experiments.append(exp)
+        return {
+            "experiments": experiments if status == "COMPILED" else [],
+            "blocked_experiments": (
+                [] if status == "COMPILED" else experiments
+            ),
+            "abstract_experiments": [],
+            "compiled_count": len(experiments) if status == "COMPILED" else 0,
+            "blocked_count": 0 if status == "COMPILED" else len(experiments),
+            "abstract_count": 0,
+        }
+    return _stub_compile
+
+
+def _undeliverable_arm_variant() -> dict:
+    """Same surface as the representative (same template/rule -> same coverage
+    unit) but with a third actor role: 3 distinct actors vs the pair
+    representative -> ``arm_shape_incompatible`` -> undeliverable as an arm."""
+    variant = _auth_obligation(
+        "obl-a2", operation_ref="op-orders",
+        control_actor="admin", treatment_actor="seller",
+    )
+    variant["property"]["actor_ref"] = "owner-x"
+    variant["required_actors"] = ["admin", "seller", "owner-x"]
+    return variant
+
+
+def _undeliverable_plan(obligations):
+    """Unit plan whose obl-a2 cannot be derived as an arm (third actor role
+    vs pair representative -> arm_shape_incompatible -> fallback)."""
+    annotated = attach_canonical_obligation_keys(obligations, behavior_ir=IR_WITH_ACTORS)
+    units = build_coverage_units(annotated, behavior_ir=IR_WITH_ACTORS)["coverage_units"]
+    by_id = {o["obligation_id"]: o for o in annotated}
+    rep_exp = _intent_compiled_experiment("obl-a1", "exp-obl-a1", "admin", "buyer")
+    plan = plan_coverage_unit_round(
+        units,
+        obligations_by_id=by_id,
+        experiments_by_obligation={"obl-a1": rep_exp},
+        behavior_ir=IR_WITH_ACTORS,
+        budget=10,
+    )
+    pack = {
+        "experiments": [rep_exp],
+        "blocked_experiments": [],
+        "abstract_experiments": [],
+        "compiled_count": 1,
+        "blocked_count": 0,
+        "abstract_count": 0,
+    }
+    return plan, units, by_id, pack
+
+
+def test_undeliverable_arm_falls_back_to_compile_and_stays_consistent() -> None:
+    """Fail-closed fallback: an arm that cannot be derived (shape
+    incompatible) falls back to an independent compile; the compiled fallback
+    experiment enters the identity index and the selected set, and the intent
+    plan still verifies (回退路径完整)."""
+    obligations = _intent_chain_obligations()
+    # obl-a2 carries a third actor role: pair rep cannot rebind it.
+    obligations[1] = _undeliverable_arm_variant()
+    plan, units, by_id, pack = _undeliverable_plan(obligations)
+    all_experiments = [dict(r) for r in pack["experiments"]]
+    by_obligation = {r["obligation_id"]: r for r in all_experiments}
+    receipt = derive_unit_execution_arms(
+        obligation_plan=plan,
+        units=units,
+        obligations_by_id=by_id,
+        experiment_pack=pack,
+        all_experiments=all_experiments,
+        by_obligation=by_obligation,
+        behavior_ir=IR_WITH_ACTORS,
+        environment_type="test",
+        policy_version="",
+        available_adapters=frozenset({"http_api", "actor_identity"}),
+        planning_context={},
+        compile_callback=_stub_compile_factory("COMPILED"),
+    )
+    assert receipt["arm_failed_count"] == 1
+    assert receipt["arm_fallback_compile_count"] == 1
+    assert receipt["arm_fallback_compiled_selected_count"] == 1
+    assert by_obligation["obl-a2"]["experiment_id"] == "exp-fb-obl-a2"
+    assert by_obligation["obl-a2"] in all_experiments
+    row_a2 = next(
+        row for row in plan["selected"] if row["obligation_id"] == "obl-a2"
+    )
+    assert row_a2["experiment_id"] == "exp-fb-obl-a2"
+    assert row_a2["arm_origin"] == "fallback_compile"
+    _assert_identity_contract(plan, by_obligation)
+    intent = build_agent_intent_plan(
+        plan,
+        obligations=obligations,
+        experiments_by_obligation=by_obligation,
+        behavior_ir=IR_WITH_ACTORS,
+    )
+    assert intent["status"] == "VERIFIED"
+
+
+def test_fallback_variant_still_blocked_stays_honestly_unselected() -> None:
+    """Fail-closed honesty: a fallback compile that still returns non-COMPILED
+    is never added to selected — it cannot trip the intent gate."""
+    obligations = _intent_chain_obligations()
+    obligations[1] = _undeliverable_arm_variant()
+    plan, units, by_id, pack = _undeliverable_plan(obligations)
+    all_experiments = [dict(r) for r in pack["experiments"]]
+    by_obligation = {r["obligation_id"]: r for r in all_experiments}
+    receipt = derive_unit_execution_arms(
+        obligation_plan=plan,
+        units=units,
+        obligations_by_id=by_id,
+        experiment_pack=pack,
+        all_experiments=all_experiments,
+        by_obligation=by_obligation,
+        behavior_ir=IR_WITH_ACTORS,
+        environment_type="test",
+        policy_version="",
+        available_adapters=frozenset({"http_api", "actor_identity"}),
+        planning_context={},
+        compile_callback=_stub_compile_factory("BLOCKED"),
+    )
+    assert receipt["arm_fallback_compile_count"] == 1
+    assert receipt["arm_fallback_compiled_selected_count"] == 0
+    assert not any(
+        row["obligation_id"] == "obl-a2" for row in plan["selected"]
+    )
+    _assert_identity_contract(plan, by_obligation)
+    intent = build_agent_intent_plan(
+        plan,
+        obligations=obligations,
+        experiments_by_obligation=by_obligation,
+        behavior_ir=IR_WITH_ACTORS,
+    )
+    assert intent["status"] == "VERIFIED"
