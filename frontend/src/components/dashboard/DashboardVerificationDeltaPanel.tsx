@@ -1,5 +1,9 @@
 import { isCustomerReadyFinding } from '../../api/data';
-import { deriveLatestVerificationRunSummary } from '../../lib/finding-verification';
+import { evidenceDeepLinkSearch } from '../../lib/evidence-presentation';
+import {
+  deriveLatestVerificationRunSummary,
+  type LatestVerificationRunFinding,
+} from '../../lib/finding-verification';
 import { useProjectNavigation } from '../../lib/project-navigation';
 import { asRecord, asText, formatScanTime, type JsonRecord } from '../../lib/dashboard-utils';
 import type { Finding } from '../../types';
@@ -21,6 +25,24 @@ function headline(summary: NonNullable<ReturnType<typeof deriveLatestVerificatio
   if (summary.inconclusiveCount > 0) return `${summary.inconclusiveCount} 个问题本轮尚无法形成修复结论`;
   if (summary.keptFixedCount > 0) return `${summary.keptFixedCount} 个问题继续保持验证通过`;
   return '最新修复后验证已完成';
+}
+
+function rowPriority(row: LatestVerificationRunFinding): number {
+  const { event } = row;
+  if (event.changedConclusion && event.outcome === 'open') return 50;
+  if (!event.changedConclusion && event.outcome === 'open') return 40;
+  if (event.outcome === 'unknown') return 30;
+  if (event.changedConclusion && event.outcome === 'fixed') return 20;
+  return 10;
+}
+
+function rowLabel(row: LatestVerificationRunFinding): string {
+  const { event } = row;
+  if (event.changedConclusion && event.outcome === 'open') return '重新出现';
+  if (!event.changedConclusion && event.outcome === 'open') return '仍失败';
+  if (event.outcome === 'unknown') return '无法确认';
+  if (event.changedConclusion && event.outcome === 'fixed') return '刚验证修复';
+  return '保持通过';
 }
 
 export function DashboardVerificationDeltaPanel({ record, project }: Props) {
@@ -66,6 +88,9 @@ export function DashboardVerificationDeltaPanel({ record, project }: Props) {
       : summary.fixedCount > 0 || summary.keptFixedCount > 0
         ? 'success'
         : 'neutral';
+  const sortedRows = [...summary.rows].sort((left, right) => rowPriority(right) - rowPriority(left));
+  const visibleRows = sortedRows.slice(0, 8);
+  const hiddenRowCount = Math.max(0, sortedRows.length - visibleRows.length);
 
   return (
     <section className={`customer-status-card ${tone} mb-4`} aria-label="最新修复后验证变化">
@@ -83,6 +108,49 @@ export function DashboardVerificationDeltaPanel({ record, project }: Props) {
         <span><em>无法确认</em><b>{summary.inconclusiveCount}</b></span>
         <span><em>保持通过</em><b>{summary.keptFixedCount}</b></span>
       </div>
+
+      <details className="verification-delta-details mt-3" open={unresolvedCount > 0}>
+        <summary>
+          <strong>查看本轮具体 Finding（{summary.matchedCount}）</strong>
+          <span>按验证风险排序，可直接进入同一问题的验证 / 证据时间线</span>
+        </summary>
+        <div className="verification-delta-list">
+          {visibleRows.map((row) => {
+            const { finding, event } = row;
+            const findingSearch = evidenceDeepLinkSearch(finding.id);
+            const hasEvidence = (finding.evidence_chain?.length || 0) > 0;
+            return (
+              <article key={`${finding.id}:${event.key}`} className={`verification-delta-row verification-${event.tone}`}>
+                <div className="verification-delta-row-head">
+                  <div>
+                    <span className={`severity-badge ${finding.severity.toLowerCase()}`}>{finding.severity}</span>
+                    <strong>{finding.title}</strong>
+                  </div>
+                  <span className="verification-delta-label">{rowLabel(row)}</span>
+                </div>
+                <p>{event.transitionLabel} · {event.detail}</p>
+                <div className="verification-timeline-meta">
+                  <span>Finding {finding.id}</span>
+                  {event.run?.regression_probe_id && <span>Probe {event.run.regression_probe_id}</span>}
+                  {event.run?.method && event.run?.path && <span>{event.run.method} {event.run.path}</span>}
+                  {event.run?.gate_status && <span>Gate {event.run.gate_status}</span>}
+                  {event.changedConclusion && <strong className="verification-change-badge">结论变化</strong>}
+                </div>
+                <div className="settings-actions mt-3">
+                  <button className="btn btn-secondary btn-sm" onClick={() => navigateToProjectPath('/findings', project, findingSearch)}>查看这条验证</button>
+                  {hasEvidence && (
+                    <button className="btn btn-secondary btn-sm" onClick={() => navigateToProjectPath('/evidence', project, findingSearch)}>查看这条证据</button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+        {hiddenRowCount > 0 && (
+          <p className="settings-hint mt-3">首屏仅展示风险最高的 8 条；另有 {hiddenRowCount} 条同轮真实回执，可在问题清单查看完整验证状态。</p>
+        )}
+      </details>
+
       <div className="settings-actions mt-3">
         <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>
           {unresolvedCount > 0 ? '查看未闭环验证' : '查看验证详情'}
