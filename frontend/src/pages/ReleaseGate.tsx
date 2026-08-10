@@ -62,6 +62,13 @@ export function ReleaseGate() {
   const pipelineUnhealthy = ['FAILED_SAFE', 'BLOCKED'].includes(pipelineHealthStatus.toUpperCase());
   const campaignBlocked = campaignStatus === 'blocked';
   const coverageDeferred = campaignStatus === 'coverage_deferred';
+  const regressionCampaign = Object.keys(asRecord(pipelineRecord.regression_campaign)).length > 0
+    ? asRecord(pipelineRecord.regression_campaign)
+    : Object.keys(asRecord(pipelineRecord.regression)).length > 0
+      ? asRecord(pipelineRecord.regression)
+      : asRecord(pipelineRecord.regression_result);
+  const regressionGateStatus = text(asRecord(regressionCampaign.ci_feedback).gate_status).toLowerCase();
+  const regressionFailed = regressionGateStatus === 'failed';
 
   const releasePresentation = deriveReleasePresentation({
     p0Count,
@@ -71,6 +78,7 @@ export function ReleaseGate() {
     gateOverall: overall,
     gateChecks: checks,
     hasGateData,
+    regressionGateStatus,
   });
 
   const lightColor: 'red' | 'yellow' | 'green' = !project || loading ? 'yellow' : releasePresentation.color;
@@ -82,15 +90,17 @@ export function ReleaseGate() {
         ? '发布依据暂时不可读取'
         : releasePresentation.label === '建议阻断'
           ? `建议阻断发布：已确认 ${p0Count} 个 P0`
-          : releasePresentation.label === '不建议发布'
-            ? '不建议发布：发布门禁存在明确阻断'
-            : releasePresentation.label === '可以发布'
-              ? '发布门禁已通过'
-              : releasePresentation.incomplete
-                ? '暂不能形成完整发布结论'
-                : releasePresentation.label === '待处理'
-                  ? '发布门禁仍有待处理事项'
-                  : '发布结论待确认';
+          : regressionFailed
+            ? '不建议发布：最新回归门禁失败'
+            : releasePresentation.label === '不建议发布'
+              ? '不建议发布：发布门禁存在明确阻断'
+              : releasePresentation.label === '可以发布'
+                ? '发布门禁已通过'
+                : releasePresentation.incomplete
+                  ? '暂不能形成完整发布结论'
+                  : releasePresentation.label === '待处理'
+                    ? '发布门禁仍有待处理事项'
+                    : '发布结论待确认';
 
   const deliveryLabel = guard
     ? (guard.customer_deliverable && guard.safe_for_customer ? '交付已放行' : '交付未放行')
@@ -98,17 +108,21 @@ export function ReleaseGate() {
 
   const nextAction = p0Count > 0
     ? { label: '处理 P0 问题', path: '/findings' }
-    : pipelineUnhealthy
-      ? { label: '查看运行状态', path: '/campaigns' }
-      : campaignBlocked
-        ? { label: '处理阻断条件', path: '/settings' }
-        : coverageDeferred
-          ? { label: '继续检测剩余范围', path: '/campaigns' }
-          : releasePresentation.color === 'red' && customerFindings.length > 0
-            ? { label: '处理已确认问题', path: '/findings' }
-            : !hasGateData
-              ? { label: '启动检测', path: '/campaigns' }
-              : { label: '返回价值总览', path: '/dashboard' };
+    : regressionFailed
+      ? customerFindings.length > 0
+        ? { label: '处理回归失败', path: '/findings' }
+        : { label: '查看回归闭环', path: '/dashboard' }
+      : pipelineUnhealthy
+        ? { label: '查看运行状态', path: '/campaigns' }
+        : campaignBlocked
+          ? { label: '处理阻断条件', path: '/settings' }
+          : coverageDeferred
+            ? { label: '继续检测剩余范围', path: '/campaigns' }
+            : releasePresentation.color === 'red' && customerFindings.length > 0
+              ? { label: '处理已确认问题', path: '/findings' }
+              : !hasGateData
+                ? { label: '启动检测', path: '/campaigns' }
+                : { label: '返回价值总览', path: '/dashboard' };
 
   return (
     <div>
