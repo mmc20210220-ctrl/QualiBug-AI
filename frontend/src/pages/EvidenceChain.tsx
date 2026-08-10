@@ -23,14 +23,15 @@ export function EvidenceChain() {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
-  const { findings, clues, loading } = useFindingsData(project);
+  const { findings, clues, loading, error, refetch } = useFindingsData(project);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replayFinding, setReplayFinding] = useState<Finding | null>(null);
 
   const customerFindings = findings.filter(isCustomerReadyFinding);
   const withEvidence = customerFindings.filter((f) => f.evidence_chain?.length > 0);
   const replayReady = withEvidence.filter((f) => hasRealReplayAsset(f)).length;
-  const selected = withEvidence.find((f) => f.id === selectedId) || null;
+  const selected = withEvidence.find((f) => f.id === selectedId) || withEvidence[0] || null;
+  const confirmedWithoutEvidence = Math.max(0, customerFindings.length - withEvidence.length);
 
   return (
     <div>
@@ -39,11 +40,12 @@ export function EvidenceChain() {
           <h1>证据中心</h1>
           <span className="findings-count">
             {withEvidence.length} 个<TermHint label="证据包" hint={GLOSSARY.evidencePack} /> · {replayReady} 个可回放
+            {confirmedWithoutEvidence > 0 && <> · {confirmedWithoutEvidence} 个已确认问题待形成证据包</>}
             {clues.length > 0 && <> · {clues.length} 条<TermHint label="待补证线索" hint={GLOSSARY.clue} /></>}
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>问题清单</button>
+          {customerFindings.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>问题清单</button>}
           <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project)}>发布门禁</button>
         </div>
       </div>
@@ -66,16 +68,48 @@ export function EvidenceChain() {
         </div>
       )}
 
-      {!loading && withEvidence.length === 0 && (
-        <section className="findings-empty-state compact">
-          <span className="findings-empty-kicker">当前结论</span>
-          <h3>当前没有可交付证据包</h3>
-          <p>{clues.length > 0 ? `当前仅有 ${clues.length} 条待验证线索，尚未形成客户可验收的证据闭环。` : '运行扫描并形成已验证缺陷后，这里会自动展示真实可交付的证据链。'}</p>
-          <button className="btn btn-primary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>
+      {!loading && error && (
+        <section className="findings-empty-state danger">
+          <span className="findings-empty-kicker">证据读取异常</span>
+          <h3>当前无法确认可交付证据状态</h3>
+          <p>{error}。读取失败不能解释为“没有证据”或“没有问题”。</p>
+          <div className="settings-actions">
+            <button className="btn btn-primary" onClick={refetch}>重新读取</button>
+            <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>
+          </div>
         </section>
       )}
 
-      {!loading && withEvidence.length > 0 && (
+      {!loading && !error && customerFindings.length === 0 && (
+        <section className="findings-empty-state compact">
+          <span className="findings-empty-kicker">当前无已确认问题</span>
+          <h3>当前没有可交付证据包</h3>
+          <p>{clues.length > 0
+            ? `当前仅有 ${clues.length} 条待验证线索，尚未形成客户可验收的缺陷与证据闭环。`
+            : '当前没有具备客户交付条件的已确认缺陷。空证据中心不等于系统没有问题，仍需结合本轮覆盖状态判断。'}
+          </p>
+          <div className="settings-actions">
+            <button className="btn btn-primary" onClick={() => navigateToProjectPath('/campaigns', project)}>继续检测</button>
+            <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/coverage', project)}>查看覆盖范围</button>
+            <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>
+          </div>
+        </section>
+      )}
+
+      {!loading && !error && customerFindings.length > 0 && withEvidence.length === 0 && (
+        <section className="findings-empty-state danger">
+          <span className="findings-empty-kicker">证据尚未形成</span>
+          <h3>{customerFindings.length} 个已确认问题当前没有可展示证据包</h3>
+          <p>这里不会把“有已确认问题但证据包不可展示”降级成普通空态。请先回到问题清单核对问题状态，或重新读取证据数据。</p>
+          <div className="settings-actions">
+            <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project)}>查看问题清单</button>
+            <button className="btn btn-secondary" onClick={refetch}>重新读取</button>
+            <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>
+          </div>
+        </section>
+      )}
+
+      {!loading && !error && withEvidence.length > 0 && (
         <div className="evidence-layout">
           <div className="evidence-list-panel">
             {withEvidence.map((f) => (
@@ -83,8 +117,8 @@ export function EvidenceChain() {
                 key={f.id}
                 role="button"
                 tabIndex={0}
-                aria-pressed={selectedId === f.id}
-                className={`evidence-list-item${selectedId === f.id ? ' active' : ''}`}
+                aria-pressed={selected?.id === f.id}
+                className={`evidence-list-item${selected?.id === f.id ? ' active' : ''}`}
                 onClick={() => setSelectedId(f.id)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
@@ -103,9 +137,7 @@ export function EvidenceChain() {
           </div>
 
           <div className="evidence-detail-panel">
-            {!selected ? (
-              <div className="evidence-detail-empty">← 选择左侧证据包查看详情</div>
-            ) : (
+            {selected && (
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
                   <span className={`severity-badge ${selected.severity.toLowerCase()}`}>{selected.severity}</span>
