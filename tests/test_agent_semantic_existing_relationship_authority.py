@@ -68,12 +68,15 @@ def test_governed_existing_edge_still_suppresses_duplicate_generation() -> None:
 
 def test_discovery_composition_installs_governed_agent_linker() -> None:
     from ai_test_asset_center import discovery_runtime_planning
-    from ai_test_asset_center import discovery_runtime_semantic_binding  # noqa: F401
+    from ai_test_asset_center import discovery_runtime_semantic_binding as binding  # noqa: F401
     from ai_test_asset_center.agent_semantic_linker_authority import (
         enrich_knowledge_asset_with_agent_relationships as governed,
     )
 
-    assert (
-        discovery_runtime_planning.enrich_knowledge_asset_with_agent_relationships
-        is governed
-    )
+    # The composition installs the visible-failure wrapper on planning, and
+    # that wrapper delegates to the governed authority linker (single semantic
+    # mapping authority). The identity assertion targets the wrapper: it is the
+    # symbol planning resolves, and its sole delegation target is ``governed``.
+    installed = discovery_runtime_planning.enrich_knowledge_asset_with_agent_relationships
+    assert installed is binding._agent_semantic_linker_with_visible_failure
+    assert binding._governed_agent_semantic_linker is governed

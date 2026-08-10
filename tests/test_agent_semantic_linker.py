@@ -202,9 +202,13 @@ def test_agent_semantic_linker_rejects_invented_behavior_identity_visibly() -> N
 
 def test_agent_semantic_linker_retries_one_transient_provider_read_failure() -> None:
     client = FlakyAgentClient(_linked_response())
+    # State transitions now have a dedicated request; this test targets the
+    # single rule request, so the asset carries no state machines.
+    asset = _asset()
+    asset["state_machines"] = []
 
     _, receipt = enrich_knowledge_asset_with_agent_relationships(
-        _asset(),
+        asset,
         client=client,
     )
 
@@ -222,9 +226,11 @@ def test_agent_semantic_linker_retries_one_transient_json_parse_failure() -> Non
             return self.response
 
     client = JsonParseFlakyClient(_linked_response())
+    asset = _asset()
+    asset["state_machines"] = []
 
     _, receipt = enrich_knowledge_asset_with_agent_relationships(
-        _asset(),
+        asset,
         client=client,
     )
 
@@ -243,11 +249,14 @@ def test_agent_semantic_linker_does_not_retry_non_transient_provider_failure() -
             raise ValueError("bad request")
 
     client = BadRequestClient()
+    asset = _asset()
+    asset["state_machines"] = []
 
     try:
-        enrich_knowledge_asset_with_agent_relationships(_asset(), client=client)
+        enrich_knowledge_asset_with_agent_relationships(asset, client=client)
     except AgentSemanticLinkerError as exc:
         assert "agent_semantic_provider_failed:ValueError" in str(exc)
+        assert "agent_semantic_all_units_failed" in str(exc)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("expected provider failure")
     assert client.calls == 1

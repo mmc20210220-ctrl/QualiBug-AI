@@ -21,6 +21,7 @@ those symbols with stable additive wrappers:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from typing import Any
 
@@ -352,6 +353,14 @@ def _agent_semantic_linker_with_visible_failure(
             "semantic_linking_degraded_to_source_only": True,
             "parallel_semantic_linker_created": False,
         }
+        # The linker only raises when EVERY unit failed (provider or schema
+        # failure); partial failures are merged into the normal receipt. The
+        # raised message carries the failed-unit count so the degrade receipt
+        # stays granular instead of hiding how many units were lost.
+        if detail.startswith("agent_semantic_all_units_failed:"):
+            matched = re.search(r":units_failed=(\d+)\s*$", detail)
+            if matched is not None:
+                receipt["failed_unit_count"] = int(matched.group(1))
         preserved = dict(knowledge_asset) if isinstance(knowledge_asset, dict) else {}
         preserved["agent_semantic_link_receipt"] = receipt
         return preserved, receipt
