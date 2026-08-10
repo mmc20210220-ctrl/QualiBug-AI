@@ -52,6 +52,7 @@ for (const script of [
   "test:live-scan-status",
   "test:dashboard-role-views",
   "test:customer-action-guidance",
+  "test:finding-context-navigation",
   "test:finding-collaboration",
   "test:evidence-distribution",
   "test:evidence-share",
