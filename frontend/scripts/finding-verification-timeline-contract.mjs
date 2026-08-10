@@ -35,7 +35,9 @@ assert(timeline.includes('结论变化'), 'timeline must visibly mark the run th
 assert(timeline.includes('Probe {event.run.regression_probe_id}'), 'timeline must retain the exact regression probe identity');
 assert(timeline.includes('{event.run.method} {event.run.path}'), 'timeline must retain the real validation target');
 assert(timeline.includes('后端尚未返回真实修复后验证历史。前端不会补造验证轮次'), 'missing history must remain explicit instead of synthetic');
-assert(timeline.includes('compact ? timeline.slice(-4) : timeline'), 'release review must be able to consume a compact real history without changing truth');
+assert(timeline.includes('const hasCollapsedHistory = compact && timeline.length > 4;'), 'compact history must have an explicit folding rule');
+assert(timeline.includes('? [timeline[0], ...timeline.slice(-3)]'), 'compact release history must preserve the original finding baseline and latest runs');
+assert(timeline.includes('中间 {collapsedCount} 次已折叠'), 'collapsed history must be explicit to the customer');
 
 assert(verificationPanel.includes('<FindingVerificationTimeline finding={finding} />'), 'finding/evidence detailed validation must show the complete real timeline');
 assert(evidence.includes('<FindingVerificationPanel finding={selected} />'), 'evidence center must inherit the complete timeline for the exact finding');
