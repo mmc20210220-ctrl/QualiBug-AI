@@ -257,8 +257,10 @@ class TestPostWriteSkeletonAttach:
         assert loaded["findings"][0]["finding_id"] == "F-1"
 
     def test_rewrite_keeps_manifest_shards_cleans_stale(self, tmp_path):
-        """A second write of the same content must not delete the active shards;
-        stale shards from an older run are removed after the write."""
+        """A second full write to an existing sharded store is refused
+        (write-once invariant); stale shards from an older run are removed
+        after the write."""
+        from ai_test_asset_center.artifact_redactor import ArtifactSecretLeakError
         from ai_test_asset_center.scan_result_store import (
             load_scan_result,
             write_scan_result,
@@ -269,20 +271,21 @@ class TestPostWriteSkeletonAttach:
             "findings": [{"finding_id": "F-1", "title": "t", "evidence": {"request": "x" * 20000}}],
         }
         target = tmp_path / "scan_result.json"
-        write_scan_result(target, result, threshold_bytes=1024)
+        # Simulate a stale shard from an older run before the write: the
+        # post-write cleanup must remove it (cross-run residue zeroing).
         parts = tmp_path / "scan_result.parts"
-        count_after_first = len(list(parts.glob("*.json")))
-
-        # Simulate a stale shard from an older run.
+        parts.mkdir(parents=True, exist_ok=True)
         stale = parts / "stale_old_run.json"
         stale.write_text("{}", encoding="utf-8")
-
-        # Second write (post-hook rewrite path): active shards survive,
-        # the stale file is cleaned.
-        write_scan_result(target, dict(result), threshold_bytes=1024)
+        write_scan_result(target, result, threshold_bytes=1024)
         names = {p.name for p in parts.glob("*.json")}
         assert "stale_old_run.json" not in names
         assert len(names) >= 1
+        count_after_first = len(names)
+
+        # Write-once invariant: a further full rewrite is refused instead of
+        # destroying the shard set (run25c regression).
+        with pytest.raises(ArtifactSecretLeakError, match="already_sharded_refuse_rewrite"):
+            write_scan_result(target, dict(result), threshold_bytes=1024)
         loaded = load_scan_result(target)
         assert loaded["findings"][0]["finding_id"] == "F-1"
-        assert count_after_first >= 1

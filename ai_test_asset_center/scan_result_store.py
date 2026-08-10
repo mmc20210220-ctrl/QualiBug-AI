@@ -409,6 +409,18 @@ def write_scan_result(
         from .artifact_redactor import write_json_redacted
 
         return write_json_redacted(target, result, indent=indent, post_redaction_validator=post_redaction_validator)
+    # Write-once invariant: a second full write to an existing sharded store
+    # re-copies the multi-GB tree (second deepcopy peak) and, if it dies
+    # mid-shard, destroys the primary run's complete shard set (run25c:
+    # 12 shards reduced to 3 by a post-hook rewrite). Small post-write
+    # updates must go through attach_skeleton_keys, never a full rewrite.
+    if target.is_file() and is_sharded_scan_result(target):
+        raise ArtifactSecretLeakError(
+            "scan_result already_sharded_refuse_rewrite: "
+            "a sharded scan_result must not be rewritten wholesale; use "
+            "attach_skeleton_keys for post-write updates",
+            scan_result={"code": "scan_result_rewrite_refused"},
+        )
     cycle_path = _find_cycle(result)
     if cycle_path:
         raise ArtifactSecretLeakError(

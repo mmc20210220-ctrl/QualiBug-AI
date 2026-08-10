@@ -423,8 +423,11 @@ def save_verified_discovery_archive(
 ) -> Path:
     path = archive_path(project, root)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Compact serialization: the archive is a machine-read monotonic ledger,
+    # not a human diagnostic file — indent=2 nearly doubles its size (18MB →
+    # ~13MB) on every scan write.
     path.write_text(
-        json.dumps(archive, ensure_ascii=False, indent=2, default=str),
+        json.dumps(archive, ensure_ascii=False, separators=(",", ":"), default=str),
         encoding="utf-8",
     )
     return path

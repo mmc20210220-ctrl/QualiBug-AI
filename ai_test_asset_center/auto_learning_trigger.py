@@ -366,12 +366,15 @@ class AutoLearningTrigger:
             try:
                 from .scan_result_store import load_scan_result
 
+                # Auto-learning only reads findings/registry/projection keys.
+                # The obligation-attempt ledger shard is tens of MB and never
+                # consulted here — loading it stalls the post-scan phase.
                 data = load_scan_result(
                     latest,
                     keys=[
                         "findings", "candidate_findings", "delivery_occurrences",
                         "canonical_defect_registry", "formal_count_projection",
-                        "trace_ledger", "obligation_attempt_ledger",
+                        "trace_ledger",
                     ],
                 )
                 if isinstance(data, dict):
