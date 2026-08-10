@@ -1,19 +1,23 @@
 # QualiBug 前端客户行动引导 SPEC
 
 状态：已实现  
-范围：仅前端展示、导航、交互状态与响应式布局；不改变任何后端检测、Finding、Release Gate 或证据判定逻辑。
+范围：仅前端展示、导航、交互状态与响应式布局；不改变任何后端检测、Finding、Release Gate、Regression Gate 或证据判定逻辑。
 
 ## 1. 目标
 
-客户在 Dashboard、运行中心、问题清单、证据中心和发布门禁之间流转时，页面必须根据后端已经返回的真实状态给出一致的下一步，不允许出现以下冲突：
+客户在 Dashboard、运行中心、问题清单、证据中心、覆盖矩阵和发布门禁之间流转时，页面必须根据后端已经返回的真实状态给出一致的下一步，不允许出现以下冲突：
 
 - 页面提示“覆盖未完成”，同时给出“可以发布”；
 - 运行前检查已有明确阻断项，但主扫描按钮仍然可以提交；
 - 0 个已确认问题时只展示空列表，让客户把“空”误读成“安全”；
 - 筛选没有命中与项目本身没有 Finding 使用同一个空态；
 - 已确认 P0 因为覆盖递延或链路异常而被降级成普通“待确认”；
+- 最新回归已经失败，但 Dashboard / ReleaseGate 仍显示黄色或绿色发布建议；
 - Dashboard 与 ReleaseGate 对同一高风险状态给出不同优先级；
 - “没有 Finding”“有 Finding 但证据包缺失”“证据数据读取失败”使用同一个证据空态；
+- 0% 覆盖被视觉上画成非 0，或后端未上报覆盖率时显示成 0%；
+- 没有真实回归探针时仍允许客户点击运行回归；
+- 旧路由重定向后丢失 `?project=...`，把用户从当前客户工作区带走；
 - Evidence 双栏和客户主操作在窄屏下横向溢出。
 
 ## 2. 统一发布展示优先级
@@ -23,13 +27,14 @@
 优先级：
 
 1. 已确认 P0：始终优先显示“建议阻断”；
-2. 无 P0，但存在与覆盖未完成无关的明确 Release Gate 失败：显示“不建议发布”；
-3. 无独立门禁失败，但检测链路 FAILED_SAFE / BLOCKED、Campaign blocked 或 coverage_deferred：显示“待确认”，不得绿色放行；
-4. Release Gate 仍有 pending：显示“待处理”；
-5. Release Gate 明确 pass：发布页才显示“可以发布”；
-6. 无完整 Gate 回执时，发布页不得仅凭 0 Finding 显示绿色放行。
+2. 无 P0，但最新 Regression Gate 已明确 failed：显示“不建议发布”；
+3. 无 P0 / 回归失败，但存在与覆盖未完成无关的明确 Release Gate 失败：显示“不建议发布”；
+4. 无独立门禁失败，但检测链路 FAILED_SAFE / BLOCKED、Campaign blocked 或 coverage_deferred：显示“待确认”，不得绿色放行；
+5. Regression Gate 尚未完成 / 需人工确认，或 Release Gate 仍有 pending：显示“待处理”；
+6. Release Gate 明确 pass，且没有更高优先级阻断：发布页才显示“可以发布”；
+7. 无完整 Gate 回执时，发布页不得仅凭 0 Finding 显示绿色放行。
 
-Dashboard 的 P0 / incomplete 高风险状态同样复用该优先级解释器；对完整扫描的普通已确认问题与无问题状态保留 Dashboard 原有“有条件发布 / 可以发布”摘要，并引导用户进入 ReleaseGate 取得正式门禁结论。
+Dashboard Hero 与 ReleaseGate 使用同一优先级解释器；顶部 Regression / Release Gate Banner 不得再与 Hero 给出相反颜色或结论。
 
 `coverage_deferred` 下的 `0 个 P0` 只代表已覆盖范围，前端必须明确说明不能直接推导为系统安全。
 
@@ -41,6 +46,7 @@ Dashboard 的 P0 / incomplete 高风险状态同样复用该优先级解释器�
 - Campaign blocked：处理阻断条件；
 - coverage_deferred：继续检测剩余范围；
 - 已确认缺陷 > 0：处理问题；
+- 最新 Regression Gate failed 且没有当前 Finding：进入发布/回归闭环确认；
 - 检测完整且无已确认缺陷：查看发布门禁。
 
 辅助动作按上下文出现：
@@ -93,6 +99,7 @@ Dashboard 的 P0 / incomplete 高风险状态同样复用该优先级解释器�
 ReleaseGate 必须同时消费：
 
 - 发布门禁 checks / overall；
+- 最新 Regression Gate；
 - 已确认 Finding 与 P0 数量；
 - pipeline health；
 - Campaign 状态；
@@ -103,6 +110,8 @@ ReleaseGate 必须同时消费：
 主要 CTA：
 
 - 已确认 P0：处理 P0 问题；
+- Regression Gate failed 且有当前 Finding：处理回归失败；
+- Regression Gate failed 但没有当前 Finding：查看回归闭环；
 - 检测链路异常：查看运行状态；
 - Campaign blocked：处理阻断条件；
 - coverage_deferred：继续检测剩余范围；
@@ -122,7 +131,52 @@ ReleaseGate 必须同时消费：
 
 当存在 Evidence Package 时，默认打开第一条真实证据，避免进入页面后仍停留在空白详情区。
 
-## 8. 客户主链响应式规则
+## 8. Coverage 真实性与下一步
+
+Coverage 页面不得从展示层制造覆盖信号：
+
+- 后端真实 0% 必须画成 0% 宽度，不允许使用最小 4% 等视觉补偿制造“已有覆盖”；
+- 后端没有提供数值时显示“未上报”，不得通过 `asNum()` 把 unknown 变成 0%；
+- 外部 Benchmark 只有在真实 measured / ground truth 条件满足时才显示 recall / precision；
+- Coverage Matrix 仍只代表风险家族 / 不变量触达，不等于 Bug recall。
+
+回归操作必须 fail-closed：
+
+- `total_probe_count > 0` 才允许运行回归；
+- 没有真实探针时按钮 disabled，handler 即使被调用也必须拒绝提交；
+- 不允许为了让按钮可点而构造 synthetic regression obligation。
+
+Coverage 的主要行动按状态变化：
+
+- Regression Gate failed：先查看/处理问题；
+- 存在覆盖缺口：继续检测剩余范围，并允许进入 Settings 检查资料与环境；
+- 无缺口但存在真实回归义务且尚未通过：运行回归验证；
+- 覆盖与回归状态均已形成：查看发布门禁；
+- 尚未生成矩阵：提供“启动标准扫描”和“检查接入条件”，不得只显示死路空态。
+
+## 9. 客户主链导航上下文
+
+所有前端重定向必须保持当前 search/query，尤其是 `project`：
+
+- `/` → `/dashboard`；
+- `/behavior-space` → `/coverage`；
+- `/test-tasks` → `/campaigns`；
+- `/clues` → `/settings`；
+- `/products` → `/dashboard`。
+
+统一使用 `PreserveSearchRedirect`，不得重新使用会丢 query 的裸 `<Navigate to="/xxx" />`。
+
+未知的 authenticated 旧链接必须 fail-safe 回 `/dashboard` 并保留当前 `project`，不能渲染空白页面。
+
+移动/键盘导航要求：
+
+- 移动 Sidebar 支持 Esc 关闭；
+- 客户切换菜单支持 Esc 关闭；
+- 导航开关暴露 `aria-expanded` 和 `aria-controls`；
+- Sidebar / 项目导航拥有明确可访问名称；
+- Topbar 必须为实际 `/jobs` 页面显示正确页面名。
+
+## 10. 客户主链响应式规则
 
 现有模块化 `evidence.css` 使用 `.evidence-split-layout`，而当前证据页面实际 class 为 `.evidence-layout`。为避免重写遗留 `index.css`，新增最后加载的 `customer-responsive.css` 作为客户主链响应式覆盖层。
 
@@ -137,26 +191,31 @@ ReleaseGate 必须同时消费：
 
 `customer-responsive.css` 必须在遗留 `index.css` 之后加载，确保真实页面 class 的修正规则生效。
 
-## 9. 回归门禁
+## 11. 回归门禁
 
 `test:customer-action-guidance` 必须进入 `npm run ci:gate`，至少锁定：
 
 - coverage_deferred 不得进入 clean release advice；
-- 已确认 P0 的展示优先级高于 incomplete coverage；
-- Dashboard 高风险发布状态复用统一前端优先级解释器；
+- 已确认 P0 的展示优先级高于 Regression / Release Gate / incomplete coverage；
+- Regression Gate failed 不得被 0 P0 或 incomplete coverage 掩盖；
+- Dashboard 与 ReleaseGate 高风险发布状态复用统一前端优先级解释器；
 - Dashboard 下一步 CTA 来自状态判断而非固定模板；
 - incomplete result 暴露 Coverage 入口；
 - ReleaseGate 使用统一优先级解释器，0 Gate 数据不显示安全；
 - 预检未通过时运行按钮 disabled，handler 同样 fail closed；
 - 运行 Toast 与结果卡共用 result tone；
 - 真空 Finding 与筛选空结果是两种不同空态；
-- 真空 Finding 必须提供继续检测与覆盖入口；
 - Evidence 读取失败、0 Finding、Finding 无证据包必须分开；
 - Evidence 默认打开第一条真实证据；
+- Coverage 0% 不允许视觉伪增，unknown rate 必须显示未上报；
+- Coverage 无真实 regression probe 时回归按钮与 handler 都必须 fail closed；
+- Coverage 空态必须提供扫描/接入 CTA；
+- 旧路由与未知路由重定向必须保留 `project`；
+- 移动导航与客户切换菜单必须支持 Esc，并拥有必要 ARIA 关系；
 - 客户响应式覆盖层必须最后加载并命中真实 `.evidence-layout`；
 - 1024 / 720 / 560 三档客户主链响应式规则不能被删除。
 
-## 10. 非目标
+## 12. 非目标
 
 本 SPEC 不定义也不修改：
 
@@ -164,7 +223,7 @@ ReleaseGate 必须同时消费：
 - 场景如何生成；
 - Oracle / Observer / Experiment 执行；
 - Finding 是否成立；
-- Release Gate 的后端判定；
+- Release Gate / Regression Gate 的后端判定；
 - 覆盖率如何计算；
 - 后端扫描状态机。
 
