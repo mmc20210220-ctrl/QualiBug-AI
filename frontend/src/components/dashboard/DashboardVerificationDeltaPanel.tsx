@@ -112,12 +112,12 @@ export function DashboardVerificationDeltaPanel({ record, project }: Props) {
       <details className="verification-delta-details mt-3" open={unresolvedCount > 0}>
         <summary>
           <strong>查看本轮具体 Finding（{summary.matchedCount}）</strong>
-          <span>按验证风险排序，可直接进入同一问题的验证 / 证据时间线</span>
+          <span>按验证风险排序，可直接进入同一问题的指定验证轮次 / 证据时间线</span>
         </summary>
         <div className="verification-delta-list">
           {visibleRows.map((row) => {
             const { finding, event } = row;
-            const findingSearch = evidenceDeepLinkSearch(finding.id);
+            const findingSearch = evidenceDeepLinkSearch(finding.id, event.generatedAt);
             const hasEvidence = (finding.evidence_chain?.length || 0) > 0;
             return (
               <article key={`${finding.id}:${event.key}`} className={`verification-delta-row verification-${event.tone}`}>
@@ -137,9 +137,9 @@ export function DashboardVerificationDeltaPanel({ record, project }: Props) {
                   {event.changedConclusion && <strong className="verification-change-badge">结论变化</strong>}
                 </div>
                 <div className="settings-actions mt-3">
-                  <button className="btn btn-secondary btn-sm" onClick={() => navigateToProjectPath('/findings', project, findingSearch)}>查看这条验证</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => navigateToProjectPath('/findings', project, findingSearch)}>定位这次验证</button>
                   {hasEvidence && (
-                    <button className="btn btn-secondary btn-sm" onClick={() => navigateToProjectPath('/evidence', project, findingSearch)}>查看这条证据</button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => navigateToProjectPath('/evidence', project, findingSearch)}>证据 + 本次验证</button>
                   )}
                 </div>
               </article>
