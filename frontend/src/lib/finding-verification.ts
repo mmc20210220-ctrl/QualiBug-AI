@@ -70,6 +70,18 @@ export type LatestVerificationRunSummary = {
   rows: LatestVerificationRunFinding[];
 };
 
+export type FocusedVerificationRunSummary = {
+  generatedAt: string;
+  previousKnownOutcome: Exclude<FindingVerificationOutcome, 'unknown'>;
+  previousKnownLabel: string;
+  currentOutcome: FindingVerificationOutcome;
+  currentLabel: string;
+  changedConclusion: boolean;
+  transitionLabel: string;
+  releaseMeaning: string;
+  event: FindingVerificationTimelineEvent;
+};
+
 const INCONCLUSIVE_STATUSES = new Set([
   'blocked',
   'error',
@@ -233,6 +245,48 @@ export function buildFindingVerificationTimeline(finding: Finding): FindingVerif
   });
 
   return timeline;
+}
+
+export function deriveFocusedVerificationRunSummary(
+  finding: Finding,
+  generatedAt: string,
+): FocusedVerificationRunSummary | null {
+  const normalizedGeneratedAt = String(generatedAt || '').trim();
+  if (!normalizedGeneratedAt) return null;
+
+  const timeline = buildFindingVerificationTimeline(finding);
+  const eventIndex = timeline.findIndex(
+    (event) => event.kind === 'verification' && event.generatedAt === normalizedGeneratedAt,
+  );
+  if (eventIndex < 0) return null;
+
+  const event = timeline[eventIndex];
+  let previousKnownOutcome: Exclude<FindingVerificationOutcome, 'unknown'> = 'open';
+  for (let index = eventIndex - 1; index >= 0; index -= 1) {
+    const outcome = timeline[index].outcome;
+    if (outcome === 'fixed' || outcome === 'open') {
+      previousKnownOutcome = outcome;
+      break;
+    }
+  }
+
+  const releaseMeaning = event.outcome === 'open'
+    ? '该 Finding 在这一轮仍是已知验证风险；是否阻断发布仍由项目级 Release Gate 判定。'
+    : event.outcome === 'fixed'
+      ? '该 Finding 在这一轮已验证恢复，但单条问题通过不等于项目可以发布。'
+      : '这一轮不能证明该 Finding 已修复，也不能作为放行依据；项目级 Release Gate 仍需其他真实事实。';
+
+  return {
+    generatedAt: normalizedGeneratedAt,
+    previousKnownOutcome,
+    previousKnownLabel: outcomeLabel(previousKnownOutcome),
+    currentOutcome: event.outcome,
+    currentLabel: event.label,
+    changedConclusion: event.changedConclusion,
+    transitionLabel: event.transitionLabel,
+    releaseMeaning,
+    event,
+  };
 }
 
 export function latestFindingConclusionChange(finding: Finding): FindingVerificationTimelineEvent | null {
