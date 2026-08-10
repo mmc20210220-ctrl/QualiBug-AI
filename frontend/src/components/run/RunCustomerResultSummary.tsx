@@ -70,6 +70,10 @@ export function RunCustomerResultSummary() {
   }, [project]);
 
   useEffect(() => {
+    setDetail(null);
+  }, [project]);
+
+  useEffect(() => {
     if (location.pathname !== '/campaigns') setDetail(null);
   }, [location.pathname]);
 
