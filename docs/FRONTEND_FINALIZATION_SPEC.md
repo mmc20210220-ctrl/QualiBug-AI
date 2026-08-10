@@ -54,7 +54,7 @@ Dashboard 第一屏优先回答：
 - 未发现已确认问题；
 - 已发现并形成客户可交付证据。
 
-空结果不得展示为“没有问题”。服务端未提供的内部阶段不得根据计时器或百分比伪造进度。完成态回执不得反推不存在的开始时间和耗时。
+空结果不得展示为“没有问题”。服务端未提供的内部阶段不得根据计时器或百分比伪造进度。发布门禁给出 verdict 不等于最终报告已经完成，交付阶段只能在最终结果/报告收口后进入 completed。
 
 ### 2.4 动作必须真实
 
@@ -169,7 +169,7 @@ Dashboard 第一屏优先回答：
 - 高级配置保持折叠；
 - `test:settings-onboarding` 已进入统一门禁。
 
-### P1-2 运行过程可视化 — 六阶段真实状态已打通
+### P1-2 运行过程可视化 — 六阶段原生真实边界已打通
 
 已完成：
 
@@ -182,28 +182,30 @@ Dashboard 第一屏优先回答：
 - dead/stale lease 不再显示成正在运行；
 - 新增 `qualibug.scan-stage-progress.v1` 项目级原子阶段快照，只有真实主链函数或权威结果投影可以推进状态；
 - `enterprise_understanding` 与 `scenario_planning` 由真实 `build_discovery_plan()` 主链调用进入/返回时上报；二者在同一规划函数内真实重叠，因此 UI 不伪装成顺序百分比；
-- `runtime_execution` 与 `evidence_collection` 由真实 `run_experiment_candidate()` 进入时上报；experiment runner 返回后执行阶段完成，证据阶段保持 active，直到最终权威 `evidence_bundle` 形成；
-- 新增 first-class `scan_stage_finalization` post-hook，直接消费核心扫描已经生成的 `evidence_bundle / test_data_plan / release_gate`，不替换 `scan()`、不修改核心检测算法；
-- `evidence_collection` 在权威证据包形成后补充完成 / 阻断 / 失败回执；
-- `test_data_assessment` 由真实 `test_data_plan` 补充完成态或 `blocked_with_testability_gap` 阻断态；当前不反推开始时间；
-- `delivery_finalization` 由真实 `release_gate` 补充完成态；发布结论 `fail/blocked` 是有效门禁结论，不会被错误解释成“遥测执行失败”；只有 release gate 自身 `failed/error/invalid` 才把阶段标记为 failed；
+- `runtime_execution` 由真实 `run_experiment_candidate()` 进入/返回时上报；
+- `evidence_collection` 在 experiment runner 开始观察时进入 active，并在真实 `_persist_execution_evidence()` 进入证据归一化/持久化时继续保持 active；证据包持久化成功后 completed，持久化异常则 failed；
+- `test_data_assessment` 在真实 `_test_data_receipt_verifier(root, project)` 构造权威收据校验器时进入 active；`test_data_plan` 形成并进入 `_evaluate_release_gate()` 后，根据真实计划状态转为 completed / blocked / failed；
+- `delivery_finalization` 在真实 `_evaluate_release_gate()` 进入时 active；门禁引擎异常时 failed；门禁成功返回后即使 verdict 为 `fail/blocked` 也继续保持 active，因为最终报告和结果仍在收口；
+- first-class `scan_stage_finalization` post-hook 在 public `scan()` 返回调用方之前消费最终 `evidence_bundle / test_data_plan / release_gate / report_path`，只在最终结果/报告收口后把 `delivery_finalization` 标为 completed；
+- 发布结论 `fail/blocked` 是业务门禁结论，不等于阶段执行失败；只有 release gate 自身 `failed/error/invalid` 或执行异常才把 delivery stage 标记为 failed；
 - stage snapshot 只有在 live scan lease 存在时才通过状态 API 暴露，历史 stage 文件不会冒充当前扫描；
 - 未知 stage / 非法百分比状态会被后端拒绝；pending 阶段不会因为时间经过自动推进；
-- 阶段遥测持久化改为 fail-soft：写盘失败记录 warning，但绝不能改变真实扫描结果；编程错误（未知 stage、假百分比）仍然 fail loud；
+- 阶段遥测持久化为 fail-soft：写盘失败记录 warning，但绝不能改变真实扫描结果；编程错误（未知 stage、假百分比）仍然 fail loud；
+- post-hook 同样属于非权威可观测投影，失败不得遮蔽核心 scan result；
 - completed 后依据真实 `campaign_status / test_data_plan / execution_status / HAR evidence / grade / coverage` 展示最终结果；
 - blocked、partial、plan_only、有 Finding 等结果不会因为 HTTP 200 被错误显示为绿色成功；
-- `test:run-lifecycle`、`test:live-scan-status`、`tests/test_live_scan_status_projection.py`、`tests/test_scan_stage_progress.py` 与 `tests/test_scan_stage_finalization_hook.py` 已建立。
+- `test:run-lifecycle`、`test:live-scan-status`、`tests/test_live_scan_status_projection.py`、`tests/test_scan_stage_progress.py`、`tests/test_scan_stage_finalization_hook.py` 与 `tests/test_scan_execution_outcome_stage_progress.py` 已建立。
 
-当前阶段口径：
+当前六阶段权威边界：
 
-- **企业资料理解**：真实主链提供进行中 + 完成 / 失败状态；
-- **场景与义务生成**：真实主链提供进行中 + 完成 / 失败状态；
-- **真实探针执行**：真实主链提供进行中 + 完成 / 失败状态；
-- **结果观察与证据收集**：真实主链提供开始状态，最终由权威 `evidence_bundle` 提供完成 / 阻断 / 失败状态；
-- **测试数据准备 / 就绪核验**：由权威 `test_data_plan` 提供完成态 / 阻断态；当前只提供 completion-only receipt，不伪造开始时间；
-- **交付门禁与报告**：由权威 `release_gate` 与报告持久化事实提供完成态；当前只提供 completion-only receipt，不伪造开始时间。
+- **企业资料理解**：`build_discovery_plan()` 提供 active + completed / failed；
+- **场景与义务生成**：`build_discovery_plan()` 提供 active + completed / failed；
+- **测试数据准备 / 就绪核验**：`_test_data_receipt_verifier()` 提供 active，`_evaluate_release_gate()` 根据真实 `test_data_plan` 提供 completed / blocked / failed；
+- **真实探针执行**：`run_experiment_candidate()` 提供 active + completed / failed；
+- **结果观察与证据收集**：experiment runner 提供观察开始，`_persist_execution_evidence()` 提供真实持久化 active + completed / failed；
+- **交付门禁与报告**：`_evaluate_release_gate()` 提供 active / failed，最终 `scan_stage_finalization` 在 report/result 收口后提供 completed。
 
-原则：任何缺少真实函数开始边界的阶段都不根据计时器、固定秒数或百分比推测。后续若要把最后两段从 completion-only 升级为实时 active，只能在拥有天然 `root/project` 和真实执行权威的原生函数入口增加打点，不能用全局变量、线程本地或前端计时器偷传状态。
+原则：所有阶段都由拥有真实执行权威和天然 `root/project` 作用域的后端函数推进；不得用全局变量、线程本地、前端计时器、固定秒数或虚构百分比模拟阶段。阶段遥测只解释“真实走到哪里”，不参与 Finding、Release Gate 或扫描成功与否的判定。
 
 ### P1-3 角色化价值视图 — 已实现
 
@@ -279,7 +281,7 @@ Dashboard 第一屏优先回答：
 - 白标或联合品牌报告；
 - 邀请漏斗、分享访问漏斗和报告转化漏斗；
 - 第三方协作 Connector 的组织级配置与审计；
-- 仅在出现天然原生函数边界后，把 `test_data_assessment` 与 `delivery_finalization` 从 completion-only receipt 继续升级为真实 active + completed；不得为了六阶段动画引入隐式上下文或假百分比。
+- 若真实客户运行时长证明有必要，再在现有六阶段权威边界内部增加更细的子阶段 / SSE 流式事件；必须来自真实函数与收据，不做装饰性百分比动画。
 
 ## 7. 非目标
 
@@ -307,10 +309,11 @@ Dashboard 第一屏优先回答：
 - ReleaseGate 操作名称与真实行为一致；
 - README 可按实际命令启动项目；
 - 服务端真实持有 scan lease 时前端能确认运行，lease 未出现时不冒充正在扫描；
-- planning / experiment 主链进入与返回时，前端能读取对应真实阶段；
-- `evidence_bundle / test_data_plan / release_gate` 形成后，后半段阶段能收到真实完成 / 阻断 / 失败回执；
-- completion-only 阶段不反推开始时间，不按时间自动推进；
-- 发布门禁 verdict=fail/blocked 不被误报成“阶段执行失败”；
+- 六阶段均只能由对应真实后端执行边界推进；
+- test-data 收据核验进入后能看到 active，并由真实 `test_data_plan` 收口成 completed / blocked / failed；
+- 真实证据持久化进入后能看到 active，持久化结果决定 completed / failed；
+- release gate 进入后 delivery 为 active；门禁 verdict=fail/blocked 不被误报成“阶段执行失败”；
+- 门禁成功返回但报告尚未收口时 delivery 继续 active，最终 report/result 收口后才 completed；
 - 阶段遥测写盘失败不改变扫描结果；未知 stage / 假百分比仍被拒绝；
 - Finding 无稳定持久化身份时，协作写入、明确 Replay 状态写回和只读分享都 fail closed；
 - 人工协作不能修改自动验证状态；
@@ -338,7 +341,7 @@ npm run ci:gate
 - 前端最终收口契约；
 - Settings 接入向导契约；
 - 运行生命周期契约；
-- 服务端 live scan / 主链 stage 状态契约；
+- 服务端 live scan / 六阶段状态契约；
 - Dashboard 角色视图契约；
 - Finding 协作契约；
 - 证据分发与脱敏契约；
@@ -352,9 +355,13 @@ npm run ci:gate
 - project scan lease 的 live/stale 外部投影；
 - `scan_stage_progress` 显式阶段迁移与非法伪进度拒绝；
 - `build_discovery_plan()` 对企业理解/场景规划真实边界的驱动；
-- `run_experiment_candidate()` 对真实执行/证据采集边界的驱动；
-- `scan_stage_finalization` 对证据、测试数据、交付门禁权威结果的 completion-only 投影；
+- `run_experiment_candidate()` 对真实执行边界的驱动；
+- `_test_data_receipt_verifier()` 对测试数据 active 边界的驱动；
+- `_persist_execution_evidence()` 对证据持久化 active / completed / failed 边界的驱动；
+- `_evaluate_release_gate()` 对 test-data 收口和 delivery active / failed 边界的驱动；
+- `scan_stage_finalization` 对最终证据、测试数据、交付报告结果的收口；
 - release verdict 与 stage execution status 分离；
+- delivery 必须保持 active 直到最终 report/result 收口；
 - stage telemetry 持久化失败 fail-soft；
 - stage snapshot 只在真实 live lease 期间进入 HTTP 状态；
 - Finding 人工协作与自动验证状态分权；
