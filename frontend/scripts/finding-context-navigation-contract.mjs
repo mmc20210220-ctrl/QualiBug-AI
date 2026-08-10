@@ -7,6 +7,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'u
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 const dashboard = read('src/pages/Dashboard.tsx');
+const dashboardFocus = read('src/components/dashboard/DashboardFocusFindingCard.tsx');
 const regressionClosure = read('src/components/dashboard/RegressionClosurePanel.tsx');
 const findings = read('src/pages/Findings.tsx');
 const evidence = read('src/pages/EvidenceChain.tsx');
@@ -21,13 +22,14 @@ assert(evidencePresentation.includes("params.set('finding', normalized);"), 'fin
 assert(projectNavigation.includes("const navigateToProjectPath = useCallback((pathname: string, projectId?: string, currentSearch = '') =>"), 'project navigation must accept entity query context');
 assert(projectNavigation.includes('buildProjectPath(pathname, projectId, currentSearch)'), 'project navigation must merge project with the supplied finding context');
 
-assert(dashboard.includes("import { hasFindingReverificationObligation } from '../lib/finding-verification';"), 'dashboard must reuse the shared real re-verification obligation helper');
-assert(dashboard.includes("navigateToProjectPath('/findings', project, evidenceDeepLinkSearch(finding.id))"), 'dashboard focus card must open the exact finding instead of the generic list');
-assert(dashboard.includes('查看这条验证'), 'dashboard focus card must expose an exact validation action');
-assert(!dashboard.includes('处理这条问题'), 'dashboard must not frame finding navigation as enterprise task handling');
-assert(dashboard.includes("(finding.evidence_chain?.length || 0) > 0"), 'dashboard must only expose exact evidence navigation when the finding has a real evidence package');
-assert(dashboard.includes("navigateToProjectPath('/evidence', project, evidenceDeepLinkSearch(finding.id))"), 'dashboard focus evidence action must keep the exact finding identity');
-assert(dashboard.includes('查看这条证据'), 'dashboard focus card must label the exact evidence action clearly');
+assert(dashboard.includes('hasFindingReverificationObligation'), 'dashboard must reuse the shared real re-verification obligation helper');
+assert(dashboard.includes('<DashboardFocusFindingCard key={finding.id} finding={finding} project={project} />'), 'dashboard must delegate exact finding navigation to the focus component');
+assert(dashboardFocus.includes("navigateToProjectPath('/findings', project, evidenceDeepLinkSearch(finding.id))"), 'dashboard focus card must open the exact finding instead of the generic list');
+assert(dashboardFocus.includes('查看这条验证'), 'dashboard focus card must expose an exact validation action');
+assert(!dashboardFocus.includes('处理这条问题'), 'dashboard focus must not frame finding navigation as enterprise task handling');
+assert(dashboardFocus.includes("(finding.evidence_chain?.length || 0) > 0"), 'dashboard focus must only expose exact evidence navigation when the finding has a real evidence package');
+assert(dashboardFocus.includes("navigateToProjectPath('/evidence', project, evidenceDeepLinkSearch(finding.id))"), 'dashboard focus evidence action must keep the exact finding identity');
+assert(dashboardFocus.includes('查看这条证据'), 'dashboard focus card must label the exact evidence action clearly');
 assert(dashboard.includes('const regressionEligible = findings.some(hasFindingReverificationObligation);'), 'dashboard validation readiness must come from real included-in-suite findings');
 assert(dashboard.includes('const hasRegressionObligation = regressionFindings.some(hasFindingReverificationObligation);'), 'dashboard validation handler must recompute the real obligation before calling the API');
 assert(dashboard.includes('if (!hasRegressionObligation) {'), 'dashboard validation handler must fail closed without a real obligation');
