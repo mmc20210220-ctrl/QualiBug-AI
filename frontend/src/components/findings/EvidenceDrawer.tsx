@@ -28,9 +28,17 @@ export function EvidenceDrawer({ finding, onClose }: EvidenceDrawerProps) {
     const html = buildFindingEvidencePackageHtml(finding);
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    const opened = window.open(url, '_blank', 'noopener,noreferrer');
-    window.setTimeout(() => URL.revokeObjectURL(url), opened ? 60_000 : 1_000);
-    setExportStatus(opened ? '已打开脱敏打印版证据包' : '浏览器阻止了新窗口，请允许弹窗后重试');
+    const opened = window.open('about:blank', '_blank');
+    if (!opened) {
+      URL.revokeObjectURL(url);
+      setExportStatus('浏览器阻止了新窗口，请允许弹窗后重试');
+      window.setTimeout(() => setExportStatus(''), 2500);
+      return;
+    }
+    opened.opener = null;
+    opened.location.href = url;
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    setExportStatus('已打开脱敏打印版证据包');
     window.setTimeout(() => setExportStatus(''), 2500);
   };
 
