@@ -26,6 +26,7 @@ export function EvidenceChain() {
   const [params, setParams] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const requestedFindingId = params.get('finding')?.trim() || '';
+  const requestedVerificationAt = params.get('verification_at')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
   const { findings, clues, loading, error, refetch } = useFindingsData(project);
   const [replayFinding, setReplayFinding] = useState<Finding | null>(null);
@@ -40,11 +41,16 @@ export function EvidenceChain() {
     ? withEvidence.find((finding) => finding.id === requestedFindingId) || null
     : withEvidence[0] || null;
   const confirmedWithoutEvidence = Math.max(0, customerFindings.length - withEvidence.length);
-  const findingContextSearch = evidenceDeepLinkSearch(selected?.id || requestedFindingId);
+  const preserveRequestedRun = Boolean(selected && selected.id === requestedFindingId && requestedVerificationAt);
+  const findingContextSearch = evidenceDeepLinkSearch(
+    selected?.id || requestedFindingId,
+    preserveRequestedRun ? requestedVerificationAt : '',
+  );
 
   const selectFinding = (findingId: string) => {
     const next = new URLSearchParams(params);
     next.set('finding', findingId);
+    next.delete('verification_at');
     setParams(next, { replace: true });
   };
 
@@ -197,7 +203,10 @@ export function EvidenceChain() {
                   <p style={{ fontSize: 13, color: 'var(--muted)' }}>{selected.business_impact?.summary || selected.business_summary || '该问题已形成确认结论。'}</p>
                 </div>
 
-                <FindingVerificationPanel finding={selected} />
+                <FindingVerificationPanel
+                  finding={selected}
+                  focusGeneratedAt={preserveRequestedRun ? requestedVerificationAt : ''}
+                />
 
                 {selected.regression?.included_in_suite && (
                   <div className="settings-actions mt-3">
