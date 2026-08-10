@@ -7,6 +7,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'u
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 const dashboard = read('src/pages/Dashboard.tsx');
+const regressionClosure = read('src/components/dashboard/RegressionClosurePanel.tsx');
 const findings = read('src/pages/Findings.tsx');
 const evidence = read('src/pages/EvidenceChain.tsx');
 const releaseGate = read('src/pages/ReleaseGate.tsx');
@@ -26,6 +27,17 @@ assert(dashboard.includes('处理这条问题'), 'dashboard focus card must expo
 assert(dashboard.includes("(f.evidence_chain?.length || 0) > 0"), 'dashboard must only expose exact evidence navigation when the finding has a real evidence package');
 assert(dashboard.includes("navigateToProjectPath('/evidence', project, evidenceDeepLinkSearch(f.id))"), 'dashboard focus evidence action must keep the exact finding identity');
 assert(dashboard.includes('查看这条证据'), 'dashboard focus card must label the exact evidence action clearly');
+assert(dashboard.includes('const regressionEligible = findings.some((finding) => Boolean(finding.regression?.included_in_suite));'), 'dashboard regression readiness must come from real included-in-suite findings');
+assert(dashboard.includes('const hasRegressionObligation = regressionFindings.some((finding) => Boolean(finding.regression?.included_in_suite));'), 'dashboard regression handler must recompute the real obligation before calling the API');
+assert(dashboard.includes('if (!hasRegressionObligation) {'), 'dashboard regression handler must fail closed without a real obligation');
+assert(dashboard.includes('不会提交空回归请求'), 'dashboard must explain why an empty regression is rejected');
+assert(dashboard.includes('disabled={regressionRunningMode !== \'\' || !regressionEligible}'), 'dashboard top regression action must disable without a real obligation');
+assert(dashboard.includes('regressionEligible={regressionEligible}'), 'dashboard regression closure must receive the same readiness authority');
+
+assert(regressionClosure.includes('regressionEligible: boolean;'), 'regression closure must receive explicit real-obligation readiness');
+assert(regressionClosure.includes("regressionEligible ? '执行 Release 回归' : '暂无可执行回归'"), 'regression closure release action must explain the fail-closed state');
+assert(regressionClosure.includes("regressionEligible ? '执行 Smoke 回归' : '暂无可执行回归'"), 'regression closure smoke action must explain the fail-closed state');
+assert(regressionClosure.includes('disabled={regressionRunningMode !== \'\' || !regressionEligible}'), 'regression closure buttons must disable without a real obligation');
 
 assert(findings.includes("const requestedFindingId = params.get('finding')?.trim() || '';"), 'findings must read the exact finding identity');
 assert(findings.includes('setExpandedId(requestedFindingId);'), 'findings must reopen the requested finding on round trip');
