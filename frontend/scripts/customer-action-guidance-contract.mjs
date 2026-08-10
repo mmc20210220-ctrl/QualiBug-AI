@@ -27,13 +27,21 @@ assert(dashboard.includes('下一步：{nextAction.title}'), 'dashboard must sur
 assert(dashboard.includes("resultIncomplete && <button className=\"btn btn-secondary\" onClick={() => navigateToProjectPath('/coverage', project)}>查看未覆盖范围</button>"), 'incomplete results must expose coverage navigation');
 assert(dashboard.includes("{currentScanDefects > 0 && ("), 'regression action should only be primary follow-up when confirmed defects exist');
 assert(dashboard.includes("resultIncomplete ? '导出当前报告' : '导出报告'"), 'incomplete result export must be labeled as a current report, not a final-safe report');
+assert(dashboard.includes('const releaseGate = asRecord(record.release_gate);'), 'dashboard hero must consume the same backend release gate surfaced by the banner');
+assert(dashboard.includes('const releaseGateChecks = (Array.isArray(releaseGate.checks) ? releaseGate.checks : []).map'), 'dashboard must project release gate checks into the shared presentation interpreter');
+assert(dashboard.includes('const releaseGateOverall = asText(releaseGate.overall_status || releaseGate.verdict || releaseGate.status);'), 'dashboard must project the release gate terminal status');
+assert(dashboard.includes('const hasReleaseGateData = Object.keys(releaseGate).length > 0;'), 'dashboard must distinguish missing release gate data from an explicit result');
+assert(dashboard.includes('releaseGateOverall,\n    releaseGateChecks,\n    hasReleaseGateData,'), 'dashboard hero decision must pass release gate facts into the shared presentation priority');
 
 const releaseDecisionStart = dashboardUtils.indexOf('export function releaseDecision');
 const releaseDecisionEnd = dashboardUtils.indexOf('\n}\n\n// ─── Campaign helpers', releaseDecisionStart);
 assert(releaseDecisionStart >= 0 && releaseDecisionEnd > releaseDecisionStart, 'release decision helper must exist');
 const releaseDecisionBody = dashboardUtils.slice(releaseDecisionStart, releaseDecisionEnd);
-assert(dashboardUtils.includes("import { deriveReleasePresentation } from './release-presentation';"), 'dashboard release decision must reuse the shared release presentation priority');
+assert(dashboardUtils.includes("import { deriveReleasePresentation, type ReleasePresentationCheck } from './release-presentation';"), 'dashboard release decision must reuse the shared release presentation priority');
 assert(releaseDecisionBody.includes('const prioritized = deriveReleasePresentation({'), 'dashboard high-risk release states must flow through the shared interpreter');
+assert(releaseDecisionBody.includes('gateOverall,'), 'dashboard release helper must accept the real release gate status');
+assert(releaseDecisionBody.includes('gateChecks,'), 'dashboard release helper must accept the real release gate checks');
+assert(releaseDecisionBody.includes('if (hasGateData) return prioritized;'), 'explicit release gate data must override the dashboard fallback summary');
 assert(releaseDecisionBody.indexOf('if (p0 > 0)') < releaseDecisionBody.indexOf('if (unhealthy || blocked)'), 'confirmed P0 must outrank incomplete coverage or unhealthy scan status in release advice');
 
 assert(releasePresentation.includes('export function deriveReleasePresentation'), 'release presentation must have one frontend priority interpreter');
