@@ -24,6 +24,7 @@
     "test:frontend-finalization": "node scripts/frontend-finalization-contract.mjs",
     "test:settings-onboarding": "node scripts/settings-onboarding-contract.mjs",
     "test:run-lifecycle": "node scripts/run-lifecycle-contract.mjs",
+    "test:run-customer-result": "node scripts/run-customer-result-contract.mjs",
     "test:live-scan-status": "node scripts/live-scan-status-contract.mjs",
     "test:dashboard-role-views": "node scripts/dashboard-role-views-contract.mjs",
     "test:customer-action-guidance": "node scripts/customer-action-guidance-contract.mjs",
