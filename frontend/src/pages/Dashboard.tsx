@@ -56,6 +56,13 @@ export function Dashboard() {
 
   const handleRegressionRun = useCallback(async (mode: 'smoke' | 'release') => {
     if (!project) return;
+    const record = asRecord(data);
+    const regressionFindings = ((record.defects || record.risks || []) as Finding[]).filter(isCustomerReadyFinding);
+    const hasRegressionObligation = regressionFindings.some((finding) => Boolean(finding.regression?.included_in_suite));
+    if (!hasRegressionObligation) {
+      toast.show('当前没有已纳入回归套件的真实缺陷义务；不会提交空回归请求。', 'warning');
+      return;
+    }
     setRegressionRunningMode(mode);
     try {
       toast.show(`正在执行 ${mode === 'smoke' ? 'Smoke' : 'Release'} 回归...`, 'info');
@@ -67,7 +74,7 @@ export function Dashboard() {
       toast.show(`回归完成：${gs}${fc > 0 ? `，失败 ${fc} 项` : ''}`, gs === 'failed' ? 'danger' : gs === 'passed' ? 'success' : 'warning');
     } catch (caught: unknown) { toast.show(caught instanceof Error ? caught.message : '回归执行失败', 'danger'); }
     finally { setRegressionRunningMode(''); }
-  }, [project, refetch, toast]);
+  }, [project, data, refetch, toast]);
 
   if (loading) return (
     <div>
@@ -102,6 +109,7 @@ export function Dashboard() {
   const totalRiskCount = findings.length;
   const p0Count = findings.filter((f) => f.severity === 'P0').length;
   const p1Count = findings.filter((f) => f.severity === 'P1').length;
+  const regressionEligible = findings.some((finding) => Boolean(finding.regression?.included_in_suite));
   const currentScanDefects = asNum(formalCounts.formal_customer_deliverable_count, totalRiskCount);
   const familyShelfDefects = currentScanDefects;
   const currentScanP0Count = Math.min(p0Count, currentScanDefects);
@@ -343,8 +351,8 @@ export function Dashboard() {
         {!resultIncomplete && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/campaigns', project)}>再次检测</button>}
         <button className="btn btn-secondary" onClick={handleExport}>{resultIncomplete ? '导出当前报告' : '导出报告'}</button>
         {currentScanDefects > 0 && (
-          <button className="btn btn-secondary" onClick={() => void handleRegressionRun('release')} disabled={regressionRunningMode !== ''}>
-            {regressionRunningMode === 'release' ? '回归中...' : '执行回归'}
+          <button className="btn btn-secondary" onClick={() => void handleRegressionRun('release')} disabled={regressionRunningMode !== '' || !regressionEligible} title={regressionEligible ? '运行当前已纳入套件的 Release 回归' : '当前没有已纳入回归套件的缺陷'}>
+            {regressionRunningMode === 'release' ? '回归中...' : regressionEligible ? '执行回归' : '暂无可执行回归'}
           </button>
         )}
       </div>
@@ -407,6 +415,7 @@ export function Dashboard() {
       <RegressionClosurePanel
         record={record}
         regressionRunningMode={regressionRunningMode}
+        regressionEligible={regressionEligible}
         onRunRegression={(mode) => void handleRegressionRun(mode)}
       />
 
