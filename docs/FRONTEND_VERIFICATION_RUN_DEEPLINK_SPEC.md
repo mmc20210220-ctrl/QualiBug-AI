@@ -149,6 +149,46 @@ Evidence 读取同一 `finding + verification_at`。
 
 指定 `verification_at` 不存在时，摘要必须 fail-closed，明确提示无法形成这一轮前后变化摘要，不得使用最近 run 替代。
 
+### 7.3 历史轮次与当前最新结论必须分离
+
+`verification_at` 是**阅读锚点**，不是当前 Finding 状态覆盖器。
+
+前端必须通过 `deriveFindingVerificationFocusContext(finding, verification_at)` 判断被指定的真实 history event 是否就是当前最新真实验证 event。
+
+规则：
+
+- 最新真实验证 event 必须来自 `buildFindingVerificationTimeline(finding)` 中最后一个真实 `kind === 'verification'` event；
+- 不能用 `Date.now()`、时间窗口、最近邻时间或标题相似度判断；
+- 指定 event 与最新 event 使用真实 timeline event identity 比较；
+- 指定 event 不存在时继续 fail-closed，不得降级到 latest。
+
+如果指定轮次就是最新轮次：
+
+- 标记 `当前最新验证 / 最新`；
+- 本轮结果可以描述为“当前最新真实结果”；
+- 仍不得覆盖项目级 Release Gate。
+
+如果指定轮次是历史轮次：
+
+- 必须标记 `历史验证轮次 / 历史`；
+- 必须同时显示当前最新真实验证时间与当前最新真实结论；
+- 必须明确“正在查看历史轮次”；
+- 历史本轮结果只能描述当时的 Finding 状态变化；
+- 历史轮次不能覆盖当前最新 Finding 结论；
+- 历史轮次的发布含义只能用于追溯，当下发布判断必须结合当前最新 Finding 结论 + 项目级 Release Gate。
+
+`FindingVerificationPanel` 顶部共享 `FindingVerificationStatus` 永远表示**当前最新结论**，因此必须显式标记“当前最新结论”。当页面同时定位历史 `verification_at` 时，还必须提示：上方状态是当前最新状态，下方指定轮次只是历史追溯。
+
+这样可以避免以下真实但容易误读的组合：
+
+`当前最新结论 = 修复验证通过`
+
+同时：
+
+`正在查看的历史轮次 = 重新验证仍失败`
+
+两者都是真实事实，但属于不同时间点，前端不得把它们混成同一时刻的结论。
+
 ## 8. Release 紧凑时间线与轮次摘要
 
 Release Gate 仍然是项目级发布权威。
@@ -163,7 +203,7 @@ Release Gate 仍然是项目级发布权威。
 - 同时保留最近真实验证以帮助理解当前状态；
 - 折叠的中间历史必须明确显示数量。
 
-指定 Finding、指定验证轮次或该轮摘要都不得覆盖 `deriveReleasePresentation()` 的项目级发布判断。
+如果指定轮次是历史轮次，Release 中的共享 summary 必须明确它是历史追溯，并同时展示当前最新 Finding 验证结论；无论历史还是最新指定轮次，都不得覆盖 `deriveReleasePresentation()` 的项目级发布判断。
 
 ## 9. URL 生命周期
 
@@ -204,6 +244,17 @@ Release Gate 仍然是项目级发布权威。
 - Release compact 视图保留基线 + 指定 run + 最近 run；
 - 项目级 Release authority 不变。
 
+`test:finding-verification-focus` 必须额外锁定：
+
+- 历史 / 最新判断来自真实 timeline verification event；
+- 不允许时间窗口或 nearest-run heuristic；
+- 最新指定轮次显示“当前最新验证 / 最新”；
+- 历史指定轮次显示“历史验证轮次 / 历史”；
+- 历史轮次同时暴露当前最新验证时间与最新结论；
+- 历史轮次不能覆盖当前 Finding 状态；
+- `FindingVerificationPanel` 顶部状态显式标记“当前最新结论”；
+- 历史轮次发布说明必须回到当前最新 Finding 结论 + 项目级 Release Gate。
+
 `test:finding-context-navigation` 与 `test:customer-action-guidance` 必须与上述上下文传播保持一致。
 
 ## 11. 非目标
@@ -216,4 +267,4 @@ Release Gate 仍然是项目级发布权威。
 - Release Gate 如何计算；
 - 企业研发流程、负责人、修复版本、任务状态或工单。
 
-前端只负责对后端已经存在的真实 Finding 与真实验证轮次进行**精确、可追溯、不会串错对象、不会夸大发布结论**的阅读与解释。
+前端只负责对后端已经存在的真实 Finding 与真实验证轮次进行**精确、可追溯、不会串错对象、不会把历史状态冒充当前状态、不会夸大发布结论**的阅读与解释。
