@@ -1,0 +1,62 @@
+name: Frontend Finalization P0
+
+on:
+  push:
+    branches:
+      - frontend/finalization-p0-20260810
+
+permissions:
+  contents: write
+
+concurrency:
+  group: frontend-finalization-p0
+  cancel-in-progress: false
+
+jobs:
+  apply-test-commit:
+    if: ${{ !contains(github.event.head_commit.message, '[frontend-finalization-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: frontend/finalization-p0-20260810
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Apply P0 changes
+        run: python tools/apply_frontend_finalization_p0.py
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend quality gate
+        working-directory: frontend
+        run: npm run ci:gate
+
+      - name: Remove one-shot automation
+        run: |
+          rm -f tools/apply_frontend_finalization_p0.py
+          rm -f .github/workflows/frontend-finalization-p0.yml
+
+      - name: Commit verified changes
+        env:
+          BRANCH_NAME: frontend/finalization-p0-20260810
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(frontend): close P0 usability and delivery gaps [frontend-finalization-applied]"
+          git push origin "HEAD:${BRANCH_NAME}"
