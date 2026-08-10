@@ -56,6 +56,7 @@ for (const script of [
   "test:finding-validation-boundary",
   "test:finding-verification-timeline",
   "test:finding-verification-focus",
+  "test:finding-decision-snapshot",
   "test:evidence-distribution",
   "test:evidence-share",
   "test:materials-coverage",
