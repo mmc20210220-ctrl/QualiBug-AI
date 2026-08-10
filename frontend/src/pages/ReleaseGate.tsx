@@ -124,7 +124,7 @@ export function ReleaseGate() {
         <span className="action-bar-title">下一步</span>
         <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看问题清单</button>
         <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>查看证据</button>
-        <button className="btn btn-primary" onClick={() => navigateToProjectPath('/dashboard', project)}>导出报告</button>
+        <button className="btn btn-primary" onClick={() => navigateToProjectPath('/dashboard', project)}>返回价值总览</button>
       </div>
     </div>
   );
