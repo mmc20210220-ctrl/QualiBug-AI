@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { getKnowledgeAsset } from '../../api/client';
-import { listKnowledgeConnectors } from '../../api/knowledge-connectors';
+import { listKnowledgeConnectors, type KnowledgeConnectorRecord } from '../../api/knowledge-connectors';
 import { useProjectNavigation } from '../../lib/project-navigation';
 
 const BUSINESS_CONTEXT_TYPES = new Set([
@@ -13,8 +13,25 @@ const BUSINESS_CONTEXT_TYPES = new Set([
   'historical_bug',
 ]);
 
+const AUTHORIZATION_HEALTH = new Set([
+  'REAUTHORIZATION_REQUIRED',
+  'PERMISSION_INSUFFICIENT',
+  'AUTHORIZATION_EXPIRING',
+]);
+
+const SYNC_FAILURE_HEALTH = new Set([
+  'DEGRADED',
+  'CALIBRATION_REQUIRED',
+]);
+
 type MaterialSnapshot = {
   connectorCount: number;
+  authorizationAttentionCount: number;
+  inactiveConnectorCount: number;
+  syncFailureConnectorCount: number;
+  syncingConnectorCount: number;
+  downstreamDegradedCount: number;
+  partialCoverageConnectorCount: number;
   total: number;
   active: number;
   onlineActive: number;
@@ -22,6 +39,16 @@ type MaterialSnapshot = {
   businessContextActive: number;
   processing: number;
   failed: number;
+};
+
+type MaterialNextAction = 'refresh' | 'connect' | 'review-connectors' | 'review-materials' | 'settings';
+
+type MaterialBlocker = {
+  headline: string;
+  detail: string;
+  action: MaterialNextAction;
+  actionLabel: string;
+  tone: 'success' | 'warning' | 'danger';
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -35,7 +62,8 @@ function isOnlineSource(source: Record<string, unknown>): boolean {
     || String(source.source_ref || '').startsWith('connector://');
 }
 
-function readMaterialSnapshot(payload: unknown): Omit<MaterialSnapshot, 'connectorCount'> {
+function readMaterialSnapshot(payload: unknown): Pick<MaterialSnapshot,
+  'total' | 'active' | 'onlineActive' | 'uploadedActive' | 'businessContextActive' | 'processing' | 'failed'> {
   const root = asRecord(payload);
   const asset = asRecord(root.knowledge_asset || root.data || root);
   const inventory = Array.isArray(asset.sources)
@@ -63,6 +91,173 @@ function readMaterialSnapshot(payload: unknown): Omit<MaterialSnapshot, 'connect
   };
 }
 
+function readConnectorSnapshot(connectors: KnowledgeConnectorRecord[]): Pick<MaterialSnapshot,
+  'connectorCount'
+  | 'authorizationAttentionCount'
+  | 'inactiveConnectorCount'
+  | 'syncFailureConnectorCount'
+  | 'syncingConnectorCount'
+  | 'downstreamDegradedCount'
+  | 'partialCoverageConnectorCount'> {
+  const authorizationAttentionCount = connectors.filter((connector) => {
+    const healthStatus = String(connector.health?.status || '').toUpperCase();
+    const oauthStatus = String(connector.oauth?.status || '').toUpperCase();
+    return AUTHORIZATION_HEALTH.has(healthStatus)
+      || AUTHORIZATION_HEALTH.has(oauthStatus)
+      || connector.health?.reauthorization_required === true
+      || connector.connection_profile?.reauthorization_required === true;
+  }).length;
+
+  return {
+    connectorCount: connectors.length,
+    authorizationAttentionCount,
+    inactiveConnectorCount: connectors.filter((connector) => (
+      ['PAUSED', 'DISABLED'].includes(String(connector.status || '').toUpperCase())
+      || ['PAUSED', 'DISABLED'].includes(String(connector.health?.status || '').toUpperCase())
+    )).length,
+    syncFailureConnectorCount: connectors.filter((connector) => (
+      SYNC_FAILURE_HEALTH.has(String(connector.health?.status || '').toUpperCase())
+    )).length,
+    syncingConnectorCount: connectors.filter((connector) => (
+      Boolean(connector.active_sync_epoch_id)
+      || ['RUNNING', 'RETRYING'].includes(String(connector.auto_sync?.state || '').toUpperCase())
+      || ['SYNCING', 'RETRYING'].includes(String(connector.health?.status || '').toUpperCase())
+    )).length,
+    downstreamDegradedCount: connectors.filter((connector) => (
+      String(connector.health?.status || '').toUpperCase() === 'DOWNSTREAM_DEGRADED'
+    )).length,
+    partialCoverageConnectorCount: connectors.filter((connector) => (
+      String(connector.health?.status || '').toUpperCase() === 'PARTIAL_COVERAGE'
+      || String(connector.coverage?.status || '').toUpperCase() === 'PARTIAL_UNSUPPORTED'
+      || (connector.coverage?.unsupported_count || 0) > 0
+    )).length,
+  };
+}
+
+function deriveCurrentBlocker(
+  snapshot: MaterialSnapshot,
+  materialReadError: string,
+  connectorReadError: string,
+): MaterialBlocker {
+  if (materialReadError || connectorReadError) {
+    return {
+      headline: '企业资料状态需要重新核对',
+      detail: '当前至少一个真实状态接口不可用；前端不会把读取失败解释成“未连接”“没有资料”或“业务理解已就绪”。',
+      action: 'refresh',
+      actionLabel: '重新核对资料状态',
+      tone: 'warning',
+    };
+  }
+
+  if (snapshot.authorizationAttentionCount > 0) {
+    return {
+      headline: `${snapshot.authorizationAttentionCount} 个在线资料源需要处理授权或权限`,
+      detail: '这是当前最高优先级阻塞。请先恢复连接器授权或最小读取权限，再继续依赖后续同步结果。',
+      action: 'review-connectors',
+      actionLabel: '处理资料源授权',
+      tone: 'danger',
+    };
+  }
+
+  if (snapshot.inactiveConnectorCount > 0) {
+    return {
+      headline: `${snapshot.inactiveConnectorCount} 个在线资料源已暂停或关闭`,
+      detail: '暂停或关闭的来源不会持续保持企业资料最新；请先确认是否需要恢复自动更新。',
+      action: 'review-connectors',
+      actionLabel: '查看资料源状态',
+      tone: 'warning',
+    };
+  }
+
+  if (snapshot.syncFailureConnectorCount > 0 || snapshot.failed > 0) {
+    return {
+      headline: '企业资料同步或处理存在失败项',
+      detail: `当前 ${snapshot.syncFailureConnectorCount} 个在线资料源同步异常，${snapshot.failed} 份资料处于 failed/degraded。失败项不会被包装成可用输入。`,
+      action: snapshot.syncFailureConnectorCount > 0 ? 'review-connectors' : 'review-materials',
+      actionLabel: snapshot.syncFailureConnectorCount > 0 ? '查看同步异常' : '查看异常资料',
+      tone: 'danger',
+    };
+  }
+
+  if (snapshot.downstreamDegradedCount > 0) {
+    return {
+      headline: `${snapshot.downstreamDegradedCount} 个资料源已读取，但业务理解刷新尚未完成`,
+      detail: '后端连接器已明确返回 DOWNSTREAM_DEGRADED。前端只说明下游刷新未完成，不会把“资料已读取”提前解释成业务理解已经更新。',
+      action: 'review-connectors',
+      actionLabel: '查看刷新状态',
+      tone: 'warning',
+    };
+  }
+
+  if (snapshot.syncingConnectorCount > 0 || snapshot.processing > 0) {
+    return {
+      headline: '企业资料正在同步或处理',
+      detail: `当前 ${snapshot.syncingConnectorCount} 个在线资料源正在同步/重试，${snapshot.processing} 份资料仍在处理。完成前不会提前形成最终就绪结论。`,
+      action: 'refresh',
+      actionLabel: '重新核对最新状态',
+      tone: 'warning',
+    };
+  }
+
+  if (snapshot.partialCoverageConnectorCount > 0) {
+    return {
+      headline: `${snapshot.partialCoverageConnectorCount} 个在线资料源存在未支持资源`,
+      detail: '已读取部分仍然可用，但连接器明确报告部分资源未覆盖；请先查看覆盖差距，避免把“部分同步”理解成“全部资料已接入”。',
+      action: 'review-connectors',
+      actionLabel: '查看未覆盖资料',
+      tone: 'warning',
+    };
+  }
+
+  if (snapshot.connectorCount === 0 && snapshot.uploadedActive === 0) {
+    return {
+      headline: '尚未连接企业在线资料源',
+      detail: '在线文档和知识库是默认主来源；请先建立真实在线连接，文件上传只用于补充在线来源没有覆盖的资料。',
+      action: 'connect',
+      actionLabel: '连接在线资料',
+      tone: 'warning',
+    };
+  }
+
+  if (snapshot.connectorCount > 0 && snapshot.onlineActive === 0 && snapshot.uploadedActive === 0) {
+    return {
+      headline: '在线资料源已连接，等待首次同步形成可读资料',
+      detail: '连接器实例已经存在，但尚未 materialize 真实 source；Connection Ready 仍不等于 Material Ready。',
+      action: 'refresh',
+      actionLabel: '重新核对首次同步',
+      tone: 'warning',
+    };
+  }
+
+  if (snapshot.onlineActive === 0 && snapshot.uploadedActive > 0) {
+    return {
+      headline: '当前主要依赖文件补充资料',
+      detail: '文件补充已经可用，不会阻塞首次运行；但建议连接企业在线资料源，以持续获取最新资料并减少重复上传。',
+      action: 'connect',
+      actionLabel: '连接在线资料（推荐）',
+      tone: 'warning',
+    };
+  }
+
+  if (snapshot.businessContextActive === 0) {
+    return {
+      headline: '核心业务理解输入仍待补齐',
+      detail: '已有真实资料可读，但当前未观察到 active 的 PRD / API / DB / 协作文档 / 历史缺陷等核心输入；这里只提示输入缺口，不推断后端理解质量。',
+      action: snapshot.connectorCount > 0 ? 'review-connectors' : 'connect',
+      actionLabel: snapshot.connectorCount > 0 ? '检查资料范围' : '连接核心资料源',
+      tone: 'warning',
+    };
+  }
+
+  return {
+    headline: '企业资料输入主链已就绪',
+    detail: `${snapshot.businessContextActive} 份核心输入已形成真实 active source。这里只代表资料输入可用；业务理解正确率、完整性和后续扫描能力仍由对应后端链路验证。`,
+    action: 'settings',
+    actionLabel: '下一步：系统与环境',
+    tone: 'success',
+  };
+}
+
 export function MaterialsOnboardingHandoff() {
   const location = useLocation();
   const [params] = useSearchParams();
@@ -70,6 +265,12 @@ export function MaterialsOnboardingHandoff() {
   const project = params.get('project')?.trim() || '';
   const [snapshot, setSnapshot] = useState<MaterialSnapshot>({
     connectorCount: 0,
+    authorizationAttentionCount: 0,
+    inactiveConnectorCount: 0,
+    syncFailureConnectorCount: 0,
+    syncingConnectorCount: 0,
+    downstreamDegradedCount: 0,
+    partialCoverageConnectorCount: 0,
     total: 0,
     active: 0,
     onlineActive: 0,
@@ -99,7 +300,8 @@ export function MaterialsOnboardingHandoff() {
     }
 
     if (connectorsResult.status === 'fulfilled') {
-      setSnapshot((current) => ({ ...current, connectorCount: connectorsResult.value.connectors.length }));
+      const connectorSnapshot = readConnectorSnapshot(connectorsResult.value.connectors);
+      setSnapshot((current) => ({ ...current, ...connectorSnapshot }));
       setConnectorReadError('');
     } else {
       setConnectorReadError(connectorsResult.reason instanceof Error ? connectorsResult.reason.message : '在线资料源状态读取失败');
@@ -115,32 +317,6 @@ export function MaterialsOnboardingHandoff() {
   }, [location.pathname, project, refresh]);
 
   if (location.pathname !== '/materials' || !project) return null;
-
-  const cleanReady = snapshot.active > 0 && snapshot.processing === 0 && snapshot.failed === 0 && !materialReadError;
-  const onlyUploadedReady = cleanReady && snapshot.onlineActive === 0 && snapshot.uploadedActive > 0;
-  const tone = materialReadError || snapshot.failed > 0 ? 'warning' : cleanReady ? 'success' : 'warning';
-  const title = materialReadError
-    ? '企业资料状态暂时无法完整核对'
-    : snapshot.failed > 0
-      ? `${snapshot.failed} 份资料存在异常，建议处理后再形成完整理解输入`
-      : snapshot.processing > 0
-        ? `${snapshot.processing} 份资料仍在处理，可以同时完成系统接入`
-        : onlyUploadedReady
-          ? '补充文件已可用，建议继续连接企业在线资料源'
-          : snapshot.onlineActive > 0
-            ? '企业在线资料已同步并进入知识主链'
-            : snapshot.connectorCount > 0
-              ? '企业在线资料源已连接，等待首次同步形成可读资料'
-              : '优先连接企业在线资料源';
-  const detail = materialReadError
-    ? '当前不会把读取失败解释为资料缺失或业务理解完成。可以重新核对，或先继续配置系统地址和测试账号。'
-    : onlyUploadedReady
-      ? `当前 ${snapshot.uploadedActive} 份文件补充资料已经可用，因此不会阻塞首次运行；但在线资料才是默认主来源，连接后可以持续同步企业最新文档，减少重复上传。`
-      : cleanReady
-        ? `${snapshot.onlineActive} 份在线资料当前可用${snapshot.uploadedActive > 0 ? `，另有 ${snapshot.uploadedActive} 份文件补充` : ''}。这里仅表示资料已经进入 QualiBug 输入主链，不代表业务理解已经正确或完整。`
-        : snapshot.connectorCount > 0
-          ? `已有 ${snapshot.connectorCount} 个在线资料源完成连接，但当前尚未形成可读取的在线资料；不会提前把“连接成功”解释成“资料已同步”。`
-          : '先连接企业在线文档、知识库或其他后端已声明支持的资料源；文件上传只用于补充在线来源没有覆盖的资料。';
 
   const sourceStage = connectorReadError
     ? { value: '状态待核对', note: '在线资料源状态读取失败，不把失败解释为未连接。', tone: 'warning' }
@@ -168,15 +344,37 @@ export function MaterialsOnboardingHandoff() {
         ? { value: '输入主链已建立', note: '已有资料可读，但 PRD / API / DB / 协作文档 / 历史缺陷等核心输入仍待补齐。', tone: 'warning' }
         : { value: '等待可读资料', note: '必须先形成真实 active source，前端才会显示业务理解输入已建立。', tone: 'warning' };
 
+  const currentBlocker = deriveCurrentBlocker(snapshot, materialReadError, connectorReadError);
+
   const scrollToOnlineMaterials = () => {
     document.querySelector('.materials-primary-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  const scrollToMaterialInventory = () => {
+    document.querySelector('.materials-inventory-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const handleNextAction = () => {
+    if (currentBlocker.action === 'refresh') {
+      void refresh();
+      return;
+    }
+    if (currentBlocker.action === 'connect' || currentBlocker.action === 'review-connectors') {
+      scrollToOnlineMaterials();
+      return;
+    }
+    if (currentBlocker.action === 'review-materials') {
+      scrollToMaterialInventory();
+      return;
+    }
+    navigateToProjectPath('/settings', project);
+  };
+
   return (
-    <section className={`card mb-4 status-card status-${tone}`} aria-label="企业资料接入与业务理解输入就绪度">
-      <span className="panel-kicker">企业资料 · 就绪链路</span>
-      <h2>{title}</h2>
-      <p className="muted">{detail}</p>
+    <section className={`card mb-4 status-card status-${currentBlocker.tone}`} aria-label="企业资料接入与业务理解输入就绪度">
+      <span className="panel-kicker">企业资料 · 当前判断</span>
+      <h2>{currentBlocker.headline}</h2>
+      <p className="muted">{currentBlocker.detail}</p>
 
       <div className="customer-summary-grid settings-mt-10" aria-label="企业资料三层就绪状态">
         <article className={`customer-summary-card tone-${sourceStage.tone}`}>
@@ -196,32 +394,19 @@ export function MaterialsOnboardingHandoff() {
         </article>
       </div>
 
-      <div className="settings-actions settings-mt-10">
-        {cleanReady ? (
-          onlyUploadedReady ? (
-            <>
-              <button type="button" className="btn btn-primary" onClick={scrollToOnlineMaterials}>连接在线资料（推荐）</button>
-              <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>暂用补充资料，继续系统与环境</button>
-              <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/campaigns', project)}>已配置过？运行前检查</button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="btn btn-primary" onClick={() => navigateToProjectPath('/settings', project)}>下一步：系统与环境</button>
-              <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/campaigns', project)}>已配置过？运行前检查</button>
-            </>
-          )
-        ) : (
-          <>
-            {snapshot.connectorCount === 0 && !connectorReadError && (
-              <button type="button" className="btn btn-primary" onClick={scrollToOnlineMaterials}>连接在线资料</button>
-            )}
-            <button type="button" className={snapshot.connectorCount === 0 && !connectorReadError ? 'btn btn-secondary' : 'btn btn-primary'} onClick={() => void refresh()} disabled={loading}>{loading ? '正在核对…' : '重新核对资料状态'}</button>
-            <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>同时配置系统与环境</button>
-          </>
-        )}
+      <div className={`status-card status-${currentBlocker.tone} settings-mt-10`} aria-label="企业资料当前最重要动作">
+        <span className="panel-kicker">当前最重要动作</span>
+        <strong>{currentBlocker.actionLabel}</strong>
+        <p className="muted">只显示当前最高优先级动作；其他资料状态仍保留在下方连接器与统一资料清单中查看。</p>
+        <div className="settings-actions settings-mt-10">
+          <button type="button" className="btn btn-primary" onClick={handleNextAction} disabled={loading && currentBlocker.action === 'refresh'}>
+            {loading && currentBlocker.action === 'refresh' ? '正在核对…' : currentBlocker.actionLabel}
+          </button>
+        </div>
       </div>
 
       {connectorReadError && <p className="settings-inline-feedback settings-mt-10" role="alert">在线资料源状态暂时无法核对：{connectorReadError}</p>}
+      {materialReadError && <p className="settings-inline-feedback settings-mt-10" role="alert">企业资料状态暂时无法核对：{materialReadError}</p>}
     </section>
   );
 }
