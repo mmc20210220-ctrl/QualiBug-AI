@@ -13,11 +13,13 @@ import {
   type UploadFixtureRecord,
 } from '../api/upload-fixtures';
 import { runV12ScanFromRunCenter } from '../api/run-center';
+import { RunPreflightDecisionSnapshot } from '../components/run/RunPreflightDecisionSnapshot';
 import {
   RunUploadFixtureSelector,
   type UploadScenarioRunState,
 } from '../components/run/RunUploadFixtureSelector';
 import { useToast } from '../components/useToast';
+import { deriveRunPreflightPresentation } from '../lib/run-preflight-presentation';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { asArray, asNum, asRecord, asText } from '../lib/value-guards';
@@ -116,6 +118,7 @@ export function EnterpriseCampaigns() {
 
   const [preflight, setPreflight] = useState<ScanPreflight | null>(null);
   const [loadingPreflight, setLoadingPreflight] = useState(false);
+  const [preflightError, setPreflightError] = useState('');
   const [services, setServices] = useState<SavedServiceConfig[]>([]);
   const [serviceError, setServiceError] = useState('');
   const [sources, setSources] = useState<SourceSummary[]>([]);
@@ -142,6 +145,7 @@ export function EnterpriseCampaigns() {
   const refreshContext = useCallback(async () => {
     if (!project) {
       setPreflight(null);
+      setPreflightError('');
       setServices([]);
       setSources([]);
       setApprovedFixtures([]);
@@ -151,6 +155,7 @@ export function EnterpriseCampaigns() {
     }
     setLoadingPreflight(true);
     setLoadingFixtures(true);
+    setPreflightError('');
     setError('');
     const [preflightResult, serviceResult, knowledgeResult, fixtureResult] = await Promise.allSettled([
       getScanPreflight(project),
@@ -158,13 +163,21 @@ export function EnterpriseCampaigns() {
       getKnowledgeAsset(project),
       listUploadFixtures(project, false),
     ]);
-    if (preflightResult.status === 'fulfilled') setPreflight(preflightResult.value);
-    else { setPreflight(null); setError(preflightResult.reason instanceof Error ? preflightResult.reason.message : '运行前检查失败'); }
+    if (preflightResult.status === 'fulfilled') {
+      setPreflight(preflightResult.value);
+      setPreflightError('');
+    } else {
+      setPreflight(null);
+      setPreflightError(preflightResult.reason instanceof Error ? preflightResult.reason.message : '运行前检查失败');
+    }
     if (serviceResult.status === 'fulfilled') {
       const payload = asRecord(serviceResult.value);
       setServices(asArray(payload.services).map((item) => asRecord(item) as SavedServiceConfig));
       setServiceError('');
-    } else { setServices([]); setServiceError(serviceResult.reason instanceof Error ? serviceResult.reason.message : '服务配置读取失败'); }
+    } else {
+      setServices([]);
+      setServiceError(serviceResult.reason instanceof Error ? serviceResult.reason.message : '服务配置读取失败');
+    }
     if (knowledgeResult.status === 'fulfilled') {
       const asset = asRecord(asRecord(knowledgeResult.value).knowledge_asset);
       setSources(asArray(asset.sources || asset.source_inventory).map((value) => {
@@ -177,7 +190,10 @@ export function EnterpriseCampaigns() {
         };
       }).filter((source) => source.source_id && source.status !== 'deleted'));
       setSourceError('');
-    } else { setSources([]); setSourceError(knowledgeResult.reason instanceof Error ? knowledgeResult.reason.message : '资料读取失败'); }
+    } else {
+      setSources([]);
+      setSourceError(knowledgeResult.reason instanceof Error ? knowledgeResult.reason.message : '资料读取失败');
+    }
     if (fixtureResult.status === 'fulfilled') {
       const fixtures = activeApprovedFixtures(fixtureResult.value.fixtures);
       const activeRefs = new Set(fixtures.map((fixture) => asText(fixture.binding_ref)));
@@ -199,12 +215,16 @@ export function EnterpriseCampaigns() {
     () => services.filter((service) => service.enabled !== false && asText(service.base_url)),
     [services],
   );
-  const configuredAuthCount = useMemo(() => services.filter(hasConfiguredAuth).length, [services]);
-  const configuredDbCount = useMemo(() => services.filter(hasConfiguredDb).length, [services]);
+  const activeSources = useMemo(
+    () => sources.filter((source) => source.status.trim().toLowerCase() === 'active'),
+    [sources],
+  );
+  const configuredAuthCount = useMemo(() => enabledServices.filter(hasConfiguredAuth).length, [enabledServices]);
+  const configuredDbCount = useMemo(() => enabledServices.filter(hasConfiguredDb).length, [enabledServices]);
   const apiSources = useMemo(() => {
     const apiTypes = new Set(['openapi', 'openapi3', 'swagger', 'postman', 'api_spec']);
-    return sources.filter((source) => apiTypes.has((source.source_type || '').toLowerCase()));
-  }, [sources]);
+    return activeSources.filter((source) => apiTypes.has((source.source_type || '').toLowerCase()));
+  }, [activeSources]);
   const resolvedTargetBaseUrl = targetBaseUrl.trim() || asText(enabledServices[0]?.base_url);
   const resolvedSourceId = selectedSourceId || apiSources[0]?.source_id || '';
   const blockers = preflight?.reasons || [];
@@ -212,48 +232,21 @@ export function EnterpriseCampaigns() {
   const runBlockedByPreflight = !loadingPreflight && !preflightReady;
   const runBlockedByScenario = !forceReadOnly && (scenarioState.loading || Boolean(scenarioState.error));
   const runDisabled = running || loadingPreflight || loadingFixtures || runBlockedByPreflight || runBlockedByScenario;
-  const runButtonLabel = running
-    ? '正在自主验证…'
-    : loadingPreflight
-      ? '正在检查运行条件…'
-      : runBlockedByPreflight
-        ? blockers.length > 0 ? `先处理 ${blockers.length} 项阻断` : '运行前检查未通过'
-        : runBlockedByScenario
-          ? scenarioState.loading ? '正在同步审批场景…' : '审批场景同步失败'
-          : '执行标准扫描';
-
-  const readinessCards = [
-    {
-      label: '目标系统',
-      value: enabledServices.length > 0 ? '已自动匹配' : '待接入',
-      note: enabledServices[0] ? `${serviceDisplayName(enabledServices[0])} · 运行时自动使用已登记测试地址` : '尚未发现可用测试地址',
-      tone: enabledServices.length > 0 ? 'success' : 'warning',
-    },
-    {
-      label: '登录能力',
-      value: configuredAuthCount > 0 ? '已自动复用' : '待补充',
-      note: configuredAuthCount > 0 ? `${configuredAuthCount} 组测试凭据可供后台自动登录` : '尚未发现可用测试凭据',
-      tone: configuredAuthCount > 0 ? 'success' : 'warning',
-    },
-    {
-      label: '企业资料',
-      value: sources.length > 0 ? '已自动绑定' : '待导入',
-      note: sources.length > 0 ? `${sources.length} 份资料已入库，执行时自动选择有效快照` : '尚未发现企业资料',
-      tone: sources.length > 0 ? 'success' : 'warning',
-    },
-    {
-      label: '审批上传场景',
-      value: forceReadOnly ? '只读熔断跳过' : scenarioState.loading ? '后台同步中' : scenarioState.error ? '同步失败' : `${scenarioState.refs.length} 个自动纳入`,
-      note: forceReadOnly ? '本次不会执行任何上传写场景' : scenarioState.error || (scenarioState.refs.length > 0 ? '上传、提交、断言和业务 cleanup 已绑定' : '当前没有活动审批上传场景'),
-      tone: forceReadOnly ? 'neutral' : scenarioState.loading ? 'neutral' : scenarioState.error ? 'danger' : scenarioState.refs.length > 0 ? 'warning' : 'neutral',
-    },
-    {
-      label: '运行状态',
-      value: loadingPreflight ? '后台检查中' : preflightReady ? '可以开始' : `${blockers.length} 项阻断`,
-      note: loadingPreflight ? '正在自动核对必要条件' : preflightReady ? '无需再配置运行参数' : '只在无法继续时要求补充必要信息',
-      tone: loadingPreflight ? 'neutral' : preflightReady ? 'success' : 'danger',
-    },
-  ];
+  const preflightPresentation = deriveRunPreflightPresentation({
+    preflight,
+    loadingPreflight,
+    preflightError,
+    enabledServiceCount: enabledServices.length,
+    serviceError,
+    configuredAuthCount,
+    activeSourceCount: activeSources.length,
+    totalSourceCount: sources.length,
+    sourceError,
+    forceReadOnly,
+    scenarioLoading: scenarioState.loading,
+    scenarioError: scenarioState.error,
+    scenarioCount: scenarioState.refs.length,
+  });
 
   const toggleFixture = useCallback((bindingRef: string) => {
     const normalized = bindingRef.trim();
@@ -338,50 +331,75 @@ export function EnterpriseCampaigns() {
   const missingExtraFixtures = lastRunFixtureRefs.filter((ref) => !runtimeFixtureRefs.includes(ref));
   const fixtureBindingMismatch = Boolean(result && missingExtraFixtures.length > 0);
 
+  const reviewRunBlocker = () => {
+    const targetId = preflightReady && !forceReadOnly && scenarioState.error
+      ? 'run-safety-overrides'
+      : 'run-blocker-details';
+    document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <div>
       <div className="page-header">
         <div>
           <span className="panel-kicker">自主验证入口</span>
           <h1>运行中心</h1>
-          <p>QualiBug 自动读取系统接入、测试凭据、企业资料、审批场景和安全策略。正常情况下，用户只需要点击一次。</p>
+          <p>先看运行前检查结论，再决定是否启动。系统接入、企业资料和测试凭据只负责解释上下文，最终是否可运行始终由后端 Preflight 决定。</p>
         </div>
-        <div className="settings-actions"><button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>接入信息</button></div>
+        <div className="settings-actions">
+          <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/materials', project)}>企业资料</button>
+          <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>接入信息</button>
+        </div>
       </div>
 
-      <div className="customer-summary-grid mb-4">
-        {readinessCards.map((item) => <article key={item.label} className={`customer-summary-card tone-${item.tone}`}><span>{item.label}</span><strong>{item.value}</strong><small>{item.note}</small></article>)}
-      </div>
+      <RunPreflightDecisionSnapshot
+        presentation={preflightPresentation}
+        running={running}
+        runDisabled={runDisabled}
+        onRun={() => void runStandardScan()}
+        onRefresh={() => void refreshContext()}
+        onReview={reviewRunBlocker}
+      />
 
-      {!loadingPreflight && !preflightReady && blockers.length > 0 && (
-        <section className="card mb-4 status-card status-warning">
-          <h2>还缺少无法自动推断的必要信息</h2>
-          <p className="muted">系统已经完成自动检查，只把真正会阻断执行的事项交给用户处理。</p>
-          <ul>{blockers.map((reason) => <li key={reason.code}>{reason.message}</li>)}</ul>
-          <details className="mt-3"><summary>查看技术原因</summary><ul>{blockers.map((reason) => <li key={`code-${reason.code}`}><code>{reason.code}</code></li>)}</ul></details>
-          <div className="settings-actions"><button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>补充必要信息</button><button type="button" className="btn btn-secondary" onClick={() => void refreshContext()} disabled={loadingPreflight}>后台重新检查</button></div>
+      {!loadingPreflight && !preflightError && !preflightReady && blockers.length > 0 && (
+        <section className="card mb-4 status-card status-warning" id="run-blocker-details">
+          <span className="panel-kicker">运行阻断详情</span>
+          <h2>后端报告 {blockers.length} 项真实阻断</h2>
+          <p className="muted">首屏只突出第一个上报阻断；这里保留全部后端原因。前端不会根据代码名称自行判断哪个资料或配置一定是根因。</p>
+          <ul>{blockers.map((reason) => <li key={`${reason.code}-${reason.message}`}>{reason.message}</li>)}</ul>
+          <details className="mt-3">
+            <summary>查看技术原因代码</summary>
+            <ul>{blockers.map((reason) => <li key={`code-${reason.code}-${reason.message}`}><code>{reason.code || 'UNSPECIFIED'}</code></li>)}</ul>
+          </details>
+          <div className="settings-actions">
+            <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/materials', project)}>核对企业资料</button>
+            <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>核对接入信息</button>
+            <button type="button" className="btn btn-secondary" onClick={() => void refreshContext()} disabled={loadingPreflight}>重新检查</button>
+          </div>
         </section>
       )}
 
-      <section className="card mb-4">
-        <span className="panel-kicker">零配置运行</span>
-        <h2>开始企业系统验证</h2>
-        <p className="muted">后台会自动选择目标服务、有效资料快照、登录方式、测试数据方案和可执行场景；只有安全门禁或关键歧义无法解决时才会中断。</p>
-        <div className="settings-grid">
-          <div><span className="muted">自动目标</span><p>{enabledServices[0] ? `${serviceDisplayName(enabledServices[0])} · ${asText(enabledServices[0].base_url)}` : (serviceError ? `读取失败：${serviceError}` : '由后台从项目上下文解析')}</p></div>
-          <div><span className="muted">自动资料</span><p>{sourceError ? `读取失败：${sourceError}` : resolvedSourceId ? `${apiSources.find((source) => source.source_id === resolvedSourceId)?.filename || resolvedSourceId}` : `${sources.length} 份资料由后台自动选择`}</p></div>
-          <div><span className="muted">自动场景</span><p>{forceReadOnly ? '本次只读熔断，跳过全部上传场景' : scenarioState.loading ? '正在同步审批场景…' : scenarioState.error ? `同步失败：${scenarioState.error}` : scenarioState.refs.length > 0 ? `${scenarioState.refs.length} 个已审批 UI 场景由后台自动纳入` : '普通接口、页面与只读验证由后台自动生成'}</p></div>
-          <div><span className="muted">自动观察</span><p>{configuredDbCount > 0 ? `接口、页面及 ${configuredDbCount} 组数据库观察自动编排` : '接口与页面观察自动编排；数据库为可选增强'}</p></div>
-          <div><span className="muted">安全边界</span><p>{forceReadOnly ? '强制只读已开启，后台不会发送写请求' : '环境类型、审批、before/after 与 cleanup 由后台门禁控制'}</p></div>
-        </div>
-        <div className="settings-actions">
-          <button type="button" className="btn btn-primary" onClick={() => void runStandardScan()} disabled={runDisabled} aria-describedby="run-readiness-hint">{runButtonLabel}</button>
-          <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>查看系统总览</button>
-        </div>
-        <p className="muted" id="run-readiness-hint">{runBlockedByPreflight ? '运行前检查未通过时不会提交扫描请求；请先处理上方阻断项并重新检查。' : '阻断、仅计划和部分覆盖会如实展示，不会被包装成通过；发现结果会自动进入问题清单和证据中心。'}</p>
-      </section>
-
       <details className="card mb-4">
+        <summary>
+          <strong>本次自动选择与安全边界</strong>
+          <span className="muted">用于核对，不参与替代 Preflight 结论</span>
+        </summary>
+        <div className="mt-3">
+          <p className="muted">后台会自动选择目标服务、有效资料快照、登录方式、测试数据方案和可执行场景；以下内容只是本次上下文说明。</p>
+          <div className="settings-grid">
+            <div><span className="muted">自动目标</span><p>{enabledServices[0] ? `${serviceDisplayName(enabledServices[0])} · ${asText(enabledServices[0].base_url)}` : (serviceError ? `读取失败：${serviceError}` : '由后台从项目上下文解析')}</p></div>
+            <div><span className="muted">自动资料</span><p>{sourceError ? `读取失败：${sourceError}` : resolvedSourceId ? `${apiSources.find((source) => source.source_id === resolvedSourceId)?.filename || resolvedSourceId}` : `${activeSources.length} 份 active 资料可供后台自动选择`}</p></div>
+            <div><span className="muted">自动场景</span><p>{forceReadOnly ? '本次只读熔断，跳过全部上传场景' : scenarioState.loading ? '正在同步审批场景…' : scenarioState.error ? `同步失败：${scenarioState.error}` : scenarioState.refs.length > 0 ? `${scenarioState.refs.length} 个已审批 UI 场景由后台自动纳入` : '普通接口、页面与只读验证由后台自动生成'}</p></div>
+            <div><span className="muted">自动观察</span><p>{configuredDbCount > 0 ? `接口、页面及 ${configuredDbCount} 组数据库观察自动编排` : '接口与页面观察自动编排；数据库为可选增强'}</p></div>
+            <div><span className="muted">安全边界</span><p>{forceReadOnly ? '强制只读已开启，后台不会发送写请求' : '环境类型、审批、before/after 与 cleanup 由后台门禁控制'}</p></div>
+          </div>
+          <div className="settings-actions">
+            <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>查看系统总览</button>
+          </div>
+        </div>
+      </details>
+
+      <details className="card mb-4" id="run-safety-overrides">
         <summary><strong>异常覆盖与安全熔断</strong> <span className="muted">仅在后台识别错误或需要紧急只读时使用</span></summary>
         <p className="muted mt-3">正常运行不需要维护以下字段。填写后只覆盖本次执行，不改变后台的长期自动理解责任。</p>
         <div className="settings-grid">
