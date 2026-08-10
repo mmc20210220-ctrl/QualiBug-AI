@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { MaterialsOnboardingHandoff } from './materials/MaterialsOnboardingHandoff';
+import { RunCustomerResultSummary } from './run/RunCustomerResultSummary';
 import { RunLifecycleBanner } from './run/RunLifecycleBanner';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
@@ -38,6 +39,7 @@ export function Layout() {
         <Topbar navOpen={mobileNavOpen} onToggleNav={() => setMobileNavOpen((open) => !open)} />
         <div className="content">
           <RunLifecycleBanner />
+          <RunCustomerResultSummary />
           <MaterialsOnboardingHandoff />
           <Outlet />
         </div>
