@@ -6,6 +6,23 @@ function elapsedSeconds(detail: RunLifecycleDetail, now: number): number {
   return Math.max(0, Math.floor((end - detail.startedAt) / 1000));
 }
 
+function lifecycleTone(detail: RunLifecycleDetail): 'success' | 'warning' | 'danger' {
+  if (detail.phase === 'failed') return 'danger';
+  if (detail.phase === 'submitted') return 'warning';
+
+  const executionStatus = detail.executionStatus.toLowerCase();
+  const campaignStatus = detail.campaignStatus.toLowerCase();
+  const testDataStatus = detail.testDataStatus.toLowerCase();
+  if (['blocked', 'failed', 'error'].includes(executionStatus) || campaignStatus === 'blocked') return 'danger';
+  if (
+    ['plan_only', 'partial', 'partial_coverage', 'coverage_deferred', 'not_executed'].includes(executionStatus)
+    || campaignStatus === 'coverage_deferred'
+    || (testDataStatus && testDataStatus !== 'ready')
+    || detail.totalFindings > 0
+  ) return 'warning';
+  return 'success';
+}
+
 export function RunLifecycleBanner() {
   const [detail, setDetail] = useState<RunLifecycleDetail | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -67,7 +84,7 @@ export function RunLifecycleBanner() {
 
   if (!detail) return null;
 
-  const tone = detail.phase === 'failed' ? 'danger' : detail.phase === 'completed' ? 'success' : 'warning';
+  const tone = lifecycleTone(detail);
   const title = detail.phase === 'submitted'
     ? '后台正在执行真实验证'
     : detail.phase === 'completed'
