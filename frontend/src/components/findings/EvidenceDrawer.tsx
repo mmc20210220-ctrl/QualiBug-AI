@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import type { Finding } from '../../types';
+import { buildFindingEvidencePackageHtml, buildFindingEvidencePackageText } from '../../lib/finding-evidence-package';
 import { EvidenceTimeline } from '../EvidenceTimeline';
 
 interface EvidenceDrawerProps {
@@ -7,9 +9,30 @@ interface EvidenceDrawerProps {
 }
 
 export function EvidenceDrawer({ finding, onClose }: EvidenceDrawerProps) {
+  const [exportStatus, setExportStatus] = useState('');
   if (!finding) return null;
   const quality = finding.evidence_quality;
   const chain = finding.evidence_chain || [];
+
+  const copyEvidencePackage = async () => {
+    try {
+      await navigator.clipboard.writeText(buildFindingEvidencePackageText(finding));
+      setExportStatus('脱敏证据包已复制');
+    } catch {
+      setExportStatus('复制失败，请使用打印版证据包');
+    }
+    window.setTimeout(() => setExportStatus(''), 2500);
+  };
+
+  const openPrintableEvidencePackage = () => {
+    const html = buildFindingEvidencePackageHtml(finding);
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => URL.revokeObjectURL(url), opened ? 60_000 : 1_000);
+    setExportStatus(opened ? '已打开脱敏打印版证据包' : '浏览器阻止了新窗口，请允许弹窗后重试');
+    window.setTimeout(() => setExportStatus(''), 2500);
+  };
 
   return (
     <>
@@ -20,9 +43,18 @@ export function EvidenceDrawer({ finding, onClose }: EvidenceDrawerProps) {
             <span className={`severity-badge ${finding.severity.toLowerCase()}`}>{finding.severity}</span>
             <strong style={{ marginLeft: 8, fontSize: 14 }}>{finding.title}</strong>
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={onClose}>关闭</button>
+          <div className="settings-actions">
+            <button className="btn btn-secondary btn-sm" onClick={() => void copyEvidencePackage()}>复制脱敏证据包</button>
+            <button className="btn btn-secondary btn-sm" onClick={openPrintableEvidencePackage}>打印 / PDF</button>
+            <button className="btn btn-secondary btn-sm" onClick={onClose}>关闭</button>
+          </div>
         </div>
+        {exportStatus && <div className="settings-inline-feedback" role="status">{exportStatus}</div>}
         <div className="evidence-drawer-body">
+          <div className="settings-card-note" style={{ marginBottom: 14 }}>
+            外发操作只生成前端脱敏副本，不会创建公开链接或自动上传第三方。原始证据仍以当前证据中心为唯一事实源。
+          </div>
+
           {/* 证据质量 */}
           <div className="quality-score">
             <div className="quality-score-info">
@@ -63,6 +95,7 @@ export function EvidenceDrawer({ finding, onClose }: EvidenceDrawerProps) {
               <pre style={{ fontSize: 12, background: 'var(--surface-2)', padding: 12, borderRadius: 8, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                 <code>{finding.reproduction.curl_command}</code>
               </pre>
+              <p className="settings-hint">原始复现命令仅在登录后的证据中心展示；复制/打印外发包会重新执行脱敏，不直接复用该原始文本。</p>
             </div>
           )}
 
