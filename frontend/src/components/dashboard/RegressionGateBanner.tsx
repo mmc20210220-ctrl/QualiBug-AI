@@ -8,16 +8,16 @@ function releaseTone(overallStatus: string): string {
 
 function releaseLabel(overallStatus: string): string {
   if (overallStatus === 'fail') return '发布门禁阻塞，不能直接发布';
-  if (overallStatus === 'pending') return '发布门禁待处理，需先完成回归或复核';
+  if (overallStatus === 'pending') return '发布门禁待确认，需先完成验证或复核';
   return '发布门禁状态待同步';
 }
 
 function gateLabel(gateStatus: string, hasPendingObligation: boolean): string {
-  if (gateStatus === 'failed') return '最近回归失败，建议阻断发布';
-  if (gateStatus === 'manual_approval_required') return '最近回归需要人工复核';
-  if (gateStatus === 'passed') return '最近回归通过';
-  if (hasPendingObligation) return '已生成回归义务，尚未执行回归';
-  return '最近回归状态待同步';
+  if (gateStatus === 'failed') return '最近修复后验证失败，建议阻断发布';
+  if (gateStatus === 'manual_approval_required') return '最近修复后验证需要人工复核';
+  if (gateStatus === 'passed') return '最近修复后验证通过';
+  if (hasPendingObligation) return '已生成验证义务，尚未执行修复后验证';
+  return '最近验证状态待同步';
 }
 
 function gateTone(gateStatus: string, hasPendingObligation: boolean): string {
@@ -28,7 +28,7 @@ function gateTone(gateStatus: string, hasPendingObligation: boolean): string {
 }
 
 /**
- * 发布门禁 / 回归门禁首屏警示条。
+ * 发布门禁 / 修复后验证门禁首屏警示条。
  * 数据来源：pipeline record 的 release_gate / regression_* 字段；
  * 无阻断事项时渲染 null（不占用首屏）。
  */
@@ -45,10 +45,10 @@ export function RegressionGateBanner({ record }: { record: JsonRecord }) {
       <section className={`customer-status-card ${releaseTone(releaseOverall)} mb-4`}>
         <span>发布门禁 Gate</span>
         <strong>{releaseLabel(releaseOverall)}</strong>
-        <p>{asText(regressionGateCheck?.detail) || '后端 release_gate 合同显示当前仍存在发布阻断或待处理项。'}</p>
+        <p>{asText(regressionGateCheck?.detail) || '后端 release_gate 合同显示当前仍存在发布阻断或待确认项。'}</p>
         <div className="customer-secondary-meta">
           <span><em>阻塞项</em><b>{blockingCount}</b></span>
-          <span><em>待处理</em><b>{pendingCount}</b></span>
+          <span><em>待确认</em><b>{pendingCount}</b></span>
           <span><em>门禁来源</em><b>{asText(releaseGate.source) || 'release_gate'}</b></span>
           <span><em>首要检查</em><b>{asText(regressionGateCheck?.name) || '发布门禁'}</b></span>
         </div>
@@ -78,14 +78,14 @@ export function RegressionGateBanner({ record }: { record: JsonRecord }) {
 
   return (
     <section className={`customer-status-card ${gateTone(gateStatus, hasPendingObligation)} mb-4`}>
-      <span>修复后回归 Gate</span>
+      <span>修复后验证 Gate</span>
       <strong>{gateLabel(gateStatus, hasPendingObligation)}</strong>
-      <p>{ciMessage || (hasPendingObligation ? '扫描后已经形成 confirmed bug 回归义务，但客户尚未运行回归；发布前需要先执行 Smoke 或 Release 回归。' : gateStatus === 'failed' ? '最近一次回归仍有失败探针，不能声明缺陷已修复。' : '最近一次回归仍有需人工确认的探针，不能直接进入发布结论。')}</p>
+      <p>{ciMessage || (hasPendingObligation ? '扫描后已经形成 confirmed bug 的真实验证义务，但尚未执行；发布前需要先完成 Smoke 或 Release 修复后验证。' : gateStatus === 'failed' ? '最近一次修复后验证仍有失败探针，不能声明缺陷已修复。' : '最近一次修复后验证仍有需人工确认的探针，不能直接进入发布结论。')}</p>
       <div className="customer-secondary-meta">
         <span><em>通过</em><b>{passed}</b></span>
         <span><em>失败</em><b>{failed}</b></span>
-        <span><em>{hasPendingObligation ? '待执行' : '需复核'}</em><b>{pending}</b></span>
-        <span><em>回归义务</em><b>{obligationCount}</b></span>
+        <span><em>{hasPendingObligation ? '待验证' : '需复核'}</em><b>{pending}</b></span>
+        <span><em>验证义务</em><b>{obligationCount}</b></span>
         <span><em>确认缺陷台账</em><b>{confirmedLedgerProbeCount}</b></span>
         <span><em>最近执行</em><b>{generatedAt || '未执行'}</b></span>
       </div>
