@@ -237,13 +237,28 @@ def _evaluate_release_gate(*, project: str, root: Path, campaign: dict[str, Any]
 
     gate_status = str(_as_dict(gate).get("status") or "reported").strip().lower()
     gate_verdict = str(_as_dict(gate).get("verdict") or "unspecified").strip().lower()
-    mark_scan_stage(
-        root,
-        project,
-        "delivery_finalization",
-        "failed" if gate_status in {"failed", "error", "invalid"} else "completed",
-        detail=f"release_gate={gate_status} verdict={gate_verdict}"[:240],
-    )
+    if gate_status in {"failed", "error", "invalid"}:
+        mark_scan_stage(
+            root,
+            project,
+            "delivery_finalization",
+            "failed",
+            detail=f"release_gate={gate_status} verdict={gate_verdict}"[:240],
+        )
+    else:
+        # The release verdict is now known, but the report/result finalization
+        # still runs in the scan coordinator. Keep this stage ACTIVE until the
+        # first-class post-hook confirms the final result/report boundary.
+        mark_scan_stage(
+            root,
+            project,
+            "delivery_finalization",
+            "active",
+            detail=(
+                f"release_gate={gate_status} verdict={gate_verdict}; "
+                "报告与最终结果正在收口"
+            )[:240],
+        )
     return gate
 
 
