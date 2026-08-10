@@ -10,6 +10,7 @@ import { QualityScore } from '../components/evidence/QualityScore';
 import { ReplayPanel } from '../components/evidence/ReplayPanel';
 import { Skeleton } from '../components/dashboard/DashboardPrimitives';
 import { FindingVerificationPanel } from '../components/findings/FindingVerificationPanel';
+import { FindingVerificationStatus } from '../components/findings/FindingVerificationStatus';
 import { TermHint } from '../components/TermHint';
 import { GLOSSARY } from '../lib/glossary';
 import type { Finding } from '../types';
@@ -151,6 +152,7 @@ export function EvidenceChain() {
                   {finding.title}
                 </h4>
                 <span>{moduleName(finding)} · 证据 {evidenceScoreLabel(finding)} · {hasRealReplayAsset(finding) ? '可回放' : '待补充'}</span>
+                <div style={{ marginTop: 8 }}><FindingVerificationStatus finding={finding} compact /></div>
               </div>
             ))}
           </div>
@@ -177,6 +179,7 @@ export function EvidenceChain() {
                   <span className={`severity-badge ${selected.severity.toLowerCase()}`}>{selected.severity}</span>
                   <h2 style={{ font: '700 18px var(--font-display)', flex: 1 }}>{selected.title}</h2>
                 </div>
+                <FindingVerificationStatus finding={selected} />
                 <QualityScore finding={selected} />
                 <h4 style={{ fontSize: 13, fontWeight: 700, margin: '16px 0 8px' }}>预期 vs 实际</h4>
                 <AssertionDiff comparison={selected.expected_actual_comparison} expected={selected.expected} actual={selected.actual} />
