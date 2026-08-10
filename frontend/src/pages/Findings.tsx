@@ -70,6 +70,7 @@ export function Findings() {
   });
   const hasActiveFilter = filter !== 'all' || Boolean(searchQuery.trim());
 
+  const regressionEligible = confirmed.some((f) => Boolean(f.regression?.included_in_suite));
   const pendingRegression = confirmed.filter((f) => f.regression && f.regression.included_in_suite && f.regression.latest_status !== 'passed');
   const passedRegression = confirmed.filter((f) => f.regression?.latest_status === 'passed');
   const failedRegression = confirmed.filter((f) => f.regression?.latest_status === 'failed');
@@ -81,6 +82,10 @@ export function Findings() {
 
   const runReleaseRegression = async (): Promise<void> => {
     if (!project || regressionRunning) return;
+    if (!regressionEligible) {
+      toast.show('当前没有已纳入回归套件的真实缺陷义务；不会提交空回归请求。', 'warning');
+      return;
+    }
     setRegressionRunning(true);
     try {
       toast.show('正在执行 Release 回归…', 'info');
@@ -116,9 +121,9 @@ export function Findings() {
             {clues.length > 0 && <> · {clues.length} 条<TermHint label="待补证线索" hint={GLOSSARY.clue} /></>}
           </span>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-secondary" onClick={() => void runReleaseRegression()} disabled={!project || regressionRunning}>
-            {regressionRunning ? 'Release 回归中' : '执行 Release 回归'}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" onClick={() => void runReleaseRegression()} disabled={!project || regressionRunning || !regressionEligible} title={regressionEligible ? '运行当前已纳入套件的 Release 回归' : '当前没有已纳入回归套件的缺陷'}>
+            {regressionRunning ? 'Release 回归中' : regressionEligible ? '执行 Release 回归' : '暂无可执行回归'}
           </button>
           <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/evidence', project)}>证据中心</button>
           <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project)}>发布门禁</button>
