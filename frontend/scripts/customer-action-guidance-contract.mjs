@@ -17,6 +17,7 @@ const evidence = read('src/pages/EvidenceChain.tsx');
 const evidenceDrawer = read('src/components/findings/EvidenceDrawer.tsx');
 const qualityScore = read('src/components/evidence/QualityScore.tsx');
 const evidencePresentation = read('src/lib/evidence-presentation.ts');
+const projectNavigation = read('src/lib/project-navigation.ts');
 const coverage = read('src/pages/CoverageMatrix.tsx');
 const layout = read('src/components/Layout.tsx');
 const sidebar = read('src/components/Sidebar.tsx');
@@ -34,6 +35,8 @@ assert(app.includes('<Route path="/test-tasks" element={<PreserveSearchRedirect 
 assert(app.includes('<Route path="/clues" element={<PreserveSearchRedirect to="/settings" />} />'), 'legacy clues route must preserve project context');
 assert(app.includes('<Route path="/products" element={<PreserveSearchRedirect to="/dashboard" />} />'), 'legacy products route must preserve project context');
 assert(app.includes('<Route path="*" element={<PreserveSearchRedirect to="/dashboard" />} />'), 'unknown authenticated routes must fail safe to the current project dashboard');
+assert(projectNavigation.includes("const navigateToProjectPath = useCallback((pathname: string, projectId?: string, currentSearch = '') =>"), 'project navigation must accept optional entity query context');
+assert(projectNavigation.includes('buildProjectPath(pathname, projectId, currentSearch)'), 'project navigation must preserve supplied entity context while setting project');
 
 assert(dashboard.includes("const coverageDeferred = campaignStatus === 'coverage_deferred';"), 'dashboard must distinguish deferred coverage from a clean completed scan');
 assert(dashboard.includes('const resultIncomplete = pipelineUnhealthy || campaignBlocked || coverageDeferred;'), 'dashboard must use one incomplete-result authority for customer actions');
@@ -96,6 +99,9 @@ assert(runCenter.includes('const tone = resultTone(response);'), 'run completion
 assert(runCenter.includes("completed: '已完成真实验证'"), 'run center must translate completed execution status for customers');
 assert(runCenter.includes('运行前检查未通过时不会提交扫描请求'), 'run center must explain fail-closed preflight behavior');
 
+assert(findings.includes("const requestedFindingId = params.get('finding')?.trim() || '';"), 'findings must accept a stable finding context when returning from evidence');
+assert(findings.includes('setExpandedId(requestedFindingId);'), 'returning to findings must reopen the exact requested finding');
+assert(findings.includes('当前不会用标题相似的问题代替它'), 'stale finding links must not guess a replacement by title');
 assert(findings.includes("const hasActiveFilter = filter !== 'all' || Boolean(searchQuery.trim());"), 'findings must distinguish an empty dataset from an empty filter result');
 assert(findings.includes('{(loading || confirmed.length > 0) && ('), 'zero-finding state must not render a meaningless all-zero filter bar');
 assert(findings.includes('const clearFilters = (): void => {'), 'filtered-empty state must provide a direct reset action');
@@ -111,6 +117,8 @@ assert(evidence.includes("const requestedFindingId = params.get('finding')?.trim
 assert(evidence.includes("? withEvidence.find((f) => f.id === requestedFindingId) || null"), 'requested finding must be selected only when that exact finding has evidence');
 assert(evidence.includes('证据中心不会静默切换到另一条问题来冒充当前证据'), 'missing requested evidence must never silently fall back to another finding');
 assert(evidence.includes('setParams(next, { replace: true });'), 'evidence selection must keep the selected finding in URL state');
+assert(evidence.includes('const findingContextSearch = evidenceDeepLinkSearch(selected?.id || requestedFindingId);'), 'evidence center must retain the current finding identity for round-trip navigation');
+assert(evidence.includes("navigateToProjectPath('/findings', project, findingContextSearch)"), 'evidence to findings navigation must preserve exact finding context');
 assert(evidence.includes('evidenceScoreLabel(f)'), 'evidence list must preserve unknown evidence score instead of coercing to zero');
 assert(evidence.includes('!loading && error && ('), 'evidence read failures must have a dedicated error state');
 assert(evidence.includes('读取失败不能解释为“没有证据”或“没有问题”'), 'evidence read failure must never collapse into an empty-safe state');
