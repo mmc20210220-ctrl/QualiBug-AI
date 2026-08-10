@@ -47,7 +47,7 @@ const icons: Record<string, string> = {
 
 function SvgIcon({ name }: { name: string }) {
   const d = icons[name] || icons.overview;
-  return <svg viewBox="0 0 24 24"><path d={d} /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={d} /></svg>;
 }
 
 type SidebarProps = {
@@ -75,9 +75,9 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
       <div
         className={`sidebar-backdrop${mobileOpen ? ' open' : ''}`}
         onClick={onClose}
-        aria-hidden={mobileOpen ? 'false' : 'true'}
+        aria-hidden="true"
       />
-      <aside className={`sidebar${mobileOpen ? ' mobile-open' : ''}`}>
+      <aside id="primary-sidebar" className={`sidebar${mobileOpen ? ' mobile-open' : ''}`} aria-label="主导航">
         <div className="side-brand">
           <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">
             ×
@@ -104,7 +104,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           </div>
         </div>
 
-        <nav className="side-nav">
+        <nav className="side-nav" aria-label="客户项目导航">
           {sections.map((section) => (
             <div key={section.label} className="side-section-group">
               <div className="side-section">{section.label}</div>
