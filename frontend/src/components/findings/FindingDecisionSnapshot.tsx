@@ -21,7 +21,6 @@ export function FindingDecisionSnapshot({ finding, compact = false }: Props) {
           <span className="panel-kicker">问题判断摘要</span>
           <h3>先看结论，再看完整证据</h3>
         </div>
-        <FindingVerificationStatus finding={finding} compact />
       </div>
 
       <div className="finding-decision-grid">
