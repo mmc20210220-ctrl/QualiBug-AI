@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { deriveFindingVerification } from '../../lib/finding-verification';
+import { FindingDecisionSnapshot } from './FindingDecisionSnapshot';
 import { FindingVerificationPanel } from './FindingVerificationPanel';
 import { FindingVerificationStatus } from './FindingVerificationStatus';
 import type { Finding } from '../../types';
@@ -52,7 +53,6 @@ export function FindingCard({
   focusGeneratedAt = '',
 }: FindingCardProps) {
   const quality = finding.evidence_quality;
-  const impact = finding.business_summary || finding.business_impact?.summary || finding.actual || '该问题已形成可交付缺陷。';
   const [copyStatus, setCopyStatus] = useState('');
 
   const copySummary = async () => {
@@ -88,39 +88,48 @@ export function FindingCard({
 
       {expanded && (
         <div className="finding-card-expand">
-          <p style={{ marginBottom: 12, fontSize: 13, color: 'var(--muted)' }}>{impact}</p>
-          <div className="assertion-diff">
-            <div className="assertion-diff-row">
-              <span className="assertion-diff-label expected">预期</span>
-              <span className="assertion-diff-value">{finding.expected || '未指定'}</span>
-            </div>
-            <div className="assertion-diff-row">
-              <span className="assertion-diff-label actual">实际</span>
-              <span className="assertion-diff-value">{finding.actual || '未捕获'}</span>
-            </div>
-          </div>
+          <FindingDecisionSnapshot finding={finding} />
 
-          {finding.reproduction?.steps?.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <strong style={{ fontSize: 12, color: 'var(--subtle)' }}>复现步骤</strong>
-              <ol style={{ fontSize: 13, paddingLeft: 18, marginTop: 6 }}>
-                {finding.reproduction.steps.map((step, index) => <li key={index}>{step}</li>)}
-              </ol>
+          <details className="settings-auth-section mt-3">
+            <summary>
+              <strong>查看预期 / 实际与复现细节</strong>
+              <span className="muted">需要进一步核对时展开</span>
+            </summary>
+            <div className="mt-3">
+              <div className="assertion-diff">
+                <div className="assertion-diff-row">
+                  <span className="assertion-diff-label expected">预期</span>
+                  <span className="assertion-diff-value">{finding.expected || '未指定'}</span>
+                </div>
+                <div className="assertion-diff-row">
+                  <span className="assertion-diff-label actual">实际</span>
+                  <span className="assertion-diff-value">{finding.actual || '未捕获'}</span>
+                </div>
+              </div>
+
+              {finding.reproduction?.steps?.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <strong style={{ fontSize: 12, color: 'var(--subtle)' }}>复现步骤</strong>
+                  <ol style={{ fontSize: 13, paddingLeft: 18, marginTop: 6 }}>
+                    {finding.reproduction.steps.map((step, index) => <li key={index}>{step}</li>)}
+                  </ol>
+                </div>
+              )}
             </div>
-          )}
+          </details>
 
           <section className="customer-secondary-grid mt-3" aria-label="问题证据与产品边界">
             <article className="customer-secondary-card">
               <span className="customer-value-kicker">问题摘要</span>
-              <h3>保留可复现、可验收的信息</h3>
-              <p>摘要只包含 Finding 事实、证据、复现步骤和修复后验证义务。QualiBug 不记录企业内部负责人、修复版本、研发进度或工单流转。</p>
+              <h3>只复制可复现、可验收的信息</h3>
+              <p>摘要只包含 Finding 事实、证据、复现步骤和修复后验证义务，不混入企业内部研发流程。</p>
               <button type="button" className="btn btn-secondary settings-btn-mini" onClick={() => void copySummary()}>复制问题与验证摘要</button>
             </article>
 
             <article className="customer-secondary-card">
               <span className="customer-value-kicker">产品责任边界</span>
               <h3>只判断验证结果，不管理修复过程</h3>
-              <p>客户如何组织研发、由谁修复、在哪个版本修复都属于企业自己的流程。QualiBug 只在客户修复后重新执行真实验证，并据此更新 Finding 与发布判断。</p>
+              <p>QualiBug 不记录企业内部负责人、修复版本、研发进度或工单流转。客户修复后，QualiBug 只重新执行真实验证并更新 Finding 与发布判断。</p>
             </article>
           </section>
 
