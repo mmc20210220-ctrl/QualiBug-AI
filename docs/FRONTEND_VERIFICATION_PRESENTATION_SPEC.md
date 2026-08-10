@@ -199,6 +199,45 @@ Dashboard 变化卡只表达验证价值事实；它不能改变项目级 Releas
 
 即使 Gate 通过，也不能隐藏有价值的最新 Finding 变化；即使 Gate 阻塞，也不能用 Gate 总数伪装成逐 Finding 变化。
 
+### 7.4 Dashboard 变化结果可追溯下钻
+
+Dashboard 的“本轮关联 / 刚验证修复 / 重新出现 / 仍失败 / 无法确认 / 保持通过”数字必须能够下钻到**同一真实 Run 中的具体 Finding**，不能只保留汇总数字。
+
+下钻列表数据源必须直接使用 `deriveLatestVerificationRunSummary(...).rows`，不得重新查询另一套 Finding 状态。
+
+展示顺序按验证风险：
+
+1. 重新出现；
+2. 仍失败；
+3. 无法确认；
+4. 刚验证修复；
+5. 保持通过。
+
+每一条至少保留：
+
+- Finding severity；
+- Finding title；
+- 精确 Finding ID；
+- 本轮 `transitionLabel`；
+- 本轮 `regression_probe_id`（若后端上报）；
+- 本轮 `method + path`（若后端上报）；
+- 本轮 `gate_status`（若后端上报）；
+- 是否是真实“结论变化”。
+
+点击行为只能使用稳定 Finding ID：
+
+- `查看这条验证` -> `/findings?finding=<exact-id>`；
+- `查看这条证据` -> `/evidence?finding=<exact-id>`，且仅当该 Finding 真实存在 evidence 时展示。
+
+禁止：
+
+- 按 title 猜测 Finding；
+- 从汇总数字构造 synthetic Finding；
+- 没有 evidence 时展示假的 Evidence CTA；
+- 将“保持通过”重新包装成“刚验证修复”。
+
+为了控制 Dashboard 首屏长度，最多展示风险最高的 8 条同轮回执；超过 8 条必须明确显示被折叠数量，并引导进入 Findings 查看完整状态。移动端每条 Finding 的验证 / 证据 CTA 必须保持可点击、可读。
+
 ## 8. 身份连续性
 
 统一状态呈现和验证历史不能破坏既有：
@@ -234,6 +273,11 @@ Dashboard / Findings / Evidence / Release 必须始终通过 Finding ID 精确�
 - Dashboard 最新一轮变化必须按项目级 `generated_at` 精确锚定；
 - “刚验证修复 / 重新出现 / 仍失败 / 无法确认 / 保持通过”必须互斥；
 - 项目 Run 与 Finding history 无法精确关联时必须 fail-closed，不得补造变化数字；
+- Dashboard 变化汇总必须能够下钻到 `summary.rows` 的具体 Finding；
+- 下钻必须保留 Finding ID、Probe、验证目标和 transition；
+- Finding / Evidence 跳转必须继续使用 exact `finding` 深链；
+- Evidence 不存在时不得展示 Evidence CTA；
+- 首屏超过 8 条时必须明确折叠；
 - Dashboard 验证变化与项目级 Gate 权威必须保持分离；
 - Release 项目级 Gate 权威不变。
 
