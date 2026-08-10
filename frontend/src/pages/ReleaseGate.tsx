@@ -5,6 +5,7 @@ import { deriveFindingVerification } from '../lib/finding-verification';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import { deriveReleasePresentation } from '../lib/release-presentation';
+import { FindingVerificationRunSummary } from '../components/findings/FindingVerificationRunSummary';
 import { FindingVerificationStatus } from '../components/findings/FindingVerificationStatus';
 import { FindingVerificationTimeline } from '../components/findings/FindingVerificationTimeline';
 import { TermHint } from '../components/TermHint';
@@ -165,6 +166,7 @@ export function ReleaseGate() {
                 <span><em>验证下一步</em><b>{requestedVerification.nextActionLabel}</b></span>
               </div>
               <p className="muted">发布门禁仍按整个项目的真实 Gate 判定；单条 Finding 的修复后验证状态只是发布依据之一，不会覆盖项目级门禁。</p>
+              <FindingVerificationRunSummary finding={requestedFinding} generatedAt={requestedVerificationAt} />
               <FindingVerificationTimeline
                 finding={requestedFinding}
                 compact
