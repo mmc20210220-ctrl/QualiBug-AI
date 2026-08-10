@@ -138,9 +138,16 @@ export function Dashboard() {
   });
   const releaseGateOverall = asText(releaseGate.overall_status || releaseGate.verdict || releaseGate.status);
   const hasReleaseGateData = Object.keys(releaseGate).length > 0;
+  const regressionCampaign = Object.keys(asRecord(record.regression_campaign)).length > 0
+    ? asRecord(record.regression_campaign)
+    : Object.keys(asRecord(record.regression)).length > 0
+      ? asRecord(record.regression)
+      : asRecord(record.regression_result);
+  const regressionGateStatus = asText(asRecord(regressionCampaign.ci_feedback).gate_status).toLowerCase();
+  const regressionFailed = regressionGateStatus === 'failed';
 
   const executiveHeadline = getExecutiveHeadline(currentScanDefects, currentScanDefects, currentScanP0Count, clueCount, campaignStatus, campaignDeferredReason);
-  const conclusion = pipelineFailedSafe ? '检测异常（非"无问题"）' : pipelineBlocked ? '检测执行被阻断' : campaignBlocked ? '检测暂停' : coverageDeferred ? '部分范围待后续检测' : currentScanP0Count > 0 ? `发现 ${currentScanDefects} 个已确认缺陷，拦截 ${currentScanP0Count} 个 P0 阻断发布` : currentScanDefects > 0 ? '建议进入整改验收' : '当前未发现阻断性问题';
+  const conclusion = pipelineFailedSafe ? '检测异常（非"无问题"）' : pipelineBlocked ? '检测执行被阻断' : campaignBlocked ? '检测暂停' : coverageDeferred ? '部分范围待后续检测' : currentScanP0Count > 0 ? `发现 ${currentScanDefects} 个已确认缺陷，拦截 ${currentScanP0Count} 个 P0 阻断发布` : regressionFailed ? '最新回归门禁失败' : currentScanDefects > 0 ? '建议进入整改验收' : '当前未发现阻断性问题';
   const level = riskLevel(conclusion);
   const decision = releaseDecision(
     currentScanP0Count,
@@ -150,6 +157,7 @@ export function Dashboard() {
     releaseGateOverall,
     releaseGateChecks,
     hasReleaseGateData,
+    regressionGateStatus,
   );
   const nextAction = pipelineUnhealthy
     ? { title: '先恢复检测链路，再判断风险', label: '查看运行状态', path: '/campaigns' }
@@ -159,7 +167,9 @@ export function Dashboard() {
         ? { title: '继续覆盖剩余范围', label: '继续检测', path: '/campaigns' }
         : currentScanDefects > 0
           ? { title: '先处理已确认问题', label: '处理问题', path: '/findings' }
-          : { title: '确认发布结论', label: '查看发布门禁', path: '/release' };
+          : regressionFailed
+            ? { title: '先处理回归失败，再考虑发布', label: '查看发布门禁', path: '/release' }
+            : { title: '确认发布结论', label: '查看发布门禁', path: '/release' };
   const riskInterceptValue = resultIncomplete && currentScanP0Count === 0 ? '结论待确认' : `${currentScanP0Count} 个 P0`;
   const riskInterceptDetail = pipelineUnhealthy
     ? '检测链路异常或被阻断，当前 0 个 P0 不能解释为系统安全。先恢复检测链路再判断发布风险。'
@@ -169,9 +179,11 @@ export function Dashboard() {
         ? '本轮存在明确未覆盖范围，当前 0 个 P0 只代表已覆盖部分，不能直接推导为安全。'
         : currentScanP0Count > 0
           ? '阻断性问题已在发布前暴露，需优先安排修复。'
-          : p1Count > 0
-            ? `当前已覆盖范围无 P0，另有 ${p1Count} 个 P1 待评估。`
-            : '本轮已完成范围内未发现 P0 阻断问题。';
+          : regressionFailed
+            ? '最新回归门禁已失败，已知回归风险不能被“当前无 P0”掩盖。'
+            : p1Count > 0
+              ? `当前已覆盖范围无 P0，另有 ${p1Count} 个 P1 待评估。`
+              : '本轮已完成范围内未发现 P0 阻断问题。';
 
   const hasMaterializedMetrics = totalRiskCount > 0 || clueCount > 0 || asNum(asRecord(record.business_flow_summary).total, 0) > 0 || Boolean(campaignStatus) || Object.keys(asRecord(record.discovery_funnel)).length > 0;
 
