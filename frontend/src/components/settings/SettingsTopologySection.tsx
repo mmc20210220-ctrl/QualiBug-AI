@@ -31,7 +31,7 @@ export function SettingsTopologySection({
   } = topology;
 
   return (
-    <div className="section-card settings-span-2">
+    <div id="settings-system-access" className="section-card settings-span-2">
       <div className="settings-card-head">
         <div>
           <span className="panel-kicker">必要步骤</span>
