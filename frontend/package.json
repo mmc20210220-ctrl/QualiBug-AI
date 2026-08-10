@@ -24,6 +24,7 @@
     "test:frontend-finalization": "node scripts/frontend-finalization-contract.mjs",
     "test:settings-onboarding": "node scripts/settings-onboarding-contract.mjs",
     "test:run-lifecycle": "node scripts/run-lifecycle-contract.mjs",
+    "test:dashboard-role-views": "node scripts/dashboard-role-views-contract.mjs",
     "test:materials-coverage": "node scripts/materials-coverage-contract.mjs",
     "test:materials-acceptance": "node scripts/materials-acceptance-contract.mjs",
     "test:materials-remote-lifecycle": "node scripts/materials-remote-lifecycle-contract.mjs",
