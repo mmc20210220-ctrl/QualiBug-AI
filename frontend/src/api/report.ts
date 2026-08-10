@@ -1,6 +1,7 @@
 import type { Finding } from '../types';
 import { formatBeijingDateTime } from '../lib/time';
 import { renderBehaviorFieldSvg } from '../brand/renderBehaviorFieldSvg';
+import { escapeEvidenceHtml } from '../lib/finding-evidence-package';
 
 interface ReportData {
   projectName: string;
@@ -74,13 +75,14 @@ export function renderReportHTML(d: ReportData): string {
   const getScoreTone = (s: number) => s >= 80 ? 'tone-success' : s >= 60 ? 'tone-warning' : 'tone-danger';
   const getSeverityClass = (s: string) => s === 'P0' ? 'p0' : s === 'P1' ? 'p1' : 'p2';
   const getMetricTone = (value?: string) => value || 'tone-ink';
+  const h = escapeEvidenceHtml;
 
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>QualiBug AI 风险评级报告 — ${d.projectName}</title>
+<title>QualiBug AI 风险评级报告 — ${h(d.projectName)}</title>
 <style>
   :root {
     --ink: #0b1424; --muted: #64748b; --line: #e2e8f0;
@@ -90,6 +92,8 @@ export function renderReportHTML(d: ReportData): string {
   }
   *{margin:0;padding:0;box-sizing:border-box}
   body{background:#f8fafc;color:var(--ink);font:13px/1.6 var(--font);-webkit-font-smoothing:antialiased;padding:0}
+  .report-actions{max-width:900px;margin:18px auto 0;padding:0 32px;text-align:right}
+  .report-actions button{border:0;border-radius:8px;background:#0b1424;color:#fff;padding:9px 14px;font:600 13px var(--font);cursor:pointer}
   .report{max-width:900px;margin:0 auto;padding:40px 32px}
   
   /* Cover */
@@ -161,12 +165,14 @@ export function renderReportHTML(d: ReportData): string {
   
   @media print {
     body{background:#fff}
+    .report-actions{display:none}
     .report{max-width:100%;padding:20px}
     .finding,.db-finding{box-shadow:none;border:1px solid #ddd}
   }
 </style>
 </head>
 <body>
+<div class="report-actions"><button onclick="window.print()">打印 / 保存为 PDF</button></div>
 <div class="report">
 
   <!-- Cover -->
@@ -182,8 +188,8 @@ export function renderReportHTML(d: ReportData): string {
       })}
       <div><strong>QualiBug <span class="ai">AI</span></strong><span>风险决策台</span></div>
     </div>
-    <h1>${d.projectName} · 风险评级报告</h1>
-    <p class="meta">生成时间：${d.generatedAt} · 行业：${d.industry}</p>
+    <h1>${h(d.projectName)} · 风险评级报告</h1>
+    <p class="meta">生成时间：${h(d.generatedAt)} · 行业：${h(d.industry)}</p>
   </div>
 
   <!-- Scores -->
@@ -195,7 +201,7 @@ export function renderReportHTML(d: ReportData): string {
     </div>
     <div class="score-card">
       <div class="label">缺陷密度</div>
-      <div class="value tone-warning">${d.bdsScore}<span> 个</span></div>
+      <div class="value tone-warning">${h(d.bdsScore)}<span> 个</span></div>
       <div class="sub">每千个行为路径中高危缺陷</div>
     </div>
     <div class="score-card">
@@ -272,16 +278,16 @@ export function renderReportHTML(d: ReportData): string {
     ${d.findings.map(f=>`
     <div class="finding ${getSeverityClass(f.severity)}">
       <div class="head">
-        <span class="sev ${getSeverityClass(f.severity)}">${f.severity}</span>
-        <span class="title">${f.title}</span>
+        <span class="sev ${getSeverityClass(f.severity)}">${h(f.severity)}</span>
+        <span class="title">${h(f.title)}</span>
       </div>
       <div class="body">
         ${f.expected||f.actual?`
         <div class="row">
-          ${f.expected?`<div><label>预期行为</label><span class="exp">${f.expected.slice(0,150)}</span></div>`:''}
-          ${f.actual?`<div><label class="act-label">实际行为</label><span class="act">${f.actual.slice(0,150)}</span></div>`:''}
+          ${f.expected?`<div><label>预期行为</label><span class="exp">${h(f.expected.slice(0,150))}</span></div>`:''}
+          ${f.actual?`<div><label class="act-label">实际行为</label><span class="act">${h(f.actual.slice(0,150))}</span></div>`:''}
         </div>`:''}
-        ${f.evidence?`<div class="evidence-note">证据说明：${f.evidence}</div>`:''}
+        ${f.evidence?`<div class="evidence-note">证据说明：${h(f.evidence)}</div>`:''}
       </div>
     </div>`).join('')}
     ${d.findings.length === 0 ? '<p class="empty-state">当前未检测到行为风险</p>' : ''}
@@ -294,8 +300,8 @@ export function renderReportHTML(d: ReportData): string {
     <p class="section-intro">直接从数据库检测到的数据异常，如负库存、重复记录、引用失效等</p>
     ${d.dbFindings.map(f=>`
     <div class="db-finding">
-      <span class="tag">${f.id}</span>
-      <span>${f.desc}</span>
+      <span class="tag">${h(f.id)}</span>
+      <span>${h(f.desc)}</span>
     </div>`).join('')}
   </div>` : ''}
 
@@ -305,8 +311,8 @@ export function renderReportHTML(d: ReportData): string {
     <p class="section-intro">关键缺陷的证据质量评分，所有证据均可在系统中回放验证</p>
     ${d.findings.filter(f => f.evidence).slice(0, 10).map(f => `
     <div class="db-finding">
-      <span class="tag">${f.severity}</span>
-      <span><b>${f.title}</b><br/>证据：${f.evidence}</span>
+      <span class="tag">${h(f.severity)}</span>
+      <span><b>${h(f.title)}</b><br/>证据：${h(f.evidence)}</span>
     </div>`).join('')}
   </div>` : ''}
 
@@ -322,7 +328,7 @@ export function renderReportHTML(d: ReportData): string {
     ${d.releaseChecks?.length ? d.releaseChecks.map(c => `
     <div class="db-finding">
       <span class="tag" style="background:${c.status === 'pass' ? '#ecfdf5' : c.status === 'fail' ? '#fff1f3' : '#fff8eb'};color:${c.status === 'pass' ? '#0c9a6a' : c.status === 'fail' ? '#d91f45' : '#c9780a'}">${c.status === 'pass' ? '✓ 通过' : c.status === 'fail' ? '✗ 失败' : '⏳ 待处理'}</span>
-      <span><b>${c.name}</b> — ${c.detail}</span>
+      <span><b>${h(c.name)}</b> — ${h(c.detail)}</span>
     </div>`).join('') : ''}
   </div>` : ''}
 
