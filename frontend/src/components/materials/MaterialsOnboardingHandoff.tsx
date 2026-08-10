@@ -4,15 +4,6 @@ import { getKnowledgeAsset } from '../../api/client';
 import { listKnowledgeConnectors, type KnowledgeConnectorRecord } from '../../api/knowledge-connectors';
 import { useProjectNavigation } from '../../lib/project-navigation';
 
-const BUSINESS_CONTEXT_TYPES = new Set([
-  'prd',
-  'openapi',
-  'database_schema',
-  'db_design',
-  'collaboration_document',
-  'historical_bug',
-]);
-
 const AUTHORIZATION_HEALTH = new Set([
   'REAUTHORIZATION_REQUIRED',
   'PERMISSION_INSUFFICIENT',
@@ -24,12 +15,34 @@ const SYNC_FAILURE_HEALTH = new Set([
   'CALIBRATION_REQUIRED',
 ]);
 
-type BusinessInputCounts = {
-  prd: number;
-  api: number;
-  database: number;
-  collaboration: number;
-  historicalBug: number;
+// Display aliases only. This is intentionally NOT an allowlist: unknown backend
+// source_type values are preserved and rendered automatically.
+const MATERIAL_TYPE_LABELS: Record<string, string> = {
+  prd: 'PRD / 需求',
+  requirement: '需求文档',
+  requirements: '需求文档',
+  openapi: 'API / 接口',
+  api: 'API / 接口',
+  database_schema: 'DB / 数据结构',
+  db_design: 'DB / 数据设计',
+  collaboration_document: '协作文档',
+  historical_bug: '历史 Bug',
+  ui_ux: 'UI / UX 设计',
+  ui_design: 'UI 设计',
+  ux_design: 'UX 设计',
+  prototype: '原型 / 交互稿',
+  design_spec: '设计规范',
+  test_plan: '测试方案',
+  test_case: '测试用例',
+  architecture: '架构文档',
+  architecture_design: '架构设计',
+  permission: '权限说明',
+  permission_design: '权限设计',
+  business_process: '业务流程',
+  data_dictionary: '数据字典',
+  user_manual: '用户手册',
+  deployment: '部署文档',
+  release_note: '发布说明',
 };
 
 type MaterialSnapshot = {
@@ -44,9 +57,8 @@ type MaterialSnapshot = {
   active: number;
   onlineActive: number;
   uploadedActive: number;
-  businessContextActive: number;
-  businessInputCategoryCount: number;
-  businessInputCounts: BusinessInputCounts;
+  observedTypeCount: number;
+  activeTypeCounts: Record<string, number>;
   processing: number;
   failed: number;
 };
@@ -72,14 +84,22 @@ function isOnlineSource(source: Record<string, unknown>): boolean {
     || String(source.source_ref || '').startsWith('connector://');
 }
 
+function normalizeSourceType(value: unknown): string {
+  return String(value || '').trim().toLowerCase() || 'unclassified';
+}
+
+function sourceTypeLabel(type: string): string {
+  if (type === 'unclassified') return '未分类资料';
+  return MATERIAL_TYPE_LABELS[type] || type;
+}
+
 function readMaterialSnapshot(payload: unknown): Pick<MaterialSnapshot,
   | 'total'
   | 'active'
   | 'onlineActive'
   | 'uploadedActive'
-  | 'businessContextActive'
-  | 'businessInputCategoryCount'
-  | 'businessInputCounts'
+  | 'observedTypeCount'
+  | 'activeTypeCounts'
   | 'processing'
   | 'failed'> {
   const root = asRecord(payload);
@@ -94,25 +114,20 @@ function readMaterialSnapshot(payload: unknown): Pick<MaterialSnapshot,
     .filter((source) => String(source.status || 'active').toLowerCase() !== 'deleted');
   const activeSources = sources.filter((source) => String(source.status || 'active').toLowerCase() === 'active');
   const onlineActive = activeSources.filter(isOnlineSource).length;
-  const sourceType = (source: Record<string, unknown>) => String(source.source_type || '').trim().toLowerCase();
-  const businessContextActive = activeSources.filter((source) => BUSINESS_CONTEXT_TYPES.has(sourceType(source))).length;
-  const businessInputCounts: BusinessInputCounts = {
-    prd: activeSources.filter((source) => sourceType(source) === 'prd').length,
-    api: activeSources.filter((source) => sourceType(source) === 'openapi').length,
-    database: activeSources.filter((source) => ['database_schema', 'db_design'].includes(sourceType(source))).length,
-    collaboration: activeSources.filter((source) => sourceType(source) === 'collaboration_document').length,
-    historicalBug: activeSources.filter((source) => sourceType(source) === 'historical_bug').length,
-  };
-  const businessInputCategoryCount = Object.values(businessInputCounts).filter((count) => count > 0).length;
+  const activeTypeCounts: Record<string, number> = {};
+
+  activeSources.forEach((source) => {
+    const type = normalizeSourceType(source.source_type);
+    activeTypeCounts[type] = (activeTypeCounts[type] || 0) + 1;
+  });
 
   return {
     total: sources.length,
     active: activeSources.length,
     onlineActive,
     uploadedActive: Math.max(0, activeSources.length - onlineActive),
-    businessContextActive,
-    businessInputCategoryCount,
-    businessInputCounts,
+    observedTypeCount: Object.keys(activeTypeCounts).length,
+    activeTypeCounts,
     processing: sources.filter((source) => String(source.status || '').toLowerCase() === 'processing').length,
     failed: sources.filter((source) => ['failed', 'degraded'].includes(String(source.status || '').toLowerCase())).length,
   };
@@ -236,7 +251,7 @@ function deriveCurrentBlocker(
     };
   }
 
-  if (snapshot.connectorCount === 0 && snapshot.uploadedActive === 0) {
+  if (snapshot.connectorCount === 0 && snapshot.active === 0) {
     return {
       headline: '尚未连接企业在线资料源',
       detail: '在线文档和知识库是默认主来源；请先建立真实在线连接，文件上传只用于补充在线来源没有覆盖的资料。',
@@ -246,7 +261,7 @@ function deriveCurrentBlocker(
     };
   }
 
-  if (snapshot.connectorCount > 0 && snapshot.onlineActive === 0 && snapshot.uploadedActive === 0) {
+  if (snapshot.connectorCount > 0 && snapshot.active === 0) {
     return {
       headline: '在线资料源已连接，等待首次同步形成可读资料',
       detail: '连接器实例已经存在，但尚未 materialize 真实 source；Connection Ready 仍不等于 Material Ready。',
@@ -266,19 +281,9 @@ function deriveCurrentBlocker(
     };
   }
 
-  if (snapshot.businessContextActive === 0) {
-    return {
-      headline: '核心业务理解输入仍待补齐',
-      detail: '已有真实资料可读，但当前未观察到 active 的 PRD / API / DB / 协作文档 / 历史缺陷等核心输入；这里只提示输入缺口，不推断后端理解质量。',
-      action: snapshot.connectorCount > 0 ? 'review-connectors' : 'connect',
-      actionLabel: snapshot.connectorCount > 0 ? '检查资料范围' : '连接核心资料源',
-      tone: 'warning',
-    };
-  }
-
   return {
-    headline: '企业资料输入主链已就绪',
-    detail: `${snapshot.businessContextActive} 份核心输入已形成真实 active source。这里只代表资料输入可用；业务理解正确率、完整性和后续扫描能力仍由对应后端链路验证。`,
+    headline: '企业资料输入主链已建立',
+    detail: `${snapshot.active} 份真实资料已形成 active source，当前观察到 ${snapshot.observedTypeCount} 类资料类型。任何后端真实识别并成功接入的资料都可以成为输入；这里不设固定资料类型白名单，也不代表业务理解正确率或完整性。`,
     action: 'settings',
     actionLabel: '下一步：系统与环境',
     tone: 'success',
@@ -302,15 +307,8 @@ export function MaterialsOnboardingHandoff() {
     active: 0,
     onlineActive: 0,
     uploadedActive: 0,
-    businessContextActive: 0,
-    businessInputCategoryCount: 0,
-    businessInputCounts: {
-      prd: 0,
-      api: 0,
-      database: 0,
-      collaboration: 0,
-      historicalBug: 0,
-    },
+    observedTypeCount: 0,
+    activeTypeCounts: {},
     processing: 0,
     failed: 0,
   });
@@ -365,27 +363,23 @@ export function MaterialsOnboardingHandoff() {
     ? { value: '状态待核对', note: '资料读取失败，不能判断同步结果。', tone: 'warning' }
     : snapshot.onlineActive > 0
       ? { value: `${snapshot.onlineActive} 份在线资料可用`, note: snapshot.processing > 0 ? `另有 ${snapshot.processing} 份仍在处理。` : '在线资料已经形成真实可读来源。', tone: 'success' }
-      : snapshot.connectorCount > 0
+      : snapshot.connectorCount > 0 && snapshot.active === 0
         ? { value: '等待首次读取', note: '在线来源已经连接，但尚未形成可读在线资料。', tone: 'warning' }
         : snapshot.uploadedActive > 0
           ? { value: '当前仅文件补充', note: `${snapshot.uploadedActive} 份补充文件可用；建议继续连接在线来源。`, tone: 'neutral' }
-          : { value: '等待资料', note: '尚无真实可读资料。', tone: 'warning' };
+          : snapshot.active > 0
+            ? { value: `${snapshot.active} 份资料可用`, note: '已形成真实 active source。', tone: 'success' }
+            : { value: '等待资料', note: '尚无真实可读资料。', tone: 'warning' };
 
   const understandingStage = materialReadError
     ? { value: '无法确认', note: '资料状态不可读时，不推导业务理解输入就绪。', tone: 'warning' }
-    : snapshot.businessContextActive > 0
-      ? { value: `${snapshot.businessContextActive} 份核心输入已就绪`, note: '这些资料已进入业务理解输入主链；这里只代表输入可用，不代表理解正确率或完整性。', tone: 'success' }
-      : snapshot.active > 0
-        ? { value: '输入主链已建立', note: '已有资料可读，但 PRD / API / DB / 协作文档 / 历史缺陷等核心输入仍待补齐。', tone: 'warning' }
-        : { value: '等待可读资料', note: '必须先形成真实 active source，前端才会显示业务理解输入已建立。', tone: 'warning' };
+    : snapshot.active > 0
+      ? { value: `${snapshot.active} 份资料已进入输入主链`, note: `已观察到 ${snapshot.observedTypeCount} 类真实资料类型；不设固定类型白名单，也不代表理解正确率或完整性。`, tone: 'success' }
+      : { value: '等待可读资料', note: '必须先形成真实 active source，前端才会显示业务理解输入已建立。', tone: 'warning' };
 
-  const businessInputCoverage = [
-    { key: 'prd', label: 'PRD / 需求', count: snapshot.businessInputCounts.prd, note: '需求规则、业务流程与约束输入' },
-    { key: 'api', label: 'API / 接口', count: snapshot.businessInputCounts.api, note: '接口能力、字段与调用契约输入' },
-    { key: 'database', label: 'DB / 数据结构', count: snapshot.businessInputCounts.database, note: '数据库结构与状态证据输入' },
-    { key: 'collaboration', label: '协作文档', count: snapshot.businessInputCounts.collaboration, note: '在线知识库与协作文档输入' },
-    { key: 'historicalBug', label: '历史 Bug', count: snapshot.businessInputCounts.historicalBug, note: '历史缺陷与质量经验输入' },
-  ];
+  const observedTypes = Object.entries(snapshot.activeTypeCounts)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([type, count]) => ({ type, label: sourceTypeLabel(type), count }));
 
   const currentBlocker = deriveCurrentBlocker(snapshot, materialReadError, connectorReadError);
 
@@ -437,27 +431,38 @@ export function MaterialsOnboardingHandoff() {
         </article>
       </div>
 
-      <section className="status-card status-neutral settings-mt-10" aria-label="核心业务理解输入覆盖">
-        <span className="panel-kicker">核心输入覆盖</span>
+      <section className="status-card status-neutral settings-mt-10" aria-label="已接入资料类型分布">
+        <span className="panel-kicker">资料类型分布</span>
         <strong>
           {materialReadError
-            ? '当前无法确认输入类型覆盖'
-            : `已观察到 ${snapshot.businessInputCategoryCount}/5 类核心输入`}
+            ? '当前无法确认资料类型分布'
+            : snapshot.active > 0
+              ? `已观察到 ${snapshot.observedTypeCount} 类 active 资料`
+              : '等待形成可读资料'}
         </strong>
         <p className="muted">
-          这里只统计真实 active source 的输入类型；“未观察到”不等于企业必须补充，也不代表业务理解不正确。它不是完成率、理解准确率或新的运行门禁。
+          类型完全来自后端真实 source_type，前端不设固定资料白名单。UI / UX 设计、测试资料、架构文档以及未来新增类型都会自动进入这里；友好名称只是展示别名，未知类型会原样展示。
         </p>
         <div className="customer-summary-grid settings-mt-10">
-          {businessInputCoverage.map((item) => {
-            const observed = !materialReadError && item.count > 0;
-            return (
-              <article key={item.key} className={`customer-summary-card tone-${materialReadError ? 'warning' : observed ? 'success' : 'neutral'}`}>
-                <span>{item.label}</span>
-                <strong>{materialReadError ? '无法确认' : observed ? `✓ ${item.count} 份` : '— 未观察到'}</strong>
-                <small>{materialReadError ? '资料状态不可读时不推导该输入类型是否存在。' : item.note}</small>
-              </article>
-            );
-          })}
+          {materialReadError ? (
+            <article className="customer-summary-card tone-warning">
+              <span>资料类型</span>
+              <strong>无法确认</strong>
+              <small>资料状态不可读时，不把空结果解释成没有某类资料。</small>
+            </article>
+          ) : observedTypes.length > 0 ? observedTypes.map((item) => (
+            <article key={item.type} className="customer-summary-card tone-success">
+              <span>{item.label}</span>
+              <strong>✓ {item.count} 份</strong>
+              <small>source_type · {item.type}</small>
+            </article>
+          )) : (
+            <article className="customer-summary-card tone-neutral">
+              <span>资料类型</span>
+              <strong>尚无 active 资料</strong>
+              <small>同步或上传形成真实 active source 后自动展示类型分布。</small>
+            </article>
+          )}
         </div>
       </section>
 
