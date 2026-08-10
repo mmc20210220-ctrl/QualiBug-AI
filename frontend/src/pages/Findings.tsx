@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { emitScanCompleted, isCustomerReadyFinding, useFindingsData } from '../api/data';
 import { runRegression } from '../api/client';
@@ -25,14 +25,23 @@ export function Findings() {
   usePageTitle('问题清单');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
+  const requestedFindingId = params.get('finding')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
   const { findings, clues, loading, error, refetch } = useFindingsData(project);
   const toast = useToast();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(requestedFindingId || null);
   const [filter, setFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [drawerFinding, setDrawerFinding] = useState<Finding | null>(null);
   const [regressionRunning, setRegressionRunning] = useState(false);
+
+  useEffect(() => {
+    if (requestedFindingId) {
+      setExpandedId(requestedFindingId);
+      setFilter('all');
+      setSearchQuery('');
+    }
+  }, [requestedFindingId]);
 
   const confirmed = findings.filter(isCustomerReadyFinding);
   const bySeverity = {
@@ -129,6 +138,15 @@ export function Findings() {
           <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project)}>发布门禁</button>
         </div>
       </div>
+
+      {requestedFindingId && !loading && !error && !confirmed.some((finding) => finding.id === requestedFindingId) && (
+        <section className="findings-empty-state compact">
+          <span className="findings-empty-kicker">指定问题</span>
+          <h3>该问题已不在当前已确认结果中</h3>
+          <p>链接中的 Finding 标识可能来自旧扫描或已经发生状态变化。当前不会用标题相似的问题代替它。</p>
+          <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project)}>查看当前问题清单</button>
+        </section>
+      )}
 
       {hasRegressionFact && (
         <section className="customer-secondary-grid findings-regression-grid" aria-label="回归验证">
