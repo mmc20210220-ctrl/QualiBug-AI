@@ -64,7 +64,7 @@ export function EvidenceChain() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {customerFindings.length > 0 && <button className="btn btn-secondary" onClick={() => navigateToProjectPath('/findings', project, findingContextSearch)}>问题清单</button>}
-          <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project)}>发布门禁</button>
+          <button className="btn btn-primary" onClick={() => navigateToProjectPath('/release', project, findingContextSearch)}>发布门禁</button>
         </div>
       </div>
 
