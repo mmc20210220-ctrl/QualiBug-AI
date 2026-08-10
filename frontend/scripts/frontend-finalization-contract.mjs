@@ -10,8 +10,8 @@ const assert = (condition, message) => {
 
 const journey = read('src/components/dashboard/JourneyStrip.tsx');
 assert(
-  journey.includes("title: '导入企业资料'") && journey.includes("path: '/materials'"),
-  '首次接入的企业资料步骤必须进入 /materials',
+  journey.includes("title: '连接企业资料'") && journey.includes("path: '/materials'"),
+  '首次接入的企业资料步骤必须以在线连接为主并进入 /materials',
 );
 
 const releaseGate = read('src/pages/ReleaseGate.tsx');
