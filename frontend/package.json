@@ -22,6 +22,7 @@
     "test:login-contract": "node scripts/login-page-contract.mjs",
     "test:autonomous-ux": "node scripts/autonomous-ux-contract.mjs",
     "test:frontend-finalization": "node scripts/frontend-finalization-contract.mjs",
+    "test:settings-onboarding": "node scripts/settings-onboarding-contract.mjs",
     "test:materials-coverage": "node scripts/materials-coverage-contract.mjs",
     "test:materials-acceptance": "node scripts/materials-acceptance-contract.mjs",
     "test:materials-remote-lifecycle": "node scripts/materials-remote-lifecycle-contract.mjs",
