@@ -11,6 +11,8 @@ import './styles/findings.css';
 import './styles/evidence.css';
 /* 遗留全局样式（渐进迁移中） */
 import './index.css';
+/* 客户主链响应式修正最后加载，覆盖遗留 class 与模块化 class 不一致 */
+import './styles/customer-responsive.css';
 import App from './App';
 
 createRoot(document.getElementById('root')!).render(
