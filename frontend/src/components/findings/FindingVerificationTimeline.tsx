@@ -18,7 +18,11 @@ function runTitle(event: ReturnType<typeof buildFindingVerificationTimeline>[num
 export function FindingVerificationTimeline({ finding, compact = false }: Props) {
   const timeline = buildFindingVerificationTimeline(finding);
   const latestChange = latestFindingConclusionChange(finding);
-  const visibleTimeline = compact ? timeline.slice(-4) : timeline;
+  const hasCollapsedHistory = compact && timeline.length > 4;
+  const visibleTimeline = hasCollapsedHistory
+    ? [timeline[0], ...timeline.slice(-3)]
+    : timeline;
+  const collapsedCount = hasCollapsedHistory ? Math.max(0, timeline.length - visibleTimeline.length) : 0;
 
   return (
     <section className="finding-verification-timeline" aria-label="真实验证历史时间线">
@@ -30,8 +34,8 @@ export function FindingVerificationTimeline({ finding, compact = false }: Props)
         <span className="summary-pill">{Math.max(0, timeline.length - 1)} 次修复后验证</span>
       </div>
 
-      {compact && timeline.length > visibleTimeline.length && (
-        <p className="settings-hint">仅显示最近 {visibleTimeline.length - 1} 次验证；完整历史可在问题清单或证据中心查看。</p>
+      {hasCollapsedHistory && (
+        <p className="settings-hint">保留原始 Finding 基线和最近 3 次真实验证；中间 {collapsedCount} 次已折叠，完整历史可在问题清单或证据中心查看。</p>
       )}
 
       <ol className="verification-timeline-list">
