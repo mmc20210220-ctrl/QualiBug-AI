@@ -9,6 +9,8 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const verification = read('src/lib/finding-verification.ts');
 const timeline = read('src/components/findings/FindingVerificationTimeline.tsx');
 const verificationPanel = read('src/components/findings/FindingVerificationPanel.tsx');
+const dashboardDelta = read('src/components/dashboard/DashboardVerificationDeltaPanel.tsx');
+const gateBanner = read('src/components/dashboard/RegressionGateBanner.tsx');
 const evidence = read('src/pages/EvidenceChain.tsx');
 const release = read('src/pages/ReleaseGate.tsx');
 const styles = read('src/styles/finding-verification.css');
@@ -29,6 +31,14 @@ assert(verification.includes("presentation.outcome === 'unknown'\n        ? '本
 assert(verification.includes('if (isKnownOutcome) lastKnownOutcome = presentation.outcome;'), 'unknown runs must not overwrite the last known issue conclusion');
 assert(verification.includes('export function latestFindingConclusionChange'), 'frontend must expose the latest real conclusion-changing run');
 
+assert(verification.includes('export function deriveLatestVerificationRunSummary('), 'dashboard latest-run delta must have one shared derivation helper');
+assert(verification.includes("item.kind === 'verification' && item.generatedAt === normalizedRunAt"), 'latest-run delta must only match finding history from the exact project run timestamp');
+assert(verification.includes("event.changedConclusion && event.outcome === 'fixed'"), 'newly fixed count must require a real open-to-fixed transition');
+assert(verification.includes("event.changedConclusion && event.outcome === 'open'"), 'reopened count must require a real fixed-to-open transition');
+assert(verification.includes("!event.changedConclusion && event.outcome === 'open'"), 'still-failing count must stay separate from reopened findings');
+assert(verification.includes("event.outcome === 'unknown'"), 'inconclusive latest-run outcomes must remain explicit');
+assert(verification.includes("!event.changedConclusion && event.outcome === 'fixed'"), 'already-fixed findings that stay fixed must not be counted as newly fixed');
+
 assert(timeline.includes('真实验证历史'), 'timeline must identify itself as real validation history');
 assert(timeline.includes('最近结论变化：${latestChange.transitionLabel}'), 'timeline must surface the latest real conclusion transition');
 assert(timeline.includes('结论变化'), 'timeline must visibly mark the run that changed the issue conclusion');
@@ -38,6 +48,22 @@ assert(timeline.includes('后端尚未返回真实修复后验证历史。前端
 assert(timeline.includes('const hasCollapsedHistory = compact && timeline.length > 4;'), 'compact history must have an explicit folding rule');
 assert(timeline.includes('? [timeline[0], ...timeline.slice(-3)]'), 'compact release history must preserve the original finding baseline and latest runs');
 assert(timeline.includes('中间 {collapsedCount} 次已折叠'), 'collapsed history must be explicit to the customer');
+
+assert(dashboardDelta.includes('asText(regressionRun.generated_at) || asText(latestRun.generated_at)'), 'dashboard delta must anchor to the latest persisted project regression run');
+assert(dashboardDelta.includes('deriveLatestVerificationRunSummary(findings, runAt)'), 'dashboard delta must use the shared exact-run finding derivation');
+assert(dashboardDelta.includes('逐问题变化暂不可对齐'), 'missing per-finding run linkage must remain explicit');
+assert(dashboardDelta.includes('前端不会把不同轮次的“最新状态”拼成一次验证变化，也不会补造修复数量'), 'dashboard must never fabricate a latest-run delta from mixed finding states');
+assert(dashboardDelta.includes('<em>刚验证修复</em><b>{summary.fixedCount}</b>'), 'dashboard must expose newly verified fixes from real conclusion changes');
+assert(dashboardDelta.includes('<em>重新出现</em><b>{summary.reopenedCount}</b>'), 'dashboard must expose real reopened findings separately');
+assert(dashboardDelta.includes('<em>仍失败</em><b>{summary.stillFailingCount}</b>'), 'dashboard must expose continuing failures separately');
+assert(dashboardDelta.includes('<em>无法确认</em><b>{summary.inconclusiveCount}</b>'), 'dashboard must expose inconclusive latest-run findings');
+assert(dashboardDelta.includes('<em>保持通过</em><b>{summary.keptFixedCount}</b>'), 'dashboard must distinguish already-fixed findings that stayed fixed');
+assert(dashboardDelta.includes('“刚验证修复 / 重新出现”只来自真实 open ↔ fixed 结论变化'), 'dashboard delta must explain its strict conclusion-change rule');
+
+assert(gateBanner.includes('<DashboardVerificationDeltaPanel record={record} project={project} />'), 'dashboard gate area must surface the latest-run finding delta');
+assert(gateBanner.includes('{deltaPanel}'), 'verification delta must remain visible alongside blocking gate facts');
+assert(gateBanner.includes('if (!shouldBlockFirstScreen) return deltaPanel;'), 'a passing gate must not hide useful verification change value');
+assert(gateBanner.includes('验证变化不是发布结论，发布 Gate 也不能伪造逐 Finding 变化'), 'dashboard must preserve separation between finding deltas and project release authority');
 
 assert(verificationPanel.includes('<FindingVerificationTimeline finding={finding} />'), 'finding/evidence detailed validation must show the complete real timeline');
 assert(evidence.includes('<FindingVerificationPanel finding={selected} />'), 'evidence center must inherit the complete timeline for the exact finding');
