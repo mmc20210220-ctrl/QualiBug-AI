@@ -103,6 +103,103 @@ def test_agent_intent_rejects_an_invented_obligation_identity() -> None:
         )
 
 
+def test_agent_intent_resolves_compiled_variant_obligation_view() -> None:
+    """Selected rows may reference compiler-expanded variant ids (coverage-unit
+    arms / validation field variants) that are not in the source obligation
+    pool. The gate resolves them from the experiment's own compiled contract —
+    never from invented data."""
+    operation = {
+        "id": "op-pay",
+        "method": "POST",
+        "path": "/api/payments/pay",
+        "source_refs": [_source("POST /api/payments/pay")],
+    }
+    variant_experiment = {
+        "experiment_id": "EXP-VARIANT-1",
+        "obligation_id": "OBL-PAY__v_6df9a5d8b967",
+        "risk_family": "validation",
+        "primary_operation_ref": "op-pay",
+        "property": {"operation_ref": "op-pay"},
+        "control_plan": [{
+            "actor_ref": "actor-buyer",
+            "operation_ref": "op-pay",
+        }],
+        "compile_receipt": {"status": "COMPILED"},
+        "observers": [
+            {"observer_id": "http_response", "adapter": "http_api"},
+            {"observer_id": "business_effect", "adapter": "http_api"},
+        ],
+        "source_refs": [_source("POST /api/payments/pay")],
+    }
+    adaptive_plan = {
+        "schema_version": "qualibug.adaptive-obligation-plan.v1",
+        "selected": [{
+            "obligation_id": "OBL-PAY__v_6df9a5d8b967",
+            "experiment_id": "EXP-VARIANT-1",
+            "risk_family": "validation",
+            "score": 0.6,
+        }],
+        "pending_next_round": [],
+    }
+
+    receipt = build_agent_intent_plan(
+        adaptive_plan,
+        obligations=[],
+        experiments_by_obligation={
+            "OBL-PAY__v_6df9a5d8b967": variant_experiment,
+        },
+        behavior_ir={
+            "model_id": "BIR-1",
+            "operations": [operation],
+            "actors": [{"id": "actor-buyer"}],
+            "relations": [],
+        },
+    )
+
+    assert receipt["status"] == "VERIFIED"
+    assert receipt["intent_count"] == 1
+    intent = receipt["intents"][0]
+    assert intent["obligation_id"] == "OBL-PAY__v_6df9a5d8b967"
+    assert intent["operation_refs"] == ["op-pay"]
+    assert intent["actor_refs"] == ["actor-buyer"]
+    assert intent["execution_adapters"] == ["http_api"]
+    assert intent["source_refs"] == [_source("POST /api/payments/pay")]
+
+
+def test_agent_intent_rejects_compiled_variant_without_contract() -> None:
+    """A compiled experiment that cannot supply operation/actor/source evidence
+    must not fabricate an obligation view — the gate fails closed."""
+    empty_experiment = {
+        "experiment_id": "EXP-EMPTY-VARIANT",
+        "obligation_id": "OBL-X__v_000000000000",
+        "compile_receipt": {"status": "COMPILED"},
+        "observers": [
+            {"observer_id": "http_response", "adapter": "http_api"},
+        ],
+    }
+    with pytest.raises(AgentIntentError, match="unknown_obligation:OBL-X__v_000000000000"):
+        build_agent_intent_plan(
+            {
+                "schema_version": "qualibug.adaptive-obligation-plan.v1",
+                "selected": [{
+                    "obligation_id": "OBL-X__v_000000000000",
+                    "experiment_id": "EXP-EMPTY-VARIANT",
+                }],
+                "pending_next_round": [],
+            },
+            obligations=[],
+            experiments_by_obligation={
+                "OBL-X__v_000000000000": empty_experiment,
+            },
+            behavior_ir={
+                "model_id": "BIR-1",
+                "operations": [],
+                "actors": [],
+                "relations": [],
+            },
+        )
+
+
 def test_agent_intent_rejects_missing_compiled_observer_contract() -> None:
     with pytest.raises(AgentIntentError, match="observer_contract_missing:OBL-1"):
         build_agent_intent_plan(

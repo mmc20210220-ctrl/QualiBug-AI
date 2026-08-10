@@ -977,6 +977,59 @@ def _source_refs(*values: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _obligation_view_from_compiled_experiment(
+    experiment: dict[str, Any],
+    obligation_id: str,
+) -> dict[str, Any] | None:
+    """Obligation view reconstructed from a compiled experiment (no invention).
+
+    Coverage-unit arm derivation and validation field-constraint expansion
+    create obligation ids that exist only in the compiled pool
+    (``experiments_by_obligation``), not in the source obligation list. The
+    intent gate needs the same obligation surface — risk family, required
+    operations, required actors, source refs — to verify a selected row. Every
+    field is taken from the experiment's own compiled contract: the primary
+    operation ref, the control/treatment plan actor refs, the risk family, and
+    the experiment's source refs. Nothing is fabricated; an experiment that
+    cannot supply these stays None and the gate fails closed exactly as before.
+    """
+    if not isinstance(experiment, dict):
+        return None
+    property_spec = _dict(experiment.get("property"))
+    operation_refs: list[str] = []
+    primary_op_ref = _text(
+        experiment.get("primary_operation_ref")
+        or property_spec.get("operation_ref")
+    )
+    if primary_op_ref:
+        operation_refs.append(primary_op_ref)
+    actor_refs: list[str] = []
+    for _plan_key in ("control_plan", "treatment_plan", "precondition_plan"):
+        for step in _list(experiment.get(_plan_key)):
+            if not isinstance(step, dict):
+                continue
+            step_actor = _text(step.get("actor_ref"))
+            if step_actor and step_actor not in actor_refs:
+                actor_refs.append(step_actor)
+            step_op = _text(step.get("operation_ref"))
+            if step_op and step_op not in operation_refs:
+                operation_refs.append(step_op)
+    source_refs = _source_refs(experiment.get("source_refs"))
+    if not operation_refs and not actor_refs and not source_refs:
+        return None
+    return {
+        "obligation_id": obligation_id,
+        "risk_family": _text(
+            experiment.get("risk_family") or property_spec.get("risk_family")
+        ),
+        "required_operations": sorted(set(operation_refs)),
+        "required_actors": sorted(set(actor_refs)),
+        "relation_refs": _list(experiment.get("relation_refs")),
+        "source_refs": source_refs,
+        "compiled_variant_view": True,
+    }
+
+
 def build_agent_intent_plan(
     adaptive_plan: dict[str, Any],
     *,
@@ -1004,6 +1057,29 @@ def build_agent_intent_plan(
         if not oid or oid in obligations_by_id:
             raise AgentIntentError(f"obligation_identity_invalid:{oid or 'missing'}")
         obligations_by_id[oid] = dict(row)
+    # ── Compiled-variant obligation view (coverage-unit arm derivation) ──
+    # ``derive_unit_execution_arms`` may select obligation ids that exist only
+    # as compiler-expanded variants (validation field-constraint variants like
+    # ``obl_xxx__v_<sha12>``, or multi-arm actor-rebinding arms). Those are not
+    # members of the source obligation pool, but their compiled experiments are
+    # registered in ``experiments_by_obligation`` under that exact id. The
+    # intent gate must resolve them from the experiment's own compiled contract
+    # (risk family, primary operation, actor refs, source refs) — never invent
+    # any of it — instead of failing ``unknown_obligation`` on a legitimate
+    # selected row. Resolution order: source pool → compiled experiment.
+    for _variant_oid, _variant_exp in experiments_by_obligation.items():
+        if _variant_oid in obligations_by_id:
+            continue
+        if not isinstance(_variant_exp, dict):
+            continue
+        _variant_oid_text = _text(_variant_oid)
+        if not _variant_oid_text:
+            continue
+        _variant_view = _obligation_view_from_compiled_experiment(
+            _variant_exp, _variant_oid_text
+        )
+        if _variant_view is not None:
+            obligations_by_id[_variant_oid_text] = _variant_view
     operations = {
         _text(_dict(row).get("id")): dict(row)
         for row in _list(behavior_ir.get("operations"))
