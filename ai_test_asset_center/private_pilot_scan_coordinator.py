@@ -118,7 +118,15 @@ def _remove_stale_lease(lease_dir: Path) -> None:
 
 
 def active_scan_owner(root: Path, project: str) -> dict[str, Any]:
-    return _read_owner(_lease_dir(root, project))
+    """Return the current live lease owner, never a dead-process snapshot."""
+
+    lease_dir = _lease_dir(root, project)
+    owner = _read_owner(lease_dir)
+    if not owner:
+        return {}
+    if _stale(lease_dir, stale_after_seconds=6 * 60 * 60):
+        return {}
+    return owner
 
 
 @contextmanager
