@@ -60,6 +60,25 @@
   overflow-wrap: anywhere;
 }
 
+.evidence-drawer-head {
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.evidence-drawer-head > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.evidence-drawer-head .settings-actions,
+.evidence-distribution-tools .settings-actions {
+  flex-wrap: wrap;
+}
+
+.evidence-distribution-tools .form-input {
+  min-width: 0;
+}
+
 .findings-empty-state .settings-actions {
   justify-content: center;
   flex-wrap: wrap;
@@ -92,6 +111,16 @@
     justify-content: stretch;
   }
 
+  .evidence-drawer-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .evidence-drawer-head .settings-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
   .action-bar {
     align-items: stretch;
   }
@@ -116,9 +145,23 @@
   .findings-page-head > div:last-child .btn,
   .action-bar .btn,
   .findings-empty-state .settings-actions .btn,
-  .focus-card .settings-actions .btn {
+  .focus-card .settings-actions .btn,
+  .evidence-drawer-head .settings-actions .btn,
+  .evidence-distribution-tools .settings-actions .btn {
     width: 100%;
     justify-content: center;
+  }
+
+  .evidence-drawer-head .settings-actions,
+  .evidence-distribution-tools .settings-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .evidence-distribution-tools .settings-actions .form-input,
+  .evidence-distribution-tools .settings-actions input {
+    width: 100%;
   }
 
   .action-bar {
