@@ -46,6 +46,7 @@ Dashboard 第一屏优先回答：
 - 服务端已确认真实扫描；
 - 主链真实阶段进行中；
 - 某阶段尚未进入或尚未实时上报；
+- 某阶段已由权威结果对象确认完成；
 - 正在等待最终回执；
 - 部分覆盖；
 - 执行被阻断；
@@ -53,7 +54,7 @@ Dashboard 第一屏优先回答：
 - 未发现已确认问题；
 - 已发现并形成客户可交付证据。
 
-空结果不得展示为“没有问题”。服务端未提供的内部阶段不得根据计时器或百分比伪造进度。
+空结果不得展示为“没有问题”。服务端未提供的内部阶段不得根据计时器或百分比伪造进度。完成态回执不得反推不存在的开始时间和耗时。
 
 ### 2.4 动作必须真实
 
@@ -168,7 +169,7 @@ Dashboard 第一屏优先回答：
 - 高级配置保持折叠；
 - `test:settings-onboarding` 已进入统一门禁。
 
-### P1-2 运行过程可视化 — 四个真实主链阶段已实时化
+### P1-2 运行过程可视化 — 六阶段真实状态已打通
 
 已完成：
 
@@ -179,25 +180,30 @@ Dashboard 第一屏优先回答：
 - 前端在 `submitted` 状态每秒读取服务端真实状态；
 - 明确区分“请求已提交但服务端尚未登记扫描”和“服务端已确认真实扫描”；
 - dead/stale lease 不再显示成正在运行；
-- 新增 `qualibug.scan-stage-progress.v1` 项目级原子阶段快照，只有真实主链函数可以推进状态；
+- 新增 `qualibug.scan-stage-progress.v1` 项目级原子阶段快照，只有真实主链函数或权威结果投影可以推进状态；
 - `enterprise_understanding` 与 `scenario_planning` 由真实 `build_discovery_plan()` 主链调用进入/返回时上报；二者在同一规划函数内真实重叠，因此 UI 不伪装成顺序百分比；
-- `runtime_execution` 与 `evidence_collection` 由真实 `run_experiment_candidate()` 进入时上报；experiment runner 返回后执行阶段完成，证据阶段继续保持 active，因为后续 UI 执行、证据归一化与持久化尚未结束；
+- `runtime_execution` 与 `evidence_collection` 由真实 `run_experiment_candidate()` 进入时上报；experiment runner 返回后执行阶段完成，证据阶段保持 active，直到最终权威 `evidence_bundle` 形成；
+- 新增 first-class `scan_stage_finalization` post-hook，直接消费核心扫描已经生成的 `evidence_bundle / test_data_plan / release_gate`，不替换 `scan()`、不修改核心检测算法；
+- `evidence_collection` 在权威证据包形成后补充完成 / 阻断 / 失败回执；
+- `test_data_assessment` 由真实 `test_data_plan` 补充完成态或 `blocked_with_testability_gap` 阻断态；当前不反推开始时间；
+- `delivery_finalization` 由真实 `release_gate` 补充完成态；发布结论 `fail/blocked` 是有效门禁结论，不会被错误解释成“遥测执行失败”；只有 release gate 自身 `failed/error/invalid` 才把阶段标记为 failed；
 - stage snapshot 只有在 live scan lease 存在时才通过状态 API 暴露，历史 stage 文件不会冒充当前扫描；
 - 未知 stage / 非法百分比状态会被后端拒绝；pending 阶段不会因为时间经过自动推进；
+- 阶段遥测持久化改为 fail-soft：写盘失败记录 warning，但绝不能改变真实扫描结果；编程错误（未知 stage、假百分比）仍然 fail loud；
 - completed 后依据真实 `campaign_status / test_data_plan / execution_status / HAR evidence / grade / coverage` 展示最终结果；
 - blocked、partial、plan_only、有 Finding 等结果不会因为 HTTP 200 被错误显示为绿色成功；
-- `test:run-lifecycle`、`test:live-scan-status`、`tests/test_live_scan_status_projection.py` 与 `tests/test_scan_stage_progress.py` 已建立。
+- `test:run-lifecycle`、`test:live-scan-status`、`tests/test_live_scan_status_projection.py`、`tests/test_scan_stage_progress.py` 与 `tests/test_scan_stage_finalization_hook.py` 已建立。
 
-当前实时阶段口径：
+当前阶段口径：
 
-- **企业资料理解**：真实主链实时上报；
-- **场景与义务生成**：真实主链实时上报；
-- **真实探针执行**：真实主链实时上报；
-- **结果观察与证据收集**：真实主链实时上报开始状态，最终完成以扫描回执为准；
-- **测试数据准备 / 就绪核验**：当前仍由总控函数汇总，运行中保持“尚未进入 / 尚未实时上报”，最终由 `test_data_plan` 回执确认；
-- **交付门禁与报告**：当前仍由总控函数完成，运行中保持“尚未进入 / 尚未实时上报”，最终由 grade / coverage / delivery 结果确认。
+- **企业资料理解**：真实主链提供进行中 + 完成 / 失败状态；
+- **场景与义务生成**：真实主链提供进行中 + 完成 / 失败状态；
+- **真实探针执行**：真实主链提供进行中 + 完成 / 失败状态；
+- **结果观察与证据收集**：真实主链提供开始状态，最终由权威 `evidence_bundle` 提供完成 / 阻断 / 失败状态；
+- **测试数据准备 / 就绪核验**：由权威 `test_data_plan` 提供完成态 / 阻断态；当前只提供 completion-only receipt，不伪造开始时间；
+- **交付门禁与报告**：由权威 `release_gate` 与报告持久化事实提供完成态；当前只提供 completion-only receipt，不伪造开始时间。
 
-原则：任何缺少真实函数边界的阶段都不根据计时器、固定秒数或百分比推测。后续如果继续细分，应从拥有真实阶段权威的扫描模块上报，而不是在前端造进度。
+原则：任何缺少真实函数开始边界的阶段都不根据计时器、固定秒数或百分比推测。后续若要把最后两段从 completion-only 升级为实时 active，只能在拥有天然 `root/project` 和真实执行权威的原生函数入口增加打点，不能用全局变量、线程本地或前端计时器偷传状态。
 
 ### P1-3 角色化价值视图 — 已实现
 
@@ -273,7 +279,7 @@ Dashboard 第一屏优先回答：
 - 白标或联合品牌报告；
 - 邀请漏斗、分享访问漏斗和报告转化漏斗；
 - 第三方协作 Connector 的组织级配置与审计；
-- 补齐 `test_data_assessment` 与 `delivery_finalization` 两个总控阶段的独立真实实时边界，并按需要继续细分而不引入假百分比。
+- 仅在出现天然原生函数边界后，把 `test_data_assessment` 与 `delivery_finalization` 从 completion-only receipt 继续升级为真实 active + completed；不得为了六阶段动画引入隐式上下文或假百分比。
 
 ## 7. 非目标
 
@@ -302,7 +308,10 @@ Dashboard 第一屏优先回答：
 - README 可按实际命令启动项目；
 - 服务端真实持有 scan lease 时前端能确认运行，lease 未出现时不冒充正在扫描；
 - planning / experiment 主链进入与返回时，前端能读取对应真实阶段；
-- 尚未独立打点的测试数据与交付阶段保持“未实时上报”，不按时间自动推进；
+- `evidence_bundle / test_data_plan / release_gate` 形成后，后半段阶段能收到真实完成 / 阻断 / 失败回执；
+- completion-only 阶段不反推开始时间，不按时间自动推进；
+- 发布门禁 verdict=fail/blocked 不被误报成“阶段执行失败”；
+- 阶段遥测写盘失败不改变扫描结果；未知 stage / 假百分比仍被拒绝；
 - Finding 无稳定持久化身份时，协作写入、明确 Replay 状态写回和只读分享都 fail closed；
 - 人工协作不能修改自动验证状态；
 - 分享链接过期 / 撤销后不可解析；
@@ -344,6 +353,9 @@ npm run ci:gate
 - `scan_stage_progress` 显式阶段迁移与非法伪进度拒绝；
 - `build_discovery_plan()` 对企业理解/场景规划真实边界的驱动；
 - `run_experiment_candidate()` 对真实执行/证据采集边界的驱动；
+- `scan_stage_finalization` 对证据、测试数据、交付门禁权威结果的 completion-only 投影；
+- release verdict 与 stage execution status 分离；
+- stage telemetry 持久化失败 fail-soft；
 - stage snapshot 只在真实 live lease 期间进入 HTTP 状态；
 - Finding 人工协作与自动验证状态分权；
 - display ID → SQLite persistence ID crosswalk；
@@ -372,6 +384,7 @@ npm run ci:gate
 - 首次扫描启动率；
 - 服务端扫描租约确认率；
 - 主链阶段实时上报率；
+- 六阶段真实回执覆盖率；
 - 首次扫描完成率；
 - 问题详情打开率；
 - Finding 持久化身份绑定率；
