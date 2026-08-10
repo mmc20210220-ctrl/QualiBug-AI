@@ -151,6 +151,25 @@ def score_experiment_priority(
     else:
         factors["state_transition_depth"] = 0.0
 
+    # Anonymous-write surfaces carry forgery/replay risk (credential-gated
+    # callbacks, public POST endpoints): a bounded budget must cover the
+    # highest-risk writes first. The signal is structural (the write surface
+    # declares no credential requirement), never a domain term.
+    _template = _text(prop.get("template")) or _text(exp.get("template"))
+    _is_anonymous_write = (
+        _template == "credential_gated_write"
+        or (
+            _text(exp.get("write_requires_auth") or prop.get("requires_auth"))
+            in {"", "false", "no"}
+            and bool(_list(exp.get("treatment_plan")))
+        )
+    )
+    if _is_anonymous_write:
+        factors["anonymous_write_risk"] = 1.0
+        score += 3.0
+    else:
+        factors["anonymous_write_risk"] = 0.0
+
     return {
         "score": round(score, 4),
         "factors": factors,

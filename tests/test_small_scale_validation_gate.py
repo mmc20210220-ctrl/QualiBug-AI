@@ -475,12 +475,14 @@ def test_formal_over_100_truncated():
 
 # ── Test 18: Hard Cap 200 enforced ──
 
-def test_hard_cap_200_enforced():
-    """Budget can never exceed 200 regardless of contract override."""
-    budget = get_validation_budget({"experiment_budget": 500}, phase="formal")
-    assert budget == 200
+def test_hard_cap_enforced():
+    """Budget can never exceed the hard cap regardless of contract override."""
+    from ai_test_asset_center.small_scale_validation_gate import HARD_BUDGET_CAP
+
+    budget = get_validation_budget({"experiment_budget": HARD_BUDGET_CAP + 300}, phase="formal")
+    assert budget == HARD_BUDGET_CAP
     budget2 = get_validation_budget({"experiment_budget": 999}, phase="small_scale")
-    assert budget2 == 200
+    assert budget2 == HARD_BUDGET_CAP
 
 
 # ── Test 19: Gate failure auto-marks Run invalid ──

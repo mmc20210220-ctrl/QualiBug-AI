@@ -31,9 +31,15 @@ from typing import Any
 VALIDATION_GATE_SCHEMA = "qualibug.small-scale-validation-gate.v2"
 
 # ── Phased budget limits ──
+# The hard cap bounds one execution round. It must keep pace with the
+# compiled candidate pool: run25c compiled ~11734 obligations but only 89
+# executed (1.7%) — budget-deferred DEFERRED rows never reached a finding.
+# 600 keeps a round affordable (~1.5-2h at the current per-experiment cost)
+# while covering the highest-risk surfaces (anonymous writes, admin bulk
+# ops) that a 200 cap starved.
 SMALL_SCALE_BUDGET = 20
 FORMAL_BUDGET = 100
-HARD_BUDGET_CAP = 200
+HARD_BUDGET_CAP = 600
 
 # ── Phase sub-budgets ──
 PHASE_BUDGET_PREFLIGHT = 5
