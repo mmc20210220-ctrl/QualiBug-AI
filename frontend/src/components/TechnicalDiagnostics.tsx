@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+
+export const OPEN_TECHNICAL_DIAGNOSTICS_EVENT = 'qualibug:open-technical-diagnostics';
 
 interface TechnicalDiagnosticsProps {
   children: ReactNode;
@@ -9,8 +11,19 @@ interface TechnicalDiagnosticsProps {
 export function TechnicalDiagnostics({ children, defaultOpen = false }: TechnicalDiagnosticsProps) {
   const [open, setOpen] = useState(defaultOpen);
 
+  useEffect(() => {
+    const handleOpen = () => {
+      setOpen(true);
+      window.setTimeout(() => {
+        document.getElementById('dashboard-technical-diagnostics')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 0);
+    };
+    window.addEventListener(OPEN_TECHNICAL_DIAGNOSTICS_EVENT, handleOpen);
+    return () => window.removeEventListener(OPEN_TECHNICAL_DIAGNOSTICS_EVENT, handleOpen);
+  }, []);
+
   return (
-    <section className="tech-diagnostics mb-4">
+    <section id="dashboard-technical-diagnostics" className="tech-diagnostics mb-4">
       <button
         type="button"
         className="tech-diagnostics-toggle"
