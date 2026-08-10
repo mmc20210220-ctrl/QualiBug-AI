@@ -13,6 +13,8 @@ const releaseGate = read('src/pages/ReleaseGate.tsx');
 const runCenter = read('src/pages/EnterpriseCampaigns.tsx');
 const findings = read('src/pages/Findings.tsx');
 const evidence = read('src/pages/EvidenceChain.tsx');
+const main = read('src/main.tsx');
+const responsive = read('src/styles/customer-responsive.css');
 const packageJson = read('package.json');
 const ciGate = read('scripts/ci-gate.mjs');
 
@@ -71,6 +73,16 @@ assert(evidence.includes('customerFindings.length === 0'), 'evidence center must
 assert(evidence.includes('customerFindings.length > 0 && withEvidence.length === 0'), 'confirmed findings without evidence packages must be a distinct state');
 assert(evidence.includes('个已确认问题当前没有可展示证据包'), 'missing evidence for confirmed findings must be visible and actionable');
 assert(evidence.includes("onClick={() => navigateToProjectPath('/coverage', project)}>查看覆盖范围</button>"), 'zero-finding evidence state must expose coverage');
+
+assert(main.indexOf("import './index.css';") < main.indexOf("import './styles/customer-responsive.css';"), 'customer responsive overrides must load after legacy index styles');
+assert(responsive.includes('.evidence-layout {'), 'responsive layer must target the actual evidence page class');
+assert(responsive.includes('@media (max-width: 1024px)'), 'evidence split must have a tablet breakpoint');
+assert(responsive.includes('grid-template-columns: 1fr;'), 'narrow evidence layout must collapse to one column');
+assert(responsive.includes('@media (max-width: 720px)'), 'customer page headers must have a narrow breakpoint');
+assert(responsive.includes('.findings-page-head {'), 'findings/evidence page header must stack safely on narrow screens');
+assert(responsive.includes('@media (max-width: 560px)'), 'customer actions must have a mobile breakpoint');
+assert(responsive.includes('.action-bar .btn,'), 'mobile action bar buttons must be explicitly handled');
+assert(responsive.includes('width: 100%;'), 'mobile primary actions must expand to touch-friendly full width');
 
 assert(packageJson.includes('"test:customer-action-guidance": "node scripts/customer-action-guidance-contract.mjs"'), 'package script missing customer action guidance contract');
 assert(ciGate.includes('"test:customer-action-guidance"'), 'ci gate missing customer action guidance contract');
