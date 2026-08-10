@@ -2,17 +2,21 @@
 
 Only code that actually owns a stage boundary may update that stage. Missing
 instrumentation stays PENDING/UNREPORTED; callers must never advance stages by
-time or percentage heuristics.
+time or percentage heuristics. Persistence is observability-only: filesystem
+failures are logged and must never change the real scan outcome.
 """
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
 
 from .private_pilot_json_io import _write_json_object_atomic
 from .project_runtime_primitives import safe_project_id
+
+_LOGGER = logging.getLogger(__name__)
 
 _STAGE_ORDER = (
     "enterprise_understanding",
@@ -57,6 +61,21 @@ def _empty(project: str) -> dict[str, Any]:
     }
 
 
+def _persist_best_effort(path: Path, payload: dict[str, Any]) -> bool:
+    try:
+        _write_json_object_atomic(path, payload)
+        return True
+    except Exception as exc:
+        _LOGGER.warning(
+            "scan_stage_progress_persist_failed path=%s error_type=%s error=%s",
+            path,
+            type(exc).__name__,
+            str(exc)[:240],
+            exc_info=True,
+        )
+        return False
+
+
 def read_scan_stage_progress(root: Path, project: str) -> dict[str, Any]:
     path = _path(root, project)
     if not path.exists() or not path.is_file():
@@ -91,7 +110,7 @@ def read_scan_stage_progress(root: Path, project: str) -> dict[str, Any]:
 
 def begin_scan_stage_progress(root: Path, project: str) -> dict[str, Any]:
     payload = _empty(project)
-    _write_json_object_atomic(_path(root, project), payload)
+    _persist_best_effort(_path(root, project), payload)
     return payload
 
 
@@ -110,7 +129,7 @@ def mark_scan_stage(
     if normalized_status not in _ALLOWED_STATUS - {"pending", "unreported"}:
         raise ValueError(f"invalid scan stage status: {normalized_status}")
 
-    payload = read_scan_stage_progress(root, project) or begin_scan_stage_progress(root, project)
+    payload = read_scan_stage_progress(root, project) or _empty(project)
     stages = payload["stages"]
     item = dict(stages.get(stage_key) or {})
     now = _now_iso()
@@ -124,7 +143,7 @@ def mark_scan_stage(
     item["detail"] = str(detail or "")[:240]
     stages[stage_key] = item
     payload["updated_at_utc"] = now
-    _write_json_object_atomic(_path(root, project), payload)
+    _persist_best_effort(_path(root, project), payload)
     return payload
 
 
