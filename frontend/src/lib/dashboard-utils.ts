@@ -173,10 +173,14 @@ export function releaseRecommendationLabel(v: string, fb: string): string {
 export function getExecutiveHeadline(defects: number, family: number, p0: number, clues: number, cs: string, reason: string): string {
   if (cs === 'blocked') return `检测已暂停：${reason || '还需补齐必要条件'}。`;
   if (cs === 'coverage_deferred') return `本轮覆盖已到边界：${reason || '剩余范围已明确递延'}。`;
-  if (defects > 0 && p0 > 0) return family > defects ? `已确认 ${defects} 个问题，累计 ${family} 个，其中 ${p0} 个会直接影响发布。` : `已确认 ${defects} 个问题，其中 ${p0} 个会直接影响发布。`;
-  if (defects > 0) return family > defects ? `已确认 ${defects} 个问题，累计 ${family} 个，可直接进入整改。` : `已确认 ${defects} 个问题，可直接进入整改与验收。`;
+  if (defects > 0 && p0 > 0) return family > defects
+    ? `已确认 ${defects} 个问题，累计 ${family} 个，其中 ${p0} 个会直接影响发布；客户修复后需要重新验证。`
+    : `已确认 ${defects} 个问题，其中 ${p0} 个会直接影响发布；客户修复后需要重新验证。`;
+  if (defects > 0) return family > defects
+    ? `已确认 ${defects} 个问题，累计 ${family} 个；客户修复后由 QualiBug 重新验证。`
+    : `已确认 ${defects} 个问题；客户修复后由 QualiBug 重新验证。`;
   if (clues > 0) return `本轮尚未形成确认问题，仍有 ${clues} 条线索在补证中。`;
-  return '当前未发现问题，可结合覆盖状态判断发布结论。';
+  return '当前未发现问题，可结合覆盖状态和项目级发布门禁判断发布结论。';
 }
 
 // ─── Gate / Main-chain / Evidence helpers ────────────────────────────────────
