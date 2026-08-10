@@ -183,6 +183,7 @@ by replacing host methods:
 
 | Authority | Module |
 |---|---|
+| Runtime artifact lifecycle (content-addressed store, Run Manifests, evidence artifactization, reference GC, run-manifest post hook) | `artifact_store.py` (ArtifactRef/LocalArtifactStore, canonical JSON, zstd, atomic writes, streaming put_file, sidecar metadata) + `run_manifest.py` (RunManifestStore, SPEC §15 commit ordering, failed-run policy, pinning) + `evidence_artifactization.py` (fine-grained evidence split + Dual-Read hydration) + `artifact_gc.py` (mark-and-sweep dry-run skeleton) + `run_manifest_hook.py` (registered via `scan_post_hooks`). Old `scan_result_retention.py` remains the fallback until RunRetentionManager unifies it (SPEC §32) |
 | Target authorization | `target_policy.py` |
 | Product defect truth | `discovery_quality_projection.py` |
 | Project campaign contracts (`/api/v1` only) | `campaign_api_contract.py` |

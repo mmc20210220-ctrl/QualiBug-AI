@@ -104,6 +104,7 @@ def create_delivery_package(
         "campaign": result.get("campaign") if isinstance(result.get("campaign"), dict) else {},
         "source_manifest": (result.get("runtime_contract") or {}).get("source_manifest", {}) if isinstance(result.get("runtime_contract"), dict) else {},
         "artifact_count": len(manifest.get("artifacts") if isinstance(manifest.get("artifacts"), list) else []),
+        "artifactized": bool(manifest.get("artifactized")),
     }
     temporary = archive_path.with_suffix(".tmp")
     try:
@@ -111,13 +112,33 @@ def create_delivery_package(
             archive.writestr("delivery_manifest.json", json.dumps(manifest_payload, ensure_ascii=False, indent=2, default=str))
             archive.writestr("scan_result.json", json.dumps(result, ensure_ascii=False, indent=2, default=str))
             archive.writestr("evidence_bundle_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
-            for artifact in manifest.get("artifacts", []):
-                if not isinstance(artifact, dict):
-                    continue
-                relative = str(artifact.get("path") or "")
-                source = bundle_dir / relative
-                if source.is_file():
-                    archive.write(source, arcname=f"evidence/{relative}")
+            if manifest.get("artifactized"):
+                # ── P0-4 Dual Read: pull each fine-grained part from the
+                # content-addressed store (streaming); nothing is copied back
+                # to the bundle directory. ──
+                from .artifact_store import default_artifact_store
+
+                store = default_artifact_store(workspace)
+                for index, artifact in enumerate(manifest.get("artifacts", [])):
+                    if not isinstance(artifact, dict):
+                        continue
+                    artifact_id = str(artifact.get("artifact_id") or "")
+                    if not artifact_id or not store.exists(artifact_id):
+                        continue
+                    safe_name = str(artifact.get("name") or "artifact")
+                    with store.open(artifact_id) as source_stream:
+                        archive.writestr(
+                            f"evidence/{index:04d}_{safe_name}.json",
+                            source_stream.read(),
+                        )
+            else:
+                for artifact in manifest.get("artifacts", []):
+                    if not isinstance(artifact, dict):
+                        continue
+                    relative = str(artifact.get("path") or "")
+                    source = bundle_dir / relative
+                    if source.is_file():
+                        archive.write(source, arcname=f"evidence/{relative}")
         temporary.replace(archive_path)
     finally:
         if temporary.exists():

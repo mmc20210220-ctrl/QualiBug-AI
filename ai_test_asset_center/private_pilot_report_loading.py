@@ -267,21 +267,47 @@ class ReportLoadingMixin:
         anchor_environment_ref = self._first_text(anchor_campaign.get("environment_ref"), anchor.get("environment_ref"))
         anchored = bool(anchor_campaign_id or anchor_snapshot or anchor_source_hash)
         candidates: list[tuple[int, float, dict[str, Any]]] = []
-        for manifest_path in sorted(bundle_root.glob("evb_*/manifest.json")):
-            manifest = self._read_json_dict(manifest_path)
+        for bundle_dir in sorted(bundle_root.glob("evb_*")):
+            if not bundle_dir.is_dir():
+                continue
+            manifest_path = bundle_dir / "manifest.json"
+            pointer_path = bundle_dir / "manifest.pointer.json"
+            if pointer_path.is_file():
+                # ── P0-4 Dual Read: artifactized bundles hydrate through the
+                # content-addressed store; no evidence is copied back to disk. ──
+                try:
+                    from .evidence_artifactization import load_evidence_bundle_report_view
+
+                    view = load_evidence_bundle_report_view(project, bundle_dir.name, root=root)
+                except Exception:
+                    continue
+                if not view:
+                    continue
+                manifest = view.get("manifest") if isinstance(view.get("manifest"), dict) else {}
+                campaign = view.get("campaign") if isinstance(view.get("campaign"), dict) else {}
+                findings = view.get("findings") if isinstance(view.get("findings"), list) else []
+                source_file = pointer_path
+                findings_path = pointer_path
+            else:
+                if not manifest_path.is_file():
+                    continue
+                manifest = self._read_json_dict(manifest_path)
+                if not manifest or self._first_text(manifest.get("project_id")) != project:
+                    continue
+                campaign = self._read_json_dict(bundle_dir / "campaign.json")
+                findings_path = bundle_dir / "findings.json"
+                if not findings_path.exists():
+                    continue
+                try:
+                    raw_findings = json.loads(findings_path.read_text(encoding="utf-8") or "[]")
+                except Exception:
+                    continue
+                if not isinstance(raw_findings, list):
+                    continue
+                findings = [item for item in raw_findings if isinstance(item, dict)]
+                source_file = manifest_path
             if not manifest or self._first_text(manifest.get("project_id")) != project:
                 continue
-            campaign = self._read_json_dict(manifest_path.with_name("campaign.json"))
-            findings_path = manifest_path.with_name("findings.json")
-            if not findings_path.exists():
-                continue
-            try:
-                raw_findings = json.loads(findings_path.read_text(encoding="utf-8") or "[]")
-            except Exception:
-                continue
-            if not isinstance(raw_findings, list):
-                continue
-            findings = [item for item in raw_findings if isinstance(item, dict)]
             if not findings:
                 continue
             bundle_campaign_id = self._first_text(campaign.get("campaign_id"), manifest.get("campaign_id"))
@@ -320,8 +346,8 @@ class ReportLoadingMixin:
                 "report_source_path": findings_path.relative_to(root).as_posix() if findings_path.is_relative_to(root) else str(findings_path),
                 "campaign": campaign,
                 "evidence_bundle": {
-                    "bundle_id": self._first_text(manifest.get("bundle_id"), manifest_path.parent.name),
-                    "manifest_ref": str(manifest_path.relative_to(root)) if manifest_path.is_relative_to(root) else str(manifest_path),
+                    "bundle_id": self._first_text(manifest.get("bundle_id"), bundle_dir.name),
+                    "manifest_ref": str(source_file.relative_to(root)) if source_file.is_relative_to(root) else str(source_file),
                     "evidence_level": self._first_text(manifest.get("evidence_level")),
                 },
             }

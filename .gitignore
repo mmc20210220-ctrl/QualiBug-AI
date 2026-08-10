@@ -170,6 +170,10 @@ frontend/undefined/
 # All one-off debug scripts and run artifacts live in .scratch/ and never in the root.
 /.scratch/
 
+# ── Runtime artifact store workspace (SPEC P0-4: content-addressed artifacts
+# and Run Manifests live under <workspace>/.qualibug; never committed). ──
+/.qualibug/
+
 # Root-level one-off scripts/artifacts are ignored by pattern; tracked
 # exceptions (release/test baselines) are listed explicitly below.
 /_*.py

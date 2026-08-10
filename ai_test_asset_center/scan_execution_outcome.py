@@ -49,7 +49,9 @@ def _test_data_receipt_verifier(root: Path, project: str):
 
 
 def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign: dict[str, Any], runtime_contract: dict[str, Any], execution_status: str, v12: dict[str, Any]) -> dict[str, Any]:
+    from .artifact_store import artifact_store_enabled
     from .evidence_artifact_store import persist_evidence_bundle
+
     findings = v12.get("findings") if isinstance(v12.get("findings"), list) else []
     formal_projection = _as_dict(v12.get("formal_count_projection"))
     canonical_representatives = (
@@ -87,6 +89,31 @@ def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign
         for item in [*runtime_candidates, *external_findings]
         if isinstance(item, dict)
     ]
+    if artifact_store_enabled():
+        # ── P0-4 Phase 3: Single Write — new evidence goes through the
+        # content-addressed ArtifactStore as fine-grained parts (SPEC §12/§13);
+        # old bundles remain readable through the legacy layout (Dual Read).
+        from .evidence_artifactization import persist_evidence_bundle_artifactized
+
+        return persist_evidence_bundle_artifactized(
+            project,
+            root=root,
+            run_id=scan_id,
+            campaign=campaign,
+            runtime_contract=runtime_contract,
+            execution_status=execution_status,
+            auto_har=_as_dict(v12.get("auto_har")),
+            evidence_graphs=v12.get("evidence_graphs") if isinstance(v12.get("evidence_graphs"), list) else [],
+            findings=persisted_findings,
+            candidate_findings=persisted_candidates,
+            canonical_defect_registry=registry,
+            delivery_occurrences=(
+                v12.get("delivery_occurrences")
+                if isinstance(v12.get("delivery_occurrences"), list)
+                else []
+            ),
+            ui_execution=_as_dict(v12.get("ui_execution")),
+        )
     return persist_evidence_bundle(
         project,
         root=root,

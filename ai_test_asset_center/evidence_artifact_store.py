@@ -270,6 +270,13 @@ def persist_evidence_bundle(
 
 def load_evidence_bundle(project_id: str, bundle_id: str, *, root: Path) -> dict[str, Any]:
     directory = _bundle_dir(Path(root), project_id, str(bundle_id))
+    if (directory / "manifest.pointer.json").is_file():
+        # ── P0-4 Dual Read: artifactized bundles hydrate the legacy bundle
+        # view from the content-addressed store (SPEC §33); no copy of the
+        # evidence is materialized back to disk. ──
+        from .evidence_artifactization import load_evidence_bundle_v2
+
+        return load_evidence_bundle_v2(project_id, str(bundle_id), root=Path(root))
     path = directory / "manifest.json"
     if not path.exists():
         raise EvidenceArtifactError("evidence_bundle_missing")
@@ -283,6 +290,11 @@ def load_evidence_bundle(project_id: str, bundle_id: str, *, root: Path) -> dict
 
 
 def verify_evidence_bundle(project_id: str, bundle_id: str, *, root: Path) -> dict[str, Any]:
+    directory = _bundle_dir(Path(root), project_id, bundle_id)
+    if (directory / "manifest.pointer.json").is_file():
+        from .evidence_artifactization import verify_evidence_bundle_v2
+
+        return verify_evidence_bundle_v2(project_id, str(bundle_id), root=Path(root))
     manifest = load_evidence_bundle(project_id, bundle_id, root=root)
     directory = _bundle_dir(Path(root), project_id, bundle_id)
     checked = 0

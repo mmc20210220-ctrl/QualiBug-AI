@@ -45,6 +45,10 @@ _BUILTIN_HOOK_INSTALLERS: tuple[tuple[str, str], ...] = (
         "ai_test_asset_center.behavior_registry",
         "install_behavior_registry",
     ),
+    (
+        "ai_test_asset_center.run_manifest_hook",
+        "install_run_manifest_hook",
+    ),
 )
 
 
