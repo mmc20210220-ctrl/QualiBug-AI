@@ -16,6 +16,7 @@ const guide = read('src/components/settings/SettingsOnboardingGuide.tsx');
 const materialsHandoff = read('src/components/materials/MaterialsOnboardingHandoff.tsx');
 const journey = read('src/components/dashboard/JourneyStrip.tsx');
 const customerSection = read('src/components/settings/SettingsCustomerSection.tsx');
+const sidebar = read('src/components/Sidebar.tsx');
 const layout = read('src/components/Layout.tsx');
 const metadata = read('src/components/settings/SettingsMetadataSection.tsx');
 const topology = read('src/components/settings/SettingsTopologySection.tsx');
@@ -62,6 +63,16 @@ assert(journey.includes("title: '运行前检查并检测'"), 'first-run journey
 assert(journey.includes("path: '/campaigns', action: '检查并运行'"), 'first-run run step must enter the real run center');
 assert(journey.includes("title: '查看结果与发布建议'"), 'first-run journey must be result-first after scanning');
 assert(journey.includes("path: '/dashboard', action: '查看价值总览'"), 'first-run result step must lead to dashboard instead of assuming findings exist');
+
+const mainNavStart = sidebar.indexOf("label: '主流程'");
+const projectNavStart = sidebar.indexOf("label: '项目接入'");
+const advancedNavStart = sidebar.indexOf("label: '高级视图'");
+assert(mainNavStart >= 0 && projectNavStart > mainNavStart && advancedNavStart > projectNavStart, 'sidebar navigation sections must keep a stable main/setup/advanced hierarchy');
+const mainNavBlock = sidebar.slice(mainNavStart, projectNavStart);
+const advancedNavBlock = sidebar.slice(advancedNavStart, sidebar.indexOf('];', advancedNavStart));
+assert(mainNavBlock.includes("to: 'release'"), 'release gate must remain a customer main-flow destination');
+assert(!advancedNavBlock.includes("to: 'release'"), 'release gate must not regress back into advanced views');
+assert(advancedNavBlock.includes("to: 'coverage'") && advancedNavBlock.includes("to: 'jobs'"), 'coverage and background jobs belong in advanced views');
 
 assert(runCenter.includes('const preflightReady = Boolean(preflight?.ready);'), 'run center must keep backend preflight as execution authority');
 assert(runCenter.includes('if (!preflightReady) {'), 'run center handler must remain fail-closed after frontend onboarding completion');
