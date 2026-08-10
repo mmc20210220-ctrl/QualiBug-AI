@@ -849,6 +849,8 @@ def _run_reasoner_engine(
         "error_code": "",
         "last_exception_type": "",
         "degradation_reason": "",
+        "cache_hit": False,
+        "cache_source": "llm",
         "model_usage": {
             "request_count": 0,
             "prompt_tokens": 0,
@@ -898,9 +900,40 @@ def _run_reasoner_engine(
             result["temperature"] = str(getattr(worker_config, "temperature", "") or "")
             result["prompt_template_hash"] = sha256(str(template or "").encode("utf-8", errors="replace")).hexdigest()[:16]
 
-            result["model_attempt_count"] += 1
-            raw = worker_client._chat(prompt, system_prompt=system_prompt, call_point=engine_name)
-            result["model_response_count"] += 1
+            # ── Content-addressed response cache (iteration speed) ──
+            # The full prompt is the semantic identity: same enterprise
+            # material + same template + same model → same response. A cache
+            # hit skips the LLM entirely but runs the identical parse path;
+            # model_attempt_count / model_response_count stay 0 (honest real
+            # LLM call count) and cache_hit is stamped on the result. Any
+            # material/template/model change misses automatically.
+            from .reasoner_response_cache import cache_key, load as _cache_load, store as _cache_store
+
+            _response_key = cache_key(
+                engine_name,
+                prompt,
+                system_prompt,
+                result["model_id"],
+                result["temperature"],
+            )
+            cached_raw = _cache_load(_response_key)
+            result["cache_hit"] = cached_raw is not None
+            result["cache_source"] = "content_addressed" if cached_raw is not None else "llm"
+            if cached_raw is not None:
+                raw = cached_raw
+                result["model_attempt_count"] = 0
+                result["model_response_count"] = 0
+                result["cache_lookup_seconds"] = round(max(0.0, time.time() - attempt_started), 3)
+            else:
+                result["model_attempt_count"] += 1
+                raw = worker_client._chat(prompt, system_prompt=system_prompt, call_point=engine_name)
+                result["model_response_count"] += 1
+                _cache_store(
+                    _response_key,
+                    str(raw) if raw else "",
+                    model=result["model_id"],
+                    temperature=result["temperature"],
+                )
             usage_snapshot = getattr(worker_client, "usage_snapshot", None)
             if callable(usage_snapshot):
                 for key, value in dict(usage_snapshot() or {}).items():
