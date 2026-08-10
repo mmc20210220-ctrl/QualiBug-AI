@@ -9,6 +9,7 @@ import { AssertionDiff } from '../components/evidence/AssertionDiff';
 import { QualityScore } from '../components/evidence/QualityScore';
 import { ReplayPanel } from '../components/evidence/ReplayPanel';
 import { Skeleton } from '../components/dashboard/DashboardPrimitives';
+import { FindingVerificationPanel } from '../components/findings/FindingVerificationPanel';
 import { TermHint } from '../components/TermHint';
 import { GLOSSARY } from '../lib/glossary';
 import type { Finding } from '../types';
@@ -29,13 +30,13 @@ export function EvidenceChain() {
   const [replayFinding, setReplayFinding] = useState<Finding | null>(null);
 
   const customerFindings = findings.filter(isCustomerReadyFinding);
-  const withEvidence = customerFindings.filter((f) => f.evidence_chain?.length > 0);
-  const replayReady = withEvidence.filter((f) => hasRealReplayAsset(f)).length;
+  const withEvidence = customerFindings.filter((finding) => finding.evidence_chain?.length > 0);
+  const replayReady = withEvidence.filter((finding) => hasRealReplayAsset(finding)).length;
   const requestedFinding = requestedFindingId
-    ? customerFindings.find((f) => f.id === requestedFindingId) || null
+    ? customerFindings.find((finding) => finding.id === requestedFindingId) || null
     : null;
   const selected = requestedFindingId
-    ? withEvidence.find((f) => f.id === requestedFindingId) || null
+    ? withEvidence.find((finding) => finding.id === requestedFindingId) || null
     : withEvidence[0] || null;
   const confirmedWithoutEvidence = Math.max(0, customerFindings.length - withEvidence.length);
   const findingContextSearch = evidenceDeepLinkSearch(selected?.id || requestedFindingId);
@@ -71,8 +72,8 @@ export function EvidenceChain() {
       {loading && (
         <div className="evidence-layout" aria-busy="true" aria-label="正在整理证据链">
           <div className="evidence-list-panel">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="evidence-list-item">
+            {[1, 2, 3, 4].map((index) => (
+              <div key={index} className="evidence-list-item">
                 <Skeleton h={14} w="80%" br={4} />
                 <div style={{ marginTop: 8 }}><Skeleton h={11} w="55%" br={4} /></div>
               </div>
@@ -130,26 +131,26 @@ export function EvidenceChain() {
       {!loading && !error && withEvidence.length > 0 && (
         <div className="evidence-layout">
           <div className="evidence-list-panel">
-            {withEvidence.map((f) => (
+            {withEvidence.map((finding) => (
               <div
-                key={f.id}
+                key={finding.id}
                 role="button"
                 tabIndex={0}
-                aria-pressed={selected?.id === f.id}
-                className={`evidence-list-item${selected?.id === f.id ? ' active' : ''}`}
-                onClick={() => selectFinding(f.id)}
+                aria-pressed={selected?.id === finding.id}
+                className={`evidence-list-item${selected?.id === finding.id ? ' active' : ''}`}
+                onClick={() => selectFinding(finding.id)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    selectFinding(f.id);
+                    selectFinding(finding.id);
                   }
                 }}
               >
                 <h4>
-                  <span className={`severity-badge ${f.severity.toLowerCase()}`} style={{ marginRight: 6 }}>{f.severity}</span>
-                  {f.title}
+                  <span className={`severity-badge ${finding.severity.toLowerCase()}`} style={{ marginRight: 6 }}>{finding.severity}</span>
+                  {finding.title}
                 </h4>
-                <span>{moduleName(f)} · 证据 {evidenceScoreLabel(f)} · {hasRealReplayAsset(f) ? '可回放' : '待补充'}</span>
+                <span>{moduleName(finding)} · 证据 {evidenceScoreLabel(finding)} · {hasRealReplayAsset(finding) ? '可回放' : '待补充'}</span>
               </div>
             ))}
           </div>
@@ -169,6 +170,7 @@ export function EvidenceChain() {
                 </div>
               </section>
             )}
+
             {selected && (
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
@@ -179,25 +181,24 @@ export function EvidenceChain() {
                 <h4 style={{ fontSize: 13, fontWeight: 700, margin: '16px 0 8px' }}>预期 vs 实际</h4>
                 <AssertionDiff comparison={selected.expected_actual_comparison} expected={selected.expected} actual={selected.actual} />
                 <ReplayPanel finding={selected} project={project} onReplay={setReplayFinding} />
+
                 {selected.evidence_chain.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>证据时间线</h4>
                     <EvidenceTimeline steps={selected.evidence_chain} />
                   </div>
                 )}
+
                 <div style={{ marginTop: 16 }}>
                   <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>业务影响</h4>
                   <p style={{ fontSize: 13, color: 'var(--muted)' }}>{selected.business_impact?.summary || selected.business_summary || '该问题已形成确认结论。'}</p>
                 </div>
-                {selected.regression && (
-                  <div style={{ marginTop: 16, fontSize: 12, color: 'var(--muted)' }}>
-                    <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: 'var(--ink)' }}>回归闭环</h4>
-                    <p>生命周期：{selected.regression.lifecycle_label || '待回归'}</p>
-                    <p>最新状态：{selected.regression.latest_status_label || '未执行'}</p>
-                    <p>{selected.regression.lifecycle_description || selected.regression.reason || '等待后端上报回归结果。'}</p>
-                    {selected.regression.history?.length > 0 && (
-                      <p>最近轨迹：{selected.regression.history.map((item) => `[${item.generated_at || '未知时间'}] ${item.status_label || item.gate_status || '回归'}`).join(' -> ')}</p>
-                    )}
+
+                <FindingVerificationPanel finding={selected} />
+
+                {selected.regression?.included_in_suite && (
+                  <div className="settings-actions mt-3">
+                    <button className="btn btn-primary" onClick={() => navigateToProjectPath('/findings', project, findingContextSearch)}>回到这条问题并重新验证</button>
                   </div>
                 )}
               </div>
