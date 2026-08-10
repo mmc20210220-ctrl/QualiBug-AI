@@ -53,6 +53,7 @@ for (const script of [
   "test:live-scan-status",
   "test:dashboard-role-views",
   "test:dashboard-decision-first",
+  "test:release-decision-first",
   "test:customer-action-guidance",
   "test:finding-context-navigation",
   "test:finding-validation-boundary",
