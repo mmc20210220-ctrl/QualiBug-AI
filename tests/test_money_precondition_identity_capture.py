@@ -161,3 +161,52 @@ def test_identity_receipt_is_emitted() -> None:
     assert len(identity_receipts) == 1
     assert identity_receipts[0]["identity_value"] == "ord_abc"
     assert identity_receipts[0]["target"] == "orderId"
+
+
+def test_identity_aliases_bind_entity_identity_field() -> None:
+    """Downstream state steps address the subject by its own identity field.
+
+    The chain declares ``identity_binding_aliases`` (orderId + the entity's
+    identity field id); the captured identity must be registered under every
+    declared spelling so a cancel step's path /api/orders/{id}/cancel
+    materializes from the same created subject.
+    """
+    step = _create_step()
+    step["identity_binding_aliases"] = ["orderId", "id"]
+    created = {"id": "ord_alias_1", "status": "PENDING_PAYMENT"}
+    result = _run(step, created)
+    assert result["established"] is True
+    captured = result.get("identity_bindings") or {}
+    assert captured.get("orderId") == "ord_alias_1"
+    assert captured.get("id") == "ord_alias_1"
+    bindings = result.get("runtime_bindings") or {}
+    assert bindings.get("id") == "ord_alias_1"
+
+
+def test_identity_alias_fallback_reads_entity_identity_field() -> None:
+    """The create response may expose only the entity identity field (id).
+
+    When the reference slot (orderId) is absent from the response, the
+    executor must fall back to the declared alias spelling before giving up.
+    """
+    step = _create_step()
+    step["identity_binding_aliases"] = ["orderId", "id"]
+    # Response carries ONLY the entity identity field, not the reference slot.
+    created = {"id": "ord_alias_2", "status": "PENDING_PAYMENT"}
+    result = _run(step, created)
+    assert result["established"] is True
+    captured = result.get("identity_bindings") or {}
+    assert captured.get("orderId") == "ord_alias_2"
+    assert captured.get("id") == "ord_alias_2"
+
+
+def test_identity_aliases_are_recorded_in_receipt() -> None:
+    step = _create_step()
+    step["identity_binding_aliases"] = ["orderId", "id"]
+    result = _run(step, {"id": "ord_alias_3", "status": "PENDING_PAYMENT"})
+    receipts = [r for r in result.get("receipts") or []]
+    identity_receipts = [
+        r for r in receipts if r.get("phase") == "precondition_identity"
+    ]
+    assert len(identity_receipts) == 1
+    assert identity_receipts[0]["identity_binding_aliases"] == ["orderId", "id"]

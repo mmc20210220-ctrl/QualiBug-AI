@@ -496,6 +496,21 @@ def plan_money_family_precondition(
         subject_step = steps[-1]
         subject_step["step_id"] = "money_precondition_create"
         subject_step["intent"] = "money_subject_establishment"
+        # Identity alias coverage: the subject identity is captured under the
+        # request reference field (orderId), but downstream steps address the
+        # same entity through the entity's own identity field spellings (a
+        # state-advancement step cancels via /api/orders/{id}/cancel). Declare
+        # both spellings so the flow-data freeze check and the precondition
+        # executor register every token the chain consumes.
+        subject_identity_aliases = list(
+            dict.fromkeys(
+                [
+                    reference_field,
+                    *_entity_identity_fields(entity),
+                ]
+            )
+        )
+        subject_step["identity_binding_aliases"] = subject_identity_aliases
 
         # Optional state advancement: when the property declares a required
         # pre-state (e.g. CANCELLED for a pay-after-cancel rule), plan the
@@ -535,6 +550,12 @@ def plan_money_family_precondition(
                         "from_state": _text(edge.get("from_state")),
                         "to_state": _text(edge.get("to_state")),
                         "step_ordinal": index,
+                        # The advancement step targets the SAME subject entity
+                        # (cancel /api/orders/{id}/cancel names the entity's
+                        # identity field directly); declare the alias spellings
+                        # so the flow-data freeze check and the executor bind
+                        # the path placeholder from the captured identity.
+                        "identity_binding_aliases": subject_identity_aliases,
                     }
                 )
 

@@ -1879,8 +1879,30 @@ def _permission_entries(
             continue
         if _permission_decision({}, line) != "deny":
             continue
-        line_norm = _norm(line)
-        negative_clause = _negative_permission_clause(line)
+        # ── Deny-subject sentence guard ──
+        # A permission deny must express a ROLE's access restriction: the
+        # denied role must appear in the sentence that carries the deny
+        # marker. Operation-contract lines such as
+        #   「权限：财务或管理员。\n\n业务约束：退款金额不得超过实际成功支付金额；重复退款必须幂等。」
+        # carry the deny marker only inside a business-constraint sentence
+        # ("不得" inside "不得超过"), while the roles sit in a separate
+        # role-restriction sentence ("权限：财务或管理员。"). Collecting roles
+        # from the WHOLE line fabricated deny rows (admin->payment DENY) that
+        # contradicted the role matrix grant rows, produced
+        # permission_decision_conflict nodes, and blocked every obligation
+        # referencing the affected operations at compile time. Roles are
+        # therefore scoped to the deny-marker sentence(s) only; a deny with no
+        # role in its own sentence is a business-state constraint, not an
+        # access-control statement, and emits no permission row.
+        _deny_sentences = [
+            _sentence
+            for _sentence in re.split(r"[。；!?！？]+", line)
+            if _permission_decision({}, _sentence) == "deny"
+        ]
+        if not _deny_sentences:
+            continue
+        line_norm = _norm(" ".join(_deny_sentences))
+        negative_clause = _negative_permission_clause(_deny_sentences[0])
         roles = [
             role
             for role, aliases in role_words.items()

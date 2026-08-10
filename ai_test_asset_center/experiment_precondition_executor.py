@@ -484,6 +484,17 @@ def execute_precondition_plan(
         _identity_target = _text(step.get("identity_binding_target"))
         if _identity_target and _identity_target not in _identity_targets:
             _identity_targets.insert(0, _identity_target)
+        # Identity alias spellings (money_precondition_chain): the created
+        # subject identity is captured under the request reference field
+        # (orderId), and the entity's own identity field spellings (id) cover
+        # downstream path placeholders. Every declared spelling is registered
+        # so later chain steps (cancel /api/orders/{id}/cancel) materialize
+        # their path identity from the same captured value.
+        _identity_aliases = [
+            _text(value)
+            for value in _list(step.get("identity_binding_aliases"))
+            if _text(value)
+        ]
         _identity_value: Any = None
         if (
             _identity_targets
@@ -500,7 +511,27 @@ def execute_precondition_plan(
                     write.get("body"),
                     _leaf_value,
                 )
-            for _target_name in _identity_targets:
+            # The created entity may expose its identity under the entity's own
+            # identity field (OrderWithItems -> id) while the reference slot is
+            # named orderId; try every declared alias spelling before giving up.
+            if _identity_value in (None, "", [], {}):
+                for _alias in _identity_aliases:
+                    if not _alias or _alias == _identity_targets[0]:
+                        continue
+                    _identity_value = _runtime_setup_value_from_response(
+                        write.get("body"),
+                        _alias,
+                    )
+                    if _identity_value not in (None, "", [], {}):
+                        break
+            for _target_name in [
+                *_identity_targets,
+                *[
+                    alias
+                    for alias in _identity_aliases
+                    if alias not in _identity_targets
+                ],
+            ]:
                 if _identity_value in (None, "", [], {}):
                     break
                 runtime_bindings[_target_name] = _identity_value
@@ -538,6 +569,7 @@ def execute_precondition_plan(
                     "target": _identity_targets[0],
                     "identity_value": _identity_value,
                     "identity_binding_targets": _identity_targets,
+                    "identity_binding_aliases": _identity_aliases,
                     "status": "COMPLETED",
                     "reason_code": "",
                     "detail": "money_subject_identity_captured",

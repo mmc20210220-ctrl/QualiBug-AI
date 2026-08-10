@@ -128,6 +128,45 @@ def _declared_input_targets(step: dict[str, Any]) -> list[str]:
     return targets
 
 
+def _identity_alias_targets(
+    steps: list[dict[str, Any]],
+    binding_targets: set[str],
+) -> set[str]:
+    """Expand identity bindings into the token spellings they satisfy.
+
+    A subject-establishment step (money_precondition_chain) captures the
+    created entity identity into the request reference field (``orderId``)
+    and declares ``identity_binding_aliases`` covering the entity's own
+    identity field spellings (``id``). Downstream steps address the same
+    entity through either spelling — a state-advancement step's path
+    ``/api/orders/{id}/cancel`` names the identity field directly. Such a
+    token is satisfiable whenever the step's primary identity target is
+    already bound, so the freeze check must not report it unresolved.
+    """
+    alias_targets: set[str] = set()
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        aliases = [
+            _text(value)
+            for value in _list(step.get("identity_binding_aliases"))
+            if _text(value)
+        ]
+        if not aliases:
+            continue
+        primary = _text(
+            step.get("identity_binding_target")
+            or (
+                _list(step.get("identity_binding_targets"))[0]
+                if _list(step.get("identity_binding_targets"))
+                else ""
+            )
+        )
+        if not primary or primary in binding_targets:
+            alias_targets.update(aliases)
+    return alias_targets
+
+
 def _declared_output_targets(step: dict[str, Any]) -> list[str]:
     targets: list[str] = []
     for key in ("output_binding_specs", "output_bindings", "produces_bindings"):
@@ -158,6 +197,7 @@ def _step_requirement(
     operation: dict[str, Any],
     available_before: set[str],
     binding_targets: set[str],
+    identity_alias_targets: set[str],
 ) -> tuple[dict[str, Any], list[str]]:
     step_id = _text(step.get("step_id") or step.get("id"))
     operation_ref = _text(step.get("operation_ref"))
@@ -183,7 +223,9 @@ def _step_requirement(
     unresolved = [
         target
         for target in required_targets
-        if target not in binding_targets and target not in available_before
+        if target not in binding_targets
+        and target not in available_before
+        and target not in identity_alias_targets
     ]
     requirement = {
         "phase": phase,
@@ -294,6 +336,17 @@ def build_flow_data_requirement(
     required_operation_refs: list[str] = []
     required_entity_refs: list[str] = []
 
+    all_phase_steps = [
+        dict(raw)
+        for phase in ("precondition", "control", "treatment")
+        for raw in _list(source.get(f"{phase}_plan"))
+        if isinstance(raw, dict)
+    ]
+    identity_alias_targets = _identity_alias_targets(
+        all_phase_steps,
+        binding_targets,
+    )
+
     for phase in ("precondition", "control", "treatment"):
         for raw in _list(source.get(f"{phase}_plan")):
             if not isinstance(raw, dict):
@@ -307,6 +360,7 @@ def build_flow_data_requirement(
                 operation=operation,
                 available_before=available_before,
                 binding_targets=binding_targets,
+                identity_alias_targets=identity_alias_targets,
             )
             step_requirements.append(requirement)
             if operation_ref and operation_ref not in required_operation_refs:

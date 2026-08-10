@@ -540,6 +540,46 @@ Permission constraints:
     )
 
 
+def test_operation_contract_constraints_do_not_fabricate_role_denies() -> None:
+    """Operation descriptions declare role restriction + business constraints.
+
+    An openapi operation description line such as
+    「权限：财务或管理员。\\n\\n业务约束：退款金额不得超过实际成功支付金额；重复退款必须幂等。」
+    must NOT produce admin/finance->payment DENY rows: the deny marker ("不得"
+    inside "不得超过") lives in the business-constraint sentence while the roles
+    sit in the separate role-restriction sentence. Fabricating those denies
+    contradicts the role matrix grants and blocks every obligation referencing
+    the payment operations (run16: 21 money obligations BLOCKED_CONFLICTING_SOURCE).
+    """
+    doc = (
+        "description: '权限：财务或管理员。\\n\\n"
+        "业务约束：退款金额不得超过实际成功支付金额；重复退款必须幂等。'\n"
+        "- warehouse 不能处理支付退款。\n"
+    )
+    parsed = _parse_source(
+        doc.encode("utf-8"),
+        "openapi.yaml",
+        "business_rules",
+        "src_openapi",
+    )
+
+    permissions = parsed["permissions"]
+    # The operation-contract description must not fabricate role denies.
+    assert not any(
+        row.get("decision") == "deny"
+        and row.get("role") in {"admin", "finance"}
+        and row.get("resource") in {"payment", "pay"}
+        for row in permissions
+    )
+    # A genuine role-access denial in the same sentence is still extracted.
+    assert any(
+        row.get("role") == "warehouse"
+        and row.get("resource") == "payment"
+        and row.get("decision") == "deny"
+        for row in permissions
+    )
+
+
 def test_permission_scope_extracts_own_and_other_owner_from_narrative() -> None:
     doc = """# Role permissions
 

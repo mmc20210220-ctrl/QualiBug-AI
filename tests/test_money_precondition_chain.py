@@ -335,6 +335,44 @@ def test_declared_from_state_appends_advancement_steps() -> None:
     )
 
 
+def test_subject_and_state_steps_declare_identity_alias_spellings() -> None:
+    """The chain must declare the entity identity field spellings.
+
+    The subject identity is captured under the reference field (orderId), but
+    state-advancement steps address the same entity through its own identity
+    field (a cancel step's path /api/orders/{id}/cancel names ``id``). Both
+    spellings must be declared on the subject create step AND every state
+    advancement step, so the flow-data freeze check and the precondition
+    executor bind the same captured value.
+    """
+    ir = _base_ir()
+    result = plan_money_family_precondition(
+        behavior_ir=ir,
+        operation=_pay_operation(ir),
+        actor_refs=["actor_buyer"],
+        property_spec={
+            "template": "forbidden_state_transition",
+            "from_state": "CANCELLED",
+            "expression": {
+                "kind": "forbidden_state_transition",
+                "operands": [{"from_state": "CANCELLED"}],
+            },
+        },
+        family="idempotency",
+    )
+    assert result["status"] == PLANNED
+    create_step = next(
+        step
+        for step in result["steps"]
+        if step.get("step_id") == "money_precondition_create"
+    )
+    assert create_step.get("identity_binding_aliases") == ["orderId", "id"]
+    for step in result["steps"]:
+        if step.get("intent") == "money_subject_state_advancement":
+            assert step.get("identity_binding_aliases") == ["orderId", "id"]
+    assert result.get("identity_binding_target") == "orderId"
+
+
 def test_unreachable_from_state_blocks_visibly() -> None:
     ir = _base_ir()
     result = plan_money_family_precondition(
