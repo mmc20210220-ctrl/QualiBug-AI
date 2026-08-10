@@ -47,6 +47,7 @@ for (const script of [
   "test:autonomous-ux",
   "test:frontend-finalization",
   "test:settings-onboarding",
+  "test:run-lifecycle",
   "test:materials-coverage",
   "test:materials-acceptance",
   "test:materials-remote-lifecycle",
