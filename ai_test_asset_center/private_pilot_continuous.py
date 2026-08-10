@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from . import db_persistence as db_persist
-from .private_pilot_scan_coordinator import ScanLeaseBusy, project_scan_lease
+from .private_pilot_scan_coordinator import (
+    ScanLeaseBusy,
+    active_scan_owner,
+    project_scan_lease,
+)
 
 
 def _read_json_artifact(path: Path) -> Any:
@@ -64,6 +68,24 @@ _continuous_threads_lock = threading.RLock()
 
 def _thread_key(root: Path, project: str) -> tuple[str, str]:
     return str(root.resolve()), project
+
+
+def _public_scan_owner(owner: dict[str, Any] | None) -> dict[str, Any]:
+    """Project safe scan status projection.
+
+    Lease token, pid/thread ids, tenant id and raw actor data are internal
+    coordination details and must never cross the customer HTTP boundary.
+    """
+
+    source = owner if isinstance(owner, dict) else {}
+    if not source:
+        return {}
+    return {
+        "schema": "qualibug.project-scan-live-status.v1",
+        "project_id": str(source.get("project_id") or ""),
+        "mode": str(source.get("mode") or "scan"),
+        "started_at_utc": str(source.get("started_at_utc") or ""),
+    }
 
 
 def _stop_requested(entry: dict[str, Any] | None) -> bool:
@@ -453,6 +475,20 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
         )
     elif status == "max_rounds_reached" and termination.get("round"):
         message = f"持续检测达到安全轮次上限（{termination.get('round')} 轮），未判定收敛。"
+
+    live_owner = active_scan_owner(root, project)
+    stored_owner = state.get("active_scan") if isinstance(state.get("active_scan"), dict) else {}
+    visible_owner = _public_scan_owner(live_owner or stored_owner)
+    elapsed_seconds = 0
+    if live_owner:
+        try:
+            elapsed_seconds = max(
+                0,
+                int(time.time() - float(live_owner.get("started_unix") or time.time())),
+            )
+        except (TypeError, ValueError):
+            elapsed_seconds = 0
+
     return {
         "status": status,
         "converged": bool(state.get("converged")),
@@ -463,9 +499,9 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
         "last_coverage": last_run.get("coverage", 0),
         "last_failure": last_failure,
         "termination": termination,
-        "active_scan": state.get("active_scan")
-        if isinstance(state.get("active_scan"), dict)
-        else {},
+        "active_scan": visible_owner,
+        "active_scan_live": bool(live_owner),
+        "active_scan_elapsed_seconds": elapsed_seconds,
         "message": message,
     }
 
