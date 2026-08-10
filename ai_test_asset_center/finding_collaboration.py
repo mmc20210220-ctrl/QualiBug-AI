@@ -1,9 +1,9 @@
 """Tenant/project-scoped collaboration metadata for persisted findings.
 
-Automated finding evidence and verdict fields remain owned by the scan pipeline.
-This module stores only human workflow metadata beside the existing SQLite
-``findings`` SSOT and projects the stable persistence id back into display-ready
-findings when the identity match is unambiguous.
+Automated finding evidence, verdict and verification state remain owned by the
+scan/replay pipeline. This module stores only human workflow metadata beside
+the existing SQLite ``findings`` SSOT and projects the stable persistence id
+back into display-ready findings when the identity match is unambiguous.
 """
 from __future__ import annotations
 
@@ -15,7 +15,16 @@ from urllib.parse import urlparse
 from . import db_persistence as db_persist
 from .project_runtime_primitives import safe_project_id
 
-_ALLOWED_WORKFLOW_STATUSES = frozenset({"open", "resolved", "falsified"})
+_ALLOWED_HANDLING_STATUSES = frozenset(
+    {
+        "new",
+        "triaged",
+        "in_progress",
+        "fix_ready",
+        "risk_review",
+        "false_positive_review",
+    }
+)
 _ALLOWED_DISPOSITIONS = frozenset({"none", "accepted_risk", "false_positive"})
 
 
@@ -31,6 +40,7 @@ def _ensure_table(db: Any) -> None:
             tenant_id TEXT NOT NULL,
             project_id TEXT NOT NULL,
             finding_id TEXT NOT NULL,
+            handling_status TEXT NOT NULL DEFAULT 'new',
             assignee TEXT DEFAULT '',
             fix_version TEXT DEFAULT '',
             developer_feedback TEXT DEFAULT '',
@@ -45,6 +55,15 @@ def _ensure_table(db: Any) -> None:
         )
         """
     )
+    columns = {
+        str(row["name"])
+        for row in db.execute("PRAGMA table_info(finding_collaboration)").fetchall()
+    }
+    if "handling_status" not in columns:
+        db.execute(
+            "ALTER TABLE finding_collaboration "
+            "ADD COLUMN handling_status TEXT NOT NULL DEFAULT 'new'"
+        )
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_finding_collaboration_project "
         "ON finding_collaboration(tenant_id, project_id, updated_at)"
@@ -76,7 +95,8 @@ def list_finding_collaboration(
             """
             SELECT
                 f.id AS finding_id,
-                f.status AS workflow_status,
+                f.status AS verification_status,
+                c.handling_status,
                 c.assignee,
                 c.fix_version,
                 c.developer_feedback,
@@ -99,7 +119,8 @@ def list_finding_collaboration(
         return [
             {
                 "finding_persistence_id": row["finding_id"],
-                "workflow_status": row["workflow_status"] or "open",
+                "verification_status": row["verification_status"] or "open",
+                "handling_status": row["handling_status"] or "new",
                 "assignee": row["assignee"] or "",
                 "fix_version": row["fix_version"] or "",
                 "developer_feedback": row["developer_feedback"] or "",
@@ -130,6 +151,10 @@ def update_finding_collaboration(
         raise ValueError("finding_persistence_id is required")
     if not isinstance(patch, dict):
         raise TypeError("collaboration patch must be an object")
+    if "workflow_status" in patch or "verification_status" in patch:
+        raise ValueError(
+            "verification status is execution-owned; use handling_status for human workflow"
+        )
 
     db_persist.init_db(root)
     with db_persist._conn(root) as db:  # package-internal persistence composition
@@ -143,16 +168,6 @@ def update_finding_collaboration(
         if finding is None:
             raise KeyError("finding_persistence_id is outside the current tenant/project")
 
-        workflow_status = _text(patch.get("workflow_status") if "workflow_status" in patch else finding["status"])
-        if workflow_status not in _ALLOWED_WORKFLOW_STATUSES:
-            raise ValueError("workflow_status must be open, resolved, or falsified")
-        if "workflow_status" in patch:
-            db.execute(
-                "UPDATE findings SET status = ? "
-                "WHERE id = ? AND tenant_id = ? AND project_id = ?",
-                (workflow_status, persisted_id, tenant, project),
-            )
-
         existing = db.execute(
             "SELECT * FROM finding_collaboration "
             "WHERE tenant_id = ? AND project_id = ? AND finding_id = ?",
@@ -163,6 +178,12 @@ def update_finding_collaboration(
         def field(name: str, limit: int) -> str:
             return _text(patch[name], limit) if name in patch else _text(current.get(name), limit)
 
+        handling_status = field("handling_status", 40) or "new"
+        if handling_status not in _ALLOWED_HANDLING_STATUSES:
+            raise ValueError(
+                "handling_status must be new, triaged, in_progress, fix_ready, "
+                "risk_review, or false_positive_review"
+            )
         disposition = field("disposition", 40) or "none"
         if disposition not in _ALLOWED_DISPOSITIONS:
             raise ValueError("disposition must be none, accepted_risk, or false_positive")
@@ -181,11 +202,12 @@ def update_finding_collaboration(
         db.execute(
             """
             INSERT INTO finding_collaboration (
-                tenant_id, project_id, finding_id, assignee, fix_version,
-                developer_feedback, disposition, disposition_note,
-                external_issue_url, updated_by, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                tenant_id, project_id, finding_id, handling_status,
+                assignee, fix_version, developer_feedback, disposition,
+                disposition_note, external_issue_url, updated_by, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(tenant_id, project_id, finding_id) DO UPDATE SET
+                handling_status = excluded.handling_status,
                 assignee = excluded.assignee,
                 fix_version = excluded.fix_version,
                 developer_feedback = excluded.developer_feedback,
@@ -199,6 +221,7 @@ def update_finding_collaboration(
                 tenant,
                 project,
                 persisted_id,
+                handling_status,
                 assignee,
                 fix_version,
                 developer_feedback,
@@ -335,12 +358,13 @@ def annotate_command_center_collaboration(
             if persistence_id:
                 finding["finding_persistence_id"] = persistence_id
                 collaboration = collaboration_by_id.get(persistence_id, {})
-                finding["workflow_status"] = _text(
-                    collaboration.get("workflow_status") or persisted.get("status") or "open"
+                finding["verification_status"] = _text(
+                    collaboration.get("verification_status") or persisted.get("status") or "open"
                 )
                 finding["collaboration"] = {
                     key: collaboration.get(key, "")
                     for key in (
+                        "handling_status",
                         "assignee",
                         "fix_version",
                         "developer_feedback",
