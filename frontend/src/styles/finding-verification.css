@@ -1,0 +1,54 @@
+.finding-verification-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.finding-verification-status strong {
+  color: inherit;
+  font-weight: 700;
+}
+
+.finding-verification-prefix {
+  opacity: .72;
+}
+
+.finding-verification-status.verification-success {
+  border-color: color-mix(in srgb, var(--success) 30%, var(--line));
+  background: var(--success-muted);
+  color: var(--success);
+}
+
+.finding-verification-status.verification-danger {
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--line));
+  background: var(--danger-muted);
+  color: var(--danger);
+}
+
+.finding-verification-status.verification-warning {
+  border-color: color-mix(in srgb, var(--warning) 34%, var(--line));
+  background: var(--warning-muted);
+  color: var(--warning);
+}
+
+.finding-verification-status.verification-neutral {
+  border-color: var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+@media (max-width: 560px) {
+  .finding-verification-status {
+    max-width: 100%;
+    white-space: normal;
+  }
+}
