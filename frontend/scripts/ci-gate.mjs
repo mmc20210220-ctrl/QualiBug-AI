@@ -48,6 +48,7 @@ for (const script of [
   "test:frontend-finalization",
   "test:settings-onboarding",
   "test:run-lifecycle",
+  "test:live-scan-status",
   "test:dashboard-role-views",
   "test:finding-collaboration",
   "test:evidence-distribution",
