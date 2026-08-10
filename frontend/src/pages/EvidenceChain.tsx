@@ -9,6 +9,7 @@ import { AssertionDiff } from '../components/evidence/AssertionDiff';
 import { QualityScore } from '../components/evidence/QualityScore';
 import { ReplayPanel } from '../components/evidence/ReplayPanel';
 import { Skeleton } from '../components/dashboard/DashboardPrimitives';
+import { FindingDecisionSnapshot } from '../components/findings/FindingDecisionSnapshot';
 import { FindingVerificationPanel } from '../components/findings/FindingVerificationPanel';
 import { FindingVerificationStatus } from '../components/findings/FindingVerificationStatus';
 import { TermHint } from '../components/TermHint';
@@ -181,27 +182,32 @@ export function EvidenceChain() {
 
             {selected && (
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                   <span className={`severity-badge ${selected.severity.toLowerCase()}`}>{selected.severity}</span>
                   <h2 style={{ font: '700 18px var(--font-display)', flex: 1 }}>{selected.title}</h2>
                 </div>
-                <FindingVerificationStatus finding={selected} />
-                <QualityScore finding={selected} />
-                <h4 style={{ fontSize: 13, fontWeight: 700, margin: '16px 0 8px' }}>预期 vs 实际</h4>
-                <AssertionDiff comparison={selected.expected_actual_comparison} expected={selected.expected} actual={selected.actual} />
-                <ReplayPanel finding={selected} project={project} onReplay={setReplayFinding} />
 
-                {selected.evidence_chain.length > 0 && (
-                  <div style={{ marginTop: 16 }}>
-                    <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>证据时间线</h4>
-                    <EvidenceTimeline steps={selected.evidence_chain} />
+                <FindingDecisionSnapshot finding={selected} compact />
+
+                <details className="settings-auth-section mt-3" open>
+                  <summary>
+                    <strong>查看完整证据依据</strong>
+                    <span className="muted">质量、预期/实际、回放与时间线</span>
+                  </summary>
+                  <div className="mt-3">
+                    <QualityScore finding={selected} />
+                    <h4 style={{ fontSize: 13, fontWeight: 700, margin: '16px 0 8px' }}>预期 vs 实际</h4>
+                    <AssertionDiff comparison={selected.expected_actual_comparison} expected={selected.expected} actual={selected.actual} />
+                    <ReplayPanel finding={selected} project={project} onReplay={setReplayFinding} />
+
+                    {selected.evidence_chain.length > 0 && (
+                      <div style={{ marginTop: 16 }}>
+                        <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>证据时间线</h4>
+                        <EvidenceTimeline steps={selected.evidence_chain} />
+                      </div>
+                    )}
                   </div>
-                )}
-
-                <div style={{ marginTop: 16 }}>
-                  <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>业务影响</h4>
-                  <p style={{ fontSize: 13, color: 'var(--muted)' }}>{selected.business_impact?.summary || selected.business_summary || '该问题已形成确认结论。'}</p>
-                </div>
+                </details>
 
                 <FindingVerificationPanel
                   finding={selected}
