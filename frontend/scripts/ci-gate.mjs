@@ -49,6 +49,7 @@ for (const script of [
   "test:settings-onboarding",
   "test:run-lifecycle",
   "test:run-customer-result",
+  "test:run-preflight-decision",
   "test:live-scan-status",
   "test:dashboard-role-views",
   "test:customer-action-guidance",
