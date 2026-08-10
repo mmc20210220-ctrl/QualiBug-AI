@@ -33,9 +33,14 @@ assert(dashboard.includes("const coverageDeferred = campaignStatus === 'coverage
 assert(dashboard.includes('const resultIncomplete = pipelineUnhealthy || campaignBlocked || coverageDeferred;'), 'dashboard must have one incomplete-result authority');
 assert(dashboard.includes('当前 0 个 P0 只代表已覆盖部分，不能直接推导为安全'), 'partial coverage must never imply safety');
 assert(dashboard.includes('下一步：{nextAction.title}'), 'dashboard must expose one state-driven next action');
-assert(dashboard.includes('const regressionEligible = findings.some((finding) => Boolean(finding.regression?.included_in_suite));'), 'dashboard regression readiness must come from real obligations');
-assert(dashboard.includes('if (!hasRegressionObligation) {'), 'dashboard regression handler must fail closed');
-assert(dashboard.includes('不会提交空回归请求'), 'dashboard must explain empty regression rejection');
+assert(dashboard.includes("import { hasFindingReverificationObligation } from '../lib/finding-verification';"), 'dashboard must reuse the shared re-verification obligation helper');
+assert(dashboard.includes('const regressionEligible = findings.some(hasFindingReverificationObligation);'), 'dashboard validation readiness must come from real obligations');
+assert(dashboard.includes('const hasRegressionObligation = regressionFindings.some(hasFindingReverificationObligation);'), 'dashboard validation handler must recompute current obligations');
+assert(dashboard.includes('if (!hasRegressionObligation) {'), 'dashboard validation handler must fail closed');
+assert(dashboard.includes('不会提交空验证请求'), 'dashboard must explain empty validation rejection');
+assert(dashboard.includes("? { title: '查看已确认问题与验证状态', label: '查看验证', path: '/findings' }"), 'dashboard confirmed findings must lead into the validation surface');
+assert(dashboard.includes('查看这条验证'), 'dashboard exact finding action must use validation language');
+assert(!dashboard.includes('处理这条问题'), 'dashboard must not frame a finding as an enterprise task');
 
 assert(releasePresentation.includes('export function deriveReleasePresentation'), 'release truth must use one shared interpreter');
 assert(releasePresentation.includes("gateOverall === 'pass'"), 'green release state must require explicit pass');
@@ -62,6 +67,11 @@ assert(findings.includes("verification.state === 'verified_fixed'"), 'findings m
 assert(findings.includes("verification.state === 'still_failing'"), 'findings must separate continued failures');
 assert(findings.includes("verification.state === 'inconclusive'"), 'findings must separate inconclusive validation');
 assert(findings.includes("verification.state === 'pending'"), 'findings must separate pending validation');
+assert(findings.includes("{ label: `等待验证 (${pendingRegression.length})`, value: 'verify:pending' }"), 'findings must expose a waiting-validation filter');
+assert(findings.includes("{ label: `仍失败 (${failedRegression.length})`, value: 'verify:still_failing' }"), 'findings must expose a still-failing filter');
+assert(findings.includes("{ label: `无法确认 (${inconclusiveRegression.length})`, value: 'verify:inconclusive' }"), 'findings must expose an inconclusive filter');
+assert(findings.includes("{ label: `验证通过 (${passedRegression.length})`, value: 'verify:verified_fixed' }"), 'findings must expose a verified-fixed filter');
+assert(findings.includes("filter.startsWith('verify:')"), 'validation filters must resolve through the shared finding interpreter');
 
 assert(evidence.includes("const requestedFindingId = params.get('finding')?.trim() || '';"), 'evidence must accept exact finding deep links');
 assert(evidence.includes("? withEvidence.find((finding) => finding.id === requestedFindingId) || null"), 'evidence must select only the requested finding');
