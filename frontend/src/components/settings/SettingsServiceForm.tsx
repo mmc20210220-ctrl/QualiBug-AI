@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { DbCredentialPanel, type DbOption } from './DbCredentialPanel';
 
 type AuthType = 'password_login' | 'bearer_token' | 'api_key';
@@ -60,6 +60,20 @@ type SettingsServiceFormProps = {
   onCancel: () => void;
 };
 
+type ServiceOnboardingDraft = {
+  systemName: string;
+  moduleName: string;
+  serviceName: string;
+  endpointRef: string;
+  enabled: boolean;
+  authType: AuthType;
+  loginApi: string;
+  dbType: string;
+  dbHost: string;
+  dbPort: string;
+  dbName: string;
+};
+
 const AUTH_TYPE_LABELS: Record<AuthType, string> = {
   password_login: '账号密码',
   bearer_token: 'Bearer Token',
@@ -72,6 +86,36 @@ const ROLE_OPTIONS = [
   { value: 'auditor', label: '审计员' },
   { value: '__custom__', label: '自定义…' },
 ];
+
+function getServiceDraftKey(): string {
+  const project = new URLSearchParams(window.location.search).get('project')?.trim() || 'unselected';
+  return `qualibug:settings-service-draft:${project}`;
+}
+
+function readServiceDraft(key: string): ServiceOnboardingDraft | null {
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ServiceOnboardingDraft>;
+    const authType = parsed.authType;
+    if (authType !== 'password_login' && authType !== 'bearer_token' && authType !== 'api_key') return null;
+    return {
+      systemName: typeof parsed.systemName === 'string' ? parsed.systemName : '',
+      moduleName: typeof parsed.moduleName === 'string' ? parsed.moduleName : '',
+      serviceName: typeof parsed.serviceName === 'string' ? parsed.serviceName : '',
+      endpointRef: typeof parsed.endpointRef === 'string' ? parsed.endpointRef : '',
+      enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : true,
+      authType,
+      loginApi: typeof parsed.loginApi === 'string' ? parsed.loginApi : '/auth/login',
+      dbType: typeof parsed.dbType === 'string' ? parsed.dbType : 'postgresql',
+      dbHost: typeof parsed.dbHost === 'string' ? parsed.dbHost : '',
+      dbPort: typeof parsed.dbPort === 'string' ? parsed.dbPort : '',
+      dbName: typeof parsed.dbName === 'string' ? parsed.dbName : '',
+    };
+  } catch {
+    return null;
+  }
+}
 
 export function SettingsServiceForm({
   open,
@@ -124,6 +168,90 @@ export function SettingsServiceForm({
   onCancel,
 }: SettingsServiceFormProps) {
   const [showExtraRoles, setShowExtraRoles] = useState(false);
+  const restoredDraftKey = useRef('');
+  const isCreateMode = title.includes('新增');
+
+  useEffect(() => {
+    if (!open) {
+      restoredDraftKey.current = '';
+      return;
+    }
+    if (!isCreateMode) return;
+
+    const key = getServiceDraftKey();
+    if (restoredDraftKey.current === key) return;
+    restoredDraftKey.current = key;
+    const draft = readServiceDraft(key);
+    if (!draft) return;
+
+    if (!systemName.trim() && draft.systemName) onSystemNameChange(draft.systemName);
+    if (!moduleName.trim() && draft.moduleName) onModuleNameChange(draft.moduleName);
+    if (!serviceName.trim() && draft.serviceName) onServiceNameChange(draft.serviceName);
+    if (!endpointRef.trim() && draft.endpointRef) onEndpointRefChange(draft.endpointRef);
+    onEnabledChange(draft.enabled);
+    onAuthTypeChange(draft.authType);
+    if ((loginApi === '/auth/login' || !loginApi.trim()) && draft.loginApi) onLoginApiChange(draft.loginApi);
+    if (draft.dbType) onDbTypeChange(draft.dbType);
+    if (!dbHost.trim() && draft.dbHost) onDbHostChange(draft.dbHost);
+    if (draft.dbPort) onDbPortChange(draft.dbPort);
+    if (!dbName.trim() && draft.dbName) onDbNameChange(draft.dbName);
+  }, [
+    open,
+    isCreateMode,
+    systemName,
+    moduleName,
+    serviceName,
+    endpointRef,
+    loginApi,
+    dbHost,
+    dbName,
+    onSystemNameChange,
+    onModuleNameChange,
+    onServiceNameChange,
+    onEndpointRefChange,
+    onEnabledChange,
+    onAuthTypeChange,
+    onLoginApiChange,
+    onDbTypeChange,
+    onDbHostChange,
+    onDbPortChange,
+    onDbNameChange,
+  ]);
+
+  useEffect(() => {
+    if (!open || !isCreateMode) return;
+
+    // onboarding-draft:start — only non-secret setup fields may be persisted here.
+    const draft: ServiceOnboardingDraft = {
+      systemName,
+      moduleName,
+      serviceName,
+      endpointRef,
+      enabled,
+      authType,
+      loginApi,
+      dbType,
+      dbHost,
+      dbPort,
+      dbName,
+    };
+    // onboarding-draft:end
+
+    try {
+      window.sessionStorage.setItem(getServiceDraftKey(), JSON.stringify(draft));
+    } catch {
+      // Browsers can disable session storage. Draft persistence must never block setup.
+    }
+  }, [open, isCreateMode, systemName, moduleName, serviceName, endpointRef, enabled, authType, loginApi, dbType, dbHost, dbPort, dbName]);
+
+  useEffect(() => {
+    if (open || !statusText.startsWith('✓')) return;
+    try {
+      window.sessionStorage.removeItem(getServiceDraftKey());
+    } catch {
+      // Cleanup is best effort only.
+    }
+  }, [open, statusText]);
 
   if (!open) return null;
 
@@ -170,6 +298,12 @@ export function SettingsServiceForm({
           只需提供系统名称、测试地址和可用凭据，其余由后台自动识别
         </span>
       </div>
+
+      {isCreateMode && (
+        <p className="settings-hint settings-mt-10">
+          非敏感接入草稿会自动保存在当前浏览器会话；账号密码、Token、API Key 和数据库认证信息不会写入草稿。
+        </p>
+      )}
 
       <div className="settings-form-grid">
         <div>
