@@ -67,6 +67,7 @@ import os
 import re
 from copy import deepcopy
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
 from .artifact_redactor import redact_and_validate
@@ -1668,7 +1669,16 @@ def enrich_knowledge_asset_with_agent_relationships(
         pending[index:index + MAX_RULES_PER_REQUEST]
         for index in range(0, len(pending), MAX_RULES_PER_REQUEST)
     ]
-    for batch in batches:
+    # Tier-2 batches run concurrently (bounded): provider calls are the
+    # dominant LLM-phase latency (measured 36-217s each; 8 serial batches ≈
+    # 30+ minutes). A small worker pool keeps the phase near the longest
+    # single batch while staying under provider rate limits. Each batch
+    # still fails independently and the ordered aggregation below preserves
+    # the original rule order.
+    _LINKER_BATCH_WORKERS = 4
+    _batch_results: dict[int, dict[str, Any]] = {}
+
+    def _run_batch(index: int, batch: list[dict[str, Any]]) -> None:
         prompt = _build_rule_request_prompt(batch)
         try:
             response, attempts, retries = _complete_batch(
@@ -1676,26 +1686,55 @@ def enrich_knowledge_asset_with_agent_relationships(
                 prompt=prompt,
             )
         except AgentSemanticLinkerError as exc:
-            failed_units.append({
-                "unit_kind": "rule_batch",
-                "reason_code": "provider_failure",
-                "error": str(exc)[:300],
-                "rule_ids": [unit["rule_id"] for unit in batch],
-            })
-            continue
-        provider_attempt_count += attempts
-        provider_retry_count += retries
+            _batch_results[index] = {
+                "failed": {
+                    "unit_kind": "rule_batch",
+                    "reason_code": "provider_failure",
+                    "error": str(exc)[:300],
+                    "rule_ids": [unit["rule_id"] for unit in batch],
+                },
+            }
+            return
         try:
             _validate_rule_response_shape(response)
         except AgentSemanticLinkerError as exc:
-            failed_units.append({
-                "unit_kind": "rule_batch",
-                "reason_code": "response_schema_invalid",
-                "error": str(exc)[:300],
-                "rule_ids": [unit["rule_id"] for unit in batch],
-            })
+            _batch_results[index] = {
+                "failed": {
+                    "unit_kind": "rule_batch",
+                    "reason_code": "response_schema_invalid",
+                    "error": str(exc)[:300],
+                    "rule_ids": [unit["rule_id"] for unit in batch],
+                },
+            }
+            return
+        _batch_results[index] = {
+            "ok": {
+                "attempts": attempts,
+                "retries": retries,
+                "response": response,
+                "unit_ids": [unit["rule_id"] for unit in batch],
+            },
+        }
+
+    if len(batches) > 1:
+        with ThreadPoolExecutor(max_workers=_LINKER_BATCH_WORKERS) as _pool:
+            list(_pool.map(lambda b: _run_batch(*b), enumerate(batches)))
+    else:
+        for _i, _b in enumerate(batches):
+            _run_batch(_i, _b)
+
+    for index in range(len(batches)):
+        result = _batch_results.get(index)
+        if result is None:
             continue
-        batch_units_by_rule = {unit["rule_id"]: unit for unit in batch}
+        if "failed" in result:
+            failed_units.append(result["failed"])
+            continue
+        ok = result["ok"]
+        provider_attempt_count += ok["attempts"]
+        provider_retry_count += ok["retries"]
+        response = ok["response"]
+        batch_units_by_rule = {unit["rule_id"]: unit for unit in batches[index]}
         for assessment in response["assessments"]:
             batch_assessments_ordered.append(assessment)
             rule_id = _text(assessment.get("rule_id"))
