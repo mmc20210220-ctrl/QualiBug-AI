@@ -3071,6 +3071,7 @@ def compile_experiment_for_obligation(
                 behavior_ir=ir,
                 from_state=_text(prop.get("from_state")),
                 actors=[_text(actor) for actor in required_actors if _text(actor)],
+                state_field=_text(prop.get("state_field")),
             )
             if _text(_precondition.get("status")) != "PLANNED":
                 return blocked_experiment(
@@ -3200,6 +3201,7 @@ def compile_experiment_for_obligation(
                 behavior_ir=ir,
                 from_state=_from_state,
                 actors=[_text(a) for a in required_actors if _text(a)],
+                state_field=_text(prop.get("state_field")),
             )
             if _text(_precond_result.get("status")) == _PRECOND_PLANNED:
                 _precondition_plan = [

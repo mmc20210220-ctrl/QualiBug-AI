@@ -357,9 +357,15 @@ class ReachabilityAnalyzer:
         return result
 
     def _get_target_state(self, goal: PreconditionGoal) -> str:
-        """Extract target state from goal conditions."""
+        """Extract target state from goal conditions.
+
+        The condition's field_id names the entity's state field (status/state/
+        stage/phase/... resolved from the Behavior IR). Any non-empty field_id
+        is a state condition; gating on the literal ``"status"`` would silently
+        drop every machine whose state field has a different name.
+        """
         for cond in goal.required_conditions:
-            if cond.get("field_id") == "status":
+            if str(cond.get("field_id") or "").strip():
                 return cond.get("expected_expression", "")
         return ""
 

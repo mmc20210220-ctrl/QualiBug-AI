@@ -564,6 +564,23 @@
       "pay",
       "已支付",
       "支付"
+    ],
+    "REFUND_REQUESTED": [
+      "refund_request",
+      "refundrequest",
+      "refund_requested",
+      "request_refund",
+      "apply_refund",
+      "refund_application",
+      "退款申请",
+      "申请退款"
+    ],
+    "REFUNDED": [
+      "refunded",
+      "refund",
+      "已退款",
+      "退款完成",
+      "退款成功"
     ]
   },
   "state_tokens": [
@@ -1356,6 +1373,24 @@
     "从",
     "被"
   ],
+  "denial_verbs": {
+    "comment": "Language resource: verbs that DENY/refuse an application or request. An interface whose documented identity performs a denial (驳回/拒绝/拒收/reject/deny/refuse/decline) cannot be the performer of a transition INTO the positive outcome state of the same flow; used only to break a token tie, never to invent a binding.",
+    "zh": [
+      "驳回",
+      "拒绝",
+      "拒收",
+      "退回",
+      "不予通过"
+    ],
+    "en": [
+      "reject",
+      "deny",
+      "refuse",
+      "decline",
+      "disapprove",
+      "rejectrequest"
+    ]
+  },
   "verb_action_lexicon": {
     "comment": "Language-neutral Chinese->English action-verb bridge. Maps narrative PRD verbs to API action tokens so prose state transitions can be routed to concrete endpoints WITHOUT per-domain hardcoding. Extend per deployment.",
     "支付": [

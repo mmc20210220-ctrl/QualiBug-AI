@@ -120,6 +120,98 @@ def _state_token(state: dict[str, Any]) -> str:
     return normalize(_text(state.get("value") or state.get("name") or state.get("id")))
 
 
+# Generic lifecycle state-field naming conventions (language data, not an
+# industry table). Mirrors the obligation compiler's entity-state resolution so
+# the planner and the compiler bind the same authoritative field.
+_LIFECYCLE_STATE_FIELD_NAMES = frozenset(
+    {
+        "status",
+        "state",
+        "stage",
+        "phase",
+        "lifecycle_state",
+    }
+)
+
+
+def _resolve_state_field(behavior_ir: dict[str, Any], entity_ref: str) -> str:
+    """Resolve the entity's state field from its IR-declared STATE fields.
+
+    The IR marks the field the machine governs with ``semantic_type == "STATE"``
+    or a generic lifecycle field name (status/state/stage/phase/lifecycle_state
+    or ``*_status`` / ``*_state``). Entity identity tolerates the singular/
+    plural forms different IR builders emit; unrelated prefixed entities never
+    match. Returns "" when the field cannot be established, so the compile-time
+    state-precondition freezer can still fail closed on genuinely unresolved
+    experiments instead of guessing a field name.
+    """
+    target = _text(entity_ref).lower()
+    if not target:
+        return ""
+    for entity in _list(_dict(behavior_ir).get("entities")):
+        name = _text(entity.get("name") or entity.get("id")).lower()
+        if not (name == target or name == target + "s" or target == name + "s"):
+            continue
+        for field in _list(entity.get("fields")):
+            if not isinstance(field, dict):
+                continue
+            fname = _text(
+                field.get("name") or field.get("field") or field.get("field_name")
+            ).lower()
+            is_state_field = (
+                _text(field.get("semantic_type")).upper() == "STATE"
+                or fname in _LIFECYCLE_STATE_FIELD_NAMES
+                or fname.endswith("_status")
+                or fname.endswith("_state")
+            )
+            if is_state_field:
+                return fname
+    return ""
+
+
+def _entity_ref_of_state(
+    behavior_ir: dict[str, Any],
+    adjacency: dict[str, list[dict[str, str]]],
+    goal_token: str,
+) -> str:
+    """Find the entity_ref that owns ``goal_token`` in the transition graph.
+
+    Prefers a state node that the transition graph actually uses; falls back
+    to the first IR state node whose token matches so single-state machines
+    still resolve their entity.
+    """
+    states_by_id = {
+        _text(_dict(state).get("id")): _dict(state)
+        for state in _list(_dict(behavior_ir).get("states"))
+        if _text(_dict(state).get("id"))
+    }
+    used_ids: set[str] = set()
+    for edges in adjacency.values():
+        for edge in edges:
+            used_ids.add(_text(edge.get("from_ref")))
+            used_ids.add(_text(edge.get("to_ref")))
+    ordered = sorted(
+        (states_by_id.get(state_id) for state_id in used_ids),
+        key=lambda state: _text(state.get("id") or ""),
+    )
+    ordered = [
+        state
+        for state in ordered
+        if state and _state_token(state) == goal_token
+    ] or [
+        state
+        for state in states_by_id.values()
+        if _state_token(state) == goal_token
+    ]
+    for state in ordered:
+        entity_ref = _text(
+            state.get("entity_ref") or state.get("entity") or state.get("object")
+        )
+        if entity_ref:
+            return entity_ref
+    return ""
+
+
 def _entry_states(adjacency: dict[str, list[dict[str, str]]]) -> list[str]:
     """States that no declared transition leads into."""
     reachable = {edge["to"] for edges in adjacency.values() for edge in edges}
@@ -183,6 +275,7 @@ def _select_shared_path(
     starts: list[str],
     goal: str,
     actor_refs: list[str],
+    state_field: str = "",
 ) -> tuple[str, list[dict[str, str]], str]:
     """Select the shortest path returned by the shared reachability authority."""
     goal_contract = PreconditionGoal(
@@ -191,7 +284,7 @@ def _select_shared_path(
         required_conditions=[
             {
                 "condition_id": f"state_{goal}",
-                "field_id": "status",
+                "field_id": state_field or "status",
                 "expected_expression": goal,
             }
         ],
@@ -237,8 +330,19 @@ def plan_state_precondition(
     from_state: str,
     actors: "list[str] | None" = None,
     start_state: str = "",
+    state_field: str = "",
 ) -> dict[str, Any]:
-    """Plan the shortest source-declared path that establishes ``from_state``."""
+    """Plan the shortest source-declared path that establishes ``from_state``.
+
+    ``state_field`` names the entity field the machine governs (status/state/
+    stage/phase/...). When empty it is resolved from the Behavior IR's
+    STATE-typed entity fields so no literal field name is assumed. Every
+    planned step carries the resolved field plus its readback contract, which
+    is what the compile-time state-precondition freezer consumes to bind one
+    authoritative state field to each establishment step — without it, every
+    runtime-materialized state experiment is blocked
+    ``BLOCKED_STATE_PRECONDITION_FIELD_MISSING``.
+    """
     from .assertion_dsl_base import _state_token as normalize
 
     goal = normalize(_text(from_state))
@@ -288,6 +392,13 @@ def plan_state_precondition(
     if not actor_refs:
         return _blocked(REASON_ACTOR_MISSING, goal=goal)
 
+    # Resolve the authoritative state field from the owning entity when the
+    # caller did not declare one; never assume a literal field name.
+    resolved_field = _text(state_field) or _resolve_state_field(
+        behavior_ir,
+        _entity_ref_of_state(behavior_ir, adjacency, goal),
+    )
+
     transitions, operation_defs = _shared_reachability_inputs(
         behavior_ir,
         adjacency,
@@ -298,6 +409,7 @@ def plan_state_precondition(
         starts=starts,
         goal=goal,
         actor_refs=actor_refs,
+        state_field=resolved_field,
     )
     if not path:
         if blocked_reason == PRECONDITION_PATH_TOO_LONG:
@@ -315,8 +427,9 @@ def plan_state_precondition(
     if len(path) > MAX_PRECONDITION_PATH_STEPS:
         return _blocked(REASON_TOO_LONG, goal=goal, path_length=len(path))
 
-    steps = [
-        {
+    steps = []
+    for index, edge in enumerate(path):
+        step: dict[str, Any] = {
             "step_id": f"precondition_{index + 1}",
             "phase": "fixture",
             "actor_ref": actor_refs[0],
@@ -327,8 +440,19 @@ def plan_state_precondition(
             "to_state": edge["to"],
             "step_ordinal": index + 1,
         }
-        for index, edge in enumerate(path)
-    ]
+        if resolved_field:
+            step["state_field"] = resolved_field
+            step["readback_contract"] = {
+                "required_fields": [{"field": resolved_field}],
+                "state_field": resolved_field,
+            }
+            step["runtime_body_plan"] = {
+                "readback_contract": {
+                    "required_fields": [{"field": resolved_field}],
+                    "state_field": resolved_field,
+                }
+            }
+        steps.append(step)
     return {
         "status": STATUS_PLANNED,
         "reason_code": "",
@@ -338,6 +462,7 @@ def plan_state_precondition(
             "entry_states": starts,
             "selected_start_state": selected_start,
             "path_length": len(path),
+            "state_field": resolved_field,
             "reachability_authority": "precondition_reachability",
         },
     }

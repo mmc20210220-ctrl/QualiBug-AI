@@ -1507,41 +1507,47 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             from .analyzers_adapter import build_analyzer_hypotheses, get_analyzer_engine_names
 
             analyzer_engine_names = get_analyzer_engine_names()
-            logger.info("[Stage 2] Analyzers — running %d analyzers", len(analyzer_engine_names))
-            print(f"\n[Stage 2] Analyzers — 运行 {len(analyzer_engine_names)} 个分析器...", flush=True)
+            if not analyzer_engine_names:
+                # Analyzer package retired (architecture strangler): nothing to
+                # run. One truthful line, no fake per-engine degradation.
+                logger.info("[Stage 2] Analyzers — retired, skipped")
+                print("[Stage 2] Analyzers — 已退役，跳过（不产生假设，不伪造 degraded）", flush=True)
+            else:
+                logger.info("[Stage 2] Analyzers — running %d analyzers", len(analyzer_engine_names))
+                print(f"\n[Stage 2] Analyzers — 运行 {len(analyzer_engine_names)} 个分析器...", flush=True)
 
-            analyzer_hypotheses_by_engine = build_analyzer_hypotheses(
-                prd_text=prd_text,
-                api_spec=api_spec,
-                max_hypotheses_per_analyzer=max_hypotheses_per_engine
-            )
+                analyzer_hypotheses_by_engine = build_analyzer_hypotheses(
+                    prd_text=prd_text,
+                    api_spec=api_spec,
+                    max_hypotheses_per_analyzer=max_hypotheses_per_engine
+                )
 
-            analyzer_hypotheses_count = 0
-            for engine_name in analyzer_engine_names:
-                hypotheses = analyzer_hypotheses_by_engine.get(engine_name, [])
-                status = "success" if hypotheses or engine_name in analyzer_hypotheses_by_engine else "degraded"
-                results_by_engine[engine_name] = {
-                    "engine_name": engine_name,
-                    "hypotheses": hypotheses,
-                    "status": status,
-                    "attempts": 1,
-                    "retry_used": False,
-                    "raw_chars": 0,
-                    "content_chars": sum(len(str(h)) for h in hypotheses),
-                    "duration_seconds": 0.0,
-                    "error": "",
-                    "degradation_reason": "" if hypotheses else "analyzer_no_bindable_hypotheses",
-                }
-                all_hypotheses.extend(hypotheses)
-                analyzer_hypotheses_count += len(hypotheses)
-                status_label = "[OK]" if hypotheses else "[WARN]"
-                log_level = logging.INFO if hypotheses else logging.WARNING
-                logger.log(log_level, "[%s] %d hypotheses", engine_name, len(hypotheses))
-                print(f"    {status_label} [{engine_name}] {len(hypotheses)} hypotheses", flush=True)
-            engine_names_for_report.extend(analyzer_engine_names)
+                analyzer_hypotheses_count = 0
+                for engine_name in analyzer_engine_names:
+                    hypotheses = analyzer_hypotheses_by_engine.get(engine_name, [])
+                    status = "success" if hypotheses or engine_name in analyzer_hypotheses_by_engine else "degraded"
+                    results_by_engine[engine_name] = {
+                        "engine_name": engine_name,
+                        "hypotheses": hypotheses,
+                        "status": status,
+                        "attempts": 1,
+                        "retry_used": False,
+                        "raw_chars": 0,
+                        "content_chars": sum(len(str(h)) for h in hypotheses),
+                        "duration_seconds": 0.0,
+                        "error": "",
+                        "degradation_reason": "" if hypotheses else "analyzer_no_bindable_hypotheses",
+                    }
+                    all_hypotheses.extend(hypotheses)
+                    analyzer_hypotheses_count += len(hypotheses)
+                    status_label = "[OK]" if hypotheses else "[WARN]"
+                    log_level = logging.INFO if hypotheses else logging.WARNING
+                    logger.log(log_level, "[%s] %d hypotheses", engine_name, len(hypotheses))
+                    print(f"    {status_label} [{engine_name}] {len(hypotheses)} hypotheses", flush=True)
+                engine_names_for_report.extend(analyzer_engine_names)
 
-            logger.info("Analyzers generated %d hypotheses", analyzer_hypotheses_count)
-            print(f"  [OK] 分析器生成了 {analyzer_hypotheses_count} 条假设", flush=True)
+                logger.info("Analyzers generated %d hypotheses", analyzer_hypotheses_count)
+                print(f"  [OK] 分析器生成了 {analyzer_hypotheses_count} 条假设", flush=True)
 
         except Exception as e:
             logger.warning("Analyzer integration failed: %s", e)

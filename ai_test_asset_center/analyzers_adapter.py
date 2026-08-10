@@ -22,10 +22,18 @@ class AnalyzersAdapter:
 
     def __init__(self):
         self.analyzers = {}
+        self.retirement_reason = ""
         self._init_analyzers()
 
     def _init_analyzers(self):
-        """初始化所有 8 个分析器"""
+        """初始化所有 8 个分析器。
+
+        The analyzer package was retired per the architecture-inventory
+        strangler process (``ai_test_asset_center/analyzers/__init__.py`` is an
+        empty package). The adapter keeps its interface so stage wiring stays
+        stable, but reports the retirement explicitly instead of pretending 8
+        engines exist and then degrading every one of them to 0 hypotheses.
+        """
         try:
             from .analyzers import (
                 BusinessRulesAnalyzer,
@@ -48,7 +56,10 @@ class AnalyzersAdapter:
                 "authorization": AuthorizationAnalyzer(),
             }
         except Exception as e:
-            print(f"[WARN] 分析器初始化失败: {e}", flush=True)
+            # Retirement is a declared architecture decision, not a broken
+            # import: surface it as one informational line instead of a per-run
+            # WARN stack and 8 fake degraded engines.
+            self.retirement_reason = f"{type(e).__name__}: {str(e)[:200]}"
             self.analyzers = {}
 
     def run_analyzer(
@@ -449,14 +460,18 @@ def build_analyzer_hypotheses(
 
 
 def get_analyzer_engine_names() -> List[str]:
-    """返回所有分析器引擎名称"""
-    return [
-        "business_rules",
-        "state_machine",
-        "multi_tenant",
-        "conservation",
-        "concurrency",
-        "async_task",
-        "cache_consistency",
-        "authorization",
-    ]
+    """Return the engines that actually initialized.
+
+    The analyzer package is retired, so this is empty unless a future
+    successor re-populates ``ai_test_asset_center/analyzers``. The scan stage
+    must never report fake per-engine degradations for engines that do not
+    exist.
+    """
+    adapter = AnalyzersAdapter()
+    if not adapter.analyzers and adapter.retirement_reason:
+        print(
+            f"[INFO] 分析器包已退役（architecture strangler）：{adapter.retirement_reason}；"
+            "跳过分析器阶段（不产生假设，不伪造 degraded）",
+            flush=True,
+        )
+    return sorted(adapter.analyzers.keys())

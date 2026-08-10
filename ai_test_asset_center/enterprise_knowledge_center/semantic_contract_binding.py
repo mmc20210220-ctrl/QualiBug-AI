@@ -837,7 +837,10 @@ def _bind_transition_by_verb_action_bridge(
     if not target_tokens:
         return None
 
-    scored: list[tuple[int, int, int, str, list[str]]] = []
+    from ..business_state_graph import _denial_verbs
+
+    denial_tokens = _denial_verbs()
+    scored: list[tuple[int, int, int, str, list[str], bool]] = []
     for endpoint in endpoints:
         interface = interface_index.get(endpoint.get("_interface_id"))
         if not interface:
@@ -863,6 +866,11 @@ def _bind_transition_by_verb_action_bridge(
         if not overlap:
             continue
         identity_overlap = len(sorted(identity_tokens & target_tokens))
+        # Denial is judged on the operation's DOCUMENTED IDENTITY (path tail /
+        # action field) only: lexicon-expanded summary synonyms are fuzzy
+        # clusters (审批 -> [approve, reject, review]) and would mark both
+        # approve and reject as denial. The identity is the primary semantic.
+        denial_hit = bool(denial_tokens & identity_tokens)
         # Path-tail / action-field matches are the operation's documented
         # identity; summary-verb matches are softer evidence. Rank by
         # identity overlap first, then by overlap size, then by specificity
@@ -873,6 +881,7 @@ def _bind_transition_by_verb_action_bridge(
             -len(tokens),
             endpoint.get("_interface_id", ""),
             overlap,
+            denial_hit,
         ))
     if not scored:
         return None
@@ -885,7 +894,22 @@ def _bind_transition_by_verb_action_bridge(
         if row[0] == best_identity and row[1] == best_count
     ]
     if len(best_ids) != 1:
-        return None
+        # Token tie (e.g. both ``approve`` and ``reject`` mention the refund
+        # family). A denial verb (驳回/拒绝/reject/...) is never the performer
+        # of the transition INTO the positive outcome state of the same flow:
+        # when exactly one tie candidate carries no denial verb, bind it.
+        # The demotion only breaks ties — a unique match and a lone denial
+        # candidate are never vetoed.
+        non_denial_ids = [
+            row[3]
+            for row in scored
+            if row[0] == best_identity and row[1] == best_count
+            and not row[5]
+        ]
+        if len(non_denial_ids) == 1:
+            best_ids = non_denial_ids
+        else:
+            return None
     interface_id = best_ids[0]
     return interface_id, {
         "to_state": to_name,
@@ -954,6 +978,55 @@ def _bind_entry_transition_to_collection_create(
         "interface_id": interface_id,
         "path": path,
         "derivation": "entry_state_collection_create",
+    }
+
+
+def _bind_request_state_to_request_entity_create(
+    *,
+    transition: dict[str, Any],
+    to_name: str,
+    endpoints: list[dict[str, str]],
+    interface_index: dict[str, dict[str, Any]],
+) -> tuple[str, dict[str, Any]] | None:
+    """Bind a transition INTO an ``<ACTION>_REQUESTED`` state to the create of
+    the request entity whose name matches ACTION.
+
+    States named ``<ACTION>_REQUESTED`` (REFUND_REQUESTED, RETURN_REQUESTED,
+    APPROVAL_REQUESTED, ...) follow a generic English business convention: the
+    entity enters that state when the corresponding request entity (``refunds``
+    for REFUND_REQUESTED, ``returns`` for RETURN_REQUESTED) is created. The
+    channel routes the TO-state token to the documented collection-create POST
+    (no path parameters) whose path tail matches the action stem (plural
+    tolerant). Only documented endpoints are ranked; nothing is invented. A
+    unique match binds with derivation ``request_state_entity_create``.
+    """
+    if not _text(to_name).upper().endswith("_REQUESTED"):
+        return None
+    action_stem = _text(to_name).upper()[: -len("_REQUESTED")]
+    stem_token = _norm_action_token(action_stem)
+    if not stem_token:
+        return None
+    candidates: list[tuple[str, str]] = []
+    for endpoint in endpoints:
+        method = _text(endpoint.get("method")).upper()
+        if method != "POST":
+            continue
+        path = _text(endpoint.get("path"))
+        if not path or "{" in path or ":" in path:
+            continue
+        tail = _norm_action_token(path.rstrip("/").split("/")[-1]) if path else ""
+        if not tail:
+            continue
+        if tail == stem_token or tail == stem_token + "s":
+            candidates.append((endpoint.get("_interface_id", ""), path))
+    if len(candidates) != 1:
+        return None
+    interface_id, path = candidates[0]
+    return interface_id, {
+        "to_state": to_name,
+        "interface_id": interface_id,
+        "path": path,
+        "derivation": "request_state_entity_create",
     }
 
 
@@ -1105,6 +1178,20 @@ def _bind_state_transitions_to_operations(asset: dict[str, Any]) -> int:
                             endpoints=_write_endpoints,
                             interface_index=interface_index,
                         )
+                if not bound:
+                    # Request-state channel: a transition INTO a state named
+                    # ``<ACTION>_REQUESTED`` (REFUND_REQUESTED, RETURN_REQUESTED,
+                    # APPROVAL_REQUESTED, ...) is materialized by the collection
+                    # create of the request entity whose name matches ACTION
+                    # (``/api/refunds`` for REFUND_REQUESTED). Generic English
+                    # business-state convention; language morphology only, never
+                    # an endpoint/entity invention.
+                    bound = _bind_request_state_to_request_entity_create(
+                        transition=transition,
+                        to_name=to_name,
+                        endpoints=_write_endpoints,
+                        interface_index=interface_index,
+                    )
                 if not bound:
                     continue
                 interface_id, evidence = bound

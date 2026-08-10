@@ -124,6 +124,28 @@ def _verb_action_lexicon() -> dict[str, list[str]]:
     return result
 
 
+def _denial_verbs() -> set[str]:
+    """Generic denial/refusal verbs (language resource, not domain hardcoding).
+
+    An interface whose documented identity performs a denial (驳回/拒绝/拒收/
+    reject/deny/refuse/decline/...) cannot be the performer of a transition
+    INTO the positive outcome state of the same flow. The set is only ever
+    used to break a token tie inside the state-transition binding — never to
+    invent an endpoint or to veto a unique match.
+    """
+    raw = _semantic_lexicon().get("denial_verbs")
+    result: set[str] = set()
+    if isinstance(raw, dict):
+        for value in raw.values():
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                text = str(item or "").strip().lower()
+                if text:
+                    result.add(text)
+    return result
+
+
 def _entity_token_lexicon() -> dict[str, list[str]]:
     """Chinese -> English ENTITY noun bridge (language resource, not domain hardcoding).
 
