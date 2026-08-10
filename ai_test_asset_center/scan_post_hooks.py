@@ -49,6 +49,10 @@ _BUILTIN_HOOK_INSTALLERS: tuple[tuple[str, str], ...] = (
         "ai_test_asset_center.run_manifest_hook",
         "install_run_manifest_hook",
     ),
+    (
+        "ai_test_asset_center.scan_stage_finalization_hook",
+        "install_scan_stage_finalization_hook",
+    ),
 )
 
 
