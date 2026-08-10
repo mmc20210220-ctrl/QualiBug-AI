@@ -29,7 +29,15 @@ function extractServices(payload: unknown): SavedServiceConfig[] {
 function extractMaterialCount(payload: unknown): number {
   const root = asRecord(payload);
   const asset = asRecord(root.knowledge_asset || root.data || root);
-  return Array.isArray(asset.sources) ? asset.sources.length : 0;
+  const inventory = Array.isArray(asset.sources)
+    ? asset.sources
+    : Array.isArray(asset.source_inventory)
+      ? asset.source_inventory
+      : [];
+  return inventory.filter((item) => {
+    const source = asRecord(item);
+    return String(source.status || 'active').toLowerCase() !== 'deleted';
+  }).length;
 }
 
 export function SettingsOnboardingGuide({ project }: SettingsOnboardingGuideProps) {
