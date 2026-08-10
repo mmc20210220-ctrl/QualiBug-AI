@@ -1,4 +1,5 @@
 import { deriveFindingVerification, hasFindingReverificationObligation } from '../../lib/finding-verification';
+import { FindingVerificationRunSummary } from './FindingVerificationRunSummary';
 import { FindingVerificationStatus } from './FindingVerificationStatus';
 import { FindingVerificationTimeline } from './FindingVerificationTimeline';
 import type { Finding } from '../../types';
@@ -33,6 +34,8 @@ export function FindingVerificationPanel({ finding, running = false, onReverify,
         </div>
         <span className="summary-pill">最近验证：{runLabel(finding)}</span>
       </div>
+
+      <FindingVerificationRunSummary finding={finding} generatedAt={focusGeneratedAt} />
 
       <div className="customer-secondary-grid mt-3">
         <article className="customer-secondary-card">
