@@ -7,6 +7,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'u
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 const card = read('src/components/findings/FindingCard.tsx');
+const decisionSnapshot = read('src/components/findings/FindingDecisionSnapshot.tsx');
 const verificationPanel = read('src/components/findings/FindingVerificationPanel.tsx');
 const verificationRunSummary = read('src/components/findings/FindingVerificationRunSummary.tsx');
 const verificationStatus = read('src/components/findings/FindingVerificationStatus.tsx');
@@ -75,6 +76,10 @@ assert(verificationStyles.includes('var(--danger-muted)'), 'still-failing status
 assert(verificationStyles.includes('var(--warning-muted)'), 'pending and inconclusive status must use the shared warning token');
 assert(verificationStyles.includes('verification-neutral'), 'not-enrolled state must have a neutral presentation');
 
+assert(decisionSnapshot.includes('<FindingVerificationStatus finding={finding} compact />'), 'shared customer decision snapshot must expose current verification status');
+assert(decisionSnapshot.includes('不会根据前端展示自行判定“已修复”'), 'decision snapshot must not independently close a finding');
+assert(card.includes('<FindingDecisionSnapshot finding={finding} />'), 'expanded Finding must expose the shared customer decision snapshot');
+
 assert(verificationPanel.includes('修复前基线'), 'verification panel must preserve original finding evidence');
 assert(verificationPanel.includes('最新修复后验证'), 'verification panel must show the latest post-fix backend result');
 assert(verificationPanel.includes('新原始证据</em><b>当前回执未提供'), 'missing post-fix raw evidence must be explicit');
@@ -102,7 +107,7 @@ assert(dashboard.includes('<DashboardFocusFindingCard key={finding.id} finding={
 assert(dashboardFocus.includes('<FindingVerificationStatus finding={finding} />'), 'dashboard focus card must expose the shared verification status');
 
 assert(evidence.includes('<FindingVerificationStatus finding={finding} compact />'), 'evidence list must expose the shared verification status');
-assert(evidence.includes('<FindingVerificationStatus finding={selected} />'), 'selected evidence detail must expose the shared verification status');
+assert(evidence.includes('<FindingDecisionSnapshot finding={selected} compact />'), 'selected evidence detail must expose verification truth through the shared decision snapshot');
 assert(evidence.includes('<FindingVerificationPanel'), 'evidence must preserve the detailed verification comparison');
 assert(evidence.includes("focusGeneratedAt={preserveRequestedRun ? requestedVerificationAt : ''}"), 'evidence must pass the exact run focus into the shared verification panel');
 
