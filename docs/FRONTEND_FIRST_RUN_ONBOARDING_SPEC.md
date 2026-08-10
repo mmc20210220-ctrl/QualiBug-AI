@@ -55,27 +55,98 @@ Online-first 是**产品推荐路径**，不是伪造新的执行门禁。
 
 前端不得为了强调 Online-first 而凭空阻塞一个后端已经允许执行的项目，也不得因为“连接器已经存在”就把尚未 materialize 的资料提前当成可读资料。
 
-## 4. Materials → 系统与环境交接
+## 4. Materials 三层资料就绪链路
 
-`MaterialsOnboardingHandoff` 只在 `/materials` 生效，并从真实 `getKnowledgeAsset(project)` 读取资料状态。
+`MaterialsOnboardingHandoff` 是企业资料首页的真实性摘要，必须明确展示三个彼此独立的阶段：
 
-它必须区分：
+`在线来源已连接 → 资料已同步 → 业务理解输入`
 
-- `onlineActive`：来自 `source_origin === ONLINE_CONNECTOR` 或兼容 `connector://` source_ref；
-- `uploadedActive`：非在线来源的 active 文件补充资料。
+这三个阶段不能互相替代。
+
+### 4.1 在线来源已连接
+
+权威来源：`listKnowledgeConnectors(project)`。
+
+含义仅为：已经存在后端真实在线 Connector 实例。
+
+禁止：
+
+- 因 Connector 存在就显示“资料已同步”；
+- 因 Connector 存在就标记首次资料条件完成；
+- Connector inventory 读取失败时显示“未连接”。
+
+如果 Connector inventory 读取失败，应显示“状态待核对”，并保留已经从知识资产读取到的其他真实状态。
+
+### 4.2 资料已同步
+
+权威来源：`getKnowledgeAsset(project)` 中真实 materialized source。
+
+在线资料必须满足真实 active source，并通过以下来源身份识别：
+
+- `source_origin === ONLINE_CONNECTOR`；或
+- 兼容 `source_ref` 以 `connector://` 开头。
 
 状态规则：
 
-- 无资料：由 Materials 自身在线连接主入口引导；
+- Connector 已连接但没有 active 在线 source → `等待首次读取`；
+- 至少一份 active 在线 source → `N 份在线资料可用`；
+- 只有 active 上传文件 → `当前仅文件补充`，可以继续但推荐连接在线来源；
+- material 状态读取失败 → `状态待核对`，不得推导同步成功或失败。
+
+### 4.3 业务理解输入
+
+该阶段只能表达**输入资料是否已经进入 QualiBug 业务理解输入主链**，不得表达“QualiBug 已经理解正确”“理解已完成”或任何理解准确率。
+
+前端展示层当前把以下真实 active source type 视为核心业务理解输入：
+
+- `prd`；
+- `openapi`；
+- `database_schema` / `db_design`；
+- `collaboration_document`；
+- `historical_bug`。
+
+这是**前端就绪表达白名单**，不是后端业务理解算法，也不是新的执行门禁。
+
+状态规则：
+
+- 至少一份上述核心 active source → `N 份核心输入已就绪`；
+- 有其他 active source、但没有上述核心类型 → `输入主链已建立 / 核心输入待补齐`；
+- 没有真实 active source → `等待可读资料`；
+- material 状态不可读 → `无法确认`。
+
+所有文案必须明确：
+
+**“输入可用”不等于“业务理解正确或完整”。**
+
+## 5. Materials → 系统与环境交接
+
+`MaterialsOnboardingHandoff` 只在 `/materials` 生效，并同时读取：
+
+- `getKnowledgeAsset(project)`；
+- `listKnowledgeConnectors(project)`。
+
+两者使用 `Promise.allSettled` 保留部分真实状态：一项读取失败不得抹掉另一项已经成功读取到的事实。
+
+它必须区分：
+
+- `onlineActive`：来自在线连接器的 active source；
+- `uploadedActive`：非在线来源的 active 文件补充资料；
+- `businessContextActive`：进入业务理解输入展示白名单的 active source；
+- `connectorCount`：真实在线 Connector 数量。
+
+状态规则：
+
+- 无资料、无连接器：主动作连接在线资料；
+- 有 Connector、无可读在线资料：显示“已连接 / 等待首次读取”；
 - processing：提示仍在处理，可以同时配置系统与环境；
 - failed/degraded：显示异常并允许重新核对；
-- 至少一份在线 active 且 clean：显示在线资料已接入，进入 `/settings`；
+- 至少一份在线 active 且 clean：显示在线资料已同步，进入 `/settings`；
 - 只有上传文件且 clean：显示“文件补充已可用”，提供“连接在线资料（推荐）”，同时保留“暂用补充资料继续”的非阻塞路径；
 - 已经配置过系统的客户可直接进入 `/campaigns`，但是否能运行仍由真实 preflight 决定。
 
 资料状态每 5 秒重新核对，避免同步/上传完成后客户仍长时间看到旧状态。
 
-## 5. Settings 接入向导
+## 6. Settings 接入向导
 
 Settings 必需步骤只有三项：
 
@@ -110,7 +181,7 @@ Settings 必需步骤只有三项：
 - 三项完成 → 继续运行前检查；
 - 任一状态读取失败 → 先重新核对，不把读取失败当成配置缺失。
 
-## 6. 运行前检查是最终执行权威
+## 7. 运行前检查是最终执行权威
 
 前端 onboarding 完成不等于扫描一定可运行。
 
@@ -123,7 +194,9 @@ Settings 必需步骤只有三项：
 
 任何 onboarding UI 都不得为了缩短流程绕过这一门禁，也不得因为“只有文件补充、没有在线来源”自行创造一个后端不存在的新门禁。
 
-## 7. 首次使用四步引导
+三层资料就绪链路只用于客户理解资料接入状态，不得覆盖运行中心 preflight。
+
+## 8. 首次使用四步引导
 
 Dashboard `JourneyStrip` 使用真实流程措辞：
 
@@ -140,20 +213,20 @@ Dashboard `JourneyStrip` 使用真实流程措辞：
 
 第 4 步必须进入 `/dashboard`，不能直接假设一定存在 Finding。问题清单和证据中心属于结果后的条件分支。
 
-## 8. Materials 页面顺序合同
+## 9. Materials 页面顺序合同
 
 Materials 页面已有在线连接器能力时，前端不得重新把上传区提升到其前面。
 
 稳定顺序：
 
-1. 页面总览与在线资料统计；
+1. 页面总览与三层资料就绪状态；
 2. 在线连接器 / 在线资料连接、授权、范围、同步与健康状态；
 3. 文件补充上传；
 4. 在线与文件统一后的资料清单。
 
 文件补充上传文案必须说明其用途是“补充在线资料没有的内容”。
 
-## 9. 全局导航层级
+## 10. 全局导航层级
 
 侧边栏主流程：
 
@@ -169,7 +242,7 @@ Materials 页面已有在线连接器能力时，前端不得重新把上传区�
 
 发布门禁属于客户主流程，不得重新降级到“高级视图”。
 
-## 10. 全局状态真实性
+## 11. 全局状态真实性
 
 Sidebar 必须区分：
 
@@ -183,13 +256,17 @@ Sidebar 必须区分：
 
 因此，0 Finding 的已完成扫描不得再显示成“等待首次验证”。
 
-## 11. 回归契约
+## 12. 回归契约
 
 `test:settings-onboarding` 已进入 `npm run ci:gate`，至少锁定：
 
 - 三个必需 onboarding 状态来自真实接口；
 - 企业资料必须区分“已连接在线来源”和“已形成真实可读资料”；
 - 在线 Connector 存在但尚未 materialize 时不得提前 Ready；
+- Materials 首页必须展示“在线来源已连接 / 资料已同步 / 业务理解输入”三层状态；
+- Connector inventory 与 material inventory 读取失败必须独立表达；
+- 业务理解输入必须来自真实 active source，不能从 Connector 存在推导；
+- “核心输入已就绪”只表示输入资料可用，不得宣称理解正确、理解完整或给出理解准确率；
 - 企业资料必须区分在线来源和文件补充；
 - 缺资料主 CTA 必须是“连接企业在线资料”；
 - 已连接但未 materialize 的在线来源必须进入“查看在线资料同步”；
@@ -207,12 +284,14 @@ Sidebar 必须区分：
 - clean scan 不得在 Sidebar 显示“等待首次验证”；
 - Run Center 仍由真实 preflight fail-closed。
 
-## 12. 非目标
+## 13. 非目标
 
 本 SPEC 不涉及：
 
 - Bug 发现率；
 - 业务理解算法；
+- 业务理解正确率；
+- 业务理解完整度判定；
 - 场景生成；
 - Oracle / Observer / Experiment；
 - Finding 成立条件；
