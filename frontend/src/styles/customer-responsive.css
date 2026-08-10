@@ -1,0 +1,145 @@
+/* Customer-facing responsive overrides.
+ * Loaded after legacy index.css so current page class names win without
+ * reopening the legacy stylesheet migration.
+ */
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.action-bar-title {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.findings-page-head {
+  min-width: 0;
+}
+
+.findings-page-head > div {
+  min-width: 0;
+}
+
+.findings-page-head > div:last-child {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.evidence-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 20px;
+  min-width: 0;
+  align-items: start;
+}
+
+.evidence-layout .evidence-list-panel,
+.evidence-layout .evidence-detail-panel {
+  min-width: 0;
+}
+
+.evidence-layout .evidence-list-panel {
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+}
+
+.evidence-layout .evidence-list-item h4,
+.evidence-layout .evidence-list-item span,
+.evidence-layout .evidence-detail-panel h2,
+.release-check-item .check-detail,
+.customer-status-card p {
+  overflow-wrap: anywhere;
+}
+
+.findings-empty-state .settings-actions {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1024px) {
+  .evidence-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .evidence-layout .evidence-list-panel {
+    position: static;
+    max-height: 300px;
+  }
+
+  .findings-page-head {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .findings-page-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .findings-page-head > div:last-child {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .action-bar {
+    align-items: stretch;
+  }
+
+  .action-bar-title {
+    flex-basis: 100%;
+    width: 100%;
+  }
+
+  .release-traffic-light {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+}
+
+@media (max-width: 560px) {
+  .findings-page-head > div:last-child {
+    display: grid !important;
+    grid-template-columns: 1fr;
+  }
+
+  .findings-page-head > div:last-child .btn,
+  .action-bar .btn,
+  .findings-empty-state .settings-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .action-bar {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .action-bar-title {
+    width: auto;
+  }
+
+  .evidence-layout {
+    gap: 12px;
+  }
+
+  .evidence-layout .evidence-list-panel {
+    max-height: 260px;
+    padding: 10px;
+  }
+
+  .evidence-layout .evidence-detail-panel {
+    gap: 14px;
+  }
+
+  .findings-empty-state {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
