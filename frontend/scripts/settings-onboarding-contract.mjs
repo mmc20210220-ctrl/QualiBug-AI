@@ -15,6 +15,7 @@ function assert(condition, message) {
 const guide = read('src/components/settings/SettingsOnboardingGuide.tsx');
 const materialsHandoff = read('src/components/materials/MaterialsOnboardingHandoff.tsx');
 const materials = read('src/pages/Materials.tsx');
+const materialTypes = read('src/lib/material-type-presentation.ts');
 const journey = read('src/components/dashboard/JourneyStrip.tsx');
 const customerSection = read('src/components/settings/SettingsCustomerSection.tsx');
 const sidebar = read('src/components/Sidebar.tsx');
@@ -57,6 +58,11 @@ assert(customerSection.includes('连接企业资料'), 'settings must expose the
 assert(!customerSection.includes('ingestKnowledgeFiles'), 'settings must not keep a duplicate enterprise-material upload implementation');
 assert(!customerSection.includes('type="file"'), 'settings must not render a second enterprise-material file input');
 
+assert(materialTypes.includes('Friendly labels only. This map is intentionally NOT an allowlist.'), 'material type aliases must be documented as display-only');
+assert(materialTypes.includes("ui_ux: 'UI / UX 设计'"), 'shared material type presentation must provide a friendly UI/UX label');
+assert(materialTypes.includes("return MATERIAL_TYPE_LABELS[type] || type;"), 'unknown source_type values must fall back to their real backend value');
+assert(materialTypes.includes("return String(value || '').trim().toLowerCase() || 'unclassified';"), 'material source types must normalize without filtering unknown values');
+
 assert(materialsHandoff.includes("location.pathname !== '/materials'"), 'materials onboarding handoff must stay scoped to the materials page');
 assert(materialsHandoff.includes('getKnowledgeAsset(project)'), 'materials handoff must read real knowledge asset state');
 assert(materialsHandoff.includes('listKnowledgeConnectors(project)'), 'materials readiness must read real online connector inventory');
@@ -67,12 +73,10 @@ assert(materialsHandoff.includes('onlineActive'), 'materials handoff must distin
 assert(materialsHandoff.includes('uploadedActive'), 'materials handoff must distinguish uploaded supplement sources');
 assert(materialsHandoff.includes('observedTypeCount'), 'materials readiness must expose observed source-type diversity without a fixed denominator');
 assert(materialsHandoff.includes('activeTypeCounts'), 'materials readiness must retain dynamic active source-type counts');
-assert(materialsHandoff.includes('function normalizeSourceType('), 'materials readiness must normalize backend source_type values dynamically');
+assert(materialsHandoff.includes('normalizeMaterialSourceType(source.source_type)'), 'materials readiness must use the shared open-ended source-type normalizer');
 assert(materialsHandoff.includes('activeSources.forEach((source) => {'), 'materials readiness must derive type distribution from every real active source');
 assert(materialsHandoff.includes('activeTypeCounts[type] = (activeTypeCounts[type] || 0) + 1;'), 'dynamic source types must be counted without an allowlist');
-assert(materialsHandoff.includes('const MATERIAL_TYPE_LABELS: Record<string, string> = {'), 'materials readiness may keep friendly display aliases');
-assert(materialsHandoff.includes("ui_ux: 'UI / UX 设计'"), 'UI/UX design must be recognized as a friendly display alias when that backend type appears');
-assert(materialsHandoff.includes('return MATERIAL_TYPE_LABELS[type] || type;'), 'unknown backend source types must remain visible instead of being filtered out');
+assert(materialsHandoff.includes('materialSourceTypeLabel(type)'), 'materials readiness must use the shared display-only source-type label helper');
 assert(!materialsHandoff.includes('BUSINESS_CONTEXT_TYPES'), 'materials readiness must not use a fixed business-context source-type allowlist');
 assert(!materialsHandoff.includes('BusinessInputCounts'), 'materials readiness must not hard-code a finite business-input category model');
 assert(!materialsHandoff.includes('businessInputCategoryCount'), 'materials readiness must not use a fixed category count denominator');
@@ -85,11 +89,11 @@ assert(materialsHandoff.includes('连接成功不等于资料已经完成同步'
 assert(materialsHandoff.includes('必须先形成真实 active source'), 'business-understanding input readiness must require a real active material source');
 assert(materialsHandoff.includes('${snapshot.active} 份资料已进入输入主链'), 'all real active sources must be allowed to enter the presentation input mainline');
 assert(materialsHandoff.includes('不设固定类型白名单'), 'business-understanding input presentation must explicitly reject a fixed source-type whitelist');
-assert(materialsHandoff.includes('资料类型分布'), 'materials page must expose dynamic source-type distribution');
+assert(materialsHandoff.includes('资料类型分布'), 'materials readiness must expose dynamic source-type distribution');
 assert(materialsHandoff.includes('已观察到 ${snapshot.observedTypeCount} 类 active 资料'), 'type distribution must use a dynamic observed count without a fixed denominator');
 assert(materialsHandoff.includes('未知类型会原样展示'), 'unknown backend source types must remain visible to the customer');
-assert(!materialsHandoff.includes('/5 类核心输入'), 'materials page must not present a fixed five-type denominator');
-assert(!materialsHandoff.includes('核心输入覆盖'), 'materials page must not frame a fixed source subset as canonical enterprise input coverage');
+assert(!materialsHandoff.includes('/5 类核心输入'), 'materials readiness must not present a fixed five-type denominator');
+assert(!materialsHandoff.includes('核心输入覆盖'), 'materials readiness must not frame a fixed source subset as canonical enterprise input coverage');
 assert(!materialsHandoff.includes('理解完成率'), 'materials type distribution must not be labeled as understanding completion rate');
 
 assert(materialsHandoff.includes('function readConnectorSnapshot(connectors'), 'materials readiness must derive connector attention from typed connector records');
@@ -139,12 +143,29 @@ assert(materialsHandoff.includes("document.querySelector('.materials-inventory-c
 assert(materialsHandoff.includes("navigateToProjectPath('/settings', project)"), 'ready material flow must preserve project context when moving to system setup');
 assert(layout.includes('<MaterialsOnboardingHandoff />'), 'layout must mount the materials readiness surface above the materials page');
 
+assert(materials.includes("from '../lib/material-type-presentation'"), 'materials page must use the shared open-ended material type presentation helper');
+assert(!materials.includes('EXECUTABLE_SOURCE_TYPES'), 'materials page must not define executable materials through a fixed source-type whitelist');
+assert(!materials.includes('可执行资料'), 'materials summary must not label a fixed source subset as executable materials');
+assert(!materials.includes('核心资料覆盖'), 'materials page must not present PRD/API/DB as the canonical enterprise material set');
+assert(!materials.includes("const prdCount ="), 'materials page must not derive readiness from a fixed PRD counter');
+assert(!materials.includes("const apiCount ="), 'materials page must not derive readiness from a fixed API counter');
+assert(!materials.includes("const dbCount ="), 'materials page must not derive readiness from a fixed DB counter');
+assert(materials.includes("const activeSources = sources.filter((item) => item.status === 'active');"), 'materials page type structure must be based on real active sources');
+assert(materials.includes('const observedTypeCount = sourceTypeCounts.size;'), 'materials page must expose dynamic observed type count without a fixed denominator');
+assert(materials.includes('normalizeMaterialSourceType(item.source_type)'), 'materials page must count source types through the shared open-ended normalizer');
+assert(materials.includes('materialSourceTypeLabel(type)'), 'materials page must render dynamic source types through the shared display helper');
+assert(materials.includes("{ label: '资料类型', value: observedTypeCount"), 'materials page summary must show dynamic source-type count');
+assert(materials.includes('资料来源结构'), 'materials page must explain online versus uploaded source structure instead of fixed core categories');
+assert(materials.includes('资料类型结构'), 'materials page must expose dynamic material type structure');
+assert(materials.includes('未知类型会原样展示'), 'materials page must explicitly preserve unknown backend source types');
+assert(materials.includes('当前上传分类只代表后端已提供的显式入口，不代表企业资料类型全集'), 'manual upload classifications must not be presented as the enterprise material type universe');
+assert(materials.includes('<option value="ui_ux">UI / UX 设计 / 原型</option>'), 'manual supplement upload must keep the existing UI/UX classification');
+
 const onlineSection = materials.indexOf('<h2>在线连接器</h2>');
 const uploadSection = materials.indexOf('<h2>离线资料上传</h2>');
 assert(onlineSection >= 0, 'materials page must expose online connectors as the primary materials surface');
 assert(uploadSection > onlineSection, 'file upload must remain after the online connector surface');
 assert(materials.includes('<span className="settings-hero-kicker">补充方式</span>'), 'file upload must be explicitly framed as a supplement');
-assert(materials.includes('用于补充在线资料没有的 PRD、接口文档、历史缺陷、数据库说明或设计稿'), 'upload copy must explain that files supplement missing online materials');
 assert(materials.includes('接入在线资料'), 'materials page primary CTA must remain online-source connection');
 
 assert(journey.includes("title: '接入被测系统'"), 'first-run journey must start from real system setup');
