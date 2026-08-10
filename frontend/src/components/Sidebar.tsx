@@ -1,5 +1,5 @@
 import { NavLink, useSearchParams } from 'react-router-dom';
-import { useProjectSummary } from '../api/data';
+import { useLiveStatus, useProjectSummary } from '../api/data';
 import { BrandLogo } from './BrandLogo';
 import { buildProjectPath } from '../lib/project-navigation';
 
@@ -59,16 +59,21 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { projectName, currentDefectCount, clueCount, p0Count } = useProjectSummary(project);
+  const { scanActive, hasMaterializedMetrics } = useLiveStatus(project, 15_000);
 
   const riskStateLabel = !project
     ? '请选择客户'
-    : p0Count > 0
-      ? '需先处理阻断'
-      : (currentDefectCount || 0) > 0
-        ? '可进入整改'
-        : (clueCount || 0) > 0
-          ? '后台补证中'
-          : '等待首次验证';
+    : scanActive
+      ? '检测进行中'
+      : p0Count > 0
+        ? '需先处理阻断'
+        : (currentDefectCount || 0) > 0
+          ? '可进入整改'
+          : (clueCount || 0) > 0
+            ? '后台补证中'
+            : hasMaterializedMetrics
+              ? '本轮暂无已确认问题'
+              : '等待首次验证';
 
   return (
     <>
