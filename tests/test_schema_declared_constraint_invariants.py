@@ -93,3 +93,72 @@ def test_no_decision_surface_no_invariants() -> None:
         if (inv.get("derived_invariant_kind") == "schema_declared_constraint")
     ]
     assert constraints == []
+
+
+def _state_gate_asset() -> dict:
+    return {
+        "data_tables": [
+            {"name": "products", "columns": ["id", "sku", "status", "price"],
+             "foreign_keys": []},
+            {"name": "order_items", "columns": ["id", "order_id", "sku", "qty"],
+             "foreign_keys": ["orders", "products"]},
+        ],
+        "business_objects": [
+            {"name": "products", "kind": "resource", "source_id": "schema.sql"},
+            {"name": "order_items", "kind": "resource", "source_id": "schema.sql"},
+        ],
+        "rule_library": [],
+        "field_dictionary": [],
+        "permission_matrix": [],
+        "state_machines": [],
+        "relations": [],
+    }
+
+
+def test_state_gate_derives_for_fk_consumed_entity() -> None:
+    """products.status is consumed by order creation (order_items FK): the
+    consumption surface must carry a state-eligibility invariant so ordering
+    an inactive (DRAFT) product is exercised — the target accepting it IS
+    the runtime-observed defect."""
+    ops = [
+        {"id": "op_create_order", "operation_id": "api:POST:/api/orders",
+         "method": "POST", "path": "/api/orders",
+         "request_example": {"items": [{"sku": "SKU-1", "qty": 1}]},
+         "read_write": "write"},
+        {"id": "op_create_product", "operation_id": "api:POST:/api/products/admin",
+         "method": "POST", "path": "/api/products/admin",
+         "request_example": {"sku": "SKU-NEW", "status": "DRAFT", "price": "10"},
+         "read_write": "write"},
+    ]
+    ir = build_behavior_ir_from_knowledge_asset(
+        _state_gate_asset(), api_operations=ops
+    )
+    gates = [
+        inv for inv in (ir.get("invariants") or [])
+        if (inv.get("derived_invariant_kind") == "schema_declared_state_gate")
+    ]
+    assert len(gates) == 1
+    gate = gates[0]
+    assert (gate.get("expression") or {}).get("operator") == "state_eligible"
+    refs = set(gate.get("operation_refs") or [])
+    assert "api:POST:/api/orders" in refs
+    # The entity's own create surface is not a consumption.
+    assert "api:POST:/api/products/admin" not in refs
+    assert gate.get("derivation") == "schema-derived"
+
+
+def test_state_gate_needs_fk_consumption() -> None:
+    """An entity with a status column but no foreign-key consumer gets no
+    state gate (nothing consumes it, nothing to gate)."""
+    asset = _state_gate_asset()
+    asset["data_tables"][1]["foreign_keys"] = ["orders"]
+    ir = build_behavior_ir_from_knowledge_asset(asset, api_operations=[
+        {"id": "op_create_order", "operation_id": "api:POST:/api/orders",
+         "method": "POST", "path": "/api/orders",
+         "request_example": {"items": [{"sku": "SKU-1"}]}, "read_write": "write"},
+    ])
+    gates = [
+        inv for inv in (ir.get("invariants") or [])
+        if (inv.get("derived_invariant_kind") == "schema_declared_state_gate")
+    ]
+    assert gates == []
