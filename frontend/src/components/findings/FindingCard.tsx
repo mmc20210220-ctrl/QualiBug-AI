@@ -147,18 +147,9 @@ export function FindingCard({
   const [collaborationSaving, setCollaborationSaving] = useState(false);
 
   useEffect(() => {
-    setCollaborationDraft(initialDraft(collaborativeFinding));
+    setCollaborationDraft(initialDraft(finding as CollaborativeFinding));
     setCollaborationStatus('');
-  }, [
-    finding.id,
-    collaborativeFinding.collaboration?.handling_status,
-    collaborativeFinding.collaboration?.assignee,
-    collaborativeFinding.collaboration?.fix_version,
-    collaborativeFinding.collaboration?.developer_feedback,
-    collaborativeFinding.collaboration?.disposition,
-    collaborativeFinding.collaboration?.disposition_note,
-    collaborativeFinding.collaboration?.external_issue_url,
-  ]);
+  }, [finding]);
 
   const copyHandoff = async () => {
     try {
