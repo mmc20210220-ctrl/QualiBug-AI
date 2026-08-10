@@ -24,6 +24,11 @@ function RequireAuth() {
   return <Outlet />;
 }
 
+function PreserveSearchRedirect({ to }: { to: string }) {
+  const location = useLocation();
+  return <Navigate to={`${to}${location.search}`} replace />;
+}
+
 export default function App() {
   return (
     <ToastProvider>
@@ -34,7 +39,7 @@ export default function App() {
           <Route path="/shared-evidence" element={<SharedEvidence />} />
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/" element={<PreserveSearchRedirect to="/dashboard" />} />
               {/* 成果面 */}
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/findings" element={<Findings />} />
@@ -48,11 +53,13 @@ export default function App() {
               <Route path="/coverage" element={<CoverageMatrix />} />
               {/* 配置 */}
               <Route path="/settings" element={<Settings />} />
-              {/* 向后兼容重定向 */}
-              <Route path="/behavior-space" element={<Navigate to="/coverage" replace />} />
-              <Route path="/test-tasks" element={<Navigate to="/campaigns" replace />} />
-              <Route path="/clues" element={<Navigate to="/settings" replace />} />
-              <Route path="/products" element={<Navigate to="/dashboard" replace />} />
+              {/* 向后兼容重定向：必须保留 project 等查询上下文 */}
+              <Route path="/behavior-space" element={<PreserveSearchRedirect to="/coverage" />} />
+              <Route path="/test-tasks" element={<PreserveSearchRedirect to="/campaigns" />} />
+              <Route path="/clues" element={<PreserveSearchRedirect to="/settings" />} />
+              <Route path="/products" element={<PreserveSearchRedirect to="/dashboard" />} />
+              {/* 未知旧链接 fail-safe 回到当前客户总览，而不是渲染空白页 */}
+              <Route path="*" element={<PreserveSearchRedirect to="/dashboard" />} />
             </Route>
           </Route>
         </Routes>
