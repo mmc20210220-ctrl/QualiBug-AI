@@ -30,6 +30,7 @@
     "test:customer-action-guidance": "node scripts/customer-action-guidance-contract.mjs",
     "test:finding-context-navigation": "node scripts/finding-context-navigation-contract.mjs",
     "test:finding-validation-boundary": "node scripts/finding-validation-boundary-contract.mjs",
+    "test:finding-verification-timeline": "node scripts/finding-verification-timeline-contract.mjs",
     "test:evidence-distribution": "node scripts/evidence-distribution-contract.mjs",
     "test:evidence-share": "node scripts/evidence-share-contract.mjs",
     "test:materials-coverage": "node scripts/materials-coverage-contract.mjs",
