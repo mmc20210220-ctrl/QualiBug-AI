@@ -38,8 +38,8 @@ export function Layout() {
       <main className="main">
         <Topbar navOpen={mobileNavOpen} onToggleNav={() => setMobileNavOpen((open) => !open)} />
         <div className="content">
-          <RunLifecycleBanner />
           <RunCustomerResultSummary />
+          <RunLifecycleBanner />
           <MaterialsOnboardingHandoff />
           <Outlet />
         </div>
