@@ -164,6 +164,48 @@ Online-first 是产品路径优先级，不是新的执行门禁。
 
 **“核心业务理解输入已形成真实可读 source。”**
 
+### 7.1 核心输入覆盖面板
+
+企业资料首页必须进一步把核心输入拆成五个客户可理解的类别：
+
+1. `PRD / 需求` → `source_type === prd`；
+2. `API / 接口` → `source_type === openapi`；
+3. `DB / 数据结构` → `source_type === database_schema | db_design`；
+4. `协作文档` → `source_type === collaboration_document`；
+5. `历史 Bug` → `source_type === historical_bug`。
+
+每一类只统计真实 `active source`。同一类别有多份资料时展示真实数量，例如 `✓ 3 份`。
+
+没有观察到某一类时必须写成：
+
+**“未观察到”**
+
+而不是：
+
+- “缺失”；
+- “未完成”；
+- “必须补充”；
+- “理解失败”。
+
+原因是并非所有企业项目都必须同时具备 DB、历史 Bug 或其他五类资料。
+
+面板顶部可以显示：
+
+`已观察到 N/5 类核心输入`
+
+但这里的 `N/5` 只表示**输入类型分布**，不得解释成：
+
+- 完成率；
+- 资料齐全率；
+- 业务理解准确率；
+- 业务理解完成率；
+- 扫描能力得分；
+- 新的前端运行门禁。
+
+尤其禁止使用 `businessInputCategoryCount < 5` 阻止客户进入运行前检查。真正的执行权威仍是 Run Center 后端 preflight。
+
+如果 material inventory 读取失败，五个类别全部显示“无法确认”，不得把空值变成五个“未观察到”。
+
 ## 8. CI 合同
 
 `test:settings-onboarding` 必须锁定：
@@ -179,6 +221,11 @@ Online-first 是产品路径优先级，不是新的执行门禁。
 - 在线来源动作进入在线连接器区域；
 - material failure 动作进入真实资料清单；
 - 已就绪动作进入 Settings；
+- 五类核心输入必须来自真实 active source；
+- DB 类必须统一计算 `database_schema / db_design`；
+- 未观察到某类输入不得变成必填失败；
+- `N/5` 只能表达已观察输入类别，禁止叫完成率或理解准确率；
+- 五类覆盖不得成为新的前端运行门禁；
 - Run Center preflight 权威保持不变。
 
 ## 9. 非目标
