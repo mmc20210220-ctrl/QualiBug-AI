@@ -7,6 +7,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'u
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 const dashboard = read('src/pages/Dashboard.tsx');
+const dashboardUtils = read('src/lib/dashboard-utils.ts');
 const runCenter = read('src/pages/EnterpriseCampaigns.tsx');
 const findings = read('src/pages/Findings.tsx');
 const packageJson = read('package.json');
@@ -21,6 +22,12 @@ assert(dashboard.includes('下一步：{nextAction.title}'), 'dashboard must sur
 assert(dashboard.includes("resultIncomplete && <button className=\"btn btn-secondary\" onClick={() => navigateToProjectPath('/coverage', project)}>查看未覆盖范围</button>"), 'incomplete results must expose coverage navigation');
 assert(dashboard.includes("{currentScanDefects > 0 && ("), 'regression action should only be primary follow-up when confirmed defects exist');
 assert(dashboard.includes("resultIncomplete ? '导出当前报告' : '导出报告'"), 'incomplete result export must be labeled as a current report, not a final-safe report');
+
+const releaseDecisionStart = dashboardUtils.indexOf('export function releaseDecision');
+const releaseDecisionEnd = dashboardUtils.indexOf('\n}\n\n// ─── Campaign helpers', releaseDecisionStart);
+assert(releaseDecisionStart >= 0 && releaseDecisionEnd > releaseDecisionStart, 'release decision helper must exist');
+const releaseDecisionBody = dashboardUtils.slice(releaseDecisionStart, releaseDecisionEnd);
+assert(releaseDecisionBody.indexOf('if (p0 > 0)') < releaseDecisionBody.indexOf('if (unhealthy || blocked)'), 'confirmed P0 must outrank incomplete coverage or unhealthy scan status in release advice');
 
 assert(runCenter.includes('const runBlockedByPreflight = !loadingPreflight && !preflightReady;'), 'run center must model preflight blocking explicitly');
 assert(runCenter.includes('const runDisabled = running || loadingPreflight || loadingFixtures || runBlockedByPreflight || runBlockedByScenario;'), 'run button must be disabled by real readiness blockers');
