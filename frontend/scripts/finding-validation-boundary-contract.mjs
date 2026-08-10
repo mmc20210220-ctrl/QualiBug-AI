@@ -16,18 +16,18 @@ const data = read('src/api/data.ts');
 const packageJson = read('package.json');
 const ciGate = read('scripts/ci-gate.mjs');
 
-const forbiddenWorkflowTerms = [
-  '人工处理状态',
-  '负责人',
-  '修复版本',
-  '研发反馈',
-  '外部任务链接',
+const forbiddenWorkflowControls = [
+  '<span>人工处理状态</span>',
+  '<span>负责人</span>',
+  '<span>修复版本</span>',
+  '<span>研发反馈</span>',
+  '<span>外部任务链接（可选）</span>',
   '保存协作记录',
   '风险接受 / 误报说明',
   '复制研发交接',
 ];
-for (const term of forbiddenWorkflowTerms) {
-  assert(!card.includes(term), `finding card must not manage enterprise workflow field: ${term}`);
+for (const snippet of forbiddenWorkflowControls) {
+  assert(!card.includes(snippet), `finding card must not expose enterprise workflow control: ${snippet}`);
 }
 assert(!card.includes('updateFindingCollaboration'), 'finding card must not write enterprise collaboration state');
 assert(!card.includes("from '../../api/finding-collaboration'"), 'finding card must not depend on collaboration workflow API');
@@ -35,7 +35,7 @@ assert(card.includes('QualiBug 不记录企业内部负责人、修复版本、�
 assert(card.includes('只判断验证结果，不管理修复过程'), 'finding card must remain a validation surface');
 assert(card.includes('<FindingVerificationPanel'), 'finding card must delegate verification truth to the dedicated validation panel');
 
-assert(verification.includes("export type FindingVerificationState ="), 'finding verification must have an explicit frontend presentation state');
+assert(verification.includes('export type FindingVerificationState ='), 'finding verification must have an explicit frontend presentation state');
 assert(verification.includes("| 'verified_fixed'"), 'verification state must model a verified fix');
 assert(verification.includes("| 'still_failing'"), 'verification state must model a still-failing issue');
 assert(verification.includes("| 'inconclusive'"), 'verification state must model an inconclusive revalidation');
