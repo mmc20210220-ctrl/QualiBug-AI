@@ -928,6 +928,79 @@ def build_discovery_plan(
             key=lambda o: (1 if isinstance(o, dict) and o.get("_low_confidence_source") else 0)
         )
 
+    # ── P0-1: Canonical obligation keys + Coverage Units ──
+    # Semantic uniquification starts at the obligation layer: every obligation
+    # (compiler output, coverage/reasoner/audit/guard/conflict augmentations)
+    # carries its canonical key + coverage unit id, and the pool is merged into
+    # Coverage Units (SPEC §2.1/§2.2). The planner below then budgets by unit
+    # (defect surface) instead of by variant, and each selected unit compiles
+    # once into a multi-arm experiment bundle (SPEC §2.3). Fail-closed: any
+    # failure keeps the existing obligation-variant path with a visible receipt.
+    coverage_unit_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.coverage-unit-registry.v1",
+        "status": "NOT_APPLIED",
+        "reason": "unit_build_skipped",
+    }
+    units: list[dict[str, Any]] = []
+    try:
+        from .coverage_unit_registry import (
+            attach_canonical_obligation_keys,
+            build_coverage_units,
+        )
+
+        obligations = attach_canonical_obligation_keys(
+            obligations, behavior_ir=behavior_ir
+        )
+        unit_pack = build_coverage_units(obligations, behavior_ir=behavior_ir)
+        units = [
+            dict(row)
+            for row in _list(unit_pack.get("coverage_units"))
+            if isinstance(row, dict)
+        ]
+        coverage_unit_receipt = {
+            "schema_version": _text(unit_pack.get("schema_version")),
+            "status": "APPLIED",
+            "obligation_count": int(unit_pack.get("obligation_count") or 0),
+            "unit_count": int(unit_pack.get("unit_count") or 0),
+            "collapsed_variant_count": int(unit_pack.get("collapsed_variant_count") or 0),
+            "average_variants_per_unit": unit_pack.get("average_variants_per_unit"),
+            "max_variants_per_unit": int(unit_pack.get("max_variants_per_unit") or 0),
+        }
+        _planning_logger.info(
+            "coverage_units_built units=%s obligations=%s collapsed=%s",
+            coverage_unit_receipt["unit_count"],
+            coverage_unit_receipt["obligation_count"],
+            coverage_unit_receipt["collapsed_variant_count"],
+        )
+    except Exception as exc:
+        _planning_logger.error(
+            "coverage_unit_build_failed %s: %s",
+            type(exc).__name__,
+            str(exc)[:300],
+            exc_info=exc,
+        )
+        coverage_unit_receipt = {
+            "schema_version": "qualibug.coverage-unit-registry.v1",
+            "status": "FAILED",
+            "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
+    obligations_by_id_for_units: dict[str, dict[str, Any]] = {}
+    unit_by_obligation_id: dict[str, dict[str, Any]] = {}
+    for unit in units:
+        for oid in _list(unit.get("obligation_ids")):
+            unit_by_obligation_id.setdefault(_text(oid), unit)
+    for obl in obligations:
+        if isinstance(obl, dict) and _text(obl.get("obligation_id")):
+            obligations_by_id_for_units[_text(obl.get("obligation_id"))] = obl
+    representative_obligations: list[dict[str, Any]] = []
+    for unit in units:
+        rep_id = _text(unit.get("representative_obligation_id"))
+        rep = obligations_by_id_for_units.get(rep_id)
+        if rep is not None:
+            representative_obligations.append(rep)
+    planning_authority = "coverage_unit" if units else "obligation"
+
     # ── Space Coordinate Annotation + Exploration Infrastructure ──
     from .space_coordinate import coordinate_from_obligation
     from .invariant_graph import build_default_invariant_graph
@@ -1005,8 +1078,19 @@ def build_discovery_plan(
     _runtime_contract_for_materialization = _dict(
         inputs.campaign_context.get("_runtime_contract")
     )
+    # ── P0-1: compile once per Coverage Unit (representative obligation) ──
+    # The full obligation pool is 5001+ rows whose variants differ mainly by
+    # actor/source-rule/input; compiling every variant multiplies the compile
+    # phase ~Nx (run16: 28344 compiled experiments from 5001 obligations).
+    # Compiling the unit representative once preserves every semantic surface
+    # (the representative's own input variants still expand inside the batch);
+    # the other variants of SELECTED units become cheap actor-rebinding arms
+    # after planning. Fail-closed: units whose representative does not compile
+    # fall back to compiling all their variants individually (today's behavior
+    # for that unit), so no executable variant is ever lost.
+    compile_input = representative_obligations if representative_obligations else obligations
     experiment_pack = compile_experiments(
-        obligations,
+        compile_input,
         behavior_ir=behavior_ir,
         environment_type=environment_type,
         policy_version=_text(inputs.campaign_context.get("policy_version")),
@@ -1024,6 +1108,107 @@ def build_discovery_plan(
             "runtime_contract": _runtime_contract_for_materialization,
         },
     )
+    representative_compile_receipt = {
+        "status": "APPLIED",
+        "compile_input_count": len(compile_input),
+        "obligation_pool_count": len(obligations),
+        "unit_count": len(units),
+        "compiled_count": int(experiment_pack.get("compiled_count") or 0),
+        "blocked_count": int(experiment_pack.get("blocked_count") or 0),
+        "abstract_count": int(experiment_pack.get("abstract_count") or 0),
+    }
+    # ── Fail-closed fallback: units whose representative did not compile ──
+    fallback_variants: list[dict[str, Any]] = []
+    for unit in units:
+        rep_id = _text(unit.get("representative_obligation_id"))
+        rep = obligations_by_id_for_units.get(rep_id) or {}
+        if _text(rep.get("compile_status")).upper() == "COMPILED":
+            continue
+        for oid in _list(unit.get("obligation_ids")):
+            if _text(oid) == rep_id:
+                continue
+            variant = obligations_by_id_for_units.get(_text(oid))
+            if variant is not None:
+                fallback_variants.append(variant)
+    if fallback_variants:
+        fallback_pack = compile_experiments(
+            fallback_variants,
+            behavior_ir=behavior_ir,
+            environment_type=environment_type,
+            policy_version=_text(inputs.campaign_context.get("policy_version")),
+            available_adapters=_available_adapters,
+            planning_context={
+                "root": inputs.root,
+                "project": inputs.project,
+                "base_url": _text(
+                    _runtime_contract_for_materialization.get("approved_base_url")
+                    or inputs.approved_base_url
+                ),
+                "campaign_id": _text(inputs.campaign_context.get("campaign_id")),
+                "available_adapters": _available_adapters,
+                "environment_type": environment_type,
+                "runtime_contract": _runtime_contract_for_materialization,
+            },
+        )
+        for key in ("experiments", "blocked_experiments", "abstract_experiments"):
+            experiment_pack[key] = list(_list(experiment_pack.get(key))) + list(
+                _list(fallback_pack.get(key))
+            )
+        experiment_pack["compiled_count"] = int(experiment_pack.get("compiled_count") or 0) + int(
+            fallback_pack.get("compiled_count") or 0
+        )
+        experiment_pack["blocked_count"] = int(experiment_pack.get("blocked_count") or 0) + int(
+            fallback_pack.get("blocked_count") or 0
+        )
+        experiment_pack["abstract_count"] = int(experiment_pack.get("abstract_count") or 0) + int(
+            fallback_pack.get("abstract_count") or 0
+        )
+        # ── Fail-closed representative promotion ──
+        # A unit whose representative did not compile is still selectable when
+        # one of its variants compiled: promote the highest-confidence compiled
+        # variant to representative (deterministic), so the unit keeps a
+        # compile-ready face and no executable variant is lost from selection.
+        promoted_count = 0
+        for unit in units:
+            rep_id = _text(unit.get("representative_obligation_id"))
+            rep = obligations_by_id_for_units.get(rep_id) or {}
+            if _text(rep.get("compile_status")).upper() == "COMPILED":
+                continue
+            compiled_variants = [
+                oid
+                for oid in _list(unit.get("obligation_ids"))
+                if _text(
+                    _dict(obligations_by_id_for_units.get(_text(oid))).get("compile_status")
+                ).upper()
+                == "COMPILED"
+            ]
+            if not compiled_variants:
+                continue
+            ordered = sorted(
+                compiled_variants,
+                key=lambda oid: (
+                    -float(obligations_by_id_for_units[oid].get("confidence") or 0.0),
+                    oid,
+                ),
+            )
+            unit["representative_obligation_id"] = ordered[0]
+            unit["obligation_ids"] = [
+                _text(oid)
+                for oid in _list(unit.get("obligation_ids"))
+                if _text(oid)
+            ]
+            promoted_count += 1
+        representative_compile_receipt.update({
+            "fallback_variant_compile_count": len(fallback_variants),
+            "fallback_compiled_count": int(fallback_pack.get("compiled_count") or 0),
+            "representative_promoted_count": promoted_count,
+        })
+        _planning_logger.info(
+            "coverage_unit_compile_fallback variants=%s compiled=%s promoted=%s",
+            len(fallback_variants),
+            fallback_pack.get("compiled_count"),
+            promoted_count,
+        )
     experiment_pack = attach_fixture_dag_to_experiments(
         experiment_pack,
         behavior_ir=behavior_ir,
@@ -1171,24 +1356,221 @@ def build_discovery_plan(
             "learned_knowledge_load_failed consumption_degraded failure=%s",
             _learning_boost_index.get("load_failure"),
         )
+    # ── P0-1: plan by Coverage Unit (budget counts defect surfaces) ──
+    # ``plan_coverage_unit_round`` selects units — duplicate role/source/input
+    # variants of one surface consume ONE budget slot. Selected units then
+    # expand their remaining variants into actor-rebinding arms (multi-arm
+    # Experiment Bundle: one compile per unit, N execution arms). Fail-closed:
+    # any unit-planning failure falls back to the obligation-variant planner.
+    _history_receipt_ids = (
+        [_text(history_receipt.get("receipt_id"))]
+        if (
+            history_match_status
+            in {"MATCHED", "MATCHED_HISTORY_HAS_NO_FAMILY_METRICS"}
+            and _text(history_receipt.get("receipt_id"))
+        )
+        else []
+    )
     obligation_plan = plan_obligation_round(
         obligations,
         experiments_by_obligation=by_obligation,
         behavior_ir=behavior_ir,
         budget=budget,
         historical_yield=historical_yield,
-        historical_receipt_ids=(
-            [_text(history_receipt.get("receipt_id"))]
-            if (
-                history_match_status
-                in {"MATCHED", "MATCHED_HISTORY_HAS_NO_FAMILY_METRICS"}
-                and _text(history_receipt.get("receipt_id"))
-            )
-            else []
-        ),
+        historical_receipt_ids=_history_receipt_ids,
         cold_start_reason=history_match_status,
         learned_boost_index=_learning_boost_index,
     )
+    if planning_authority == "coverage_unit":
+        try:
+            from .adaptive_discovery_planner import plan_coverage_unit_round
+            from .coverage_unit_registry import (
+                MAX_ARMS_PER_UNIT as _UNIT_ARM_CAP,
+                derive_arm_experiment,
+            )
+
+            obligation_plan = plan_coverage_unit_round(
+                units,
+                obligations_by_id=obligations_by_id_for_units,
+                experiments_by_obligation=by_obligation,
+                behavior_ir=behavior_ir,
+                budget=budget,
+                historical_yield=historical_yield,
+                historical_receipt_ids=_history_receipt_ids,
+                cold_start_reason=history_match_status,
+                learned_boost_index=_learning_boost_index,
+            )
+            planning_authority = "coverage_unit"
+        except Exception as exc:
+            _planning_logger.error(
+                "coverage_unit_planning_failed falling_back_to_obligation_planning %s: %s",
+                type(exc).__name__,
+                str(exc)[:300],
+                exc_info=exc,
+            )
+            planning_authority = "obligation"
+
+    # ── P0-1: multi-arm Experiment Bundle derivation for selected units ──
+    # Each selected unit compiles ONCE (representative); the remaining role
+    # variants become execution arms by actor-rebinding the representative's
+    # compiled experiments. Fail-closed: an arm that cannot be derived (stale
+    # actor references, actor not in representative, cap exceeded) falls back
+    # to a normal independent compile — no variant is ever lost.
+    arm_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.coverage-unit-arm-receipt.v1",
+        "status": "NOT_APPLIED",
+        "reason": "obligation_planning",
+    }
+    if planning_authority == "coverage_unit":
+        unit_by_id = {
+            _text(unit.get("coverage_unit_id")): unit
+            for unit in units
+            if _text(unit.get("coverage_unit_id"))
+        }
+        _experiment_rows = [
+            dict(row)
+            for row in _list(experiment_pack.get("experiments"))
+            if isinstance(row, dict)
+        ]
+        arm_experiments: list[dict[str, Any]] = []
+        arm_fallback_obligation_ids: list[str] = []
+        arm_derived_count = 0
+        arm_failed_count = 0
+        arm_capped_count = 0
+        for unit_row in _list(obligation_plan.get("selected_units")):
+            unit = unit_by_id.get(_text(unit_row.get("coverage_unit_id")))
+            if unit is None:
+                continue
+            rep_id = _text(unit_row.get("obligation_id"))
+            unit_id = _text(unit.get("coverage_unit_id"))
+            variant_ids = [
+                _text(oid)
+                for oid in _list(unit.get("obligation_ids"))
+                if _text(oid) and _text(oid) != rep_id
+            ]
+            if not variant_ids:
+                continue
+            # Representative's own compiled experiments (primary + its input
+            # variants) are the arm sources: same semantic surface, actor-only
+            # difference.
+            rep_experiments = [
+                exp
+                for exp in _experiment_rows
+                if _text(exp.get("obligation_id")) == rep_id
+                or _text(exp.get("expanded_from_obligation_id")) == rep_id
+                or _text(exp.get("obligation_id") or "").startswith(f"{rep_id}__v_")
+            ]
+            if not rep_experiments:
+                arm_fallback_obligation_ids.extend(variant_ids)
+                continue
+            for index, variant_id in enumerate(variant_ids[:_UNIT_ARM_CAP]):
+                variant = obligations_by_id_for_units.get(variant_id)
+                if variant is None:
+                    continue
+                derived_any = False
+                for rep_exp in rep_experiments:
+                    arm, receipt = derive_arm_experiment(
+                        rep_exp,
+                        variant,
+                        coverage_unit_id=unit_id,
+                        representative_obligation_id=rep_id,
+                        arm_index=index,
+                    )
+                    if arm is None:
+                        break
+                    derived_any = True
+                    arm_experiments.append(arm)
+                if derived_any:
+                    arm_derived_count += 1
+                else:
+                    arm_failed_count += 1
+                    arm_fallback_obligation_ids.append(variant_id)
+            if len(variant_ids) > _UNIT_ARM_CAP:
+                arm_capped_count += len(variant_ids) - _UNIT_ARM_CAP
+                arm_fallback_obligation_ids.extend(variant_ids[_UNIT_ARM_CAP:])
+        # Fail-closed fallback compile for undeliverable arms
+        if arm_fallback_obligation_ids:
+            fallback_arm_obligations = [
+                obligations_by_id_for_units[oid]
+                for oid in dict.fromkeys(arm_fallback_obligation_ids)
+                if oid in obligations_by_id_for_units
+            ]
+            if fallback_arm_obligations:
+                arm_fallback_pack = compile_experiments(
+                    fallback_arm_obligations,
+                    behavior_ir=behavior_ir,
+                    environment_type=environment_type,
+                    policy_version=_text(inputs.campaign_context.get("policy_version")),
+                    available_adapters=_available_adapters,
+                    planning_context={
+                        "root": inputs.root,
+                        "project": inputs.project,
+                        "base_url": _text(
+                            _runtime_contract_for_materialization.get("approved_base_url")
+                            or inputs.approved_base_url
+                        ),
+                        "campaign_id": _text(inputs.campaign_context.get("campaign_id")),
+                        "available_adapters": _available_adapters,
+                        "environment_type": environment_type,
+                        "runtime_contract": _runtime_contract_for_materialization,
+                    },
+                )
+                for key in ("experiments", "blocked_experiments", "abstract_experiments"):
+                    experiment_pack[key] = list(_list(experiment_pack.get(key))) + list(
+                        _list(arm_fallback_pack.get(key))
+                    )
+                experiment_pack["compiled_count"] = int(
+                    experiment_pack.get("compiled_count") or 0
+                ) + int(arm_fallback_pack.get("compiled_count") or 0)
+                _planning_logger.info(
+                    "coverage_unit_arm_fallback_compile obligations=%s compiled=%s",
+                    len(fallback_arm_obligations),
+                    arm_fallback_pack.get("compiled_count"),
+                )
+        # Merge arms into the experiment index and the selected set
+        if arm_experiments:
+            experiment_pack["experiments"] = (
+                list(_list(experiment_pack.get("experiments"))) + arm_experiments
+            )
+            experiment_pack["compiled_count"] = int(
+                experiment_pack.get("compiled_count") or 0
+            ) + len(arm_experiments)
+            all_experiments.extend(dict(arm) for arm in arm_experiments)
+            for arm in arm_experiments:
+                arm_id = _text(arm.get("obligation_id"))
+                if arm_id and arm_id not in by_obligation:
+                    by_obligation[arm_id] = arm
+            obligation_plan["selected"] = list(_list(obligation_plan.get("selected"))) + [
+                {
+                    "obligation_id": _text(arm.get("obligation_id")),
+                    "risk_family": _text(arm.get("risk_family")),
+                    "path_prefix": _text(
+                        _dict(arm.get("property")).get("operation_path_prefix")
+                    ),
+                    "operation_key": "",
+                    "score": float(arm.get("arm_index") or 0),
+                    "experiment_id": _text(arm.get("experiment_id")),
+                    "coverage_unit_id": _text(arm.get("coverage_unit_id")),
+                    "arm_index": int(arm.get("arm_index") or 0),
+                }
+                for arm in arm_experiments
+            ]
+        arm_receipt = {
+            "schema_version": "qualibug.coverage-unit-arm-receipt.v1",
+            "status": "APPLIED",
+            "arms_derived": arm_derived_count,
+            "arm_experiment_count": len(arm_experiments),
+            "arm_failed_count": arm_failed_count,
+            "arm_capped_count": arm_capped_count,
+            "arm_fallback_compile_count": len(dict.fromkeys(arm_fallback_obligation_ids)),
+            "max_arms_per_unit": _UNIT_ARM_CAP,
+        }
+        _planning_logger.info(
+            "coverage_unit_arms status=APPLIED derived=%s experiments=%s fallback=%s",
+            arm_derived_count,
+            len(arm_experiments),
+            arm_receipt["arm_fallback_compile_count"],
+        )
     _boosted_rows = [
         {
             "obligation_id": _text(row.get("obligation_id")),
@@ -1348,6 +1730,10 @@ def build_discovery_plan(
             "obligation_plan": obligation_plan,
             "planning_budget_receipt": budget_receipt,
             "agent_intent_plan": agent_intent_plan,
+            "coverage_unit_receipt": coverage_unit_receipt,
+            "coverage_unit_compile_receipt": representative_compile_receipt,
+            "coverage_unit_arm_receipt": arm_receipt,
+            "planning_authority": planning_authority,
             "agent_semantic_link_receipt": agent_semantic_link_receipt,
             "runtime_source_overlay_receipt": dict(
                 _dict(asset.get("runtime_source_overlay"))

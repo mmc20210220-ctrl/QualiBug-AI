@@ -291,6 +291,17 @@ def _write_group_key(
         return ("barrier", interface_key)
     if resource_key:
         return ("res", interface_key, resource_key)
+    # ── P0-1: Coverage Unit arms serialize within one unit ──
+    # Execution arms of one Coverage Unit probe the same defect surface with
+    # different actors on the same resource domain; when the concrete resource
+    # instance is unknown, arms must still share ONE serial group (fixture /
+    # account-state competition between role variants would otherwise race).
+    # The unit group override applies only to experiments carrying
+    # ``coverage_unit_id`` (unit representatives and derived arms); every other
+    # experiment keeps the exact previous grouping semantics.
+    _unit_group = _text(exp.get("coverage_unit_id"))
+    if _unit_group:
+        return ("unit", interface_key, _unit_group)
     actor_ref = _actor_ref_of(exp) or _step_actors(exp, write_steps)
     return ("iface", interface_key, actor_ref or "unknown")
 

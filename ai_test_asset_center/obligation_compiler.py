@@ -642,6 +642,14 @@ def compile_obligations_from_behavior_ir(
         *additions,
         *sod_obligations,
     ])
+    # ── P0-1: canonical obligation key at generation time ──
+    # Semantic uniquification starts at the obligation layer: every compiled
+    # obligation carries its canonical key + coverage unit id so the planner
+    # can budget by defect surface instead of by variant. Key derivation is
+    # structural and industry-neutral (see coverage_unit_registry).
+    from .coverage_unit_registry import attach_canonical_obligation_keys
+
+    obligations = attach_canonical_obligation_keys(obligations, behavior_ir=normalized_ir)
     gaps = []
     for gap in _list(output.get("coverage_gaps")):
         if not isinstance(gap, dict):

@@ -558,6 +558,396 @@ def plan_obligation_round(
     }
 
 
+# ── P0-1: Coverage Unit planning ──
+# Budget counts semantic units (canonical obligation keys), never variants.
+# A unit's variants (actor/input variants) share one defect surface; selecting
+# the unit once covers the surface, and its variants become execution arms.
+COVERAGE_UNIT_PLAN_SCHEMA = "qualibug.adaptive-obligation-plan.v1"
+
+
+def _unit_representative_row(
+    unit: dict[str, Any],
+    *,
+    obligations_by_id: dict[str, dict[str, Any]],
+    experiments_by_obligation: dict[str, dict[str, Any]],
+    operations_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Project a unit onto its representative obligation row for ranking.
+
+    The representative is the compile-ready face of the unit (compile status
+    gate unchanged); unit-level fields (variant_count, actor_variants) ride
+    along so selection and receipts stay unit-accounted.
+    """
+    representative_id = _text(unit.get("representative_obligation_id"))
+    representative = obligations_by_id.get(representative_id)
+    if representative is None:
+        return None
+    oid = _text(representative.get("obligation_id"))
+    experiment = _dict(experiments_by_obligation.get(oid))
+    compile_status = _text(_dict(experiment.get("compile_receipt")).get("status")).upper()
+    if not compile_status:
+        compile_status = _text(representative.get("compile_status")).upper()
+    path_prefix, operation_key, _resolved_path = _resolve_operation_path(
+        representative,
+        experiments_by_obligation=experiments_by_obligation,
+        operations_by_id=operations_by_id,
+    )
+    return {
+        "obligation_id": oid,
+        "coverage_unit_id": _text(unit.get("coverage_unit_id")),
+        "canonical_obligation_key": _text(unit.get("canonical_obligation_key")),
+        "variant_count": int(unit.get("variant_count") or 1),
+        "actor_variants": [
+            _text(value)
+            for value in _list(unit.get("actor_variants"))
+            if _text(value)
+        ],
+        "obligation_ids": [
+            _text(value)
+            for value in _list(unit.get("obligation_ids"))
+            if _text(value)
+        ],
+        "risk_family": _text(representative.get("risk_family")),
+        "path_prefix": path_prefix,
+        "operation_key": operation_key,
+        "compile_status": compile_status,
+    }
+
+
+def plan_coverage_unit_round(
+    units: list[dict[str, Any]],
+    *,
+    obligations_by_id: dict[str, dict[str, Any]],
+    experiments_by_obligation: dict[str, dict[str, Any]],
+    behavior_ir: dict[str, Any] | None = None,
+    budget: int = 600,
+    historical_yield: dict[str, float] | None = None,
+    historical_receipt_ids: list[str] | None = None,
+    cold_start_reason: str = "NO_MATCHING_HISTORY",
+    covered_keys: set[str] | None = None,
+    type_minimum_guarantees: dict[str, int] | None = None,
+    learned_boost_index: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Select Coverage Units (not variants) that maximize information gain.
+
+    P0-1 semantics: the budget counts semantic units, so duplicate role/source/
+    input variants of one defect surface consume ONE slot instead of N. A
+    selected unit's variants stay available for multi-arm execution (one
+    compile per unit) — ``selected`` rows are obligation-level (representative)
+    so downstream intent binding and execution keep working unchanged.
+
+    Fail-closed: units whose representative is not COMPILED are not selectable
+    (readiness gate, same as obligation planning); units that cannot merge
+    remain singleton units and select exactly as before.
+    """
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+        raise ValueError("obligation_budget_invalid")
+    experiments = dict(experiments_by_obligation or {})
+    operations_by_id = {
+        _text(_dict(row).get("id")): dict(row)
+        for row in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(row, dict) and _text(_dict(row).get("id"))
+    }
+    covered = set(covered_keys or [])
+    ranked: list[dict[str, Any]] = []
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        row = _unit_representative_row(
+            unit,
+            obligations_by_id=obligations_by_id,
+            experiments_by_obligation=experiments,
+            operations_by_id=operations_by_id,
+        )
+        if row is None:
+            continue
+        if row["compile_status"] != "COMPILED":
+            continue
+        representative = obligations_by_id[row["obligation_id"]]
+        score = score_obligation(
+            representative,
+            covered_keys=covered,
+            historical_yield=historical_yield,
+        )
+        _boosted_score = score
+        _boost_matches: list[dict[str, Any]] = []
+        if learned_boost_index:
+            from .learning_knowledge_consumption import apply_learned_boost
+
+            _boosted_score, _boost_matches = apply_learned_boost(
+                score=score,
+                risk_family=row["risk_family"],
+                path_prefix=row["path_prefix"],
+                resolved_path=row["operation_key"],
+                boost_index=learned_boost_index,
+            )
+        ranked.append({
+            **row,
+            "score": round(_boosted_score, 6),
+            "learned_boost": (
+                {
+                    "base_score": round(score, 6),
+                    "boost_factor": round(_boosted_score / score, 6) if score else 1.0,
+                    "matches": _boost_matches,
+                }
+                if _boost_matches
+                else None
+            ),
+        })
+    ranked.sort(key=lambda item: (-item["score"], item["coverage_unit_id"]))
+
+    guarantees = dict(type_minimum_guarantees or DEFAULT_TYPE_MINIMUM_GUARANTEES)
+    total_guaranteed = sum(guarantees.values())
+    if total_guaranteed > budget:
+        scale = budget / max(1, total_guaranteed)
+        guarantees = {k: max(1, int(v * scale)) for k, v in guarantees.items()}
+
+    selected: list[dict[str, Any]] = []
+    selected_unit_ids: set[str] = set()
+    family_counts: dict[str, int] = {}
+    prefix_counts: dict[str, int] = {}
+    operation_counts: dict[str, int] = {}
+
+    def _add_item(item: dict[str, Any]) -> None:
+        selected.append(item)
+        selected_unit_ids.add(item["coverage_unit_id"])
+        family = item["risk_family"]
+        if family:
+            family_counts[family] = family_counts.get(family, 0) + 1
+        prefix = item["path_prefix"]
+        if prefix:
+            prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+        op_key = item["operation_key"]
+        if op_key:
+            operation_counts[op_key] = operation_counts.get(op_key, 0) + 1
+
+    present_guaranteed_families = {
+        item["risk_family"]
+        for item in ranked
+        if item["risk_family"] in guarantees
+    }
+    present_families = {
+        item["risk_family"] for item in ranked if item["risk_family"]
+    }
+    if budget >= len(present_families):
+        remaining_guarantees = {
+            family: minimum
+            for family, minimum in guarantees.items()
+            if family in present_guaranteed_families
+        }
+        for item in ranked:
+            if len(selected) >= budget:
+                break
+            family = item["risk_family"]
+            if remaining_guarantees.get(family, 0) <= 0:
+                continue
+            _add_item(item)
+            remaining_guarantees[family] -= 1
+
+    families_present = sorted({item["risk_family"] for item in ranked if item["risk_family"]})
+    prefixes_present = sorted({item["path_prefix"] for item in ranked if item["path_prefix"]})
+    operations_present = sorted({item["operation_key"] for item in ranked if item["operation_key"]})
+    family_soft_cap = max(2, budget // max(1, len(families_present)))
+    prefix_soft_cap = max(2, budget // max(1, len(prefixes_present)))
+    operation_soft_cap = max(2, budget // max(1, len(operations_present)))
+
+    def _try_add(item: dict[str, Any], *, respect_soft_caps: bool = True) -> bool:
+        if len(selected) >= budget or item["coverage_unit_id"] in selected_unit_ids:
+            return False
+        family = item["risk_family"]
+        prefix = item["path_prefix"]
+        op_key = item["operation_key"]
+        if respect_soft_caps:
+            if family and family_counts.get(family, 0) >= family_soft_cap:
+                return False
+            if prefix and prefix_counts.get(prefix, 0) >= prefix_soft_cap:
+                return False
+            if op_key and operation_counts.get(op_key, 0) >= operation_soft_cap:
+                return False
+        _add_item(item)
+        return True
+
+    for item in ranked:
+        if family_counts.get(item["risk_family"], 0) < 1:
+            _try_add(item, respect_soft_caps=False)
+
+    uncovered_by_prefix: dict[str, list[dict[str, Any]]] = {}
+    for item in ranked:
+        prefix = item["path_prefix"]
+        if not prefix or prefix_counts.get(prefix, 0) >= 1:
+            continue
+        uncovered_by_prefix.setdefault(prefix, []).append(item)
+    for prefix in uncovered_by_prefix:
+        candidates = uncovered_by_prefix[prefix]
+        candidates.sort(key=lambda row: (-float(row["score"]), row["coverage_unit_id"]))
+        _try_add(candidates[0], respect_soft_caps=False)
+
+    for item in ranked:
+        op_key = item["operation_key"]
+        if op_key and operation_counts.get(op_key, 0) < 1:
+            _try_add(item, respect_soft_caps=False)
+
+    progressed = True
+    while len(selected) < budget and progressed:
+        progressed = False
+        for family in families_present:
+            if len(selected) >= budget:
+                break
+            if family_counts.get(family, 0) >= family_soft_cap:
+                continue
+            for item in ranked:
+                if item["risk_family"] != family or item["coverage_unit_id"] in selected_unit_ids:
+                    continue
+                if _try_add(item):
+                    progressed = True
+                break
+        for prefix in prefixes_present:
+            if len(selected) >= budget:
+                break
+            if prefix_counts.get(prefix, 0) >= prefix_soft_cap:
+                continue
+            for item in ranked:
+                if item["path_prefix"] != prefix or item["coverage_unit_id"] in selected_unit_ids:
+                    continue
+                if _try_add(item):
+                    progressed = True
+                break
+        for op_key in operations_present:
+            if len(selected) >= budget:
+                break
+            if operation_counts.get(op_key, 0) >= operation_soft_cap:
+                continue
+            for item in ranked:
+                if item["operation_key"] != op_key or item["coverage_unit_id"] in selected_unit_ids:
+                    continue
+                if _try_add(item):
+                    progressed = True
+                break
+
+    for prefer_uncovered_only in (True, False):
+        for item in ranked:
+            if len(selected) >= budget:
+                break
+            op_key = item["operation_key"]
+            prefix = item["path_prefix"]
+            uncovered = (
+                (op_key and operation_counts.get(op_key, 0) < 1)
+                or (prefix and prefix_counts.get(prefix, 0) < 1)
+            )
+            if prefer_uncovered_only and not uncovered:
+                continue
+            _try_add(item, respect_soft_caps=True)
+
+    for item in ranked:
+        if len(selected) >= budget:
+            break
+        if item["coverage_unit_id"] in selected_unit_ids:
+            continue
+        _add_item(item)
+
+    pending: list[dict[str, Any]] = []
+    for item in ranked:
+        if item["coverage_unit_id"] in selected_unit_ids:
+            continue
+        reason = "BUDGET_EXHAUSTED"
+        family = item["risk_family"]
+        if family and family_counts.get(family, 0) >= family_soft_cap:
+            reason = "TYPE_QUOTA_EXHAUSTED"
+        elif item["score"] < 0.01:
+            reason = "LOW_CONFIDENCE"
+        pending.append({**item, "not_in_plan_reason": reason})
+
+    # ── P0-1: dedup by coverage unit (canonical key) — variants of one unit
+    # never consume separate pending slots; then cost ranking + mechanism
+    # quota + governed truncation mirror obligation planning.
+    _seen_pending_unit_ids: set[str] = set()
+    _deduped: list[dict[str, Any]] = []
+    _dedup_removed = 0
+    for row in pending:
+        unit_id = row["coverage_unit_id"]
+        if unit_id in _seen_pending_unit_ids:
+            _dedup_removed += 1
+            continue
+        _seen_pending_unit_ids.add(unit_id)
+        _deduped.append(row)
+    _deduped.sort(key=lambda r: (-float(r.get("score") or 0), r["coverage_unit_id"]))
+
+    _MECHANISM_MIN_QUOTA = 5
+    _mechanism_counts: dict[str, int] = {}
+    _quota_ordered: list[dict[str, Any]] = []
+    _overflow: list[dict[str, Any]] = []
+    for row in _deduped:
+        fam = row.get("risk_family") or "unknown"
+        count = _mechanism_counts.get(fam, 0)
+        if count < _MECHANISM_MIN_QUOTA:
+            _quota_ordered.append(row)
+            _mechanism_counts[fam] = count + 1
+        else:
+            _overflow.append(row)
+    _ranked_pending = _quota_ordered + _overflow
+
+    _truncation_reason = ""
+    _truncated_count = 0
+    if len(_ranked_pending) > _ABS_MAX_SLICE_BUDGET:
+        _truncated_count = len(_ranked_pending) - _ABS_MAX_SLICE_BUDGET
+        _truncation_reason = (
+            f"POOL_SIZE_{len(_ranked_pending)}_EXCEEDS_ABS_MAX_{_ABS_MAX_SLICE_BUDGET}"
+        )
+        _ranked_pending = _ranked_pending[:_ABS_MAX_SLICE_BUDGET]
+
+    selected_variant_count = sum(
+        int(item.get("variant_count") or 1) for item in selected
+    )
+    return {
+        "schema_version": COVERAGE_UNIT_PLAN_SCHEMA,
+        "plan_authority": "coverage_unit",
+        "budget": budget,
+        "history_status": "OBSERVED" if historical_yield else "COLD_START",
+        "cold_start_reason": "" if historical_yield else _text(cold_start_reason),
+        "formal_yield_status": (
+            "MEASURED"
+            if any(
+                str(key).startswith("formal_yield:")
+                for key in _dict(historical_yield)
+            )
+            else "NOT_MEASURED"
+        ),
+        "historical_receipt_ids": [
+            _text(value)
+            for value in _list(historical_receipt_ids)
+            if _text(value)
+        ],
+        # Obligation-level rows (representatives) — downstream intent binding
+        # and execution consume the same shape as obligation planning.
+        "selected": selected,
+        "selected_units": [
+            {key: item[key] for key in (
+                "coverage_unit_id",
+                "canonical_obligation_key",
+                "obligation_id",
+                "variant_count",
+                "actor_variants",
+                "obligation_ids",
+                "risk_family",
+                "score",
+            ) if key in item}
+            for item in selected
+        ],
+        "pending_next_round": _ranked_pending,
+        "selected_count": len(selected),
+        "selected_unit_count": len(selected),
+        "selected_variant_count": selected_variant_count,
+        "pending_count": len(pending),
+        "pending_dedup_removed": _dedup_removed,
+        "pending_truncated": _truncated_count,
+        "pending_truncation_reason": _truncation_reason,
+        "family_coverage": family_counts,
+        "path_prefix_coverage": prefix_counts,
+        "operation_coverage": operation_counts,
+        "stop_condition": "budget_exhausted" if pending else "in_scope_units_scheduled",
+    }
+
+
 def _source_refs(*values: Any) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
