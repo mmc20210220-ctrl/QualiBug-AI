@@ -1,34 +1,40 @@
-"""Privacy-field protocol facade over the current validation-aware compiler."""
+"""Protocol facade with fail-closed validation-mutation authority.
+
+The historical protocol facade lives in ``_experiment_protocols_mechanics``.
+This layer preserves every registered/built-in protocol and adds one authority
+gate after compilation: a validation mutation must be traceable to either an
+explicit request/source constraint or a source rule whose own semantics decide
+the mutation. Request-example shape and field-name vocabulary are never enough
+to manufacture a formal validation experiment.
+"""
 from __future__ import annotations
 
 import re
 from typing import Any
 
-from . import experiment_protocols_privacy_base as _base
-from .experiment_protocols_privacy_base import *  # noqa: F401,F403
+from . import _experiment_protocols_mechanics as _core
+from ._experiment_protocols_mechanics import *  # noqa: F401,F403
 
+_original_compile_family_protocol = _core.compile_family_protocol
 
-PRIVACY_FIELD_ASSERTION_KIND = "privacy_field_policy"
-
-# ── V1.5.0: Lazy one-time registration of multi-step protocols ──
-_v150_protocols_registered = False
-
-
-def _ensure_v150_protocols() -> None:
-    """Register V1.5.0 multi-step protocols once (idempotent)."""
-    global _v150_protocols_registered
-    if _v150_protocols_registered:
-        return
-    _v150_protocols_registered = True
-    try:
-        from .multi_step_protocol import register_v150_multi_step_protocols
-        register_v150_multi_step_protocols()
-    except Exception:  # noqa: BLE001 - registration failure must not abort compile
-        pass
+_SOURCE_RUNTIME_MUTATION_CLASSES = frozenset({
+    "runtime_entity_state_violation",
+    "runtime_amount_boundary_violation",
+    "runtime_scope_violation",
+    "runtime_account_state_violation",
+})
 
 
 def __getattr__(name: str) -> Any:
-    return getattr(_base, name)
+    return getattr(_core, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_core)))
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _list(value: Any) -> list[Any]:
@@ -39,64 +45,178 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _valid_tokens(value: Any) -> list[str | int]:
-    tokens = _list(value)
-    if not tokens or not all(
-        (isinstance(token, str) and bool(token))
-        or (isinstance(token, int) and not isinstance(token, bool) and token >= 0)
-        for token in tokens
-    ):
-        return []
-    return list(tokens)
-
-
-def _compile_registered_protocol(
-    registration: dict[str, Any],
-    **envelope: Any,
-) -> dict[str, Any]:
-    """Run a registered protocol compiler and validate its plan.
-
-    A registered protocol is not trusted more than a built-in one: its result goes through
-    the same shape validation, and any failure becomes BLOCKED with the protocol id in the
-    detail so the cause is attributable to the registration rather than to the obligation.
-    """
-    from .experiment_protocol_registry import (
-        ProtocolRegistryError,
-        validate_registered_protocol_result,
+def _source_semantic_text(property_spec: dict[str, Any]) -> str:
+    prop = _dict(property_spec)
+    expression = _dict(prop.get("expression"))
+    return "\n".join(
+        _text(value)
+        for value in (
+            expression.get("raw"),
+            prop.get("source_intent"),
+            prop.get("description"),
+            prop.get("source_rule_statement"),
+        )
+        if _text(value)
     )
 
-    protocol_id = _text(registration.get("protocol_id"))
-    try:
-        raw = registration["compiler"](dict(envelope))
-        result = validate_registered_protocol_result(raw, registration=registration)
-    except ProtocolRegistryError as exc:
-        return {
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_REGISTERED_PROTOCOL_INVALID",
-            "detail": f"registered_protocol_invalid:{protocol_id}:{exc}"[:200],
-        }
-    except Exception as exc:  # noqa: BLE001 - reported as BLOCKED, never escapes the loop
-        return {
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_REGISTERED_PROTOCOL_INVALID",
-            "detail": (
-                f"registered_protocol_raised:{protocol_id}:{type(exc).__name__}:{exc}"
-            )[:200],
-        }
-    result["_registry_protocol_id"] = protocol_id
-    if registration.get("observers"):
-        result.setdefault("observers", [
-            {"observer_id": observer_id} for observer_id in registration["observers"]
-        ])
-    if registration.get("per_step_evidence"):
-        result["per_step_evidence"] = True
-    return result
+
+def _source_bound_property(property_spec: dict[str, Any]) -> bool:
+    prop = _dict(property_spec)
+    return any(
+        _text(prop.get(field))
+        for field in (
+            "invariant_ref",
+            "source_rule_ref",
+            "source_rule_statement",
+            "source_intent",
+        )
+    )
 
 
-def _resolve_family_protocol(risk_family: str, template: str) -> dict[str, Any] | None:
-    from .experiment_protocol_registry import resolve_family_protocol
+def _mutation_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for raw in _list(result.get("treatment_plan")):
+        if not isinstance(raw, dict):
+            continue
+        mutation = _dict(raw.get("mutation"))
+        if mutation:
+            rows.append(mutation)
+    return rows
 
-    return resolve_family_protocol(risk_family, template)
+
+def _semantic_constraint_declared(
+    constraint: str,
+    semantic_text: str,
+) -> bool:
+    """Whether the source statement itself declares this semantic mutation."""
+
+    constraint = _text(constraint).lower()
+    text = _text(semantic_text).lower()
+    if not constraint or not text:
+        return False
+
+    if "sql_injection_probe" in constraint:
+        return any(
+            token in text
+            for token in (
+                "参数化", "拼接", "注入", "sql", "parameterized",
+                "injection", "concatenat",
+            )
+        )
+    if "verification_code_mismatch" in constraint:
+        return any(
+            token in text
+            for token in (
+                "验证码", "校验码", "短信码", "otp",
+                "verification code", "sms code",
+            )
+        )
+    if "enum_value_not_allowed" in constraint:
+        return bool(
+            re.search(
+                r"(?:只能|仅能|仅|必须|只|only|must)",
+                text,
+                re.IGNORECASE,
+            )
+        )
+    if constraint in {"semantic:negative_value", "semantic:zero_quantity"}:
+        return any(
+            token in text
+            for token in (
+                "非负", "不能为负", "不得为负", "不允许为负",
+                "大于0", "大于 0", "正数", "不能为0", "不得为0",
+                "non-negative", "nonnegative", "must not be negative",
+                "positive", "greater than zero",
+            )
+        )
+    if constraint == "semantic:weak_password":
+        return any(
+            token in text
+            for token in (
+                "密码长度", "密码强度", "密码复杂", "口令长度",
+                "password length", "password strength", "password complexity",
+            )
+        )
+    if constraint == "semantic:invalid_email_format":
+        return any(token in text for token in ("邮箱格式", "邮件格式", "email format"))
+    if constraint == "semantic:invalid_phone_format":
+        return any(token in text for token in ("手机号格式", "电话格式", "phone format", "mobile format"))
+    if constraint == "semantic:invalid_date":
+        return any(token in text for token in ("日期格式", "时间格式", "date format", "time format"))
+    return False
+
+
+def _validation_authority_problem(
+    *,
+    result: dict[str, Any],
+    property_spec: dict[str, Any],
+) -> str:
+    """Return a reason when a compiled validation mutation lacks authority."""
+
+    if _text(result.get("status")) != "COMPILED":
+        return ""
+    prop = _dict(property_spec)
+    explicit_constraint = _text(prop.get("validation_constraint"))
+    explicit_source = _text(prop.get("validation_constraint_source"))
+    if explicit_constraint:
+        if explicit_source and explicit_source not in {
+            "request_schema",
+            "source_invariant",
+        }:
+            return "validation_constraint_lineage_invalid"
+        return ""
+
+    mutations = _mutation_rows(result)
+    if not mutations:
+        # Read-side validation protocols may carry a typed assertion without a
+        # request mutation. Their source invariant remains the authority.
+        return "" if _source_bound_property(prop) else (
+            "validation_protocol_has_no_constraint_or_source_authority"
+        )
+
+    semantic_text = _source_semantic_text(prop)
+    source_bound = _source_bound_property(prop)
+    for mutation in mutations:
+        mutation_class = _text(mutation.get("class"))
+        source = _text(mutation.get("source"))
+        constraint = _text(mutation.get("constraint"))
+
+        if mutation_class in _SOURCE_RUNTIME_MUTATION_CLASSES:
+            if source_bound and semantic_text:
+                continue
+            return f"runtime_validation_mutation_lacks_source_rule:{mutation_class}"
+
+        # This historical fallback infers field semantics from a request example
+        # and, if no semantic match exists, even removes the first field. It is
+        # diagnostic material only and must never enter the formal protocol.
+        if source == "inferred_from_example":
+            return "request_example_inference_not_validation_authority"
+
+        if source == "request_schema":
+            # Without an explicit validation_constraint, request-schema material
+            # reached this branch through the base compiler's generic field walk.
+            # A source-bound invariant may use it only when its own statement
+            # explicitly declares the semantic mutation; otherwise this is the
+            # forbidden invariant × unrelated-schema-field cross product.
+            if constraint.startswith("semantic:"):
+                if source_bound and _semantic_constraint_declared(
+                    constraint,
+                    semantic_text,
+                ):
+                    continue
+                return (
+                    "schema_field_semantic_inference_not_authoritative:"
+                    + constraint
+                )
+            return (
+                "schema_constraint_requires_explicit_validation_projection:"
+                + (constraint or "unknown")
+            )
+
+        # A mutation with no authority marker is acceptable only for one of the
+        # source-rule runtime classes above. Unknown shapes fail closed.
+        return "validation_mutation_authority_unknown"
+    return ""
 
 
 def compile_family_protocol(
@@ -109,112 +229,51 @@ def compile_family_protocol(
     property_spec: dict[str, Any],
     behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    # V1.5.0: ensure multi-step protocols are registered before first resolution
-    _ensure_v150_protocols()
-
-    # Registered protocol, consulted first and additively.
-    #
-    # On a MISS everything below runs verbatim, so all six family branches, both actor
-    # guards, the built-in template dispatch and the terminal fallback behave exactly as
-    # before. On a HIT the registered compiler answers and the result is stamped with
-    # _registry_protocol_id so the obligation compiler can tell a registered plan from a
-    # built-in one.
-    #
-    # Placed in this outermost facade rather than the base for two reasons: it leaves the
-    # 626-line family if-chain unedited, and it bypasses the middle privacy facade whose
-    # validation rewrite hard-requires exactly one control and one treatment step -- an
-    # N-step registered plan routed through that guard would be blocked by a check written
-    # for a different shape.
-    #
-    # A compiler that raises, or a result that fails validation, becomes a visible BLOCKED.
-    # An exception must never escape into the compile loop, where it would abort a whole
-    # batch of unrelated obligations.
-    _registration = _resolve_family_protocol(risk_family, _text(property_spec.get("template")))
-    if _registration is not None:
-        return _compile_registered_protocol(
-            _registration,
-            risk_family=risk_family,
-            operation=operation,
-            operation_ref=operation_ref,
-            control_actor_ref=control_actor_ref,
-            treatment_actor_ref=treatment_actor_ref,
-            property_spec=property_spec,
-            behavior_ir=behavior_ir,
-        )
-
-    policy = _text(property_spec.get("privacy_policy"))
-    is_field_policy = (
-        _text(risk_family) == "privacy"
-        and _text(property_spec.get("privacy_test_mode")) == "field_policy"
-        and policy in {"absent", "masked"}
+    result = _original_compile_family_protocol(
+        risk_family=risk_family,
+        operation=operation,
+        operation_ref=operation_ref,
+        control_actor_ref=control_actor_ref,
+        treatment_actor_ref=treatment_actor_ref,
+        property_spec=property_spec,
+        behavior_ir=behavior_ir,
     )
-    if not is_field_policy:
-        return _base.compile_family_protocol(
-            risk_family=risk_family,
-            operation=operation,
-            operation_ref=operation_ref,
-            control_actor_ref=control_actor_ref,
-            treatment_actor_ref=treatment_actor_ref,
-            property_spec=property_spec,
-            behavior_ir=behavior_ir,
-        )
+    if _text(risk_family) != "validation":
+        return result
 
-    actor_ref = _text(treatment_actor_ref or control_actor_ref or property_spec.get("actor_ref"))
-    if not actor_ref:
-        return {
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_MISSING_ACTOR",
-            "detail": "privacy_field_actor",
-        }
-    if _text(operation.get("method")).upper() != "GET":
-        return {
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_MISSING_OPERATION",
-            "detail": "privacy_field_protocol_requires_get",
-        }
-    tokens = _valid_tokens(property_spec.get("field_tokens"))
-    if not tokens:
-        return {
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_MISSING_BINDING",
-            "detail": "privacy_field_tokens_missing",
-        }
-    mask_pattern = _text(property_spec.get("mask_pattern"))
-    if policy == "masked":
-        if not mask_pattern:
-            return {
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_BINDING",
-                "detail": "privacy_mask_pattern_missing",
+    problem = _validation_authority_problem(
+        result=result,
+        property_spec=property_spec,
+    )
+    if not problem:
+        if _text(result.get("status")) == "COMPILED":
+            result = dict(result)
+            result["validation_authority_gate"] = {
+                "status": "PASS",
+                "heuristic_request_example_authority": False,
+                "schema_cross_product_enabled": False,
             }
-        try:
-            re.compile(mask_pattern)
-        except re.error:
-            return {
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_BINDING",
-                "detail": "privacy_mask_pattern_invalid",
-            }
-
+        return result
     return {
-        "status": "COMPILED",
-        "control_plan": [],
-        "treatment_plan": [{
-            "step_id": "treatment_1",
-            "actor_ref": actor_ref,
-            "operation_ref": operation_ref,
-            "intent": "privacy_field_observation",
-            "protocol_step": "privacy_field_read",
-            "property_template": _text(property_spec.get("template")),
-        }],
-        "assertion": {
-            "kind": PRIVACY_FIELD_ASSERTION_KIND,
-            "privacy_policy": policy,
-            "field_tokens": tokens,
-            "json_path": _text(property_spec.get("json_path")),
-            "mask_pattern": mask_pattern,
-            "allow_absent": property_spec.get("allow_absent") is True,
-            "require_meaningful_response": True,
-            "invariant_ref": _text(property_spec.get("invariant_ref")),
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_MISSING_BINDING",
+        "detail": problem,
+        "validation_authority_gate": {
+            "status": "BLOCKED",
+            "reason_code": problem,
+            "heuristic_request_example_authority": False,
+            "schema_cross_product_enabled": False,
         },
     }
+
+
+__all__ = sorted(
+    {
+        *[
+            name
+            for name in dir(_core)
+            if not name.startswith("__")
+        ],
+        "compile_family_protocol",
+    }
+)
