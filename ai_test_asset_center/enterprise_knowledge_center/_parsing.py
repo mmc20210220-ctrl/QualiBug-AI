@@ -7,8 +7,9 @@ This facade performs two coupled corrections:
 
 * Markdown field tables retain an explicit ``foreign_key/fk/外键/外键约束``
   declaration as structured evidence; and
-* Markdown API operations remove every name-derived ``x-foreign-key`` marker,
-  keeping the marker only for those explicitly declared fields.
+* Markdown API operations remove every name-derived ``x-foreign-key`` marker
+  and every non-required property admitted only by that heuristic, keeping
+  relationship structure only for explicitly declared FK fields.
 
 This preserves real source authority while removing relationship fabrication.
 """
@@ -194,7 +195,7 @@ def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, A
 
     # The historical parser emits exactly one operation per endpoint-method in
     # source order. If that invariant drifts, relationship authority fails
-    # closed: no x-foreign-key marker survives rather than being attached to the
+    # closed: no heuristic property survives rather than being attached to the
     # wrong operation.
     aligned = len(operations) == len(contracts)
     for index, operation in enumerate(operations):
@@ -214,11 +215,28 @@ def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, A
         properties = request_schema.get("properties")
         if not isinstance(properties, dict):
             continue
+        required_fields = {
+            _text(value)
+            for value in request_schema.get("required") or []
+            if _text(value)
+        }
         governed_properties: dict[str, Any] = {}
         for field, raw in properties.items():
+            field_name = _text(field)
+            # The historical parser placed non-required fields here only when
+            # their names matched the FK heuristic. Once relationship inference
+            # is removed, such a property has no request-schema authority.
+            if (
+                not aligned
+                or (
+                    field_name not in required_fields
+                    and field_name not in explicit_fields
+                )
+            ):
+                continue
             prop = dict(raw) if isinstance(raw, dict) else raw
             if isinstance(prop, dict):
-                if not aligned or _text(field) not in explicit_fields:
+                if field_name not in explicit_fields:
                     prop.pop("x-foreign-key", None)
                 else:
                     prop["x-foreign-key"] = True
@@ -227,9 +245,10 @@ def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, A
         request_schema["properties"] = governed_properties
         operation["request_schema"] = request_schema
 
-    # If a late alignment failure was discovered after earlier rows were
-    # processed, scrub the complete result in one second pass.
     if not aligned:
+        # Keep JSON examples/content and explicit required names, but no property
+        # admitted by the old relationship heuristic can be trusted when source
+        # alignment itself is ambiguous.
         for operation in operations:
             schema = operation.get("request_schema")
             if not isinstance(schema, dict):
@@ -237,9 +256,22 @@ def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, A
             properties = schema.get("properties")
             if not isinstance(properties, dict):
                 continue
-            for raw in properties.values():
-                if isinstance(raw, dict):
-                    raw.pop("x-foreign-key", None)
+            required_fields = {
+                _text(value)
+                for value in schema.get("required") or []
+                if _text(value)
+            }
+            schema["properties"] = {
+                field: {
+                    key: value
+                    for key, value in raw.items()
+                    if key != "x-foreign-key"
+                }
+                if isinstance(raw, dict)
+                else raw
+                for field, raw in properties.items()
+                if _text(field) in required_fields
+            }
     return operations
 
 
