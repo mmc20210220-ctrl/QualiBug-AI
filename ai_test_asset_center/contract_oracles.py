@@ -1,50 +1,52 @@
-"""Canonical outcome-aware Contract Oracle authority.
+"""Contract Oracle facade with strict post-hoc gate integrity.
 
-The historical activation and assertion mechanics remain unchanged in the private module.
-This facade proves exact mandatory-outcome coverage and deterministically projects one
-independent Oracle receipt per violated outcome. Aggregate execution truth is preserved;
-customer findings consume only the per-outcome receipts.
+Outcome-aware Oracle evaluation remains in
+``_contract_oracles_outcome_mechanics``.  Authorization causality, Oracle
+validity and authorization-delivery gates are deliberately allowed to *demote*
+a sealed Oracle after evaluation, but their annotations are not a substitute
+for the original content-addressed receipt.
+
+This facade therefore reconstructs the pre-gate Oracle, validates its complete
+activation/assertion/lineage/fingerprint contract, and separately enforces that
+post-hoc mutations are one-way demotions.  Merely adding a gate-shaped field to
+an arbitrary or tampered Oracle can no longer bypass receipt validation.
 """
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any
 
-from . import assertion_dsl as _assertions
-from . import observer_contracts as _observers
-from . import _contract_oracles_mechanics as _core
-from ._contract_oracles_mechanics import *  # noqa: F401,F403
+from . import _contract_oracles_outcome_mechanics as _outcome
+from ._contract_oracles_outcome_mechanics import *  # noqa: F401,F403
 
-from .accepted_residue_oracle import install_accepted_residue_oracle
+_validate_sealed_outcome_oracle = _outcome.validate_contract_oracle_receipt
 
-install_accepted_residue_oracle(_core)
-build_contract_oracle_activation_receipt = (
-    _core.build_contract_oracle_activation_receipt
-)
-
-_original_evaluate_contract_oracle = _core.evaluate_contract_oracle
-_original_validate_contract_oracle_receipt = _core.validate_contract_oracle_receipt
-
-_CANONICAL_FIELDS = (
-    "canonical_outcome_identity_required",
-    "mandatory_outcome_refs",
-    "covered_outcome_refs",
-    "missing_outcome_refs",
-    "duplicate_outcome_refs",
-    "foreign_outcome_refs",
-    "violation_outcome_refs",
-    "indeterminate_outcome_refs",
-    "primary_violation_outcome_ref",
-    "canonical_outcome_identity_complete",
-    "outcome_fanout_required",
-    "violation_occurrence_count",
-    "parent_oracle_receipt_id",
-    "parent_violation_outcome_refs",
-)
+_CAUSALITY_FIELDS = frozenset({
+    "authorization_causality_gate",
+    "authorization_causality_receipt_id",
+    "authorization_causality_reason_codes",
+    "pre_causality_oracle_verdict",
+})
+_VALIDITY_FIELDS = frozenset({
+    "oracle_validity_gate",
+    "oracle_validity_receipt_id",
+    "oracle_validity_reason_codes",
+    "pre_validity_oracle_verdict",
+    "effect_observation_graph_receipt_id",
+    "effect_observation_graph_status",
+    "effect_observation_graph_fingerprint",
+})
+_DELIVERY_FIELDS = frozenset({
+    "authorization_delivery_gate",
+    "authorization_delivery_reason",
+})
 
 
 def __getattr__(name: str) -> Any:
-    return getattr(_core, name)
+    return getattr(_outcome, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_outcome)))
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -59,433 +61,169 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _unique(values: Any) -> list[str]:
-    if values is None:
-        return []
-    if isinstance(values, (str, bytes, dict)):
-        items = [values]
-    else:
-        try:
-            items = list(values)
-        except TypeError:
-            items = [values]
-    return sorted({_text(value) for value in items if _text(value)})
-
-
-def _assertion_outcome_ref(assertion: dict[str, Any]) -> str:
-    return _text(assertion.get("outcome_ref"))
-
-
-def _experiment_outcome_contract(
-    experiment: dict[str, Any], assertions: list[dict[str, Any]]
-) -> tuple[bool, list[str]]:
-    explicit = _unique(experiment.get("mandatory_outcome_refs"))
-    declared = _unique(
-        [
-            _dict(row).get("outcome_ref")
-            for row in _list(experiment.get("assertions"))
-            if isinstance(row, dict) and _dict(row).get("mandatory") is not False
-        ]
+def _posthoc_gate_present(row: dict[str, Any]) -> bool:
+    return bool(
+        _text(row.get("authorization_causality_gate"))
+        or _dict(row.get("pre_causality_oracle_verdict"))
+        or _text(row.get("oracle_validity_gate"))
+        or _dict(row.get("pre_validity_oracle_verdict"))
+        or _text(row.get("authorization_delivery_gate"))
     )
-    strict = bool(experiment.get("canonical_outcome_identity_required")) or bool(
-        explicit or declared
-    )
-    mandatory = explicit or declared
-    if strict and not mandatory:
-        mandatory = _unique([_assertion_outcome_ref(row) for row in assertions])
-    return strict, mandatory
 
 
-def _canonical_projection(
-    experiment: dict[str, Any], assertions: list[dict[str, Any]]
-) -> dict[str, Any]:
-    strict, mandatory = _experiment_outcome_contract(experiment, assertions)
-    refs = [_assertion_outcome_ref(row) for row in assertions]
-    counts = Counter(ref for ref in refs if ref)
-    covered = sorted(counts)
-    duplicate = sorted(ref for ref, count in counts.items() if count > 1)
-    missing = sorted(set(mandatory) - set(covered))
-    foreign = sorted(set(covered) - set(mandatory)) if mandatory else []
-    violations = _unique(
-        _assertion_outcome_ref(row)
-        for row in assertions
-        if _text(row.get("status")).upper() == "VIOLATION"
-    )
-    indeterminate = _unique(
-        _assertion_outcome_ref(row)
-        for row in assertions
-        if _text(row.get("status")).upper() == "INDETERMINATE"
-    )
-    missing_identity = strict and any(not ref for ref in refs)
-    complete = bool(
-        strict
-        and mandatory
-        and not missing
-        and not duplicate
-        and not foreign
-        and not missing_identity
-    )
-    return {
-        "canonical_outcome_identity_required": strict,
-        "mandatory_outcome_refs": mandatory,
-        "covered_outcome_refs": covered,
-        "missing_outcome_refs": missing,
-        "duplicate_outcome_refs": duplicate,
-        "foreign_outcome_refs": foreign,
-        "violation_outcome_refs": violations,
-        "indeterminate_outcome_refs": indeterminate,
-        "primary_violation_outcome_ref": (
-            violations[0] if complete and len(violations) == 1 else ""
-        ),
-        "canonical_outcome_identity_complete": complete,
-        "outcome_fanout_required": bool(complete and len(violations) > 1),
-        "violation_occurrence_count": len(violations),
-        "parent_oracle_receipt_id": "",
-        "parent_violation_outcome_refs": [],
-        "assertion_outcome_ref_missing": missing_identity,
-    }
-
-
-def _identity_reason_codes(projection: dict[str, Any]) -> list[str]:
-    reasons: list[str] = []
-    if projection.get("canonical_outcome_identity_required"):
-        if not projection.get("mandatory_outcome_refs"):
-            reasons.append("CANONICAL_MANDATORY_OUTCOME_REFS_MISSING")
-        if projection.get("assertion_outcome_ref_missing"):
-            reasons.append("ASSERTION_CANONICAL_OUTCOME_REF_MISSING")
-        if projection.get("missing_outcome_refs"):
-            reasons.append("MANDATORY_OUTCOME_ASSERTION_MISSING")
-        if projection.get("duplicate_outcome_refs"):
-            reasons.append("DUPLICATE_OUTCOME_ASSERTION_RECEIPTS")
-        if projection.get("foreign_outcome_refs"):
-            reasons.append("FOREIGN_OUTCOME_ASSERTION_RECEIPTS")
-    return sorted(set(reasons))
-
-
-def _seal_oracle_receipt(
-    base: dict[str, Any], projection: dict[str, Any]
-) -> dict[str, Any]:
-    public_projection = {field: projection.get(field) for field in _CANONICAL_FIELDS}
-    payload = {key: value for key, value in dict(base).items() if key != "receipt_id"}
-    payload.update(public_projection)
-    return _core._content_receipt("oracle_", payload)
-
-
-def evaluate_contract_oracle(
-    *,
-    experiment: dict[str, Any],
-    evidence: dict[str, Any],
-) -> dict[str, Any]:
-    exp = _dict(experiment)
-    base = _original_evaluate_contract_oracle(experiment=exp, evidence=evidence)
-    base_assertions = [
-        _assertions.validate_assertion_receipt(_dict(row))
-        for row in _list(base.get("assertions"))
-        if isinstance(row, dict)
-    ]
-    projection = _canonical_projection(exp, base_assertions)
-    if not projection["canonical_outcome_identity_required"]:
-        return base
-
-    reasons = _identity_reason_codes(projection)
-    governed = dict(base)
-    governed["assertions"] = base_assertions
-    governed["failed_assertions"] = [
-        dict(row) for row in base_assertions if row.get("status") == "VIOLATION"
-    ]
-    governed["assertion_receipt_ids"] = [
-        _text(row.get("receipt_id")) for row in base_assertions
-    ]
-    governed["violation_assertion_receipt_ids"] = [
-        _text(row.get("receipt_id"))
-        for row in base_assertions
-        if row.get("status") == "VIOLATION"
-    ]
-    governed["indeterminate_assertion_receipt_ids"] = [
-        _text(row.get("receipt_id"))
-        for row in base_assertions
-        if row.get("status") == "INDETERMINATE"
-    ]
-    if reasons:
-        governed.update(
-            {
-                "status": "INDETERMINATE",
-                "verdict": "indeterminate",
-                "customer_deliverable": False,
-                "customer_deliverable_candidate": False,
-                "missing_requirements": sorted(
-                    {
-                        _text(value)
-                        for value in [*_list(base.get("missing_requirements")), *reasons]
-                        if _text(value)
-                    }
-                ),
-                "demotion_reason": "canonical_outcome_identity_incomplete",
-            }
-        )
-    return _seal_oracle_receipt(governed, projection)
-
-
-def _validate_canonical_projection(
-    row: dict[str, Any], assertions: list[dict[str, Any]]
-) -> dict[str, Any]:
-    projection = {field: row.get(field) for field in _CANONICAL_FIELDS}
-    normalized = {
-        "canonical_outcome_identity_required": bool(
-            projection["canonical_outcome_identity_required"]
-        ),
-        "mandatory_outcome_refs": _unique(projection["mandatory_outcome_refs"]),
-        "covered_outcome_refs": _unique(projection["covered_outcome_refs"]),
-        "missing_outcome_refs": _unique(projection["missing_outcome_refs"]),
-        "duplicate_outcome_refs": _unique(projection["duplicate_outcome_refs"]),
-        "foreign_outcome_refs": _unique(projection["foreign_outcome_refs"]),
-        "violation_outcome_refs": _unique(projection["violation_outcome_refs"]),
-        "indeterminate_outcome_refs": _unique(projection["indeterminate_outcome_refs"]),
-        "primary_violation_outcome_ref": _text(
-            projection["primary_violation_outcome_ref"]
-        ),
-        "canonical_outcome_identity_complete": bool(
-            projection["canonical_outcome_identity_complete"]
-        ),
-        "outcome_fanout_required": bool(projection["outcome_fanout_required"]),
-        "violation_occurrence_count": int(
-            projection["violation_occurrence_count"] or 0
-        ),
-        "parent_oracle_receipt_id": _text(projection["parent_oracle_receipt_id"]),
-        "parent_violation_outcome_refs": _unique(
-            projection["parent_violation_outcome_refs"]
-        ),
-    }
-    refs = [_assertion_outcome_ref(item) for item in assertions]
-    counts = Counter(ref for ref in refs if ref)
-    derived = {
-        "covered_outcome_refs": sorted(counts),
-        "duplicate_outcome_refs": sorted(
-            ref for ref, count in counts.items() if count > 1
-        ),
-        "missing_outcome_refs": sorted(
-            set(normalized["mandatory_outcome_refs"]) - set(counts)
-        ),
-        "foreign_outcome_refs": sorted(
-            set(counts) - set(normalized["mandatory_outcome_refs"])
-        ),
-        "violation_outcome_refs": _unique(
-            _assertion_outcome_ref(item)
-            for item in assertions
-            if item.get("status") == "VIOLATION"
-        ),
-        "indeterminate_outcome_refs": _unique(
-            _assertion_outcome_ref(item)
-            for item in assertions
-            if item.get("status") == "INDETERMINATE"
-        ),
-    }
-    for field, value in derived.items():
-        if normalized[field] != value:
-            raise ValueError(f"contract_oracle_{field}_mismatch")
-    expected_complete = bool(
-        normalized["canonical_outcome_identity_required"]
-        and normalized["mandatory_outcome_refs"]
-        and not normalized["missing_outcome_refs"]
-        and not normalized["duplicate_outcome_refs"]
-        and not normalized["foreign_outcome_refs"]
-        and all(refs)
-    )
-    if normalized["canonical_outcome_identity_complete"] is not expected_complete:
-        raise ValueError("contract_oracle_outcome_identity_complete_invalid")
-    expected_primary = (
-        normalized["violation_outcome_refs"][0]
-        if expected_complete and len(normalized["violation_outcome_refs"]) == 1
-        else ""
-    )
-    if normalized["primary_violation_outcome_ref"] != expected_primary:
-        raise ValueError("contract_oracle_primary_outcome_ref_invalid")
-    expected_fanout = bool(
-        expected_complete and len(normalized["violation_outcome_refs"]) > 1
-    )
-    if normalized["outcome_fanout_required"] is not expected_fanout:
-        raise ValueError("contract_oracle_outcome_fanout_invalid")
-    if normalized["violation_occurrence_count"] != len(
-        normalized["violation_outcome_refs"]
-    ):
-        raise ValueError("contract_oracle_violation_occurrence_count_invalid")
-    if normalized["parent_oracle_receipt_id"]:
-        if not normalized["parent_violation_outcome_refs"]:
-            raise ValueError("contract_oracle_parent_violation_refs_missing")
-        if not set(normalized["violation_outcome_refs"]).issubset(
-            set(normalized["parent_violation_outcome_refs"])
-        ):
-            raise ValueError("contract_oracle_parent_violation_ref_mismatch")
-    elif normalized["parent_violation_outcome_refs"]:
-        raise ValueError("contract_oracle_parent_identity_incomplete")
+def _canonical_reason_codes(value: Any, *, field: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"contract_oracle_{field}_invalid")
+    normalized = sorted({_text(item) for item in value if _text(item)})
+    if value != normalized:
+        raise ValueError(f"contract_oracle_{field}_not_canonical")
     return normalized
+
+
+def _validate_posthoc_semantics(row: dict[str, Any]) -> None:
+    """Post-hoc gates may demote or annotate; they may never upgrade truth."""
+
+    causality_gate = _text(row.get("authorization_causality_gate")).upper()
+    causality_pre = _dict(row.get("pre_causality_oracle_verdict"))
+    if causality_gate:
+        receipt_id = _text(row.get("authorization_causality_receipt_id"))
+        if causality_gate not in {"PASSED", "INDETERMINATE", "NOT_APPLICABLE"}:
+            raise ValueError("contract_oracle_causality_gate_invalid")
+        if not receipt_id.startswith("auth_causality_"):
+            raise ValueError("contract_oracle_causality_receipt_ref_invalid")
+        reasons = _canonical_reason_codes(
+            row.get("authorization_causality_reason_codes", []),
+            field="causality_reason_codes",
+        )
+        if causality_gate == "INDETERMINATE":
+            if not causality_pre or not reasons:
+                raise ValueError("contract_oracle_causality_demotion_proof_missing")
+            if any(
+                (
+                    _text(row.get("status")).upper() != "INDETERMINATE",
+                    _text(row.get("verdict")) != "blocked_experiment",
+                    row.get("customer_deliverable_candidate") is not False,
+                )
+            ):
+                raise ValueError("contract_oracle_causality_demotion_invalid")
+        elif causality_pre:
+            raise ValueError("contract_oracle_causality_preverdict_unexpected")
+
+    validity_gate = _text(row.get("oracle_validity_gate")).upper()
+    validity_pre = _dict(row.get("pre_validity_oracle_verdict"))
+    if validity_gate:
+        receipt_id = _text(row.get("oracle_validity_receipt_id"))
+        if validity_gate not in {"PASSED", "INDETERMINATE", "NOT_APPLICABLE"}:
+            raise ValueError("contract_oracle_validity_gate_invalid")
+        if not receipt_id.startswith("ovg_"):
+            raise ValueError("contract_oracle_validity_receipt_ref_invalid")
+        reasons = _canonical_reason_codes(
+            row.get("oracle_validity_reason_codes", []),
+            field="validity_reason_codes",
+        )
+        if validity_gate == "INDETERMINATE":
+            if not validity_pre or not reasons:
+                raise ValueError("contract_oracle_validity_demotion_proof_missing")
+            if any(
+                (
+                    _text(row.get("status")).upper() != "INDETERMINATE",
+                    _text(row.get("verdict")) != "indeterminate",
+                    row.get("customer_deliverable_candidate") is not False,
+                )
+            ):
+                raise ValueError("contract_oracle_validity_demotion_invalid")
+        elif validity_pre:
+            raise ValueError("contract_oracle_validity_preverdict_unexpected")
+
+    delivery_gate = _text(row.get("authorization_delivery_gate")).upper()
+    if delivery_gate:
+        if delivery_gate != "INDETERMINATE":
+            raise ValueError("contract_oracle_delivery_gate_invalid")
+        if not _text(row.get("authorization_delivery_reason")):
+            raise ValueError("contract_oracle_delivery_reason_missing")
+        if any(
+            (
+                _text(row.get("status")).upper() != "INDETERMINATE",
+                _text(row.get("verdict")) != "blocked_experiment",
+                row.get("customer_deliverable_candidate") is not False,
+            )
+        ):
+            raise ValueError("contract_oracle_delivery_demotion_invalid")
+
+
+def _restore_pre_gate_oracle(row: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the exact sealed Oracle underneath ordered post-hoc gates."""
+
+    base = dict(row)
+
+    # Authorization delivery is the last execution-boundary gate.  It only
+    # runs for a previously created defect candidate; its failure helper did
+    # not historically store a pre-verdict snapshot, so restore the unique
+    # candidate shape that can enter this gate.
+    delivery_gate = _text(base.get("authorization_delivery_gate")).upper()
+    if delivery_gate:
+        for field in _DELIVERY_FIELDS:
+            base.pop(field, None)
+        if delivery_gate == "INDETERMINATE":
+            base["status"] = "VIOLATION"
+            base["verdict"] = "customer_deliverable_defect_candidate"
+            base["customer_deliverable_candidate"] = True
+
+    # Oracle validity runs after authorization causality.  Its pre-verdict
+    # snapshot contains the sealed semantic fields that it changed.  Restore
+    # only fields present in that snapshot, then remove validity annotations.
+    validity_pre = dict(_dict(base.get("pre_validity_oracle_verdict")))
+    for field in _VALIDITY_FIELDS:
+        base.pop(field, None)
+    if validity_pre:
+        for field, value in validity_pre.items():
+            base[field] = value
+
+    # Authorization causality runs first among these post-hoc gates.
+    causality_pre = dict(_dict(base.get("pre_causality_oracle_verdict")))
+    for field in _CAUSALITY_FIELDS:
+        base.pop(field, None)
+    if causality_pre:
+        for field, value in causality_pre.items():
+            base[field] = value
+
+    return base
 
 
 def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     row = _dict(receipt)
-    # Post-hoc demotion gates (authorization causality, delivery, SPEC oracle
-    # validity) mutate status/verdict after the sealed receipt_id was computed.
-    # Accept those annotated receipts when the gate provenance fields are present.
-    if (
-        row.get("pre_causality_oracle_verdict")
-        or row.get("authorization_delivery_gate")
-        or row.get("pre_validity_oracle_verdict")
-        or row.get("oracle_validity_gate")
-    ):
-        if not _text(row.get("receipt_id")):
-            raise ValueError("contract_oracle_receipt_fingerprint_invalid")
-        if _text(row.get("status")) not in {
-            "VIOLATION",
-            "PROPERTY_HELD",
-            "INDETERMINATE",
-            "BLOCKED",
-            "HARNESS_FAILED",
-        }:
-            raise ValueError("contract_oracle_semantics_invalid")
-        return dict(row)
-    if not set(_CANONICAL_FIELDS).intersection(row):
-        return _original_validate_contract_oracle_receipt(row)
-    if not set(_CANONICAL_FIELDS).issubset(row):
-        raise ValueError("contract_oracle_outcome_fields_invalid")
-    activation = _core.validate_contract_oracle_activation_receipt(
-        _dict(row.get("activation_receipt"))
-    )
-    if _text(row.get("activation_receipt_id")) != _text(activation.get("receipt_id")):
-        raise ValueError("contract_oracle_activation_identity_mismatch")
-    assertions = [
-        _assertions.validate_assertion_receipt(_dict(item))
-        for item in _list(row.get("assertions"))
-    ]
-    if any(
-        _text(item.get("campaign_id")) != _text(row.get("campaign_id"))
-        or _text(item.get("execution_id")) != _text(row.get("execution_id"))
-        for item in assertions
-    ):
-        raise ValueError("contract_oracle_assertion_lineage_mismatch")
-    normalized = _validate_canonical_projection(row, assertions)
-    reasons = _identity_reason_codes(
-        {
-            **normalized,
-            "assertion_outcome_ref_missing": any(
-                not _assertion_outcome_ref(item) for item in assertions
-            ),
-        }
-    )
-    if reasons:
-        if any(
-            (
-                _text(row.get("status")) != "INDETERMINATE",
-                _text(row.get("verdict")) != "indeterminate",
-                row.get("customer_deliverable") is not False,
-                row.get("customer_deliverable_candidate") is not False,
-                _text(row.get("demotion_reason"))
-                != "canonical_outcome_identity_incomplete",
-                not set(reasons).issubset(
-                    {_text(value) for value in _list(row.get("missing_requirements"))}
-                ),
-            )
-        ):
-            raise ValueError("contract_oracle_outcome_fail_closed_invalid")
-    else:
-        base_payload = {
-            key: value
-            for key, value in row.items()
-            if key not in set(_CANONICAL_FIELDS) | {"receipt_id"}
-        }
-        base = _core._content_receipt("oracle_", base_payload)
-        _original_validate_contract_oracle_receipt(base)
+    if not _posthoc_gate_present(row):
+        return _validate_sealed_outcome_oracle(row)
 
-    expected = _seal_oracle_receipt(
-        {key: value for key, value in row.items() if key not in set(_CANONICAL_FIELDS)},
-        normalized,
-    )
-    if row != expected:
+    if not _text(row.get("receipt_id")):
         raise ValueError("contract_oracle_receipt_fingerprint_invalid")
-    return dict(expected)
+    _validate_posthoc_semantics(row)
+    base = _restore_pre_gate_oracle(row)
+    if _text(base.get("receipt_id")) != _text(row.get("receipt_id")):
+        raise ValueError("contract_oracle_posthoc_base_identity_mismatch")
+
+    # This call traverses the complete pre-existing strict validator: activation
+    # receipt identity, assertion receipt validation, campaign/execution lineage,
+    # canonical outcome projection and content-address fingerprint.
+    validated_base = _validate_sealed_outcome_oracle(base)
+    if _text(validated_base.get("receipt_id")) != _text(row.get("receipt_id")):
+        raise ValueError("contract_oracle_posthoc_fingerprint_mismatch")
+    return dict(row)
 
 
-def project_contract_oracle_for_outcome(
-    receipt: dict[str, Any], outcome_ref: str
-) -> dict[str, Any]:
-    """Derive one independently gateable Oracle receipt from an aggregate violation."""
-    parent = validate_contract_oracle_receipt(_dict(receipt))
-    ref = _text(outcome_ref)
-    if not ref:
-        raise ValueError("contract_oracle_outcome_ref_missing")
-    if not bool(parent.get("canonical_outcome_identity_required")):
-        raise ValueError("contract_oracle_outcome_projection_not_canonical")
-    if _text(parent.get("status")) != "VIOLATION":
-        raise ValueError("contract_oracle_outcome_projection_not_violated")
-    parent_refs = _unique(parent.get("violation_outcome_refs"))
-    if ref not in parent_refs:
-        raise ValueError("contract_oracle_outcome_projection_foreign")
-    matches = [
-        _assertions.validate_assertion_receipt(_dict(row))
-        for row in _list(parent.get("assertions"))
-        if isinstance(row, dict)
-        and _text(_dict(row).get("status")) == "VIOLATION"
-        and _assertion_outcome_ref(_dict(row)) == ref
-    ]
-    if len(matches) != 1:
-        raise ValueError("contract_oracle_outcome_projection_ambiguous")
-    assertion = matches[0]
-    governed = {
-        key: value
-        for key, value in parent.items()
-        if key not in set(_CANONICAL_FIELDS) | {"receipt_id"}
-    }
-    governed.update(
-        {
-            "status": "VIOLATION",
-            "verdict": "customer_deliverable_defect_candidate",
-            "customer_deliverable": False,
-            "customer_deliverable_candidate": True,
-            "assertions": [assertion],
-            "failed_assertions": [assertion],
-            "assertion_receipt_ids": [_text(assertion.get("receipt_id"))],
-            "violation_assertion_receipt_ids": [_text(assertion.get("receipt_id"))],
-            "indeterminate_assertion_receipt_ids": [],
-            "field_oracle_traces": (
-                [dict(assertion["field_oracle_trace"])]
-                if isinstance(assertion.get("field_oracle_trace"), dict)
-                else []
-            ),
-            "field_oracle_trace_count": (
-                1 if isinstance(assertion.get("field_oracle_trace"), dict) else 0
-            ),
-            "missing_requirements": [],
-            "demotion_reason": "",
-        }
-    )
-    projection = {
-        "canonical_outcome_identity_required": True,
-        "mandatory_outcome_refs": [ref],
-        "covered_outcome_refs": [ref],
-        "missing_outcome_refs": [],
-        "duplicate_outcome_refs": [],
-        "foreign_outcome_refs": [],
-        "violation_outcome_refs": [ref],
-        "indeterminate_outcome_refs": [],
-        "primary_violation_outcome_ref": ref,
-        "canonical_outcome_identity_complete": True,
-        "outcome_fanout_required": False,
-        "violation_occurrence_count": 1,
-        "parent_oracle_receipt_id": _text(parent.get("receipt_id")),
-        "parent_violation_outcome_refs": parent_refs,
-    }
-    return validate_contract_oracle_receipt(
-        _seal_oracle_receipt(governed, projection)
-    )
-
-
-_core.evaluate_assertion = _assertions.evaluate_assertion
-_core.validate_assertion_receipt = _assertions.validate_assertion_receipt
-_core.validate_observer_receipt = _observers.validate_observer_receipt
-_core.validate_contract_oracle_receipt = validate_contract_oracle_receipt
+# Outcome projection and historical mechanics resolve the validator from their
+# module globals at call time.  Point both at the strict public authority so no
+# internal path can retain the old annotation-shaped bypass.
+_outcome.validate_contract_oracle_receipt = validate_contract_oracle_receipt
+_outcome._core.validate_contract_oracle_receipt = validate_contract_oracle_receipt
 
 __all__ = sorted(
-    name
-    for name in globals()
-    if not name.startswith("__")
-    and name not in {"_core", "_assertions", "_observers"}
+    {
+        *[
+            name
+            for name in dir(_outcome)
+            if not name.startswith("__")
+        ],
+        "validate_contract_oracle_receipt",
+    }
 )
