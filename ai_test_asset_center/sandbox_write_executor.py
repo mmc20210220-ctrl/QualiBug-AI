@@ -1,21 +1,25 @@
 """Effect-aware facade for governed non-production writes.
 
 The safety implementation remains in ``sandbox_write_executor_base``. This
-facade preserves the original HTTP outcome while promoting one special case to
-an effectively accepted write for cleanup purposes: the server returned a
-non-2xx response, but audited before/after snapshots prove that business state
-changed. Without this distinction, validation and authorization probes could
-find a real side effect yet lose formal finding eligibility because cleanup was
-incorrectly skipped.
+facade preserves the original HTTP outcome while promoting no rejected request
+to an accepted write. It also installs the same table-scoped DDL UNIQUE
+authority used by fixture materialization so governed control POSTs cannot
+silently mutate a field merely because another table declares that name UNIQUE.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 import json
+from pathlib import Path
 from typing import Any
 
 from . import sandbox_write_executor_base as _base
 from .sandbox_write_executor_base import *  # noqa: F401,F403
+from .schema_unique_materialization_authority import (
+    TableScopedUniqueFields,
+    declared_unique_fields_scoped,
+    materialize_unique_create_fields_scoped,
+)
 
 
 # Private compatibility exports used by the main experiment executor.
@@ -27,6 +31,43 @@ _base_execute_governed_fixture_lifecycle = _base.execute_governed_fixture_lifecy
 
 def __getattr__(name: str) -> Any:
     return getattr(_base, name)
+
+
+def _load_declared_unique_fields_scoped(root: Any, project: str) -> TableScopedUniqueFields:
+    """Load/cache one table-scoped UNIQUE authority for the project schema."""
+
+    key = (str(root or ""), str(project or ""))
+    cached = _base._DECLARED_UNIQUE_FIELDS_CACHE.get(key)
+    if isinstance(cached, TableScopedUniqueFields):
+        return cached
+    candidates = [
+        Path(root) / "platform_workspace" / str(project) / "input" / "schema.sql",
+        Path(root) / "platform_inputs" / str(project) / "schema.sql",
+    ]
+    authority = TableScopedUniqueFields({})
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                authority = declared_unique_fields_scoped(
+                    candidate.read_text(encoding="utf-8")
+                )
+                break
+        except OSError:
+            continue
+    _base._DECLARED_UNIQUE_FIELDS_CACHE[key] = authority
+    return authority
+
+
+def _materialize_unique_create_fields_scoped(*args: Any, **kwargs: Any) -> tuple[Any, list[str]]:
+    return materialize_unique_create_fields_scoped(*args, **kwargs)
+
+
+# ``sandbox_write_executor_base`` imported the historical helpers directly into
+# module globals. Replace those exact authorities so its internal loader and
+# governed-control implementation cannot retain the global flattened field set.
+_base.declared_unique_fields = declared_unique_fields_scoped
+_base._load_declared_unique_fields = _load_declared_unique_fields_scoped
+_base.materialize_unique_create_fields = _materialize_unique_create_fields_scoped
 
 
 def _cleanup_after_write(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -58,15 +99,7 @@ def execute_governed_fixture_lifecycle(*args: Any, **kwargs: Any) -> dict[str, A
 
 
 def execute_with_sandbox_write(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """Facade over the governed base implementation.
-
-    The safety implementation in ``sandbox_write_executor_base`` references
-    ``_http_request`` / ``_cleanup_after_write`` as module globals. Tests
-    monkeypatch the facade's copies (e.g. to simulate transports and cleanups)
-    so the governance contract stays observable. We route those facade bindings
-    into the base module for the duration of the call, then restore them, so the
-    monkeypatch is honored without duplicating the implementation.
-    """
+    """Facade over the governed base implementation with composable transport."""
     import sys
 
     _self = sys.modules[__name__]
@@ -209,19 +242,6 @@ def execute_governed_control_write(
     if write_status <= 0 or not _audited_business_state_changed(receipt):
         return receipt
 
-    # The transport itself rejected this write (non-2xx). Business state moving
-    # anyway is a target-system anomaly -- e.g. a partial commit before a late
-    # validation failure -- not a successful governed write. This branch used
-    # to flip ``accepted`` to True so the anomaly would not go unnoticed, but
-    # that silently promoted a rejected request into an "accepted write" for
-    # every downstream consumer that gates on ``accepted is True``: cleanup
-    # selection (``accepted_governed_writes``) and the customer-delivery gate.
-    # A caller was told the write failed; it must never be countable as an
-    # accepted write for cleanup/delivery. Downstream cleanup evaluation
-    # already has a dedicated fail-closed path for a rejected-but-effectful
-    # write (``_rejected_writes_left_state_unchanged`` /
-    # ``REJECTED_WRITE_STATE_NOT_PROVEN_UNCHANGED``); leaving ``accepted``
-    # False here is what lets that path run instead of the accepted-write path.
     receipt["accepted"] = False
     receipt["effectively_accepted"] = False
     receipt["indeterminate_side_effect_detected"] = True
