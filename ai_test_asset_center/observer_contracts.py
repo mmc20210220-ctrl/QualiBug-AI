@@ -1,45 +1,44 @@
-"""Canonical outcome-aware observer receipt authority.
+"""Observer facade with source-authoritative response-only business effects.
 
-Authorization comparison mechanics remain in the private compatibility module. This
-public facade preserves legacy receipt bytes when no canonical outcome identity is
-present, and content-addresses ``outcome_ref`` whenever an observer proves one mandatory
-business outcome.
+The accumulated outcome-aware observer mechanics live in
+``_observer_contracts_outcome_authority_mechanics``.  A 2xx write response may
+prove a newly materialized entity only when the compiled step carries a FROZEN
+identity-output contract and the response actually exposes that declared output.
+Generic keys such as ``code``/``slug`` are not creation evidence by name alone.
+
+This boundary injects compiler-sealed identity-output contracts onto their exact
+runtime steps for observation, then tightens the existing business-effect
+fallback before authorization comparison consumes it. Ordinary before/after
+readback evidence is unchanged.
 """
 from __future__ import annotations
 
-import copy
+import re
+from copy import deepcopy
 from typing import Any
 
-from . import _observer_contracts_authorization_mechanics as _auth
-from ._observer_contracts_authorization_mechanics import *  # noqa: F401,F403
+from . import _observer_contracts_outcome_authority_mechanics as _authority
 
-_base = _auth._base
+for _name in dir(_authority):
+    if not _name.startswith("__") and not _name.startswith("_original_"):
+        globals()[_name] = getattr(_authority, _name)
 
-_original_receipt = _base._receipt
-_original_validate_observer_receipt = _base.validate_observer_receipt
-_original_observe_experiment_requirements = _base.observe_experiment_requirements
+_base = _authority._base
+_original_observe_requirements = _authority.observe_experiment_requirements
+_original_observe_business_effect = _base._observe_business_effect
 
-_CANONICAL_IDENTITY_FIELDS = (
-    "semantic_role",
-    "outcome_ref",
-    "oracle_template_ref",
-    "assertion_requirement_ref",
-)
-_CANONICAL_EVIDENCE_KEY = "canonical_outcome_identity"
-_BASE_RECEIPT_FIELDS = {
-    "schema_version",
-    "receipt_id",
-    "campaign_id",
-    "execution_id",
-    "observer_id",
-    "status",
-    "reason_code",
-    "evidence",
-}
+_RESPONSE_ONLY_EFFECT_BASES = frozenset({
+    "write_response_new_identity",
+    "response_bound_create_observer",
+})
 
 
 def __getattr__(name: str) -> Any:
-    return getattr(_auth, name)
+    return getattr(_authority, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_authority)))
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -54,195 +53,225 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _identity_values(
-    evidence: dict[str, Any] | None,
-    *,
-    semantic_role: str = "",
-    outcome_ref: str = "",
-    oracle_template_ref: str = "",
-    assertion_requirement_ref: str = "",
-) -> dict[str, str]:
-    embedded = _dict(_dict(evidence).get(_CANONICAL_EVIDENCE_KEY))
-    resolved_outcome = _text(outcome_ref or embedded.get("outcome_ref"))
-    resolved_role = _text(
-        semantic_role
-        or embedded.get("semantic_role")
-        or ("MANDATORY_OUTCOME" if resolved_outcome else "")
-    ).upper()
-    return {
-        "semantic_role": resolved_role,
-        "outcome_ref": resolved_outcome,
-        "oracle_template_ref": _text(
-            oracle_template_ref or embedded.get("oracle_template_ref")
-        ),
-        "assertion_requirement_ref": _text(
-            assertion_requirement_ref or embedded.get("assertion_requirement_ref")
-        ),
-    }
+def _valid_identity_output_contract(value: Any) -> dict[str, Any]:
+    row = _dict(value)
+    if (
+        _text(row.get("schema_version")) != "qualibug.identity-output-binding.v1"
+        or _text(row.get("status")).upper() != "FROZEN"
+        or not _text(row.get("source_identity_field"))
+        or not _text(row.get("source_path"))
+        or not _text(row.get("source_authority"))
+    ):
+        return {}
+    return row
 
 
-def _canonical_identity_present(identity: dict[str, str]) -> bool:
-    return any(_text(identity.get(field)) for field in _CANONICAL_IDENTITY_FIELDS)
+def _extract_declared_path(body: Any, path: str) -> Any:
+    """Read one explicit identity-output path; no fuzzy key search."""
+
+    raw = _text(path)
+    if not raw:
+        return None
+    if raw.startswith("$"):
+        raw = raw[1:]
+        if raw.startswith("."):
+            raw = raw[1:]
+    if raw.startswith("/"):
+        tokens = [
+            token.replace("~1", "/").replace("~0", "~")
+            for token in raw.split("/")[1:]
+            if token != ""
+        ]
+    else:
+        tokens = []
+        for name, index in re.findall(r"([A-Za-z_][A-Za-z0-9_-]*)|\[(\d+)\]", raw):
+            tokens.append(name if name else index)
+        if not tokens and raw:
+            tokens = [raw]
+
+    current = body
+    for token in tokens:
+        if isinstance(current, dict):
+            if token not in current:
+                return None
+            current = current[token]
+        elif isinstance(current, list) and token.isdigit():
+            index = int(token)
+            if index < 0 or index >= len(current):
+                return None
+            current = current[index]
+        else:
+            return None
+    return current
 
 
-def _receipt(
-    *,
-    observer_id: str,
-    status: str,
-    reason_code: str = "",
-    evidence: dict[str, Any] | None = None,
-    campaign_id: str = "",
-    execution_id: str = "",
-    semantic_role: str = "",
-    outcome_ref: str = "",
-    oracle_template_ref: str = "",
-    assertion_requirement_ref: str = "",
+def _contains_scalar(value: Any, needle: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_scalar(child, needle) for child in value.values())
+    if isinstance(value, list):
+        return any(_contains_scalar(child, needle) for child in value)
+    return value == needle
+
+
+def _selected_effect_step(
+    execution_steps: list[dict[str, Any]],
+    evidence: dict[str, Any],
 ) -> dict[str, Any]:
-    identity = _identity_values(
-        evidence,
-        semantic_role=semantic_role,
-        outcome_ref=outcome_ref,
-        oracle_template_ref=oracle_template_ref,
-        assertion_requirement_ref=assertion_requirement_ref,
+    phase = ""
+    if "treatment_effect_count" in evidence:
+        phase = "treatment"
+    elif "control_effect_count" in evidence:
+        phase = "control"
+    candidates = [
+        step
+        for step in execution_steps
+        if isinstance(step, dict)
+        and _text(step.get("phase")) in {"control", "treatment"}
+        and (not phase or _text(step.get("phase")) == phase)
+        and _text(step.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and _dict(step.get("governance_receipt"))
+    ]
+    return _dict(candidates[-1] if candidates else {})
+
+
+def _response_only_effect_authority(
+    execution_steps: list[dict[str, Any]],
+    evidence: dict[str, Any],
+) -> tuple[bool, str, dict[str, Any]]:
+    basis = _text(evidence.get("effect_basis"))
+    if basis not in _RESPONSE_ONLY_EFFECT_BASES:
+        return True, "not_response_only", {}
+
+    step = _selected_effect_step(execution_steps, evidence)
+    if not step:
+        return False, "BUSINESS_EFFECT_SOURCE_STEP_MISSING", {}
+    contract = _valid_identity_output_contract(step.get("identity_output_binding"))
+    if not contract:
+        contract = _valid_identity_output_contract(
+            _dict(step.get("governance_receipt")).get("identity_output_binding")
+        )
+    if not contract:
+        return False, "BUSINESS_EFFECT_IDENTITY_OUTPUT_AUTHORITY_MISSING", {}
+
+    governance = _dict(step.get("governance_receipt"))
+    write_body = _dict(governance.get("write")).get("body")
+    source_path = _text(contract.get("source_path"))
+    value = _extract_declared_path(write_body, source_path)
+    if value in (None, "", [], {}):
+        return False, "BUSINESS_EFFECT_IDENTITY_OUTPUT_VALUE_MISSING", contract
+
+    before_body = _dict(governance.get("before")).get("body")
+    request_body = governance.get("materialized_request_body")
+    if _contains_scalar(before_body, value) or _contains_scalar(request_body, value):
+        return False, "BUSINESS_EFFECT_IDENTITY_OUTPUT_NOT_NEW", contract
+
+    if basis == "response_bound_create_observer":
+        readback_body = _dict(governance.get("response_bound_after")).get("body")
+        if not _contains_scalar(readback_body, value):
+            return False, "BUSINESS_EFFECT_IDENTITY_READBACK_MISMATCH", contract
+
+    return True, "frozen_identity_output", contract
+
+
+def _strict_observe_business_effect(
+    execution_steps: list[dict[str, Any]],
+    *,
+    aggregate_control_treatment: bool = False,
+    require_treatment_window: bool = False,
+) -> dict[str, Any]:
+    receipt = _original_observe_business_effect(
+        execution_steps,
+        aggregate_control_treatment=aggregate_control_treatment,
+        require_treatment_window=require_treatment_window,
     )
-    if not _canonical_identity_present(identity):
-        return _original_receipt(
-            observer_id=observer_id,
-            status=status,
-            reason_code=reason_code,
+    row = _dict(receipt)
+    evidence = dict(_dict(row.get("evidence")))
+    if (
+        _text(row.get("status")).upper() != "OBSERVED"
+        or _text(evidence.get("effect_basis")) not in _RESPONSE_ONLY_EFFECT_BASES
+    ):
+        return row
+
+    allowed, reason, contract = _response_only_effect_authority(
+        execution_steps,
+        evidence,
+    )
+    if allowed:
+        evidence["response_only_effect_authority"] = reason
+        evidence["identity_output_source_path"] = _text(contract.get("source_path"))
+        return _base.build_observer_receipt(
+            observer_id="business_effect",
+            status="OBSERVED",
             evidence=evidence,
-            campaign_id=campaign_id,
-            execution_id=execution_id,
+            campaign_id=_text(row.get("campaign_id")),
+            execution_id=_text(row.get("execution_id")),
         )
 
-    normalized_status = _text(status).upper()
-    if normalized_status not in _base.OBSERVER_STATUSES:
-        raise ValueError(f"observer_status_invalid:{normalized_status}")
-    safe_evidence = copy.deepcopy(evidence or {})
-    safe_evidence[_CANONICAL_EVIDENCE_KEY] = dict(identity)
-    payload = {
-        "schema_version": _base.SCHEMA_VERSION,
-        "campaign_id": _text(campaign_id),
-        "execution_id": _text(execution_id),
-        "observer_id": _text(observer_id),
-        "status": normalized_status,
-        "reason_code": _text(reason_code),
-        "evidence": safe_evidence,
-        **identity,
-    }
-    return {
-        **payload,
-        "receipt_id": "obs_" + _base._fingerprint(payload),
-    }
-
-
-def build_observer_receipt(
-    *,
-    observer_id: str,
-    status: str,
-    reason_code: str = "",
-    evidence: dict[str, Any] | None = None,
-    campaign_id: str = "",
-    execution_id: str = "",
-    semantic_role: str = "",
-    outcome_ref: str = "",
-    oracle_template_ref: str = "",
-    assertion_requirement_ref: str = "",
-) -> dict[str, Any]:
-    if not _text(observer_id):
-        raise ValueError("observer_id_missing")
-    return _receipt(
-        observer_id=observer_id,
-        status=status,
-        reason_code=reason_code,
-        evidence=evidence,
-        campaign_id=campaign_id,
-        execution_id=execution_id,
-        semantic_role=semantic_role,
-        outcome_ref=outcome_ref,
-        oracle_template_ref=oracle_template_ref,
-        assertion_requirement_ref=assertion_requirement_ref,
+    evidence.update(
+        {
+            "business_effect_observed": False,
+            "response_only_effect_authority": "BLOCKED",
+            "response_only_effect_rejected_reason": reason,
+        }
     )
-
-
-def validate_observer_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
-    row = _dict(receipt)
-    if not set(_CANONICAL_IDENTITY_FIELDS).intersection(row):
-        return _original_validate_observer_receipt(row)
-    expected_fields = _BASE_RECEIPT_FIELDS | set(_CANONICAL_IDENTITY_FIELDS)
-    if set(row) != expected_fields:
-        raise ValueError("observer_receipt_fields_invalid")
-    if row.get("schema_version") != _base.SCHEMA_VERSION:
-        raise ValueError("observer_receipt_schema_invalid")
-    if not isinstance(row.get("evidence"), dict):
-        raise ValueError("observer_receipt_content_invalid")
-    identity = {field: _text(row.get(field)) for field in _CANONICAL_IDENTITY_FIELDS}
-    if identity["semantic_role"] == "MANDATORY_OUTCOME" and not identity["outcome_ref"]:
-        raise ValueError("observer_receipt_outcome_ref_missing")
-    embedded = _identity_values(row["evidence"])
-    if identity != embedded:
-        raise ValueError("observer_receipt_outcome_identity_mismatch")
-    expected = _receipt(
-        observer_id=_text(row.get("observer_id")),
-        status=_text(row.get("status")),
-        reason_code=_text(row.get("reason_code")),
-        evidence=dict(row["evidence"]),
+    return _base.build_observer_receipt(
+        observer_id="business_effect",
+        status="INDETERMINATE",
+        reason_code=reason,
+        evidence=evidence,
         campaign_id=_text(row.get("campaign_id")),
         execution_id=_text(row.get("execution_id")),
-        **identity,
-    )
-    if row != expected:
-        raise ValueError("observer_receipt_fingerprint_invalid")
-    return dict(expected)
-
-
-def bind_observer_receipt_lineage(
-    receipt: dict[str, Any],
-    *,
-    campaign_id: str,
-    execution_id: str,
-) -> dict[str, Any]:
-    resolved_campaign_id = _text(campaign_id)
-    resolved_execution_id = _text(execution_id)
-    if not resolved_campaign_id or not resolved_execution_id:
-        raise ValueError("observer_receipt_lineage_missing")
-    validated = validate_observer_receipt(receipt)
-    existing_campaign_id = _text(validated.get("campaign_id"))
-    existing_execution_id = _text(validated.get("execution_id"))
-    if existing_campaign_id and existing_campaign_id != resolved_campaign_id:
-        raise ValueError("observer_receipt_campaign_mismatch")
-    if existing_execution_id and existing_execution_id != resolved_execution_id:
-        raise ValueError("observer_receipt_execution_mismatch")
-    identity = {
-        field: _text(validated.get(field)) for field in _CANONICAL_IDENTITY_FIELDS
-    }
-    return _receipt(
-        observer_id=_text(validated.get("observer_id")),
-        status=_text(validated.get("status")),
-        reason_code=_text(validated.get("reason_code")),
-        evidence=dict(_dict(validated.get("evidence"))),
-        campaign_id=resolved_campaign_id,
-        execution_id=resolved_execution_id,
-        **identity,
     )
 
 
-def _declaration_identity(declaration: dict[str, Any]) -> dict[str, str]:
-    outcome_ref = _text(declaration.get("outcome_ref"))
-    role = _text(declaration.get("semantic_role")).upper()
-    if not role and outcome_ref:
-        role = "MANDATORY_OUTCOME"
-    return {
-        "semantic_role": role,
-        "outcome_ref": outcome_ref,
-        "oracle_template_ref": _text(
-            declaration.get("oracle_template_ref")
-            or declaration.get("template_ref")
-        ),
-        "assertion_requirement_ref": _text(
-            declaration.get("assertion_requirement_ref")
-        ),
-    }
+def _plan_identity_contracts(experiment: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    contracts: dict[str, dict[str, Any]] = {}
+    for phase in ("precondition", "control", "treatment"):
+        for raw in _list(_dict(experiment).get(f"{phase}_plan")):
+            step = _dict(raw)
+            step_id = _text(step.get("step_id") or step.get("id"))
+            contract = _valid_identity_output_contract(step.get("identity_output_binding"))
+            if step_id and contract:
+                contracts[step_id] = deepcopy(contract)
+    return contracts
+
+
+def _inject_identity_output_contracts(
+    experiment: dict[str, Any],
+    observations: dict[str, Any],
+) -> list[tuple[dict[str, Any], bool, Any]]:
+    """Temporarily project sealed plan contracts onto their exact runtime steps."""
+
+    contracts = _plan_identity_contracts(experiment)
+    changes: list[tuple[dict[str, Any], bool, Any]] = []
+    if not contracts:
+        return changes
+    for raw in _list(observations.get("execution_steps")):
+        if not isinstance(raw, dict):
+            continue
+        step_id = _text(raw.get("step_id") or raw.get("id"))
+        contract = contracts.get(step_id)
+        if not contract:
+            continue
+        had = "identity_output_binding" in raw
+        previous = raw.get("identity_output_binding")
+        existing = _valid_identity_output_contract(previous)
+        if existing and existing != contract:
+            # Conflicting runtime vs compiled identity authority is not resolved
+            # by overwrite. Leave it untouched; the strict observer will reject
+            # it unless its own contract is independently valid for the effect.
+            continue
+        changes.append((raw, had, previous))
+        raw["identity_output_binding"] = deepcopy(contract)
+    return changes
+
+
+def _restore_injected_contracts(changes: list[tuple[dict[str, Any], bool, Any]]) -> None:
+    for row, had, previous in reversed(changes):
+        if had:
+            row["identity_output_binding"] = previous
+        else:
+            row.pop("identity_output_binding", None)
 
 
 def observe_experiment_requirements(
@@ -252,65 +281,38 @@ def observe_experiment_requirements(
     campaign_id: str = "",
     execution_id: str = "",
 ) -> list[dict[str, Any]]:
-    exp = _dict(experiment)
-    declarations = [
-        _dict(row) for row in _list(exp.get("observers")) if isinstance(row, dict)
-    ]
-    generated = _original_observe_experiment_requirements(
-        exp,
-        observations=observations,
-        campaign_id=campaign_id,
-        execution_id=execution_id,
+    changes = _inject_identity_output_contracts(
+        _dict(experiment),
+        observations if isinstance(observations, dict) else {},
     )
-    strict = bool(exp.get("canonical_outcome_identity_required")) or any(
-        _text(row.get("outcome_ref")) for row in declarations
-    )
-    governed: list[dict[str, Any]] = []
-    for index, raw in enumerate(generated):
-        receipt = validate_observer_receipt(_dict(raw))
-        declaration = declarations[index] if index < len(declarations) else {}
-        identity = _declaration_identity(declaration)
-        if not _canonical_identity_present(identity):
-            governed.append(receipt)
-            continue
-        status = _text(receipt.get("status"))
-        reason = _text(receipt.get("reason_code"))
-        if (
-            strict
-            and identity["semantic_role"] == "MANDATORY_OUTCOME"
-            and not identity["outcome_ref"]
-        ):
-            status = "FAILED"
-            reason = "OBSERVER_CANONICAL_OUTCOME_REF_MISSING"
-        governed.append(
-            _receipt(
-                observer_id=_text(receipt.get("observer_id")),
-                status=status,
-                reason_code=reason,
-                evidence=dict(_dict(receipt.get("evidence"))),
-                campaign_id=_text(receipt.get("campaign_id")),
-                execution_id=_text(receipt.get("execution_id")),
-                **identity,
-            )
+    try:
+        return _original_observe_requirements(
+            experiment,
+            observations=observations,
+            campaign_id=campaign_id,
+            execution_id=execution_id,
         )
-    return governed
+    finally:
+        _restore_injected_contracts(changes)
 
 
-# Patch the stable mechanics globals so callers that imported the base module (the
-# experiment finalizer does this intentionally) still preserve canonical outcome identity.
-_base._receipt = _receipt
-_base.build_observer_receipt = build_observer_receipt
-_base.validate_observer_receipt = validate_observer_receipt
-_base.bind_observer_receipt_lineage = bind_observer_receipt_lineage
-_base.observe_experiment_requirements = observe_experiment_requirements
-
-# The authorization mechanics module re-exports the base names captured at import time;
-# publish the governed functions explicitly from this authority.
-_auth.build_observer_receipt = build_observer_receipt
-_auth.validate_observer_receipt = validate_observer_receipt
-_auth.bind_observer_receipt_lineage = bind_observer_receipt_lineage
-_auth.observe_experiment_requirements = observe_experiment_requirements
+# The base dispatch computes business_effect before authorization_comparison, so
+# this must be patched at the source rather than demoting the receipt afterward.
+# Otherwise a fake effect could already have contaminated authorization evidence.
+_base._observe_business_effect = _strict_observe_business_effect
+_authority._base._observe_business_effect = _strict_observe_business_effect
+_authority.observe_experiment_requirements = observe_experiment_requirements
+_authority._auth.observe_experiment_requirements = observe_experiment_requirements
 
 __all__ = sorted(
-    name for name in globals() if not name.startswith("__") and name not in {"_auth", "_base"}
+    {
+        *[
+            name
+            for name in dir(_authority)
+            if not name.startswith("__") and not name.startswith("_original_")
+        ],
+        "observe_experiment_requirements",
+        "_strict_observe_business_effect",
+        "_response_only_effect_authority",
+    }
 )
