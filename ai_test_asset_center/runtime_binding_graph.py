@@ -1,14 +1,16 @@
-"""Runtime binding graph facade with actor, observer and value authority.
+"""Runtime binding graph facade with actor, observer, value and fixture authority.
 
 The established source/fixture/read resolver mechanics live in
 ``_runtime_binding_graph_mechanics``. Formal facts require explicit authority:
 
 * credential placeholders are principal-specific and may not select the first
   actor that happens to have a secret;
-* effect observers belong to an exact source operation; and
+* effect observers belong to an exact source operation;
 * request-schema examples/defaults may supply ordinary business scalars, but
-  never resource identity. An example ``orderId``/``addressId`` is documentation
-  data, not proof that the referenced resource exists at runtime.
+  never resource identity; and
+* fixture creation uses either the target's structural collection or an explicit
+  source ``produces`` relation to the operation's entity. A sibling/action POST
+  under the same module prefix is never create authority by proximity alone.
 """
 from __future__ import annotations
 
@@ -46,8 +48,6 @@ def _text(value: Any) -> str:
 
 
 def _identity_shaped_target(value: Any) -> bool:
-    """Return whether a target is structurally a resource identity field."""
-
     raw = _text(value)
     if not raw:
         return False
@@ -127,6 +127,180 @@ def declared_effect_observers(
     )
 
 
+def _fixture_structural_collection_paths(
+    operation: dict[str, Any],
+    target: str,
+) -> list[str]:
+    target_path = _core.normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    )
+    prefix = _core._api_prefix(target_path)
+    candidates = _core.body_field_collection_paths(target, api_prefix=prefix)
+    if not candidates:
+        primary = _core.normalize_path_placeholders(
+            _core.collection_path(target_path)
+        )
+        if primary.startswith("/") and not _core.path_has_placeholders(primary):
+            candidates = [primary]
+    return list(
+        dict.fromkeys(
+            _core.normalize_path_placeholders(path).rstrip("/")
+            for path in candidates
+            if _text(path).startswith("/")
+            and not _core.path_has_placeholders(
+                _core.normalize_path_placeholders(path)
+            )
+        )
+    )
+
+
+def _fixture_create_candidates(
+    operation: dict[str, Any],
+    *,
+    target: str,
+    behavior_ir: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return source POSTs authorized structurally or by explicit produces relation."""
+
+    operations = {
+        _text(row.get("id") or row.get("operation_id")): row
+        for row in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(row, dict)
+        and _text(row.get("id") or row.get("operation_id"))
+    }
+    structural_paths = set(_fixture_structural_collection_paths(operation, target))
+    current_entities = {
+        _text(value)
+        for value in [
+            *_list(_dict(operation).get("entity_refs")),
+            _dict(operation).get("entity_ref"),
+        ]
+        if _text(value)
+    }
+    explicit_producers: set[str] = set()
+    if current_entities:
+        for raw in _list(_dict(behavior_ir).get("relations")):
+            relation = _dict(raw)
+            if (
+                _text(relation.get("relation_type")) != "produces"
+                or _text(relation.get("status")) in {"conflicting", "unsupported"}
+                or not _list(relation.get("source_refs"))
+                or _text(relation.get("to_ref")) not in current_entities
+            ):
+                continue
+            producer_ref = _text(
+                relation.get("operation_ref") or relation.get("from_ref")
+            )
+            if producer_ref:
+                explicit_producers.add(producer_ref)
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for operation_ref, raw in operations.items():
+        candidate = _dict(raw)
+        path = _core.normalize_path_placeholders(
+            _text(candidate.get("path") or candidate.get("raw_path"))
+        ).rstrip("/")
+        if (
+            _text(candidate.get("method")).upper() != "POST"
+            or not path.startswith("/")
+            or _core.path_has_placeholders(path)
+        ):
+            continue
+        authorities: list[str] = []
+        if path in structural_paths:
+            authorities.append("structural_collection")
+        if operation_ref in explicit_producers:
+            authorities.append("explicit_produces_relation")
+        if not authorities or operation_ref in seen:
+            continue
+        seen.add(operation_ref)
+        candidates.append(
+            {
+                "operation": candidate,
+                "operation_ref": operation_ref,
+                "path": path,
+                "authorities": authorities,
+            }
+        )
+    return candidates
+
+
+def _declared_fixture_setup(
+    operation: dict[str, Any],
+    *,
+    target: str,
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    """Build fixture setup only from one fully viable authoritative create."""
+
+    operations = _list(_dict(behavior_ir).get("operations"))
+    viable: list[dict[str, Any]] = []
+    for candidate in _fixture_create_candidates(
+        operation,
+        target=target,
+        behavior_ir=behavior_ir,
+    ):
+        create = _dict(candidate.get("operation"))
+        create_path = _text(candidate.get("path"))
+        body_template = _core._request_example(create, sibling_ops=operations)
+        if not body_template:
+            continue
+
+        body_bindings: list[dict[str, Any]] = []
+        unresolved_body = False
+        prefix = _core._api_prefix(create_path)
+        for row in _core._body_placeholder_rows(body_template):
+            field = _text(row.get("target")).split(".")[-1].split("[")[0]
+            token = _text(row.get("template_token"))
+            resolvers = _core._declared_reads_for_paths(
+                _core.body_field_collection_paths(field or token, api_prefix=prefix)
+                or _core.body_field_collection_paths(token, api_prefix=prefix),
+                behavior_ir=behavior_ir,
+            )
+            if not resolvers:
+                unresolved_body = True
+                break
+            body_bindings.append(
+                {
+                    "target": _text(row.get("target")),
+                    "template_token": token,
+                    "resolver_operations": resolvers,
+                }
+            )
+        if unresolved_body:
+            continue
+
+        cleanup_operations = _core._declared_cleanup_operations(
+            create_path,
+            behavior_ir=behavior_ir,
+        )
+        actor_refs = _core._declared_fixture_actor_refs(
+            create,
+            behavior_ir=behavior_ir,
+        )
+        if not cleanup_operations or len(actor_refs) != 1:
+            continue
+        viable.append(
+            {
+                "operation_ref": _text(candidate.get("operation_ref")),
+                "method": "POST",
+                "path": create_path,
+                "actor_refs": list(actor_refs),
+                "body_template": body_template,
+                "body_bindings": body_bindings,
+                "cleanup_operations": cleanup_operations,
+                "create_authorities": list(candidate.get("authorities") or []),
+            }
+        )
+
+    # Multiple fully viable creates are semantic ambiguity. Do not let source
+    # order choose which business object/setup route the experiment will create.
+    if len(viable) != 1:
+        return {}
+    return viable[0]
+
+
 def _actor_ref(actor: dict[str, Any]) -> str:
     return _text(actor.get("id") or actor.get("actor_id"))
 
@@ -146,8 +320,6 @@ def _credential_actor_authority(
     obligation: dict[str, Any],
     actors: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, str]:
-    """Return one principal only when compile-time actor identity is unique."""
-
     candidates = {
         _actor_ref(actor): actor
         for actor in actors
@@ -269,12 +441,11 @@ def build_binding_plan(
     )
 
 
-# Internal graph helpers dynamically resolve these functions from their defining
-# module. Keep private/public call paths on the same strict authorities.
 _core.declared_effect_observers = declared_effect_observers
 _core._source_declared_body_example_bindings = (
     _source_declared_body_example_bindings
 )
+_core._declared_fixture_setup = _declared_fixture_setup
 
 __all__ = sorted(
     {
@@ -287,6 +458,8 @@ __all__ = sorted(
         "declared_effect_observers",
         "_source_declared_body_example_bindings",
         "_identity_shaped_target",
+        "_fixture_create_candidates",
+        "_declared_fixture_setup",
         "_credential_actor_authority",
         "_govern_credential_bindings",
     }
