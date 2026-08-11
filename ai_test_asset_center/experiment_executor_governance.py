@@ -31,7 +31,7 @@ from .request_header_transport_authority import (
     install_request_header_transport_authority,
 )
 from .validation_parameter_authority import (
-    install_validation_parameter_authority,
+    install_request_parameter_contract_authority,
 )
 from .experiment_barrier_request_authority import (
     install_barrier_request_first_loss_authority,
@@ -40,11 +40,11 @@ from .fixture_measurement_finalizer_authority import (
     install_fixture_measurement_finalizer_authority,
 )
 
-# Runtime may execute a frozen artifact in a fresh process that never imported
-# the validation compiler. Reinstall exact request authorities, bridge barrier
-# zero-write governance, and register the canonical Finalizer composition hook
-# for fixture/precondition measurement blockers.
-install_validation_parameter_authority()
+# A runtime-only process must rebuild exactly the compile-frozen request
+# contract, but it must not import validation-expander/protocol modules merely
+# to do so. Install only the query RequestBuildContract authority here, then the
+# exact transport-header authority and execution/finalizer bridges.
+install_request_parameter_contract_authority()
 install_request_header_transport_authority()
 install_barrier_request_first_loss_authority()
 install_fixture_measurement_finalizer_authority()
