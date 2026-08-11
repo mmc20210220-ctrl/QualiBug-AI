@@ -1,9 +1,11 @@
-"""Public compile-freeze facade with one flow-data authority.
+"""Public compile-freeze facade with flow-data and request-build authority.
 
 The core module freezes protocol steps and readback contracts. This facade first
 projects source-declared credential coordinates into request bodies as opaque
-secret refs, then freezes exact data dependencies and proves the current
-runtimes can execute them. Secret values never enter the compiled artifact.
+secret refs, then freezes exact data dependencies and finally proves that those
+dependencies can form the source-declared HTTP requests. Secret values never
+enter the compiled artifact and a known-unbuildable request never becomes a
+FROZEN execution plan.
 """
 from copy import deepcopy
 
@@ -20,6 +22,10 @@ from .flow_data_requirement import (
 from .real_id_resolver import (
     infer_path_params,
     normalize_path_placeholders,
+)
+from .request_build_contract import (
+    STATUS_BLOCKED as REQUEST_BUILD_BLOCKED,
+    build_request_build_contract,
 )
 
 for _name in dir(_core):
@@ -132,6 +138,23 @@ def _requirement_projection_input(frozen: dict) -> dict:
     return projection_source
 
 
+def _request_build_block_detail(contract: dict) -> str:
+    details: list[str] = []
+    for row in _list(contract.get("steps")):
+        if not isinstance(row, dict) or _text(row.get("status")) != REQUEST_BUILD_BLOCKED:
+            continue
+        components = ",".join(
+            _text(value)
+            for value in _list(row.get("blocked_components"))
+            if _text(value)
+        )
+        details.append(
+            f"{_text(row.get('phase'))}:{_text(row.get('step_id'))}:"
+            f"{_text(row.get('operation_ref'))}:{components or 'request'}"
+        )
+    return ("request_build_contract:" + ";".join(details[:12]))[:1000]
+
+
 def freeze_compiled_experiment(
     experiment: dict,
     *,
@@ -192,6 +215,26 @@ def freeze_compiled_experiment(
             or "flow_data_execution_contract_not_frozen",
         )
 
+    # FlowData answers "where can each dynamic value come from?". The request
+    # contract answers the next question: "does that make every declared HTTP
+    # request constructible?". Runtime channels stay DEFERRED, not fabricated.
+    request_contract_input = deepcopy(frozen)
+    request_contract_input["flow_data_requirement"] = requirement
+    request_contract_input["flow_data_execution_contract"] = execution_contract
+    request_build_contract = build_request_build_contract(
+        request_contract_input,
+        behavior_ir=behavior_ir,
+        flow_execution_contract=execution_contract,
+    )
+    if _text(request_build_contract.get("status")) == REQUEST_BUILD_BLOCKED:
+        blocked = _block(
+            frozen,
+            "BLOCKED_MISSING_BINDING",
+            _request_build_block_detail(request_build_contract),
+        )
+        blocked["request_build_contract"] = request_build_contract
+        return blocked
+
     result = deepcopy(frozen)
     requirement_id = _text(requirement.get("requirement_id"))
     requirement_fingerprint = _text(
@@ -200,14 +243,19 @@ def freeze_compiled_experiment(
     execution_fingerprint = _text(
         execution_contract.get("contract_fingerprint")
     )
+    request_build_fingerprint = _text(
+        request_build_contract.get("contract_fingerprint")
+    )
     result["flow_data_requirement"] = requirement
     result["flow_data_execution_contract"] = execution_contract
+    result["request_build_contract"] = request_build_contract
     flow_requirements = deepcopy(_dict(result.get("flow_requirements")))
     flow_requirements.update(
         {
             "data_requirement_id": requirement_id,
             "data_requirement_fingerprint": requirement_fingerprint,
             "data_execution_contract_fingerprint": execution_fingerprint,
+            "request_build_contract_fingerprint": request_build_fingerprint,
             "materialization_authority": _dict(
                 requirement.get("materialization_authority")
             ),
@@ -254,6 +302,7 @@ def freeze_compiled_experiment(
         "flow_data_requirement_id": requirement_id,
         "flow_data_requirement_fingerprint": requirement_fingerprint,
         "flow_data_execution_contract_fingerprint": execution_fingerprint,
+        "request_build_contract_fingerprint": request_build_fingerprint,
     }
     freeze_fingerprint = _fingerprint(reseal_payload)
     result["compile_freeze_receipt"] = {
@@ -269,7 +318,9 @@ def freeze_compiled_experiment(
         "flow_data_requirement_id": requirement_id,
         "flow_data_requirement_fingerprint": requirement_fingerprint,
         "flow_data_execution_contract_fingerprint": execution_fingerprint,
+        "request_build_contract_fingerprint": request_build_fingerprint,
         "fixture_contract_authority": "flow_data_requirement",
+        "request_build_authority": "request_build_contract",
     }
     return result
 
