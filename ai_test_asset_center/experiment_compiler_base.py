@@ -1,23 +1,31 @@
 """Batch compiler facade with source-operation and ownership-scope authority.
 
 The established raw compilation/finalization mechanics live in
-``_experiment_compiler_base_mechanics``. This boundary adds two fail-closed
-identity rules before final FlowData freeze:
+``_experiment_compiler_base_mechanics``. This boundary adds fail-closed identity
+rules before final FlowData freeze:
 
 * stale source locators recover an operation only when METHOD+PATH identifies
-  exactly one Behavior IR operation; and
+  exactly one Behavior IR operation;
 * ownership bindings are scoped only after the family protocol has fixed exact
-  control/treatment actors. Query own-scope becomes a step-local actor identity
-  reference rather than one global ``userId``; authorization same-resource body
-  binding is sealed to the unique compiled control owner actor.
+  control/treatment actors; and
+* the existing V1.2 Binding Coverage Graph is rebuilt after that scope
+  projection. Query-local ownership targets removed from the global binding plan
+  therefore cannot remain as stale coverage facts/fingerprints.
 """
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
 from typing import Any
 
 from . import _experiment_compiler_base_mechanics as _core
+from .binding_coverage_graph import build_binding_coverage_graph
 from .ownership_binding_scope_authority import seal_ownership_binding_scopes
+from .v12_coverage_recovery_orchestrator import (
+    GATE_BLOCKED,
+    _evaluate_binding_gate,
+)
 
 for _name in dir(_core):
     if not _name.startswith("__"):
@@ -174,6 +182,101 @@ def _ownership_scope_block(
     return blocked
 
 
+def _binding_coverage_block(
+    experiment: dict[str, Any],
+    gate: dict[str, Any],
+) -> dict[str, Any]:
+    blocked = deepcopy(experiment)
+    blocked["control_plan"] = []
+    blocked["treatment_plan"] = []
+    blocked["precondition_plan"] = []
+    blocked["cleanup_plan"] = []
+    blocked["compile_receipt"] = {
+        "status": "BLOCKED",
+        "reason_code": _text(gate.get("reason_code"))
+        or "BLOCKED_MISSING_BINDING",
+        "detail": (
+            "ownership_scope_binding_coverage:"
+            + (_text(gate.get("detail")) or "binding_graph_not_valid")
+        )[:1000],
+    }
+    blocked["post_scope_binding_gate_receipt"] = deepcopy(gate)
+    return blocked
+
+
+def _reseal_binding_coverage_after_scope(
+    experiment: dict[str, Any],
+    *,
+    obligation: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Rebuild only the V1.2 module whose semantic input changed.
+
+    The raw compiler already ran the full V1.2 orchestrator. Ownership scope
+    projection changes the binding plan (and query-local runtime DAG nodes) but
+    does not change cleanup/oracle/observer semantics. Reuse the canonical
+    binding graph builder + canonical binding gate, replace that gate receipt,
+    and recompute the orchestrator fingerprint with the original gate statuses.
+    """
+
+    result = deepcopy(experiment)
+    graph = build_binding_coverage_graph(
+        experiment=result,
+        behavior_ir=behavior_ir,
+    )
+    gate = _evaluate_binding_gate(graph)
+    result["binding_coverage_graph"] = graph
+    result["post_scope_binding_gate_receipt"] = deepcopy(gate)
+    if _text(gate.get("status")) == GATE_BLOCKED:
+        return result, gate
+
+    coverage = deepcopy(_dict(result.get("compile_coverage_receipt")))
+    gate_receipts = [
+        dict(row)
+        for row in _list(coverage.get("gate_receipts"))
+        if isinstance(row, dict)
+    ]
+    replaced = False
+    for index, row in enumerate(gate_receipts):
+        if _text(row.get("module")) == "binding_coverage_graph":
+            gate_receipts[index] = deepcopy(gate)
+            replaced = True
+            break
+    if not replaced:
+        gate_receipts.append(deepcopy(gate))
+
+    verdict = _text(coverage.get("verdict")) or "READY"
+    binding_fingerprint = _text(graph.get("binding_graph_fingerprint"))
+    fp_content = {
+        "obligation_id": _text(obligation.get("obligation_id")),
+        "verdict": verdict,
+        "gates": {
+            _text(row.get("module")): _text(row.get("status"))
+            for row in gate_receipts
+            if _text(row.get("module"))
+        },
+        "binding_fingerprint": binding_fingerprint,
+    }
+    orchestrator_fingerprint = hashlib.sha256(
+        json.dumps(
+            fp_content,
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()[:32]
+    coverage.update(
+        {
+            "verdict": verdict,
+            "fingerprint": orchestrator_fingerprint,
+            "gate_receipts": gate_receipts,
+            "binding_graph_fingerprint": binding_fingerprint,
+            "ownership_scope_resealed": True,
+        }
+    )
+    result["compile_coverage_receipt"] = coverage
+    return result, gate
+
+
 def compile_experiment_for_obligation(
     obligation: dict[str, Any],
     *,
@@ -182,7 +285,7 @@ def compile_experiment_for_obligation(
     policy_version: str = "",
     available_adapters: "set[str] | frozenset[str] | None" = None,
 ) -> dict[str, Any]:
-    """Compile protocol, seal ownership scope, then perform final freezes once."""
+    """Compile protocol, seal ownership scope/coverage, then final-freeze once."""
 
     experiment = _original_raw_compile_for_obligation(
         obligation,
@@ -201,8 +304,17 @@ def compile_experiment_for_obligation(
     )
     if _text(receipt.get("status")) == "BLOCKED":
         return _ownership_scope_block(scoped, receipt)
-    return _core._finalize_compiled_experiment(
+
+    resealed, binding_gate = _reseal_binding_coverage_after_scope(
         scoped,
+        obligation=obligation,
+        behavior_ir=behavior_ir,
+    )
+    if _text(binding_gate.get("status")) == GATE_BLOCKED:
+        return _binding_coverage_block(resealed, binding_gate)
+
+    return _core._finalize_compiled_experiment(
+        resealed,
         behavior_ir=behavior_ir,
     )
 
@@ -249,9 +361,6 @@ def _compile_one_obligation_in_batch(
         return
 
     if len(candidates) == 1:
-        # Feed the unique recovered identity to the historical compiler without
-        # rewriting the source obligation's semantic contract. Only compile
-        # status/count fields are projected back to the original obligation.
         working = deepcopy(obl)
         working["required_operations"] = [candidates[0]]
         _original_compile_one_in_batch(
@@ -269,8 +378,6 @@ def _compile_one_obligation_in_batch(
         _sync_compile_status(working, obl)
         return
 
-    # No exact recovery exists. Preserve the historical missing-operation path;
-    # it will produce the established diagnostics rather than inventing identity.
     _original_compile_one_in_batch(
         obl,
         operations=operations,
@@ -285,7 +392,6 @@ def _compile_one_obligation_in_batch(
     )
 
 
-# Patch mechanics globals because its batch loop resolves these names at call time.
 _core.compile_experiment_for_obligation = compile_experiment_for_obligation
 _core._compile_one_obligation_in_batch = _compile_one_obligation_in_batch
 
@@ -300,6 +406,7 @@ __all__ = sorted(
         ],
         "_compile_one_obligation_in_batch",
         "_locator_operation_candidates",
+        "_reseal_binding_coverage_after_scope",
         "compile_experiment_for_obligation",
         "compile_experiments",
     }
