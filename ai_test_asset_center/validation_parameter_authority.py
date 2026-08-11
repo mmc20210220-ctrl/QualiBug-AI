@@ -34,6 +34,14 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _required_flag(value: Any) -> bool:
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    return _text(value).lower() in {"true", "yes", "1", "required"}
+
+
 def declared_parameter_control_value(
     parameter: dict[str, Any],
 ) -> tuple[bool, Any, str]:
@@ -117,7 +125,7 @@ def strict_parameter_entries(operation: dict[str, Any]) -> list[dict[str, Any]]:
                     "name": name,
                     "schema": schema,
                     "example": deepcopy(value),
-                    "required": bool(row.get("required")),
+                    "required": _required_flag(row.get("required")),
                     "control_value_authority": authority,
                     "source_declared_control_value": True,
                 }
