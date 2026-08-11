@@ -1,4 +1,4 @@
-"""Runtime-support facade with structural identity, operation and observer authority.
+"""Runtime-support facade with structural identity, operation, observer and binding authority.
 
 The established transport/preflight/credential mechanics live in
 ``_experiment_runtime_support_mechanics``. Formal runtime execution may not
@@ -6,10 +6,12 @@ manufacture identity by convenience:
 
 * resource selection is structural; only an explicitly compiled state predicate
   may filter rows;
-* every transport step's HTTP method comes from its Behavior IR operation; and
+* every transport step's HTTP method comes from its Behavior IR operation;
 * effect-observer derivation requires one exact source-declared write operation
-  and one unambiguous materializable observer. Path-only or source-order
-  selection never becomes observation authority.
+  and one unambiguous materializable observer; and
+* every FROZEN initial flow binding must still have an executable materialization
+  channel at runtime. Old/stale artifacts cannot bypass compile-time binding
+  authority and fall through to ``HARNESS_REQUEST_BUILD_FAILED``.
 """
 from __future__ import annotations
 
@@ -17,6 +19,9 @@ from typing import Any
 
 from . import _experiment_runtime_support_mechanics as _core
 from ._experiment_runtime_support_mechanics import *  # noqa: F401,F403
+from .binding_target_materialization_authority import (
+    resolve_binding_target_materialization,
+)
 from .real_id_resolver import (
     _extract_entity_candidates as _structural_entity_candidates,
     bind_entity_fields as _structural_bind_entity_fields,
@@ -121,6 +126,47 @@ def _operation_method_authority(
                     "BLOCKED_OPERATION_CONTRACT_DRIFT",
                     f"method_mismatch:{op_ref}:step={step_method}:ir={declared_method}",
                 )
+    return True, "", ""
+
+
+def _runtime_initial_binding_authority(
+    experiment: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> tuple[bool, str, str]:
+    """Revalidate the frozen initial-binding set before execution admission."""
+
+    exp = _dict(experiment)
+    contract = _dict(exp.get("flow_data_execution_contract"))
+    if _text(contract.get("status")).upper() != "FROZEN":
+        # Legacy/no-flow-contract artifacts continue through the historical
+        # preflight, which already validates path bindings. This guard is a
+        # drift check for artifacts that explicitly claim frozen flow authority.
+        return True, "", ""
+
+    targets: list[str] = []
+    for raw in _list(contract.get("step_contracts")):
+        for value in _list(_dict(raw).get("initial_binding_targets")):
+            target = _text(value)
+            if target and target not in targets:
+                targets.append(target)
+
+    for target in targets:
+        receipt = resolve_binding_target_materialization(
+            target,
+            experiment=exp,
+            behavior_ir=behavior_ir,
+            flow_execution_contract=contract,
+        )
+        if _text(receipt.get("status")) == "RESOLVED":
+            continue
+        reason = _text(receipt.get("reason_code")) or (
+            "BINDING_TARGET_HAS_NO_EXECUTABLE_MATERIALIZATION_CHANNEL"
+        )
+        return (
+            False,
+            "BLOCKED_MISSING_BINDING",
+            f"runtime_initial_binding_unexecutable:{target}:{reason}",
+        )
     return True, "", ""
 
 
@@ -282,6 +328,12 @@ def preflight_experiment_executable(
     )
     if not method_ok:
         return method_ok, method_reason, method_detail
+    binding_ok, binding_reason, binding_detail = _runtime_initial_binding_authority(
+        experiment,
+        behavior_ir,
+    )
+    if not binding_ok:
+        return binding_ok, binding_reason, binding_detail
     return _original_preflight_experiment_executable(
         experiment,
         behavior_ir=behavior_ir,
@@ -307,6 +359,7 @@ __all__ = sorted(
         "_runtime_entity_candidates",
         "_select_runtime_binding",
         "_operation_method_authority",
+        "_runtime_initial_binding_authority",
         "_operation_for_observation_path",
         "_declared_observation_path",
         "_response_bound_observation_path",
