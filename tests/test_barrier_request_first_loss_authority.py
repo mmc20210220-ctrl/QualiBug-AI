@@ -49,6 +49,7 @@ def test_barrier_zero_transport_reason_becomes_pre_transport_block() -> None:
     assert receipt["row_count"] == 1
     assert receipt["transport_attempted"] is False
     assert receipt["harness_failure_claimed"] is False
+    assert receipt["barrier_scope"] is True
     assert observations["barrier_request_build_first_loss_receipt"] == receipt
 
 
@@ -63,7 +64,28 @@ def test_barrier_transport_error_remains_harness_eligible() -> None:
     assert "barrier_request_build_first_loss_receipt" not in result
 
 
-def test_existing_barrier_pretransport_reason_is_preserved_once() -> None:
+def test_barrier_release_failure_is_not_reclassified_as_request_build() -> None:
+    result = seal_barrier_request_first_loss(
+        {
+            "steps": [
+                {
+                    "phase": "treatment",
+                    "step_id": "treatment_1",
+                    "method": "POST",
+                    "path": "/resource",
+                    "status": "blocked_write",
+                    "status_code": 0,
+                    "reason": "BARRIER_RELEASE_FAILED",
+                }
+            ],
+            "pre_transport_block_reasons": [],
+        }
+    )
+    assert result["pre_transport_block_reasons"] == []
+    assert "barrier_request_build_first_loss_receipt" not in result
+
+
+def test_existing_barrier_pretransport_reason_is_preserved_without_forging_receipt() -> None:
     reason = "BLOCKED_MISSING_OBSERVER"
     result = seal_barrier_request_first_loss(
         {
@@ -82,4 +104,4 @@ def test_existing_barrier_pretransport_reason_is_preserved_once() -> None:
         }
     )
     assert result["pre_transport_block_reasons"] == [reason]
-    assert result["barrier_request_build_first_loss_receipt"]["row_count"] == 1
+    assert "barrier_request_build_first_loss_receipt" not in result
