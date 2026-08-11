@@ -914,7 +914,19 @@ def _structurize_rule_causal_chains(rules: list[dict[str, Any]]) -> list[dict[st
     return rules
 
 
-def build_enterprise_business_knowledge_asset(project_id: str = "real_project_demo", root: Path | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_enterprise_business_knowledge_asset(
+    project_id: str = "real_project_demo",
+    root: Path | None = None,
+    options: dict[str, Any] | None = None,
+    *,
+    parsed_source_sink: list[tuple[dict[str, Any], dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """Build the extraction asset and optionally hand parsed rows to its caller.
+
+    ``parsed_source_sink`` is an invocation-scoped handoff, not a cache.  The
+    composition root consumes these exact rows immediately so the same immutable
+    source version is not parsed a second time during one build.
+    """
     from ._crud import _record_parse  # lazy: avoid circular import
     root = root or ROOT
     project = _safe_project_id(project_id)
@@ -924,6 +936,10 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         registry = _sync_declared_project_sources(project, root, registry)
     active = [row for row in registry.get("sources") or [] if isinstance(row, dict) and row.get("status") == "active"]
     parsed_rows = [(source, _record_parse(source, root)) for source in active]
+    if parsed_source_sink is not None:
+        if parsed_source_sink:
+            raise ValueError("parsed_source_sink_must_be_empty")
+        parsed_source_sink.extend(parsed_rows)
     parser_receipts = [
         dict(parsed.get("parser_receipt") or {})
         for _, parsed in parsed_rows

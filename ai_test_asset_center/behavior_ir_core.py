@@ -5408,6 +5408,61 @@ def build_behavior_ir_from_knowledge_asset(
                 status="unsupported",
             ))
             continue
+        _rule_source_type = _text(rule.get("source_type")).lower()
+        if _rule_source_type == "deploy":
+            _has_deployment_operation_authority = bool(
+                _text(rule.get("operation_ref") or rule.get("operation_id"))
+                or any(
+                    _text(value)
+                    for value in [
+                        *_list(rule.get("operation_refs")),
+                        *_list(rule.get("authoritative_operation_refs")),
+                    ]
+                )
+                or any(
+                    isinstance(edge, dict)
+                    and _text(edge.get("relation") or edge.get("relation_type")).lower()
+                    == "rule_to_interface"
+                    and _text(edge.get("from") or edge.get("from_ref")) == rid
+                    and _text(edge.get("status")).lower() == "accepted"
+                    and _text(edge.get("derivation")).lower().replace("-", "_")
+                    in {"agent_semantic_mapping", "exact_source_section"}
+                    for edge in _list(data.get("relationships"))
+                )
+            )
+            if not _has_deployment_operation_authority:
+                model["coverage_gaps"].append(_fact_node(
+                    node_id=_stable_id(
+                        "gap",
+                        "deployment_rule_lacks_executable_surface_contract",
+                        rid,
+                    ),
+                    typed_fields={
+                        "gap_type": (
+                            "deployment_rule_lacks_executable_surface_contract"
+                        ),
+                        "reason_code": (
+                            "DEPLOYMENT_RULE_NOT_BUSINESS_INVARIANT"
+                        ),
+                        "description": (
+                            "Deployment guidance has no explicit operation "
+                            "contract and cannot be promoted to a business "
+                            "invariant"
+                        ),
+                        "source_rule_ref": rid,
+                    },
+                    source_refs=[
+                        _source_ref(
+                            _text(rule.get("source_id")) or "rule_library",
+                            locator=_text(rule.get("source_locator")),
+                            kind="deployment_authority_gap",
+                        )
+                    ],
+                    confidence=1.0,
+                    derivation="explicit",
+                    status="unsupported",
+                ))
+                continue
         _semantic_frame = _validated_semantic_frame(rule, statement)
 
         # ── Field-level grounding: extract structured operands from statement ──
@@ -6557,296 +6612,6 @@ def build_behavior_ir_from_knowledge_asset(
                 confidence=float(rule.get("confidence") or 0.7),
                 derivation="explicit",
             ))
-
-    # ── Schema-declared constraint invariants ──
-    # A table column whose name declares a business constraint (user_limit /
-    # global_limit / max_discount / category_scope / min_order_amount /
-    # expires_at …) is source material: the schema states the constraint's
-    # existence even when no prose rule documents it — enterprise documents
-    # are never complete and implicit rules surface at runtime. When the
-    # entity has a decision or consumption operation (claim/use/validate/
-    # simulate — 领取/使用/校验/验证/试算/模拟), compile a constraint
-    # verification invariant on that surface so the declared constraint is
-    # actually exercised. Violations are runtime-observed (the target accepts
-    # what the declared column forbids). Column-name patterns are generic
-    # SQL/enterprise vocabulary, never industry terms.
-    _constraint_column_suffixes = (
-        ("limit", "USAGE_LIMIT"), ("cap", "USAGE_LIMIT"), ("quota", "USAGE_LIMIT"),
-        ("threshold", "USAGE_LIMIT"), ("uses", "USAGE_LIMIT"),
-        ("scope", "CATEGORY_SCOPE"), ("category", "CATEGORY_SCOPE"),
-        ("expires", "VALIDITY_WINDOW"), ("valid", "VALIDITY_WINDOW"),
-        ("start", "VALIDITY_WINDOW"), ("effective", "VALIDITY_WINDOW"),
-    )
-    _constraint_column_prefixes = (
-        ("max", "AMOUNT_BOUND"), ("min", "AMOUNT_BOUND"),
-        ("expires", "VALIDITY_WINDOW"), ("valid", "VALIDITY_WINDOW"),
-    )
-    _constraint_decision_tokens = (
-        "use", "consume", "redeem", "claim", "apply", "validate", "check",
-        "verify", "simulate", "核销", "使用", "领取", "兑换", "校验", "验证",
-        "试算", "模拟",
-    )
-    _derived_constraint_ids: set[str] = set()
-    for _ent in _list(model.get("entities")):
-        if not isinstance(_ent, dict):
-            continue
-        _ent_name = _text(_ent.get("name") or _ent.get("id"))
-        if not _ent_name:
-            continue
-        _constraint_cols: list[tuple[str, str]] = []
-        for _fld in _list(_ent.get("fields")):
-            if not isinstance(_fld, dict):
-                continue
-            _fname = _text(_fld.get("name") or _fld.get("field")).lower()
-            if not _fname:
-                continue
-            for _suffix, _kind in _constraint_column_suffixes:
-                if _fname.endswith(_suffix) and len(_fname) > len(_suffix):
-                    _constraint_cols.append((_fname, _kind))
-                    break
-            else:
-                for _prefix, _kind in _constraint_column_prefixes:
-                    if _fname.startswith(_prefix) and len(_fname) > len(_prefix):
-                        _constraint_cols.append((_fname, _kind))
-                        break
-        if not _constraint_cols:
-            continue
-        # Entity-scoped decision/consumption operations (by entity_refs, then
-        # path-token fallback on the entity's own name — never a global scan).
-        _ent_ops = [
-            row for row in _list(model.get("operations"))
-            if isinstance(row, dict)
-            and (
-                _ent_name in set(_text(v) for v in _list(row.get("entity_refs")))
-                or _op_text_has_token(
-                    " ".join((
-                        _text(row.get("path") or row.get("raw_path")),
-                        _text(row.get("summary") or ""),
-                    )),
-                    str(_ent_name),
-                )
-            )
-        ]
-        _decision_ops = [
-            row for row in _ent_ops
-            if any(
-                _op_text_has_token(
-                    " ".join((
-                        _text(row.get("path") or row.get("raw_path")),
-                        _text(row.get("operation_id") or row.get("id")),
-                    )),
-                    token,
-                )
-                for token in _constraint_decision_tokens
-            )
-            and _text(row.get("method") or "").upper() in {"POST", "PUT", "PATCH", "DELETE"}
-        ]
-        if not _decision_ops:
-            continue
-        _decision_op_refs = [
-            _text(row.get("operation_id") or row.get("id"))
-            for row in _decision_ops
-            if _text(row.get("operation_id") or row.get("id"))
-        ]
-        for _col_name, _kind in _constraint_cols:
-            _inv_id = _stable_id("inv", "schema_constraint", _ent_name, _col_name)
-            if _inv_id in _derived_constraint_ids:
-                continue
-            _derived_constraint_ids.add(_inv_id)
-            model["invariants"].append(_fact_node(
-                node_id=_inv_id,
-                typed_fields={
-                    "description": (
-                        f"声明列约束 {_ent_name}.{_col_name} 必须在实体决策面上生效"
-                    ),
-                    "expression": {
-                        "kind": "validation",
-                        "operator": {
-                            "USAGE_LIMIT": "under_limit",
-                            "AMOUNT_BOUND": "within_bound",
-                            "CATEGORY_SCOPE": "scope_restricted",
-                            "VALIDITY_WINDOW": "within_window",
-                        }.get(_kind, "within_bound"),
-                        "constraint_kind": _kind,
-                        "operands": [{
-                            "entity_ref": _ent_name,
-                            "field": _col_name,
-                            "source": "schema_declared_column",
-                        }],
-                        "raw": f"schema column {_ent_name}.{_col_name}",
-                    },
-                    "operation_refs": list(dict.fromkeys(_decision_op_refs)),
-                    "subject_entity_refs": [_ent_name],
-                    "derived_invariant_kind": "schema_declared_constraint",
-                    "constraint_source": "data_tables.columns",
-                },
-                source_refs=[_source_ref(
-                    "schema.sql",
-                    locator=f"table:{_ent_name}.{_col_name}",
-                    quote=f"column {_col_name}",
-                    kind="schema_declared_constraint",
-                )],
-                confidence=0.6,
-                derivation="schema-derived",
-            ))
-
-    # ── Schema-declared state-gate invariants (inactive-state consumption) ──
-    # An entity with a status/state column that OTHER entities consume (schema
-    # foreign keys — order_items → products) must be gated at consumption:
-    # consuming an inactive state (DRAFT/PENDING/未发布… — generic initial
-    # state vocabulary, never an industry term) is a runtime-observable
-    # violation. The consumption surface is any write whose request references
-    # the consumed entity's identity column. The expected rejection is
-    # runtime-observed, not assumed: the target accepting a DRAFT product in
-    # an order IS the defect.
-    _INACTIVE_STATE_TOKENS = (
-        "draft", "草稿", "pending", "待审核", "待发布", "init", "initial",
-        "unpublished", "未发布", "temp", "temporary", "新建", "new", "created",
-        "inactive", "disabled", "停用", "禁用", "下架", "off", "off_sale",
-        "off-sale", "offline",
-    )
-    _entity_identity_columns = ("id", "sku", "code", "key", "uuid", "no", "number")
-    _fk_targets: dict[str, set[str]] = {}
-    for _dt in _list(data.get("data_tables")):
-        if not isinstance(_dt, dict):
-            continue
-        _fk_tables = _list(_dt.get("foreign_keys"))
-        if not _fk_tables:
-            continue
-        for _fk in _fk_tables:
-            _fk_name = _text(_fk).lower()
-            if _fk_name:
-                _fk_targets.setdefault(_fk_name, set()).add(
-                    _text(_dt.get("name") or _dt.get("table")).lower()
-                )
-    _state_gate_ids: set[str] = set()
-    for _ent in _list(model.get("entities")):
-        if not isinstance(_ent, dict):
-            continue
-        _ent_name = _text(_ent.get("name") or _ent.get("id"))
-        if not _ent_name:
-            continue
-        _ent_lower = _ent_name.lower()
-        if not _fk_targets.get(_ent_lower):
-            continue
-        _state_field = ""
-        for _fld in _list(_ent.get("fields")):
-            if not isinstance(_fld, dict):
-                continue
-            _fname = _text(_fld.get("name") or _fld.get("field")).lower()
-            if _fname in {"status", "state", "lifecycle", "lifecycle_status"}:
-                _state_field = _fname
-                break
-        if not _state_field:
-            continue
-        # Consuming operations: writes whose request body/path references the
-        # consumed entity's identity columns (sku/product_id/coupon_code…),
-        # excluding the entity's own CRUD surfaces (path carries the entity
-        # name — creating a product is not consuming it).
-        _ent_path_has_name = _op_text_has_token(
-            " ".join((
-                _text(row.get("path") or row.get("raw_path")),
-                _text(row.get("summary") or ""),
-            )),
-            _ent_name,
-        )
-        _ent_identity_fields = {
-            _text(_fld.get("name") or _fld.get("field")).lower()
-            for _fld in _list(_ent.get("fields"))
-            if isinstance(_fld, dict)
-            and _text(_fld.get("name") or _fld.get("field")).lower()
-            in _entity_identity_columns
-        }
-
-        def _nested_request_identity_fields(
-            _op: dict[str, Any],
-        ) -> set[str]:
-            """Recursively find the consumed entity's identity column names
-            anywhere in the request example (items[].sku, productId in a
-            nested line object …)."""
-            _found: set[str] = set()
-            _example = (
-                _op.get("request_example")
-                or _dict(_op.get("requestBody")).get("example")
-            )
-
-            def _walk(_node: Any) -> None:
-                if isinstance(_node, dict):
-                    for _k, _val in _node.items():
-                        if _text(_k).lower() in _ent_identity_fields:
-                            _found.add(_text(_k).lower())
-                        _walk(_val)
-                elif isinstance(_node, list):
-                    for _item in _node:
-                        _walk(_item)
-
-            _walk(_example)
-            return _found
-
-        _consume_ops = [
-            row for row in _list(model.get("operations"))
-            if isinstance(row, dict)
-            and _text(row.get("method") or "").upper() in {"POST", "PUT", "PATCH", "DELETE"}
-            and not _op_text_has_token(
-                " ".join((
-                    _text(row.get("path") or row.get("raw_path")),
-                    _text(row.get("summary") or ""),
-                )),
-                _ent_name,
-            )
-            and (
-                _ent_name in set(_text(v) for v in _list(row.get("entity_refs")))
-                or bool(
-                    _operation_request_field_names(row)
-                    & _ent_identity_fields
-                )
-                or bool(_nested_request_identity_fields(row))
-            )
-        ]
-        _consume_refs = [
-            _text(row.get("operation_id") or row.get("id"))
-            for row in _consume_ops
-            if _text(row.get("operation_id") or row.get("id"))
-        ]
-        if not _consume_refs:
-            continue
-        _gate_id = _stable_id("inv", "state_gate", _ent_name, _state_field)
-        if _gate_id in _state_gate_ids:
-            continue
-        _state_gate_ids.add(_gate_id)
-        model["invariants"].append(_fact_node(
-            node_id=_gate_id,
-            typed_fields={
-                "description": (
-                    f"声明状态门 {_ent_name}.{_state_field}：被消费实体处于"
-                    f"非活跃状态时必须拒绝消费"
-                ),
-                "expression": {
-                    "kind": "validation",
-                    "operator": "state_eligible",
-                    "constraint_kind": "STATE_GATE",
-                    "operands": [{
-                        "entity_ref": _ent_name,
-                        "field": _state_field,
-                        "inactive_states": list(_INACTIVE_STATE_TOKENS),
-                        "source": "schema_foreign_key_consumption",
-                    }],
-                    "raw": f"schema FK consumption of {_ent_name}.{_state_field}",
-                },
-                "operation_refs": list(dict.fromkeys(_consume_refs)),
-                "subject_entity_refs": [_ent_name],
-                "derived_invariant_kind": "schema_declared_state_gate",
-                "constraint_source": "data_tables.foreign_keys",
-            },
-            source_refs=[_source_ref(
-                "schema.sql",
-                locator=f"fk:{_ent_name}",
-                quote=f"consumed entity {_ent_name} state gate",
-                kind="schema_declared_state_gate",
-            )],
-            confidence=0.55,
-            derivation="schema-derived",
-        ))
 
     # Runtime V2 relations are the only semantic joins used by the compiler.
     permission_policy_mode = _text(

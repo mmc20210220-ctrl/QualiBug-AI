@@ -84,15 +84,20 @@ def _prefer_specific_blocks(candidates: list[dict[str, Any]]) -> list[dict[str, 
 
 
 def _single_block_candidates(
-    statement: str, blocks: list[dict[str, Any]]
+    statement: str,
+    blocks: list[dict[str, Any]],
+    normalized_blocks: dict[int, str] | None = None,
 ) -> list[list[dict[str, Any]]]:
     target = _normalized(statement)
     if not target:
         return []
-    exact = [row for row in blocks if _normalized(row.get("text")) == target]
+    normalized = normalized_blocks or {
+        id(row): _normalized(row.get("text")) for row in blocks
+    }
+    exact = [row for row in blocks if normalized[id(row)] == target]
     if exact:
         return [[row] for row in _prefer_specific_blocks(exact)]
-    contained = [row for row in blocks if target in _normalized(row.get("text"))]
+    contained = [row for row in blocks if target in normalized[id(row)]]
     return [[row] for row in _prefer_specific_blocks(contained)]
 
 
@@ -107,12 +112,17 @@ def _same_structural_stream(left: dict[str, Any], right: dict[str, Any]) -> bool
 
 
 def _contiguous_block_candidates(
-    statement: str, blocks: list[dict[str, Any]]
+    statement: str,
+    blocks: list[dict[str, Any]],
+    normalized_blocks: dict[int, str] | None = None,
 ) -> list[list[dict[str, Any]]]:
     target = _normalized(statement)
     if not target or len(blocks) < 2:
         return []
     candidates: list[list[dict[str, Any]]] = []
+    normalized = normalized_blocks or {
+        id(row): _normalized(row.get("text")) for row in blocks
+    }
     shortest: int | None = None
     for start in range(len(blocks)):
         combined = ""
@@ -121,7 +131,7 @@ def _contiguous_block_candidates(
             block = blocks[end]
             if span and not _same_structural_stream(span[-1], block):
                 break
-            combined += _normalized(block.get("text"))
+            combined += normalized[id(block)]
             span.append(block)
             if len(combined) > max(len(target) * 4, len(target) + 400):
                 break
@@ -143,12 +153,14 @@ def _contiguous_block_candidates(
 
 
 def _candidate_spans(
-    statement: str, blocks: list[dict[str, Any]]
+    statement: str,
+    blocks: list[dict[str, Any]],
+    normalized_blocks: dict[int, str] | None = None,
 ) -> list[list[dict[str, Any]]]:
-    singles = _single_block_candidates(statement, blocks)
+    singles = _single_block_candidates(statement, blocks, normalized_blocks)
     if singles:
         return singles
-    return _contiguous_block_candidates(statement, blocks)
+    return _contiguous_block_candidates(statement, blocks, normalized_blocks)
 
 
 def _candidate_block_payload(
@@ -223,9 +235,12 @@ def align_business_facts_to_document_ir(
                     }
                 )
             continue
+        normalized_blocks = {
+            id(row): _normalized(row.get("text")) for row in blocks
+        }
         for fact in source_facts:
             statement = _text(fact.get("raw_statement") or fact.get("statement"))
-            candidates = _candidate_spans(statement, blocks)
+            candidates = _candidate_spans(statement, blocks, normalized_blocks)
             if len(candidates) != 1:
                 candidate_block_ids, candidate_block_spans = _candidate_block_payload(
                     candidates

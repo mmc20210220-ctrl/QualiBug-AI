@@ -21,7 +21,14 @@ from .identity_types import (
     fact_mentions,
 )
 from .authorization_semantics import resolve_fact_authorization
-from .schema import as_dict, as_list, stable_id, text, unique_text
+from .schema import (
+    as_dict,
+    as_list,
+    clone_asset_for_understanding_projection,
+    stable_id,
+    text,
+    unique_text,
+)
 
 
 def _authorization_contract_identity(row: dict[str, Any]) -> dict[str, Any]:
@@ -197,7 +204,7 @@ def resolve_enterprise_identities(asset: dict[str, Any]) -> dict[str, Any]:
 def project_asset_for_legacy_builder(
     asset: dict[str, Any], resolution: dict[str, Any]
 ) -> dict[str, Any]:
-    projected = deepcopy(asset)
+    projected = clone_asset_for_understanding_projection(asset)
     label_to_entity = dict(as_dict(resolution.get("label_to_entity")))
     canonical_by_entity = dict(as_dict(resolution.get("canonical_label_by_entity")))
     ledger = dict(as_dict(projected.get("business_fact_ledger")))

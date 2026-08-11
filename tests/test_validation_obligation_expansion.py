@@ -272,6 +272,39 @@ def test_explicit_constraint_is_not_expanded_again() -> None:
     ]
 
 
+def test_semantic_invariant_is_not_cross_producted_with_request_schema() -> None:
+    """A rule obligation and a schema-coverage obligation are different facts.
+
+    An invariant already carries the property it is meant to verify.  Expanding
+    it once per unrelated request field silently replaces that property with a
+    generic type/required check and can also make the protocol shape invalid.
+    """
+
+    obligation = _obligation()
+    obligation["property"] = {
+        "template": "invariant_validation",
+        "invariant_ref": "rule-visible-state",
+        "operation_ref": "op-create",
+        "actor_ref": "actor-public",
+        "expression": {
+            "kind": "business_rule",
+            "operator": "must_hold",
+            "operands": [],
+            "raw": "Only source-approved records may be visible.",
+        },
+    }
+
+    variants = expand_validation_obligation(
+        obligation,
+        operation=_operation(),
+    )
+
+    assert len(variants) == 1
+    assert variants[0]["obligation_id"] == "obl-create-validation"
+    assert variants[0]["property"] == obligation["property"]
+    assert "validation_constraint" not in variants[0]["property"]
+
+
 def test_typed_invariant_operand_targets_exact_source_constraint() -> None:
     obligation = _obligation()
     obligation["property"]["expression"] = {

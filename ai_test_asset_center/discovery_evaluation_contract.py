@@ -949,7 +949,10 @@ def evaluate_completed_scan(
         # Isolate hidden ground truth: receipts expose aggregate counts only.
         for _leak_key in (
             "matched_bugs",
+            "matched_bug_ids",
             "missed_bug_ids",
+            "canonical_unmatched",
+            "gt_unmatched",
             "bug_type_breakdown",
             "risk_family_breakdown",
             "false_positive_findings",

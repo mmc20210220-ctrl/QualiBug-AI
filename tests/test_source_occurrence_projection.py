@@ -123,6 +123,7 @@ def _registry() -> dict:
 def test_projection_creates_two_evidence_views_without_duplicating_business_facts(tmp_path) -> None:
     _save_registry("projection-demo", tmp_path, _registry())
     asset = _asset()
+    original_asset = deepcopy(asset)
     original_rules = deepcopy(asset["rule_library"])
 
     result = project_source_occurrence_assets(
@@ -165,6 +166,7 @@ def test_projection_creates_two_evidence_views_without_duplicating_business_fact
         "departments/finance/rules.md",
     }
     assert all(row["adapter_execution_repeated"] is False for row in views)
+    assert asset == original_asset
 
 
 def test_projection_fails_closed_when_occurrence_has_no_canonical_inventory(tmp_path) -> None:

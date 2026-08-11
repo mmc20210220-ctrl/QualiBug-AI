@@ -465,6 +465,40 @@ def _with_validation_effect_observer(
     return row
 
 
+def _schema_constraint_expansion_eligible(
+    property_spec: dict[str, Any],
+) -> bool:
+    """Return whether this property requests schema-coverage fan-out.
+
+    A source invariant already names the property to verify. Crossing it with
+    every request-schema field changes its meaning and creates unrelated
+    variants. Schema fan-out is authoritative only for the dedicated
+    single-dimension template (or the legacy empty template used by callers
+    that provide only an operation contract). Explicit field constraints are
+    handled before this predicate.
+    """
+
+    prop = _dict(property_spec)
+    template = _text(prop.get("template"))
+    if template not in {"", "single_dimension_mutation"}:
+        return False
+    if any(
+        _text(prop.get(field))
+        for field in (
+            "invariant_ref",
+            "source_intent",
+            "source_rule_ref",
+            "source_rule_statement",
+        )
+    ):
+        return False
+    expression = _dict(prop.get("expression"))
+    return not any(
+        expression.get(field) not in (None, "", [], {})
+        for field in ("kind", "operator", "operands", "raw")
+    )
+
+
 def expand_validation_obligation(
     obligation: dict[str, Any],
     *,
@@ -502,6 +536,9 @@ def expand_validation_obligation(
         )
         normalized["property"] = normalized_property
         return [normalized]
+
+    if not _schema_constraint_expansion_eligible(prop):
+        return [guarded]
 
     schema = _body_schema(_dict(operation))
     example = _request_example(_dict(operation))

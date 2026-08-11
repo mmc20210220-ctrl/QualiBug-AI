@@ -361,13 +361,17 @@ def _apply_global_budget(
     """
     from . import _experiment_batch_executor_single_finding_mechanics as _core
     from .safe_experiment_prioritizer import prioritize_experiments
-    from .small_scale_validation_gate import get_validation_budget
+    from .small_scale_validation_gate import HARD_BUDGET_CAP, get_validation_budget
 
     phase = _phase_of(runtime_contract, validation_phase)
     budget = get_validation_budget(runtime_contract, phase=phase)
-    budget = max(1, min(budget, 200))
-    budget = _core._operation_coverage_budget(selected, budget, hard_cap=200)
-    budget = _core._family_coverage_budget(selected, budget, hard_cap=200)
+    budget = max(1, min(budget, HARD_BUDGET_CAP))
+    budget = _core._operation_coverage_budget(
+        selected, budget, hard_cap=HARD_BUDGET_CAP
+    )
+    budget = _core._family_coverage_budget(
+        selected, budget, hard_cap=HARD_BUDGET_CAP
+    )
 
     receipt: dict[str, Any] = {}
     try:

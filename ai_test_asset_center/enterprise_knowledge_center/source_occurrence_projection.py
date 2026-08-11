@@ -271,7 +271,8 @@ def project_source_occurrence_assets(
     asset: dict[str, Any], *, project_id: str, root: Path
 ) -> dict[str, Any]:
     """Attach deterministic occurrence inventories and evidence views to one final asset."""
-    result = copy.deepcopy(asset or {})
+    # Every modified branch below is rebuilt; large untouched IR branches stay read-only.
+    result = dict(asset or {})
     registry = _load_registry(project_id, root)
     occurrences = _active_occurrences(registry)
     canonical_inventory = _canonical_inventory(result)

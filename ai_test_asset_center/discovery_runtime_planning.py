@@ -1883,6 +1883,8 @@ def build_discovery_plan(
         obligations=obligations,
         experiments=all_experiments,
         fact_experimentability_ledger=_fact_exp_ledger,
+        behavior_ir=behavior_ir,
+        knowledge_asset=asset,
     )
     return DiscoveryPlanningBundle(
         mainline_run=contract,

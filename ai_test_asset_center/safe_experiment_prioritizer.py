@@ -49,6 +49,7 @@ ALLOWED_FACTORS = frozenset({
     "entity_chain_depth",
     "state_transition_depth",
     "cross_entity_depth",
+    "anonymous_write_risk",
 })
 
 
@@ -156,13 +157,18 @@ def score_experiment_priority(
     # highest-risk writes first. The signal is structural (the write surface
     # declares no credential requirement), never a domain term.
     _template = _text(prop.get("template")) or _text(exp.get("template"))
-    _is_anonymous_write = (
-        _template == "credential_gated_write"
-        or (
-            _text(exp.get("write_requires_auth") or prop.get("requires_auth"))
-            in {"", "false", "no"}
-            and bool(_list(exp.get("treatment_plan")))
-        )
+    if "write_requires_auth" in exp:
+        _requires_auth = exp.get("write_requires_auth")
+    elif "requires_auth" in prop:
+        _requires_auth = prop.get("requires_auth")
+    else:
+        _requires_auth = None
+    _auth_explicitly_absent = (
+        _requires_auth is False
+        or _text(_requires_auth).lower() in {"false", "no", "0"}
+    )
+    _is_anonymous_write = _template == "credential_gated_write" or (
+        _auth_explicitly_absent and bool(_list(exp.get("treatment_plan")))
     )
     if _is_anonymous_write:
         factors["anonymous_write_risk"] = 1.0

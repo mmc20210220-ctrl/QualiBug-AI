@@ -6,6 +6,7 @@ traceable to an original source span or an existing source-backed knowledge asse
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 from typing import Any, Iterable
@@ -46,6 +47,24 @@ def as_dict(value: Any) -> dict[str, Any]:
 
 def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def clone_asset_for_understanding_projection(
+    asset: dict[str, Any],
+) -> dict[str, Any]:
+    """Clone mutable cognition state while sharing finalized heavy evidence.
+
+    Document Structure IR is finalized before cognition starts and remains
+    read-only throughout the builder. A prior-pass understanding model is also
+    read-only and replaced atomically by the caller. ``deepcopy``'s memo keeps
+    those branches shared while retaining full isolation for mutable state.
+    """
+    shared = (
+        asset.get("document_structure_assets"),
+        asset.get("enterprise_understanding_model"),
+    )
+    memo = {id(value): value for value in shared if value is not None}
+    return deepcopy(asset, memo)
 
 
 def stable_id(prefix: str, *parts: Any) -> str:

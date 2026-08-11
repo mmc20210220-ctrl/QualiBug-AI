@@ -2009,25 +2009,44 @@ def _ticket_rows(text: str, payload: Any, source_id: str, source_type: str) -> l
     if rows:
         return rows
     for idx, line in enumerate(text.splitlines()):
-        if any(marker in _norm(line) for marker in ("缺陷", "bug", "故障", "incident", "越权", "重复", "金额")):
+        if any(
+            _lexicon_term_present(_norm(line), marker)
+            for marker in (
+                "缺陷", "bug", "故障", "incident", "越权", "重复", "金额",
+            )
+        ):
             rows.append({"risk_id": f"history:{source_id}:line:{idx+1}", "source_id": source_id, "source_type": source_type, "title": _redact_text(line, 320), "severity": "P1" if any(x in _norm(line) for x in ("p0", "p1", "严重", "资金", "越权")) else "P2", "status": "historical", "risk_type": _risk_type_from_text(line), "evidence": _redact_text(line, 600)})
     return rows
+
+
+def _lexicon_term_present(normalized_text: str, term: Any) -> bool:
+    """Match ASCII risk terms as words and CJK terms as source substrings."""
+
+    normalized_term = _norm(term)
+    if not normalized_term:
+        return False
+    if re.fullmatch(r"[a-z0-9_-]+(?: [a-z0-9_-]+)*", normalized_term):
+        return bool(re.search(
+            rf"(?<![a-z0-9]){re.escape(normalized_term)}(?![a-z0-9])",
+            normalized_text,
+        ))
+    return normalized_term in normalized_text
 
 
 def _rule_type_from_text(text: str) -> str:
     norm = _norm(text)
     risk_terms = _lexicon_dict("risk_terms") or RISK_TERMS
-    if any(_norm(term) in norm for term in risk_terms.get("permission_boundary", [])):
+    if any(_lexicon_term_present(norm, term) for term in risk_terms.get("permission_boundary", [])):
         return "permission"
-    if any(_norm(term) in norm for term in risk_terms.get("async_event", [])):
+    if any(_lexicon_term_present(norm, term) for term in risk_terms.get("async_event", [])):
         return "async_event"
-    if any(_norm(term) in norm for term in risk_terms.get("data_conservation", [])):
+    if any(_lexicon_term_present(norm, term) for term in risk_terms.get("data_conservation", [])):
         return "conservation"
-    if any(_norm(term) in norm for term in risk_terms.get("data_reconciliation", [])):
+    if any(_lexicon_term_present(norm, term) for term in risk_terms.get("data_reconciliation", [])):
         return "reconciliation"
-    if any(_norm(term) in norm for term in risk_terms.get("state_machine", [])):
+    if any(_lexicon_term_present(norm, term) for term in risk_terms.get("state_machine", [])):
         return "state_transition"
-    if any(_norm(term) in norm for term in risk_terms.get("idempotency", [])):
+    if any(_lexicon_term_present(norm, term) for term in risk_terms.get("idempotency", [])):
         return "idempotency"
     return "business_rule"
 
@@ -2035,14 +2054,14 @@ def _rule_type_from_text(text: str) -> str:
 def _risk_type_from_text(text: str) -> str:
     norm = _norm(text)
     risk_terms = _lexicon_dict("risk_terms") or RISK_TERMS
-    if any(_norm(term) in norm for term in risk_terms.get("async_event", [])):
+    if any(_lexicon_term_present(norm, term) for term in risk_terms.get("async_event", [])):
         return "async_event"
-    if any(_norm(term) in norm for term in risk_terms.get("idempotency", [])):
+    if any(_lexicon_term_present(norm, term) for term in risk_terms.get("idempotency", [])):
         return "idempotency"
     for name, terms in risk_terms.items():
         if name in {"async_event", "idempotency"}:
             continue
-        if any(_norm(term) in norm for term in terms):
+        if any(_lexicon_term_present(norm, term) for term in terms):
             return name
     return "business_rule"
 

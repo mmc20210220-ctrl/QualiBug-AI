@@ -17,6 +17,7 @@ def _parsed_sources_for_context(
     root: Path,
     *,
     parsed_overrides: Mapping[str, dict[str, Any]] | None = None,
+    require_overrides: bool = False,
 ) -> list[dict[str, Any]]:
     """Read registered sources through the format-agnostic ingestion pipeline.
 
@@ -42,13 +43,27 @@ def _parsed_sources_for_context(
         stored = root / text(source.get("stored_path"))
         source_id = text(source.get("source_id"))
         parsed = overrides.get(source_id)
+        if parsed is None and require_overrides:
+            raise RuntimeError(f"parsed_source_handoff_missing:{source_id}")
         if parsed is None:
             parsed = _record_parse(source, root)
         parser_receipt = as_dict(parsed.get("parser_receipt"))
         filename = text(source.get("original_name") or stored.name)
         document_structure = as_dict(parsed.get("document_structure"))
         structure_error: dict[str, Any] = {}
-        if stored.exists():
+        registered_hash = text(source.get("content_hash"))
+        parsed_hash = text(
+            as_dict(document_structure.get("ingestion_pipeline_receipt")).get(
+                "source_hash"
+            )
+        )
+        if document_structure and registered_hash and parsed_hash != registered_hash:
+            raise RuntimeError(
+                "parsed_document_structure_source_hash_mismatch:"
+                f"{source_id}:{registered_hash}:{parsed_hash or 'missing'}"
+            )
+        reused_document_structure = bool(document_structure)
+        if not document_structure and stored.exists():
             try:
                 document_structure = build_document_structure_ir(
                     stored.read_bytes(),
@@ -80,6 +95,7 @@ def _parsed_sources_for_context(
                 ),
                 "document_structure": document_structure,
                 "document_structure_error": structure_error,
+                "document_structure_reused_from_parse": reused_document_structure,
             }
         )
     return parsed_sources

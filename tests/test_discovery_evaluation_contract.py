@@ -77,7 +77,9 @@ def _target(tmp_path: Path, target_id: str, *, industry: str, split: str, expect
                     "title": f"{target_id} seeded defect",
                     "severity": "P1",
                     "type": "authorization_access_control",
-                    "match_keywords": ["alpha", "beta", "gamma", "delta"],
+                    "match_keywords": [
+                        "seeded_defect_id", "alpha", "beta", "gamma", "delta"
+                    ],
                 }
             ],
         )
@@ -122,7 +124,7 @@ def _manifest(tmp_path: Path) -> Path:
 def _matched_finding(target_id: str) -> dict:
     return {
         **_customer_deliverable_clean_finding(),
-        "title": f"alpha beta gamma delta on {target_id}",
+        "title": f"seeded_defect_id alpha beta gamma delta on {target_id}",
         "severity": "P1",
         "reproduction": {
             **_customer_deliverable_clean_finding()["reproduction"],
@@ -528,6 +530,10 @@ def test_aggregate_uses_hidden_truth_and_clean_false_positive_measurement(tmp_pa
         )
         receipts.append(_receipt(manifest, target.target_id, findings))
 
+    serialized_receipts = json.dumps(receipts, ensure_ascii=False)
+    assert "matched_bug_ids" not in serialized_receipts
+    assert "canonical_unmatched" not in serialized_receipts
+    assert "gt_unmatched" not in serialized_receipts
     report = aggregate_evaluation_receipts(manifest, receipts)
 
     assert report["claim_status"] == "MEASURED"
@@ -542,7 +548,11 @@ def test_aggregate_uses_hidden_truth_and_clean_false_positive_measurement(tmp_pa
     assert report["operational"]["complete"] is True
     assert report["operational"]["total_request_count"] == 60
     assert report["operational"]["total_estimated_cost_usd"] == 6.25
-    assert "ground_truth_source" not in json.dumps(report, ensure_ascii=False)
+    serialized = json.dumps(report, ensure_ascii=False)
+    assert "ground_truth_source" not in serialized
+    assert "matched_bug_ids" not in serialized
+    assert "canonical_unmatched" not in serialized
+    assert "gt_unmatched" not in serialized
 
 
 def test_failed_pipeline_is_not_reported_as_zero_bug_or_zero_false_positive(tmp_path: Path) -> None:

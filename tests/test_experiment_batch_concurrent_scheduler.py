@@ -21,6 +21,7 @@ from ai_test_asset_center import (
 )
 from ai_test_asset_center import safe_experiment_prioritizer as prio_m
 from ai_test_asset_center.experiment_batch_concurrent_scheduler import (
+    _apply_global_budget,
     execute_selected_experiments_concurrent,
     get_concurrency,
     partition_serial_groups,
@@ -496,10 +497,43 @@ def test_global_budget_deferred(monkeypatch: pytest.MonkeyPatch) -> None:
         exps[oid] = _exp(oid, resource=f"res-{i}")
     batch, _ = _run(selected, exps, monkeypatch)
     # Formal phase budget ≤ 100, distinct operations=1, distinct families=1
-    # → budget = max(validation, 2) capped at 200 → 40 experiments all fit.
+    # → budget = max(validation, 2), below the shared hard cap → all 40 fit.
     assert batch["budget_exceeded_count"] == 0
     assert batch["selected_count"] == 40
     assert batch["concurrency"]["group_count"] == 40  # one group per resource
+
+
+def test_global_budget_honors_contract_above_legacy_cap() -> None:
+    """The concurrent mainline must not re-cap a valid 250 budget at 200."""
+    selected = [
+            {
+                "obligation_id": f"obl:{i:03d}",
+                "operation_key": "POST /api/resources",
+                "risk_family": "validation",
+            }
+        for i in range(300)
+    ]
+    experiments = {
+        row["obligation_id"]: {
+            "experiment_id": f"exp:{row['obligation_id']}",
+            "obligation_id": row["obligation_id"],
+        }
+        for row in selected
+    }
+
+    budgeted, deferred, receipt, budget = _apply_global_budget(
+        selected,
+        runtime_contract={"experiment_budget": 250},
+        validation_phase="formal",
+        behavior_ir={},
+        experiments_by_obligation=experiments,
+        family_quota=1,
+    )
+
+    assert budget == 250
+    assert len(budgeted) == 250
+    assert len(deferred) == 50
+    assert receipt["budget"] == 250
 
 
 def test_serial_fallback_single_group(monkeypatch: pytest.MonkeyPatch) -> None:

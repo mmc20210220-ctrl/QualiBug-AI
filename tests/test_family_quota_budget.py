@@ -226,11 +226,16 @@ class TestFamilyCoverageBudgetFloor:
         assert batch_core._family_coverage_budget(selected, budget=1) == 8
 
     def test_respects_hard_cap(self):
+        from ai_test_asset_center.small_scale_validation_gate import HARD_BUDGET_CAP
+
         selected = [
             {"obligation_id": f"o{i}", "risk_family": f"family-{i}"}
-            for i in range(500)
+            for i in range(HARD_BUDGET_CAP + 100)
         ]
-        assert batch_core._family_coverage_budget(selected, budget=1) == 200
+        assert (
+            batch_core._family_coverage_budget(selected, budget=1)
+            == HARD_BUDGET_CAP
+        )
 
     def test_never_shrinks_larger_budget(self):
         selected = [
@@ -256,7 +261,8 @@ class TestBatchExecutorWiring:
     def test_executor_still_applies_operation_coverage_floor(self):
         src = inspect.getsource(batch_core.execute_selected_experiments)
         assert "_operation_coverage_budget(" in src
-        assert "min(_budget, 200)" in src
+        assert "HARD_BUDGET_CAP" in src
+        assert "min(_budget, 200)" not in src
 
     def test_prioritizer_receives_family_quota(self):
         src = inspect.getsource(batch_core.execute_selected_experiments)

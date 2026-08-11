@@ -183,12 +183,65 @@ def freeze_flow_data_execution_contract(
         if isinstance(row, dict) and _text(row.get("step_id"))
     }
     produced_by_step: dict[str, set[str]] = {}
+    sequential_identity_targets: set[str] = set()
+    identity_outputs_by_step: dict[str, dict[str, Any]] = {}
     issues: list[dict[str, Any]] = []
     step_contracts: list[dict[str, Any]] = []
 
     for phase, step in _steps(exp):
         step_id = _text(step.get("step_id") or step.get("id"))
+        available_sequential_identity_targets = set(sequential_identity_targets)
         graph_backed = bool(_graph(step)) and phase == "treatment"
+        identity_input = _dict(step.get("identity_input_binding"))
+        identity_input_contract: dict[str, Any] = {}
+        if identity_input:
+            producer_step_id = _text(
+                identity_input.get("producer_step_id")
+            )
+            producer_output_field = _text(
+                identity_input.get("producer_output_field")
+            )
+            consumer_targets = sorted(
+                {
+                    _text(value)
+                    for value in _list(
+                        identity_input.get("consumer_targets")
+                    )
+                    if _text(value)
+                }
+            )
+            producer_contract = _dict(
+                identity_outputs_by_step.get(producer_step_id)
+            )
+            valid_identity_input = bool(
+                _text(identity_input.get("status")) == STATUS_FROZEN
+                and producer_step_id
+                and producer_output_field
+                and consumer_targets
+                and producer_output_field
+                == _text(producer_contract.get("source_identity_field"))
+                and set(consumer_targets).issubset(
+                    set(_list(producer_contract.get("produced_targets")))
+                )
+            )
+            identity_input_contract = {
+                "producer_step_id": producer_step_id,
+                "producer_output_field": producer_output_field,
+                "consumer_targets": consumer_targets,
+                "source_authority": _text(
+                    identity_input.get("source_authority")
+                ),
+                "status": "RESOLVED" if valid_identity_input else "BLOCKED",
+            }
+            if not valid_identity_input:
+                issues.append(
+                    {
+                        "kind": "IDENTITY_INPUT_BINDING_UNRESOLVED",
+                        "phase": phase,
+                        "step_id": step_id,
+                        **identity_input_contract,
+                    }
+                )
         output_specs = _output_specs(step)
         produced_fields: set[str] = set()
         for index, spec in enumerate(output_specs):
@@ -259,7 +312,11 @@ def freeze_flow_data_execution_contract(
             if _text(value)
         )
         required_targets.update(query_targets)
-        available_targets = initial_targets | consumed_targets
+        available_targets = (
+            initial_targets
+            | consumed_targets
+            | available_sequential_identity_targets
+        )
         missing_targets = sorted(required_targets - available_targets)
         if missing_targets:
             issues.append(
@@ -280,12 +337,43 @@ def freeze_flow_data_execution_contract(
                 ),
                 "query_binding_targets": query_targets,
                 "input_bindings": input_contracts,
+                "identity_input_binding": identity_input_contract,
+                "sequential_identity_targets": sorted(
+                    required_targets & available_sequential_identity_targets
+                ),
                 "produced_output_fields": sorted(produced_fields),
                 "required_targets": sorted(required_targets),
                 "available_targets": sorted(available_targets),
                 "missing_targets": missing_targets,
             }
         )
+        identity_output = _dict(step.get("identity_output_binding"))
+        if identity_output:
+            identity_targets = {
+                _text(value)
+                for value in [
+                    *_list(identity_output.get("consumer_targets")),
+                    *_list(identity_output.get("alias_targets")),
+                ]
+                if _text(value)
+            }
+            if phase != "precondition":
+                issues.append(
+                    {
+                        "kind": "IDENTITY_OUTPUT_EXECUTOR_UNAVAILABLE",
+                        "phase": phase,
+                        "step_id": step_id,
+                        "targets": sorted(identity_targets),
+                    }
+                )
+            else:
+                sequential_identity_targets.update(identity_targets)
+                identity_outputs_by_step[step_id] = {
+                    "source_identity_field": _text(
+                        identity_output.get("source_identity_field")
+                    ),
+                    "produced_targets": sorted(identity_targets),
+                }
 
     payload = {
         "flow_data_requirement_id": _text(req.get("requirement_id")),
@@ -297,6 +385,7 @@ def freeze_flow_data_execution_contract(
         "executor_capabilities": {
             "initial_bindings": "experiment_fixture_materializer_core",
             "cross_step_bindings": "process_graph_binding_ledger",
+            "precondition_identity_outputs": "experiment_precondition_executor",
             "sequential_output_bindings_supported": False,
         },
     }

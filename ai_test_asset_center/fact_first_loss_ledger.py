@@ -24,6 +24,7 @@ FIRST_LOSS_STAGES = (
     "FACT_NOT_SELECTED",
     "HYPOTHESIS_NOT_GENERATED",
     "OBLIGATION_NOT_GENERATED",
+    "FACT_LINEAGE_UNRESOLVED",
     "ABSTRACT_EXPERIMENT_NOT_COMPILED",
     "MATERIALIZATION_BLOCKED",
     "FIXTURE_BLOCKED",
@@ -168,6 +169,8 @@ def _blocker_owner(stage: str, experimentability_status: str) -> str:
         "ABSTRACT_EXPERIMENT_NOT_COMPILED",
     }:
         return "obligation_compiler"
+    if stage == "FACT_LINEAGE_UNRESOLVED":
+        return "diagnostic_lineage"
     if stage in {
         "MATERIALIZATION_BLOCKED",
         "FIXTURE_BLOCKED",
@@ -280,6 +283,7 @@ def _resolve_first_loss(
     experiments_by_obligation: dict[str, dict[str, Any]],
     attempts_by_obligation: dict[str, dict[str, Any]],
     deliverable_obligation_ids: set[str],
+    fact_lineage_unresolved: bool = False,
 ) -> tuple[str, str, list[str], list[str], list[str], list[str], list[str], str | None]:
     status = _text(receipt.get("status")).upper()
     blockers = _unique(receipt.get("blocker_codes"))
@@ -306,6 +310,17 @@ def _resolve_first_loss(
         )
 
     if not linked_obligations:
+        if fact_lineage_unresolved:
+            return (
+                "FACT_LINEAGE_UNRESOLVED",
+                "fact_to_ir_authority_not_resolved",
+                obligation_refs,
+                experiment_refs,
+                execution_refs,
+                observation_refs,
+                oracle_refs,
+                finding_ref,
+            )
         return (
             "OBLIGATION_NOT_GENERATED",
             "no_obligation_linked_to_fact_ref",
@@ -489,6 +504,7 @@ def build_fact_first_loss_ledger(
     obligations: list[dict[str, Any]] | None = None,
     experiments: list[dict[str, Any]] | dict[str, Any] | None = None,
     obligation_attempt_ledger: dict[str, Any] | None = None,
+    fact_lineage_receipt: dict[str, Any] | None = None,
     v12_result: dict[str, Any] | None = None,
     campaign_id: str = "",
     run_id: str = "",
@@ -523,6 +539,10 @@ def build_fact_first_loss_ledger(
     experiments_by_obligation = _index_experiments_by_obligation(exp_pack or {})
     attempts_by_obligation = _attempts_by_obligation(attempt_ledger)
     deliverable_ids = _deliverable_obligation_ids(result)
+    lineage_receipt = _dict(fact_lineage_receipt)
+    unresolved_lineage_fact_refs = set(
+        _unique(lineage_receipt.get("unresolved_fact_refs"))
+    )
 
     rows: list[dict[str, Any]] = []
     for receipt in sorted(receipts, key=lambda row: _text(row.get("fact_ref"))):
@@ -543,6 +563,7 @@ def build_fact_first_loss_ledger(
             experiments_by_obligation=experiments_by_obligation,
             attempts_by_obligation=attempts_by_obligation,
             deliverable_obligation_ids=deliverable_ids,
+            fact_lineage_unresolved=fact_ref in unresolved_lineage_fact_refs,
         )
         if stage not in FIRST_LOSS_STAGES:
             stage = "HYPOTHESIS_NOT_GENERATED"
@@ -593,6 +614,12 @@ def build_fact_first_loss_ledger(
         "obligation_attempt_ledger_fingerprint": _text(
             attempt_ledger.get("ledger_fingerprint")
         ),
+        "fact_lineage_receipt_schema": _text(
+            lineage_receipt.get("schema_version")
+        ),
+        "fact_lineage_authority_status": _text(
+            lineage_receipt.get("authority_status")
+        ) or "NOT_MEASURED",
         "receipt_count": len(receipts),
         "row_count": len(rows),
         "stage_counts": stage_counts,
@@ -730,52 +757,305 @@ def render_first_loss_summary(ledger: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _canonical_fact_authority_by_ir_ref(
+    *,
+    behavior_ir: dict[str, Any],
+    knowledge_asset: dict[str, Any],
+    accepted_fact_refs: set[str],
+) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]], Counter[str], set[str]]:
+    """Resolve exact accepted-fact lineage onto IR invariant/relation IDs.
+
+    The join is deliberately structural: canonical Business World Model
+    evidence -> canonical behavior -> governed implementation binding ->
+    Behavior IR invariant/relation.  Text, operation names, paths and source
+    locators are never matching authorities.
+    """
+
+    reasons: Counter[str] = Counter()
+    ambiguous_ir_refs: set[str] = set()
+    world = _dict(knowledge_asset.get("business_world_model"))
+    model = _dict(knowledge_asset.get("enterprise_understanding_model"))
+
+    evidence_fact_refs: dict[str, set[str]] = {}
+    for row in _list(world.get("evidence_registry")):
+        if not isinstance(row, dict):
+            continue
+        evidence_ref = _text(row.get("evidence_ref"))
+        fact_ref = _text(row.get("fact_id") or row.get("fact_ref"))
+        if evidence_ref and fact_ref in accepted_fact_refs:
+            evidence_fact_refs.setdefault(evidence_ref, set()).add(fact_ref)
+    for fact_refs in evidence_fact_refs.values():
+        if len(fact_refs) > 1:
+            reasons["AMBIGUOUS_WORLD_MODEL_EVIDENCE_ID"] += 1
+
+    behaviors_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in _list(model.get("business_behaviors")):
+        if isinstance(row, dict) and _text(row.get("behavior_id")):
+            behaviors_by_id.setdefault(_text(row.get("behavior_id")), []).append(row)
+
+    top_binding_behaviors: dict[str, set[str]] = {}
+    api_binding_behaviors: dict[str, set[str]] = {}
+    for row in _list(model.get("behavior_implementation_bindings")):
+        if not isinstance(row, dict):
+            continue
+        behavior_ref = _text(row.get("behavior_ref"))
+        binding_ref = _text(row.get("binding_id"))
+        if behavior_ref and binding_ref:
+            top_binding_behaviors.setdefault(binding_ref, set()).add(behavior_ref)
+        for api_binding in _list(row.get("api_operation_bindings")):
+            if not isinstance(api_binding, dict):
+                continue
+            api_binding_ref = _text(api_binding.get("binding_id"))
+            if (
+                behavior_ref
+                and api_binding_ref
+                and _text(api_binding.get("status")).upper() == "BOUND"
+                and api_binding.get("authoritative") is True
+            ):
+                api_binding_behaviors.setdefault(api_binding_ref, set()).add(
+                    behavior_ref
+                )
+    ambiguous_binding_count = sum(
+        1 for values in [*top_binding_behaviors.values(), *api_binding_behaviors.values()]
+        if len(values) > 1
+    )
+    if ambiguous_binding_count:
+        reasons["AMBIGUOUS_IMPLEMENTATION_BINDING_ID"] = ambiguous_binding_count
+
+    world_nodes_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in _list(world.get("behavior_nodes")):
+        if isinstance(row, dict) and _text(row.get("node_id")):
+            world_nodes_by_id.setdefault(_text(row.get("node_id")), []).append(row)
+
+    behavior_fact_refs: dict[str, tuple[str, ...]] = {}
+    for behavior_ref, nodes in world_nodes_by_id.items():
+        if len(nodes) != 1 or len(behaviors_by_id.get(behavior_ref, [])) != 1:
+            reasons["AMBIGUOUS_BEHAVIOR_ID"] += 1
+            continue
+        node = nodes[0]
+        behavior = behaviors_by_id[behavior_ref][0]
+        node_binding_refs = _unique(node.get("implementation_binding_refs"))
+        if not node_binding_refs or any(
+            top_binding_behaviors.get(binding_ref) != {behavior_ref}
+            for binding_ref in node_binding_refs
+        ):
+            reasons["BEHAVIOR_IMPLEMENTATION_BINDING_UNRESOLVED"] += 1
+            continue
+        world_fact_refs: set[str] = set()
+        evidence_ambiguous = False
+        for evidence_ref in _unique(node.get("evidence_refs")):
+            resolved = evidence_fact_refs.get(evidence_ref, set())
+            if len(resolved) > 1:
+                evidence_ambiguous = True
+                break
+            world_fact_refs.update(resolved)
+        if evidence_ambiguous:
+            reasons["BEHAVIOR_EVIDENCE_AUTHORITY_AMBIGUOUS"] += 1
+            continue
+        behavior_source_fact_refs = set(extract_fact_refs(behavior)) & accepted_fact_refs
+        fact_refs = world_fact_refs & behavior_source_fact_refs
+        if not fact_refs:
+            reasons["BEHAVIOR_FACT_AUTHORITY_UNRESOLVED"] += 1
+            continue
+        behavior_fact_refs[behavior_ref] = tuple(sorted(fact_refs))
+
+    invariants_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in _list(behavior_ir.get("invariants")):
+        if isinstance(row, dict) and _text(row.get("id")):
+            invariants_by_id.setdefault(_text(row.get("id")), []).append(row)
+
+    invariant_fact_refs: dict[str, tuple[str, ...]] = {}
+    invariant_authority_refs: dict[str, set[str]] = {}
+    for invariant_ref, rows in invariants_by_id.items():
+        if len(rows) != 1:
+            reasons["AMBIGUOUS_INVARIANT_ID"] += 1
+            ambiguous_ir_refs.add(invariant_ref)
+            continue
+        invariant = rows[0]
+        behavior_ref = _text(invariant.get("business_behavior_ref"))
+        fact_refs = behavior_fact_refs.get(behavior_ref)
+        api_binding_refs = _unique(invariant.get("implementation_binding_refs"))
+        if not behavior_ref or not fact_refs or not api_binding_refs:
+            continue
+        if any(
+            api_binding_behaviors.get(binding_ref) != {behavior_ref}
+            for binding_ref in api_binding_refs
+        ):
+            reasons["INVARIANT_IMPLEMENTATION_BINDING_UNRESOLVED"] += 1
+            ambiguous_ir_refs.add(invariant_ref)
+            continue
+        invariant_fact_refs[invariant_ref] = fact_refs
+        invariant_authority_refs[invariant_ref] = {
+            behavior_ref,
+            *api_binding_refs,
+        }
+
+    relations_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in _list(behavior_ir.get("relations")):
+        if isinstance(row, dict) and _text(row.get("id")):
+            relations_by_id.setdefault(_text(row.get("id")), []).append(row)
+
+    relation_fact_refs: dict[str, tuple[str, ...]] = {}
+    for relation_ref, rows in relations_by_id.items():
+        if len(rows) != 1:
+            reasons["AMBIGUOUS_RELATION_ID"] += 1
+            ambiguous_ir_refs.add(relation_ref)
+            continue
+        relation = rows[0]
+        incident_invariants = {
+            ref
+            for ref in (_text(relation.get("from_ref")), _text(relation.get("to_ref")))
+            if ref in invariant_fact_refs
+        }
+        if len(incident_invariants) > 1:
+            reasons["RELATION_INVARIANT_AUTHORITY_AMBIGUOUS"] += 1
+            ambiguous_ir_refs.add(relation_ref)
+            continue
+        if len(incident_invariants) != 1:
+            continue
+        invariant_ref = next(iter(incident_invariants))
+        source_relationship_ref = _text(relation.get("source_relationship_ref"))
+        if source_relationship_ref not in invariant_authority_refs[invariant_ref]:
+            reasons["RELATION_IMPLEMENTATION_BINDING_UNRESOLVED"] += 1
+            continue
+        relation_fact_refs[relation_ref] = invariant_fact_refs[invariant_ref]
+
+    return invariant_fact_refs, relation_fact_refs, reasons, ambiguous_ir_refs
+
+
 def attach_fact_refs_to_planning_artifacts(
     *,
     obligations: list[dict[str, Any]],
     experiments: list[dict[str, Any]],
     fact_experimentability_ledger: dict[str, Any] | None = None,
+    behavior_ir: dict[str, Any] | None = None,
+    knowledge_asset: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Stamp non-authoritative fact_refs onto obligations/experiments.
+    """Stamp authority-projected fact refs onto obligations/experiments.
 
     Does not change compile status, selection, or execution decisions.
     """
 
+    ledger = _dict(fact_experimentability_ledger)
+    accepted_fact_refs = {
+        _text(row.get("fact_ref"))
+        for row in _list(ledger.get("items"))
+        if isinstance(row, dict) and _text(row.get("fact_ref"))
+    }
+    authority_requested = bool(behavior_ir) or bool(knowledge_asset)
+    reason_counts: Counter[str] = Counter()
+    invariant_fact_refs: dict[str, tuple[str, ...]] = {}
+    relation_fact_refs: dict[str, tuple[str, ...]] = {}
+    ambiguous_ir_refs: set[str] = set()
+    if authority_requested:
+        if not behavior_ir or not knowledge_asset or not accepted_fact_refs:
+            reason_counts["FACT_LINEAGE_AUTHORITY_INPUT_MISSING"] += 1
+        else:
+            (
+                invariant_fact_refs,
+                relation_fact_refs,
+                authority_reasons,
+                ambiguous_ir_refs,
+            ) = _canonical_fact_authority_by_ir_ref(
+                behavior_ir=_dict(behavior_ir),
+                knowledge_asset=_dict(knowledge_asset),
+                accepted_fact_refs=accepted_fact_refs,
+            )
+            reason_counts.update(authority_reasons)
+
     stamped_obligations = 0
     stamped_experiments = 0
+    linked_fact_refs: set[str] = set()
     for obligation in obligations:
         if not isinstance(obligation, dict):
             continue
         refs = extract_fact_refs(obligation)
+        if accepted_fact_refs:
+            refs = [ref for ref in refs if ref in accepted_fact_refs]
+        if authority_requested and not refs:
+            prop = _dict(obligation.get("property"))
+            structural_refs = {
+                _text(prop.get("invariant_ref")),
+                *(_unique(obligation.get("relation_refs"))),
+                *(_unique(obligation.get("subject_refs"))),
+            }
+            structural_refs.discard("")
+            if structural_refs & ambiguous_ir_refs:
+                reason_counts["OBLIGATION_FACT_AUTHORITY_AMBIGUOUS"] += 1
+                structural_sets: list[tuple[str, ...]] = []
+            else:
+                structural_sets = [
+                    values
+                    for ref in sorted(structural_refs)
+                    for values in (
+                        invariant_fact_refs.get(ref),
+                        relation_fact_refs.get(ref),
+                    )
+                    if values
+                ]
+            distinct_sets = {values for values in structural_sets}
+            if len(distinct_sets) == 1:
+                refs = list(next(iter(distinct_sets)))
+            elif len(distinct_sets) > 1:
+                reason_counts["OBLIGATION_FACT_AUTHORITY_AMBIGUOUS"] += 1
+            else:
+                reason_counts["OBLIGATION_FACT_AUTHORITY_UNRESOLVED"] += 1
         if refs:
             obligation["fact_refs"] = refs
+            linked_fact_refs.update(refs)
             stamped_obligations += 1
-    experiments_by_obligation = {
-        _text(row.get("obligation_id")): row
-        for row in experiments
-        if isinstance(row, dict) and _text(row.get("obligation_id"))
-    }
+    experiments_by_obligation: dict[str, list[dict[str, Any]]] = {}
+    for row in experiments:
+        if not isinstance(row, dict) or not _text(row.get("obligation_id")):
+            continue
+        experiments_by_obligation.setdefault(
+            _text(row.get("obligation_id")), []
+        ).append(row)
     for obligation in obligations:
         if not isinstance(obligation, dict):
             continue
         oid = _text(obligation.get("obligation_id"))
-        experiment = experiments_by_obligation.get(oid)
-        if not isinstance(experiment, dict):
-            continue
-        refs = _unique(
-            [
-                *extract_fact_refs(obligation),
-                *extract_fact_refs(experiment),
-            ]
-        )
-        if refs:
-            experiment["fact_refs"] = refs
-            stamped_experiments += 1
-    ledger = _dict(fact_experimentability_ledger)
+        for experiment in experiments_by_obligation.get(oid, []):
+            refs = _unique(
+                [
+                    *extract_fact_refs(obligation),
+                    *extract_fact_refs(experiment),
+                ]
+            )
+            if refs:
+                experiment["fact_refs"] = refs
+                stamped_experiments += 1
+    unresolved_count = int(
+        reason_counts.get("OBLIGATION_FACT_AUTHORITY_UNRESOLVED", 0)
+        + reason_counts.get("OBLIGATION_FACT_AUTHORITY_AMBIGUOUS", 0)
+    )
+    authority_resolved_fact_refs = {
+        fact_ref
+        for refs in invariant_fact_refs.values()
+        for fact_ref in refs
+    }
     return {
         "schema_version": "qualibug.fact-ref-planning-attach.v1",
+        "authority_status": (
+            "NOT_REQUESTED"
+            if not authority_requested
+            else "BLOCKED_WITH_GAPS"
+            if reason_counts
+            else "PASS"
+        ),
+        "authority": (
+            "canonical_business_world_model_to_behavior_ir_exact_identity"
+        ),
+        "heuristic_matching_enabled": False,
         "stamped_obligation_count": stamped_obligations,
         "stamped_experiment_count": stamped_experiments,
+        "unresolved_obligation_count": unresolved_count,
+        "authority_resolved_fact_refs": sorted(authority_resolved_fact_refs),
+        "linked_fact_refs": sorted(linked_fact_refs),
+        "unresolved_fact_refs": sorted(
+            accepted_fact_refs - authority_resolved_fact_refs
+        ) if authority_requested else [],
+        "reason_counts": dict(sorted(reason_counts.items())),
         "fact_experimentability_ledger_fingerprint": _text(
             ledger.get("ledger_fingerprint")
         ),
@@ -798,7 +1078,8 @@ def build_fact_first_loss_from_v12_result(v12_result: dict[str, Any]) -> dict[st
             "fact_experimentability_ledger"
         )
     )
-    obligations = _list(_dict(result.get("obligations")).get("obligations"))
+    obligation_pack = _dict(result.get("obligations"))
+    obligations = _list(obligation_pack.get("obligations"))
     if not obligations:
         obligations = _list(result.get("obligations"))
     return build_fact_first_loss_ledger(
@@ -806,6 +1087,10 @@ def build_fact_first_loss_from_v12_result(v12_result: dict[str, Any]) -> dict[st
         obligations=obligations,
         experiments=result.get("experiments"),
         obligation_attempt_ledger=result.get("obligation_attempt_ledger"),
+        fact_lineage_receipt=(
+            _dict(obligation_pack.get("fact_ref_attach_receipt"))
+            or _dict(_dict(result.get("experiments")).get("fact_ref_attach_receipt"))
+        ),
         v12_result=result,
     )
 

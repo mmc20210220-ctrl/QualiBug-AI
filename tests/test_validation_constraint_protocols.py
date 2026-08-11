@@ -242,3 +242,61 @@ def test_expanded_constraints_survive_into_matching_protocol_mutations() -> None
         assert mutation["json_path"] == variant["property"]["json_path"]
         assert protocol["assertion"]["kind"] == "validation_rejection"
         assert protocol["assertion"]["expected_control_effect_min"] == 1
+
+
+def test_explicit_request_constraint_supersedes_one_sided_semantic_projection() -> None:
+    """A typed request constraint has its own executable two-arm protocol.
+
+    The semantic base may project the surrounding rule as a response-only
+    observation.  That one-sided plan must not make the independently sourced
+    request constraint look like an adapter capability gap.
+    """
+
+    operation = {
+        "id": "op-update",
+        "method": "POST",
+        "path": "/resources/{id}/state",
+        "read_write": "write",
+        "request_schema": {
+            "type": "object",
+            "required": ["nextState"],
+            "properties": {"nextState": {"type": "string"}},
+        },
+        "request_example": {"nextState": "source-declared"},
+        "response_schema": {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+        },
+    }
+    property_spec = {
+        "template": "invariant_validation",
+        "expression": {
+            "kind": "validation",
+            "operator": "must_hold",
+            "operands": [{"field": "status"}],
+            "raw": "A textual outcome must be present.",
+        },
+        "field": "nextState",
+        "field_tokens": ["nextState"],
+        "json_path": "$.nextState",
+        "validation_constraint": "required",
+        "validation_constraint_source": "request_schema",
+    }
+
+    protocol = compile_family_protocol(
+        risk_family="validation",
+        operation=operation,
+        operation_ref="op-update",
+        control_actor_ref="actor-public",
+        treatment_actor_ref="actor-public",
+        property_spec=property_spec,
+    )
+
+    assert protocol["status"] == "COMPILED"
+    assert len(protocol["control_plan"]) == 1
+    assert len(protocol["treatment_plan"]) == 1
+    assert protocol["control_plan"][0]["body"] == {
+        "nextState": "source-declared"
+    }
+    assert protocol["treatment_plan"][0]["body"] == {}
+    assert protocol["assertion"]["kind"] == "validation_rejection"

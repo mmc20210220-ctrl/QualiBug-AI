@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import pytest
@@ -262,3 +263,89 @@ def test_enterprise_understanding_mainline_uses_adapter_pipeline(tmp_path, monke
     assert structure["parsing_plan"]["selected_adapters"][0]["adapter_name"] == "generic-text-structure"
     assert structure["ingestion_pipeline_receipt"]["executed_adapter_count"] == 1
     assert not parsed[0]["document_structure_error"]
+
+
+def test_same_build_parse_handoff_reuses_verified_document_structure(
+    tmp_path, monkeypatch
+) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center import _crud
+    from ai_test_asset_center.enterprise_knowledge_center import document_ingestion
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding import (
+        integration_legacy_v1 as integration,
+    )
+
+    content = b"# Order\nThe owner may read the order."
+    content_hash = hashlib.sha256(content).hexdigest()
+    relative = "platform_workspace/project/enterprise_knowledge_center/sources/order.md"
+    stored = tmp_path / relative
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    stored.write_bytes(content)
+    structure = _ir("The owner may read the order.", adapter_name="same-build")
+    structure["ingestion_pipeline_receipt"] = {"source_hash": content_hash}
+    parsed = {
+        "text": "The owner may read the order.",
+        "document_structure": structure,
+        "parser_receipt": {"source_locator": "order.md"},
+    }
+    source = {
+        "source_id": "source-order",
+        "status": "active",
+        "stored_path": relative,
+        "original_name": "order.md",
+        "source_type": "business_rule",
+        "content_hash": content_hash,
+    }
+
+    monkeypatch.setattr(
+        _crud,
+        "_record_parse",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("same source must not be parsed twice")
+        ),
+    )
+    monkeypatch.setattr(
+        document_ingestion,
+        "build_document_structure_ir",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("verified Document IR must not be rebuilt")
+        ),
+    )
+
+    rows = integration._parsed_sources_for_context(
+        {"source_inventory": [source]},
+        tmp_path,
+        parsed_overrides={"source-order": parsed},
+        require_overrides=True,
+    )
+
+    assert rows[0]["document_structure"] is structure
+    assert rows[0]["document_structure_reused_from_parse"] is True
+
+
+def test_same_build_parse_handoff_fails_on_source_hash_drift(tmp_path) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding import (
+        integration_legacy_v1 as integration,
+    )
+
+    source = {
+        "source_id": "source-order",
+        "status": "active",
+        "stored_path": "order.md",
+        "original_name": "order.md",
+        "content_hash": "registered-hash",
+    }
+    parsed = {
+        "document_structure": {
+            "ingestion_pipeline_receipt": {"source_hash": "different-hash"}
+        }
+    }
+
+    with pytest.raises(
+        RuntimeError, match="parsed_document_structure_source_hash_mismatch"
+    ):
+        integration._parsed_sources_for_context(
+            {"source_inventory": [source]},
+            tmp_path,
+            parsed_overrides={"source-order": parsed},
+            require_overrides=True,
+        )

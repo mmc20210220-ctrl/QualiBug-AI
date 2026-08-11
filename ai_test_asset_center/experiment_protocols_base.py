@@ -1893,18 +1893,10 @@ def _validation_protocol_material(
                     "constraint": "required_inferred",
                     "source": "inferred_from_example",
                 }
-        # No control body or no fields — use synthetic fallback
-        method = _text(operation.get("method", "")).upper()
-        if method in ("PATCH", "PUT"):
-            control = {"status": "active"}
-            return control, {}, {"json_path": "$.status", "constraint": "synthetic", "source": "synthetic_fallback"}
-        if method == "POST":
-            control = {}
-            return control, {}, {"json_path": "$", "constraint": "synthetic", "source": "synthetic_fallback"}
-        if method == "DELETE":
-            # DELETE has no body — the validation test checks the HTTP response
-            control = {}
-            return control, {}, {"json_path": "$", "constraint": "synthetic", "source": "synthetic_fallback_delete"}
+        # No documented request material means there is no decidable mutation.
+        # Fabricating a generic body or status value changes the source
+        # contract and can manufacture validation findings, so fail closed at
+        # the caller's existing missing-binding gate.
         return {}, {}, {}
     if not control:
         # No documented example — generate a minimal valid body from the schema.

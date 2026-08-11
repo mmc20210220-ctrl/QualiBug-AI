@@ -45,6 +45,7 @@ def _entity(entity_id: str, name: str) -> dict[str, Any]:
         "id": entity_id,
         "name": name,
         "source_entity_names": [name + "s"],
+        "identity_fields": ["id"],
     }
 
 

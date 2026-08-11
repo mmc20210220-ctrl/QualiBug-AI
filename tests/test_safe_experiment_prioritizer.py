@@ -137,6 +137,27 @@ class TestScoring:
         for key in result["factors"]:
             assert key in ALLOWED_FACTORS, f"Factor {key} not in ALLOWED_FACTORS"
 
+    def test_missing_auth_declaration_is_not_anonymous(self):
+        exp = _make_experiment()
+        exp["treatment_plan"] = [{"method": "POST", "path": "/api/resources"}]
+        result = score_experiment_priority(
+            experiment=exp,
+            obligation=_make_obligation(),
+            behavior_ir={},
+        )
+        assert result["factors"]["anonymous_write_risk"] == 0.0
+
+    def test_explicit_anonymous_write_is_prioritized(self):
+        exp = _make_experiment()
+        exp["write_requires_auth"] = False
+        exp["treatment_plan"] = [{"method": "POST", "path": "/api/resources"}]
+        result = score_experiment_priority(
+            experiment=exp,
+            obligation=_make_obligation(),
+            behavior_ir={},
+        )
+        assert result["factors"]["anonymous_write_risk"] == 1.0
+
 
 class TestPrioritization:
     def test_ordering_by_score(self):

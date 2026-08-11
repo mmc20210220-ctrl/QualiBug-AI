@@ -473,7 +473,7 @@ def test_formal_over_100_truncated():
     assert receipt["was_truncated"] is True
 
 
-# ── Test 18: Hard Cap 200 enforced ──
+# ── Test 18: Shared hard cap enforced ──
 
 def test_hard_cap_enforced():
     """Budget can never exceed the hard cap regardless of contract override."""

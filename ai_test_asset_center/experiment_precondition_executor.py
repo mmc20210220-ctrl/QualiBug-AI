@@ -22,7 +22,6 @@ from .experiment_runtime_support import (
     _list,
     _resolve_token,
     _run_http_step,
-    _select_runtime_binding,
     _text,
     _unresolved_body_placeholders,
     _unresolved_path_placeholders,
@@ -30,9 +29,6 @@ from .experiment_runtime_support import (
 from .runtime_binding_materializer import (
     materialize_body_template,
     materialize_path,
-)
-from .runtime_binding_materializer_base import (
-    runtime_setup_value_from_response as _runtime_setup_value_from_response,
 )
 from .runtime_binding_graph import (
     _request_example as _tokenized_request_example,
@@ -46,6 +42,12 @@ BLOCKED_PRECONDITION_BINDING_INCOMPLETE = "BLOCKED_PRECONDITION_BINDING_INCOMPLE
 BLOCKED_PRECONDITION_TRANSPORT = "BLOCKED_PRECONDITION_TRANSPORT"
 BLOCKED_PRECONDITION_TARGET_NOT_OBSERVED = "BLOCKED_PRECONDITION_TARGET_NOT_OBSERVED"
 BLOCKED_PRECONDITION_TARGET_NOT_REACHED = "BLOCKED_PRECONDITION_TARGET_NOT_REACHED"
+BLOCKED_PRECONDITION_IDENTITY_OUTPUT_MISSING = (
+    "BLOCKED_PRECONDITION_IDENTITY_OUTPUT_MISSING"
+)
+BLOCKED_PRECONDITION_IDENTITY_OUTPUT_AMBIGUOUS = (
+    "BLOCKED_PRECONDITION_IDENTITY_OUTPUT_AMBIGUOUS"
+)
 
 
 def _fingerprint(value: Any) -> str:
@@ -85,9 +87,10 @@ def _observe_reference_value(
     """
     token = _text(step.get("skip_if_observed_target"))
     resolvers = _list(step.get("observation_resolvers"))
-    if not token or not resolvers:
+    identity_output = _dict(step.get("identity_output_binding"))
+    source_path = _text(identity_output.get("source_path"))
+    if not token or not resolvers or not source_path:
         return ""
-    leaf = token.split(".")[-1].split("[")[0]
     for index, resolver in enumerate(resolvers[:3]):
         if not isinstance(resolver, dict):
             continue
@@ -103,17 +106,9 @@ def _observe_reference_value(
         )
         if not (200 <= int(obs.get("status_code") or 0) < 300):
             continue
-        projected = _select_runtime_binding(
-            obs.get("body"),
-            f"/{{{token}}}",
-        )
-        value = projected.get(token) if isinstance(projected, dict) else None
-        if value in (None, "", [], {}):
-            value = _runtime_setup_value_from_response(obs.get("body"), token)
-        if value in (None, "", [], {}):
-            value = _runtime_setup_value_from_response(obs.get("body"), leaf)
-        if value not in (None, "", [], {}):
-            return str(value)
+        values = _field_values(obs.get("body"), source_path)
+        if len(values) == 1 and values[0] not in (None, "", [], {}):
+            return str(values[0])
     return ""
 
 
@@ -286,11 +281,60 @@ def execute_precondition_plan(
         # the entity it creates) are consulted — real environment data wins
         # over creation; the governed create remains the fallback. Reads are
         # read-only on the declared target; never a write to customer data.
+        _declared_identity_targets = [
+            _text(value)
+            for value in _list(step.get("identity_binding_targets"))
+            if _text(value)
+        ]
+        _declared_identity_target = _text(
+            step.get("identity_binding_target")
+        )
+        if (
+            _declared_identity_target
+            and _declared_identity_target not in _declared_identity_targets
+        ):
+            _declared_identity_targets.insert(0, _declared_identity_target)
+        if _declared_identity_targets:
+            _declared_identity_output = _dict(
+                step.get("identity_output_binding")
+            )
+            if not (
+                _text(_declared_identity_output.get("status")) == "FROZEN"
+                and _text(_declared_identity_output.get("source_path"))
+                and _text(_declared_identity_output.get("source_authority"))
+                and _list(_declared_identity_output.get("consumer_targets"))
+            ):
+                return {
+                    "schema_version": SCHEMA_VERSION,
+                    "status": "BLOCKED",
+                    "established": False,
+                    "steps": plan,
+                    "receipts": receipts,
+                    "governed_write_steps": governed_write_steps,
+                    "reason_code": BLOCKED_PRECONDITION_IDENTITY_OUTPUT_MISSING,
+                    "detail": (
+                        f"step={step_id}:identity_output_contract_incomplete:"
+                        "blocked_before_transport"
+                    ),
+                }
         _skip_token = _text(step.get("skip_if_observed_target"))
         if (
             _skip_token
             and runtime_bindings.get(_skip_token) not in (None, "", [], {})
         ):
+            _skip_identity_output = _dict(
+                step.get("identity_output_binding")
+            )
+            for _alias in _list(
+                _skip_identity_output.get("alias_targets")
+            ):
+                if _text(_alias):
+                    runtime_bindings[_text(_alias)] = runtime_bindings.get(
+                        _skip_token
+                    )
+                    identity_bindings[_text(_alias)] = runtime_bindings.get(
+                        _skip_token
+                    )
             receipts.append({
                 "schema_version": SCHEMA_VERSION,
                 "receipt_id": "precond_" + _fingerprint(
@@ -324,8 +368,19 @@ def execute_precondition_plan(
                 actor_token=token,
             )
             if _observed_value:
-                runtime_bindings[_skip_token] = _observed_value
-                identity_bindings[_skip_token] = _observed_value
+                _observed_identity_output = _dict(
+                    step.get("identity_output_binding")
+                )
+                _observed_aliases = [
+                    _text(value)
+                    for value in _list(
+                        _observed_identity_output.get("alias_targets")
+                    )
+                    if _text(value)
+                ] or [_skip_token]
+                for _observed_alias in _observed_aliases:
+                    runtime_bindings[_observed_alias] = _observed_value
+                    identity_bindings[_observed_alias] = _observed_value
                 import re as _re
 
                 _snake_obs = _re.sub(
@@ -484,6 +539,7 @@ def execute_precondition_plan(
         _identity_target = _text(step.get("identity_binding_target"))
         if _identity_target and _identity_target not in _identity_targets:
             _identity_targets.insert(0, _identity_target)
+        _identity_output = _dict(step.get("identity_output_binding"))
         # Identity alias spellings (money_precondition_chain): the created
         # subject identity is captured under the request reference field
         # (orderId), and the entity's own identity field spellings (id) cover
@@ -495,35 +551,62 @@ def execute_precondition_plan(
             for value in _list(step.get("identity_binding_aliases"))
             if _text(value)
         ]
+        if _identity_output:
+            _identity_targets = [
+                _text(value)
+                for value in _list(_identity_output.get("consumer_targets"))
+                if _text(value)
+            ]
+            _identity_aliases = [
+                _text(value)
+                for value in _list(_identity_output.get("alias_targets"))
+                if _text(value)
+            ]
         _identity_value: Any = None
         if (
             _identity_targets
             and accepted
             and verdict.get("reached") is not False
         ):
-            _identity_value = _runtime_setup_value_from_response(
-                write.get("body"),
-                _identity_targets[0],
+            _source_path = _text(_identity_output.get("source_path"))
+            _source_authority = _text(
+                _identity_output.get("source_authority")
             )
-            if _identity_value in (None, "", [], {}):
-                _leaf_value = _identity_targets[0].split(".")[-1].split("[")[0]
-                _identity_value = _runtime_setup_value_from_response(
+            if not _source_path or not _source_authority:
+                verdict = {
+                    "observed": False,
+                    "reached": False,
+                    "reason_code": BLOCKED_PRECONDITION_IDENTITY_OUTPUT_MISSING,
+                    "detail": f"step={step_id}:identity_output_contract_incomplete",
+                    "state_field": verdict.get("state_field", ""),
+                    "target_state": verdict.get("target_state", ""),
+                    "observed_values": [],
+                }
+            else:
+                _identity_values = _field_values(
                     write.get("body"),
-                    _leaf_value,
+                    _source_path,
                 )
-            # The created entity may expose its identity under the entity's own
-            # identity field (OrderWithItems -> id) while the reference slot is
-            # named orderId; try every declared alias spelling before giving up.
-            if _identity_value in (None, "", [], {}):
-                for _alias in _identity_aliases:
-                    if not _alias or _alias == _identity_targets[0]:
-                        continue
-                    _identity_value = _runtime_setup_value_from_response(
-                        write.get("body"),
-                        _alias,
+                if len(_identity_values) == 1:
+                    _identity_value = _identity_values[0]
+                else:
+                    _identity_reason = (
+                        BLOCKED_PRECONDITION_IDENTITY_OUTPUT_MISSING
+                        if not _identity_values
+                        else BLOCKED_PRECONDITION_IDENTITY_OUTPUT_AMBIGUOUS
                     )
-                    if _identity_value not in (None, "", [], {}):
-                        break
+                    verdict = {
+                        "observed": False,
+                        "reached": False,
+                        "reason_code": _identity_reason,
+                        "detail": (
+                            f"step={step_id}:source_path={_source_path}:"
+                            f"observed_value_count={len(_identity_values)}"
+                        ),
+                        "state_field": verdict.get("state_field", ""),
+                        "target_state": verdict.get("target_state", ""),
+                        "observed_values": [],
+                    }
             for _target_name in [
                 *_identity_targets,
                 *[
@@ -570,9 +653,11 @@ def execute_precondition_plan(
                     "identity_value": _identity_value,
                     "identity_binding_targets": _identity_targets,
                     "identity_binding_aliases": _identity_aliases,
+                    "identity_source_path": _source_path,
+                    "identity_source_authority": _source_authority,
                     "status": "COMPLETED",
                     "reason_code": "",
-                    "detail": "money_subject_identity_captured",
+                    "detail": "source_declared_identity_output_captured",
                 })
         receipt_id = "precond_" + _fingerprint(
             {

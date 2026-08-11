@@ -16,6 +16,7 @@ import tempfile
 import time
 import zipfile
 from collections import Counter, defaultdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -193,10 +194,16 @@ def _short_hash(value: Any, size: int = 16) -> str:
     return hashlib.sha256(raw).hexdigest()[:size]
 
 
-def _norm(value: Any) -> str:
-    text = str(value or "").strip().lower()
+@lru_cache(maxsize=32768)
+def _norm_text(text: str) -> str:
+    """Normalize one immutable text value; bounded memoization cannot go stale."""
+    text = text.strip().lower()
     text = re.sub(r"[^a-z0-9_\-\u4e00-\u9fff]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _norm(value: Any) -> str:
+    return _norm_text(str(value or ""))
 
 
 def _tokens(value: Any) -> set[str]:

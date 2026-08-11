@@ -136,19 +136,11 @@ def normalize_envelope(raw: dict) -> dict:
             deliverable_occurrences=delivery_occurrences,
             obligation_attempt_ledger=attempt_ledger,
         )
-        # Findings are occurrence-level in the evaluator contract (every
-        # gate-passing occurrence is scored; canonical de-duplication lives in
-        # the registry). The registry's canonical representatives are NOT the
-        # published finding set.
-        occurrence_ids_from_findings = sorted(
-            str(item.get("finding_id") or item.get("id") or "").strip()
-            for item in findings
+        canonical_findings = canonical_representative_findings(
+            validated_registry,
+            deliverable_occurrences=delivery_occurrences,
         )
-        occurrence_ids_from_occurrences = sorted(
-            str(item.get("finding_id") or item.get("id") or "").strip()
-            for item in delivery_occurrences
-        )
-        if occurrence_ids_from_findings != occurrence_ids_from_occurrences:
+        if findings != canonical_findings:
             raise CanonicalDefectRegistryError(
                 "normalized_canonical_findings_mismatch"
             )
@@ -204,7 +196,7 @@ def normalize_envelope(raw: dict) -> dict:
         "defect_identity_consistency": validated_consistency,
         "formal_delivery_authority": validated_authority,
         "scan_result": {
-            "findings": list(findings),
+            "findings": list(canonical_findings),
             "delivery_occurrences": list(delivery_occurrences),
             "candidate_findings": list(candidates),
             "obligation_attempt_ledger": attempt_ledger,

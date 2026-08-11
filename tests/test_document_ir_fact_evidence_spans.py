@@ -121,3 +121,35 @@ def test_table_cells_can_form_one_source_backed_rule_span() -> None:
     aligned = result["document_ir_fact_evidence_receipt"]["aligned"]
     assert len(aligned) == 1
     assert aligned[0]["block_ids"] == ["c1", "c2", "c3"]
+
+
+def test_block_normalization_is_once_per_source_not_once_per_fact(monkeypatch) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center import (
+        _document_ir_fact_evidence as evidence,
+    )
+
+    calls = 0
+    original = evidence._normalized
+
+    def counted(value) -> str:
+        nonlocal calls
+        calls += 1
+        return original(value)
+
+    monkeypatch.setattr(evidence, "_normalized", counted)
+    statements = [f"Rule number {index}" for index in range(40)]
+    asset = {
+        "business_fact_ledger": {
+            "items": [_fact(statement, f"fact:{index}") for index, statement in enumerate(statements)]
+        }
+    }
+    blocks = [_block(f"b{index}", statement, index) for index, statement in enumerate(statements)]
+
+    align_business_facts_to_document_ir(
+        asset,
+        [{"source_id": "source:rules", "document_structure": {"blocks": blocks}}],
+    )
+
+    # One normalization per block plus one per fact statement. The former nested
+    # fact-by-block implementation performed at least 40 * 40 block normalizations.
+    assert calls == len(blocks) + len(statements)

@@ -9,7 +9,13 @@ from copy import deepcopy
 from typing import Any
 
 from ._object_role_evidence import comparison_key, object_slot_mentions
-from .schema import as_dict, as_list, text, unique_text
+from .schema import (
+    as_dict,
+    as_list,
+    clone_asset_for_understanding_projection,
+    text,
+    unique_text,
+)
 
 def _behavior_surface_bindings(
     recognition: dict[str, Any], identity_eligible: set[str] | None = None
@@ -71,7 +77,7 @@ def prepare_identity_safe_behavior_surfaces(
     asset: dict[str, Any], recognition: dict[str, Any]
 ) -> dict[str, Any]:
     """Remove behavior mentions from identity input while retaining audit traces."""
-    projected = deepcopy(asset)
+    projected = clone_asset_for_understanding_projection(asset)
     bindings = _behavior_surface_bindings(recognition)
     binding_keys = set(bindings)
     ledger = dict(as_dict(projected.get("business_fact_ledger")))
@@ -119,7 +125,7 @@ def project_behavior_surface_bindings(
     converts a source-local object surface into its one declared parent only for
     operation/lifecycle construction, while preserving the raw source mention.
     """
-    projected = deepcopy(asset)
+    projected = clone_asset_for_understanding_projection(asset)
     bindings = _behavior_surface_bindings(recognition)
     label_to_entity = dict(
         as_dict(

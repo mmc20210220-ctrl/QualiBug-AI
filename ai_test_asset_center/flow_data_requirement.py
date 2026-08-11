@@ -167,6 +167,61 @@ def _identity_alias_targets(
     return alias_targets
 
 
+def _identity_output_binding(step: dict[str, Any]) -> dict[str, Any]:
+    return _dict(step.get("identity_output_binding"))
+
+
+def _identity_output_receipt(
+    step: dict[str, Any],
+    *,
+    phase: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    binding = _identity_output_binding(step)
+    if not binding:
+        return {}, {}
+    step_id = _text(step.get("step_id") or step.get("id"))
+    source_field = _text(binding.get("source_identity_field"))
+    source_path = _text(binding.get("source_path"))
+    targets = list(
+        dict.fromkeys(
+            _text(value)
+            for value in [
+                *_list(binding.get("consumer_targets")),
+                *_list(binding.get("alias_targets")),
+            ]
+            if _text(value)
+        )
+    )
+    authority = _text(binding.get("source_authority"))
+    status = _text(binding.get("status"))
+    if not (
+        status == STATUS_FROZEN
+        and source_field
+        and source_path
+        and targets
+        and authority
+    ):
+        return {}, {
+            "phase": phase,
+            "step_id": step_id,
+            "kind": "IDENTITY_OUTPUT_BINDING_INCOMPLETE",
+            "source_identity_field": source_field,
+            "source_path": source_path,
+            "targets": targets,
+            "source_authority": authority,
+            "status": status,
+        }
+    return {
+        "producer_step_id": step_id,
+        "entity_ref": _text(binding.get("entity_ref")),
+        "source_identity_field": source_field,
+        "source_path": source_path,
+        "produced_targets": targets,
+        "source_authority": authority,
+        "status": STATUS_FROZEN,
+    }, {}
+
+
 def _declared_output_targets(step: dict[str, Any]) -> list[str]:
     targets: list[str] = []
     for key in ("output_binding_specs", "output_bindings", "produces_bindings"):
@@ -179,6 +234,15 @@ def _declared_output_targets(step: dict[str, Any]) -> list[str]:
                 if isinstance(raw, dict)
                 else raw
             )
+            if value and value not in targets:
+                targets.append(value)
+    identity_output = _identity_output_binding(step)
+    if _text(identity_output.get("status")) == STATUS_FROZEN:
+        for raw in [
+            *_list(identity_output.get("consumer_targets")),
+            *_list(identity_output.get("alias_targets")),
+        ]:
+            value = _text(raw)
             if value and value not in targets:
                 targets.append(value)
     return targets
@@ -197,7 +261,6 @@ def _step_requirement(
     operation: dict[str, Any],
     available_before: set[str],
     binding_targets: set[str],
-    identity_alias_targets: set[str],
 ) -> tuple[dict[str, Any], list[str]]:
     step_id = _text(step.get("step_id") or step.get("id"))
     operation_ref = _text(step.get("operation_ref"))
@@ -225,7 +288,6 @@ def _step_requirement(
         for target in required_targets
         if target not in binding_targets
         and target not in available_before
-        and target not in identity_alias_targets
     ]
     requirement = {
         "phase": phase,
@@ -335,17 +397,8 @@ def build_flow_data_requirement(
     unresolved_rows: list[dict[str, Any]] = []
     required_operation_refs: list[str] = []
     required_entity_refs: list[str] = []
-
-    all_phase_steps = [
-        dict(raw)
-        for phase in ("precondition", "control", "treatment")
-        for raw in _list(source.get(f"{phase}_plan"))
-        if isinstance(raw, dict)
-    ]
-    identity_alias_targets = _identity_alias_targets(
-        all_phase_steps,
-        binding_targets,
-    )
+    identity_output_binding_receipts: list[dict[str, Any]] = []
+    identity_output_issues: list[dict[str, Any]] = []
 
     for phase in ("precondition", "control", "treatment"):
         for raw in _list(source.get(f"{phase}_plan")):
@@ -354,13 +407,20 @@ def build_flow_data_requirement(
             step = dict(raw)
             operation_ref = _text(step.get("operation_ref"))
             operation = _dict(operations.get(operation_ref))
+            identity_receipt, identity_issue = _identity_output_receipt(
+                step,
+                phase=phase,
+            )
+            if identity_receipt:
+                identity_output_binding_receipts.append(identity_receipt)
+            if identity_issue:
+                identity_output_issues.append(identity_issue)
             requirement, unresolved = _step_requirement(
                 phase=phase,
                 step=step,
                 operation=operation,
                 available_before=available_before,
                 binding_targets=binding_targets,
-                identity_alias_targets=identity_alias_targets,
             )
             step_requirements.append(requirement)
             if operation_ref and operation_ref not in required_operation_refs:
@@ -377,6 +437,19 @@ def build_flow_data_requirement(
                     }
                 )
             available_before.update(requirement["produced_binding_targets"])
+
+    if identity_output_issues:
+        detail = ";".join(
+            f"{row['phase']}:{row['step_id']}:{row['kind']}"
+            for row in identity_output_issues
+        )
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": STATUS_BLOCKED,
+            "reason_code": BLOCKED_FLOW_DATA_BINDING_INCOMPLETE,
+            "detail": detail,
+            "identity_output_binding_issues": identity_output_issues,
+        }
 
     if unresolved_rows:
         detail = ";".join(
@@ -406,6 +479,7 @@ def build_flow_data_requirement(
         "binding_targets": sorted(binding_targets),
         "materialized_before_measurement_targets": materialized_before_measurement,
         "step_requirements": step_requirements,
+        "identity_output_binding_receipts": identity_output_binding_receipts,
         "fixture_dependency_dag_fingerprint": _text(
             fixture_dag.get("fixture_dependency_dag_fingerprint")
             or fixture_dag.get("fingerprint")

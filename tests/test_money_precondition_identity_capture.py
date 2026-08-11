@@ -98,6 +98,16 @@ def _create_step() -> dict[str, Any]:
         "intent": "money_subject_establishment",
         "protocol_step": "precondition_write",
         "identity_binding_target": "orderId",
+        "identity_output_binding": {
+            "schema_version": "qualibug.identity-output-binding.v1",
+            "status": "FROZEN",
+            "entity_ref": "ent_order",
+            "source_identity_field": "id",
+            "source_path": "id",
+            "consumer_targets": ["orderId"],
+            "alias_targets": ["orderId", "id"],
+            "source_authority": "behavior_ir.entities.identity_fields",
+        },
         "observe_response_body": True,
         "step_ordinal": 1,
         "method": "POST",
@@ -129,8 +139,16 @@ def test_created_identity_is_captured_into_runtime_bindings() -> None:
 
 
 def test_identity_captured_in_both_camel_and_snake_placeholder_forms() -> None:
+    step = _create_step()
+    step["identity_output_binding"].update(
+        {
+            "source_identity_field": "order_id",
+            "source_path": "order_id",
+            "alias_targets": ["orderId", "order_id"],
+        }
+    )
     created = {"order_id": "ord_456", "status": "PENDING_PAYMENT"}
-    result = _run(_create_step(), created)
+    result = _run(step, created)
     captured = result.get("identity_bindings") or {}
     # The response names the identity order_id (snake); the body placeholder
     # may use either spelling — both must bind.
@@ -147,9 +165,22 @@ def test_rejected_create_captures_no_identity() -> None:
 def test_step_without_identity_binding_target_is_untouched() -> None:
     step = _create_step()
     step.pop("identity_binding_target")
+    step.pop("identity_output_binding")
     result = _run(step, {"id": "ord_789", "status": "PENDING_PAYMENT"})
     assert result["established"] is True
     assert not (result.get("identity_bindings") or {})
+
+
+def test_identity_target_without_output_authority_blocks_before_transport() -> None:
+    step = _create_step()
+    step.pop("identity_output_binding")
+
+    result = _run(step, {"id": "must_not_be_observed"})
+
+    assert result["established"] is False
+    assert result["reason_code"] == "BLOCKED_PRECONDITION_IDENTITY_OUTPUT_MISSING"
+    assert result["governed_write_steps"] == []
+    assert "blocked_before_transport" in result["detail"]
 
 
 def test_identity_receipt_is_emitted() -> None:
@@ -210,3 +241,20 @@ def test_identity_aliases_are_recorded_in_receipt() -> None:
     ]
     assert len(identity_receipts) == 1
     assert identity_receipts[0]["identity_binding_aliases"] == ["orderId", "id"]
+
+
+def test_conflicting_declared_identity_values_fail_closed() -> None:
+    step = _create_step()
+    step["identity_binding_aliases"] = ["orderId", "id"]
+    result = _run(
+        step,
+        {
+            "id": "record_a",
+            "nested": {"id": "record_b"},
+            "status": "PENDING_PAYMENT",
+        },
+    )
+
+    assert result["established"] is False
+    assert result["reason_code"] == "BLOCKED_PRECONDITION_IDENTITY_OUTPUT_AMBIGUOUS"
+    assert "source_path=id" in result["detail"]

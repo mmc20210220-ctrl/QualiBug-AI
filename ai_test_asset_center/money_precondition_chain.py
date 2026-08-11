@@ -352,7 +352,7 @@ def _entity_identity_fields(entity: dict[str, Any]) -> list[str]:
             fields.extend(
                 _text(value) for value in _list(row.get("columns")) if _text(value)
             )
-    return list(dict.fromkeys(fields)) or ["id"]
+    return list(dict.fromkeys(fields))
 
 
 def plan_money_family_precondition(
@@ -502,14 +502,14 @@ def plan_money_family_precondition(
         # state-advancement step cancels via /api/orders/{id}/cancel). Declare
         # both spellings so the flow-data freeze check and the precondition
         # executor register every token the chain consumes.
-        subject_identity_aliases = list(
-            dict.fromkeys(
-                [
-                    reference_field,
-                    *_entity_identity_fields(entity),
-                ]
-            )
+        identity_output_binding = _dict(
+            subject_step.get("identity_output_binding")
         )
+        subject_identity_aliases = [
+            _text(value)
+            for value in _list(identity_output_binding.get("alias_targets"))
+            if _text(value)
+        ]
         subject_step["identity_binding_aliases"] = subject_identity_aliases
 
         # Optional state advancement: when the property declares a required
@@ -556,6 +556,24 @@ def plan_money_family_precondition(
                         # so the flow-data freeze check and the executor bind
                         # the path placeholder from the captured identity.
                         "identity_binding_aliases": subject_identity_aliases,
+                        "identity_input_binding": {
+                            "schema_version": "qualibug.identity-input-binding.v1",
+                            "status": "FROZEN",
+                            "producer_step_id": _text(
+                                subject_step.get("step_id")
+                            ),
+                            "producer_output_field": _text(
+                                identity_output_binding.get(
+                                    "source_identity_field"
+                                )
+                            ),
+                            "consumer_targets": subject_identity_aliases,
+                            "source_authority": _text(
+                                identity_output_binding.get(
+                                    "source_authority"
+                                )
+                            ),
+                        },
                     }
                 )
 

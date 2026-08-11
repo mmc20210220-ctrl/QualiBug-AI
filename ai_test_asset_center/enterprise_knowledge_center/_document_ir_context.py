@@ -128,7 +128,11 @@ def _block_index(document_structure: dict[str, Any]) -> tuple[dict[str, dict[str
     return {_text(row.get("block_id")): row for row in rows}, rows
 
 
-def _statement_blocks(statement: str, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _statement_blocks(
+    statement: str,
+    blocks: list[dict[str, Any]],
+    normalized_blocks: dict[int, str] | None = None,
+) -> list[dict[str, Any]]:
     target = _normalized(statement)
     if not target:
         return []
@@ -140,12 +144,15 @@ def _statement_blocks(statement: str, blocks: list[dict[str, Any]]) -> list[dict
     }
     exact: list[dict[str, Any]] = []
     contained: list[dict[str, Any]] = []
+    normalized = normalized_blocks or {
+        id(row): _normalized(row.get("text")) for row in blocks
+    }
     for block in blocks:
         if _text(block.get("region")) not in {"", "body"}:
             continue
         if _text(block.get("type")) not in eligible:
             continue
-        block_text = _normalized(block.get("text"))
+        block_text = normalized[id(block)]
         if not block_text:
             continue
         if block_text == target:
@@ -194,12 +201,15 @@ def _fact_block_map(
     facts: list[dict[str, Any]],
     source_id: str,
     blocks: list[dict[str, Any]],
+    normalized_blocks: dict[int, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for fact in facts:
         if _fact_source_id(fact) != source_id:
             continue
-        candidates = _statement_blocks(_text(fact.get("raw_statement")), blocks)
+        candidates = _statement_blocks(
+            _text(fact.get("raw_statement")), blocks, normalized_blocks
+        )
         if len(candidates) == 1:
             result[_text(fact.get("fact_id"))] = candidates[0]
     return result
@@ -288,7 +298,12 @@ def apply_document_ir_context(
         block_index, blocks = _block_index(structure)
         if not blocks:
             continue
-        fact_blocks = _fact_block_map(source_facts, source_id, blocks)
+        normalized_blocks = {
+            id(row): _normalized(row.get("text")) for row in blocks
+        }
+        fact_blocks = _fact_block_map(
+            source_facts, source_id, blocks, normalized_blocks
+        )
         for fact in source_facts:
             ambiguities = _unique(_list(fact.get("ambiguities")))
             statement = _text(fact.get("raw_statement"))
@@ -298,7 +313,7 @@ def apply_document_ir_context(
                 continue
             if not _REFERENCE_SIGNAL_RE.search(statement):
                 continue
-            candidates = _statement_blocks(statement, blocks)
+            candidates = _statement_blocks(statement, blocks, normalized_blocks)
             if len(candidates) != 1:
                 unresolved.append(
                     {

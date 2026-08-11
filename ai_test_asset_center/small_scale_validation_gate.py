@@ -809,7 +809,7 @@ def truncate_to_budget(
     Returns (truncated_list, truncation_receipt).
     - small_scale: ≤20
     - formal: ≤100
-    - hard_cap: 200 absolute maximum
+    - hard_cap: ``HARD_BUDGET_CAP`` absolute maximum
     """
     budget = get_validation_budget(_dict(runtime_contract), phase=phase)
     original_count = len(experiments)

@@ -28,7 +28,10 @@ def _empty_authority_envelope() -> dict:
         evaluation_mode="replay",
     )
     findings, ledger = build_formal_evaluation_scope(
-        [],
+        [
+            {"finding_id": "finding-1"},
+            {"finding_id": "finding-2"},
+        ],
         run_id="run-1",
         campaign_id="campaign-1",
         target_id="target-1",
@@ -78,6 +81,12 @@ def test_normalizer_preserves_complete_formal_authority() -> None:
     assert normalized["formal_delivery_authority"] == (
         raw["formal_delivery_authority"]
     )
+    assert normalized["scan_result"]["findings"] == raw[
+        "formal_count_projection"
+    ]["canonical_representative_findings"]
+    assert normalized["scan_result"]["findings"] != normalized[
+        "scan_result"
+    ]["delivery_occurrences"]
 
 
 def test_normalizer_preserves_evaluator_execution_boundary_without_synthesis() -> None:
@@ -109,7 +118,7 @@ def test_normalizer_never_invents_missing_authority_identity(field: str) -> None
         normalize_envelope(raw)
 
 
-def test_normalizer_refuses_post_redaction_invalid_authority(
+def test_normalizer_redacts_occurrence_evidence_without_changing_canonical_scope(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -177,6 +186,11 @@ def test_normalizer_refuses_post_redaction_invalid_authority(
         ],
     )
 
-    with pytest.raises(ValueError, match="formal_delivery_authority|canonical"):
-        normalize_main()
-    assert not destination.exists()
+    normalize_main()
+
+    assert destination.exists()
+    serialized = destination.read_text(encoding="utf-8")
+    assert "evaluator-secret-token" not in serialized
+    normalized = json.loads(serialized)
+    assert len(normalized["scan_result"]["findings"]) == 1
+    assert len(normalized["scan_result"]["delivery_occurrences"]) == 1

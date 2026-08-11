@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +113,52 @@ def _finding_text_blob(finding: dict[str, Any]) -> str:
     return " ".join(str(p or "") for p in parts).lower()
 
 
+def _finding_match_identity_blob(finding: dict[str, Any]) -> str:
+    """Controlled finding semantics only; raw payload values are not identity."""
+
+    parts: list[Any] = [
+        finding.get("title"),
+        finding.get("category"),
+        finding.get("defect_family"),
+        finding.get("risk_type"),
+        finding.get("risk_family"),
+        finding.get("source_rule_statement"),
+    ]
+    for assertion in finding.get("failed_assertions") or []:
+        if isinstance(assertion, dict):
+            parts.extend(
+                [
+                    assertion.get("kind"),
+                    assertion.get("assertion_kind"),
+                    assertion.get("violation_shape"),
+                ]
+            )
+    evidence = (
+        finding.get("evidence")
+        if isinstance(finding.get("evidence"), dict)
+        else {}
+    )
+    assertion = (
+        evidence.get("assertion")
+        if isinstance(evidence.get("assertion"), dict)
+        else {}
+    )
+    parts.extend(
+        [
+            assertion.get("kind"),
+            assertion.get("assertion_kind"),
+            assertion.get("violation_shape"),
+        ]
+    )
+    reproduction = (
+        finding.get("reproduction")
+        if isinstance(finding.get("reproduction"), dict)
+        else {}
+    )
+    parts.extend([reproduction.get("method"), reproduction.get("path")])
+    return " ".join(str(part or "") for part in parts).lower()
+
+
 def _finding_paths(finding: dict[str, Any]) -> set[str]:
     paths = set()
     repro = finding.get("reproduction") if isinstance(finding.get("reproduction"), dict) else {}
@@ -122,6 +169,143 @@ def _finding_paths(finding: dict[str, Any]) -> set[str]:
         paths.add(key_path.lower())
     paths |= _extract_api_paths(_finding_text_blob(finding))
     return paths
+
+
+def _normalized_endpoint_paths(values: list[Any]) -> set[str]:
+    paths: set[str] = set()
+    for value in values:
+        paths.update(_extract_api_paths(str(value or "")))
+    return paths
+
+
+def _finding_endpoint_paths(finding: dict[str, Any]) -> set[str]:
+    reproduction = (
+        finding.get("reproduction")
+        if isinstance(finding.get("reproduction"), dict)
+        else {}
+    )
+    raw = (
+        finding.get("raw_evidence")
+        if isinstance(finding.get("raw_evidence"), dict)
+        else {}
+    )
+    request = (
+        raw.get("request_raw")
+        if isinstance(raw.get("request_raw"), dict)
+        else {}
+    )
+    values = [
+        reproduction.get("path"),
+        finding.get("path"),
+        finding.get("_api_path"),
+        request.get("path"),
+    ]
+    paths = _normalized_endpoint_paths(values)
+    return paths or _normalized_endpoint_paths(
+        [_finding_match_identity_blob(finding)]
+    )
+
+
+def _gt_endpoint_paths(gt: dict[str, Any]) -> set[str]:
+    values: list[Any] = [
+        gt.get("trigger"),
+        gt.get("endpoint_hint"),
+        gt.get("api_path"),
+    ]
+    for endpoint in gt.get("affected_endpoints") or gt.get("related_endpoints") or []:
+        if isinstance(endpoint, dict):
+            values.append(endpoint.get("path") or endpoint.get("api_path"))
+        else:
+            values.append(endpoint)
+    values.extend(gt.get("match_keywords") or [])
+    return _normalized_endpoint_paths(values)
+
+
+def _finding_http_methods(finding: dict[str, Any]) -> set[str]:
+    reproduction = (
+        finding.get("reproduction")
+        if isinstance(finding.get("reproduction"), dict)
+        else {}
+    )
+    raw = (
+        finding.get("raw_evidence")
+        if isinstance(finding.get("raw_evidence"), dict)
+        else {}
+    )
+    request = (
+        raw.get("request_raw")
+        if isinstance(raw.get("request_raw"), dict)
+        else {}
+    )
+    return {
+        str(value).strip().upper()
+        for value in (
+            reproduction.get("method"),
+            finding.get("method"),
+            finding.get("_api_method"),
+            request.get("method"),
+        )
+        if str(value or "").strip()
+    }
+
+
+def _gt_http_methods(gt: dict[str, Any]) -> set[str]:
+    values: list[Any] = [gt.get("method"), gt.get("_api_method")]
+    text_values: list[Any] = [
+        gt.get("trigger"),
+        gt.get("endpoint_hint"),
+        gt.get("api_path"),
+    ]
+    for endpoint in gt.get("affected_endpoints") or gt.get("related_endpoints") or []:
+        if isinstance(endpoint, dict):
+            values.append(endpoint.get("method"))
+            text_values.append(endpoint.get("path") or endpoint.get("api_path"))
+        else:
+            text_values.append(endpoint)
+    for value in text_values:
+        values.extend(
+            re.findall(
+                r"\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b",
+                str(value or ""),
+                flags=re.IGNORECASE,
+            )
+        )
+    return {
+        str(value).strip().upper()
+        for value in values
+        if str(value or "").strip()
+    }
+
+
+@lru_cache(maxsize=1)
+def _generic_match_terms() -> frozenset[str]:
+    terms: set[str] = set()
+    for family, definition in _benchmark_match_ontology().items():
+        terms.update(part for part in family.lower().split("_") if part)
+        if isinstance(definition, dict):
+            terms.update(
+                str(alias).strip().lower()
+                for alias in definition.get("aliases") or []
+                if str(alias or "").strip()
+            )
+    return frozenset(terms)
+
+
+def _strong_identity_keyword(keyword: Any) -> bool:
+    original = str(keyword or "").strip()
+    normalized = original.lower()
+    if not normalized or normalized in _generic_match_terms():
+        return False
+    if _extract_api_paths(original):
+        return False
+    if re.search(r"[-_.\s]", original):
+        return True
+    if re.search(r"[a-z][A-Z]|\d", original):
+        return True
+    if original.isupper() and len(original) >= 4:
+        return True
+    cjk_count = len(re.findall(r"[\u3400-\u9fff]", original))
+    return cjk_count >= 4
 
 
 # ── Constraint-class semantic matching (evaluator-side, industry-neutral) ──
@@ -328,10 +512,11 @@ def _match_finding_to_gt(
     used_ids: set[str],
 ) -> dict[str, Any] | None:
     """Keyword + API-path + semantic match (post-scan scoring only — never fed into discovery)."""
-    blob = _finding_text_blob(finding)
-    f_paths = _finding_paths(finding)
+    blob = _finding_match_identity_blob(finding)
+    f_paths = _finding_endpoint_paths(finding)
+    finding_methods = _finding_http_methods(finding)
     finding_family = _canonical_match_family(finding)
-    best: tuple[float, dict[str, Any]] | None = None
+    best: tuple[float, str, dict[str, Any], dict[str, Any]] | None = None
 
     for gt in truth_bugs:
         gt_id = str(gt.get("bug_id") or gt.get("id") or "")
@@ -350,17 +535,27 @@ def _match_finding_to_gt(
             kw_hits = _constraint_keyword_hits(blob, keywords)
         else:
             kw_hits = sum(1 for kw in keywords if str(kw).lower() in blob)
+        matched_keywords = [
+            str(keyword)
+            for keyword in keywords
+            if str(keyword).strip() and str(keyword).lower() in blob
+        ]
+        strong_identity_hits = [
+            keyword
+            for keyword in matched_keywords
+            if _strong_identity_keyword(keyword)
+        ]
         if keywords:
             score += min(0.55, kw_hits * 0.12)
-        gt_paths = _extract_api_paths(str(gt.get("trigger") or ""))
-        gt_paths |= _extract_api_paths(str(gt.get("endpoint_hint") or gt.get("api_path") or ""))
-        for endpoint in gt.get("affected_endpoints") or gt.get("related_endpoints") or []:
-            if isinstance(endpoint, dict):
-                gt_paths |= _extract_api_paths(str(endpoint.get("path") or endpoint.get("api_path") or ""))
-            else:
-                gt_paths |= _extract_api_paths(str(endpoint))
-        gt_paths |= _extract_api_paths(" ".join(str(k) for k in keywords))
+        gt_paths = _gt_endpoint_paths(gt)
+        gt_methods = _gt_http_methods(gt)
         path_matches = _paths_overlap(f_paths, gt_paths)
+        if f_paths and gt_paths and not path_matches:
+            continue
+        if finding_methods and gt_methods and not (finding_methods & gt_methods):
+            continue
+        if not gt_paths and (kw_hits < 2 or not strong_identity_hits):
+            continue
         if path_matches:
             # Endpoint overlap proves where a probe ran, not which defect it
             # found. Keep it below the acceptance threshold so broad
@@ -413,14 +608,252 @@ def _match_finding_to_gt(
         # coverage, never a detected bug.
         if score < 0.58 or (path_matches and not family_matches and score < 0.70):
             continue
-        if best is None or score > best[0]:
-            best = (score, gt)
+        criteria = ["semantic_score_threshold"]
+        if path_matches:
+            criteria.append("path_overlap")
+        else:
+            criteria.append("semantic_identity_without_gt_endpoint")
+        if family_matches:
+            criteria.append("risk_family_overlap")
+        if matched_keywords:
+            criteria.append("keyword_overlap")
+        if strong_identity_hits:
+            criteria.append("strong_identity_keyword")
+        if finding_methods and gt_methods:
+            criteria.append("http_method_overlap")
+        evidence = {
+            "criteria": criteria,
+            "acceptance_mode": (
+                "endpoint_bound" if gt_paths else "semantic_identity_only"
+            ),
+            "finding_paths": sorted(f_paths),
+            "gt_paths": sorted(gt_paths),
+            "finding_methods": sorted(finding_methods),
+            "gt_methods": sorted(gt_methods),
+            "matched_keywords": matched_keywords,
+            "keyword_hit_count": kw_hits,
+            "strong_identity_keyword_hits": strong_identity_hits,
+            "family_match": family_matches,
+            "accepted_score": round(score, 4),
+        }
+        candidate = (score, gt_id, gt, evidence)
+        if best is None or score > best[0] or (
+            score == best[0] and gt_id < best[1]
+        ):
+            best = candidate
 
     if best is None:
         return None
-    matched = dict(best[1])
+    matched = dict(best[2])
     matched["__match_score"] = round(best[0], 4)
+    matched["__match_evidence"] = best[3]
     return matched
+
+
+def _score_finding_gt(
+    finding: dict[str, Any],
+    gt: dict[str, Any],
+) -> float | None:
+    """Return one accepted evaluator-private finding/GT edge weight."""
+
+    matched = _match_finding_to_gt(finding, [gt], set())
+    if matched is None:
+        return None
+    return float(matched["__match_score"])
+
+
+def _match_evidence_finding_gt(
+    finding: dict[str, Any],
+    gt: dict[str, Any],
+) -> dict[str, Any] | None:
+    matched = _match_finding_to_gt(finding, [gt], set())
+    if matched is None:
+        return None
+    evidence = matched.get("__match_evidence")
+    return dict(evidence) if isinstance(evidence, dict) else None
+
+
+def _validated_canonical_representatives(
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Fail closed unless the scoring scope is exactly canonical representatives."""
+
+    validated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            raise ValueError(f"canonical_representative_invalid:{index}")
+        if finding.get("archive_entry") is True:
+            raise ValueError(
+                f"canonical_representative_archive_forbidden:{index}"
+            )
+        canonical_id = str(finding.get("canonical_defect_id") or "").strip()
+        if not canonical_id:
+            raise ValueError(
+                f"canonical_representative_missing_canonical_defect_id:{index}"
+            )
+        if canonical_id in seen:
+            raise ValueError(
+                f"duplicate_canonical_defect_id:{canonical_id}"
+            )
+        fingerprint = str(
+            finding.get("canonical_identity_fingerprint") or ""
+        ).strip()
+        occurrence_ids = finding.get("delivery_occurrence_finding_ids")
+        representative_id = str(
+            finding.get("delivery_occurrence_finding_id") or ""
+        ).strip()
+        occurrence_count = finding.get("delivery_occurrence_count")
+        if (
+            not fingerprint
+            or not isinstance(occurrence_ids, list)
+            or not occurrence_ids
+            or not representative_id
+            or representative_id not in occurrence_ids
+            or occurrence_count != len(occurrence_ids)
+        ):
+            raise ValueError(
+                f"canonical_representative_evidence_scope_invalid:{canonical_id}"
+            )
+        seen.add(canonical_id)
+        validated.append(dict(finding))
+    return sorted(
+        validated,
+        key=lambda row: str(row["canonical_defect_id"]),
+    )
+
+
+def _validated_ground_truth_identity(
+    truth_bugs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Require one stable evaluator-private identifier per GT defect."""
+
+    seen: set[str] = set()
+    validated: list[dict[str, Any]] = []
+    for index, gt in enumerate(truth_bugs):
+        gt_id = str(gt.get("bug_id") or gt.get("id") or "").strip()
+        if not gt_id:
+            raise ValueError(f"ground_truth_bug_id_missing:{index}")
+        if gt_id in seen:
+            raise ValueError(f"duplicate_ground_truth_bug_id:{gt_id}")
+        seen.add(gt_id)
+        validated.append(gt)
+    return validated
+
+
+def _hungarian_maximum_assignment(weights: list[list[int]]) -> list[int]:
+    """Return the deterministic maximum-weight column for each square row."""
+
+    size = len(weights)
+    if size == 0:
+        return []
+    max_weight = max(max(row) for row in weights)
+    costs = [[max_weight - value for value in row] for row in weights]
+    u = [0] * (size + 1)
+    v = [0] * (size + 1)
+    p = [0] * (size + 1)
+    way = [0] * (size + 1)
+    for row_index in range(1, size + 1):
+        p[0] = row_index
+        minv = [10**30] * (size + 1)
+        used = [False] * (size + 1)
+        column = 0
+        while True:
+            used[column] = True
+            active_row = p[column]
+            delta = 10**30
+            next_column = 0
+            for candidate_column in range(1, size + 1):
+                if used[candidate_column]:
+                    continue
+                reduced = (
+                    costs[active_row - 1][candidate_column - 1]
+                    - u[active_row]
+                    - v[candidate_column]
+                )
+                if reduced < minv[candidate_column]:
+                    minv[candidate_column] = reduced
+                    way[candidate_column] = column
+                if minv[candidate_column] < delta:
+                    delta = minv[candidate_column]
+                    next_column = candidate_column
+            for candidate_column in range(size + 1):
+                if used[candidate_column]:
+                    u[p[candidate_column]] += delta
+                    v[candidate_column] -= delta
+                else:
+                    minv[candidate_column] -= delta
+            column = next_column
+            if p[column] == 0:
+                break
+        while True:
+            previous_column = way[column]
+            p[column] = p[previous_column]
+            column = previous_column
+            if column == 0:
+                break
+    assignment = [-1] * size
+    for column in range(1, size + 1):
+        if p[column]:
+            assignment[p[column] - 1] = column - 1
+    return assignment
+
+
+def _maximum_weight_canonical_matching(
+    findings: list[dict[str, Any]],
+    truth_bugs: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], dict[str, Any], float, dict[str, Any]]]:
+    """Maximise one-to-one TP cardinality, then total semantic match weight."""
+
+    ordered_findings = sorted(
+        findings, key=lambda row: str(row["canonical_defect_id"])
+    )
+    ordered_truth = sorted(
+        truth_bugs,
+        key=lambda row: str(row.get("bug_id") or row.get("id") or ""),
+    )
+    if not ordered_findings or not ordered_truth:
+        return []
+    size = max(len(ordered_findings), len(ordered_truth))
+    edge_scores: dict[tuple[int, int], float] = {}
+    edge_evidence: dict[tuple[int, int], dict[str, Any]] = {}
+    max_score_units = 0
+    for finding_index, finding in enumerate(ordered_findings):
+        for gt_index, gt in enumerate(ordered_truth):
+            score = _score_finding_gt(finding, gt)
+            if score is None:
+                continue
+            evidence = _match_evidence_finding_gt(finding, gt)
+            if evidence is None:
+                continue
+            edge_scores[(finding_index, gt_index)] = score
+            edge_evidence[(finding_index, gt_index)] = evidence
+            max_score_units = max(max_score_units, round(score * 10_000))
+    if not edge_scores:
+        return []
+    cardinality_bonus = (max_score_units + 1) * (size + 1)
+    weights = [[0 for _ in range(size)] for _ in range(size)]
+    for (finding_index, gt_index), score in edge_scores.items():
+        weights[finding_index][gt_index] = (
+            cardinality_bonus + round(score * 10_000)
+        )
+    assignment = _hungarian_maximum_assignment(weights)
+    matches: list[
+        tuple[dict[str, Any], dict[str, Any], float, dict[str, Any]]
+    ] = []
+    for finding_index, gt_index in enumerate(assignment[: len(ordered_findings)]):
+        score = edge_scores.get((finding_index, gt_index))
+        if score is None:
+            continue
+        matches.append(
+            (
+                ordered_findings[finding_index],
+                ordered_truth[gt_index],
+                score,
+                edge_evidence[(finding_index, gt_index)],
+            )
+        )
+    return matches
 
 
 def _safe_float(value: Any, fallback: float = 0.0) -> float:
@@ -1146,50 +1579,63 @@ def compute_benchmark(
             "reason": "ground_truth_empty",
             "coverage_matrix": _coverage_matrix(findings, candidates),
         }
+    truth_bugs = _validated_ground_truth_identity(truth_bugs)
 
     # ── Match confirmed findings against ground truth (post-scan scoring only) ──
-    raw_confirmed_findings = [
-        f for f in findings
-        if isinstance(f, dict) and (
-            f.get("gate_passed") is True
-            or str(f.get("customer_delivery_status") or "") == "defect"
-            or str(f.get("confirmation_status") or "") == "confirmed"
+    # The evaluator scores current canonical representatives only. Delivery
+    # occurrences and historical archive rows are evidence, never score rows.
+    canonical_findings = _validated_canonical_representatives(findings)
+    confirmed_findings = [
+        finding
+        for finding in canonical_findings
+        if (
+            finding.get("gate_passed") is True
+            or str(finding.get("customer_delivery_status") or "") == "defect"
+            or str(finding.get("confirmation_status") or "") == "confirmed"
         )
     ]
-    confirmed_findings, duplicate_findings_excluded = _deduplicate_benchmark_findings(
-        raw_confirmed_findings
+    matching = _maximum_weight_canonical_matching(
+        confirmed_findings, truth_bugs
     )
-    all_findings = list(confirmed_findings) + [
-        c for c in (candidates or [])
-        if isinstance(c, dict) and c.get("gate_passed") is True
+    matched_gt_ids = {
+        str(gt.get("bug_id") or gt.get("id") or "")
+        for _, gt, _, _ in matching
+    }
+    matched_canonical_ids = {
+        str(finding["canonical_defect_id"])
+        for finding, _, _, _ in matching
+    }
+    matched_pairs = [
+        {
+            "canonical_defect_id": finding["canonical_defect_id"],
+            "canonical_finding_id": finding.get("finding_id") or finding.get("id"),
+            "finding_title": finding.get("title", ""),
+            "finding_severity": finding.get("severity", ""),
+            "match_score": score,
+            "gt_bug_id": str(gt.get("bug_id") or gt.get("id") or ""),
+            "gt_title": gt.get("title", ""),
+            "gt_severity": gt.get("severity", ""),
+            "gt_type": gt.get("type", ""),
+            "gt_risk_family": _risk_family_for_item(gt),
+            "match_evidence": match_evidence,
+        }
+        for finding, gt, score, match_evidence in matching
     ]
-
-    matched_gt_ids: set[str] = set()
-    matched_pairs: list[dict[str, Any]] = []
-    false_positives: list[dict[str, Any]] = []
-
-    for finding in confirmed_findings:
-        gt = _match_finding_to_gt(finding, truth_bugs, matched_gt_ids)
-        if gt:
-            gt_id = str(gt.get("bug_id") or gt.get("id") or "")
-            matched_gt_ids.add(gt_id)
-            matched_pairs.append({
-                "finding_title": finding.get("title", ""),
-                "finding_severity": finding.get("severity", ""),
-                "match_score": gt.get("__match_score", 0),
-                "gt_bug_id": gt_id,
-                "gt_title": gt.get("title", ""),
-                "gt_severity": gt.get("severity", ""),
-                "gt_type": gt.get("type", ""),
-                "gt_risk_family": _risk_family_for_item(gt),
-            })
-        elif finding.get("customer_delivery_status") == "defect" or finding.get("gate_passed") is True:
-            false_positives.append(finding)
+    canonical_unmatched = [
+        str(finding["canonical_defect_id"])
+        for finding in confirmed_findings
+        if str(finding["canonical_defect_id"]) not in matched_canonical_ids
+    ]
+    gt_unmatched = sorted(
+        str(gt.get("bug_id") or gt.get("id") or "")
+        for gt in truth_bugs
+        if str(gt.get("bug_id") or gt.get("id") or "") not in matched_gt_ids
+    )
 
     total_gt = len(truth_bugs)
-    total_found = len(all_findings)
+    total_found = len(confirmed_findings)
     true_pos = len(matched_pairs)
-    false_pos = len(false_positives)
+    false_pos = len(canonical_unmatched)
     false_neg = max(0, total_gt - true_pos)
 
     # ── Sub-metrics ──
@@ -1234,7 +1680,8 @@ def compute_benchmark(
         "ground_truth_source": str(gt_path),
         "ground_truth_bug_count": total_gt,
         "scan_findings_total": total_found,
-        "duplicate_findings_excluded": duplicate_findings_excluded,
+        "canonical_defects_evaluated": len(confirmed_findings),
+        "duplicate_findings_excluded": 0,
         "true_positives": true_pos,
         "false_positives": false_pos,
         "false_negatives": false_neg,
@@ -1253,9 +1700,11 @@ def compute_benchmark(
         "regression_success_rate": round(reg_passed / reg_total, 4) if reg_total else 0,
         "regression_total_count": reg_total,
         "regression_passed_count": reg_passed,
-        "matched_bugs": matched_pairs[:50],
+        "matched_bugs": matched_pairs,
         "matched_bug_ids": sorted(matched_gt_ids),
-        "missed_bug_ids": [b.get("bug_id") for b in truth_bugs if b.get("bug_id") not in matched_gt_ids],
+        "missed_bug_ids": list(gt_unmatched),
+        "canonical_unmatched": canonical_unmatched,
+        "gt_unmatched": gt_unmatched,
         "bug_type_breakdown": _bug_type_breakdown(matched_pairs, truth_bugs),
         "risk_family_breakdown": _risk_family_breakdown(matched_pairs, truth_bugs),
         "coverage_matrix": _coverage_matrix(findings, candidates, truth=truth_bugs),

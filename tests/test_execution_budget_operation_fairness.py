@@ -27,6 +27,7 @@ from ai_test_asset_center.safe_experiment_prioritizer import (
 from ai_test_asset_center import (
     _experiment_batch_executor_single_finding_mechanics as batch_core,
 )
+from ai_test_asset_center.small_scale_validation_gate import HARD_BUDGET_CAP
 
 
 def _make_obligation(
@@ -86,12 +87,15 @@ class TestOperationCoverageBudget:
         assert batch_core._operation_coverage_budget(selected, budget=1) == 5
 
     def test_respects_hard_cap(self):
-        """Floor must never exceed the hard cap (200)."""
+        """Floor must never exceed the shared hard cap."""
         selected = [
             {"obligation_id": f"o{i}", "operation_key": f"OP-{i}"}
-            for i in range(500)
+            for i in range(HARD_BUDGET_CAP + 100)
         ]
-        assert batch_core._operation_coverage_budget(selected, budget=1) == 200
+        assert (
+            batch_core._operation_coverage_budget(selected, budget=1)
+            == HARD_BUDGET_CAP
+        )
 
     def test_never_shrinks_larger_budget(self):
         """A phase budget already above the operation count must stay put."""
@@ -186,6 +190,7 @@ class TestBatchExecutorWiring:
         assert "_operation_coverage_budget(" in src
 
     def test_hard_cap_still_present(self):
-        """The 200 hard cap must remain the absolute ceiling."""
+        """The executor must consume the budget SSOT, not a stale literal."""
         src = inspect.getsource(batch_core.execute_selected_experiments)
-        assert "min(_budget, 200)" in src
+        assert "HARD_BUDGET_CAP" in src
+        assert "min(_budget, 200)" not in src

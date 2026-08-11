@@ -16,7 +16,7 @@ from ._object_source_conflict_preparation import (
     finalize_conflict_governed_source_recognition,
     prepare_conflict_governed_source_asset,
 )
-from .schema import as_dict, as_list, text
+from .schema import as_dict, as_list, clone_asset_for_understanding_projection, text
 
 _CJK_ENTITY_SECTION = re.compile(
     r"^(?:(?:核心|主要|关键|业务|领域)+)(?:实体|对象)(?:定义|清单|列表)?$"
@@ -40,7 +40,7 @@ def _formatted_heading(value: Any) -> str:
 
 
 def _normalized_trees(asset: dict[str, Any]) -> tuple[dict[str, Any], dict[str, list[tuple[str, str]]]]:
-    result = deepcopy(asset)
+    result = clone_asset_for_understanding_projection(asset)
     root = result.get("document_semantic_trees")
     root_dict = dict(as_dict(root))
     trees = [

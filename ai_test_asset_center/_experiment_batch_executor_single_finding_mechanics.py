@@ -28,6 +28,7 @@ from .experiment_runtime_support import (
 )
 from .operational_receipts import build_execution_operational_receipt
 from .sandbox_write_executor_base import evaluator_request_trace
+from .small_scale_validation_gate import HARD_BUDGET_CAP
 
 
 def _deliverable_dedupe_key(finding: dict[str, Any]) -> str:
@@ -228,7 +229,7 @@ def stamp_finding_delivery_gate_refs(
 def _operation_coverage_budget(
     selected: list[Any],
     budget: int,
-    hard_cap: int = 200,
+    hard_cap: int = HARD_BUDGET_CAP,
 ) -> int:
     """Floor the batch budget at one experiment per distinct operation.
 
@@ -264,7 +265,7 @@ def _operation_coverage_budget(
 def _family_coverage_budget(
     selected: list[Any],
     budget: int,
-    hard_cap: int = 200,
+    hard_cap: int = HARD_BUDGET_CAP,
 ) -> int:
     """Floor the batch budget so family-fair and operation-fair both fit.
 
@@ -401,18 +402,22 @@ def execute_selected_experiments(
     else:
         _phase = "small_scale"  # Default to small-scale for safety
     _budget = get_validation_budget(runtime_contract, phase=_phase)
-    _budget = max(1, min(_budget, 200))  # hard cap at 200
+    _budget = max(1, min(_budget, HARD_BUDGET_CAP))
     # ── Operation-coverage floor ──
     # One experiment per distinct operation minimum, bounded by the same hard
     # cap. See _operation_coverage_budget for the rationale.
-    _budget = _operation_coverage_budget(selected, _budget, hard_cap=200)
+    _budget = _operation_coverage_budget(
+        selected, _budget, hard_cap=HARD_BUDGET_CAP
+    )
     # ── Family-coverage floor (family-fair execution budget) ──
     # One experiment per distinct risk family minimum, bounded by the same
     # hard cap, so the prioritizer's family-fair tier can fit every family
     # (authorization can no longer crowd out state/idempotency/conservation/
     # validation/privacy). The quota itself is operator-configurable through
     # the runtime contract (family_execution_quota, default 1).
-    _budget = _family_coverage_budget(selected, _budget, hard_cap=200)
+    _budget = _family_coverage_budget(
+        selected, _budget, hard_cap=HARD_BUDGET_CAP
+    )
     _family_quota = max(
         1, int(_dict(runtime_contract).get("family_execution_quota") or 0) or 1
     )

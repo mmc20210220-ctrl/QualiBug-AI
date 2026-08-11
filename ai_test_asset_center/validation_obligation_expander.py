@@ -98,6 +98,8 @@ def _semantic_variants(
     explicit_tokens = _core._explicit_tokens(prop)
     if explicit_tokens and _text(prop.get("validation_constraint")):
         return []
+    if not _core._schema_constraint_expansion_eligible(prop):
+        return []
 
     schema = _core._body_schema(_core._dict(operation))
     example = _core._request_example(_core._dict(operation))

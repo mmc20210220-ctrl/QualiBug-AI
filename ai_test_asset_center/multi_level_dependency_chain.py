@@ -85,6 +85,8 @@ REASON_NO_ACTOR = "MULTI_LEVEL_DEPENDENCY_ACTOR_UNRESOLVED"
 REASON_NO_CLEANUP = "MULTI_LEVEL_DEPENDENCY_CLEANUP_MISSING"
 REASON_CYCLE = "MULTI_LEVEL_DEPENDENCY_CYCLE"
 REASON_TOO_DEEP = "MULTI_LEVEL_DEPENDENCY_TOO_DEEP"
+REASON_IDENTITY_MISSING = "MULTI_LEVEL_DEPENDENCY_IDENTITY_SOURCE_MISSING"
+REASON_IDENTITY_AMBIGUOUS = "MULTI_LEVEL_DEPENDENCY_IDENTITY_SOURCE_AMBIGUOUS"
 
 # Establishment step intents (shared with the money chain).
 INTENT_ESTABLISHMENT = "multi_level_dependency_establishment"
@@ -122,6 +124,29 @@ def _entity_by_id(entities: list[Any], entity_id: str) -> dict[str, Any]:
         if _text(entity.get("id")) == entity_id:
             return entity
     return {}
+
+
+def _declared_entity_identity_fields(entity: dict[str, Any]) -> list[str]:
+    """Return only identity fields explicitly projected into Behavior IR.
+
+    A conventional ``id`` is not an authority.  The field must be present in
+    ``identity_fields`` or in an explicit ``identity_keys[].columns`` row;
+    otherwise response capture cannot know which create-response value names
+    the established entity.
+    """
+    fields = [
+        _text(value)
+        for value in _list(entity.get("identity_fields"))
+        if _text(value)
+    ]
+    for raw_key in _list(entity.get("identity_keys")):
+        key = _dict(raw_key)
+        fields.extend(
+            _text(value)
+            for value in _list(key.get("columns"))
+            if _text(value)
+        )
+    return list(dict.fromkeys(fields))
 
 
 def _collection_observation_resolvers(
@@ -344,6 +369,29 @@ def _plan_level(
             "reason_code": REASON_NO_ENTITY,
             "detail": {"entity_ref": entity_id, "reference_field": primary_field},
         }
+    identity_fields = _declared_entity_identity_fields(entity)
+    if not identity_fields:
+        return {
+            "status": "blocked",
+            "reason_code": REASON_IDENTITY_MISSING,
+            "detail": {
+                "entity_ref": entity_id,
+                "reference_field": primary_field,
+                "identity_fields": [],
+                "source_authority": "behavior_ir.entities.identity_fields",
+            },
+        }
+    if len(identity_fields) != 1:
+        return {
+            "status": "blocked",
+            "reason_code": REASON_IDENTITY_AMBIGUOUS,
+            "detail": {
+                "entity_ref": entity_id,
+                "reference_field": primary_field,
+                "identity_fields": identity_fields,
+                "source_authority": "behavior_ir.entities.identity_fields",
+            },
+        }
     if entity_id in visited:
         chain = "->".join([*visited, entity_id])
         return {
@@ -491,6 +539,21 @@ def _plan_level(
         "creates_entity_ref": entity_id,
         "method": "POST",
         "path": create_path,
+        "identity_binding_aliases": list(
+            dict.fromkeys([*reference_fields, identity_fields[0]])
+        ),
+        "identity_output_binding": {
+            "schema_version": "qualibug.identity-output-binding.v1",
+            "status": "FROZEN",
+            "entity_ref": entity_id,
+            "source_identity_field": identity_fields[0],
+            "source_path": identity_fields[0],
+            "consumer_targets": list(dict.fromkeys(reference_fields)),
+            "alias_targets": list(
+                dict.fromkeys([*reference_fields, identity_fields[0]])
+            ),
+            "source_authority": "behavior_ir.entities.identity_fields",
+        },
     }
     if entry_state:
         step["to_state"] = entry_state
@@ -522,6 +585,17 @@ def _attach_reference_field(
         ]
         merged = list(dict.fromkeys([*existing, *reference_fields]))
         step["identity_binding_targets"] = merged
+        output_binding = _dict(step.get("identity_output_binding"))
+        source_field = _text(output_binding.get("source_identity_field"))
+        if output_binding:
+            output_binding["consumer_targets"] = merged
+            output_binding["alias_targets"] = list(
+                dict.fromkeys([*merged, source_field])
+            )
+            step["identity_output_binding"] = output_binding
+            step["identity_binding_aliases"] = list(
+                output_binding["alias_targets"]
+            )
         if not _text(step.get("identity_binding_target")):
             step["identity_binding_target"] = merged[0] if merged else ""
             step["skip_if_observed_target"] = merged[0] if merged else ""
@@ -630,6 +704,8 @@ __all__ = [
     "NOT_APPLICABLE",
     "PLANNED",
     "REASON_CYCLE",
+    "REASON_IDENTITY_AMBIGUOUS",
+    "REASON_IDENTITY_MISSING",
     "REASON_NO_ACTOR",
     "REASON_NO_CLEANUP",
     "REASON_NO_CREATE",

@@ -564,11 +564,31 @@ def compile_family_protocol(
             if isinstance(row, dict)
         ]
         if len(control_plan) != 1 or len(treatment_plan) != 1:
-            return {
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_UNSUPPORTED_ADAPTER",
-                "detail": "validation_protocol_shape_invalid",
-            }
+            # The exact request constraint is an independently sourced
+            # property. A surrounding semantic rule may project to a
+            # response-only or treatment-only protocol, but that one-sided
+            # shape must not replace the request constraint or masquerade as
+            # an adapter gap. Compile the constraint's own canonical two-arm
+            # protocol; fixture/precondition chains are attached later by the
+            # obligation compiler and therefore remain intact.
+            control_plan = [{
+                "step_id": "control_1",
+                "actor_ref": control_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "valid_source_control",
+                "protocol_step": "positive_control",
+            }]
+            treatment_plan = [{
+                "step_id": "treatment_1",
+                "actor_ref": treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "single_constraint_mutation",
+                "protocol_step": "single_mutation",
+            }]
+            # Do not retain observers/assertions from the unrelated semantic
+            # projection. The constraint assertion is set below and observer
+            # requirements are compiled from the obligation contract.
+            result = {"status": "COMPILED"}
         location = _text(mutation.get("parameter_location")).lower() or "body"
         if location in {"query", "path", "header"}:
             control_plan[0][location] = deepcopy(control)

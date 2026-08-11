@@ -2123,8 +2123,12 @@ def build_enterprise_business_knowledge_asset(
     # The base compiler is an extraction primitive in this composition. It is not
     # allowed to publish Probes before semantic, implementation and runtime gates.
     base_options = {**resolved_options, "probe_limit": 0}
+    base_parsed_rows: list[tuple[dict[str, Any], dict[str, Any]]] = []
     asset = _base_api.build_enterprise_business_knowledge_asset(
-        project, resolved_root, base_options
+        project,
+        resolved_root,
+        base_options,
+        parsed_source_sink=base_parsed_rows,
     )
     _restore_previous_implicit_rule_governance(
         asset, previous_finalized_governance
@@ -2132,7 +2136,35 @@ def build_enterprise_business_knowledge_asset(
     _restore_previous_identity_registry(
         asset, previous_finalized_governance, pass_name="source_fact_pass"
     )
-    parsed_sources = _parsed_sources_for_context(asset, resolved_root)
+    parsed_overrides = {
+        _incremental_text(source.get("source_id"), 300): parsed
+        for source, parsed in base_parsed_rows
+        if _incremental_text(source.get("source_id"), 300)
+    }
+    parsed_sources = _parsed_sources_for_context(
+        asset,
+        resolved_root,
+        parsed_overrides=parsed_overrides,
+        require_overrides=True,
+    )
+    asset["source_parse_execution_receipt"] = {
+        "schema": "qualibug.enterprise-source-parse-execution.v1",
+        "active_source_count": len(asset.get("source_inventory") or []),
+        "parse_execution_count": len(base_parsed_rows),
+        "context_reparse_count": 0,
+        "document_structure_rebuild_count": sum(
+            1
+            for row in parsed_sources
+            if not row.get("document_structure_reused_from_parse")
+        ),
+        "document_structure_reuse_count": sum(
+            1
+            for row in parsed_sources
+            if row.get("document_structure_reused_from_parse")
+        ),
+        "handoff_scope": "same_build_invocation",
+        "cross_build_cache_used": False,
+    }
 
     # Technical declarations must be projected before enterprise cognition. No stage
     # below invents a business sequence from document, schema or diagram order.

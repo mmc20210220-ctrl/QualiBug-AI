@@ -7,7 +7,15 @@ from typing import Any
 from ._object_role_evidence import comparison_key, object_slot_mentions
 from ._object_source_declarations import source_object_declarations
 from ._object_source_surfaces import collect_source_attested_object_surfaces
-from .schema import as_dict, as_list, evidence_from_fact, stable_id, text, unique_text
+from .schema import (
+    as_dict,
+    as_list,
+    clone_asset_for_understanding_projection,
+    evidence_from_fact,
+    stable_id,
+    text,
+    unique_text,
+)
 
 
 def _direct_surface_parents(
@@ -85,7 +93,7 @@ def prepare_source_declared_asset(asset: dict[str, Any]) -> tuple[dict[str, Any]
     if not declarations:
         return asset, {"declared_keys": [], "surface_parents": {}}
 
-    prepared = deepcopy(asset)
+    prepared = clone_asset_for_understanding_projection(asset)
     # The parser emits ``entity_inventory_table`` for both explicit entity
     # inventories and weak database table directories.  Source structure has
     # already selected the declarations above, so raw tables return to

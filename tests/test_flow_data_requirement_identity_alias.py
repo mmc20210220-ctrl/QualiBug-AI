@@ -71,6 +71,16 @@ def _experiment(*, with_aliases: bool) -> dict:
     }
     if with_aliases:
         create_step["identity_binding_aliases"] = ["orderId", "id"]
+        create_step["identity_output_binding"] = {
+            "schema_version": "qualibug.identity-output-binding.v1",
+            "status": "FROZEN",
+            "entity_ref": "ent_subject",
+            "source_identity_field": "id",
+            "source_path": "id",
+            "consumer_targets": ["orderId"],
+            "alias_targets": ["orderId", "id"],
+            "source_authority": "behavior_ir.entities.identity_fields",
+        }
         cancel_step["identity_binding_aliases"] = ["orderId", "id"]
     return {
         "obligation_id": "obl_alias_test",

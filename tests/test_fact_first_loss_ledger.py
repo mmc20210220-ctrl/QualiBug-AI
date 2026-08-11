@@ -142,6 +142,34 @@ def test_ready_without_obligation_is_obligation_not_generated() -> None:
     assert ledger["items"][0]["first_loss_stage"] == "OBLIGATION_NOT_GENERATED"
 
 
+def test_unresolved_fact_lineage_is_not_misreported_as_generation_loss() -> None:
+    ledger = build_fact_first_loss_ledger(
+        fact_experimentability_ledger=_exp_ledger(
+            [
+                {
+                    "receipt_id": "fer_ready",
+                    "fact_ref": "fact:lineage-gap",
+                    "status": "READY",
+                    "blocker_codes": [],
+                    "risk_operator": "business_rule_violation",
+                    "risk_level": "medium",
+                }
+            ]
+        ),
+        fact_lineage_receipt={
+            "schema_version": "qualibug.fact-ref-planning-attach.v1",
+            "authority_status": "BLOCKED_WITH_GAPS",
+            "authority_resolved_fact_refs": [],
+            "unresolved_fact_refs": ["fact:lineage-gap"],
+        },
+    )
+
+    assert ledger["items"][0]["first_loss_stage"] == "FACT_LINEAGE_UNRESOLVED"
+    assert ledger["items"][0]["first_loss_reason"] == (
+        "fact_to_ir_authority_not_resolved"
+    )
+
+
 def test_attach_fact_refs_does_not_claim_behavior_change() -> None:
     obligations = [{"obligation_id": "obl_1", "source_refs": ["fact:x"]}]
     experiments = [{"obligation_id": "obl_1", "experiment_id": "exp_1"}]
@@ -153,6 +181,189 @@ def test_attach_fact_refs_does_not_claim_behavior_change() -> None:
     assert receipt["changes_compile_or_execution_decisions"] is False
     assert obligations[0]["fact_refs"] == ["fact:x"]
     assert experiments[0]["fact_refs"] == ["fact:x"]
+
+
+def _canonical_fact_lineage_authority() -> tuple[dict, dict]:
+    knowledge_asset = {
+        "business_world_model": {
+            "behavior_nodes": [
+                {
+                    "node_id": "behavior:submit-record",
+                    "implementation_binding_refs": ["binding:submit-record"],
+                    "evidence_refs": ["evidence:submit-record"],
+                }
+            ],
+            "evidence_registry": [
+                {
+                    "evidence_ref": "evidence:submit-record",
+                    "fact_id": "fact:submission-rule",
+                }
+            ],
+        },
+        "enterprise_understanding_model": {
+            "business_behaviors": [
+                {
+                    "behavior_id": "behavior:submit-record",
+                    "source_refs": ["fact:submission-rule"],
+                }
+            ],
+            "behavior_implementation_bindings": [
+                {
+                    "binding_id": "binding:submit-record",
+                    "behavior_ref": "behavior:submit-record",
+                    "api_operation_bindings": [
+                        {
+                            "binding_id": "api-binding:submit-record",
+                            "status": "BOUND",
+                            "authoritative": True,
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    behavior_ir = {
+        "invariants": [
+            {
+                "id": "invariant:submission-rule",
+                "business_behavior_ref": "behavior:submit-record",
+                "implementation_binding_refs": ["api-binding:submit-record"],
+            }
+        ],
+        "relations": [
+            {
+                "id": "relation:submit-observes-rule",
+                "from_ref": "operation:submit-record",
+                "to_ref": "invariant:submission-rule",
+                "operation_ref": "operation:submit-record",
+                "source_relationship_ref": "api-binding:submit-record",
+            }
+        ],
+    }
+    return knowledge_asset, behavior_ir
+
+
+def test_canonical_authority_projects_fact_identity_to_obligation_and_experiment() -> None:
+    knowledge_asset, behavior_ir = _canonical_fact_lineage_authority()
+    obligations = [
+        {
+            "obligation_id": "obl_submission_rule",
+            "property": {"invariant_ref": "invariant:submission-rule"},
+            "relation_refs": ["relation:submit-observes-rule"],
+        }
+    ]
+    experiments = [
+        {
+            "obligation_id": "obl_submission_rule",
+            "experiment_id": "exp_submission_rule",
+        }
+    ]
+
+    receipt = attach_fact_refs_to_planning_artifacts(
+        obligations=obligations,
+        experiments=experiments,
+        fact_experimentability_ledger=_exp_ledger(
+            [{"fact_ref": "fact:submission-rule", "status": "READY"}]
+        ),
+        behavior_ir=behavior_ir,
+        knowledge_asset=knowledge_asset,
+    )
+
+    assert obligations[0]["fact_refs"] == ["fact:submission-rule"]
+    assert experiments[0]["fact_refs"] == ["fact:submission-rule"]
+    assert receipt["authority_status"] == "PASS"
+    assert receipt["stamped_obligation_count"] == 1
+    assert receipt["stamped_experiment_count"] == 1
+    assert receipt["changes_compile_or_execution_decisions"] is False
+    assert receipt["heuristic_matching_enabled"] is False
+
+
+def test_ambiguous_implementation_binding_fails_closed_with_receipt() -> None:
+    knowledge_asset, behavior_ir = _canonical_fact_lineage_authority()
+    knowledge_asset["business_world_model"]["behavior_nodes"].append(
+        {
+            "node_id": "behavior:review-record",
+            "implementation_binding_refs": ["binding:review-record"],
+            "evidence_refs": ["evidence:review-record"],
+        }
+    )
+    knowledge_asset["business_world_model"]["evidence_registry"].append(
+        {
+            "evidence_ref": "evidence:review-record",
+            "fact_id": "fact:review-rule",
+        }
+    )
+    model = knowledge_asset["enterprise_understanding_model"]
+    model["business_behaviors"].append(
+        {
+            "behavior_id": "behavior:review-record",
+            "source_refs": ["fact:review-rule"],
+        }
+    )
+    model["behavior_implementation_bindings"].append(
+        {
+            "binding_id": "binding:review-record",
+            "behavior_ref": "behavior:review-record",
+            "api_operation_bindings": [
+                {
+                    "binding_id": "api-binding:submit-record",
+                    "status": "BOUND",
+                    "authoritative": True,
+                }
+            ],
+        }
+    )
+    obligations = [
+        {
+            "obligation_id": "obl_submission_rule",
+            "property": {"invariant_ref": "invariant:submission-rule"},
+            "relation_refs": ["relation:submit-observes-rule"],
+        }
+    ]
+
+    receipt = attach_fact_refs_to_planning_artifacts(
+        obligations=obligations,
+        experiments=[],
+        fact_experimentability_ledger=_exp_ledger(
+            [
+                {"fact_ref": "fact:submission-rule", "status": "READY"},
+                {"fact_ref": "fact:review-rule", "status": "READY"},
+            ]
+        ),
+        behavior_ir=behavior_ir,
+        knowledge_asset=knowledge_asset,
+    )
+
+    assert "fact_refs" not in obligations[0]
+    assert receipt["authority_status"] == "BLOCKED_WITH_GAPS"
+    assert receipt["reason_counts"]["AMBIGUOUS_IMPLEMENTATION_BINDING_ID"] == 1
+    assert receipt["reason_counts"]["OBLIGATION_FACT_AUTHORITY_UNRESOLVED"] == 1
+
+
+def test_operation_or_text_similarity_never_creates_fact_lineage() -> None:
+    knowledge_asset, behavior_ir = _canonical_fact_lineage_authority()
+    obligations = [
+        {
+            "obligation_id": "obl_same_operation_only",
+            "required_operations": ["operation:submit-record"],
+            "property": {"description": "submit record"},
+            "source_refs": [{"locator": "submit record"}],
+        }
+    ]
+
+    receipt = attach_fact_refs_to_planning_artifacts(
+        obligations=obligations,
+        experiments=[],
+        fact_experimentability_ledger=_exp_ledger(
+            [{"fact_ref": "fact:submission-rule", "status": "READY"}]
+        ),
+        behavior_ir=behavior_ir,
+        knowledge_asset=knowledge_asset,
+    )
+
+    assert "fact_refs" not in obligations[0]
+    assert receipt["heuristic_matching_enabled"] is False
+    assert receipt["reason_counts"]["OBLIGATION_FACT_AUTHORITY_UNRESOLVED"] == 1
 
 
 def test_experimentability_report_includes_counts() -> None:

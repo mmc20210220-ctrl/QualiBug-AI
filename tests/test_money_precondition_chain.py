@@ -38,11 +38,13 @@ def _base_ir() -> dict[str, Any]:
                 "id": "ent_order",
                 "name": "order",
                 "source_entity_names": ["orders"],
+                "identity_fields": ["id"],
             },
             {
                 "id": "ent_user",
                 "name": "user",
                 "source_entity_names": ["users"],
+                "identity_fields": ["id"],
             },
         ],
         "operations": [
@@ -367,9 +369,17 @@ def test_subject_and_state_steps_declare_identity_alias_spellings() -> None:
         if step.get("step_id") == "money_precondition_create"
     )
     assert create_step.get("identity_binding_aliases") == ["orderId", "id"]
+    assert create_step["identity_output_binding"]["source_path"] == "id"
+    assert create_step["identity_output_binding"]["source_authority"] == (
+        "behavior_ir.entities.identity_fields"
+    )
     for step in result["steps"]:
         if step.get("intent") == "money_subject_state_advancement":
             assert step.get("identity_binding_aliases") == ["orderId", "id"]
+            assert step["identity_input_binding"]["producer_step_id"] == (
+                "money_precondition_create"
+            )
+            assert step["identity_input_binding"]["producer_output_field"] == "id"
     assert result.get("identity_binding_target") == "orderId"
 
 
@@ -402,8 +412,18 @@ def test_different_industry_names_bind_identically() -> None:
     'order' — the mechanism is structural, not industry vocabulary."""
     ir = _base_ir()
     ir["entities"] = [
-        {"id": "ent_shipment", "name": "shipment", "source_entity_names": ["shipments"]},
-        {"id": "ent_user", "name": "user", "source_entity_names": ["users"]},
+        {
+            "id": "ent_shipment",
+            "name": "shipment",
+            "source_entity_names": ["shipments"],
+            "identity_fields": ["id"],
+        },
+        {
+            "id": "ent_user",
+            "name": "user",
+            "source_entity_names": ["users"],
+            "identity_fields": ["id"],
+        },
     ]
     ir["operations"] = [
         {

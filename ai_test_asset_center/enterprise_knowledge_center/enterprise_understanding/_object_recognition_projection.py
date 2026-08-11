@@ -8,6 +8,7 @@ from ._object_role_evidence import comparison_key, object_slot_mentions
 from .schema import (
     as_dict,
     as_list,
+    clone_asset_for_understanding_projection,
     dedupe_evidence,
     stable_id,
     text,
@@ -165,7 +166,7 @@ def project_asset_for_recognized_objects(
     asset: dict[str, Any], recognition: dict[str, Any]
 ) -> dict[str, Any]:
     """Filter object mentions while retaining technical assets for binding."""
-    projected = deepcopy(asset)
+    projected = clone_asset_for_understanding_projection(asset)
     accepted = set(as_list(recognition.get("accepted_comparison_keys")))
     identity_eligible = set(
         as_list(recognition.get("identity_resolution_eligible_comparison_keys"))

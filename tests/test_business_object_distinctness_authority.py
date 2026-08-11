@@ -315,3 +315,23 @@ def test_independent_exact_structure_is_review_only_and_lifecycle_conflict_vetoe
     assert resolution["clusters"] == []
     assert resolution["bindings"] == []
     assert projected["gate"] == original["gate"]
+
+
+def test_understanding_projection_clone_shares_only_finalized_heavy_evidence() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.schema import (
+        clone_asset_for_understanding_projection,
+    )
+
+    asset = {
+        "document_structure_assets": {"items": [{"blocks": [{"text": "rule"}]}]},
+        "enterprise_understanding_model": {"business_objects": [{"name": "Order"}]},
+        "business_fact_ledger": {"items": [{"fact_id": "fact:1"}]},
+    }
+
+    cloned = clone_asset_for_understanding_projection(asset)
+
+    assert cloned["document_structure_assets"] is asset["document_structure_assets"]
+    assert cloned["enterprise_understanding_model"] is asset["enterprise_understanding_model"]
+    assert cloned["business_fact_ledger"] is not asset["business_fact_ledger"]
+    cloned["business_fact_ledger"]["items"][0]["fact_id"] = "changed"
+    assert asset["business_fact_ledger"]["items"][0]["fact_id"] == "fact:1"

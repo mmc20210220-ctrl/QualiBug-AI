@@ -855,6 +855,9 @@ def _match_existing_facts_to_spans(
     by_source: dict[str, list[dict[str, Any]]] = {}
     for span in spans:
         by_source.setdefault(_text(span.get("source_id")), []).append(span)
+    normalized_spans = {
+        id(span): _norm(span.get("text")) for span in spans
+    }
 
     result: list[dict[str, Any]] = []
     for raw_fact in facts:
@@ -873,7 +876,7 @@ def _match_existing_facts_to_spans(
                 for span in by_source.get(source_id, []):
                     if not span.get("structure_authority"):
                         continue
-                    span_text = _norm(span.get("text"))
+                    span_text = normalized_spans[id(span)]
                     if normalized_statement and normalized_statement in span_text:
                         candidates.append(span)
         if len(candidates) == 1:
