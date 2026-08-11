@@ -190,7 +190,6 @@ _core._binding_proof = _binding_proof
 # Preserve the established public callables while ensuring their mechanics use
 # the governed binding proof above.
 build_authorization_causality_receipt = _core.build_authorization_causality_receipt
-apply_authorization_causality_gate = _core.apply_authorization_causality_gate
 
 __all__ = sorted(
     {
@@ -201,6 +200,5 @@ __all__ = sorted(
         ],
         "_binding_proof",
         "build_authorization_causality_receipt",
-        "apply_authorization_causality_gate",
     }
 )
