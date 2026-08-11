@@ -2,13 +2,15 @@
 
 The current account/graph/comparison/cleanup authorities live in
 ``_experiment_executor_governance_authority_mechanics``. This boundary composes
-two independent rules before the governed core can reach transport:
+three independent rules before the governed core can reach transport:
 
-* batch ``_pre_resolved_bindings`` are discovery/performance hints only; and
+* batch ``_pre_resolved_bindings`` are discovery/performance hints only;
 * every modern frozen experiment must carry the same RequestBuildContract that
   can be rebuilt from its current plans, Binding/Flow contracts and source
-  operations. Missing/drifted/blocked contracts terminate as a binding GAP,
-  never as ``HARNESS_REQUEST_BUILD_FAILED``.
+  operations; and
+* the sequential transport kernel uses the source-truthful FK guard. Concrete
+  values such as ``1`` or ``test`` are never rejected by lexical guessing; only
+  surviving harness placeholders/sentinels prove materialization failure.
 """
 from __future__ import annotations
 
@@ -136,6 +138,17 @@ def _request_contract_terminal(
     return result
 
 
+def _install_strict_fk_request_authority() -> None:
+    """Patch the exact imported step-kernel hook without facade duplication."""
+
+    from . import experiment_plan_step_executor_core as step_core
+    from .foreign_key_request_authority import (
+        foreign_key_materialization_violations,
+    )
+
+    step_core._foreign_key_violations = foreign_key_materialization_violations
+
+
 def execute_one_experiment(
     experiment: dict[str, Any],
     **kwargs: Any,
@@ -153,6 +166,7 @@ def execute_one_experiment(
             diagnostic=diagnostic,
         )
 
+    _install_strict_fk_request_authority()
     result = _original_execute_one_experiment(governed, **kwargs)
     output = dict(_dict(result))
     output["request_build_runtime_gate_receipt"] = gate
@@ -171,5 +185,6 @@ __all__ = sorted(
         "execute_one_experiment",
         "_formal_experiment_without_raw_prebindings",
         "_request_build_runtime_gate",
+        "_install_strict_fk_request_authority",
     }
 )
