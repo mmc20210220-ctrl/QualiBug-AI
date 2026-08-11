@@ -1,12 +1,12 @@
 """Step-scoped ownership-query binding authority.
 
 Query ownership parameters such as ``?userId={userId}`` describe the caller's
-own identity for that exact control/treatment step. A single experiment-global
-``runtime_bindings['userId']`` cannot represent two different arm actors.
+own identity for that exact control/treatment step. Modern compilation seals
+such placeholders as ``actor_identity_ref:<actor_ref>:<target>`` and removes the
+target from the experiment-global binding plan. Legacy ``{target}`` query
+placeholders remain supported only by the same step-local actor authority.
 
-This module projects only source-declared query ownership placeholders, using
-that step's exact actor identity. Identity authority is:
-
+Identity authority is:
 1. one explicit actor account/user identity field; otherwise
 2. one typed JWT identity claim (user/account/id); otherwise
 3. JWT ``sub`` only when no typed identity exists.
@@ -29,11 +29,15 @@ from .obligation_compiler_base import (
     _ownership_params_declared_on_operation,
 )
 from .experiment_runtime_support import _resolve_token
+from .ownership_binding_scope_authority import ACTOR_IDENTITY_REF_PREFIX
 
 SCHEMA_VERSION = "qualibug.actor-scoped-query-binding.v1"
 UNRESOLVED_TOKEN = "QUALIBUG_ACTOR_IDENTITY_UNRESOLVED"
 UNRESOLVED_PLACEHOLDER = "{" + UNRESOLVED_TOKEN + "}"
 _QUERY_TOKEN_RE = re.compile(r"^\s*\{([A-Za-z_][A-Za-z0-9_]*)\}\s*$")
+_ACTOR_REF_RE = re.compile(
+    r"^actor_identity_ref:([^:\s]+):([A-Za-z_][A-Za-z0-9_]*)$"
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -155,6 +159,22 @@ def resolve_actor_runtime_identity(
     }
 
 
+def _query_coordinate(
+    raw_value: str,
+    *,
+    step_actor_ref: str,
+) -> tuple[str, str, str]:
+    """Return (coordinate_actor, target, source_kind) for one governed query value."""
+
+    actor_match = _ACTOR_REF_RE.match(_text(raw_value))
+    if actor_match:
+        return _text(actor_match.group(1)), _text(actor_match.group(2)), "sealed_actor_identity_ref"
+    legacy = _QUERY_TOKEN_RE.match(raw_value)
+    if legacy:
+        return _text(step_actor_ref), _text(legacy.group(1)), "legacy_step_placeholder"
+    return "", "", ""
+
+
 def project_actor_scoped_query_bindings(
     *,
     control_plan: list[Any],
@@ -185,58 +205,80 @@ def project_actor_scoped_query_bindings(
                 projected.append(step)
                 continue
 
-            actor_ref = _text(step.get("actor_ref"))
-            identity_receipt: dict[str, Any] | None = None
+            step_actor_ref = _text(step.get("actor_ref"))
             new_query = dict(query)
             projected_targets: list[str] = []
             unresolved_targets: list[str] = []
+            step_rows: list[dict[str, Any]] = []
             for key, raw_value in query.items():
                 if not isinstance(raw_value, str):
                     continue
-                match = _QUERY_TOKEN_RE.match(raw_value)
-                if not match:
+                coordinate_actor, target, coordinate_source = _query_coordinate(
+                    raw_value,
+                    step_actor_ref=step_actor_ref,
+                )
+                if not target:
                     continue
-                target = _text(match.group(1))
                 if (
                     target not in ownership_params
                     or _ownership_binder_location(operation, name=target) != "query"
                 ):
                     continue
-                if identity_receipt is None:
-                    identity_receipt = resolve_actor_runtime_identity(
-                        actor_ref,
-                        actors=actors,
-                        tokens=tokens,
+
+                if coordinate_actor != step_actor_ref:
+                    new_query[key] = UNRESOLVED_PLACEHOLDER
+                    unresolved_targets.append(target)
+                    step_rows.append(
+                        {
+                            "target": target,
+                            "status": "UNRESOLVED",
+                            "reason_code": "ACTOR_IDENTITY_REF_STEP_ACTOR_MISMATCH",
+                            "coordinate_source": coordinate_source,
+                        }
                     )
+                    continue
+
+                identity_receipt = resolve_actor_runtime_identity(
+                    coordinate_actor,
+                    actors=actors,
+                    tokens=tokens,
+                )
                 if _text(identity_receipt.get("status")) == "RESOLVED":
                     new_query[key] = _text(identity_receipt.get("identity_value"))
                     projected_targets.append(target)
                 else:
                     new_query[key] = UNRESOLVED_PLACEHOLDER
                     unresolved_targets.append(target)
+                step_rows.append(
+                    {
+                        "target": target,
+                        "status": _text(identity_receipt.get("status")),
+                        "reason_code": _text(identity_receipt.get("reason_code")),
+                        "identity_authority": _text(identity_receipt.get("authority")),
+                        "identity_fingerprint": _text(
+                            identity_receipt.get("identity_fingerprint")
+                        ),
+                        "coordinate_source": coordinate_source,
+                    }
+                )
 
             if projected_targets or unresolved_targets:
                 step["query"] = new_query
-                safe_identity = dict(identity_receipt or {})
-                safe_identity.pop("identity_value", None)
                 step["actor_query_binding_projection"] = {
                     "schema_version": SCHEMA_VERSION,
-                    "actor_ref": actor_ref,
+                    "actor_ref": step_actor_ref,
                     "projected_targets": list(dict.fromkeys(projected_targets)),
                     "unresolved_targets": list(dict.fromkeys(unresolved_targets)),
-                    "identity_authority": _text(safe_identity.get("authority")),
-                    "identity_fingerprint": _text(
-                        safe_identity.get("identity_fingerprint")
-                    ),
-                    "reason_code": _text(safe_identity.get("reason_code")),
+                    "target_receipts": step_rows,
                     "identity_value_persisted": False,
+                    "global_binding_fallback_allowed": False,
                 }
                 rows.append(
                     {
                         "phase": phase,
                         "step_id": _text(step.get("step_id") or step.get("id")),
                         "operation_ref": operation_ref,
-                        "actor_ref": actor_ref,
+                        "actor_ref": step_actor_ref,
                         **step["actor_query_binding_projection"],
                     }
                 )
