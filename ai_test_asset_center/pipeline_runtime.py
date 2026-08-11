@@ -150,6 +150,13 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
     _fq = context.get("family_execution_quota")
     if _fq:
         contract["family_execution_quota"] = int(_fq)
+    # Propagate the operator-declared per-batch experiment budget. Without
+    # this the batch executor falls back to the phase default (~100), so a
+    # declared 250 budget silently executes only ~116 obligations (run26b
+    # measured: SELECTED 1150 → 116 attempted, 1034 DEFERRED_BUDGET).
+    _eb = context.get("experiment_budget")
+    if _eb:
+        contract["experiment_budget"] = int(_eb)
     return contract
 
 
