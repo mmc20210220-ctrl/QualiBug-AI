@@ -4,7 +4,7 @@ The stable low-level response/entity mechanics remain in
 ``real_id_resolver_base``. This facade removes the closed domain dictionaries
 from the active resolver path and replaces them with structural derivation:
 
-* parameter aliases are exact normalized spelling plus generic primary-key
+* parameter aliases are exact/snake/camel spelling plus generic primary-key
   compatibility, never order/user/coupon/patient/etc. vocabulary;
 * body dependency collection candidates come from the field token's own entity
   stem and generic pluralization;
@@ -96,9 +96,12 @@ def param_field_candidates(param_name: str) -> list[str]:
     seen: set[str] = set()
     for value in ordered:
         token = _text(value)
-        normalized = _field_key(token)
-        if token and normalized and normalized not in seen:
-            seen.add(normalized)
+        # Keep userId and user_id as distinct structural spellings; callers such
+        # as the legacy single-identity body resolver perform exact dict lookup.
+        # Only exact case-insensitive duplicates are removed here.
+        duplicate_key = token.lower()
+        if token and duplicate_key not in seen:
+            seen.add(duplicate_key)
             result.append(token)
     return result
 
@@ -156,14 +159,12 @@ def alternate_collection_paths(path: str) -> list[str]:
     prefix = _api_identity_prefix(normalized)
     alternatives: list[str] = []
 
-    # Identity token itself may name another declared top-level resource.
     if prefix:
         for param in params:
             for candidate in body_field_collection_paths(param, api_prefix=prefix):
                 if candidate != primary:
                     alternatives.append(candidate)
 
-    # Walk only real static ancestors already present in the target path.
     parts = [part for part in primary.strip("/").split("/") if part]
     for size in range(len(parts) - 1, 0, -1):
         candidate = "/" + "/".join(parts[:size])
@@ -185,9 +186,6 @@ def _state_token(value: Any) -> str:
 
 
 def _entity_state_values(entity: dict[str, Any]) -> list[Any]:
-    # State-field recognition stays structural: exact generic state labels or a
-    # source field whose own name ends with state/status/stage. Domain-specific
-    # order/payment/refund/shipment names are unnecessary under this rule.
     values: list[Any] = []
     for key, value in entity.items():
         normalized = _field_key(key)
@@ -349,10 +347,6 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
     return _strict_multi_identity_bindings(selected, resolved_path)
 
 
-# Patch the base module's dynamic authorities before any of its higher-level
-# helpers run. Their function globals resolve these names at call time, so the
-# old closed dictionaries remain compatibility data only and no longer drive
-# active path/body resolution.
 _base.param_field_candidates = param_field_candidates
 _base.body_field_collection_paths = body_field_collection_paths
 _base.alternate_collection_paths = alternate_collection_paths
