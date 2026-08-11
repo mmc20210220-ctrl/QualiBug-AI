@@ -14,11 +14,17 @@ from . import _validation_obligation_expander_core as _core
 from .behavior_ir_core import _infer_operation_effect
 from .experiment_protocols_base import _semantic_invalid_value
 from .validation_parameter_authority import install_validation_parameter_authority
+from .request_header_transport_authority import (
+    install_request_header_transport_authority,
+)
 
 
 # The formal expander, protocol materializer and RequestBuildContract must share
-# the same parameter-control authority before the first variant is produced.
+# the same parameter-control and transport-header authorities before the first
+# variant is produced. This also ensures the compile-time request fingerprint
+# uses the same header truth as a fresh-process runtime rebuild.
 install_validation_parameter_authority()
+install_request_header_transport_authority()
 
 
 def _text(value: Any) -> str:
