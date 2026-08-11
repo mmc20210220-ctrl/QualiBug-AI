@@ -1,8 +1,9 @@
 """State-aware, domain-neutral runtime identity resolution.
 
 The stable low-level response/entity mechanics remain in
-``real_id_resolver_base``. This facade removes closed domain dictionaries from
-the active resolver path and replaces them with structural authority:
+``real_id_resolver_base``. This facade removes closed domain dictionaries and
+business-richness ranking from the active resolver path and replaces them with
+structural authority:
 
 * parameter aliases are exact/snake/camel spelling plus generic primary-key
   compatibility, never order/user/coupon/patient/etc. vocabulary;
@@ -11,8 +12,10 @@ the active resolver path and replaces them with structural authority:
 * alternate list paths come from the real path hierarchy and identity-token
   stems, never products/materials/users/accounts catalogs;
 * response entities come from the resource object itself, a generic envelope,
-  or one unambiguous unknown-domain collection. Multiple unrelated business
-  arrays are unresolved instead of being selected by a domain-key priority.
+  or one unambiguous unknown-domain collection; and
+* candidate order remains the target response's own order. Non-zero balances,
+  quantities or monetary fields are never treated as evidence that one record
+  is a better identity than another.
 
 All resolver candidates are still intersected with Behavior IR's
 source-declared operations by the binding graph. Unknown semantics therefore
@@ -204,13 +207,7 @@ def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
 
 
 def _extract_raw_entity_candidates(body: Any) -> list[dict[str, Any]]:
-    """Extract one structurally identifiable resource collection or none.
-
-    Unknown business envelope names are supported when exactly one branch can
-    represent the entity collection. If two unrelated branches both contain
-    candidate entities, choosing one would be semantic inference and the result
-    is deliberately empty.
-    """
+    """Extract one structurally identifiable resource collection or none."""
 
     if isinstance(body, list):
         return _list_of_dicts(body)
@@ -219,7 +216,6 @@ def _extract_raw_entity_candidates(body: Any) -> list[dict[str, Any]]:
     if _base._dict_has_own_identity(body):
         return [dict(body)]
 
-    # Generic protocol envelopes have structural meaning independent of domain.
     for field in _GENERIC_LIST_ENVELOPES:
         value = body.get(field)
         rows = _list_of_dicts(value)
@@ -238,7 +234,6 @@ def _extract_raw_entity_candidates(body: Any) -> list[dict[str, Any]]:
         if nested:
             return nested
 
-    # Unknown-domain keys are accepted only when they are unambiguous.
     candidate_groups: list[list[dict[str, Any]]] = []
     for key, value in body.items():
         if key in _GENERIC_LIST_ENVELOPES:
@@ -254,6 +249,18 @@ def _extract_raw_entity_candidates(body: Any) -> list[dict[str, Any]]:
     if len(candidate_groups) != 1:
         return []
     return candidate_groups[0]
+
+
+def _extract_entity_candidates(body: Any) -> list[dict[str, Any]]:
+    """Keep target response order; filter harness-owned disposable rows only."""
+
+    candidates = _extract_raw_entity_candidates(body)
+    if not candidates:
+        return []
+    real = [
+        row for row in candidates if not _base._is_harness_disposable_entity(row)
+    ]
+    return real if real else candidates
 
 
 def _state_token(value: Any) -> str:
@@ -310,6 +317,9 @@ def _entity_in_required_state(body: Any, required_token: str) -> dict[str, Any]:
     ]
     if not matches:
         return {}
+    # A source-declared state predicate is authority; deterministic identity
+    # ordering merely makes multiple matching rows reproducible and is not a
+    # business-richness preference.
     return sorted(matches, key=_identity_sort_key)[0]
 
 
@@ -422,12 +432,13 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
 
 
 # Base helpers resolve these names from their defining-module globals at call
-# time. Patch those dynamic authorities so the old domain dictionaries remain
-# compatibility data only and no longer drive active resolution.
+# time. Patch those dynamic authorities so old domain dictionaries and richness
+# ranking remain compatibility data only and no longer drive active resolution.
 _base.param_field_candidates = param_field_candidates
 _base.body_field_collection_paths = body_field_collection_paths
 _base.alternate_collection_paths = alternate_collection_paths
 _base._extract_raw_entity_candidates = _extract_raw_entity_candidates
+_base._extract_entity_candidates = _extract_entity_candidates
 _base.bind_entity_fields = bind_entity_fields
 
 __all__ = sorted(
@@ -441,6 +452,7 @@ __all__ = sorted(
         "body_field_collection_paths",
         "alternate_collection_paths",
         "_extract_raw_entity_candidates",
+        "_extract_entity_candidates",
         "bind_entity_fields",
         "_strict_multi_identity_bindings",
     }
