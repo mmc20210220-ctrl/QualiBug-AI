@@ -381,17 +381,34 @@ def _plan_level(
                 "source_authority": "behavior_ir.entities.identity_fields",
             },
         }
-    if len(identity_fields) != 1:
-        return {
-            "status": "blocked",
-            "reason_code": REASON_IDENTITY_AMBIGUOUS,
-            "detail": {
-                "entity_ref": entity_id,
-                "reference_field": primary_field,
-                "identity_fields": identity_fields,
-                "source_authority": "behavior_ir.entities.identity_fields",
-            },
-        }
+    if len(identity_fields) > 1:
+        # A row may declare several identity fields (schema PRIMARY KEY plus
+        # UNIQUE business keys — orders: id + order_no). The primary key is
+        # the structural authority: it identifies exactly the row the create
+        # response mints. Business keys are legitimate alternatives but never
+        # a reason to block the whole dependency chain, so the primary key
+        # wins and the rest stay recorded as alternates. Only when NO
+        # structural key exists among the declarations (every candidate is a
+        # business key) does the ambiguity remain fail-closed.
+        structural = [
+            field
+            for field in identity_fields
+            if re.sub(r"[^a-z0-9]+", "", field.lower())
+            in {"id", "uuid", "pk", "key", "uid", "guid"}
+        ]
+        if structural:
+            identity_fields = [structural[0]]
+        else:
+            return {
+                "status": "blocked",
+                "reason_code": REASON_IDENTITY_AMBIGUOUS,
+                "detail": {
+                    "entity_ref": entity_id,
+                    "reference_field": primary_field,
+                    "identity_fields": identity_fields,
+                    "source_authority": "behavior_ir.entities.identity_fields",
+                },
+            }
     if entity_id in visited:
         chain = "->".join([*visited, entity_id])
         return {
