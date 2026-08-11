@@ -1,16 +1,21 @@
 """Unique cleanup-operation authority for automatically created fixtures.
 
-A destructive compensation route cannot be chosen by source order. This module
-resolves one create operation to exactly one cleanup operation using two authority
-tiers:
+A destructive compensation route cannot be chosen by source order, and a
+source ``compensates`` relation alone does not prove that the current executor
+can safely invoke its operation.  Today automatic fixture cleanup has a formal
+request materialization contract only for identity-bound DELETE: the target is
+bound into exactly one path placeholder from the created resource.
 
-1. one source-backed, non-conflicting ``compensates`` relation that links the
-   exact create operation to one declared mutating compensator; otherwise
+Authority tiers are therefore:
+
+1. one source-backed, non-conflicting ``compensates`` relation whose compensator
+   is DELETE with exactly one path identity placeholder; otherwise
 2. one identity-bound DELETE on the same source collection.
 
-Multiple candidates within the winning tier are AMBIGUOUS. Structural DELETE
-requires exactly one path identity placeholder, so bulk collection DELETE is
-never automatic fixture cleanup.
+POST/PUT/PATCH compensators and identity-free DELETE compensators remain visible
+as protocol gaps until a dedicated compensator request-body/identity contract is
+implemented.  The executor must never reuse the original business request body,
+drop unresolved fields, or infer a cleanup method/path to make them executable.
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ from .real_id_resolver import (
     normalize_path_placeholders,
 )
 
-SCHEMA_VERSION = "qualibug.cleanup-operation-authority.v1"
+SCHEMA_VERSION = "qualibug.cleanup-operation-authority.v2"
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
@@ -61,6 +66,7 @@ def _operation_projection(
         ),
         "source": authority,
         "compensates_operation_ref": _text(compensates_operation_ref),
+        "request_materialization_authority": "identity_bound_path_delete",
     }
 
 
@@ -68,6 +74,8 @@ def _source_compensator_candidates(
     create_operation: dict[str, Any],
     behavior_ir: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """Return every source-backed compensator operation, executable or not."""
+
     create_ref = _text(
         create_operation.get("id") or create_operation.get("operation_id")
     )
@@ -125,6 +133,15 @@ def _source_compensator_candidates(
     return [candidates[key] for key in sorted(candidates)]
 
 
+def _identity_bound_delete(operation: dict[str, Any]) -> bool:
+    if _text(operation.get("method")).upper() != "DELETE":
+        return False
+    path = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    )
+    return bool(path.startswith("/") and len(infer_path_params(path)) == 1)
+
+
 def _identity_delete_candidates(
     create_operation: dict[str, Any],
     behavior_ir: dict[str, Any],
@@ -137,18 +154,28 @@ def _identity_delete_candidates(
 
     candidates: dict[str, dict[str, Any]] = {}
     for operation_ref, operation in _operation_index(behavior_ir).items():
-        if _text(operation.get("method")).upper() != "DELETE":
+        if not _identity_bound_delete(operation):
             continue
         path = normalize_path_placeholders(
             _text(operation.get("path") or operation.get("raw_path"))
         )
-        placeholders = infer_path_params(path)
-        if len(placeholders) != 1:
-            continue
         if normalize_path_placeholders(collection_path(path)).rstrip("/") != create_path:
             continue
         candidates[operation_ref] = operation
     return [candidates[key] for key in sorted(candidates)]
+
+
+def _candidate_diagnostic(operation: dict[str, Any]) -> dict[str, Any]:
+    path = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    )
+    return {
+        "operation_ref": _text(operation.get("id") or operation.get("operation_id")),
+        "method": _text(operation.get("method")).upper(),
+        "path": path,
+        "path_identity_count": len(infer_path_params(path)),
+        "executor_protocol_supported": _identity_bound_delete(operation),
+    }
 
 
 def resolve_cleanup_operation(
@@ -156,7 +183,7 @@ def resolve_cleanup_operation(
     *,
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    """Resolve one cleanup route or return a named missing/ambiguity receipt."""
+    """Resolve one currently executable cleanup route or a named protocol gap."""
 
     create_ref = _text(
         create_operation.get("id") or create_operation.get("operation_id")
@@ -169,10 +196,14 @@ def resolve_cleanup_operation(
             "create_operation_ref": "",
             "cleanup_operation": {},
             "candidate_operation_ids": [],
+            "unsupported_compensators": [],
             "source_order_selection_allowed": False,
         }
 
-    explicit = _source_compensator_candidates(create_operation, behavior_ir)
+    explicit_all = _source_compensator_candidates(create_operation, behavior_ir)
+    explicit = [row for row in explicit_all if _identity_bound_delete(row)]
+    unsupported = [row for row in explicit_all if not _identity_bound_delete(row)]
+
     if len(explicit) == 1:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -182,11 +213,14 @@ def resolve_cleanup_operation(
             "authority": "source_compensates_relation",
             "cleanup_operation": _operation_projection(
                 explicit[0],
-                authority="explicit_compensator_relation",
+                authority="explicit_identity_delete_compensator",
                 compensates_operation_ref=create_ref,
             ),
             "candidate_operation_ids": [
                 _text(explicit[0].get("id") or explicit[0].get("operation_id"))
+            ],
+            "unsupported_compensators": [
+                _candidate_diagnostic(row) for row in unsupported
             ],
             "source_order_selection_allowed": False,
         }
@@ -201,9 +235,15 @@ def resolve_cleanup_operation(
                 _text(row.get("id") or row.get("operation_id"))
                 for row in explicit
             ],
+            "unsupported_compensators": [
+                _candidate_diagnostic(row) for row in unsupported
+            ],
             "source_order_selection_allowed": False,
         }
 
+    # An explicit relation that points at a protocol the current cleanup executor
+    # cannot materialize is retained as a diagnostic, but a separately declared
+    # same-collection identity DELETE may still be a safe cleanup route.
     deletes = _identity_delete_candidates(create_operation, behavior_ir)
     if len(deletes) == 1:
         return {
@@ -220,6 +260,9 @@ def resolve_cleanup_operation(
             "candidate_operation_ids": [
                 _text(deletes[0].get("id") or deletes[0].get("operation_id"))
             ],
+            "unsupported_compensators": [
+                _candidate_diagnostic(row) for row in unsupported
+            ],
             "source_order_selection_allowed": False,
         }
     if len(deletes) > 1:
@@ -233,6 +276,26 @@ def resolve_cleanup_operation(
                 _text(row.get("id") or row.get("operation_id"))
                 for row in deletes
             ],
+            "unsupported_compensators": [
+                _candidate_diagnostic(row) for row in unsupported
+            ],
+            "source_order_selection_allowed": False,
+        }
+
+    if unsupported:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "UNRESOLVED",
+            "reason_code": "CLEANUP_COMPENSATOR_PROTOCOL_UNPROVEN",
+            "create_operation_ref": create_ref,
+            "cleanup_operation": {},
+            "candidate_operation_ids": [
+                _text(row.get("id") or row.get("operation_id"))
+                for row in unsupported
+            ],
+            "unsupported_compensators": [
+                _candidate_diagnostic(row) for row in unsupported
+            ],
             "source_order_selection_allowed": False,
         }
 
@@ -243,6 +306,7 @@ def resolve_cleanup_operation(
         "create_operation_ref": create_ref,
         "cleanup_operation": {},
         "candidate_operation_ids": [],
+        "unsupported_compensators": [],
         "source_order_selection_allowed": False,
     }
 
