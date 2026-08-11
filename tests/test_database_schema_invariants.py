@@ -1,9 +1,7 @@
-"""Schema-declared constraint dimension (root-cause fix for DB reachability).
+"""Explicit database-constraint authority regressions.
 
-A schema that declares money/quantity/idempotency columns without the guards
-those columns need is a source-declared structural property of the system.
-This test pins the derivation (DDL-only, industry-neutral) and the read-only
-audit evaluation of the derived invariants.
+DDL may describe a constraint, but a missing constraint is never authority for
+inventing the business rule that the schema 'should' have contained.
 """
 from __future__ import annotations
 
@@ -26,7 +24,7 @@ CREATE TABLE orders (
 );
 CREATE TABLE payments (
   id UUID PRIMARY KEY,
-  idempotency_key TEXT,
+  idempotency_key TEXT UNIQUE,
   amount NUMERIC(12,2) NOT NULL CHECK (amount >= 0)
 );
 CREATE TABLE inventory (
@@ -35,10 +33,6 @@ CREATE TABLE inventory (
 );
 CREATE TABLE cart_items (
   qty INT NOT NULL
-);
-CREATE TABLE orders_guarded (
-  id UUID PRIMARY KEY,
-  payable_amount NUMERIC(12,2) NOT NULL CHECK (payable_amount >= 0)
 );
 """
 
@@ -49,69 +43,81 @@ def _tables() -> list[dict[str, Any]]:
     return _sql_tables(SCHEMA, "runtime:database_schema:test")
 
 
-def test_schema_derives_boundary_and_uniqueness_rules_from_missing_guards() -> None:
-    rules = derive_database_constraint_rules(_tables(), "runtime:database_schema:test")
-    by_key = {}
-    for rule in rules:
-        locator = rule.get("source_locator") or ""
-        operator = rule.get("equation", {}).get("operator") or "uniqueness"
-        by_key[f"{locator}:{operator}"] = rule
+def _by_locator() -> dict[str, dict[str, Any]]:
+    return {
+        str(rule.get("source_locator") or ""): rule
+        for rule in derive_database_constraint_rules(
+            _tables(), "runtime:database_schema:test"
+        )
+    }
 
-    # orders.payable_amount has no non-negative CHECK -> non_negative rule.
-    assert "table:orders:column:payable_amount:non_negative" in by_key
-    rule = by_key["table:orders:column:payable_amount:non_negative"]
-    assert rule["kind"] == "numeric_boundary"
-    assert rule["equation"]["operator"] == "non_negative"
-    assert rule["operands"][0]["entity_ref"] == "orders"
-    assert rule["operands"][0]["field"] == "payable_amount"
 
-    # orders.total_amount HAS a CHECK -> no rule.
-    assert "table:orders:column:total_amount:non_negative" not in by_key
+def test_missing_guards_never_generate_business_rules() -> None:
+    by_locator = _by_locator()
 
-    # inventory.available_qty has no guard -> both non_negative and positive.
-    assert "table:inventory:column:available_qty:positive" in by_key
-    assert "table:inventory:column:available_qty:non_negative" in by_key
-    # safety_stock HAS a positive CHECK -> no rules.
-    assert "table:inventory:column:safety_stock:positive" not in by_key
+    # Names such as payable_amount / available_qty / qty carry no authority by
+    # themselves. Missing CHECK clauses must stay gaps, not fabricated rules.
+    assert "table:orders:column:payable_amount:check" not in by_locator
+    assert "table:inventory:column:available_qty:check" not in by_locator
+    assert "table:cart_items:column:qty:check" not in by_locator
 
-    # cart_items.qty has no guard -> boundary rules.
-    assert "table:cart_items:column:qty:positive" in by_key
 
-    # payments.idempotency_key is a uniqueness-intent column without UNIQUE.
-    uniqueness = by_key.get("table:payments:column:idempotency_key:uniqueness")
-    assert uniqueness is not None
-    assert uniqueness["kind"] == "validation_uniqueness"
-    assert uniqueness["operands"][0]["field"] == "idempotency_key"
+def test_only_explicit_check_and_unique_constraints_are_projected() -> None:
+    by_locator = _by_locator()
 
-    # Guarded table produces nothing for its guarded column.
-    assert "table:orders_guarded:column:payable_amount:non_negative" not in by_key
+    total = by_locator["table:orders:column:total_amount:check"]
+    assert total["kind"] == "numeric_boundary"
+    assert total["equation"]["operator"] == "non_negative"
+    assert total["constraint_authority"]["kind"] == "DDL_CHECK"
+    assert total["inference_used"] is False
+
+    stock = by_locator["table:inventory:column:safety_stock:check"]
+    assert stock["equation"]["operator"] == "positive"
+    assert stock["constraint_authority"]["operator"] == ">"
+
+    unique = by_locator["table:payments:column:idempotency_key:unique"]
+    assert unique["kind"] == "validation_uniqueness"
+    assert unique["constraint_authority"] == {
+        "kind": "DDL_UNIQUE",
+        "table": "payments",
+        "column": "idempotency_key",
+    }
+    assert unique["inference_used"] is False
 
 
 def test_schema_rules_are_stable_and_deterministic() -> None:
-    first = derive_database_constraint_rules(_tables(), "runtime:database_schema:test")
-    second = derive_database_constraint_rules(_tables(), "runtime:database_schema:test")
-    assert [r["rule_id"] for r in first] == [r["rule_id"] for r in second]
+    first = derive_database_constraint_rules(
+        _tables(), "runtime:database_schema:test"
+    )
+    second = derive_database_constraint_rules(
+        _tables(), "runtime:database_schema:test"
+    )
+    assert [row["rule_id"] for row in first] == [
+        row["rule_id"] for row in second
+    ]
 
 
-def test_readonly_numeric_audit_compiles_and_evaluates_boundary() -> None:
+def test_readonly_numeric_audit_compiles_and_evaluates_explicit_boundary() -> None:
     compiled = _compile_readonly_validation_audit({
         "operation": {"method": "GET", "path": "/api/orders"},
         "operation_ref": "op:list-orders",
         "treatment_actor_ref": "actor:admin",
         "property_spec": {
             "template": "readonly_audit_validation",
-            "invariant_ref": "bir:payable",
+            "invariant_ref": "bir:total",
             "expression": {
                 "kind": "numeric_boundary",
                 "operator": "non_negative",
-                "operands": [{"entity_ref": "orders", "field": "payable_amount"}],
+                "operands": [
+                    {"entity_ref": "orders", "field": "total_amount"}
+                ],
             },
         },
     })
     assert compiled["status"] == "COMPILED"
     assertion = compiled["assertion"]
     assert assertion["kind"] == "readonly_numeric_audit"
-    assert assertion["field"] == "payable_amount"
+    assert assertion["field"] == "total_amount"
     assert assertion["operator"] == "non_negative"
 
     verdict = _evaluate_readonly_numeric_audit({
@@ -119,9 +125,9 @@ def test_readonly_numeric_audit_compiles_and_evaluates_boundary() -> None:
         "observations": {
             "status_code": 200,
             "body": {"items": [
-                {"payable_amount": "100.00"},
-                {"payable_amount": "0.00"},
-                {"payable_amount": "-5.00"},
+                {"total_amount": "100.00"},
+                {"total_amount": "0.00"},
+                {"total_amount": "-5.00"},
             ]},
         },
     })
@@ -133,19 +139,18 @@ def test_readonly_numeric_audit_compiles_and_evaluates_boundary() -> None:
         "observations": {
             "status_code": 200,
             "body": {"items": [
-                {"payable_amount": "100.00"},
-                {"payable_amount": "1.00"},
+                {"total_amount": "100.00"},
+                {"total_amount": "1.00"},
             ]},
         },
     })
     assert clean["passed"] is True
 
-    # Too few rows must never read as a verified boundary.
     small = _evaluate_readonly_numeric_audit({
         "spec": assertion,
         "observations": {
             "status_code": 200,
-            "body": {"items": [{"payable_amount": "100.00"}]},
+            "body": {"items": [{"total_amount": "100.00"}]},
         },
     })
     assert small["passed"] is None
@@ -154,16 +159,18 @@ def test_readonly_numeric_audit_compiles_and_evaluates_boundary() -> None:
 
 def test_readonly_audit_positive_operator_rejects_zero() -> None:
     compiled = _compile_readonly_validation_audit({
-        "operation": {"method": "GET", "path": "/api/cart"},
-        "operation_ref": "op:list-cart",
-        "treatment_actor_ref": "actor:buyer",
+        "operation": {"method": "GET", "path": "/api/inventory"},
+        "operation_ref": "op:list-inventory",
+        "treatment_actor_ref": "actor:operator",
         "property_spec": {
             "template": "readonly_audit_validation",
-            "invariant_ref": "bir:qty",
+            "invariant_ref": "bir:safety-stock",
             "expression": {
                 "kind": "numeric_boundary",
                 "operator": "positive",
-                "operands": [{"entity_ref": "cart_items", "field": "qty"}],
+                "operands": [
+                    {"entity_ref": "inventory", "field": "safety_stock"}
+                ],
             },
         },
     })
@@ -174,7 +181,7 @@ def test_readonly_audit_positive_operator_rejects_zero() -> None:
         "spec": compiled["assertion"],
         "observations": {
             "status_code": 200,
-            "body": [{"qty": 0}, {"qty": 3}],
+            "body": [{"safety_stock": 0}, {"safety_stock": 3}],
         },
     })
     assert zero_row["passed"] is False
@@ -183,7 +190,7 @@ def test_readonly_audit_positive_operator_rejects_zero() -> None:
         "spec": compiled["assertion"],
         "observations": {
             "status_code": 200,
-            "body": [{"qty": -1}, {"qty": 3}],
+            "body": [{"safety_stock": -1}, {"safety_stock": 3}],
         },
     })
     assert negative_row["passed"] is False
