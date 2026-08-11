@@ -2,14 +2,16 @@
 
 The current account/graph/comparison/cleanup authorities live in
 ``_experiment_executor_governance_authority_mechanics``. This boundary composes
-four independent rules before the governed core can reach transport:
+five independent rules before the governed core can reach transport/finalize:
 
 * batch ``_pre_resolved_bindings`` are discovery/performance hints only;
 * every modern frozen experiment must carry the same RequestBuildContract that
   can be rebuilt from its current plans, Binding/Flow contracts and source
   operations;
 * RequestBuildContract query/header claims must use the same source/transport
-  authorities in a fresh runtime process as they did at compile time; and
+  authorities in a fresh runtime process as they did at compile time;
+* barrier zero-transport governance blocks pass through the same request
+  first-loss seal as sequential execution; and
 * the sequential transport kernel uses the source-truthful FK guard. Concrete
   values such as ``1`` or ``test`` are never rejected by lexical guessing; only
   surviving harness placeholders/sentinels prove materialization failure.
@@ -29,14 +31,17 @@ from .request_header_transport_authority import (
 from .validation_parameter_authority import (
     install_validation_parameter_authority,
 )
+from .experiment_barrier_request_authority import (
+    install_barrier_request_first_loss_authority,
+)
 
 # Runtime may execute a frozen artifact in a fresh process that never imported
-# the validation compiler. Reinstall the exact query-mutation and header
-# authorities before rebuilding the stored RequestBuildContract, otherwise an
-# intentional required-query removal or actor/body-scoped header claim can drift
-# solely because of import history.
+# the validation compiler. Reinstall the exact query-mutation/header authorities
+# before rebuilding RequestBuildContract, and bridge barrier zero-transport
+# governance to the same first-loss authority used by sequential execution.
 install_validation_parameter_authority()
 install_request_header_transport_authority()
+install_barrier_request_first_loss_authority()
 
 for _name in dir(_authority):
     if not _name.startswith("__") and not _name.startswith("_original_"):
