@@ -13,6 +13,12 @@ from typing import Any
 from . import _validation_obligation_expander_core as _core
 from .behavior_ir_core import _infer_operation_effect
 from .experiment_protocols_base import _semantic_invalid_value
+from .validation_parameter_authority import install_validation_parameter_authority
+
+
+# The formal expander, protocol materializer and RequestBuildContract must share
+# the same parameter-control authority before the first variant is produced.
+install_validation_parameter_authority()
 
 
 def _text(value: Any) -> str:
