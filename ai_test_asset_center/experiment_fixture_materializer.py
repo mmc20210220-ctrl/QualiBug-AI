@@ -1,15 +1,20 @@
-"""Public fixture materializer facade with target-scoped identity authority.
+"""Public fixture materializer facade with source-truthful fixture authority.
 
 The core module owns fixture DAG/data binding. The composed wrapper proves the
 frozen FlowDataRequirement and establishes compiled state preconditions before
-measured business steps. This public boundary additionally prevents a generic
-response ``id`` from satisfying an arbitrary different identity-shaped field:
-``order_id`` may use the created order's generic ``id`` when it is the binding
-target, but ``addressId``/``userRef`` cannot borrow that same value.
+measured business steps. This public boundary adds two truth constraints:
+
+* a generic response ``id`` can satisfy only the same binding-target identity,
+  never an arbitrary different identity-shaped field; and
+* a documented fixture value that conflicts with a schema CHECK enum is never
+  silently replaced with the first legal value. The original source body is
+  sent through governed execution, where rejection becomes a visible fixture
+  block instead of a guessed business state.
 """
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any
 
 from . import experiment_fixture_materializer_core as _core
@@ -52,6 +57,38 @@ def _exact_response_field_present(body: dict[str, Any], field: str) -> bool:
     return False
 
 
+def _preserve_source_enum_conflicts(
+    body: Any,
+    enums_by_table: dict[str, dict[str, list[str]]],
+    *,
+    table_hint: str = "",
+) -> tuple[Any, list[str]]:
+    """Diagnose CHECK-enum drift without mutating the source fixture body."""
+
+    if not isinstance(body, dict):
+        return body, []
+    table_key = _identity_key(table_hint)
+    table_enums = (
+        enums_by_table.get(table_key)
+        if isinstance(enums_by_table, dict)
+        else None
+    )
+    if not isinstance(table_enums, dict):
+        return body, []
+    conflicts: list[str] = []
+    for key, value in body.items():
+        if not isinstance(value, str):
+            continue
+        allowed = table_enums.get(_identity_key(key))
+        if not isinstance(allowed, list) or not allowed:
+            continue
+        if value.lower() not in {_text(item).lower() for item in allowed}:
+            conflicts.append(str(key))
+    # Return a defensive copy so downstream mutation cannot accidentally feed
+    # back into the source-derived template object.
+    return deepcopy(body), sorted(set(conflicts))
+
+
 def _strict_validate_fixture_preconditions(
     exp: dict[str, Any],
     fixture_response_body: Any,
@@ -81,11 +118,6 @@ def _strict_validate_fixture_preconditions(
             continue
         if _exact_response_field_present(fixture_response_body, field):
             continue
-
-        # Only the binding target itself may bridge a generic API primary-key
-        # spelling (id/uuid/guid/key). A differently named identity field is a
-        # different business identity until the source/binding graph proves a
-        # mapping; name shape alone is never that proof.
         if (
             _identity_key(field) == target_key
             and strict_observed_resource_identity(
@@ -104,9 +136,14 @@ def _strict_validate_fixture_preconditions(
     return failures
 
 
-# The composed materializer installs its own validator into core immediately
-# before execution. Replace that composition point here so public execution uses
-# the target-scoped authority rather than the historical any-id alias.
+# Core fixture setup previously imported the enum aligner as a private alias.
+# Replace that exact call site with the non-mutating authority before any public
+# materialization runs.
+_core._align_body_enums_with_declared_schema = _preserve_source_enum_conflicts
+
+# The composed materializer installs its own precondition validator into core
+# immediately before execution. Replace that composition point here so public
+# execution uses the target-scoped identity authority.
 _composed._strict_validate_fixture_preconditions = (
     _strict_validate_fixture_preconditions
 )
