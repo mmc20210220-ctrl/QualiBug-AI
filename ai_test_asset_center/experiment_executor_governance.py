@@ -8,9 +8,8 @@ four independent rules before the governed core can reach transport:
 * every modern frozen experiment must carry the same RequestBuildContract that
   can be rebuilt from its current plans, Binding/Flow contracts and source
   operations;
-* RequestBuildContract header claims must match the exact transport channel
-  (Accept always, Authorization only with a declared actor credential, and
-  Content-Type only with a non-None JSON body); and
+* RequestBuildContract query/header claims must use the same source/transport
+  authorities in a fresh runtime process as they did at compile time; and
 * the sequential transport kernel uses the source-truthful FK guard. Concrete
   values such as ``1`` or ``test`` are never rejected by lexical guessing; only
   surviving harness placeholders/sentinels prove materialization failure.
@@ -27,10 +26,16 @@ from .request_build_contract import (
 from .request_header_transport_authority import (
     install_request_header_transport_authority,
 )
+from .validation_parameter_authority import (
+    install_validation_parameter_authority,
+)
 
 # Runtime may execute a frozen artifact in a fresh process that never imported
-# the validation compiler. Install the same header authority explicitly before
-# rebuilding the stored RequestBuildContract.
+# the validation compiler. Reinstall the exact query-mutation and header
+# authorities before rebuilding the stored RequestBuildContract, otherwise an
+# intentional required-query removal or actor/body-scoped header claim can drift
+# solely because of import history.
+install_validation_parameter_authority()
 install_request_header_transport_authority()
 
 for _name in dir(_authority):
