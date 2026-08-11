@@ -728,3 +728,37 @@ def test_produces_create_without_compensator_is_reported_not_invented() -> None:
         and row.get("reason_code") == "MULTI_LEVEL_DEPENDENCY_CLEANUP_MISSING"
         for row in unresolved
     )
+
+
+def test_primary_key_wins_over_business_keys_in_identity_resolution():
+    """orders declares identity_fields ['id', 'order_no'] (schema PRIMARY KEY
+    + UNIQUE). The dependency chain must pick the structural primary key, not
+    block the whole chain as AMBIGUOUS — run26b: callback idempotency
+    obligations died at compile with MULTI_LEVEL_DEPENDENCY_IDENTITY_SOURCE_
+    AMBIGUOUS because of exactly this multi-field declaration."""
+    from ai_test_asset_center.multi_level_dependency_chain import (
+        _declared_entity_identity_fields,
+    )
+
+    entity = {"identity_fields": ["id", "order_no"]}
+    fields = _declared_entity_identity_fields(entity)
+    assert fields == ["id", "order_no"]
+    import re
+
+    structural = [
+        field
+        for field in fields
+        if re.sub(r"[^a-z0-9]+", "", field.lower())
+        in {"id", "uuid", "pk", "key", "uid", "guid"}
+    ]
+    assert structural == ["id"]
+
+    # Pure business keys (no structural key) stay ambiguous — fail closed.
+    entity2 = {"identity_fields": ["order_no", "payment_no"]}
+    structural2 = [
+        field
+        for field in _declared_entity_identity_fields(entity2)
+        if re.sub(r"[^a-z0-9]+", "", field.lower())
+        in {"id", "uuid", "pk", "key", "uid", "guid"}
+    ]
+    assert structural2 == []
