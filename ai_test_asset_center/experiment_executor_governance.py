@@ -2,12 +2,15 @@
 
 The current account/graph/comparison/cleanup authorities live in
 ``_experiment_executor_governance_authority_mechanics``. This boundary composes
-three independent rules before the governed core can reach transport:
+four independent rules before the governed core can reach transport:
 
 * batch ``_pre_resolved_bindings`` are discovery/performance hints only;
 * every modern frozen experiment must carry the same RequestBuildContract that
   can be rebuilt from its current plans, Binding/Flow contracts and source
-  operations; and
+  operations;
+* RequestBuildContract header claims must match the exact transport channel
+  (Accept always, Authorization only with a declared actor credential, and
+  Content-Type only with a non-None JSON body); and
 * the sequential transport kernel uses the source-truthful FK guard. Concrete
   values such as ``1`` or ``test`` are never rejected by lexical guessing; only
   surviving harness placeholders/sentinels prove materialization failure.
@@ -21,6 +24,14 @@ from .request_build_contract import (
     STATUS_BLOCKED as REQUEST_BUILD_BLOCKED,
     validate_request_build_contract,
 )
+from .request_header_transport_authority import (
+    install_request_header_transport_authority,
+)
+
+# Runtime may execute a frozen artifact in a fresh process that never imported
+# the validation compiler. Install the same header authority explicitly before
+# rebuilding the stored RequestBuildContract.
+install_request_header_transport_authority()
 
 for _name in dir(_authority):
     if not _name.startswith("__") and not _name.startswith("_original_"):
