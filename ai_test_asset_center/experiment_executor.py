@@ -1,13 +1,13 @@
 """Public experiment executor with compiler-sealed actor-plan authority.
 
 The established execution, exploration, Oracle and delivery mechanics live in
-``_experiment_executor_mainline_mechanics``.  Current compilation already
+``_experiment_executor_mainline_mechanics``. Current compilation already
 promotes assertion-local actor exploration metadata into one top-level
 ``qualibug.actor-execution-plan.v1`` contract and seals it with ``plan_hash``.
 Runtime therefore has no reason to trust the historical unsealed assertion
 fallback.
 
-Formal execution accepts the compiler-sealed plan or no exploration plan.  A
+Formal execution accepts the compiler-sealed plan or no exploration plan. A
 legacy ``_actor_exploration_plan`` found without the sealed top-level contract is
 visible drift and blocks execution; ``candidate_ids[0]`` is never promoted to a
 source actor merely because it appears first.
@@ -19,7 +19,7 @@ from typing import Any
 from . import _experiment_executor_mainline_mechanics as _core
 
 for _name in dir(_core):
-    if not _name.startswith("__"):
+    if not _name.startswith("__") and not _name.startswith("_original_"):
         globals()[_name] = getattr(_core, _name)
 
 _original_actor_execution_plan = _core._actor_execution_plan
@@ -43,8 +43,6 @@ def _list(value: Any) -> list[Any]:
 
 
 def _legacy_actor_plan_present(experiment: dict[str, Any]) -> bool:
-    """Whether an unsealed assertion/property actor plan survived compilation."""
-
     exp = _dict(experiment)
     direct_property = _dict(exp.get("property"))
     if _dict(direct_property.get(_core._LEGACY_ACTOR_PLAN_KEY)):
@@ -63,7 +61,6 @@ def _actor_execution_plan(
 
     exp = _dict(experiment)
     if _dict(exp.get("actor_execution_plan")):
-        # Reuse the established schema/hash validator for the modern contract.
         return _original_actor_execution_plan(exp)
     if _legacy_actor_plan_present(exp):
         return {}, "legacy_actor_execution_plan_not_authoritative"
@@ -71,8 +68,6 @@ def _actor_execution_plan(
 
 
 def _sync_public_executor_hooks() -> None:
-    """Preserve the historical public monkeypatch/injection surface."""
-
     for name in tuple(getattr(_core, "_HOOK_NAMES", ())):
         value = globals().get(name)
         if value is not None and hasattr(_core, name):
@@ -87,7 +82,6 @@ def execute_one_experiment(*args: Any, **kwargs: Any) -> dict[str, Any]:
     return _original_execute_one_experiment(*args, **kwargs)
 
 
-# Mechanics functions resolve this authority from their defining-module globals.
 _core._actor_execution_plan = _actor_execution_plan
 
 __all__ = sorted(
@@ -95,7 +89,7 @@ __all__ = sorted(
         *[
             name
             for name in dir(_core)
-            if not name.startswith("__")
+            if not name.startswith("__") and not name.startswith("_original_")
         ],
         "_actor_execution_plan",
         "execute_one_experiment",
