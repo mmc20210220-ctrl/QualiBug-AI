@@ -1,10 +1,11 @@
 """State-aware facade for real runtime identity resolution.
 
-The stable resolver remains in ``real_id_resolver_base``. This facade teaches
-the public ``bind_entity_fields`` entrypoint to honor the state-selection marker
-emitted by the state experiment compiler. The main experiment executor calls
-this public function directly, so the source-state precondition is now enforced
-on the actual execution path rather than only in an auxiliary materializer.
+The stable resolver remains in ``real_id_resolver_base``. This facade keeps the
+state-selection behavior and adds one destructive ambiguity boundary: for a
+path with multiple identity placeholders, one generic response ``id`` may not
+be mirrored into several different identities. Exact snake/camel-equivalent
+fields are resolved first; a generic id may fill at most one remaining identity
+only after every other placeholder is already proven exactly.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from .real_id_resolver_base import *  # noqa: F401,F403
 
 
 _STATE_PATH_RE = re.compile(r"^@state=([a-z0-9]+)@(.*)$")
+_original_bind_entity_fields = _base.bind_entity_fields
 
 
 def __getattr__(name: str) -> Any:
@@ -100,15 +102,135 @@ def _entity_in_required_state(body: Any, required_token: str) -> dict[str, Any]:
     return sorted(matches, key=_identity_sort_key)[0]
 
 
+def _scalar(value: Any) -> str:
+    if isinstance(value, bool) or isinstance(value, (dict, list)):
+        return ""
+    return _text(value)
+
+
+def _strict_multi_identity_bindings(
+    body: Any,
+    path: str,
+) -> dict[str, str]:
+    """Bind a multi-identity path without cross-resource id mirroring."""
+
+    params = _base.infer_path_params(path)
+    if len(params) <= 1:
+        return _original_bind_entity_fields(body, path)
+    entities = _base._extract_entity_candidates(body)
+    if not entities and isinstance(body, dict):
+        entities = [body]
+    if not entities:
+        return {}
+
+    bindings: dict[str, str] = {}
+    unresolved: list[str] = []
+    generic_params = {"id", "uuid", "guid", "pk", "key"}
+
+    # Phase 1: exact semantic field identity only. Normalization deliberately
+    # treats order_id and orderId as the same declared name, but never collapses
+    # addressId onto id or userId.
+    for param in params:
+        wanted = _field_key(param)
+        values: list[tuple[str, str]] = []
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            for field, raw in entity.items():
+                if _field_key(field) != wanted:
+                    continue
+                value = _scalar(raw)
+                if value:
+                    values.append((_text(field), value))
+        unique_values = list(dict.fromkeys(value for _, value in values))
+        if len(unique_values) == 1:
+            bindings[param] = unique_values[0]
+            for field, value in values:
+                if value == unique_values[0]:
+                    bindings.setdefault(field, value)
+        elif wanted in generic_params:
+            generic_values: list[tuple[str, str]] = []
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    continue
+                for field, raw in entity.items():
+                    if _field_key(field) not in generic_params:
+                        continue
+                    value = _scalar(raw)
+                    if value:
+                        generic_values.append((_text(field), value))
+            unique_generic = list(
+                dict.fromkeys(value for _, value in generic_values)
+            )
+            if len(unique_generic) == 1:
+                bindings[param] = unique_generic[0]
+                for field, value in generic_values:
+                    if value == unique_generic[0]:
+                        bindings.setdefault(field, value)
+            else:
+                unresolved.append(param)
+        else:
+            unresolved.append(param)
+
+    # Phase 2: one generic resource id may close exactly ONE remaining explicit
+    # identity. This is elimination, not mirroring: all sibling dimensions have
+    # already been proven by exact fields. If two identities remain unknown,
+    # generic id cannot tell which resource it names and neither is bound.
+    unresolved_explicit = [
+        param
+        for param in unresolved
+        if _field_key(param) not in generic_params
+    ]
+    if len(unresolved_explicit) == 1:
+        generic_values: list[tuple[str, str]] = []
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            for field, raw in entity.items():
+                if _field_key(field) not in generic_params:
+                    continue
+                value = _scalar(raw)
+                if value:
+                    generic_values.append((_text(field), value))
+        unique_generic = list(
+            dict.fromkeys(value for _, value in generic_values)
+        )
+        if len(unique_generic) == 1:
+            target = unresolved_explicit[0]
+            bindings[target] = unique_generic[0]
+            for field, value in generic_values:
+                if value == unique_generic[0]:
+                    bindings.setdefault(field, value)
+    return bindings
+
+
 def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
     raw_path = _text(path)
     marker = _STATE_PATH_RE.match(raw_path)
     if not marker:
-        return _base.bind_entity_fields(body, raw_path)
+        return _strict_multi_identity_bindings(body, raw_path)
 
     required_state = _text(marker.group(1))
     resolved_path = _text(marker.group(2))
     selected = _entity_in_required_state(body, required_state)
     if not selected:
         return {}
-    return _base.bind_entity_fields(selected, resolved_path)
+    return _strict_multi_identity_bindings(selected, resolved_path)
+
+
+# Public call sites import this facade. Also update the base module's dynamic
+# attribute for callers that resolve it after facade initialization; the saved
+# original remains available internally to avoid recursion on single-id paths.
+_base.bind_entity_fields = bind_entity_fields
+
+__all__ = sorted(
+    {
+        *[
+            name
+            for name in dir(_base)
+            if not name.startswith("__")
+        ],
+        "bind_entity_fields",
+        "_strict_multi_identity_bindings",
+    }
+)
