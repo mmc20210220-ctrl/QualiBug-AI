@@ -23,6 +23,9 @@ _SOURCE_RUNTIME_MUTATION_CLASSES = frozenset({
     "runtime_scope_violation",
     "runtime_account_state_violation",
 })
+_SOURCE_RULE_MUTATION_SOURCES = frozenset({
+    "account_state_precondition",
+})
 
 
 def __getattr__(name: str) -> Any:
@@ -185,6 +188,11 @@ def _validation_authority_problem(
             if source_bound and semantic_text:
                 continue
             return f"runtime_validation_mutation_lacks_source_rule:{mutation_class}"
+
+        if source in _SOURCE_RULE_MUTATION_SOURCES:
+            if source_bound and semantic_text:
+                continue
+            return f"source_validation_mutation_lacks_rule:{source}"
 
         # This historical fallback infers field semantics from a request example
         # and, if no semantic match exists, even removes the first field. It is
