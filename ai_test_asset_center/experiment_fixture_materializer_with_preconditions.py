@@ -4,6 +4,12 @@ The core fixture materializer remains the sole data/setup executor. This wrapper
 projects the frozen FlowDataRequirement into the core's supported node schema,
 proves the result, then executes compiled preconditions before measured business
 steps. Any block preserves cleanup context and clears measurement plans.
+
+Activation reconciliation is diagnostic only. A fixture required by the Oracle
+but never processed by the fixture DAG is a contract drift, not evidence that
+the fixture was resolved. Synthetic ``activation_requirement_reconciliation``
+rows are therefore converted into a fail-closed DAG drift before preconditions
+or measured business steps may run.
 """
 from __future__ import annotations
 
@@ -65,6 +71,85 @@ def _block_measurement(
     return state
 
 
+def _reject_synthetic_activation_reconciliation(
+    *,
+    exp: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Turn non-executed fixture reconciliation into visible DAG drift.
+
+    The historical core added ``resolved`` fixture receipts when an activation
+    requirement was absent from the execution order (and even when no DAG node
+    existed). That row was later converted into a Contract Evidence ``OBSERVED``
+    receipt. Reconciliation may explain the mismatch, but it cannot satisfy the
+    fixture requirement.
+    """
+
+    fixture_receipts = [
+        dict(row) if isinstance(row, dict) else row
+        for row in _list(state.get("fixture_receipts"))
+    ]
+    affected_ids: list[str] = []
+    diagnostic_rows: list[dict[str, Any]] = []
+    for row in fixture_receipts:
+        if not isinstance(row, dict):
+            continue
+        if _text(row.get("source")) != "activation_requirement_reconciliation":
+            continue
+        fixture_id = _text(row.get("node_id"))
+        if fixture_id:
+            affected_ids.append(fixture_id)
+        stale = _text(row.get("kind")) == "stale_requirement"
+        row.update({
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_FIXTURE_DAG_DRIFT",
+            "detail": (
+                "activation_required_fixture_missing_from_dag"
+                if stale
+                else "activation_required_fixture_not_executed"
+            ),
+            "reconciliation_is_evidence": False,
+        })
+        diagnostic_rows.append(dict(row))
+
+    if not diagnostic_rows:
+        return None
+
+    state["fixture_receipts"] = fixture_receipts
+    affected = set(affected_ids)
+    # Remove the fake fixture Contract Evidence receipt already authored by the
+    # historical core.  Absence is deliberate: downstream activation must see
+    # that the required fixture has no observed proof, never a rewritten proof.
+    state["contract_evidence_receipts"] = [
+        row
+        for row in _list(state.get("contract_evidence_receipts"))
+        if not (
+            isinstance(row, dict)
+            and _text(row.get("kind")) == "fixture"
+            and _text(row.get("subject_id")) in affected
+        )
+    ]
+    receipt = {
+        "schema_version": "qualibug.fixture-activation-reconciliation-gate.v1",
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_FIXTURE_DAG_DRIFT",
+        "affected_fixture_ids": sorted(affected),
+        "diagnostics": diagnostic_rows,
+        "synthetic_resolution_allowed": False,
+    }
+    return _block_measurement(
+        exp=exp,
+        state=state,
+        reason_code="BLOCKED_FIXTURE_DAG_DRIFT",
+        detail=(
+            "activation_fixture_reconciliation_not_evidence:"
+            + ",".join(sorted(affected))
+        ),
+        phase="fixture_activation_reconciliation",
+        receipt=receipt,
+    )
+
+
 def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     exp = _dict(kwargs.get("exp"))
     projected_exp, projection_receipt = project_flow_data_materializer_dag(exp)
@@ -85,6 +170,13 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
             )
             state["result"] = terminal_result
         return state
+
+    reconciliation_block = _reject_synthetic_activation_reconciliation(
+        exp=exp,
+        state=state,
+    )
+    if reconciliation_block is not None:
+        return reconciliation_block
 
     flow_data_receipt = validate_flow_data_materialization(exp, state)
     state["flow_data_materialization_receipt"] = flow_data_receipt
@@ -148,11 +240,6 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     state["precondition_execution_receipt"] = precondition
     state["state_precondition_established"] = precondition.get("established") is True
 
-    # ── Money-family subject identity capture ──
-    # Precondition steps that create the subject entity of a money obligation
-    # (order before pay) register the created identity into runtime_bindings.
-    # Merge them back into the fixture state so control/treatment body
-    # materialization binds the created subject (pay the order just created).
     _precondition_bindings = dict(
         precondition.get("runtime_bindings") or {}
     )
