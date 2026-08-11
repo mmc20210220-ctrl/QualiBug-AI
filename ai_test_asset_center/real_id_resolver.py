@@ -1,11 +1,19 @@
-"""State-aware facade for real runtime identity resolution.
+"""State-aware, domain-neutral runtime identity resolution.
 
-The stable resolver remains in ``real_id_resolver_base``. This facade keeps the
-state-selection behavior and adds one destructive ambiguity boundary: for a
-path with multiple identity placeholders, one generic response ``id`` may not
-be mirrored into several different identities. Exact snake/camel-equivalent
-fields are resolved first; a generic id may fill at most one remaining identity
-only after every other placeholder is already proven exactly.
+The stable low-level response/entity mechanics remain in
+``real_id_resolver_base``. This facade removes the closed domain dictionaries
+from the active resolver path and replaces them with structural derivation:
+
+* parameter aliases are exact normalized spelling plus generic primary-key
+  compatibility, never order/user/coupon/patient/etc. vocabulary;
+* body dependency collection candidates come from the field token's own entity
+  stem and generic pluralization;
+* alternate list paths come from the real path hierarchy and identity-token
+  stems, never products/materials/users/accounts catalogs.
+
+All candidates are still intersected with Behavior IR's source-declared
+operations by the binding graph. Unknown semantics therefore remain unresolved
+instead of being forced through a familiar industry alias.
 """
 from __future__ import annotations
 
@@ -19,6 +27,8 @@ from .real_id_resolver_base import *  # noqa: F401,F403
 
 _STATE_PATH_RE = re.compile(r"^@state=([a-z0-9]+)@(.*)$")
 _original_bind_entity_fields = _base.bind_entity_fields
+_GENERIC_PRIMARY_KEYS = ("id", "uuid", "guid", "pk", "key")
+_IDENTITY_SUFFIXES = ("uuid", "guid", "number", "code", "key", "id", "no")
 
 
 def __getattr__(name: str) -> Any:
@@ -33,30 +43,158 @@ def _field_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", _text(value).lower())
 
 
+def _snake_identity_name(value: Any) -> str:
+    raw = _text(value)
+    if not raw:
+        return ""
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", raw).replace("-", "_")
+    return re.sub(r"_+", "_", snake).strip("_").lower()
+
+
+def _camel_identity_name(value: Any) -> str:
+    snake = _snake_identity_name(value)
+    if not snake:
+        return ""
+    parts = [part for part in snake.split("_") if part]
+    if not parts:
+        return ""
+    return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
+
+
+def _identity_entity_stem(value: Any) -> str:
+    key = _field_key(value)
+    if not key:
+        return ""
+    for suffix in _IDENTITY_SUFFIXES:
+        if key.endswith(suffix) and len(key) > len(suffix) + 1:
+            stem = key[: -len(suffix)].strip("_")
+            if stem:
+                return stem
+    return ""
+
+
+def param_field_candidates(param_name: str) -> list[str]:
+    """Domain-neutral response fields that may satisfy one path parameter."""
+
+    name = _text(param_name)
+    if not name:
+        return ["id"]
+    key = _field_key(name)
+    snake = _snake_identity_name(name)
+    camel = _camel_identity_name(name)
+    ordered = [name, snake, camel]
+    if key in {_field_key(item) for item in _GENERIC_PRIMARY_KEYS}:
+        ordered.extend(_GENERIC_PRIMARY_KEYS)
+    elif _identity_entity_stem(name):
+        # A single entity-qualified identity may be exposed by an API as its
+        # generic primary key. Multi-identity paths are governed separately and
+        # do not use this cross-spelling fallback until ambiguity is eliminated.
+        ordered.extend(_GENERIC_PRIMARY_KEYS)
+    # Natural keys such as sku/code have no entity stem and stay exact. Mapping
+    # sku->code or code->coupon is business semantics, not a naming convention.
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in ordered:
+        token = _text(value)
+        normalized = _field_key(token)
+        if token and normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(token)
+    return result
+
+
+def body_field_collection_paths(
+    field: str,
+    *,
+    api_prefix: str = "/api",
+) -> list[str]:
+    """Derive collection candidates from the field's own entity stem only."""
+
+    stem = _identity_entity_stem(field)
+    if not stem:
+        return []
+    prefix = _text(api_prefix).rstrip("/") or "/api"
+    plural = _base._pluralize_resource(stem)
+    candidates = [
+        f"{prefix}/{plural}" if plural else "",
+        f"{prefix}/{stem}",
+    ]
+    return list(
+        dict.fromkeys(
+            candidate
+            for candidate in candidates
+            if candidate.startswith("/")
+        )
+    )
+
+
+def _api_identity_prefix(path: str) -> str:
+    parts = [
+        part
+        for part in _base.normalize_path_placeholders(path).strip("/").split("/")
+        if part and not _base._NORMALIZED_PARAM_RE.fullmatch(part)
+    ]
+    if not parts:
+        return ""
+    if parts[0].lower() == "api":
+        if len(parts) > 1 and re.fullmatch(r"v\d+(?:\.\d+)?", parts[1].lower()):
+            return "/" + "/".join(parts[:2])
+        return "/api"
+    if re.fullmatch(r"v\d+(?:\.\d+)?", parts[0].lower()):
+        return "/" + parts[0]
+    return "/" + parts[0]
+
+
+def alternate_collection_paths(path: str) -> list[str]:
+    """Return only structural parent/token collection alternatives."""
+
+    normalized = _base.normalize_path_placeholders(path).split("?", 1)[0]
+    params = _base.infer_path_params(normalized)
+    if not params:
+        return []
+    primary = _base.collection_path(normalized)
+    prefix = _api_identity_prefix(normalized)
+    alternatives: list[str] = []
+
+    # Identity token itself may name another declared top-level resource.
+    if prefix:
+        for param in params:
+            for candidate in body_field_collection_paths(param, api_prefix=prefix):
+                if candidate != primary:
+                    alternatives.append(candidate)
+
+    # Walk only real static ancestors already present in the target path.
+    parts = [part for part in primary.strip("/").split("/") if part]
+    for size in range(len(parts) - 1, 0, -1):
+        candidate = "/" + "/".join(parts[:size])
+        if candidate and candidate != primary:
+            alternatives.append(candidate)
+
+    return list(
+        dict.fromkeys(
+            candidate
+            for candidate in alternatives
+            if candidate.startswith("/")
+            and not _base.path_has_placeholders(candidate)
+        )
+    )
+
+
 def _state_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", _text(value).casefold())
 
 
 def _entity_state_values(entity: dict[str, Any]) -> list[Any]:
-    exact = {
-        "state",
-        "status",
-        "stage",
-        "lifecycle",
-        "lifecyclestatus",
-        "orderstatus",
-        "paymentstatus",
-        "refundstatus",
-        "shipmentstatus",
-        "fulfillmentstatus",
-    }
+    # State-field recognition stays structural: exact generic state labels or a
+    # source field whose own name ends with state/status/stage. Domain-specific
+    # order/payment/refund/shipment names are unnecessary under this rule.
     values: list[Any] = []
     for key, value in entity.items():
         normalized = _field_key(key)
         if isinstance(value, (dict, list, bool)) or value in (None, ""):
             continue
         if (
-            normalized in exact
+            normalized in {"state", "status", "stage", "lifecycle", "lifecyclestatus"}
             or normalized.endswith("status")
             or normalized.endswith("state")
             or normalized.endswith("stage")
@@ -71,7 +209,7 @@ def _identity_sort_key(entity: dict[str, Any]) -> tuple[str, str]:
         for key, value in entity.items()
         if not isinstance(value, (dict, list))
         and (
-            _field_key(key) in {"id", "uuid", "key"}
+            _field_key(key) in {_field_key(item) for item in _GENERIC_PRIMARY_KEYS}
             or _field_key(key).endswith("id")
         )
         and _text(value)
@@ -125,11 +263,8 @@ def _strict_multi_identity_bindings(
 
     bindings: dict[str, str] = {}
     unresolved: list[str] = []
-    generic_params = {"id", "uuid", "guid", "pk", "key"}
+    generic_params = {_field_key(item) for item in _GENERIC_PRIMARY_KEYS}
 
-    # Phase 1: exact semantic field identity only. Normalization deliberately
-    # treats order_id and orderId as the same declared name, but never collapses
-    # addressId onto id or userId.
     for param in params:
         wanted = _field_key(param)
         values: list[tuple[str, str]] = []
@@ -172,10 +307,6 @@ def _strict_multi_identity_bindings(
         else:
             unresolved.append(param)
 
-    # Phase 2: one generic resource id may close exactly ONE remaining explicit
-    # identity. This is elimination, not mirroring: all sibling dimensions have
-    # already been proven by exact fields. If two identities remain unknown,
-    # generic id cannot tell which resource it names and neither is bound.
     unresolved_explicit = [
         param
         for param in unresolved
@@ -218,9 +349,13 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
     return _strict_multi_identity_bindings(selected, resolved_path)
 
 
-# Public call sites import this facade. Also update the base module's dynamic
-# attribute for callers that resolve it after facade initialization; the saved
-# original remains available internally to avoid recursion on single-id paths.
+# Patch the base module's dynamic authorities before any of its higher-level
+# helpers run. Their function globals resolve these names at call time, so the
+# old closed dictionaries remain compatibility data only and no longer drive
+# active path/body resolution.
+_base.param_field_candidates = param_field_candidates
+_base.body_field_collection_paths = body_field_collection_paths
+_base.alternate_collection_paths = alternate_collection_paths
 _base.bind_entity_fields = bind_entity_fields
 
 __all__ = sorted(
@@ -230,6 +365,9 @@ __all__ = sorted(
             for name in dir(_base)
             if not name.startswith("__")
         ],
+        "param_field_candidates",
+        "body_field_collection_paths",
+        "alternate_collection_paths",
         "bind_entity_fields",
         "_strict_multi_identity_bindings",
     }
