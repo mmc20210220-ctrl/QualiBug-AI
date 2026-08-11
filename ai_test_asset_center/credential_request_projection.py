@@ -8,8 +8,11 @@ transport and its evidence boundary redacts credential fields.
 
 Projection is driven by the binding plan's exact ``body_template_paths``. This
 covers source redaction spellings such as ``<PASSWORD>`` without guessing token
-case or replacing a concrete business value. String-token matching is retained
-only as a compatibility fallback when an older binding lacks path coordinates.
+case or replacing a concrete business value. Once every use is projected, the
+credential target is removed from the experiment-global binding plan and any
+runtime-read binding DAG node for that target is pruned. A credential secret is
+not FlowData and must never re-enter fixture/runtime materialization after it has
+become a request-local secret reference.
 """
 from __future__ import annotations
 
@@ -47,17 +50,37 @@ def _operation_index(behavior_ir: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def _credential_bindings(experiment: dict[str, Any]) -> list[dict[str, Any]]:
+def _binding_rows(experiment: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     raw = _dict(experiment).get("binding_plan")
-    rows = (
-        [
-            {**(_dict(value)), "target": _text(_dict(value).get("target") or key)}
-            for key, value in raw.items()
-            if isinstance(value, dict)
-        ]
-        if isinstance(raw, dict)
-        else [dict(row) for row in _list(raw) if isinstance(row, dict)]
-    )
+    if isinstance(raw, dict):
+        rows: list[dict[str, Any]] = []
+        for key, value in raw.items():
+            if not isinstance(value, dict):
+                continue
+            row = dict(value)
+            row.setdefault("target", _text(key))
+            rows.append(row)
+        return rows, "dict"
+    return [dict(row) for row in _list(raw) if isinstance(row, dict)], "list"
+
+
+def _restore_binding_shape(
+    experiment: dict[str, Any],
+    rows: list[dict[str, Any]],
+    shape: str,
+) -> None:
+    if shape == "dict":
+        experiment["binding_plan"] = {
+            _text(row.get("target")): row
+            for row in rows
+            if _text(row.get("target"))
+        }
+    else:
+        experiment["binding_plan"] = rows
+
+
+def _credential_bindings(experiment: dict[str, Any]) -> list[dict[str, Any]]:
+    rows, _shape = _binding_rows(experiment)
     return [
         row
         for row in rows
@@ -109,15 +132,9 @@ def _set_placeholder_at_path(
         existing = current[final]
 
     if not isinstance(existing, str) or not _PLACEHOLDER_VALUE_RE.match(existing):
-        # A binding path may be stale relative to a protocol step that already
-        # supplied a concrete value. Never overwrite concrete source/runtime
-        # material with a credential merely because the field name matches.
         return value, False
 
-    if isinstance(final, int):
-        current[final] = secret_ref
-    else:
-        current[final] = secret_ref
+    current[final] = secret_ref
     return root, True
 
 
@@ -169,6 +186,91 @@ def _project_binding_into_body(
     return _replace_exact_token(projected, target, secret_ref)
 
 
+def _contains_target_placeholder(value: Any, target: str) -> bool:
+    wanted = _text(target).casefold()
+    if isinstance(value, dict):
+        return any(_contains_target_placeholder(child, target) for child in value.values())
+    if isinstance(value, list):
+        return any(_contains_target_placeholder(child, target) for child in value)
+    if not isinstance(value, str):
+        return False
+    match = _PLACEHOLDER_VALUE_RE.match(value)
+    return bool(match and _text(match.group(1)).casefold() == wanted)
+
+
+def _target_still_used_as_placeholder(experiment: dict[str, Any], target: str) -> bool:
+    for phase in ("precondition", "control", "treatment"):
+        for raw in _list(experiment.get(f"{phase}_plan")):
+            if not isinstance(raw, dict):
+                continue
+            step = _dict(raw)
+            if _contains_target_placeholder(step.get("body"), target):
+                return True
+            if _contains_target_placeholder(step.get("query"), target):
+                return True
+            if _contains_target_placeholder(step.get("path"), target):
+                return True
+    return False
+
+
+def _prune_runtime_binding_nodes(
+    experiment: dict[str, Any],
+    targets: set[str],
+) -> dict[str, list[str]]:
+    pruned: dict[str, list[str]] = {}
+    if not targets:
+        return pruned
+    for field in ("fixture_dag", "fixture_dependency_dag"):
+        dag = _dict(experiment.get(field))
+        if not dag:
+            continue
+        removed_ids = {
+            _text(node.get("node_id"))
+            for node in _list(dag.get("nodes"))
+            if isinstance(node, dict)
+            and _text(node.get("kind")) == "runtime_read_binding"
+            and _text(node.get("target")) in targets
+            and _text(node.get("node_id"))
+        }
+        if not removed_ids:
+            continue
+        governed = deepcopy(dag)
+        governed["nodes"] = [
+            node
+            for node in _list(governed.get("nodes"))
+            if not (isinstance(node, dict) and _text(node.get("node_id")) in removed_ids)
+        ]
+        for order_field in (
+            "setup_order",
+            "cleanup_order",
+            "execution_order",
+            "topological_order",
+        ):
+            if order_field in governed:
+                governed[order_field] = [
+                    node_id
+                    for node_id in _list(governed.get(order_field))
+                    if _text(node_id) not in removed_ids
+                ]
+        if "edges" in governed:
+            governed["edges"] = [
+                edge
+                for edge in _list(governed.get("edges"))
+                if not (
+                    isinstance(edge, dict)
+                    and (
+                        _text(edge.get("from")) in removed_ids
+                        or _text(edge.get("to")) in removed_ids
+                    )
+                )
+            ]
+        governed["credential_request_binding_nodes_pruned"] = sorted(removed_ids)
+        governed["credential_request_binding_targets"] = sorted(targets)
+        experiment[field] = governed
+        pruned[field] = sorted(removed_ids)
+    return pruned
+
+
 def project_declared_credential_refs(
     experiment: dict[str, Any],
     *,
@@ -177,10 +279,15 @@ def project_declared_credential_refs(
     """Replace proven credential placeholders with opaque secret references."""
 
     result = deepcopy(_dict(experiment))
-    operations = _operation_index(behavior_ir)
     bindings = _credential_bindings(result)
+    existing_receipt = _dict(result.get("credential_request_projection_receipt"))
+    if not bindings and _text(existing_receipt.get("schema_version")) == SCHEMA_VERSION:
+        return result, dict(existing_receipt)
+
+    operations = _operation_index(behavior_ir)
     rows: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
+    removable_targets: set[str] = set()
 
     for binding in bindings:
         target = _text(binding.get("target"))
@@ -219,9 +326,8 @@ def project_declared_credential_refs(
             continue
 
         for phase in ("precondition", "control", "treatment"):
-            plan = _list(result.get(f"{phase}_plan"))
             projected_plan: list[Any] = []
-            for raw_step in plan:
+            for raw_step in _list(result.get(f"{phase}_plan")):
                 if not isinstance(raw_step, dict):
                     projected_plan.append(raw_step)
                     continue
@@ -264,13 +370,37 @@ def project_declared_credential_refs(
                 projected_plan.append(step)
             result[f"{phase}_plan"] = projected_plan
 
+        if _target_still_used_as_placeholder(result, target):
+            issue = {
+                **audit,
+                "status": "BLOCKED",
+                "reason_code": "CREDENTIAL_BINDING_PROJECTION_INCOMPLETE",
+            }
+            issues.append(issue)
+            rows.append(issue)
+            continue
+
+        removable_targets.add(target)
         audit.update(
             {
                 "status": "PROJECTED" if audit["replacement_count"] else "NOT_USED",
                 "reason_code": "",
+                "global_binding_required": False,
             }
         )
         rows.append(audit)
+
+    all_bindings, shape = _binding_rows(result)
+    governed_bindings = [
+        row
+        for row in all_bindings
+        if not (
+            _text(row.get("source_priority")) == "actor_credential_secret"
+            and _text(row.get("target")) in removable_targets
+        )
+    ]
+    _restore_binding_shape(result, governed_bindings, shape)
+    pruned_nodes = _prune_runtime_binding_nodes(result, removable_targets)
 
     receipt = {
         "schema_version": SCHEMA_VERSION,
@@ -279,6 +409,8 @@ def project_declared_credential_refs(
         "projected_binding_count": sum(
             1 for row in rows if _text(row.get("status")) == "PROJECTED"
         ),
+        "removed_global_binding_targets": sorted(removable_targets),
+        "pruned_fixture_dag_nodes": pruned_nodes,
         "rows": rows,
         "issues": issues,
         "secret_value_persisted": False,
