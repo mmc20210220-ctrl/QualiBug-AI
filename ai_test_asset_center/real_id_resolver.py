@@ -258,7 +258,7 @@ def _extract_entity_candidates(body: Any) -> list[dict[str, Any]]:
     if not candidates:
         return []
     real = [
-        row for row in candidates if not _base._is_harness_disposable_entity(row)
+        row for row in candidates if not _base._is_harness_disposable_record(row)
     ]
     return real if real else candidates
 
