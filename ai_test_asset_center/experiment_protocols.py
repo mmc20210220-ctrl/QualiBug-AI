@@ -1,11 +1,11 @@
-"""Protocol facade with fail-closed validation-mutation authority.
+"""Protocol facade with fail-closed mutation and assertion authority.
 
 The historical protocol facade lives in ``_experiment_protocols_mechanics``.
-This layer preserves every registered/built-in protocol and adds one authority
-gate after compilation: a validation mutation must be traceable to either an
-explicit request/source constraint or a source rule whose own semantics decide
-the mutation. Request-example shape and field-name vocabulary are never enough
-to manufacture a formal validation experiment.
+This layer preserves registered/built-in semantics while enforcing two final
+compile authorities: validation mutations need an explicit source/schema basis,
+and every COMPILED protocol must resolve an assertion kind either from its own
+result or from the compiler's declared family map. A generic HTTP status check is
+never allowed to stand in for a missing Oracle.
 """
 from __future__ import annotations
 
@@ -149,6 +149,39 @@ def _semantic_constraint_declared(
     return False
 
 
+def _assertion_authority_problem(
+    *,
+    result: dict[str, Any],
+    risk_family: str,
+) -> str:
+    """A COMPILED protocol must have a real Oracle authority.
+
+    The semantic compiler historically ended its selection with ``or
+    'http_status'``. Combined with the generic protocol fallback, a newly
+    registered family could therefore become canonical without declaring any
+    assertion semantics and still look executable. The family registry stays
+    open, but execution is blocked until either the protocol emits a concrete
+    assertion kind or the compiler family map explicitly owns one.
+    """
+
+    if _text(result.get("status")) != "COMPILED":
+        return ""
+    if _text(_dict(result.get("assertion")).get("kind")):
+        return ""
+    family = _text(risk_family)
+    if not family:
+        return "protocol_assertion_kind_missing:empty_family"
+    try:
+        from . import experiment_compiler_obligation_core as _compiler_core
+
+        mapped = _text(_compiler_core._FAMILY_ASSERTION_KIND.get(family))
+    except Exception:  # pragma: no cover - import cycle stays fail-closed
+        mapped = ""
+    if mapped:
+        return ""
+    return f"protocol_assertion_kind_missing:{family}"
+
+
 def _validation_authority_problem(
     *,
     result: dict[str, Any],
@@ -171,8 +204,6 @@ def _validation_authority_problem(
 
     mutations = _mutation_rows(result)
     if not mutations:
-        # Read-side validation protocols may carry a typed assertion without a
-        # request mutation. Their source invariant remains the authority.
         return "" if _source_bound_property(prop) else (
             "validation_protocol_has_no_constraint_or_source_authority"
         )
@@ -194,18 +225,10 @@ def _validation_authority_problem(
                 continue
             return f"source_validation_mutation_lacks_rule:{source}"
 
-        # This historical fallback infers field semantics from a request example
-        # and, if no semantic match exists, even removes the first field. It is
-        # diagnostic material only and must never enter the formal protocol.
         if source == "inferred_from_example":
             return "request_example_inference_not_validation_authority"
 
         if source == "request_schema":
-            # Without an explicit validation_constraint, request-schema material
-            # reached this branch through the base compiler's generic field walk.
-            # A source-bound invariant may use it only when its own statement
-            # explicitly declares the semantic mutation; otherwise this is the
-            # forbidden invariant × unrelated-schema-field cross product.
             if constraint.startswith("semantic:"):
                 if source_bound and _semantic_constraint_declared(
                     constraint,
@@ -221,8 +244,6 @@ def _validation_authority_problem(
                 + (constraint or "unknown")
             )
 
-        # A mutation with no authority marker is acceptable only for one of the
-        # source-rule runtime classes above. Unknown shapes fail closed.
         return "validation_mutation_authority_unknown"
     return ""
 
@@ -246,7 +267,30 @@ def compile_family_protocol(
         property_spec=property_spec,
         behavior_ir=behavior_ir,
     )
+
+    assertion_problem = _assertion_authority_problem(
+        result=result,
+        risk_family=risk_family,
+    )
+    if assertion_problem:
+        return {
+            "status": "BLOCKED",
+            "reason_code": "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+            "detail": assertion_problem,
+            "assertion_authority_gate": {
+                "status": "BLOCKED",
+                "reason_code": assertion_problem,
+                "generic_http_status_fallback_allowed": False,
+            },
+        }
+
     if _text(risk_family) != "validation":
+        if _text(result.get("status")) == "COMPILED":
+            result = dict(result)
+            result["assertion_authority_gate"] = {
+                "status": "PASS",
+                "generic_http_status_fallback_allowed": False,
+            }
         return result
 
     problem = _validation_authority_problem(
@@ -256,6 +300,10 @@ def compile_family_protocol(
     if not problem:
         if _text(result.get("status")) == "COMPILED":
             result = dict(result)
+            result["assertion_authority_gate"] = {
+                "status": "PASS",
+                "generic_http_status_fallback_allowed": False,
+            }
             result["validation_authority_gate"] = {
                 "status": "PASS",
                 "heuristic_request_example_authority": False,
@@ -266,6 +314,10 @@ def compile_family_protocol(
         "status": "BLOCKED",
         "reason_code": "BLOCKED_MISSING_BINDING",
         "detail": problem,
+        "assertion_authority_gate": {
+            "status": "PASS",
+            "generic_http_status_fallback_allowed": False,
+        },
         "validation_authority_gate": {
             "status": "BLOCKED",
             "reason_code": problem,
