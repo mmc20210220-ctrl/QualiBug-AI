@@ -377,9 +377,18 @@ _core.build_proof_fingerprint = _graph_aware_build_proof_fingerprint
 _core.validate_cleanup_plan = _graph_aware_validate_cleanup_plan
 _execute_one_core = _core.execute_one_experiment
 
-for _name in dir(_core):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_core, _name)
+def __getattr__(name: str) -> Any:
+    # Lazy delegation to experiment_executor_core. The former ``dir(_core)``
+    # wholesale copy failed on half-initialized modules during the import
+    # cycle (names visible via __dir__ but not yet bound). Delegation
+    # resolves names only once the module graph is complete.
+    if not name.startswith("__"):
+        return getattr(_core, name)
+    raise AttributeError(name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_core)))
 
 # Preserve established public identities. The private core path remains graph-
 # aware, account-strict, comparison-strict and proof-set aware.
