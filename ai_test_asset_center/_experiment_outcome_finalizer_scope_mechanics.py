@@ -511,9 +511,20 @@ def _install_core_hooks() -> None:
 
 _install_core_hooks()
 
-for _name in dir(_core):
-    if not _name.startswith("__") and _name != "finalize_experiment_execution":
-        globals()[_name] = getattr(_core, _name)
+
+def __getattr__(name: str) -> Any:
+    # Lazy delegation to experiment_outcome_finalizer_core. The former
+    # ``dir(_core)`` wholesale copy re-entered the finalizer import cycle
+    # during partial initialization (AttributeError on half-built modules —
+    # names visible via __dir__ but not yet bound in the module dict).
+    # Delegation resolves any name only when the module graph is complete.
+    if not name.startswith("__"):
+        return getattr(_core, name)
+    raise AttributeError(name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_core)))
 
 
 def _fixtureless_bundle_declared(

@@ -30,7 +30,6 @@ from .observation_completeness import (
 )
 from .observer_contracts_base import observe_experiment_requirements
 from .runtime_binding_materializer import materialize_path as _materialize_path
-from .cleanup_equivalence import evaluate_cleanup_equivalence
 from .cleanup_observation_adapter import build_cleanup_equivalence_inputs
 from .finding_risk_grading import apply_finding_grading as _apply_finding_grading
 
@@ -1129,6 +1128,13 @@ def finalize_experiment_execution(
             after_cleanup_obs = equiv_inputs["after_cleanup_observation"]
             cleanup_exec_receipt = equiv_inputs["cleanup_execution_receipt"]
             observations["cleanup_observation_source_trace"] = equiv_inputs["source_trace"]
+            # Imported lazily: a top-level import forms an import cycle
+            # (cleanup_equivalence → cleanup_equivalence_core →
+            # _cleanup_equivalence_core_mechanics ↔ finalizer core
+            # mechanics), leaving _original_evaluate_cleanup_equivalence
+            # undefined on the partially-initialized module.
+            from .cleanup_equivalence import evaluate_cleanup_equivalence
+
             cleanup_equivalence_receipt = evaluate_cleanup_equivalence(
                 proof=proof,
                 before_observation=before_obs,

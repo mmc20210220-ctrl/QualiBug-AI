@@ -29,9 +29,18 @@ from .process_graph_reversibility import (
 )
 
 
-for _name in dir(_core):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_core, _name)
+def __getattr__(name: str) -> Any:
+    # Lazy delegation to cleanup_equivalence_core. The former wholesale
+    # ``dir(_core)`` copy re-entered the finalizer import cycle during
+    # partial initialization (AttributeError on half-built modules) —
+    # delegation resolves any name only when the module graph is complete.
+    if not name.startswith("__"):
+        return getattr(_core, name)
+    raise AttributeError(name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_core)))
 
 
 def _dict(value: Any) -> dict[str, Any]:

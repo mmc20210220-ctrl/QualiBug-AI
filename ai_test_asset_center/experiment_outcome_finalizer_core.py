@@ -46,6 +46,14 @@ _COMPOSED_MECHANICS_HOOKS = (
 
 
 def __getattr__(name: str) -> Any:
+    if name == "evaluate_cleanup_equivalence":
+        # Resolved lazily: cleanup_equivalence → cleanup_equivalence_core →
+        # _cleanup_equivalence_core_mechanics forms an import cycle with this
+        # finalizer chain when imported at module load; by call time every
+        # module is fully initialized.
+        from .cleanup_equivalence import evaluate_cleanup_equivalence
+
+        return evaluate_cleanup_equivalence
     return getattr(_core, name)
 
 
