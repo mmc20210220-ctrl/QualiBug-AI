@@ -1,45 +1,37 @@
-"""Compile TestObligations into frozen ExecutableExperiments.
+"""Batch compiler facade with unique source-operation identity recovery.
 
-The existing single-obligation compiler remains the semantic authority. This
-module applies final process-graph write safety, flow/readback, and state-
-precondition freezes after that compiler returns, then keeps the batch
-compilation and public re-export surface.
+The established single/batch compilation and finalization mechanics live in
+``_experiment_compiler_base_mechanics``.  A source locator such as
+``POST /api/orders`` is useful for recovering a stale operation id only when it
+identifies exactly one Behavior IR operation. Exact string equality is not a
+license to choose the first duplicate node: different IR operation ids may carry
+different entity, permission, fact-lineage, or observer relations.
+
+This facade therefore admits locator recovery only for one unique operation id.
+Multiple exact method/path matches, or multiple locators resolving to different
+operation ids, are explicit ``BLOCKED_MISSING_OPERATION`` ambiguity rather than
+source-order selection.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
-from .real_id_resolver import normalize_path_placeholders
-from .validation_obligation_expander import expand_validation_obligation
-from .experiment_compile_freezer import freeze_compiled_experiment
-from .state_precondition_compile_freezer import freeze_state_precondition_fields
-from .process_graph_write_contract import finalize_process_graph_write_contract
-from .experiment_compiler_support import (  # noqa: F401
-    _actor_is_executable,
-    _compensates_create_operation,
-    _field_key,
-    _index_by_id,
-    _inverse_delta_cleanup_spec,
-    _is_unresolvable_actor_secret_ref,
-    _operation_entity_refs,
-    _post_action_can_restore_named_terminal_field,
-    _resolve_state_compile_context,
-    _source_declared_control_fixture_binding,
-    _source_request_example,
-    _state_match_token,
-    _state_semantic_value,
-)
-from .abstract_experiment import is_capability_gap_reason
-from .experiment_compiler_obligation import (  # noqa: F401
-    BLOCK_REASONS,
-    SCHEMA_VERSION,
-    blocked_experiment,
-    compile_experiment_for_obligation as _compile_experiment_for_obligation,
-    make_experiment,
-    stable_experiment_id,
-)
+from . import _experiment_compiler_base_mechanics as _core
+
+for _name in dir(_core):
+    if not _name.startswith("__"):
+        globals()[_name] = getattr(_core, _name)
+
+_original_compile_one_in_batch = _core._compile_one_obligation_in_batch
+
+
+def __getattr__(name: str) -> Any:
+    return getattr(_core, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_core)))
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -54,174 +46,108 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _blocked_copy(
-    experiment: dict[str, Any],
-    *,
-    reason_code: str,
-    detail: str,
-) -> dict[str, Any]:
-    blocked = deepcopy(experiment)
-    blocked["control_plan"] = []
-    blocked["treatment_plan"] = []
-    blocked["cleanup_plan"] = []
-    blocked["compile_receipt"] = {
-        "status": "BLOCKED",
-        "reason_code": reason_code,
-        "detail": detail,
-    }
-    return blocked
+def _operation_ref_from_obligation(obligation: dict[str, Any]) -> str:
+    prop = _dict(obligation.get("property"))
+    return (
+        next(
+            (
+                _text(value)
+                for value in _list(obligation.get("required_operations"))
+                if _text(value)
+            ),
+            "",
+        )
+        or _text(prop.get("operation_ref"))
+    )
 
 
-def _block_uncovered_graph_precondition_writes(
-    experiment: dict[str, Any], behavior_ir: dict[str, Any]
-) -> dict[str, Any]:
-    contract = _dict(experiment.get("process_graph_write_contract"))
-    if not _list(contract.get("write_step_ids")):
-        return experiment
-    operations = _index_by_id(_list(_dict(behavior_ir).get("operations")))
-    uncovered: list[str] = []
-    for row in _list(experiment.get("precondition_plan")):
-        if not isinstance(row, dict):
+def _locator_operation_candidates(
+    obligation: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    """Return exact operation ids named by source api_operation locators."""
+
+    candidate_ids: set[str] = set()
+    locators: list[str] = []
+    for raw in _list(obligation.get("source_refs")):
+        source = _dict(raw)
+        if _text(source.get("kind")) != "api_operation":
             continue
-        step_id = _text(row.get("step_id") or row.get("id"))
-        operation_ref = _text(row.get("operation_ref"))
-        operation = _dict(operations.get(operation_ref))
-        method = _text(row.get("method") or operation.get("method")).upper()
-        if method in {"POST", "PUT", "PATCH", "DELETE"}:
-            uncovered.append(
-                step_id or operation_ref or "unknown_precondition_write"
-            )
-    if not uncovered:
-        return experiment
-    return _blocked_copy(
-        experiment,
-        reason_code="BLOCKED_STEP_CLEANUP_UNCOVERED",
-        detail=(
-            "graph_precondition_writes_not_in_global_reverse_cleanup:"
-            + ",".join(uncovered)
-        ),
-    )
+        locator = _text(source.get("locator"))
+        if not locator:
+            continue
+        parts = locator.split(None, 1)
+        if len(parts) != 2:
+            continue
+        method = parts[0].upper()
+        path = _core.normalize_path_placeholders(parts[1].strip())
+        if not method or not path.startswith("/"):
+            continue
+        locators.append(f"{method} {path}")
+        for operation_id, raw_operation in operations.items():
+            operation = _dict(raw_operation)
+            if (
+                _text(operation.get("method")).upper() == method
+                and _core.normalize_path_placeholders(
+                    _text(operation.get("path") or operation.get("raw_path"))
+                )
+                == path
+            ):
+                candidate_ids.add(_text(operation_id))
+    return sorted(candidate_ids), sorted(set(locators))
 
 
-def _finalize_compiled_experiment(
-    experiment: dict[str, Any],
-    *,
-    behavior_ir: dict[str, Any],
-) -> dict[str, Any]:
-    graph_safe = finalize_process_graph_write_contract(
-        experiment,
-        behavior_ir,
-    )
-    graph_safe = _block_uncovered_graph_precondition_writes(
-        graph_safe,
-        behavior_ir,
-    )
-    if _text(_dict(graph_safe.get("compile_receipt")).get("status")) != "COMPILED":
-        return graph_safe
-    flow_frozen = freeze_compiled_experiment(
-        graph_safe,
-        behavior_ir=behavior_ir,
-    )
-    return freeze_state_precondition_fields(flow_frozen)
-
-
-def compile_experiment_for_obligation(
+def _mark_ambiguous_operation_block(
     obligation: dict[str, Any],
     *,
-    behavior_ir: dict[str, Any],
-    environment_type: str = "",
-    policy_version: str = "",
-    available_adapters: "set[str] | frozenset[str] | None" = None,
-) -> dict[str, Any]:
-    """Compile one obligation and freeze final cross-plan requirements."""
-    experiment = _compile_experiment_for_obligation(
-        obligation,
-        behavior_ir=behavior_ir,
-        environment_type=environment_type,
-        policy_version=policy_version,
-        available_adapters=available_adapters,
+    candidate_ids: list[str],
+    locators: list[str],
+    blocked: list[dict[str, Any]],
+) -> None:
+    obligation_id = _text(obligation.get("obligation_id")) or "unknown_obligation"
+    detail = (
+        "ambiguous_source_operation_locator:"
+        + "|".join(locators)
+        + ":candidates="
+        + ",".join(candidate_ids)
+    )[:1000]
+    experiment = _core.blocked_experiment(
+        obligation_id,
+        "BLOCKED_MISSING_OPERATION",
+        detail,
     )
-    return _finalize_compiled_experiment(
-        experiment,
-        behavior_ir=behavior_ir,
-    )
-
-
-def _is_fully_finalized(experiment: dict[str, Any]) -> bool:
-    """True when the batch-loop finalizers are content no-ops on this experiment.
-
-    The per-obligation compiler (``compile_experiment_for_obligation``) already
-    applies ``_finalize_compiled_experiment`` internally, and the product
-    compile_one enriches AFTER that first freeze (sod fixture binding,
-    source-observed mutations, authorization comparison contract) without
-    touching the freeze surface (control/treatment/precondition/cleanup plans,
-    assertions, observers). Re-running the finalizers on such an experiment is
-    content-idempotent (verified byte-identical) but costs a second full
-    deepcopy + plan walk per experiment. COMPILED experiments count as
-    finalized when they carry both freeze receipts; every other status
-    short-circuits all finalizers to content no-ops, so skipping them is
-    byte-identical. A custom compile_one that does NOT finalize internally
-    still goes through the single finalization here.
-    """
-    receipt = _dict(experiment.get("compile_receipt"))
-    if _text(receipt.get("status")).upper() != "COMPILED":
-        return True
-    return (
-        isinstance(experiment.get("compile_freeze_receipt"), dict)
-        and isinstance(experiment.get("state_precondition_freeze_receipt"), dict)
-    )
-
-
-def compile_experiments(
-    obligations: list[dict[str, Any]],
-    *,
-    behavior_ir: dict[str, Any],
-    environment_type: str = "",
-    policy_version: str = "",
-    compile_one: Callable[..., dict[str, Any]] | None = None,
-    available_adapters: "set[str] | frozenset[str] | None" = None,
-) -> dict[str, Any]:
-    compiler = compile_one or compile_experiment_for_obligation
-    compiled: list[dict[str, Any]] = []
-    blocked: list[dict[str, Any]] = []
-    abstract: list[dict[str, Any]] = []
-    operations = _index_by_id(_list(_dict(behavior_ir).get("operations")))
-    # SPEC-11 4.2: precompute the IR-derived index bundle once for the batch;
-    # per-obligation scoping / observer joins / relation scans consume it via
-    # the context instead of rebuilding O(IR) indexes per obligation.
-    from .compile_batch_context import (
-        build_batch_indexes,
-        reset_batch_indexes,
-        set_batch_indexes,
-    )
-
-    _indexes_token = set_batch_indexes(build_batch_indexes(behavior_ir))
-    try:
-        for obl in obligations:
-            _compile_one_obligation_in_batch(
-                obl,
-                operations=operations,
-                behavior_ir=behavior_ir,
-                environment_type=environment_type,
-                policy_version=policy_version,
-                compiler=compiler,
-                available_adapters=available_adapters,
-                compiled=compiled,
-                blocked=blocked,
-                abstract=abstract,
-            )
-    finally:
-        reset_batch_indexes(_indexes_token)
-    return {
-        "schema_version": "qualibug.experiment-compile.v1",
-        "compiled_count": len(compiled),
-        "blocked_count": len(blocked),
-        "abstract_count": len(abstract),
-        "experiments": compiled,
-        "blocked_experiments": blocked,
-        "abstract_experiments": abstract,
-        "block_reason_counts": _count_reasons(blocked + abstract),
+    experiment["operation_identity_ambiguity_receipt"] = {
+        "schema_version": "qualibug.operation-identity-ambiguity.v1",
+        "status": "BLOCKED",
+        "reason_code": "AMBIGUOUS_SOURCE_OPERATION_IDENTITY",
+        "source_locators": list(locators),
+        "candidate_operation_ids": list(candidate_ids),
+        "source_order_selection_allowed": False,
     }
+    blocked.append(experiment)
+    obligation.update(
+        {
+            "compile_status": "BLOCKED",
+            "expanded_experiment_count": 1,
+            "compiled_experiment_count": 0,
+            "blocked_experiment_count": 1,
+            "abstract_experiment_count": 0,
+            "block_reason": "BLOCKED_MISSING_OPERATION",
+        }
+    )
+
+
+def _sync_compile_status(source: dict[str, Any], target: dict[str, Any]) -> None:
+    for field in (
+        "compile_status",
+        "expanded_experiment_count",
+        "compiled_experiment_count",
+        "blocked_experiment_count",
+        "abstract_experiment_count",
+        "block_reason",
+    ):
+        if field in source:
+            target[field] = source[field]
 
 
 def _compile_one_obligation_in_batch(
@@ -231,129 +157,93 @@ def _compile_one_obligation_in_batch(
     behavior_ir: dict[str, Any],
     environment_type: str,
     policy_version: str,
-    compiler: Callable[..., dict[str, Any]],
+    compiler: Any,
     available_adapters: Any,
     compiled: list[dict[str, Any]],
     blocked: list[dict[str, Any]],
     abstract: list[dict[str, Any]],
 ) -> None:
-    """Per-obligation body of the batch loop (SPEC-11 4.1 / 4.2 refactor keeps
-    the original serial semantics; extracted so the batch can set one index
-    context instead of rebuilding per obligation)."""
     if not isinstance(obl, dict):
         return
-    prop = _dict(obl.get("property"))
-    operation_ref = (
-        next(
-            (
-                _text(value)
-                for value in _list(obl.get("required_operations"))
-                if _text(value)
-            ),
-            "",
-        )
-        or _text(prop.get("operation_ref"))
-    )
-    if operation_ref and operation_ref not in operations:
-        source_locators = [
-            _text(source.get("locator"))
-            for source in _list(obl.get("source_refs"))
-            if isinstance(source, dict)
-            and _text(source.get("kind")) == "api_operation"
-            and _text(source.get("locator"))
-        ]
-        for locator in source_locators:
-            parts = locator.split(None, 1)
-            if len(parts) == 2:
-                locator_method, locator_path = parts[0].upper(), parts[1].strip()
-                for ir_id, ir_op in operations.items():
-                    if (
-                        isinstance(ir_op, dict)
-                        and _text(ir_op.get("method")).upper()
-                        == locator_method
-                        and normalize_path_placeholders(
-                            _text(ir_op.get("path") or ir_op.get("raw_path"))
-                        )
-                        == normalize_path_placeholders(locator_path)
-                    ):
-                        operation_ref = ir_id
-                        break
-            if operation_ref in operations:
-                break
-    variants = expand_validation_obligation(
-        obl,
-        operation=operations.get(operation_ref) or {},
-    )
-    variant_compiled = 0
-    variant_blocked = 0
-    variant_abstract = 0
-    for variant in variants:
-        experiment = compiler(
-            variant,
+
+    operation_ref = _operation_ref_from_obligation(obl)
+    if operation_ref and operation_ref in operations:
+        return _original_compile_one_in_batch(
+            obl,
+            operations=operations,
             behavior_ir=behavior_ir,
             environment_type=environment_type,
             policy_version=policy_version,
+            compiler=compiler,
             available_adapters=available_adapters,
-        )
-        # A custom compile_one callback must still pass through the same
-        # deterministic final freezes. All finalizers are idempotent and
-        # the product compile_one already finalized internally (freeze
-        # receipts present), so re-freezing here is skipped when it would
-        # be a content no-op — this halves the finalization cost of the
-        # batch (SPEC-11 4.1).
-        if not _is_fully_finalized(experiment):
-            experiment = _finalize_compiled_experiment(
-                experiment,
-                behavior_ir=behavior_ir,
-            )
-        receipt = _dict(experiment.get("compile_receipt"))
-        status = _text(receipt.get("status")).upper()
-        reason = _text(receipt.get("reason_code"))
-        if status == "COMPILED":
-            compiled.append(experiment)
-            variant["compile_status"] = "COMPILED"
-            variant_compiled += 1
-        elif status == "ABSTRACT" or (
-            status == "BLOCKED" and is_capability_gap_reason(reason)
-        ):
-            if status != "ABSTRACT":
-                from .abstract_experiment import promote_blocked_to_abstract
-
-                experiment = promote_blocked_to_abstract(experiment, variant)
-            abstract.append(experiment)
-            variant["compile_status"] = "ABSTRACT"
-            variant["block_reason"] = reason
-            variant_abstract += 1
-        else:
-            blocked.append(experiment)
-            variant["compile_status"] = "BLOCKED"
-            variant["block_reason"] = receipt.get("reason_code")
-            variant_blocked += 1
-    if variant_compiled:
-        obl["compile_status"] = "COMPILED"
-    elif variant_abstract:
-        obl["compile_status"] = "ABSTRACT"
-    else:
-        obl["compile_status"] = "BLOCKED"
-    obl["expanded_experiment_count"] = len(variants)
-    obl["compiled_experiment_count"] = variant_compiled
-    obl["blocked_experiment_count"] = variant_blocked
-    obl["abstract_experiment_count"] = variant_abstract
-    if not variant_compiled:
-        source = abstract[-1] if variant_abstract and abstract else (
-            blocked[-1] if blocked else {}
-        )
-        obl["block_reason"] = _dict(source.get("compile_receipt")).get(
-            "reason_code"
+            compiled=compiled,
+            blocked=blocked,
+            abstract=abstract,
         )
 
-
-def _count_reasons(blocked: list[dict[str, Any]]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for item in blocked:
-        code = (
-            _text(_dict(item.get("compile_receipt")).get("reason_code"))
-            or "UNKNOWN"
+    candidates, locators = _locator_operation_candidates(obl, operations)
+    if len(candidates) > 1:
+        _mark_ambiguous_operation_block(
+            obl,
+            candidate_ids=candidates,
+            locators=locators,
+            blocked=blocked,
         )
-        counts[code] = counts.get(code, 0) + 1
-    return counts
+        return
+
+    if len(candidates) == 1:
+        # Feed the unique recovered identity to the historical compiler without
+        # rewriting the source obligation's semantic contract. Only compile
+        # status/count fields are projected back to the original obligation.
+        working = deepcopy(obl)
+        working["required_operations"] = [candidates[0]]
+        _original_compile_one_in_batch(
+            working,
+            operations=operations,
+            behavior_ir=behavior_ir,
+            environment_type=environment_type,
+            policy_version=policy_version,
+            compiler=compiler,
+            available_adapters=available_adapters,
+            compiled=compiled,
+            blocked=blocked,
+            abstract=abstract,
+        )
+        _sync_compile_status(working, obl)
+        return
+
+    # No exact recovery exists. Preserve the historical missing-operation path;
+    # it will produce the established diagnostics rather than inventing identity.
+    _original_compile_one_in_batch(
+        obl,
+        operations=operations,
+        behavior_ir=behavior_ir,
+        environment_type=environment_type,
+        policy_version=policy_version,
+        compiler=compiler,
+        available_adapters=available_adapters,
+        compiled=compiled,
+        blocked=blocked,
+        abstract=abstract,
+    )
+
+
+# The mechanics batch loop resolves this helper from its own module globals.
+_core._compile_one_obligation_in_batch = _compile_one_obligation_in_batch
+
+compile_experiment_for_obligation = _core.compile_experiment_for_obligation
+compile_experiments = _core.compile_experiments
+
+__all__ = sorted(
+    {
+        *[
+            name
+            for name in dir(_core)
+            if not name.startswith("__")
+        ],
+        "_compile_one_obligation_in_batch",
+        "_locator_operation_candidates",
+        "compile_experiment_for_obligation",
+        "compile_experiments",
+    }
+)
