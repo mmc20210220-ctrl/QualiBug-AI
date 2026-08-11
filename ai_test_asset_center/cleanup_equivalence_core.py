@@ -1,20 +1,22 @@
 """Cleanup equivalence facade with one canonical receipt-success authority.
 
 The historical equivalence engine lives in
-``_cleanup_equivalence_core_mechanics``.  This facade closes a schema-compatibility
+``_cleanup_equivalence_core_mechanics``. This facade closes a schema-compatibility
 seam only: some formally sealed cleanup execution receipts describe successful
 transport with the canonical tuple
 
 ``status in {ACCEPTED, COMPLETED, CLEANED} + attempted=true +
 transport_reached=true + 2xx``
 
-but omit the legacy convenience boolean ``succeeded``.  The old evaluator read
+but omit the legacy convenience boolean ``succeeded``. The old evaluator read
 only that boolean and therefore emitted the contradictory diagnosis
-``cleanup_transport_failed:status=200``.  Downstream finalization had to special
-case the contradiction.
+``cleanup_transport_failed:status=200``. Downstream finalization then had to
+special-case the contradiction.
 
-No HTTP status is trusted by itself.  Explicit ``succeeded=False`` is never
-overridden, and any missing authority leg remains fail-closed.
+No HTTP status is trusted by itself. Explicit ``succeeded=False`` is never
+overridden, any missing authority leg remains fail-closed, and the original
+sealed receipt is never mutated; the alias exists only in a local evaluator
+view.
 """
 from __future__ import annotations
 
@@ -55,9 +57,8 @@ def normalize_cleanup_execution_success_authority(
 ) -> dict[str, Any]:
     """Bridge canonical formal success into the legacy ``succeeded`` alias.
 
-    This is deliberately narrow.  It never creates a receipt, never accepts a
-    schema-less row, never turns a non-2xx response into success, and never
-    overrides an explicit ``succeeded`` value.
+    The returned dict is a local compatibility view. ``receipt`` itself is
+    never changed.
     """
 
     row = dict(_dict(receipt))
@@ -79,9 +80,6 @@ def normalize_cleanup_execution_success_authority(
         and 200 <= status_code < 300
     ):
         row["succeeded"] = True
-        row["success_authority"] = (
-            "formal_status+attempted+transport_reached+http_2xx"
-        )
     return row
 
 
@@ -107,8 +105,9 @@ def evaluate_cleanup_equivalence(
     )
 
 
-# Any caller that imports the mechanics object through this facade must see the
-# same governed evaluator (cleanup_equivalence.py does exactly that).
+# cleanup_equivalence.py imports this module object and dispatches through its
+# evaluator; install the same governed callable into the mechanics namespace so
+# all internal calls share one authority.
 _core.evaluate_cleanup_equivalence = evaluate_cleanup_equivalence
 
 __all__ = sorted(
