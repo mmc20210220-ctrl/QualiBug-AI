@@ -12,19 +12,41 @@ PRIVACY_FIELD_ASSERTION_KIND = "privacy_field_policy"
 
 # ── V1.5.0: Lazy one-time registration of multi-step protocols ──
 _v150_protocols_registered = False
+_v150_protocol_registration_error = ""
+_V150_OWNED_PROTOCOLS = frozenset({
+    ("process", "multi_step_business_process"),
+    ("state", "state_chain_process"),
+    ("process", "sequence_verification"),
+})
 
 
-def _ensure_v150_protocols() -> None:
-    """Register V1.5.0 multi-step protocols once (idempotent)."""
-    global _v150_protocols_registered
+def _ensure_v150_protocols() -> str:
+    """Register V1.5.0 multi-step protocols and expose bootstrap failure.
+
+    Registration is retryable.  The previous implementation marked the bootstrap
+    complete before importing/registering the protocols and swallowed every exception;
+    one transient or partial registration failure therefore disabled multi-step
+    protocols for the rest of the process while compilation silently fell through to
+    unrelated built-in logic.  That is a false capability claim.
+
+    The registry is keyed assignment, so retrying after a partial registration is
+    idempotent: already-written entries are replaced by the same governed definitions.
+    """
+    global _v150_protocols_registered, _v150_protocol_registration_error
     if _v150_protocols_registered:
-        return
-    _v150_protocols_registered = True
+        return ""
     try:
         from .multi_step_protocol import register_v150_multi_step_protocols
+
         register_v150_multi_step_protocols()
-    except Exception:  # noqa: BLE001 - registration failure must not abort compile
-        pass
+    except Exception as exc:  # noqa: BLE001 - returned as a typed compile blocker
+        _v150_protocol_registration_error = (
+            f"{type(exc).__name__}:{exc}"
+        )[:180]
+        return _v150_protocol_registration_error
+    _v150_protocols_registered = True
+    _v150_protocol_registration_error = ""
+    return ""
 
 
 def __getattr__(name: str) -> Any:
@@ -109,8 +131,19 @@ def compile_family_protocol(
     property_spec: dict[str, Any],
     behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    # V1.5.0: ensure multi-step protocols are registered before first resolution
-    _ensure_v150_protocols()
+    # V1.5.0: ensure multi-step protocols are registered before first resolution.
+    # A bootstrap failure blocks only the three templates owned by that bootstrap;
+    # unrelated built-in protocols keep working.  Crucially, an owned template may
+    # never fall through to a different single-step implementation.
+    _template = _text(property_spec.get("template"))
+    _family = _text(risk_family).lower()
+    _v150_error = _ensure_v150_protocols()
+    if _v150_error and (_family, _template) in _V150_OWNED_PROTOCOLS:
+        return {
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_REGISTERED_PROTOCOL_INVALID",
+            "detail": f"v150_protocol_registration_failed:{_v150_error}"[:200],
+        }
 
     # Registered protocol, consulted first and additively.
     #
@@ -129,7 +162,7 @@ def compile_family_protocol(
     # A compiler that raises, or a result that fails validation, becomes a visible BLOCKED.
     # An exception must never escape into the compile loop, where it would abort a whole
     # batch of unrelated obligations.
-    _registration = _resolve_family_protocol(risk_family, _text(property_spec.get("template")))
+    _registration = _resolve_family_protocol(risk_family, _template)
     if _registration is not None:
         return _compile_registered_protocol(
             _registration,
