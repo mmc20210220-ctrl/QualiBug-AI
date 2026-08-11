@@ -1,17 +1,20 @@
-"""Runtime-support facade with structural identity, operation, observer and binding authority.
+"""Runtime-support facade with structural identity, operation, observer, binding and credential authority.
 
-The established transport/preflight/credential mechanics live in
+The established transport/preflight mechanics live in
 ``_experiment_runtime_support_mechanics``. Formal runtime execution may not
-manufacture identity by convenience:
+manufacture identity or credential truth by convenience:
 
 * resource selection is structural; only an explicitly compiled state predicate
   may filter rows;
 * every transport step's HTTP method comes from its Behavior IR operation;
 * effect-observer derivation requires one exact source-declared write operation
-  and one unambiguous materializable observer; and
+  and one unambiguous materializable observer;
 * every FROZEN initial flow binding must still have an executable materialization
-  channel at runtime. Old/stale artifacts cannot bypass compile-time binding
-  authority and fall through to ``HARNESS_REQUEST_BUILD_FAILED``.
+  channel at runtime; and
+* opaque request credential refs must resolve through declared credential
+  authorities before transport. Any residual ``secret_ref:*`` is converted into
+  a named unresolved placeholder so the existing pre-transport body gate blocks
+  it instead of sending the reference string as a password/API key.
 """
 from __future__ import annotations
 
@@ -27,11 +30,15 @@ from .real_id_resolver import (
     bind_entity_fields as _structural_bind_entity_fields,
     normalize_path_placeholders,
 )
+from .request_credential_authority import resolve_request_credentials
 from .runtime_binding_graph import (
     declared_effect_observers as _strict_declared_effect_observers,
 )
 
 _original_preflight_experiment_executable = _core.preflight_experiment_executable
+_original_unresolved_body_placeholders = _core._unresolved_body_placeholders
+_CREDENTIAL_UNRESOLVED_TOKEN = "QUALIBUG_CREDENTIAL_REF_UNRESOLVED"
+_CREDENTIAL_UNRESOLVED_PLACEHOLDER = "{" + _CREDENTIAL_UNRESOLVED_TOKEN + "}"
 
 
 def __getattr__(name: str) -> Any:
@@ -168,6 +175,66 @@ def _runtime_initial_binding_authority(
             f"runtime_initial_binding_unexecutable:{target}:{reason}",
         )
     return True, "", ""
+
+
+def _mask_unresolved_credential_refs(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _mask_unresolved_credential_refs(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_unresolved_credential_refs(child) for child in value]
+    if isinstance(value, str) and _text(value).startswith("secret_ref:"):
+        return _CREDENTIAL_UNRESOLVED_PLACEHOLDER
+    return value
+
+
+def _contains_credential_unresolved_placeholder(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            _contains_credential_unresolved_placeholder(child)
+            for child in value.values()
+        )
+    if isinstance(value, list):
+        return any(
+            _contains_credential_unresolved_placeholder(child)
+            for child in value
+        )
+    return isinstance(value, str) and _text(value) == _CREDENTIAL_UNRESOLVED_PLACEHOLDER
+
+
+def _resolve_body_credential_refs(
+    value: Any,
+    *,
+    root: Any,
+    project: str,
+) -> Any:
+    """Resolve declared credential refs or leave an explicit pre-transport block."""
+
+    resolved, receipt = resolve_request_credentials(
+        value,
+        root=root,
+        project=project,
+    )
+    if int(_dict(receipt).get("unresolved_count") or 0) > 0:
+        return _mask_unresolved_credential_refs(resolved)
+    return resolved
+
+
+def _unresolved_body_placeholders(
+    value: Any,
+    bindings: dict[str, Any],
+) -> list[str]:
+    unresolved = list(
+        _original_unresolved_body_placeholders(value, bindings)
+    )
+    if (
+        _contains_credential_unresolved_placeholder(value)
+        and _CREDENTIAL_UNRESOLVED_TOKEN not in unresolved
+    ):
+        unresolved.append(_CREDENTIAL_UNRESOLVED_TOKEN)
+    return unresolved
 
 
 def _operation_for_observation_path(
@@ -343,6 +410,8 @@ def preflight_experiment_executable(
 
 _core._runtime_entity_candidates = _runtime_entity_candidates
 _core._select_runtime_binding = _select_runtime_binding
+_core._resolve_body_credential_refs = _resolve_body_credential_refs
+_core._unresolved_body_placeholders = _unresolved_body_placeholders
 _core._operation_for_observation_path = _operation_for_observation_path
 _core._declared_observation_path = _declared_observation_path
 _core._response_bound_observation_path = _response_bound_observation_path
@@ -360,6 +429,8 @@ __all__ = sorted(
         "_select_runtime_binding",
         "_operation_method_authority",
         "_runtime_initial_binding_authority",
+        "_resolve_body_credential_refs",
+        "_unresolved_body_placeholders",
         "_operation_for_observation_path",
         "_declared_observation_path",
         "_response_bound_observation_path",
