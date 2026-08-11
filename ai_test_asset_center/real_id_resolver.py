@@ -1,19 +1,22 @@
 """State-aware, domain-neutral runtime identity resolution.
 
 The stable low-level response/entity mechanics remain in
-``real_id_resolver_base``. This facade removes the closed domain dictionaries
-from the active resolver path and replaces them with structural derivation:
+``real_id_resolver_base``. This facade removes closed domain dictionaries from
+the active resolver path and replaces them with structural authority:
 
 * parameter aliases are exact/snake/camel spelling plus generic primary-key
   compatibility, never order/user/coupon/patient/etc. vocabulary;
 * body dependency collection candidates come from the field token's own entity
   stem and generic pluralization;
 * alternate list paths come from the real path hierarchy and identity-token
-  stems, never products/materials/users/accounts catalogs.
+  stems, never products/materials/users/accounts catalogs;
+* response entities come from the resource object itself, a generic envelope,
+  or one unambiguous unknown-domain collection. Multiple unrelated business
+  arrays are unresolved instead of being selected by a domain-key priority.
 
-All candidates are still intersected with Behavior IR's source-declared
-operations by the binding graph. Unknown semantics therefore remain unresolved
-instead of being forced through a familiar industry alias.
+All resolver candidates are still intersected with Behavior IR's
+source-declared operations by the binding graph. Unknown semantics therefore
+remain unresolved instead of being forced through a familiar industry alias.
 """
 from __future__ import annotations
 
@@ -29,6 +32,30 @@ _STATE_PATH_RE = re.compile(r"^@state=([a-z0-9]+)@(.*)$")
 _original_bind_entity_fields = _base.bind_entity_fields
 _GENERIC_PRIMARY_KEYS = ("id", "uuid", "guid", "pk", "key")
 _IDENTITY_SUFFIXES = ("uuid", "guid", "number", "code", "key", "id", "no")
+_GENERIC_LIST_ENVELOPES = (
+    "records",
+    "data",
+    "items",
+    "results",
+    "list",
+    "rows",
+    "content",
+    "payload",
+    "body",
+    "response",
+    "resources",
+    "entities",
+    "objects",
+    "members",
+    "elements",
+    "collection",
+    "documents",
+    "nodes",
+    "entries",
+    "assets",
+)
+_GENERIC_PAGINATION_WRAPPERS = ("data", "result", "payload", "body", "response")
+_GENERIC_INNER_LIST_KEYS = ("content", "items", "records", "list", "rows", "results", "data")
 
 
 def __getattr__(name: str) -> Any:
@@ -86,19 +113,11 @@ def param_field_candidates(param_name: str) -> list[str]:
     if key in {_field_key(item) for item in _GENERIC_PRIMARY_KEYS}:
         ordered.extend(_GENERIC_PRIMARY_KEYS)
     elif _identity_entity_stem(name):
-        # A single entity-qualified identity may be exposed by an API as its
-        # generic primary key. Multi-identity paths are governed separately and
-        # do not use this cross-spelling fallback until ambiguity is eliminated.
         ordered.extend(_GENERIC_PRIMARY_KEYS)
-    # Natural keys such as sku/code have no entity stem and stay exact. Mapping
-    # sku->code or code->coupon is business semantics, not a naming convention.
     result: list[str] = []
     seen: set[str] = set()
     for value in ordered:
         token = _text(value)
-        # Keep userId and user_id as distinct structural spellings; callers such
-        # as the legacy single-identity body resolver perform exact dict lookup.
-        # Only exact case-insensitive duplicates are removed here.
         duplicate_key = token.lower()
         if token and duplicate_key not in seen:
             seen.add(duplicate_key)
@@ -158,19 +177,16 @@ def alternate_collection_paths(path: str) -> list[str]:
     primary = _base.collection_path(normalized)
     prefix = _api_identity_prefix(normalized)
     alternatives: list[str] = []
-
     if prefix:
         for param in params:
             for candidate in body_field_collection_paths(param, api_prefix=prefix):
                 if candidate != primary:
                     alternatives.append(candidate)
-
     parts = [part for part in primary.strip("/").split("/") if part]
     for size in range(len(parts) - 1, 0, -1):
         candidate = "/" + "/".join(parts[:size])
         if candidate and candidate != primary:
             alternatives.append(candidate)
-
     return list(
         dict.fromkeys(
             candidate
@@ -179,6 +195,65 @@ def alternate_collection_paths(path: str) -> list[str]:
             and not _base.path_has_placeholders(candidate)
         )
     )
+
+
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _extract_raw_entity_candidates(body: Any) -> list[dict[str, Any]]:
+    """Extract one structurally identifiable resource collection or none.
+
+    Unknown business envelope names are supported when exactly one branch can
+    represent the entity collection. If two unrelated branches both contain
+    candidate entities, choosing one would be semantic inference and the result
+    is deliberately empty.
+    """
+
+    if isinstance(body, list):
+        return _list_of_dicts(body)
+    if not isinstance(body, dict):
+        return []
+    if _base._dict_has_own_identity(body):
+        return [dict(body)]
+
+    # Generic protocol envelopes have structural meaning independent of domain.
+    for field in _GENERIC_LIST_ENVELOPES:
+        value = body.get(field)
+        rows = _list_of_dicts(value)
+        if rows:
+            return rows
+        if not isinstance(value, dict):
+            continue
+        if _base._dict_has_own_identity(value):
+            return [dict(value)]
+        if field in _GENERIC_PAGINATION_WRAPPERS:
+            for inner_key in _GENERIC_INNER_LIST_KEYS:
+                rows = _list_of_dicts(value.get(inner_key))
+                if rows:
+                    return rows
+        nested = _extract_raw_entity_candidates(value)
+        if nested:
+            return nested
+
+    # Unknown-domain keys are accepted only when they are unambiguous.
+    candidate_groups: list[list[dict[str, Any]]] = []
+    for key, value in body.items():
+        if key in _GENERIC_LIST_ENVELOPES:
+            continue
+        rows = _list_of_dicts(value)
+        if rows:
+            candidate_groups.append(rows)
+            continue
+        if isinstance(value, dict):
+            nested = _extract_raw_entity_candidates(value)
+            if nested:
+                candidate_groups.append(nested)
+    if len(candidate_groups) != 1:
+        return []
+    return candidate_groups[0]
 
 
 def _state_token(value: Any) -> str:
@@ -338,7 +413,6 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
     marker = _STATE_PATH_RE.match(raw_path)
     if not marker:
         return _strict_multi_identity_bindings(body, raw_path)
-
     required_state = _text(marker.group(1))
     resolved_path = _text(marker.group(2))
     selected = _entity_in_required_state(body, required_state)
@@ -347,9 +421,13 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
     return _strict_multi_identity_bindings(selected, resolved_path)
 
 
+# Base helpers resolve these names from their defining-module globals at call
+# time. Patch those dynamic authorities so the old domain dictionaries remain
+# compatibility data only and no longer drive active resolution.
 _base.param_field_candidates = param_field_candidates
 _base.body_field_collection_paths = body_field_collection_paths
 _base.alternate_collection_paths = alternate_collection_paths
+_base._extract_raw_entity_candidates = _extract_raw_entity_candidates
 _base.bind_entity_fields = bind_entity_fields
 
 __all__ = sorted(
@@ -362,6 +440,7 @@ __all__ = sorted(
         "param_field_candidates",
         "body_field_collection_paths",
         "alternate_collection_paths",
+        "_extract_raw_entity_candidates",
         "bind_entity_fields",
         "_strict_multi_identity_bindings",
     }
