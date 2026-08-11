@@ -11,6 +11,13 @@ truthfulness boundaries:
   visibility experiments often contain a successful control write before a
   rejected treatment.  Such a write may never be treated as read-only merely
   because the treatment was expected to fail.
+
+The exact-scope finalizer composes Observer/Oracle/Cleanup callables by assigning
+them on this facade.  Before invoking the extracted mechanics implementation we
+mirror those explicit composition points into the mechanics module, because a
+function retains the globals of the module where it was defined.  Without this
+handoff, the Facade/Mechanics split would silently bypass exact-step evidence
+scoping even though the public hook appeared installed.
 """
 from __future__ import annotations
 
@@ -30,6 +37,11 @@ HARNESS_FAILURE_SUBTYPES = tuple(
             HARNESS_CLEANUP_FAILURE_UNATTRIBUTED,
         ]
     )
+)
+_COMPOSED_MECHANICS_HOOKS = (
+    "observe_experiment_requirements",
+    "evaluate_contract_oracle",
+    "evaluate_cleanup_equivalence",
 )
 
 
@@ -58,6 +70,22 @@ def _status_code(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _sync_composed_finalizer_hooks() -> None:
+    """Mirror supported facade composition points into extracted mechanics.
+
+    ``_experiment_outcome_finalizer_scope_mechanics`` intentionally replaces
+    these names on the public facade for the duration of a finalization call.
+    The implementation function itself was extracted into ``_core`` and thus
+    resolves its globals there; copying only these three documented hooks keeps
+    composition working without exposing arbitrary monkeypatch propagation.
+    """
+
+    for name in _COMPOSED_MECHANICS_HOOKS:
+        hook = globals().get(name)
+        if callable(hook):
+            setattr(_core, name, hook)
 
 
 def _cleanup_failure_subtype(observations: dict[str, Any]) -> str:
@@ -193,9 +221,6 @@ def _actual_accepted_business_write(
             return True
         status = _status_code(step.get("status_code") or step.get("status"))
         if 200 <= status < 300:
-            # A target 2xx is enough to demand cleanup proof.  If governance
-            # simultaneously claims the write was not accepted, that is a
-            # contradiction we handle conservatively as a possible mutation.
             return True
     return False
 
@@ -302,10 +327,6 @@ def _fail_closed_actual_write_cleanup(
     if not _text(governed.get("detail")):
         governed["detail"] = reason
 
-    # The historical family exemption may already have derived TRUE_COMPLETED
-    # without this restoration authority.  Do not mutate a content-addressed
-    # finalization receipt; withdraw it instead so downstream validators see a
-    # missing formal completion proof rather than a rewritten receipt.
     governed["execution_finalization_receipt"] = {}
     execution_receipt = dict(_dict(governed.get("execution_receipt")))
     execution_receipt.update(
@@ -348,7 +369,11 @@ def finalize_experiment_execution(
     resolved_execution_id: str,
     started: float,
 ) -> dict[str, Any]:
-    """Finalize with actual-write cleanup authority independent of risk family."""
+    """Finalize with exact composition and actual-write cleanup authority."""
+
+    # The scope facade installs its callables on this module.  Sync them into
+    # the extracted implementation before any precomputation or Oracle work.
+    _sync_composed_finalizer_hooks()
 
     actual_write = _actual_accepted_business_write(
         exp=exp,
@@ -363,7 +388,7 @@ def finalize_experiment_execution(
                 observations=observations,
                 runtime_bindings=runtime_bindings,
             )
-        except Exception as exc:  # fail closed; exact failure remains diagnostic
+        except Exception as exc:
             observations["actual_write_cleanup_precompute_error"] = (
                 f"{type(exc).__name__}:{exc}"
             )[:240]
