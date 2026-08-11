@@ -1,11 +1,14 @@
-"""Protocol facade with fail-closed mutation and assertion authority.
+"""Protocol facade with fail-closed operation, mutation and assertion authority.
 
 The historical protocol facade lives in ``_experiment_protocols_mechanics``.
-This layer preserves registered/built-in semantics while enforcing two final
-compile authorities: validation mutations need an explicit source/schema basis,
-and every COMPILED protocol must resolve an assertion kind either from its own
-result or from the compiler's declared family map. A generic HTTP status check is
-never allowed to stand in for a missing Oracle.
+This layer preserves registered/built-in semantics while enforcing three final
+compile authorities:
+
+* every transport step must reference a source operation whose HTTP method is
+  declared and must not drift from that method;
+* validation mutations need an explicit source/schema basis; and
+* every COMPILED protocol must resolve an assertion kind. A generic HTTP status
+  check never stands in for a missing Oracle.
 """
 from __future__ import annotations
 
@@ -46,6 +49,51 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _protocol_operation_contract_problem(
+    *,
+    result: dict[str, Any],
+    operation: dict[str, Any],
+    operation_ref: str,
+    behavior_ir: dict[str, Any] | None,
+) -> str:
+    """Return a problem when a compiled step invents or drifts operation truth."""
+
+    if _text(result.get("status")) != "COMPILED":
+        return ""
+    operations = {
+        _text(row.get("id") or row.get("operation_id")): row
+        for row in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(row, dict)
+        and _text(row.get("id") or row.get("operation_id"))
+    }
+    supplied = _dict(operation)
+    supplied_ref = _text(
+        supplied.get("id") or supplied.get("operation_id") or operation_ref
+    )
+    if supplied_ref and supplied:
+        operations.setdefault(supplied_ref, supplied)
+
+    for phase in ("control", "treatment"):
+        for raw in _list(result.get(f"{phase}_plan")):
+            step = _dict(raw)
+            if not step or _text(step.get("protocol_step")) == "ui_open":
+                continue
+            step_ref = _text(step.get("operation_ref"))
+            source = _dict(operations.get(step_ref))
+            if not step_ref or not source:
+                return f"protocol_operation_unresolved:{phase}:{step_ref or 'missing'}"
+            source_method = _text(source.get("method")).upper()
+            if not source_method:
+                return f"protocol_operation_method_missing:{phase}:{step_ref}"
+            step_method = _text(step.get("method")).upper()
+            if step_method and step_method != source_method:
+                return (
+                    f"protocol_operation_method_drift:{phase}:{step_ref}:"
+                    f"step={step_method}:source={source_method}"
+                )
+    return ""
 
 
 def _source_semantic_text(property_spec: dict[str, Any]) -> str:
@@ -154,15 +202,7 @@ def _assertion_authority_problem(
     result: dict[str, Any],
     risk_family: str,
 ) -> str:
-    """A COMPILED protocol must have a real Oracle authority.
-
-    The semantic compiler historically ended its selection with ``or
-    'http_status'``. Combined with the generic protocol fallback, a newly
-    registered family could therefore become canonical without declaring any
-    assertion semantics and still look executable. The family registry stays
-    open, but execution is blocked until either the protocol emits a concrete
-    assertion kind or the compiler family map explicitly owns one.
-    """
+    """A COMPILED protocol must have a real Oracle authority."""
 
     if _text(result.get("status")) != "COMPILED":
         return ""
@@ -268,6 +308,24 @@ def compile_family_protocol(
         behavior_ir=behavior_ir,
     )
 
+    operation_problem = _protocol_operation_contract_problem(
+        result=result,
+        operation=operation,
+        operation_ref=operation_ref,
+        behavior_ir=behavior_ir,
+    )
+    if operation_problem:
+        return {
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_MISSING_OPERATION",
+            "detail": operation_problem,
+            "operation_authority_gate": {
+                "status": "BLOCKED",
+                "reason_code": operation_problem,
+                "implicit_method_default_allowed": False,
+            },
+        }
+
     assertion_problem = _assertion_authority_problem(
         result=result,
         risk_family=risk_family,
@@ -287,6 +345,10 @@ def compile_family_protocol(
     if _text(risk_family) != "validation":
         if _text(result.get("status")) == "COMPILED":
             result = dict(result)
+            result["operation_authority_gate"] = {
+                "status": "PASS",
+                "implicit_method_default_allowed": False,
+            }
             result["assertion_authority_gate"] = {
                 "status": "PASS",
                 "generic_http_status_fallback_allowed": False,
@@ -300,6 +362,10 @@ def compile_family_protocol(
     if not problem:
         if _text(result.get("status")) == "COMPILED":
             result = dict(result)
+            result["operation_authority_gate"] = {
+                "status": "PASS",
+                "implicit_method_default_allowed": False,
+            }
             result["assertion_authority_gate"] = {
                 "status": "PASS",
                 "generic_http_status_fallback_allowed": False,
@@ -314,6 +380,10 @@ def compile_family_protocol(
         "status": "BLOCKED",
         "reason_code": "BLOCKED_MISSING_BINDING",
         "detail": problem,
+        "operation_authority_gate": {
+            "status": "PASS",
+            "implicit_method_default_allowed": False,
+        },
         "assertion_authority_gate": {
             "status": "PASS",
             "generic_http_status_fallback_allowed": False,
@@ -335,5 +405,6 @@ __all__ = sorted(
             if not name.startswith("__")
         ],
         "compile_family_protocol",
+        "_protocol_operation_contract_problem",
     }
 )
