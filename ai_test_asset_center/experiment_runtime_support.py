@@ -1,17 +1,15 @@
-"""Runtime-support facade with structural identity and operation authority.
+"""Runtime-support facade with structural identity, operation and observer authority.
 
 The established transport/preflight/credential mechanics live in
-``_experiment_runtime_support_mechanics``. Runtime execution must not select a
-business resource because it has a larger balance/quantity or because its
-current fields make a planned mutation easier to observe. It also must not
-invent an HTTP method when Behavior IR omitted one.
+``_experiment_runtime_support_mechanics``. Formal runtime execution may not
+manufacture identity by convenience:
 
-This facade therefore enforces two boundaries:
-* ordinary entity extraction uses the domain-neutral structural resolver; only
-  an explicitly compiled ``@state=...@`` target may filter by business state;
-* every HTTP control/treatment step must reference an IR operation with a
-  declared method, and any method carried by the step must match that source
-  method exactly. Missing method never defaults to GET.
+* resource selection is structural; only an explicitly compiled state predicate
+  may filter rows;
+* every transport step's HTTP method comes from its Behavior IR operation; and
+* effect-observer derivation requires one exact source-declared write operation.
+  A path-only synthetic operation, or one path shared by multiple write methods,
+  cannot scan the relation graph and adopt a convenient GET observer.
 """
 from __future__ import annotations
 
@@ -22,6 +20,10 @@ from ._experiment_runtime_support_mechanics import *  # noqa: F401,F403
 from .real_id_resolver import (
     _extract_entity_candidates as _structural_entity_candidates,
     bind_entity_fields as _structural_bind_entity_fields,
+    normalize_path_placeholders,
+)
+from .runtime_binding_graph import (
+    declared_effect_observers as _strict_declared_effect_observers,
 )
 
 _original_preflight_experiment_executable = _core.preflight_experiment_executable
@@ -95,10 +97,9 @@ def _operation_method_authority(
 ) -> tuple[bool, str, str]:
     """Prove every transport step's method from the referenced IR operation."""
 
-    actors_irrelevant = _dict(behavior_ir)
     operations = {
         _text(row.get("id") or row.get("operation_id")): row
-        for row in _list(actors_irrelevant.get("operations"))
+        for row in _list(_dict(behavior_ir).get("operations"))
         if isinstance(row, dict)
         and _text(row.get("id") or row.get("operation_id"))
     }
@@ -130,6 +131,98 @@ def _operation_method_authority(
     return True, "", ""
 
 
+def _operation_for_observation_path(
+    path: str,
+    operations: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Resolve one unique source write operation; never synthesize one from path."""
+
+    normalized = normalize_path_placeholders(_text(path))
+    if not normalized.startswith("/"):
+        return {}
+    candidates: list[dict[str, Any]] = []
+    for raw in operations.values():
+        operation = _dict(raw)
+        if not operation:
+            continue
+        operation_ref = _text(operation.get("id") or operation.get("operation_id"))
+        method = _text(operation.get("method")).upper()
+        candidate_path = normalize_path_placeholders(
+            _text(operation.get("path") or operation.get("raw_path"))
+        )
+        if (
+            operation_ref
+            and method in {"POST", "PUT", "PATCH", "DELETE"}
+            and candidate_path == normalized
+        ):
+            candidates.append(operation)
+    if len(candidates) != 1:
+        return {}
+    return dict(candidates[0])
+
+
+def _declared_observation_path(
+    path: str,
+    operations: dict[str, dict[str, Any]],
+    *,
+    runtime_bindings: dict[str, Any] | None = None,
+    request_body: Any = None,
+) -> str:
+    """Materialize an observer only from one exact source write identity."""
+
+    operation = _operation_for_observation_path(path, operations)
+    if not operation:
+        return ""
+    observers = _strict_declared_effect_observers(
+        operation,
+        behavior_ir={"operations": list(operations.values())},
+        max_candidates=5,
+    )
+    binding_values = {
+        **_core._scalar_body_bindings(_core._request_example(operation)),
+        **_core._scalar_body_bindings(request_body),
+        **(runtime_bindings or {}),
+    }
+    write_placeholders = set(
+        _core.infer_path_params(normalize_path_placeholders(path))
+    )
+    entity_bound: list[str] = []
+    collection_bound: list[str] = []
+    for observer in observers:
+        template = _text(observer.get("path"))
+        materialized = template
+        for name, value in binding_values.items():
+            if value in (None, ""):
+                continue
+            materialized = materialized.replace(
+                "{" + name + "}",
+                _core.quote(str(value), safe=""),
+            )
+        if not (
+            materialized.startswith("/")
+            and not _core.path_has_placeholders(materialized)
+        ):
+            continue
+        obs_placeholders = set(_core.infer_path_params(template))
+        if obs_placeholders and (
+            not write_placeholders or (obs_placeholders & write_placeholders)
+        ):
+            entity_bound.append(materialized)
+        elif obs_placeholders:
+            # A differently-scoped identity observer is not evidence for this
+            # write merely because all of its tokens happened to materialize.
+            continue
+        else:
+            collection_bound.append(materialized)
+    if len(entity_bound) == 1:
+        return entity_bound[0]
+    if not entity_bound and len(collection_bound) == 1:
+        return collection_bound[0]
+    # Multiple equally materializable observers are semantic ambiguity, not an
+    # invitation to pick the first source-order candidate.
+    return ""
+
+
 def preflight_experiment_executable(
     experiment: dict[str, Any],
     *,
@@ -150,10 +243,13 @@ def preflight_experiment_executable(
 
 
 # Functions extracted into the mechanics module resolve helpers from that
-# module's globals. Mirror the governed authorities there so internal execution
-# cannot retain either resource-richness ranking or the implicit-GET fallback.
+# module's globals. Mirror every governed authority there so internal execution
+# cannot retain the path-only observer or first-candidate shortcuts.
 _core._runtime_entity_candidates = _runtime_entity_candidates
 _core._select_runtime_binding = _select_runtime_binding
+_core._operation_for_observation_path = _operation_for_observation_path
+_core._declared_observation_path = _declared_observation_path
+_core.declared_effect_observers = _strict_declared_effect_observers
 _core.preflight_experiment_executable = preflight_experiment_executable
 
 __all__ = sorted(
@@ -166,6 +262,8 @@ __all__ = sorted(
         "_runtime_entity_candidates",
         "_select_runtime_binding",
         "_operation_method_authority",
+        "_operation_for_observation_path",
+        "_declared_observation_path",
         "preflight_experiment_executable",
     }
 )
