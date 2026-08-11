@@ -1,9 +1,15 @@
 """Single authority for whether one binding target can reach runtime materialization.
 
 A target name in ``binding_plan`` is intent, not evidence that the current
-executors can materialize a value.  This authority is shared by compile freeze
+executors can materialize a value. This authority is shared by compile freeze
 and runtime preflight so a ``blocked``/empty binding can never be upgraded to an
 initially available flow value merely because its target key exists.
+
+Credential values are a special case: modern compilation projects the opaque
+``credential_secret_ref`` directly into the request before freeze. Therefore a
+credential target that still appears as an initial runtime binding is an old or
+incomplete artifact and must fail closed rather than rely on a nonexistent
+fixture/read materializer.
 
 No value is discovered here and no request is sent.
 """
@@ -207,20 +213,20 @@ def resolve_binding_target_materialization(
             "authority": "runtime_actor_identity_channel",
         }
 
-    # Credential placeholders have a dedicated declared-secret channel. Runtime
-    # execution additionally validates the exact actor/secret coordinate and
-    # resolves the value without persisting it into receipts.
-    if status == "runtime_resolvable" and source_priority == "actor_credential_secret":
-        if _text(row.get("actor_ref")) and _text(row.get("credential_secret_ref")):
-            return {
-                **base,
-                "status": "RESOLVED",
-                "reason_code": "",
-                "authority": "declared_actor_credential_channel",
-            }
+    # Modern compilation replaces {password}/<password> with the opaque exact
+    # secret ref before freeze. If this target is still present in the frozen
+    # initial-binding set, projection did not happen (old artifact, actor
+    # mismatch, or compile drift). The fixture materializer has no credential
+    # value channel and must not be treated as if it did.
+    if source_priority == "actor_credential_secret":
         return {
             **base,
-            "reason_code": "BINDING_CREDENTIAL_COORDINATE_INCOMPLETE",
+            "reason_code": "BINDING_CREDENTIAL_REQUIRES_SECRET_REF_PROJECTION",
+            "credential_actor_ref": _text(row.get("actor_ref")),
+            "credential_secret_ref_present": bool(
+                _text(row.get("credential_secret_ref"))
+            ),
+            "secret_value_persisted": False,
         }
 
     operations = _operation_index(behavior_ir)
