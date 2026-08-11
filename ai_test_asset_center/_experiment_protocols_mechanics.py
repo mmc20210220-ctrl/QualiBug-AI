@@ -53,6 +53,10 @@ def __getattr__(name: str) -> Any:
     return getattr(_base, name)
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
@@ -78,9 +82,11 @@ def _compile_registered_protocol(
 ) -> dict[str, Any]:
     """Run a registered protocol compiler and validate its plan.
 
-    A registered protocol is not trusted more than a built-in one: its result goes through
-    the same shape validation, and any failure becomes BLOCKED with the protocol id in the
-    detail so the cause is attributable to the registration rather than to the obligation.
+    The registration's ``assertion_kind`` is a real authority, not decorative
+    metadata.  If the compiler emits no assertion kind, that declared kind is
+    projected into the plan.  A compiler may still emit a more specific dynamic
+    kind (for example the async variant of a process graph); the explicit result
+    wins, while absence is never allowed to erase the registry declaration.
     """
     from .experiment_protocol_registry import (
         ProtocolRegistryError,
@@ -106,6 +112,11 @@ def _compile_registered_protocol(
             )[:200],
         }
     result["_registry_protocol_id"] = protocol_id
+    declared_assertion_kind = _text(registration.get("assertion_kind"))
+    emitted_assertion = dict(_dict(result.get("assertion")))
+    if declared_assertion_kind and not _text(emitted_assertion.get("kind")):
+        emitted_assertion["kind"] = declared_assertion_kind
+        result["assertion"] = emitted_assertion
     if registration.get("observers"):
         result.setdefault("observers", [
             {"observer_id": observer_id} for observer_id in registration["observers"]
@@ -145,23 +156,6 @@ def compile_family_protocol(
             "detail": f"v150_protocol_registration_failed:{_v150_error}"[:200],
         }
 
-    # Registered protocol, consulted first and additively.
-    #
-    # On a MISS everything below runs verbatim, so all six family branches, both actor
-    # guards, the built-in template dispatch and the terminal fallback behave exactly as
-    # before. On a HIT the registered compiler answers and the result is stamped with
-    # _registry_protocol_id so the obligation compiler can tell a registered plan from a
-    # built-in one.
-    #
-    # Placed in this outermost facade rather than the base for two reasons: it leaves the
-    # 626-line family if-chain unedited, and it bypasses the middle privacy facade whose
-    # validation rewrite hard-requires exactly one control and one treatment step -- an
-    # N-step registered plan routed through that guard would be blocked by a check written
-    # for a different shape.
-    #
-    # A compiler that raises, or a result that fails validation, becomes a visible BLOCKED.
-    # An exception must never escape into the compile loop, where it would abort a whole
-    # batch of unrelated obligations.
     _registration = _resolve_family_protocol(risk_family, _template)
     if _registration is not None:
         return _compile_registered_protocol(
