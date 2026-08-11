@@ -10,20 +10,28 @@ manufacture identity or credential truth by convenience:
 * effect-observer derivation requires one exact source-declared write operation
   and one unambiguous materializable observer;
 * every FROZEN initial flow binding must still have an executable materialization
-  channel at runtime; and
+  channel at runtime;
 * opaque request credential refs must resolve through declared credential
-  authorities before transport. Any residual ``secret_ref:*`` is converted into
-  a named unresolved placeholder so the existing pre-transport body gate blocks
-  it instead of sending the reference string as a password/API key.
+  authorities before transport; and
+* test-account live login decrypts declared at-rest material through the same
+  authority before the existing login/token-refresh mechanics see it. An
+  ``enc$v1$`` envelope is never submitted as a password.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 
 from . import _experiment_runtime_support_mechanics as _core
+from . import experiment_runtime_credentials as _credentials
 from ._experiment_runtime_support_mechanics import *  # noqa: F401,F403
 from .binding_target_materialization_authority import (
     resolve_binding_target_materialization,
+)
+from .declared_credential_material import (
+    prepare_declared_credential_decryption,
+    resolve_declared_credential_material,
 )
 from .real_id_resolver import (
     _extract_entity_candidates as _structural_entity_candidates,
@@ -37,8 +45,21 @@ from .runtime_binding_graph import (
 
 _original_preflight_experiment_executable = _core.preflight_experiment_executable
 _original_unresolved_body_placeholders = _core._unresolved_body_placeholders
+_original_load_actor_tokens = _core.load_actor_tokens
 _CREDENTIAL_UNRESOLVED_TOKEN = "QUALIBUG_CREDENTIAL_REF_UNRESOLVED"
 _CREDENTIAL_UNRESOLVED_PLACEHOLDER = "{" + _CREDENTIAL_UNRESOLVED_TOKEN + "}"
+_CREDENTIAL_ROOT_CONTEXT: ContextVar[Path | None] = ContextVar(
+    "qualibug_credential_root",
+    default=None,
+)
+_ORIGINAL_LOGIN_ATTR = "_qualibug_original_login_declared_account"
+if not hasattr(_credentials, _ORIGINAL_LOGIN_ATTR):
+    setattr(
+        _credentials,
+        _ORIGINAL_LOGIN_ATTR,
+        _credentials._login_declared_account,
+    )
+_ORIGINAL_LOGIN_DECLARED_ACCOUNT = getattr(_credentials, _ORIGINAL_LOGIN_ATTR)
 
 
 def __getattr__(name: str) -> Any:
@@ -145,9 +166,6 @@ def _runtime_initial_binding_authority(
     exp = _dict(experiment)
     contract = _dict(exp.get("flow_data_execution_contract"))
     if _text(contract.get("status")).upper() != "FROZEN":
-        # Legacy/no-flow-contract artifacts continue through the historical
-        # preflight, which already validates path bindings. This guard is a
-        # drift check for artifacts that explicitly claim frozen flow authority.
         return True, "", ""
 
     targets: list[str] = []
@@ -235,6 +253,70 @@ def _unresolved_body_placeholders(
     ):
         unresolved.append(_CREDENTIAL_UNRESOLVED_TOKEN)
     return unresolved
+
+
+def _decrypting_login_declared_account(
+    *,
+    base_url: str,
+    login_path: str,
+    email: str,
+    password: str,
+) -> tuple[str, int]:
+    """Preserve login mechanics while forbidding encrypted envelopes on transport."""
+
+    root = _CREDENTIAL_ROOT_CONTEXT.get()
+    if root is None:
+        # The runtime facade owns the decryption context. A direct legacy call
+        # with plaintext remains compatible; an encrypted envelope cannot be
+        # authenticated without its declared root/key authority.
+        if _text(password).startswith("enc$v1$"):
+            raise RuntimeError("declared_actor_password_decrypt_context_missing")
+        return _ORIGINAL_LOGIN_DECLARED_ACCOUNT(
+            base_url=base_url,
+            login_path=login_path,
+            email=email,
+            password=password,
+        )
+
+    resolved_password, receipt = resolve_declared_credential_material(
+        password,
+        root=Path(root),
+    )
+    if not resolved_password:
+        raise RuntimeError(
+            "declared_actor_password_decrypt_failed:"
+            + (_text(receipt.get("reason_code")) or "unresolved")
+        )
+    return _ORIGINAL_LOGIN_DECLARED_ACCOUNT(
+        base_url=base_url,
+        login_path=login_path,
+        email=email,
+        password=resolved_password,
+    )
+
+
+def load_actor_tokens(
+    root: Path,
+    project: str,
+    *,
+    base_url: str = "",
+) -> dict[str, str]:
+    """Run established token acquisition with one declared decryption context."""
+
+    # Loading an existing key also enables EnterpriseCredentialManager to
+    # decrypt service-role credentials. Unavailable key is not fatal by itself:
+    # plaintext-only catalogs remain valid, while encrypted values fail closed
+    # when actually resolved.
+    prepare_declared_credential_decryption(Path(root))
+    token = _CREDENTIAL_ROOT_CONTEXT.set(Path(root))
+    try:
+        return _original_load_actor_tokens(
+            Path(root),
+            str(project),
+            base_url=base_url,
+        )
+    finally:
+        _CREDENTIAL_ROOT_CONTEXT.reset(token)
 
 
 def _operation_for_observation_path(
@@ -408,6 +490,11 @@ def preflight_experiment_executable(
     )
 
 
+# The historical load_actor_tokens function resolves this global from its own
+# module at call time, so patching exactly that login seam preserves all existing
+# stale-token/restricted-account policy while adding decryption truthfulness.
+_credentials._login_declared_account = _decrypting_login_declared_account
+_core.load_actor_tokens = load_actor_tokens
 _core._runtime_entity_candidates = _runtime_entity_candidates
 _core._select_runtime_binding = _select_runtime_binding
 _core._resolve_body_credential_refs = _resolve_body_credential_refs
@@ -434,6 +521,7 @@ __all__ = sorted(
         "_operation_for_observation_path",
         "_declared_observation_path",
         "_response_bound_observation_path",
+        "load_actor_tokens",
         "preflight_experiment_executable",
     }
 )
