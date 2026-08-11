@@ -1,16 +1,16 @@
-"""Experiment outcome finalizer facade with receipt-derived harness attribution.
+"""Experiment outcome finalizer facade with receipt-derived cleanup truth.
 
 The durable finalization implementation lives in
-``_experiment_outcome_finalizer_core_mechanics``.  This facade changes one
-truthfulness boundary only: cleanup harness failures are classified from the
-formal cleanup execution/equivalence receipts when those receipts exist.
+``_experiment_outcome_finalizer_core_mechanics``.  This facade owns two
+truthfulness boundaries:
 
-The historical classifier defaulted every non-described cleanup failure to
-``HARNESS_CLEANUP_TRANSPORT_FAILED``.  That turns missing attribution into a
-transport claim that may be false.  The governed classifier distinguishes
-transport failure, response rejection and equivalence failure from evidence;
-when the evidence cannot prove which happened it emits an explicit
-``HARNESS_CLEANUP_FAILURE_UNATTRIBUTED`` instead of inventing a cause.
+* cleanup harness failures are classified from formal execution/equivalence
+  receipts rather than guessed as transport failures; and
+* an actually accepted control/treatment write requires restoration evidence
+  regardless of risk-family label.  Authorization/validation/isolation/
+  visibility experiments often contain a successful control write before a
+  rejected treatment.  Such a write may never be treated as read-only merely
+  because the treatment was expected to fail.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from . import _experiment_outcome_finalizer_core_mechanics as _core
 from ._experiment_outcome_finalizer_core_mechanics import *  # noqa: F401,F403
 
 _original_classify_harness_failure = _core._classify_harness_failure
+_original_finalize_experiment_execution = _core.finalize_experiment_execution
 
 HARNESS_CLEANUP_FAILURE_UNATTRIBUTED = "HARNESS_CLEANUP_FAILURE_UNATTRIBUTED"
 HARNESS_FAILURE_SUBTYPES = tuple(
@@ -42,6 +43,10 @@ def __dir__() -> list[str]:
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def _text(value: Any) -> str:
@@ -89,9 +94,6 @@ def _cleanup_failure_subtype(observations: dict[str, Any]) -> str:
         transport_reached = cleanup.get("transport_reached") is True
         status_code = _status_code(cleanup.get("status_code"))
 
-        # Transport failure requires evidence that the cleanup was attempted
-        # but did not reach a response-producing target boundary, or an explicit
-        # transport reason from the cleanup executor.
         if (
             attempted
             and transport_reached is False
@@ -107,8 +109,6 @@ def _cleanup_failure_subtype(observations: dict[str, Any]) -> str:
         ):
             return "HARNESS_CLEANUP_TRANSPORT_FAILED"
 
-        # A received non-success response is a target-side cleanup rejection,
-        # not a transport failure.
         if (
             attempted
             and transport_reached
@@ -116,9 +116,6 @@ def _cleanup_failure_subtype(observations: dict[str, Any]) -> str:
         ) or status in {"REJECTED", "RESPONSE_REJECTED"}:
             return "HARNESS_CLEANUP_RESPONSE_REJECTED"
 
-        # A formally successful transport may still fail restoration.  Prefer
-        # the equivalence receipt for that claim; when the execution receipt
-        # itself explicitly names restoration failure it is still usable.
         if any(
             marker in reason
             for marker in (
@@ -129,9 +126,6 @@ def _cleanup_failure_subtype(observations: dict[str, Any]) -> str:
         ):
             return "HARNESS_CLEANUP_EQUIVALENCE_FAILED"
 
-    # Legacy structured status is secondary evidence only.  It may classify a
-    # known state but never causes a generic cleanup failure to be called
-    # transport failure by default.
     cleanup_status = _text(evidence.get("cleanup_status")).upper()
     if cleanup_status in {"TRANSPORT_ERROR", "CONNECTION_FAILED"}:
         return "HARNESS_CLEANUP_TRANSPORT_FAILED"
@@ -161,9 +155,248 @@ def _classify_harness_failure(
     )
 
 
-# The mechanics finalizer resolves this global at call time. Installing the
-# classifier here changes attribution only; execution, Oracle, cleanup and
-# finding construction remain owned by the historical implementation.
+def _actual_accepted_business_write(
+    *,
+    exp: dict[str, Any],
+    steps_out: list[dict[str, Any]],
+) -> bool:
+    """Whether a control/treatment write actually reached a 2xx accepted state.
+
+    A declared write operation alone is not enough: an expected 4xx treatment
+    must not demand cleanup.  Conversely, a successful control write is real
+    state-change evidence even when the experiment belongs to a response-only
+    family.  Source-declared ephemeral exchanges remain exempt only through the
+    compiled cleanup/business-effect contract, never through family names.
+    """
+
+    safety = _dict(exp.get("safety_contract"))
+    if (
+        safety.get("cleanup_not_required") is True
+        and _text(safety.get("business_effect_requirement")).upper()
+        == "NOT_APPLICABLE"
+    ):
+        return False
+
+    for raw in _list(steps_out):
+        step = _dict(raw)
+        if _text(step.get("phase")) not in {"control", "treatment"}:
+            continue
+        if _text(step.get("method")).upper() not in {
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+        }:
+            continue
+        governance = _dict(step.get("governance_receipt"))
+        if governance.get("accepted") is True:
+            return True
+        status = _status_code(step.get("status_code") or step.get("status"))
+        if 200 <= status < 300:
+            # A target 2xx is enough to demand cleanup proof.  If governance
+            # simultaneously claims the write was not accepted, that is a
+            # contradiction we handle conservatively as a possible mutation.
+            return True
+    return False
+
+
+def _precompute_actual_write_cleanup_equivalence(
+    *,
+    exp: dict[str, Any],
+    steps_out: list[dict[str, Any]],
+    observations: dict[str, Any],
+    runtime_bindings: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Build the restoration receipt the historical family exemption skipped."""
+
+    if not _actual_accepted_business_write(exp=exp, steps_out=steps_out):
+        return None
+    proof = _dict(exp.get("write_reversibility_proof"))
+    if _text(proof.get("proof_status")).upper() != "PROVEN":
+        return None
+
+    cleanup_result = _dict(observations.get("cleanup_result"))
+    sealed_after = _dict(observations.get("after_cleanup_observation"))
+    if sealed_after and not _dict(cleanup_result.get("after_cleanup_observation")):
+        cleanup_result = {
+            **cleanup_result,
+            "after_cleanup_observation": sealed_after,
+            "observation_path": _text(sealed_after.get("path")),
+            "after": {
+                "status": _status_code(
+                    sealed_after.get("status_code") or sealed_after.get("status")
+                ),
+                "body": sealed_after.get("body"),
+            },
+        }
+
+    equiv_inputs = _core.build_cleanup_equivalence_inputs(
+        exp=exp,
+        observations=observations,
+        steps_out=steps_out,
+        cleanup_result=cleanup_result,
+    )
+    observations["cleanup_observation_source_trace"] = equiv_inputs[
+        "source_trace"
+    ]
+    cleanup_execution_receipt = _dict(
+        equiv_inputs.get("cleanup_execution_receipt")
+    )
+    if cleanup_execution_receipt:
+        observations["cleanup_execution_receipt"] = cleanup_execution_receipt
+        if _text(cleanup_execution_receipt.get("receipt_id")):
+            observations["cleanup_execution_receipts"] = [
+                cleanup_execution_receipt
+            ]
+
+    receipt = _core.evaluate_cleanup_equivalence(
+        proof=proof,
+        before_observation=equiv_inputs["before_observation"],
+        after_write_observation=equiv_inputs["after_write_observation"],
+        after_cleanup_observation=equiv_inputs["after_cleanup_observation"],
+        runtime_bindings=runtime_bindings,
+        cleanup_execution_receipt=cleanup_execution_receipt,
+    )
+    observations["cleanup_equivalence_receipt"] = receipt
+    if _text(receipt.get("receipt_id")):
+        observations["cleanup_verification_receipts"] = [dict(receipt)]
+    return receipt
+
+
+def _fail_closed_actual_write_cleanup(
+    result: dict[str, Any],
+    *,
+    cleanup_receipt: dict[str, Any] | None,
+    cleanup_failures: int,
+) -> dict[str, Any]:
+    """Remove false restoration/delivery claims when proof is not PASSED."""
+
+    gate, reason = _core._cleanup_equivalence_gate(
+        is_governed_write=True,
+        cleanup_equivalence_receipt=cleanup_receipt,
+    )
+    governed = dict(result)
+    governed["cleanup_equivalence_receipt"] = cleanup_receipt
+    if gate == "PASSED" and cleanup_failures == 0:
+        return governed
+
+    reason = reason or (
+        "HARNESS_CLEANUP_FAILURE_UNATTRIBUTED"
+        if cleanup_failures
+        else "BLOCKED_CLEANUP_EQUIVALENCE_MISSING"
+    )
+    governed["environment_restored"] = False
+    governed["finding"] = None
+    governed["finding_created"] = False
+    governed["finding_filter_reason"] = "environment_not_restored"
+    governed["finalizer_block_reason"] = reason
+    governed["lifecycle_state"] = (
+        _core.LIFECYCLE_CLEANUP_FAILED
+        if cleanup_failures
+        else _core.LIFECYCLE_EXECUTED_BUT_NOT_RESTORED
+    )
+    if _text(governed.get("status")) == "EXECUTED":
+        governed["status"] = "EXECUTED_BUT_NOT_RESTORED"
+    if not _text(governed.get("reason_code")):
+        governed["reason_code"] = reason
+    if not _text(governed.get("detail")):
+        governed["detail"] = reason
+
+    # The historical family exemption may already have derived TRUE_COMPLETED
+    # without this restoration authority.  Do not mutate a content-addressed
+    # finalization receipt; withdraw it instead so downstream validators see a
+    # missing formal completion proof rather than a rewritten receipt.
+    governed["execution_finalization_receipt"] = {}
+    execution_receipt = dict(_dict(governed.get("execution_receipt")))
+    execution_receipt.update(
+        {
+            "status": governed.get("status"),
+            "environment_restored": False,
+            "lifecycle_state": governed["lifecycle_state"],
+            "cleanup_equivalence_status": _text(
+                _dict(cleanup_receipt).get("equivalence_status")
+            )
+            or None,
+            "harness_failure_reason": (
+                reason if cleanup_failures else execution_receipt.get(
+                    "harness_failure_reason"
+                )
+            ),
+        }
+    )
+    governed["execution_receipt"] = execution_receipt
+    return governed
+
+
+def finalize_experiment_execution(
+    *,
+    exp: dict[str, Any],
+    steps_out: list[dict[str, Any]],
+    observations: dict[str, Any],
+    contract_evidence_receipts: list[dict[str, Any]],
+    fixture_receipts: list[dict[str, Any]],
+    binding_materialization_receipts: list[dict[str, Any]],
+    pre_transport_block_reasons: list[str],
+    cleanup_failures: int,
+    runtime_bindings: dict[str, Any],
+    ops: dict[str, dict[str, Any]],
+    actors: dict[str, dict[str, Any]],
+    eid: str,
+    oid: str,
+    campaign_id: str,
+    resolved_campaign_id: str,
+    resolved_execution_id: str,
+    started: float,
+) -> dict[str, Any]:
+    """Finalize with actual-write cleanup authority independent of risk family."""
+
+    actual_write = _actual_accepted_business_write(
+        exp=exp,
+        steps_out=steps_out,
+    )
+    cleanup_receipt: dict[str, Any] | None = None
+    if actual_write:
+        try:
+            cleanup_receipt = _precompute_actual_write_cleanup_equivalence(
+                exp=exp,
+                steps_out=steps_out,
+                observations=observations,
+                runtime_bindings=runtime_bindings,
+            )
+        except Exception as exc:  # fail closed; exact failure remains diagnostic
+            observations["actual_write_cleanup_precompute_error"] = (
+                f"{type(exc).__name__}:{exc}"
+            )[:240]
+            cleanup_receipt = None
+
+    result = _original_finalize_experiment_execution(
+        exp=exp,
+        steps_out=steps_out,
+        observations=observations,
+        contract_evidence_receipts=contract_evidence_receipts,
+        fixture_receipts=fixture_receipts,
+        binding_materialization_receipts=binding_materialization_receipts,
+        pre_transport_block_reasons=pre_transport_block_reasons,
+        cleanup_failures=cleanup_failures,
+        runtime_bindings=runtime_bindings,
+        ops=ops,
+        actors=actors,
+        eid=eid,
+        oid=oid,
+        campaign_id=campaign_id,
+        resolved_campaign_id=resolved_campaign_id,
+        resolved_execution_id=resolved_execution_id,
+        started=started,
+    )
+    if not actual_write:
+        return result
+    return _fail_closed_actual_write_cleanup(
+        result,
+        cleanup_receipt=cleanup_receipt,
+        cleanup_failures=cleanup_failures,
+    )
+
+
 _core._classify_harness_failure = _classify_harness_failure
 _core.HARNESS_FAILURE_SUBTYPES = HARNESS_FAILURE_SUBTYPES
 
@@ -176,5 +409,6 @@ __all__ = sorted(
         ],
         "HARNESS_CLEANUP_FAILURE_UNATTRIBUTED",
         "HARNESS_FAILURE_SUBTYPES",
+        "finalize_experiment_execution",
     }
 )
