@@ -10,8 +10,9 @@ project's existing credential authorities:
 The request field itself constrains which secret type may be used. Password
 fields never receive an API key, API-key fields never receive a password, and a
 generic ``secret``/``clientSecret`` is resolved only when exactly one declared
-secret material exists. Unresolved references remain a named GAP; they are
-never sent verbatim to the target.
+secret material exists. Test-account material is then passed through the shared
+at-rest decryption authority; an ``enc$v1$`` envelope is never sent to the target.
+Unresolved references remain a named GAP and receipts never contain secret values.
 """
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ import json
 from pathlib import Path
 import re
 from typing import Any
+
+from .declared_credential_material import resolve_declared_credential_material
 
 SCHEMA_VERSION = "qualibug.request-credential-authority.v1"
 _TEST_ACCOUNT_REF_RE = re.compile(r"^secret_ref:test_accounts:([^:\s]+)$")
@@ -123,18 +126,28 @@ def _unique_nonempty(values: list[Any]) -> str:
     return unique[0] if len(unique) == 1 else ""
 
 
-def _account_secret(row: dict[str, Any], field_name: str) -> tuple[str, str]:
+def _declared_account_secret_candidate(
+    row: dict[str, Any],
+    field_name: str,
+) -> tuple[str, str, str]:
+    """Select one declared secret *coordinate* before decrypting its material."""
+
     kind = _credential_kind(field_name)
     if kind == "password":
         value = _unique_nonempty(
             [row.get("password"), row.get("pass"), row.get("passphrase")]
         )
-        return value, "password" if value else ""
+        return value, "password" if value else "", (
+            "" if value else "REQUEST_CREDENTIAL_MATERIAL_UNRESOLVED"
+        )
     if kind == "api_key":
         value = _unique_nonempty(
             [row.get("api_key"), row.get("apiKey"), row.get("access_key")]
         )
-        return value, "api_key" if value else ""
+        return value, "api_key" if value else "", (
+            "" if value else "REQUEST_CREDENTIAL_MATERIAL_UNRESOLVED"
+        )
+
     candidates = [
         ("password", row.get("password") or row.get("pass") or row.get("passphrase")),
         ("api_key", row.get("api_key") or row.get("apiKey") or row.get("access_key")),
@@ -142,11 +155,42 @@ def _account_secret(row: dict[str, Any], field_name: str) -> tuple[str, str]:
         ("credential", row.get("credential")),
     ]
     nonempty = [(name, _text(value)) for name, value in candidates if _text(value)]
-    values = list(dict.fromkeys(value for _, value in nonempty))
-    if len(values) != 1:
-        return "", ""
-    kinds = list(dict.fromkeys(name for name, value in nonempty if value == values[0]))
-    return values[0], kinds[0] if len(kinds) == 1 else "unique_declared_secret"
+    unique_values = list(dict.fromkeys(value for _, value in nonempty))
+    if len(unique_values) != 1:
+        return "", "", "REQUEST_CREDENTIAL_MATERIAL_UNRESOLVED"
+    kinds = list(
+        dict.fromkeys(name for name, value in nonempty if value == unique_values[0])
+    )
+    material_kind = kinds[0] if len(kinds) == 1 else "unique_declared_secret"
+    return unique_values[0], material_kind, ""
+
+
+def _account_secret(
+    row: dict[str, Any],
+    field_name: str,
+    *,
+    root: Any,
+) -> tuple[str, str, str, dict[str, Any]]:
+    raw, material_kind, selection_reason = _declared_account_secret_candidate(
+        row,
+        field_name,
+    )
+    if selection_reason:
+        return "", "", selection_reason, {}
+    resolved, material_receipt = resolve_declared_credential_material(
+        raw,
+        root=Path(root),
+    )
+    if not resolved:
+        reason = _text(material_receipt.get("reason_code"))
+        if reason == "DECLARED_CREDENTIAL_DECRYPT_FAILED":
+            reason = "REQUEST_CREDENTIAL_DECRYPT_FAILED"
+        elif reason.startswith("DECLARED_CREDENTIAL_KEY_"):
+            reason = "REQUEST_CREDENTIAL_DECRYPT_KEY_UNAVAILABLE"
+        else:
+            reason = "REQUEST_CREDENTIAL_MATERIAL_UNRESOLVED"
+        return "", "", reason, material_receipt
+    return resolved, material_kind, "", material_receipt
 
 
 def _resolve_test_account_ref(
@@ -155,7 +199,7 @@ def _resolve_test_account_ref(
     field_name: str,
     root: Any,
     project: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, dict[str, Any]]:
     matches = [
         row for row in _test_account_rows(root, project) if _account_matches(row, selector)
     ]
@@ -164,11 +208,15 @@ def _resolve_test_account_ref(
             "REQUEST_CREDENTIAL_ACCOUNT_NOT_FOUND"
             if not matches
             else "REQUEST_CREDENTIAL_ACCOUNT_AMBIGUOUS"
-        )
-    value, material_kind = _account_secret(matches[0], field_name)
+        ), {}
+    value, material_kind, reason, material_receipt = _account_secret(
+        matches[0],
+        field_name,
+        root=root,
+    )
     if not value:
-        return "", "", "REQUEST_CREDENTIAL_MATERIAL_UNRESOLVED"
-    return value, f"test_accounts:{material_kind}", ""
+        return "", "", reason or "REQUEST_CREDENTIAL_MATERIAL_UNRESOLVED", material_receipt
+    return value, f"test_accounts:{material_kind}", "", material_receipt
 
 
 def _service_secret(credential: Any, field_name: str) -> tuple[str, str]:
@@ -233,8 +281,9 @@ def _resolve_scalar(
             }
         return value, None
 
+    material_receipt: dict[str, Any] = {}
     if test_match:
-        resolved, source, reason = _resolve_test_account_ref(
+        resolved, source, reason, material_receipt = _resolve_test_account_ref(
             test_match.group(1),
             field_name=field_name,
             root=root,
@@ -255,6 +304,9 @@ def _resolve_scalar(
         "status": "RESOLVED" if resolved else "UNRESOLVED",
         "reason_code": reason,
         "material_source": source,
+        "encrypted_at_rest": bool(material_receipt.get("encrypted_at_rest")),
+        "material_authority": _text(material_receipt.get("authority")),
+        "material_key_source": _text(material_receipt.get("key_source")),
         "secret_value_persisted": False,
     }
     return (resolved if resolved else text), receipt
