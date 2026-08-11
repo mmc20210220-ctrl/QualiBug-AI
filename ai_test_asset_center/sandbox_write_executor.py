@@ -2,9 +2,11 @@
 
 The safety implementation remains in ``sandbox_write_executor_base``. This
 facade preserves the original HTTP outcome while promoting no rejected request
-to an accepted write. It also installs the same table-scoped DDL UNIQUE
-authority used by fixture materialization so governed control POSTs cannot
-silently mutate a field merely because another table declares that name UNIQUE.
+to an accepted write. It also installs two shared truth authorities:
+
+* DDL UNIQUE rewriting is table-scoped; and
+* disposable account creation rewrites only explicit login locators, never
+  business names/status/password/credential fields.
 """
 from __future__ import annotations
 
@@ -15,6 +17,10 @@ from typing import Any
 
 from . import sandbox_write_executor_base as _base
 from .sandbox_write_executor_base import *  # noqa: F401,F403
+from .disposable_identity_authority import (
+    has_disposable_identity_anchor as _has_disposable_identity_anchor,
+    materialize_disposable_identity_fields as _materialize_disposable_identity_fields,
+)
 from .schema_unique_materialization_authority import (
     TableScopedUniqueFields,
     declared_unique_fields_scoped,
@@ -64,10 +70,13 @@ def _materialize_unique_create_fields_scoped(*args: Any, **kwargs: Any) -> tuple
 
 # ``sandbox_write_executor_base`` imported the historical helpers directly into
 # module globals. Replace those exact authorities so its internal loader and
-# governed-control implementation cannot retain the global flattened field set.
+# governed-control implementation cannot retain global UNIQUE flattening or
+# broad substring-based disposable mutation.
 _base.declared_unique_fields = declared_unique_fields_scoped
 _base._load_declared_unique_fields = _load_declared_unique_fields_scoped
 _base.materialize_unique_create_fields = _materialize_unique_create_fields_scoped
+_base.has_disposable_identity_anchor = _has_disposable_identity_anchor
+_base.materialize_disposable_identity_fields = _materialize_disposable_identity_fields
 
 
 def _cleanup_after_write(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -265,9 +274,6 @@ def execute_governed_control_write(
     return receipt
 
 
-# Preserve the proven governed-write implementation and extend only its
-# post-write readback phase. The lambda resolves the facade transport at call
-# time so existing tests/consumers that substitute ``_http_request`` still work.
 from .governed_async_readback import wrap_governed_write as _wrap_governed_write
 
 execute_governed_control_write = _wrap_governed_write(
