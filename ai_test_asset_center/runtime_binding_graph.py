@@ -1,18 +1,18 @@
-"""Runtime binding graph facade with actor and observer authority.
+"""Runtime binding graph facade with actor, observer and value authority.
 
 The established source/fixture/read resolver mechanics live in
-``_runtime_binding_graph_mechanics``. Two formal facts require explicit identity:
+``_runtime_binding_graph_mechanics``. Formal facts require explicit authority:
 
-* credential-valued body placeholders are principal-specific and may not select
-  the first actor that happens to have a secret; and
-* effect observers belong to a source operation. A path-only synthetic operation
-  may not scan the whole Behavior IR relation graph and adopt an unrelated GET
-  as its observer.
-
-Unknown principal or operation identity stays blocked/unresolved.
+* credential placeholders are principal-specific and may not select the first
+  actor that happens to have a secret;
+* effect observers belong to an exact source operation; and
+* request-schema examples/defaults may supply ordinary business scalars, but
+  never resource identity. An example ``orderId``/``addressId`` is documentation
+  data, not proof that the referenced resource exists at runtime.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from . import _runtime_binding_graph_mechanics as _core
@@ -20,6 +20,9 @@ from ._runtime_binding_graph_mechanics import *  # noqa: F401,F403
 
 _original_build_binding_plan = _core.build_binding_plan
 _original_declared_effect_observers = _core.declared_effect_observers
+_original_source_declared_body_example_bindings = (
+    _core._source_declared_body_example_bindings
+)
 
 
 def __getattr__(name: str) -> Any:
@@ -42,20 +45,56 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _identity_shaped_target(value: Any) -> bool:
+    """Return whether a target is structurally a resource identity field."""
+
+    raw = _text(value)
+    if not raw:
+        return False
+    leaf = raw.split(".")[-1].split("[")[0]
+    if not leaf:
+        return False
+    lowered = leaf.lower()
+    if lowered in {"id", "uuid", "guid", "key", "ref"}:
+        return True
+    if re.search(r"(?:_|-)(?:id|uuid|guid|key|ref)$", leaf, re.IGNORECASE):
+        return True
+    return bool(re.search(r"(?:Id|ID|Uuid|UUID|Guid|GUID|Key|Ref)$", leaf))
+
+
+def _source_declared_body_example_bindings(
+    operation: dict[str, Any],
+    unresolved: list[str],
+    body_placeholder_paths: dict[str, list[str]],
+) -> dict[str, Any] | None:
+    """Allow source examples only for non-identity business scalar bindings."""
+
+    governed_unresolved = [
+        name for name in unresolved if not _identity_shaped_target(name)
+    ]
+    if not governed_unresolved:
+        return None
+    bindings = _original_source_declared_body_example_bindings(
+        operation,
+        governed_unresolved,
+        body_placeholder_paths,
+    )
+    if not isinstance(bindings, dict):
+        return None
+    return {
+        target: row
+        for target, row in bindings.items()
+        if not _identity_shaped_target(target)
+    } or None
+
+
 def declared_effect_observers(
     operation: dict[str, Any],
     *,
     behavior_ir: dict[str, Any],
     max_candidates: int = 2,
 ) -> list[dict[str, str]]:
-    """Return effect observers only for an exact Behavior IR operation identity.
-
-    The historical mechanics intentionally tolerated a path-only operation. In
-    that state ``operation_ref`` is empty and relation lookup falls back to the
-    entire relation graph, so a caller that merely knows ``/api/x`` can adopt
-    observers connected to another operation/entity. Formal observation cannot
-    be path-affinity authority: the write operation itself must exist in IR.
-    """
+    """Return effect observers only for an exact Behavior IR operation identity."""
 
     op = _dict(operation)
     operation_ref = _text(op.get("id") or op.get("operation_id"))
@@ -71,9 +110,6 @@ def declared_effect_observers(
     if not source_operation:
         return []
 
-    # Prevent a caller from borrowing a valid operation id while substituting a
-    # different path/method. The canonical IR row is the only input passed to
-    # the historical discovery mechanics.
     supplied_path = _text(op.get("path") or op.get("raw_path"))
     source_path = _text(
         source_operation.get("path") or source_operation.get("raw_path")
@@ -233,9 +269,12 @@ def build_binding_plan(
     )
 
 
-# Internal graph helpers dynamically resolve the observer function from their
-# defining module. Keep private and public paths on the same strict authority.
+# Internal graph helpers dynamically resolve these functions from their defining
+# module. Keep private/public call paths on the same strict authorities.
 _core.declared_effect_observers = declared_effect_observers
+_core._source_declared_body_example_bindings = (
+    _source_declared_body_example_bindings
+)
 
 __all__ = sorted(
     {
@@ -246,6 +285,8 @@ __all__ = sorted(
         ],
         "build_binding_plan",
         "declared_effect_observers",
+        "_source_declared_body_example_bindings",
+        "_identity_shaped_target",
         "_credential_actor_authority",
         "_govern_credential_bindings",
     }
