@@ -103,6 +103,10 @@ from .scan_result_normalizer import (
 
 # 分片清单在索引文件中的标记键（顶层键，天然不会与产品键冲突）。
 SHARD_MARKER = "_scan_result_shards"
+
+# Targets this PROCESS has fully written (write-once invariant). A fresh
+# process — a new run — overwrites the previous run's artifact freely.
+_WRITTEN_SCAN_RESULTS: set[str] = set()
 SCAN_RESULT_SHARD_SCHEMA = "qualibug.scan-result-shard.v1"
 SHARD_DIR_NAME = "scan_result.parts"
 
@@ -422,12 +426,14 @@ def write_scan_result(
         from .artifact_redactor import write_json_redacted
 
         return write_json_redacted(target, result, indent=indent, post_redaction_validator=post_redaction_validator)
-    # Write-once invariant: a second full write to an existing sharded store
-    # re-copies the multi-GB tree (second deepcopy peak) and, if it dies
-    # mid-shard, destroys the primary run's complete shard set (run25c:
-    # 12 shards reduced to 3 by a post-hook rewrite). Small post-write
-    # updates must go through attach_skeleton_keys, never a full rewrite.
-    if target.is_file() and is_sharded_scan_result(target):
+    # Write-once invariant (in-process): a second full write to the SAME
+    # target within one process re-copies the multi-GB tree (second deepcopy
+    # peak) and, if it dies mid-shard, destroys the primary run's complete
+    # shard set (run25c: 12 shards reduced to 3 by a post-hook rewrite).
+    # Small post-write updates must go through attach_skeleton_keys, never a
+    # full rewrite. The guard is process-scoped — a fresh process (a new run)
+    # legitimately overwrites the previous run's artifact.
+    if str(target) in _WRITTEN_SCAN_RESULTS:
         raise ArtifactSecretLeakError(
             "scan_result already_sharded_refuse_rewrite: "
             "a sharded scan_result must not be rewritten wholesale; use "
@@ -575,6 +581,7 @@ def write_scan_result(
     _start = _stage_marks[0][1]
     timing = {name: round(stamp - _start, 1) for name, stamp in _stage_marks[1:]}
     timing["total_seconds"] = round(time.time() - _start, 1)
+    _WRITTEN_SCAN_RESULTS.add(str(target))
     return _combine_redaction_receipt(
         skeleton_receipt,
         piece_events,
