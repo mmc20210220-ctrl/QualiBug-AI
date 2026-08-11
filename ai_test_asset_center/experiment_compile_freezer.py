@@ -23,7 +23,20 @@ from .real_id_resolver import (
     infer_path_params,
     normalize_path_placeholders,
 )
-from .request_build_contract import (
+from .validation_parameter_authority import (
+    install_request_parameter_contract_authority,
+)
+from .request_header_transport_authority import (
+    install_request_header_transport_authority,
+)
+
+# Freeze is itself an authority boundary. It must not rely on another compiler
+# module having happened to import first: install the exact request query/header
+# rules before binding ``build_request_build_contract`` by value below.
+install_request_parameter_contract_authority()
+install_request_header_transport_authority()
+
+from .request_build_contract import (  # noqa: E402
     STATUS_BLOCKED as REQUEST_BUILD_BLOCKED,
     build_request_build_contract,
 )
@@ -106,9 +119,6 @@ def _requirement_projection_input(frozen: dict) -> dict:
             if output_specs:
                 step["output_binding_specs"] = output_specs
 
-            # A wait observer path is transport input just like the business
-            # request path. Feed its placeholders into the read-only requirement
-            # projection; the stored treatment step and graph remain unchanged.
             wait_contract = _dict(step.get("wait_contract"))
             wait_path = normalize_path_placeholders(
                 _text(
@@ -160,10 +170,6 @@ def freeze_compiled_experiment(
     *,
     behavior_ir: dict,
 ) -> dict:
-    # Credential values are never compile-time data. Only the exact declared
-    # secret coordinate is projected into the request body; the transport step
-    # resolves that coordinate at runtime through the existing credential
-    # authority. Project before the core freeze so all content hashes cover it.
     credential_projected, credential_receipt = project_declared_credential_refs(
         experiment,
         behavior_ir=behavior_ir,
@@ -215,9 +221,6 @@ def freeze_compiled_experiment(
             or "flow_data_execution_contract_not_frozen",
         )
 
-    # FlowData answers "where can each dynamic value come from?". The request
-    # contract answers the next question: "does that make every declared HTTP
-    # request constructible?". Runtime channels stay DEFERRED, not fabricated.
     request_contract_input = deepcopy(frozen)
     request_contract_input["flow_data_requirement"] = requirement
     request_contract_input["flow_data_execution_contract"] = execution_contract
