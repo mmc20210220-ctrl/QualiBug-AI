@@ -1,20 +1,16 @@
 """Flow-data requirement facade with execution-contract authority.
 
 The historical dependency freeze mechanics live in
-``_flow_data_requirement_mechanics``.  A target name is not a produced value:
-``produces_bindings=['x']`` or an unknown operation may describe intent, but it
-cannot make ``x`` formally available to a later step.
+``_flow_data_requirement_mechanics``. A target name is not a produced value and
+is also not proof that a binding can be materialized. ``blocked`` bindings,
+empty fingerprint-only rows, and name-only outputs must never become initial
+flow facts.
 
-This facade keeps the existing requirement model and reuses the repository's
-existing ``flow_data_execution_contract`` as the executable producer/consumer
-authority.  A requirement is FROZEN only when:
-
-* every HTTP step references an existing Behavior IR operation with a declared,
-  non-drifting method; and
-* the existing execution contract proves initial bindings, graph output source
-  paths, producer/output/consumer references, and sequential identity outputs.
-
-No parallel binding registry or new matching heuristic is introduced.
+A requirement is FROZEN only when:
+* every HTTP step references one source operation with a non-drifting method;
+* the existing flow execution contract proves producer/output/consumer identity;
+* every target the execution contract treats as an initial binding has an
+  executable materialization channel in the current binding/fixture runtime.
 """
 from __future__ import annotations
 
@@ -22,6 +18,9 @@ from typing import Any
 
 from . import _flow_data_requirement_mechanics as _core
 from ._flow_data_requirement_mechanics import *  # noqa: F401,F403
+from .binding_target_materialization_authority import (
+    resolve_binding_target_materialization,
+)
 from .flow_data_execution_contract import (
     STATUS_FROZEN as EXECUTION_STATUS_FROZEN,
     freeze_flow_data_execution_contract,
@@ -108,6 +107,37 @@ def _flow_operation_issues(
     return issues
 
 
+def _initial_binding_targets(
+    execution_contract: dict[str, Any],
+) -> list[str]:
+    targets: list[str] = []
+    for raw in _list(_dict(execution_contract).get("step_contracts")):
+        for value in _list(_dict(raw).get("initial_binding_targets")):
+            target = _text(value)
+            if target and target not in targets:
+                targets.append(target)
+    return targets
+
+
+def _binding_materialization_issues(
+    experiment: dict[str, Any],
+    behavior_ir: dict[str, Any],
+    execution_contract: dict[str, Any],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for target in _initial_binding_targets(execution_contract):
+        receipt = resolve_binding_target_materialization(
+            target,
+            experiment=experiment,
+            behavior_ir=behavior_ir,
+            flow_execution_contract=execution_contract,
+        )
+        if _text(receipt.get("status")) == "RESOLVED":
+            continue
+        issues.append(receipt)
+    return issues
+
+
 def build_flow_data_requirement(
     experiment: dict[str, Any],
     *,
@@ -139,28 +169,54 @@ def build_flow_data_requirement(
         experiment,
         requirement,
     )
-    if _text(execution_contract.get("status")) == EXECUTION_STATUS_FROZEN:
-        # Preserve the existing content-addressed requirement exactly. The
-        # execution contract is its gate, not extra unsigned payload inside it.
-        return requirement
+    if _text(execution_contract.get("status")) != EXECUTION_STATUS_FROZEN:
+        return {
+            "schema_version": _core.SCHEMA_VERSION,
+            "status": _core.STATUS_BLOCKED,
+            "reason_code": _core.BLOCKED_FLOW_DATA_BINDING_INCOMPLETE,
+            "detail": (
+                "execution_contract:"
+                + _text(execution_contract.get("reason_code") or "incomplete")
+                + ":"
+                + _text(execution_contract.get("detail"))
+            )[:1000],
+            "candidate_requirement_id": _text(requirement.get("requirement_id")),
+            "candidate_requirement_fingerprint": _text(
+                requirement.get("requirement_fingerprint")
+            ),
+            "flow_data_execution_contract": execution_contract,
+        }
 
-    return {
-        "schema_version": _core.SCHEMA_VERSION,
-        "status": _core.STATUS_BLOCKED,
-        "reason_code": _core.BLOCKED_FLOW_DATA_BINDING_INCOMPLETE,
-        "detail": (
-            "execution_contract:"
-            + _text(execution_contract.get("reason_code") or "incomplete")
-            + ":"
-            + _text(execution_contract.get("detail"))
-        )[:1000],
-        "candidate_requirement_id": _text(requirement.get("requirement_id")),
-        "candidate_requirement_fingerprint": _text(
-            requirement.get("requirement_fingerprint")
-        ),
-        "flow_data_execution_contract": execution_contract,
-    }
+    materialization_issues = _binding_materialization_issues(
+        experiment,
+        behavior_ir,
+        execution_contract,
+    )
+    if materialization_issues:
+        return {
+            "schema_version": _core.SCHEMA_VERSION,
+            "status": _core.STATUS_BLOCKED,
+            "reason_code": _core.BLOCKED_FLOW_DATA_BINDING_INCOMPLETE,
+            "detail": "binding_materialization:"
+            + ";".join(
+                f"{_text(row.get('target'))}:{_text(row.get('reason_code'))}"
+                for row in materialization_issues[:12]
+            ),
+            "candidate_requirement_id": _text(requirement.get("requirement_id")),
+            "candidate_requirement_fingerprint": _text(
+                requirement.get("requirement_fingerprint")
+            ),
+            "binding_materialization_issues": materialization_issues,
+            "flow_data_execution_contract": execution_contract,
+        }
 
+    # Preserve the existing content-addressed requirement exactly. The
+    # execution/materialization contracts gate it rather than mutating its
+    # fingerprinted payload after the fact.
+    return requirement
+
+
+_core.build_flow_data_requirement = build_flow_data_requirement
 
 __all__ = sorted(
     {
@@ -171,5 +227,6 @@ __all__ = sorted(
         ],
         "build_flow_data_requirement",
         "_flow_operation_issues",
+        "_binding_materialization_issues",
     }
 )
