@@ -1,22 +1,20 @@
-"""Money precondition facade with unique create-operation authority.
+"""Money precondition facade with source-declared subject identity.
 
 The established money-family planning mechanics live in
-``_money_precondition_chain_mechanics``. Source-declared create resolution may
-have several exact candidates (duplicate collection POSTs, alternate operations
-that share one collection, etc.). Sorting those candidates and taking the first
-is not business authority.
+``_money_precondition_chain_mechanics``. A request field name such as
+``orderId`` is not subject authority. The field must carry an explicit target
+that the shared BodyReferenceAuthority resolves to one Behavior IR entity.
 
-This facade keeps the historical subject-selection behavior but makes create
-identity explicit: each candidate subject either has zero, one, or multiple
-source create operations. Only one is usable. An ambiguous subject is skipped
-when another subject has a unique establishable create; if no unique subject
-exists, the ambiguity is surfaced as a named BLOCKED reason.
+Create operations remain uniqueness-gated: an ambiguous subject is skipped when
+another explicitly targeted subject has one unique create; if no unique subject
+exists, the ambiguity is surfaced instead of selecting source order.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from . import _money_precondition_chain_mechanics as _core
+from .body_reference_authority import resolve_body_reference
 
 for _name in dir(_core):
     if not _name.startswith("__") and not _name.startswith("_original_"):
@@ -47,12 +45,58 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _operation_index(behavior_ir: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        _text(row.get("id") or row.get("operation_id")): row
+        for row in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(row, dict)
+        and _text(row.get("id") or row.get("operation_id"))
+    }
+
+
+def _source_declared_subject_pairs(
+    operation: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> list[tuple[str, str]]:
+    """Resolve subject fields only through explicit target-bearing metadata."""
+
+    example = _core._request_example(operation)
+    resolved: list[tuple[str, str]] = []
+    for field in example:
+        if not isinstance(field, str) or not _text(field):
+            continue
+        receipt = resolve_body_reference(
+            operation,
+            field,
+            behavior_ir=behavior_ir,
+        )
+        entity_ref = _text(receipt.get("target_entity_ref"))
+        if _text(receipt.get("status")) == "RESOLVED" and entity_ref:
+            resolved.append((entity_ref, _text(field)))
+    return list(dict.fromkeys(resolved))
+
+
+def _subject_entities_from_example(
+    example: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> list[tuple[str, str]]:
+    """Mechanics hook using the current operation identity carried by the facade."""
+
+    operation_ref = _text(_dict(behavior_ir).get("_body_reference_operation_ref"))
+    operation = _dict(_operation_index(behavior_ir).get(operation_ref))
+    if not operation:
+        return []
+    # The historical caller already passes this operation's source example. A
+    # mismatch is fail-closed instead of searching other operations by payload.
+    if _core._request_example(operation) != _dict(example):
+        return []
+    return _source_declared_subject_pairs(operation, behavior_ir)
+
+
 def _create_operation_candidates_for_entity(
     behavior_ir: dict[str, Any],
     entity: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Return all source-declared structural create candidates deterministically."""
-
     entity_name = _text(entity.get("name"))
     if not entity_name:
         return []
@@ -116,8 +160,7 @@ def _ambiguous_subjects(
     behavior_ir: dict[str, Any],
     operation: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    example = _core._request_example(operation)
-    pairs = _core._subject_entities_from_example(example, behavior_ir)
+    pairs = _source_declared_subject_pairs(operation, behavior_ir)
     entities = {
         _text(row.get("id")): row
         for row in _list(_dict(behavior_ir).get("entities"))
@@ -170,8 +213,13 @@ def plan_money_family_precondition(
             "ambiguous_subjects": ambiguous,
             "source_order_selection_allowed": False,
         }
+
+    governed_ir = dict(_dict(behavior_ir))
+    governed_ir["_body_reference_operation_ref"] = _text(
+        operation.get("id") or operation.get("operation_id")
+    )
     return _original_plan_money_family_precondition(
-        behavior_ir=behavior_ir,
+        behavior_ir=governed_ir,
         operation=operation,
         actor_refs=actor_refs,
         property_spec=property_spec,
@@ -180,6 +228,7 @@ def plan_money_family_precondition(
 
 
 _core._create_operation_for_entity = _create_operation_for_entity
+_core._subject_entities_from_example = _subject_entities_from_example
 
 __all__ = sorted(
     {
@@ -189,6 +238,7 @@ __all__ = sorted(
             if not name.startswith("__") and not name.startswith("_original_")
         ],
         "REASON_CREATE_AMBIGUOUS",
+        "_source_declared_subject_pairs",
         "_create_operation_candidates_for_entity",
         "_create_operation_for_entity",
         "plan_money_family_precondition",
