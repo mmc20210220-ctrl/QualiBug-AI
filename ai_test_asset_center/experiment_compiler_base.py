@@ -1,16 +1,15 @@
-"""Batch compiler facade with unique source-operation identity recovery.
+"""Batch compiler facade with source-operation and ownership-scope authority.
 
-The established single/batch compilation and finalization mechanics live in
-``_experiment_compiler_base_mechanics``.  A source locator such as
-``POST /api/orders`` is useful for recovering a stale operation id only when it
-identifies exactly one Behavior IR operation. Exact string equality is not a
-license to choose the first duplicate node: different IR operation ids may carry
-different entity, permission, fact-lineage, or observer relations.
+The established raw compilation/finalization mechanics live in
+``_experiment_compiler_base_mechanics``. This boundary adds two fail-closed
+identity rules before final FlowData freeze:
 
-This facade therefore admits locator recovery only for one unique operation id.
-Multiple exact method/path matches, or multiple locators resolving to different
-operation ids, are explicit ``BLOCKED_MISSING_OPERATION`` ambiguity rather than
-source-order selection.
+* stale source locators recover an operation only when METHOD+PATH identifies
+  exactly one Behavior IR operation; and
+* ownership bindings are scoped only after the family protocol has fixed exact
+  control/treatment actors. Query own-scope becomes a step-local actor identity
+  reference rather than one global ``userId``; authorization same-resource body
+  binding is sealed to the unique compiled control owner actor.
 """
 from __future__ import annotations
 
@@ -18,12 +17,14 @@ from copy import deepcopy
 from typing import Any
 
 from . import _experiment_compiler_base_mechanics as _core
+from .ownership_binding_scope_authority import seal_ownership_binding_scopes
 
 for _name in dir(_core):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_core, _name)
 
 _original_compile_one_in_batch = _core._compile_one_obligation_in_batch
+_original_raw_compile_for_obligation = _core._compile_experiment_for_obligation
 
 
 def __getattr__(name: str) -> Any:
@@ -150,6 +151,62 @@ def _sync_compile_status(source: dict[str, Any], target: dict[str, Any]) -> None
             target[field] = source[field]
 
 
+def _ownership_scope_block(
+    experiment: dict[str, Any],
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
+    blocked = deepcopy(experiment)
+    blocked["control_plan"] = []
+    blocked["treatment_plan"] = []
+    blocked["precondition_plan"] = []
+    blocked["cleanup_plan"] = []
+    details = [
+        f"{_text(row.get('target'))}:{_text(row.get('reason_code'))}"
+        for row in _list(receipt.get("issues"))
+        if isinstance(row, dict)
+    ]
+    blocked["compile_receipt"] = {
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_MISSING_BINDING",
+        "detail": ("ownership_binding_scope:" + ";".join(details))[:1000],
+    }
+    blocked["ownership_binding_scope_receipt"] = deepcopy(receipt)
+    return blocked
+
+
+def compile_experiment_for_obligation(
+    obligation: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+    environment_type: str = "",
+    policy_version: str = "",
+    available_adapters: "set[str] | frozenset[str] | None" = None,
+) -> dict[str, Any]:
+    """Compile protocol, seal ownership scope, then perform final freezes once."""
+
+    experiment = _original_raw_compile_for_obligation(
+        obligation,
+        behavior_ir=behavior_ir,
+        environment_type=environment_type,
+        policy_version=policy_version,
+        available_adapters=available_adapters,
+    )
+    if _text(_dict(experiment.get("compile_receipt")).get("status")) != "COMPILED":
+        return experiment
+
+    scoped, receipt = seal_ownership_binding_scopes(
+        experiment,
+        obligation=obligation,
+        behavior_ir=behavior_ir,
+    )
+    if _text(receipt.get("status")) == "BLOCKED":
+        return _ownership_scope_block(scoped, receipt)
+    return _core._finalize_compiled_experiment(
+        scoped,
+        behavior_ir=behavior_ir,
+    )
+
+
 def _compile_one_obligation_in_batch(
     obl: Any,
     *,
@@ -228,10 +285,10 @@ def _compile_one_obligation_in_batch(
     )
 
 
-# The mechanics batch loop resolves this helper from its own module globals.
+# Patch mechanics globals because its batch loop resolves these names at call time.
+_core.compile_experiment_for_obligation = compile_experiment_for_obligation
 _core._compile_one_obligation_in_batch = _compile_one_obligation_in_batch
 
-compile_experiment_for_obligation = _core.compile_experiment_for_obligation
 compile_experiments = _core.compile_experiments
 
 __all__ = sorted(
