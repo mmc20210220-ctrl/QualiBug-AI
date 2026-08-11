@@ -54,6 +54,20 @@ def _load_existing_local_key(root: Path) -> tuple[bool, str]:
     return True, "existing_local_key_file"
 
 
+def prepare_declared_credential_decryption(root: Path) -> dict[str, Any]:
+    """Prepare runtime decryption from existing authority without creating keys."""
+
+    ready, source = _load_existing_local_key(Path(root))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "READY" if ready else "UNAVAILABLE",
+        "reason_code": "" if ready else source,
+        "key_source": source if ready else "",
+        "key_created": False,
+        "secret_value_persisted": False,
+    }
+
+
 def resolve_declared_credential_material(
     value: Any,
     *,
@@ -83,13 +97,15 @@ def resolve_declared_credential_material(
             "encrypted_at_rest": False,
         }
 
-    key_ready, key_source = _load_existing_local_key(Path(root))
-    if not key_ready:
+    key_receipt = prepare_declared_credential_decryption(Path(root))
+    if _text(key_receipt.get("status")) != "READY":
         return "", {
             **receipt,
-            "reason_code": key_source,
+            "reason_code": _text(key_receipt.get("reason_code"))
+            or "DECLARED_CREDENTIAL_KEY_UNAVAILABLE",
             "key_source": "",
         }
+    key_source = _text(key_receipt.get("key_source"))
     try:
         resolved = decrypt(raw)
     except CredentialDecryptionError:
@@ -121,5 +137,6 @@ def resolve_declared_credential_material(
 
 __all__ = [
     "SCHEMA_VERSION",
+    "prepare_declared_credential_decryption",
     "resolve_declared_credential_material",
 ]
