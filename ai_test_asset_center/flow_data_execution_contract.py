@@ -1,34 +1,37 @@
-"""Compile-time execution capability contract for frozen flow data.
+"""Flow-data execution contract facade with producer-identity authority.
 
-``FlowDataRequirement`` identifies values a flow needs. This module proves that
-the existing executors can actually supply them:
+The established executor-capability proof lives in
+``_flow_data_execution_contract_mechanics``. This boundary prevents set/dict
+flattening from turning ambiguous or invalid producers into apparently available
+flow values.
 
-- initial values must come from the frozen binding plan;
-- query placeholders are data requirements too;
-- cross-step outputs are legal only on graph-backed treatment nodes;
-- each dynamic consumption must explicitly name producer, output field and
-  consumer target, matching the graph runtime binding-ledger contract;
-- output fields must declare the exact response source path the graph runtime
-  will extract.
-
-It does not discover bindings or execute requests.
+Before the historical contract can be FROZEN it now proves:
+* step ids and graph node ids are unique;
+* one canonical output field in one step has one response source path;
+* one consumer target has one producer/output identity;
+* precondition identity-output contracts are themselves FROZEN and complete;
+* if several earlier identity-output steps can produce one required target, the
+  consuming step explicitly selects one producer through identity_input_binding.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-import re
 from typing import Any
 
+from . import _flow_data_execution_contract_mechanics as _core
 
-SCHEMA_VERSION = "qualibug.flow-data-execution-contract.v1"
-STATUS_FROZEN = "FROZEN"
-STATUS_BLOCKED = "BLOCKED"
-BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE = (
-    "BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE"
-)
+for _name in dir(_core):
+    if not _name.startswith("__") and not _name.startswith("_original_"):
+        globals()[_name] = getattr(_core, _name)
 
-_TOKEN_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
+_original_freeze_flow_data_execution_contract = _core.freeze_flow_data_execution_contract
+
+
+def __getattr__(name: str) -> Any:
+    return getattr(_core, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_core)))
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -43,377 +46,239 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _fingerprint(value: Any) -> str:
-    raw = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
+def _valid_identity_output(value: Any) -> tuple[bool, list[str]]:
+    row = _dict(value)
+    targets = sorted(
+        {
+            _text(item)
+            for item in [
+                *_list(row.get("consumer_targets")),
+                *_list(row.get("alias_targets")),
+            ]
+            if _text(item)
+        }
     )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    valid = bool(
+        _text(row.get("schema_version")) == "qualibug.identity-output-binding.v1"
+        and _text(row.get("status")).upper() == _core.STATUS_FROZEN
+        and _text(row.get("source_identity_field"))
+        and _text(row.get("source_path"))
+        and _text(row.get("source_authority"))
+        and targets
+    )
+    return valid, targets
 
 
-def _tokens(value: Any) -> list[str]:
-    targets: list[str] = []
+def _ambiguity_issues(
+    experiment: dict[str, Any],
+    requirement: dict[str, Any],
+) -> list[dict[str, Any]]:
+    exp = _dict(experiment)
+    req = _dict(requirement)
+    issues: list[dict[str, Any]] = []
+    steps = _core._steps(exp)
 
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            for child in node.values():
-                walk(child)
-            return
-        if isinstance(node, list):
-            for child in node:
-                walk(child)
-            return
-        if not isinstance(node, str):
-            return
-        match = _TOKEN_RE.match(node)
-        target = _text(match.group(1)) if match else ""
-        if target and target not in targets:
-            targets.append(target)
+    # Step identity is part of every producer/input reference. Duplicate ids make
+    # the historical produced_by_step dict source-order dependent.
+    step_locations: dict[str, list[str]] = {}
+    for phase, step in steps:
+        step_id = _text(step.get("step_id") or step.get("id"))
+        if step_id:
+            step_locations.setdefault(step_id, []).append(phase)
+    for step_id, phases in sorted(step_locations.items()):
+        if len(phases) > 1:
+            issues.append(
+                {
+                    "kind": "STEP_IDENTITY_AMBIGUOUS",
+                    "step_id": step_id,
+                    "phases": list(phases),
+                }
+            )
 
-    walk(value)
-    return targets
+    requirements_by_step = {
+        _text(row.get("step_id")): _dict(row)
+        for row in _list(req.get("step_requirements"))
+        if isinstance(row, dict) and _text(row.get("step_id"))
+    }
+    prior_identity_producers: dict[str, set[str]] = {}
 
+    for phase, step in steps:
+        step_id = _text(step.get("step_id") or step.get("id"))
+        graph = _dict(step.get("_execution_graph"))
 
-def _steps(experiment: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    rows: list[tuple[str, dict[str, Any]]] = []
-    for phase in ("precondition", "control", "treatment"):
-        rows.extend(
-            (phase, dict(row))
-            for row in _list(experiment.get(f"{phase}_plan"))
-            if isinstance(row, dict)
+        node_counts: dict[str, int] = {}
+        for raw_node in _list(graph.get("nodes")):
+            node = _dict(raw_node)
+            node_id = _text(node.get("node_id") or node.get("step_id"))
+            if node_id:
+                node_counts[node_id] = node_counts.get(node_id, 0) + 1
+        duplicate_nodes = sorted(
+            node_id for node_id, count in node_counts.items() if count > 1
         )
-    return rows
+        if duplicate_nodes:
+            issues.append(
+                {
+                    "kind": "GRAPH_NODE_IDENTITY_AMBIGUOUS",
+                    "phase": phase,
+                    "step_id": step_id,
+                    "node_ids": duplicate_nodes,
+                }
+            )
 
+        output_sources: dict[str, set[str]] = {}
+        for spec in _core._output_specs(step):
+            canonical, source_path = _core._output_identity(_dict(spec))
+            if canonical:
+                output_sources.setdefault(canonical, set()).add(source_path)
+        for canonical, source_paths in sorted(output_sources.items()):
+            nonempty = {path for path in source_paths if path}
+            if len(nonempty) > 1:
+                issues.append(
+                    {
+                        "kind": "OUTPUT_BINDING_SOURCE_AMBIGUOUS",
+                        "phase": phase,
+                        "step_id": step_id,
+                        "canonical_field_id": canonical,
+                        "source_paths": sorted(nonempty),
+                    }
+                )
 
-def _graph(step: dict[str, Any]) -> dict[str, Any]:
-    return _dict(step.get("_execution_graph"))
+        input_producers: dict[str, set[tuple[str, str]]] = {}
+        for ref in _core._input_refs(step):
+            producer, source_field, target = _core._input_identity(_dict(ref))
+            if target:
+                input_producers.setdefault(target, set()).add(
+                    (producer, source_field)
+                )
+        for target, producers in sorted(input_producers.items()):
+            concrete = {
+                pair for pair in producers if pair[0] and pair[1]
+            }
+            if len(concrete) > 1:
+                issues.append(
+                    {
+                        "kind": "INPUT_BINDING_PRODUCER_AMBIGUOUS",
+                        "phase": phase,
+                        "step_id": step_id,
+                        "consumer_target": target,
+                        "producers": [
+                            {
+                                "producer_node_id": producer,
+                                "producer_output_field": field,
+                            }
+                            for producer, field in sorted(concrete)
+                        ],
+                    }
+                )
 
+        requirement_row = _dict(requirements_by_step.get(step_id))
+        required_targets = {
+            _text(value)
+            for value in _list(requirement_row.get("required_binding_targets"))
+            if _text(value)
+        }
+        required_targets.update(_core._tokens(step.get("query")))
+        identity_input = _dict(step.get("identity_input_binding"))
+        selected_producer = _text(identity_input.get("producer_step_id"))
+        selected_targets = {
+            _text(value)
+            for value in _list(identity_input.get("consumer_targets"))
+            if _text(value)
+        }
+        for target in sorted(required_targets):
+            producers = set(prior_identity_producers.get(target) or set())
+            if len(producers) <= 1:
+                continue
+            if not (
+                target in selected_targets
+                and selected_producer in producers
+                and _text(identity_input.get("status")).upper()
+                == _core.STATUS_FROZEN
+            ):
+                issues.append(
+                    {
+                        "kind": "SEQUENTIAL_IDENTITY_PRODUCER_AMBIGUOUS",
+                        "phase": phase,
+                        "step_id": step_id,
+                        "consumer_target": target,
+                        "producer_step_ids": sorted(producers),
+                    }
+                )
 
-def _graph_node(step: dict[str, Any]) -> dict[str, Any]:
-    step_id = _text(step.get("step_id") or step.get("id"))
-    for raw in _list(_graph(step).get("nodes")):
-        node = _dict(raw)
-        if _text(node.get("node_id") or node.get("step_id")) == step_id:
-            return node
-    return {}
+        identity_output = _dict(step.get("identity_output_binding"))
+        if identity_output:
+            valid_output, output_targets = _valid_identity_output(identity_output)
+            if not valid_output:
+                issues.append(
+                    {
+                        "kind": "IDENTITY_OUTPUT_CONTRACT_INVALID",
+                        "phase": phase,
+                        "step_id": step_id,
+                        "targets": output_targets,
+                    }
+                )
+            if phase == "precondition" and valid_output:
+                for target in output_targets:
+                    prior_identity_producers.setdefault(target, set()).add(step_id)
 
-
-def _output_specs(step: dict[str, Any]) -> list[dict[str, Any]]:
-    node = _graph_node(step)
-    source = _list(step.get("output_binding_specs")) or _list(
-        node.get("output_binding_specs")
-    )
-    return [dict(row) for row in source if isinstance(row, dict)]
-
-
-def _input_refs(step: dict[str, Any]) -> list[dict[str, Any]]:
-    node = _graph_node(step)
-    refs = [
-        dict(row)
-        for row in (
-            _list(step.get("input_binding_refs"))
-            or _list(node.get("input_binding_refs"))
-        )
-        if isinstance(row, dict)
-    ]
-    step_id = _text(step.get("step_id") or step.get("id"))
-    for edge in _list(_graph(step).get("edges")):
-        edge_row = _dict(edge)
-        if _text(edge_row.get("target_node_id")) != step_id:
-            continue
-        refs.extend(
-            dict(row)
-            for row in _list(edge_row.get("binding_refs"))
-            if isinstance(row, dict)
-        )
-    return refs
-
-
-def _output_identity(spec: dict[str, Any]) -> tuple[str, str]:
-    canonical = _text(
-        spec.get("canonical_field_id")
-        or spec.get("output_field")
-        or spec.get("field")
-    )
-    source_path = _text(
-        spec.get("json_path")
-        or spec.get("source_path")
-        or spec.get("response_field")
-    )
-    return canonical, source_path
-
-
-def _input_identity(ref: dict[str, Any]) -> tuple[str, str, str]:
-    producer = _text(
-        ref.get("producer_node_id")
-        or ref.get("source_node_id")
-        or ref.get("producer_step_id")
-    )
-    source_field = _text(
-        ref.get("producer_output_field")
-        or ref.get("source_field")
-        or ref.get("canonical_field_id")
-    )
-    target = _text(
-        ref.get("target")
-        or ref.get("consumer_target")
-        or ref.get("target_location")
-    )
-    return producer, source_field, target
+    return issues
 
 
 def freeze_flow_data_execution_contract(
     experiment: dict[str, Any],
     requirement: dict[str, Any],
 ) -> dict[str, Any]:
-    """Prove every frozen data dependency is executable by current runtimes."""
-    exp = _dict(experiment)
-    req = _dict(requirement)
-    initial_targets = {
-        _text(value)
-        for value in _list(req.get("binding_targets"))
-        if _text(value)
-    }
-    requirements_by_step = {
-        _text(row.get("step_id")): _dict(row)
-        for row in _list(req.get("step_requirements"))
-        if isinstance(row, dict) and _text(row.get("step_id"))
-    }
-    produced_by_step: dict[str, set[str]] = {}
-    sequential_identity_targets: set[str] = set()
-    identity_outputs_by_step: dict[str, dict[str, Any]] = {}
-    issues: list[dict[str, Any]] = []
-    step_contracts: list[dict[str, Any]] = []
+    base = _original_freeze_flow_data_execution_contract(experiment, requirement)
+    authority_issues = _ambiguity_issues(experiment, requirement)
+    if not authority_issues:
+        return base
 
-    for phase, step in _steps(exp):
-        step_id = _text(step.get("step_id") or step.get("id"))
-        available_sequential_identity_targets = set(sequential_identity_targets)
-        graph_backed = bool(_graph(step)) and phase == "treatment"
-        identity_input = _dict(step.get("identity_input_binding"))
-        identity_input_contract: dict[str, Any] = {}
-        if identity_input:
-            producer_step_id = _text(
-                identity_input.get("producer_step_id")
-            )
-            producer_output_field = _text(
-                identity_input.get("producer_output_field")
-            )
-            consumer_targets = sorted(
-                {
-                    _text(value)
-                    for value in _list(
-                        identity_input.get("consumer_targets")
-                    )
-                    if _text(value)
-                }
-            )
-            producer_contract = _dict(
-                identity_outputs_by_step.get(producer_step_id)
-            )
-            valid_identity_input = bool(
-                _text(identity_input.get("status")) == STATUS_FROZEN
-                and producer_step_id
-                and producer_output_field
-                and consumer_targets
-                and producer_output_field
-                == _text(producer_contract.get("source_identity_field"))
-                and set(consumer_targets).issubset(
-                    set(_list(producer_contract.get("produced_targets")))
-                )
-            )
-            identity_input_contract = {
-                "producer_step_id": producer_step_id,
-                "producer_output_field": producer_output_field,
-                "consumer_targets": consumer_targets,
-                "source_authority": _text(
-                    identity_input.get("source_authority")
-                ),
-                "status": "RESOLVED" if valid_identity_input else "BLOCKED",
-            }
-            if not valid_identity_input:
-                issues.append(
-                    {
-                        "kind": "IDENTITY_INPUT_BINDING_UNRESOLVED",
-                        "phase": phase,
-                        "step_id": step_id,
-                        **identity_input_contract,
-                    }
-                )
-        output_specs = _output_specs(step)
-        produced_fields: set[str] = set()
-        for index, spec in enumerate(output_specs):
-            canonical, source_path = _output_identity(spec)
-            if not graph_backed:
-                issues.append(
-                    {
-                        "kind": "OUTPUT_BINDING_EXECUTOR_UNAVAILABLE",
-                        "phase": phase,
-                        "step_id": step_id,
-                        "output_index": index,
-                    }
-                )
-                continue
-            if not canonical or not source_path:
-                issues.append(
-                    {
-                        "kind": "OUTPUT_BINDING_IDENTITY_INCOMPLETE",
-                        "phase": phase,
-                        "step_id": step_id,
-                        "output_index": index,
-                        "canonical_field_id": canonical,
-                        "source_path": source_path,
-                    }
-                )
-                continue
-            produced_fields.add(canonical)
-        produced_by_step[step_id] = produced_fields
-
-        consumed_targets: set[str] = set()
-        input_contracts: list[dict[str, str]] = []
-        for index, ref in enumerate(_input_refs(step)):
-            producer, source_field, target = _input_identity(ref)
-            valid = bool(
-                producer
-                and source_field
-                and target
-                and source_field in produced_by_step.get(producer, set())
-            )
-            input_contracts.append(
-                {
-                    "producer_node_id": producer,
-                    "producer_output_field": source_field,
-                    "consumer_target": target,
-                    "status": "RESOLVED" if valid else "BLOCKED",
-                }
-            )
-            if valid:
-                consumed_targets.add(target)
-            else:
-                issues.append(
-                    {
-                        "kind": "INPUT_BINDING_REFERENCE_UNRESOLVED",
-                        "phase": phase,
-                        "step_id": step_id,
-                        "input_index": index,
-                        "producer_node_id": producer,
-                        "producer_output_field": source_field,
-                        "consumer_target": target,
-                    }
-                )
-
-        requirement_row = _dict(requirements_by_step.get(step_id))
-        query_targets = _tokens(step.get("query"))
-        required_targets = set(
-            _text(value)
-            for value in _list(requirement_row.get("required_binding_targets"))
-            if _text(value)
-        )
-        required_targets.update(query_targets)
-        available_targets = (
-            initial_targets
-            | consumed_targets
-            | available_sequential_identity_targets
-        )
-        missing_targets = sorted(required_targets - available_targets)
-        if missing_targets:
-            issues.append(
-                {
-                    "kind": "STEP_BINDING_EXECUTION_SOURCE_MISSING",
-                    "phase": phase,
-                    "step_id": step_id,
-                    "targets": missing_targets,
-                }
-            )
-        step_contracts.append(
-            {
-                "phase": phase,
-                "step_id": step_id,
-                "graph_backed": graph_backed,
-                "initial_binding_targets": sorted(
-                    required_targets & initial_targets
-                ),
-                "query_binding_targets": query_targets,
-                "input_bindings": input_contracts,
-                "identity_input_binding": identity_input_contract,
-                "sequential_identity_targets": sorted(
-                    required_targets & available_sequential_identity_targets
-                ),
-                "produced_output_fields": sorted(produced_fields),
-                "required_targets": sorted(required_targets),
-                "available_targets": sorted(available_targets),
-                "missing_targets": missing_targets,
-            }
-        )
-        identity_output = _dict(step.get("identity_output_binding"))
-        if identity_output:
-            identity_targets = {
-                _text(value)
-                for value in [
-                    *_list(identity_output.get("consumer_targets")),
-                    *_list(identity_output.get("alias_targets")),
-                ]
-                if _text(value)
-            }
-            if phase != "precondition":
-                issues.append(
-                    {
-                        "kind": "IDENTITY_OUTPUT_EXECUTOR_UNAVAILABLE",
-                        "phase": phase,
-                        "step_id": step_id,
-                        "targets": sorted(identity_targets),
-                    }
-                )
-            else:
-                sequential_identity_targets.update(identity_targets)
-                identity_outputs_by_step[step_id] = {
-                    "source_identity_field": _text(
-                        identity_output.get("source_identity_field")
-                    ),
-                    "produced_targets": sorted(identity_targets),
-                }
-
-    payload = {
-        "flow_data_requirement_id": _text(req.get("requirement_id")),
-        "flow_data_requirement_fingerprint": _text(
-            req.get("requirement_fingerprint")
-        ),
-        "step_contracts": step_contracts,
-        "issues": issues,
-        "executor_capabilities": {
-            "initial_bindings": "experiment_fixture_materializer_core",
-            "cross_step_bindings": "process_graph_binding_ledger",
-            "precondition_identity_outputs": "experiment_precondition_executor",
-            "sequential_output_bindings_supported": False,
-        },
-    }
-    fingerprint = _fingerprint(payload)
-    if issues:
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "status": STATUS_BLOCKED,
-            "reason_code": BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE,
+    combined = [
+        dict(row)
+        for row in _list(_dict(base).get("issues"))
+        if isinstance(row, dict)
+    ]
+    combined.extend(authority_issues)
+    output = dict(_dict(base))
+    output.update(
+        {
+            "schema_version": _core.SCHEMA_VERSION,
+            "status": _core.STATUS_BLOCKED,
+            "reason_code": _core.BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE,
             "detail": ";".join(
                 f"{_text(row.get('kind'))}:{_text(row.get('step_id'))}"
-                for row in issues[:12]
+                for row in combined[:12]
             ),
-            "contract_fingerprint": fingerprint,
-            **payload,
+            "issues": combined,
+            "producer_identity_authority": {
+                "status": "BLOCKED",
+                "source_order_selection_allowed": False,
+                "ambiguity_issue_count": len(authority_issues),
+            },
         }
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "status": STATUS_FROZEN,
-        "contract_fingerprint": fingerprint,
-        **payload,
+    )
+    output["contract_fingerprint"] = _core._fingerprint(
+        {
+            "base_contract_fingerprint": _text(base.get("contract_fingerprint")),
+            "issues": combined,
+            "producer_identity_authority": output[
+                "producer_identity_authority"
+            ],
+        }
+    )
+    return output
+
+
+_core.freeze_flow_data_execution_contract = freeze_flow_data_execution_contract
+
+__all__ = sorted(
+    {
+        *[
+            name
+            for name in dir(_core)
+            if not name.startswith("__") and not name.startswith("_original_")
+        ],
+        "freeze_flow_data_execution_contract",
+        "_ambiguity_issues",
     }
-
-
-__all__ = [
-    "BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE",
-    "SCHEMA_VERSION",
-    "STATUS_BLOCKED",
-    "STATUS_FROZEN",
-    "freeze_flow_data_execution_contract",
-]
+)
