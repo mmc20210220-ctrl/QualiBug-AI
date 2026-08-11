@@ -2,12 +2,13 @@
 
 The existing privacy and typed evaluator mechanics remain unchanged in the private
 compatibility module. This facade filters foreign outcome observations, requires one
-matching outcome receipt for canonical assertions, and seals ``outcome_ref`` into every
-tri-state assertion verdict.
+matching outcome receipt for canonical assertions, enforces the final tri-state
+truthfulness boundary, and seals ``outcome_ref`` into every assertion verdict.
 """
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 from . import observer_contracts as _outcome_observers
@@ -26,6 +27,15 @@ _CANONICAL_FIELDS = (
     "assertion_requirement_ref",
     "canonical_outcome_identity_bound",
 )
+
+# These reason codes describe absence of comparison evidence, not an observed
+# counterexample.  Older evaluator branches set ``passed=False`` while emitting
+# one of these reasons, which sealed a customer-visible VIOLATION from missing
+# evidence.  The final assertion authority makes that impossible.
+_EVIDENCE_MISSING_VIOLATION_REASONS = frozenset({
+    "POSTCONDITION_FIELD_EVIDENCE_MISSING",
+    "JSON_COMPARE_EXPECTED_PATH_MISSING",
+})
 
 
 def __getattr__(name: str) -> Any:
@@ -155,6 +165,128 @@ def _indeterminate_identity_receipt(
     return _seal_assertion_receipt(base, identity)
 
 
+def _rebuild_base_receipt(
+    prior: dict[str, Any],
+    *,
+    status: str,
+    reason_code: str,
+) -> dict[str, Any]:
+    """Re-seal one base assertion receipt without changing its evidence payload."""
+
+    rebuilt = _original_assertion_receipt(
+        assertion_id=_text(prior.get("assertion_id")),
+        kind=_text(prior.get("kind")),
+        status=status,
+        reason_code=reason_code,
+        expected=prior.get("expected"),
+        actual=prior.get("actual"),
+        error=_text(prior.get("error")),
+        observer_receipt_ids=[
+            _text(value)
+            for value in _list(prior.get("observer_receipt_ids"))
+            if _text(value)
+        ],
+        source_refs=[
+            dict(row)
+            for row in _list(prior.get("source_refs"))
+            if isinstance(row, dict)
+        ],
+        harness_error=bool(prior.get("harness_error")),
+        campaign_id=_text(prior.get("campaign_id")),
+        execution_id=_text(prior.get("execution_id")),
+    )
+    if isinstance(prior.get("field_oracle_trace"), dict):
+        rebuilt["field_oracle_trace"] = dict(prior["field_oracle_trace"])
+    return rebuilt
+
+
+def _row_has_declared_state_evidence(row: Any, allowed: set[str]) -> bool:
+    """Whether a response row exposes a state value the filter can actually judge."""
+
+    if not isinstance(row, dict):
+        return False
+    for key, value in row.items():
+        normalized = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+        if "status" in normalized or "state" in normalized:
+            return isinstance(value, (str, int, float, bool)) and _text(value) != ""
+    return any(isinstance(value, str) and value in allowed for value in row.values())
+
+
+def _truthful_tri_state_projection(
+    *,
+    spec: dict[str, Any],
+    observations: dict[str, Any],
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
+    """Prevent missing/incomparable evidence from becoming PASS or VIOLATION.
+
+    This is the last verdict boundary before canonical sealing.  A concrete
+    observed mismatch is still a VIOLATION.  A missing operand, missing field,
+    or row that cannot be interpreted under the source-declared assertion stays
+    INDETERMINATE.  No matching/observer semantics are invented here.
+    """
+
+    row = dict(receipt)
+    kind = _text(spec.get("kind") or spec.get("type"))
+    status = _text(row.get("status")).upper()
+    reason = _text(row.get("reason_code"))
+
+    if status == "VIOLATION" and reason in _EVIDENCE_MISSING_VIOLATION_REASONS:
+        return _rebuild_base_receipt(
+            row,
+            status="INDETERMINATE",
+            reason_code=reason,
+        )
+
+    # field_delta historically folded MISSING/NON_NUMERIC rows into the same
+    # boolean accumulator as real mismatches.  A real FAIL remains sufficient
+    # counterexample evidence; otherwise incomplete field evidence is unknown.
+    if status == "VIOLATION" and kind == "field_delta":
+        field_results = [
+            dict(item)
+            for item in _list(_dict(row.get("actual")).get("field_results"))
+            if isinstance(item, dict)
+        ]
+        result_states = {
+            _text(item.get("result")).upper() for item in field_results
+        }
+        if "FAIL" not in result_states and (
+            not field_results
+            or bool(result_states.intersection({"MISSING", "NON_NUMERIC"}))
+        ):
+            return _rebuild_base_receipt(
+                row,
+                status="INDETERMINATE",
+                reason_code="FIELD_DELTA_EVIDENCE_MISSING",
+            )
+
+    # A row-state filter can PASS only when every returned business row exposes
+    # a recognizable state value.  The base evaluator intentionally skipped
+    # rows without a state field, but then treated an empty violation list as
+    # PASS; that converted absence of state evidence into proof of compliance.
+    effective_kind = _core.KIND_ALIASES.get(kind, kind)
+    if status == "PASS" and effective_kind == "response_rows_state_filter":
+        body = _dict(observations).get("body")
+        business_rows = _core._response_rows(body)
+        if business_rows:
+            allowed = {
+                _text(value)
+                for value in _list(spec.get("allowed_states"))
+                if _text(value)
+            }
+            if not allowed or any(
+                not _row_has_declared_state_evidence(item, allowed)
+                for item in business_rows
+            ):
+                return _rebuild_base_receipt(
+                    row,
+                    status="INDETERMINATE",
+                    reason_code="ROW_STATE_FILTER_STATE_EVIDENCE_MISSING",
+                )
+
+    return row
+
+
 def evaluate_assertion(
     assertion: dict[str, Any],
     *,
@@ -218,7 +350,12 @@ def evaluate_assertion(
         campaign_id=campaign_id,
         execution_id=execution_id,
     )
-    return _seal_assertion_receipt(base, identity)
+    governed = _truthful_tri_state_projection(
+        spec=spec,
+        observations=governed_observations,
+        receipt=base,
+    )
+    return _seal_assertion_receipt(governed, identity)
 
 
 def validate_assertion_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
