@@ -4,6 +4,12 @@ The stable binding implementation remains unchanged. This layer strengthens
 cleanup target resolution so an HTTP-rejected write that demonstrably changed
 business state is cleaned with the same source-declared compensation route as a
 2xx write.
+
+Cleanup identity is safety-critical: a ``{id}`` placeholder may not be satisfied
+by whichever response field happens to end in ``id``.  Runtime cleanup now uses
+only the concrete request path or the exact declared placeholder identity
+(top-level / standard response envelope semantics shared with the cleanup
+adapter contract).  Ambiguous or differently-named identities remain unbound.
 """
 from __future__ import annotations
 
@@ -14,6 +20,7 @@ from urllib.parse import quote, unquote
 
 from . import runtime_binding_materializer_base as _base
 from .runtime_binding_materializer_base import *  # noqa: F401,F403
+from .cleanup_adapter_ladder import identity_value_from_body
 
 
 _PATH_PARAMETER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -130,6 +137,19 @@ def _path_bindings_from_concrete(
     }
 
 
+def _declared_placeholder_identity(body: Any, placeholder: str) -> str:
+    """Resolve one cleanup placeholder without cross-field guessing.
+
+    ``identity_value_from_body`` accepts the exact declared key.  Only when the
+    placeholder itself is a generic primary-key name (id/uuid/guid/key) does
+    that shared helper allow the other generic aliases, and only at the body
+    root or a standard response envelope.  Nested related-object IDs and domain
+    ``*Id`` suffixes are never substitutes.
+    """
+
+    return identity_value_from_body(body, placeholder)
+
+
 def runtime_cleanup_paths(
     path_template: str,
     steps: list[dict[str, Any]],
@@ -137,15 +157,15 @@ def runtime_cleanup_paths(
     """Resolve one compensation target per proven effectful write.
 
     A candidate is either HTTP-accepted or has auditable before/after snapshots
-    proving business-state change. This prevents a 4xx response with a real
-    write side effect from escaping cleanup.
+    proving business-state change.  Each path placeholder must then resolve from
+    the concrete request path or its own declared identity field; inability to
+    prove that identity is a visible cleanup binding gap, never permission to
+    choose another ID-shaped field.
     """
 
     template = _text(path_template)
     placeholders = _PATH_PARAMETER_RE.findall(template)
-    effectful_steps = [
-        step for step in steps if _cleanup_candidate(step)
-    ]
+    effectful_steps = [step for step in steps if _cleanup_candidate(step)]
     if not placeholders:
         return ([(template, {})] if effectful_steps else []), []
     if not effectful_steps:
@@ -155,14 +175,9 @@ def runtime_cleanup_paths(
     missing: list[str] = []
     seen_paths: set[str] = set()
     for index, step in enumerate(effectful_steps):
-        fields = _base._response_scalar_fields(step.get("body"))
         governance = _dict(step.get("governance_receipt"))
-        before_fields = _base._response_scalar_fields(
-            _dict(governance.get("before")).get("body")
-        )
-        after_fields = _base._response_scalar_fields(
-            _dict(governance.get("after")).get("body")
-        )
+        before_body = _dict(governance.get("before")).get("body")
+        after_body = _dict(governance.get("after")).get("body")
         concrete_path_bindings = _path_bindings_from_concrete(
             template,
             _text(step.get("path")),
@@ -170,71 +185,32 @@ def runtime_cleanup_paths(
         bindings: dict[str, Any] = {}
         step_missing: list[str] = []
         for name in placeholders:
-            normalized = _base._field_key(name)
             direct = concrete_path_bindings.get(name)
-            candidates = [direct] if direct not in (None, "") else []
+            candidates: list[Any] = (
+                [direct] if direct not in (None, "") else []
+            )
+
             if not candidates:
-                candidates = list(
-                    dict.fromkeys(fields.get(normalized) or [])
+                response_value = _declared_placeholder_identity(
+                    step.get("body"), name
                 )
-            if not candidates and normalized == "id":
-                candidates = list(
-                    dict.fromkeys(
-                        value
-                        for key, values in fields.items()
-                        if key.endswith("id")
-                        for value in values
-                    )
-                )
+                if response_value:
+                    candidates = [response_value]
+
             if not candidates:
-                observed_after = list(
-                    dict.fromkeys(after_fields.get(normalized) or [])
-                )
-                observed_before = set(
-                    before_fields.get(normalized) or []
-                )
-                candidates = [
-                    value
-                    for value in observed_after
-                    if value not in observed_before
-                ]
-            if not candidates and normalized == "id":
-                observed_after = list(
-                    dict.fromkeys(
-                        value
-                        for key, values in after_fields.items()
-                        if key.endswith("id")
-                        for value in values
-                    )
-                )
-                observed_before = {
-                    value
-                    for key, values in before_fields.items()
-                    if key.endswith("id")
-                    for value in values
-                }
-                candidates = [
-                    value
-                    for value in observed_after
-                    if value not in observed_before
-                ]
-            if not candidates:
-                stable_after = list(
-                    dict.fromkeys(after_fields.get(normalized) or [])
-                )
-                if len(stable_after) == 1:
-                    candidates = stable_after
-            if not candidates and normalized == "id":
-                stable_ids = list(
-                    dict.fromkeys(
-                        value
-                        for key, values in after_fields.items()
-                        if key.endswith("id")
-                        for value in values
-                    )
-                )
-                if len(stable_ids) == 1:
-                    candidates = stable_ids
+                after_value = _declared_placeholder_identity(after_body, name)
+                before_value = _declared_placeholder_identity(before_body, name)
+                # An after-only or changed exact identity is useful evidence.
+                # A stable exact identity is also acceptable because the field
+                # itself is the source-declared cleanup placeholder; unlike the
+                # removed suffix fallback, no cross-field substitution occurs.
+                if after_value and (
+                    not before_value
+                    or after_value != before_value
+                    or after_value == before_value
+                ):
+                    candidates = [after_value]
+
             candidates = list(
                 dict.fromkeys(
                     value
@@ -246,6 +222,7 @@ def runtime_cleanup_paths(
                 step_missing.append(name)
                 continue
             bindings[name] = candidates[0]
+
         if step_missing:
             step_ref = _text(step.get("step_id")) or str(index)
             missing.extend(
