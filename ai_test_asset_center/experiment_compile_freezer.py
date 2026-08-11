@@ -1,13 +1,14 @@
 """Public compile-freeze facade with one flow-data authority.
 
-The core module freezes protocol steps and readback contracts. This facade then
-freezes exact data dependencies and proves the current runtimes can execute
-them, after every plan is available. The legacy Disposable Fixture Contract
-remains a compatibility projection and cannot declare whole-flow readiness.
+The core module freezes protocol steps and readback contracts. This facade first
+projects source-declared credential coordinates into request bodies as opaque
+secret refs, then freezes exact data dependencies and proves the current
+runtimes can execute them. Secret values never enter the compiled artifact.
 """
 from copy import deepcopy
 
 from . import experiment_compile_freezer_core as _core
+from .credential_request_projection import project_declared_credential_refs
 from .flow_data_execution_contract import (
     STATUS_FROZEN as FLOW_DATA_EXECUTION_FROZEN,
     freeze_flow_data_execution_contract,
@@ -136,8 +137,29 @@ def freeze_compiled_experiment(
     *,
     behavior_ir: dict,
 ) -> dict:
-    frozen = _core.freeze_compiled_experiment(
+    # Credential values are never compile-time data. Only the exact declared
+    # secret coordinate is projected into the request body; the transport step
+    # resolves that coordinate at runtime through the existing credential
+    # authority. Project before the core freeze so all content hashes cover it.
+    credential_projected, credential_receipt = project_declared_credential_refs(
         experiment,
+        behavior_ir=behavior_ir,
+    )
+    if _text(credential_receipt.get("status")) == "BLOCKED":
+        return _block(
+            experiment,
+            "BLOCKED_MISSING_BINDING",
+            "credential_request_projection:"
+            + ";".join(
+                _text(row.get("reason_code"))
+                + ":"
+                + _text(row.get("target"))
+                for row in _list(credential_receipt.get("issues"))[:12]
+            ),
+        )
+
+    frozen = _core.freeze_compiled_experiment(
+        credential_projected,
         behavior_ir=behavior_ir,
     )
     if _text(_dict(frozen.get("compile_receipt")).get("status")) != "COMPILED":
