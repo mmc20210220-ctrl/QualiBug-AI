@@ -1,53 +1,28 @@
-"""Schema-declared constraint dimension: industry-universal DB invariants.
+"""Project explicit database constraints into the business-rule pipeline.
 
-The database layer of an enterprise system is a first-class business surface.
-A schema that declares money and quantity columns without any non-negative
-guard, or an idempotency-intent column without a uniqueness constraint, is a
-source-declared structural property of the system — the same property in any
-industry. This module turns those schema facts into rule-library entries so
-they flow through the standard rule → Behavior IR → obligation path.
+Database structure is evidence, not permission to invent a business rule.  This
+module therefore projects only constraints that the supplied DDL explicitly
+declares (currently supported CHECK boundaries and UNIQUE columns).  A missing
+CHECK/UNIQUE is a coverage fact, never evidence that the customer intended the
+missing constraint.
 
-Everything here is derived from the declared DDL only: table names, column
-names, column types, unique/primary declarations and CHECK clauses. Column
-semantic classes (money / quantity / uniqueness intent) use generic business
-vocabulary (金额/数量/库存/幂等 are industry-neutral words for value, count,
-stock and idempotency), never industry terms and never benchmark material.
-
-A column WITH a guard or constraint produces nothing — the absence of the
-guard is what the invariant targets, and the invariant asserts the guard the
-schema omits. No inference about customer data or business rules beyond the
-column's own declaration.
+This boundary is deliberately fail-closed:
+- column/table names never imply money, quantity, stock, idempotency, or any
+  other business semantic;
+- absence of a constraint never creates a rule;
+- only parser-produced, source-declared constraint rows are projected;
+- every generated rule carries its exact DDL authority.
 """
 from __future__ import annotations
 
 from typing import Any
 
-# Generic value (money-like) vocabulary — industry-neutral.
-_MONEY_TOKENS = (
-    "amount", "price", "payable", "total", "discount", "balance",
-    "fee", "cost", "charge", "value", "premium",
-    "金额", "价格", "应付", "余额", "优惠", "费用", "单价", "总价",
-)
-# Generic count/stock vocabulary.
-_QUANTITY_TOKENS = (
-    "qty", "quantity", "count", "stock", "inventory", "capacity", "quota",
-    "数量", "库存", "容量", "额度",
-)
-# Uniqueness-intent vocabulary: the column name itself declares that its
-# values are business identities that must not repeat.
-_UNIQUENESS_TOKENS = (
-    "idempotency", "idempotent", "dedup", "dedupe", "exactly_once",
-    "幂等",
-)
+SCHEMA_RULE_SOURCE_KIND = "database_schema"
+
 _NUMERIC_TYPES = frozenset({
     "numeric", "decimal", "int", "integer", "bigint", "smallint",
     "tinyint", "float", "double", "real", "money", "serial",
 })
-_TEXT_TYPES = frozenset({
-    "text", "varchar", "char", "uuid",
-})
-
-SCHEMA_RULE_SOURCE_KIND = "database_schema"
 
 
 def _text(value: Any) -> str:
@@ -59,43 +34,36 @@ def _list(value: Any) -> list[Any]:
 
 
 def _numeric_type(column_type: str) -> bool:
-    return _text(column_type).lower() in _NUMERIC_TYPES
+    token = _text(column_type).lower()
+    # Parsed SQL types may preserve precision, e.g. NUMERIC(12,2).
+    base = token.split("(", 1)[0].strip()
+    return base in _NUMERIC_TYPES
 
 
-def _matches_any(token: str, vocabulary: tuple[str, ...]) -> bool:
-    lowered = _text(token).lower()
-    return any(word in lowered for word in vocabulary)
+def _column_type(table: dict[str, Any], column: str) -> str:
+    column_types = (
+        table.get("column_types")
+        if isinstance(table.get("column_types"), dict)
+        else {}
+    )
+    direct = _text(column_types.get(column))
+    if direct:
+        return direct
+    lowered = _text(column).lower()
+    for key, value in column_types.items():
+        if _text(key).lower() == lowered:
+            return _text(value)
+    return ""
 
 
-def _column_guards(
-    table: dict[str, Any],
+def _constraint_rule_id(
+    source_id: str,
+    table: str,
     column: str,
-) -> tuple[bool, bool]:
-    """Return (has_non_negative_guard, has_positive_guard) for one column."""
-    non_negative = False
-    positive = False
-    for raw in _list(table.get("check_constraints")):
-        constraint = raw if isinstance(raw, dict) else {}
-        if _text(constraint.get("column")).lower() != _text(column).lower():
-            continue
-        operator = _text(constraint.get("operator")).lower()
-        value = _text(constraint.get("value")).lower()
-        if operator in {">=", ">"} and value == "0":
-            non_negative = True
-        if operator == ">" and value == "0":
-            positive = True
-    return non_negative, positive
-
-
-def _identity_columns(table: dict[str, Any]) -> set[str]:
-    return {
-        _text(value).lower()
-        for value in [
-            * _list(table.get("identity_fields")),
-            * _list(table.get("unique_columns")),
-        ]
-        if _text(value)
-    }
+    authority: str,
+    operator: str,
+) -> str:
+    return f"rule:{source_id}:schema:{table}:{column}:{authority}:{operator}"
 
 
 def _boundary_rule(
@@ -105,21 +73,26 @@ def _boundary_rule(
     column: str,
     column_type: str,
     operator: str,
-    statement: str,
-    risk_type: str,
+    ddl_operator: str,
+    ddl_value: str,
 ) -> dict[str, Any]:
-    rule_id = f"rule:{source_id}:schema:{table}:{column}:{operator}"
+    statement = (
+        f"DDL explicitly declares CHECK on `{table}`.`{column}`: "
+        f"{column} {ddl_operator} {ddl_value}"
+    )
     return {
-        "rule_id": rule_id,
+        "rule_id": _constraint_rule_id(
+            source_id, table, column, "check", operator
+        ),
         "source_id": source_id,
         "source_type": SCHEMA_RULE_SOURCE_KIND,
-        "source_locator": f"table:{table}:column:{column}",
+        "source_locator": f"table:{table}:column:{column}:check",
         "statement": statement,
-        "rule_type": "conservation",
+        "rule_type": "validation",
         "kind": "numeric_boundary",
-        "risk_type": risk_type,
+        "risk_type": "input_boundary",
         "severity": "P1",
-        "tokens": [table, column, column_type, operator],
+        "tokens": [table, column, column_type, ddl_operator, ddl_value],
         "operands": [{
             "entity_ref": table,
             "field": column,
@@ -129,7 +102,70 @@ def _boundary_rule(
         "equation": {
             "operator": operator,
             "terms": [column],
+            "declared_operator": ddl_operator,
+            "declared_value": ddl_value,
         },
+        "constraint_authority": {
+            "kind": "DDL_CHECK",
+            "table": table,
+            "column": column,
+            "operator": ddl_operator,
+            "value": ddl_value,
+        },
+        "inference_used": False,
+    }
+
+
+def _explicit_boundary_operator(
+    ddl_operator: str,
+    ddl_value: str,
+) -> str:
+    """Map only boundaries the existing assertion protocol can prove exactly."""
+
+    operator = _text(ddl_operator)
+    value = _text(ddl_value).lower()
+    if value in {"0", "0.0", "0.00"}:
+        if operator == ">=":
+            return "non_negative"
+        if operator == ">":
+            return "positive"
+    return ""
+
+
+def _unique_rule(
+    *,
+    source_id: str,
+    table: str,
+    column: str,
+    column_type: str,
+) -> dict[str, Any]:
+    return {
+        "rule_id": _constraint_rule_id(
+            source_id, table, column, "unique", "uniqueness"
+        ),
+        "source_id": source_id,
+        "source_type": SCHEMA_RULE_SOURCE_KIND,
+        "source_locator": f"table:{table}:column:{column}:unique",
+        "statement": (
+            f"DDL explicitly declares `{table}`.`{column}` UNIQUE"
+        ),
+        "rule_type": "validation",
+        "kind": "validation_uniqueness",
+        "risk_type": "data_integrity",
+        "severity": "P1",
+        "tokens": [table, column, column_type, "unique"],
+        "operands": [{
+            "entity_ref": table,
+            "field": column,
+            "field_id": f"schema:{table}:{column}",
+            "semantic_type": "UNIQUENESS",
+        }],
+        "constraint_authority": {
+            "kind": "DDL_UNIQUE",
+            "table": table,
+            "column": column,
+        },
+        "inference_used": False,
     }
 
 
@@ -137,97 +173,64 @@ def derive_database_constraint_rules(
     data_tables: list[dict[str, Any]],
     source_id: str,
 ) -> list[dict[str, Any]]:
-    """Derive industry-universal constraint invariants from declared DDL.
+    """Project explicit DDL constraints into rule-library entries.
 
-    Returns rule-library entries. Rules are deterministic (stable rule ids);
-    a column with the declared guard produces no rule.
+    Missing constraints intentionally produce no rule.  Unsupported explicit
+    CHECK shapes also produce no rule rather than being coerced into a nearby
+    semantic assertion.  They remain available in the parsed schema for future
+    protocol support.
     """
+
     rules: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for raw in data_tables:
         table = raw if isinstance(raw, dict) else {}
         table_name = _text(table.get("name"))
         if not table_name:
             continue
-        column_types = table.get("column_types") if isinstance(table.get("column_types"), dict) else {}
-        identity = _identity_columns(table)
-        for column in _list(table.get("columns")):
-            column_name = _text(column)
-            if not column_name:
+
+        for constraint_raw in _list(table.get("check_constraints")):
+            constraint = (
+                constraint_raw if isinstance(constraint_raw, dict) else {}
+            )
+            column = _text(constraint.get("column"))
+            ddl_operator = _text(constraint.get("operator"))
+            ddl_value = _text(constraint.get("value"))
+            if not column or not ddl_operator or not ddl_value:
                 continue
-            column_type = _text(column_types.get(column_name))
-            lowered = column_name.lower()
+            column_type = _column_type(table, column)
+            if not _numeric_type(column_type):
+                continue
+            operator = _explicit_boundary_operator(ddl_operator, ddl_value)
+            if not operator:
+                continue
+            rule = _boundary_rule(
+                source_id=source_id,
+                table=table_name,
+                column=column,
+                column_type=column_type,
+                operator=operator,
+                ddl_operator=ddl_operator,
+                ddl_value=ddl_value,
+            )
+            if rule["rule_id"] not in seen:
+                seen.add(rule["rule_id"])
+                rules.append(rule)
 
-            if _numeric_type(column_type):
-                has_non_negative, has_positive = _column_guards(table, column_name)
-                is_money = _matches_any(lowered, _MONEY_TOKENS)
-                is_quantity = _matches_any(lowered, _QUANTITY_TOKENS)
-                if is_money and not has_non_negative:
-                    rules.append(_boundary_rule(
-                        source_id=source_id,
-                        table=table_name,
-                        column=column_name,
-                        column_type=column_type,
-                        operator="non_negative",
-                        statement=(
-                            f"`{table_name}`.`{column_name}` 必须非负，"
-                            f"数值不允许为负 (must not go below zero)"
-                        ),
-                        risk_type="data_conservation",
-                    ))
-                if is_quantity:
-                    if not has_positive:
-                        rules.append(_boundary_rule(
-                            source_id=source_id,
-                            table=table_name,
-                            column=column_name,
-                            column_type=column_type,
-                            operator="positive",
-                            statement=(
-                                f"`{table_name}`.`{column_name}` 必须为正数，"
-                                f"数量不允许为负 (must stay positive)"
-                            ),
-                            risk_type="data_conservation",
-                        ))
-                    if not has_non_negative:
-                        rules.append(_boundary_rule(
-                            source_id=source_id,
-                            table=table_name,
-                            column=column_name,
-                            column_type=column_type,
-                            operator="non_negative",
-                            statement=(
-                                f"`{table_name}`.`{column_name}` 必须非负，"
-                                f"数值不允许为负 (must not go below zero)"
-                            ),
-                            risk_type="data_conservation",
-                        ))
+        for raw_column in _list(table.get("unique_columns")):
+            column = _text(raw_column)
+            if not column:
+                continue
+            rule = _unique_rule(
+                source_id=source_id,
+                table=table_name,
+                column=column,
+                column_type=_column_type(table, column),
+            )
+            if rule["rule_id"] not in seen:
+                seen.add(rule["rule_id"])
+                rules.append(rule)
 
-            if _matches_any(lowered, _UNIQUENESS_TOKENS):
-                if lowered in identity:
-                    continue
-                if _text(column_type).lower() not in _TEXT_TYPES and not _numeric_type(column_type):
-                    continue
-                rules.append({
-                    "rule_id": f"rule:{source_id}:schema:{table_name}:{column_name}:uniqueness",
-                    "source_id": source_id,
-                    "source_type": SCHEMA_RULE_SOURCE_KIND,
-                    "source_locator": f"table:{table_name}:column:{column_name}",
-                    "statement": (
-                        f"`{table_name}`.`{column_name}` 必须唯一，"
-                        f"重复值不允许出现 (values must be unique)"
-                    ),
-                    "rule_type": "validation",
-                    "kind": "validation_uniqueness",
-                    "risk_type": "idempotency",
-                    "severity": "P1",
-                    "tokens": [table_name, column_name, "unique"],
-                    "operands": [{
-                        "entity_ref": table_name,
-                        "field": column_name,
-                        "field_id": f"schema:{table_name}:{column_name}",
-                        "semantic_type": "UNIQUENESS",
-                    }],
-                })
     return rules
 
 
