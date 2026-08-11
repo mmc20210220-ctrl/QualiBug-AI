@@ -30,7 +30,7 @@ from .process_step_observer import (
 )
 
 for _name in dir(_core):
-    if not _name.startswith("__"):
+    if not _name.startswith("__") and not _name.startswith("_original_"):
         globals()[_name] = getattr(_core, _name)
 
 

@@ -13,7 +13,7 @@ from typing import Any
 from . import process_graph_cleanup_equivalence_core as _core
 
 for _name in dir(_core):
-    if not _name.startswith("__"):
+    if not _name.startswith("__") and not _name.startswith("_original_"):
         globals()[_name] = getattr(_core, _name)
 
 GRAPH_EQUIVALENCE_SCOPE_INVALID = "PROCESS_GRAPH_EQUIVALENCE_SCOPE_INVALID"
