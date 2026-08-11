@@ -1,16 +1,15 @@
-"""Runtime binding graph facade with actor-scoped credential authority.
+"""Runtime binding graph facade with actor and observer authority.
 
 The established source/fixture/read resolver mechanics live in
-``_runtime_binding_graph_mechanics``.  A credential-valued body placeholder is
-special: unlike an entity id, its value is principal-specific.  A shared
-experiment binding plan therefore may not take the first actor that happens to
-have a secret reference.
+``_runtime_binding_graph_mechanics``. Two formal facts require explicit identity:
 
-This facade permits compile-time credential binding only when the compiler's
-required-actor set proves one principal, or every explicit actor coordinate on
-the obligation converges to the same principal.  Multi-actor plans remain
-blocked until a future per-step runtime credential receipt can bind the exact
-step actor; they are never silently cross-wired.
+* credential-valued body placeholders are principal-specific and may not select
+  the first actor that happens to have a secret; and
+* effect observers belong to a source operation. A path-only synthetic operation
+  may not scan the whole Behavior IR relation graph and adopt an unrelated GET
+  as its observer.
+
+Unknown principal or operation identity stays blocked/unresolved.
 """
 from __future__ import annotations
 
@@ -20,6 +19,7 @@ from . import _runtime_binding_graph_mechanics as _core
 from ._runtime_binding_graph_mechanics import *  # noqa: F401,F403
 
 _original_build_binding_plan = _core.build_binding_plan
+_original_declared_effect_observers = _core.declared_effect_observers
 
 
 def __getattr__(name: str) -> Any:
@@ -40,6 +40,55 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def declared_effect_observers(
+    operation: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+    max_candidates: int = 2,
+) -> list[dict[str, str]]:
+    """Return effect observers only for an exact Behavior IR operation identity.
+
+    The historical mechanics intentionally tolerated a path-only operation. In
+    that state ``operation_ref`` is empty and relation lookup falls back to the
+    entire relation graph, so a caller that merely knows ``/api/x`` can adopt
+    observers connected to another operation/entity. Formal observation cannot
+    be path-affinity authority: the write operation itself must exist in IR.
+    """
+
+    op = _dict(operation)
+    operation_ref = _text(op.get("id") or op.get("operation_id"))
+    if not operation_ref:
+        return []
+    indexed = {
+        _text(row.get("id") or row.get("operation_id")): row
+        for row in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(row, dict)
+        and _text(row.get("id") or row.get("operation_id"))
+    }
+    source_operation = _dict(indexed.get(operation_ref))
+    if not source_operation:
+        return []
+
+    # Prevent a caller from borrowing a valid operation id while substituting a
+    # different path/method. The canonical IR row is the only input passed to
+    # the historical discovery mechanics.
+    supplied_path = _text(op.get("path") or op.get("raw_path"))
+    source_path = _text(
+        source_operation.get("path") or source_operation.get("raw_path")
+    )
+    supplied_method = _text(op.get("method")).upper()
+    source_method = _text(source_operation.get("method")).upper()
+    if supplied_path and supplied_path != source_path:
+        return []
+    if supplied_method and source_method and supplied_method != source_method:
+        return []
+    return _original_declared_effect_observers(
+        source_operation,
+        behavior_ir=behavior_ir,
+        max_candidates=max_candidates,
+    )
 
 
 def _actor_ref(actor: dict[str, Any]) -> str:
@@ -90,9 +139,6 @@ def _credential_actor_authority(
         if _text(value)
     }
     explicit_candidates = explicit_refs.intersection(candidates)
-    # A shared binding plan is safe only when all explicit actor coordinates
-    # converge.  control=A,treatment=B is intentionally ambiguous even if one
-    # of them appears first in the obligation/property object.
     if len(explicit_refs) == 1 and len(explicit_candidates) == 1:
         actor_ref = next(iter(explicit_candidates))
         return candidates[actor_ref], "explicit_actor_consensus"
@@ -187,6 +233,10 @@ def build_binding_plan(
     )
 
 
+# Internal graph helpers dynamically resolve the observer function from their
+# defining module. Keep private and public paths on the same strict authority.
+_core.declared_effect_observers = declared_effect_observers
+
 __all__ = sorted(
     {
         *[
@@ -195,6 +245,7 @@ __all__ = sorted(
             if not name.startswith("__")
         ],
         "build_binding_plan",
+        "declared_effect_observers",
         "_credential_actor_authority",
         "_govern_credential_bindings",
     }
