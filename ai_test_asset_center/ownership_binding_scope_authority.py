@@ -10,7 +10,9 @@ One target name such as ``userId`` can mean two fundamentally different things:
 
 This authority runs after the family protocol has fixed step actors and before
 FlowData/compile freeze. Query-only ownership placeholders are replaced by an
-opaque actor-identity coordinate and removed from the global binding plan.
+opaque actor-identity coordinate and removed from the global binding plan. Any
+runtime-read-binding nodes already emitted by the raw compiler for those targets
+are pruned from both fixture DAG projections by exact target/node identity.
 Same-resource body bindings retain their target but are sealed with the exact
 control owner actor.
 """
@@ -107,12 +109,13 @@ def _project_query_steps(
     *,
     target: str,
     operations: dict[str, dict[str, Any]],
-) -> tuple[int, list[dict[str, Any]], bool]:
-    """Project exact query placeholders and report whether non-query use exists."""
+) -> tuple[int, list[dict[str, Any]], bool, bool]:
+    """Project exact query placeholders and report query/non-query scope use."""
 
     projected_count = 0
     rows: list[dict[str, Any]] = []
     non_query_use = False
+    query_scope_seen = False
     for phase in ("precondition", "control", "treatment"):
         new_plan: list[Any] = []
         for raw in _list(experiment.get(f"{phase}_plan")):
@@ -133,6 +136,7 @@ def _project_query_steps(
                     non_query_use = True
                 new_plan.append(step)
                 continue
+            query_scope_seen = True
             query = _dict(step.get("query"))
             actor_ref = _text(step.get("actor_ref"))
             replacements = 0
@@ -179,7 +183,70 @@ def _project_query_steps(
                 )
             new_plan.append(step)
         experiment[f"{phase}_plan"] = new_plan
-    return projected_count, rows, non_query_use
+    return projected_count, rows, non_query_use, query_scope_seen
+
+
+def _prune_query_binding_dag_nodes(
+    experiment: dict[str, Any],
+    targets: set[str],
+) -> dict[str, list[str]]:
+    """Remove only runtime-read nodes for query-local targets from existing DAGs."""
+
+    pruned: dict[str, list[str]] = {}
+    if not targets:
+        return pruned
+    for field in ("fixture_dag", "fixture_dependency_dag"):
+        dag = _dict(experiment.get(field))
+        if not dag:
+            continue
+        removed_ids = {
+            _text(node.get("node_id"))
+            for node in _list(dag.get("nodes"))
+            if isinstance(node, dict)
+            and _text(node.get("kind")) == "runtime_read_binding"
+            and _text(node.get("target")) in targets
+            and _text(node.get("node_id"))
+        }
+        if not removed_ids:
+            continue
+        governed = deepcopy(dag)
+        governed["nodes"] = [
+            node
+            for node in _list(governed.get("nodes"))
+            if not (
+                isinstance(node, dict)
+                and _text(node.get("node_id")) in removed_ids
+            )
+        ]
+        for order_field in (
+            "setup_order",
+            "cleanup_order",
+            "execution_order",
+            "topological_order",
+        ):
+            if order_field in governed:
+                governed[order_field] = [
+                    node_id
+                    for node_id in _list(governed.get(order_field))
+                    if _text(node_id) not in removed_ids
+                ]
+        if "edges" in governed:
+            governed["edges"] = [
+                edge
+                for edge in _list(governed.get("edges"))
+                if not (
+                    isinstance(edge, dict)
+                    and (
+                        _text(edge.get("from")) in removed_ids
+                        or _text(edge.get("to")) in removed_ids
+                    )
+                )
+            ]
+        governed["query_local_binding_nodes_pruned"] = sorted(removed_ids)
+        governed["query_local_binding_targets"] = sorted(targets)
+        experiment[field] = governed
+        pruned[field] = sorted(removed_ids)
+    return pruned
 
 
 def seal_ownership_binding_scopes(
@@ -198,6 +265,7 @@ def seal_ownership_binding_scopes(
     governed: list[dict[str, Any]] = []
     receipt_rows: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
+    removed_query_targets: set[str] = set()
 
     for raw_binding in bindings:
         binding = dict(raw_binding)
@@ -215,7 +283,7 @@ def seal_ownership_binding_scopes(
             governed.append(binding)
             continue
 
-        query_count, query_rows, non_query_use = _project_query_steps(
+        query_count, query_rows, non_query_use, query_scope_seen = _project_query_steps(
             result,
             target=target,
             operations=operations,
@@ -224,15 +292,19 @@ def seal_ownership_binding_scopes(
         issues.extend(row for row in query_rows if row.get("status") == "BLOCKED")
 
         # A target used exclusively as arm-local query identity is no longer a
-        # global FlowData binding after projection. Removing it is what prevents
-        # fixture materialization from fabricating one experiment-wide userId.
-        if query_count and not non_query_use:
+        # global FlowData binding after projection. This is true even if a step
+        # already carried a concrete query value: the global ownership row has no
+        # remaining consumer. Remove the raw compiler's runtime-binding DAG node
+        # as well so activation cannot demand a ghost materialization receipt.
+        if query_scope_seen and not non_query_use:
+            removed_query_targets.add(target)
             receipt_rows.append(
                 {
                     "target": target,
                     "scope": "step_actor_query",
                     "status": "REMOVED_FROM_GLOBAL_BINDING_PLAN",
                     "global_binding_required": False,
+                    "projected_placeholder_count": query_count,
                     "identity_value_persisted": False,
                 }
             )
@@ -301,11 +373,17 @@ def seal_ownership_binding_scopes(
         governed.append(binding)
 
     _restore_binding_shape(result, governed, binding_shape)
+    pruned_nodes = _prune_query_binding_dag_nodes(
+        result,
+        removed_query_targets,
+    )
     receipt = {
         "schema_version": SCHEMA_VERSION,
         "status": "BLOCKED" if issues else "SEALED",
         "rows": receipt_rows,
         "issues": issues,
+        "removed_query_targets": sorted(removed_query_targets),
+        "pruned_fixture_dag_nodes": pruned_nodes,
         "source_order_selection_allowed": False,
         "identity_value_persisted": False,
     }
