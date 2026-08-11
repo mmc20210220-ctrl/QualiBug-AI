@@ -5,6 +5,9 @@ Reference/create/actor authority lives in
 recursive cleanup consume the same unique CleanupOperationAuthority used by runtime
 fixture binding. The recursive mechanics may keep indexing its cleanup list because
 this facade guarantees that list contains zero or exactly one authoritative route.
+
+The shared cleanup module is deliberately dependency-light; this facade does not
+import the runtime-binding facade back into the dependency planner.
 """
 from __future__ import annotations
 
@@ -53,13 +56,6 @@ def _cleanup_operations(
 # The original recursive planner resolves this helper from its defining-module
 # globals. Patching the underlying mechanics makes every depth obey the same rule.
 _authority._core._cleanup_operations = _cleanup_operations
-_authority._core._declared_cleanup_operations = getattr(
-    __import__(
-        "ai_test_asset_center.runtime_binding_graph",
-        fromlist=["_declared_cleanup_operations"],
-    ),
-    "_declared_cleanup_operations",
-)
 
 plan_multi_level_dependency_chain = _authority.plan_multi_level_dependency_chain
 
