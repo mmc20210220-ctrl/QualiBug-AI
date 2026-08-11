@@ -1,23 +1,29 @@
 """Project declared actor credential references into request bodies.
 
 The binding graph may prove that one credential-shaped placeholder belongs to
-one exact declared actor.  The compile artifact must carry only the opaque
-``credential_secret_ref`` coordinate, never the password itself.  The existing
+one exact declared actor. The compile artifact must carry only the opaque
+``credential_secret_ref`` coordinate, never the password itself. The existing
 step-kernel credential resolver dereferences that coordinate immediately before
 transport and its evidence boundary redacts credential fields.
 
-This closes the previous compiler/runtime gap where
-``actor_credential_secret`` was marked runtime-resolvable but no fixture/read
-resolver could ever materialize ``{password}``.
+Projection is driven by the binding plan's exact ``body_template_paths``. This
+covers source redaction spellings such as ``<PASSWORD>`` without guessing token
+case or replacing a concrete business value. String-token matching is retained
+only as a compatibility fallback when an older binding lacks path coordinates.
 """
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 from .runtime_binding_graph import _request_example
 
 SCHEMA_VERSION = "qualibug.credential-request-projection.v1"
+_PLACEHOLDER_VALUE_RE = re.compile(
+    r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$"
+)
+_PATH_TOKEN_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_-]*)|\[(\d+)\]")
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -59,10 +65,67 @@ def _credential_bindings(experiment: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _path_tokens(path: str) -> list[str | int]:
+    tokens: list[str | int] = []
+    for match in _PATH_TOKEN_RE.finditer(_text(path)):
+        field, index = match.groups()
+        if field:
+            tokens.append(field)
+        elif index:
+            tokens.append(int(index))
+    return tokens
+
+
+def _set_placeholder_at_path(
+    value: Any,
+    path: str,
+    secret_ref: str,
+) -> tuple[Any, bool]:
+    """Replace one existing placeholder scalar at an exact declared body path."""
+
+    tokens = _path_tokens(path)
+    if not tokens:
+        return value, False
+    root = deepcopy(value)
+    current: Any = root
+    for token in tokens[:-1]:
+        if isinstance(token, int):
+            if not isinstance(current, list) or token >= len(current):
+                return value, False
+            current = current[token]
+        else:
+            if not isinstance(current, dict) or token not in current:
+                return value, False
+            current = current[token]
+
+    final = tokens[-1]
+    if isinstance(final, int):
+        if not isinstance(current, list) or final >= len(current):
+            return value, False
+        existing = current[final]
+    else:
+        if not isinstance(current, dict) or final not in current:
+            return value, False
+        existing = current[final]
+
+    if not isinstance(existing, str) or not _PLACEHOLDER_VALUE_RE.match(existing):
+        # A binding path may be stale relative to a protocol step that already
+        # supplied a concrete value. Never overwrite concrete source/runtime
+        # material with a credential merely because the field name matches.
+        return value, False
+
+    if isinstance(final, int):
+        current[final] = secret_ref
+    else:
+        current[final] = secret_ref
+    return root, True
+
+
 def _replace_exact_token(value: Any, target: str, secret_ref: str) -> tuple[Any, int]:
+    """Compatibility fallback for old binding rows without body path metadata."""
+
     count = 0
-    brace = "{" + target + "}"
-    angle = "<" + target + ">"
+    governed_target = _text(target).casefold()
 
     def walk(node: Any) -> Any:
         nonlocal count
@@ -70,12 +133,40 @@ def _replace_exact_token(value: Any, target: str, secret_ref: str) -> tuple[Any,
             return {key: walk(child) for key, child in node.items()}
         if isinstance(node, list):
             return [walk(child) for child in node]
-        if isinstance(node, str) and node.strip() in {brace, angle}:
-            count += 1
-            return secret_ref
+        if isinstance(node, str):
+            match = _PLACEHOLDER_VALUE_RE.match(node)
+            if match and _text(match.group(1)).casefold() == governed_target:
+                count += 1
+                return secret_ref
         return node
 
     return walk(value), count
+
+
+def _project_binding_into_body(
+    body: Any,
+    binding: dict[str, Any],
+    *,
+    target: str,
+    secret_ref: str,
+) -> tuple[Any, int]:
+    paths = [
+        _text(value)
+        for value in _list(binding.get("body_template_paths"))
+        if _text(value)
+    ]
+    projected = deepcopy(body)
+    count = 0
+    for path in list(dict.fromkeys(paths)):
+        projected, replaced = _set_placeholder_at_path(
+            projected,
+            path,
+            secret_ref,
+        )
+        count += int(replaced)
+    if count or paths:
+        return projected, count
+    return _replace_exact_token(projected, target, secret_ref)
 
 
 def project_declared_credential_refs(
@@ -102,6 +193,11 @@ def project_declared_credential_refs(
             "actor_ref": actor_ref,
             "credential_secret_ref": secret_ref,
             "credential_actor_authority": authority,
+            "body_template_paths": [
+                _text(value)
+                for value in _list(binding.get("body_template_paths"))
+                if _text(value)
+            ],
             "projected_step_ids": [],
             "replacement_count": 0,
             "secret_value_persisted": False,
@@ -133,10 +229,11 @@ def project_declared_credential_refs(
                 op_ref = _text(step.get("operation_ref"))
                 operation = _dict(operations.get(op_ref))
                 body = step.get("body") if "body" in step else _request_example(operation)
-                projected_body, replacement_count = _replace_exact_token(
+                projected_body, replacement_count = _project_binding_into_body(
                     body,
-                    target,
-                    secret_ref,
+                    binding,
+                    target=target,
+                    secret_ref=secret_ref,
                 )
                 if replacement_count:
                     step_actor = _text(step.get("actor_ref"))
