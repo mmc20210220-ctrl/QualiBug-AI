@@ -4,16 +4,19 @@ The core executor keeps request logic. This adapter preserves a ledger created
 at experiment entry and merges core step facts through public ledger methods,
 so fixture, barrier, business, and cleanup stages share one public authority.
 
-This boundary also seals request-build truth before finalization. A governed
-write that explicitly reports ``write_request_attempt_count == 0`` is a
-pre-transport block when it carries a non-transport reason; it must never fall
-through to the finalizer's legacy ``HARNESS_REQUEST_BUILD_FAILED`` fallback.
+Two request-boundary authorities compose here before finalization:
+
+* source-declared ownership query placeholders are projected per exact step actor
+  (never from one experiment-global ``userId`` chosen by actor order); and
+* an explicit zero-write governance result is sealed as a pre-transport block,
+  so it cannot fall through to ``HARNESS_REQUEST_BUILD_FAILED``.
 """
 from __future__ import annotations
 
 import sys
 from typing import Any, Callable
 
+from .actor_scoped_query_binding import project_actor_scoped_query_bindings
 from .experiment_plan_executor import (
     execute_non_barrier_plans as _execute_non_barrier_plans,
 )
@@ -300,7 +303,6 @@ def _copy_timeline(
         existing.add(key)
 
 
-
 def current_raw_plan_delegate() -> Callable[..., dict[str, Any]]:
     """Return the transport delegate wrapped by the lifecycle authority."""
     return _execute_non_barrier_plans
@@ -336,7 +338,24 @@ def execute_non_barrier_plans(**kwargs: Any) -> dict[str, Any]:
     observations = _dict(kwargs.get("observations"))
     entry_ledger = _ledger(observations.get("process_step_ledger"))
 
-    result = _dict(_execute_non_barrier_plans(**kwargs))
+    # Query ownership identity is an arm-local fact. Project it into a call-local
+    # copy of each plan before graph/sequential dispatch; never mutate the sealed
+    # experiment and never let an experiment-global runtime binding pick an
+    # actor by list order.
+    control_plan, treatment_plan, query_receipt = project_actor_scoped_query_bindings(
+        control_plan=list(kwargs.get("control_plan") or []),
+        treatment_plan=list(kwargs.get("treatment_plan") or []),
+        ops=_dict(kwargs.get("ops")),
+        actors=_dict(kwargs.get("actors")),
+        tokens=_dict(kwargs.get("tokens")),
+    )
+    governed_kwargs = dict(kwargs)
+    governed_kwargs["control_plan"] = control_plan
+    governed_kwargs["treatment_plan"] = treatment_plan
+    if int(_dict(query_receipt).get("row_count") or 0) > 0:
+        observations["actor_scoped_query_binding_receipt"] = query_receipt
+
+    result = _dict(_execute_non_barrier_plans(**governed_kwargs))
     result, first_loss_receipt = _seal_pre_transport_request_blocks(result)
     if first_loss_receipt.get("row_count"):
         observations["request_build_first_loss_receipt"] = first_loss_receipt
