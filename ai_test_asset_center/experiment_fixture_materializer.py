@@ -9,19 +9,22 @@ becoming fixture facts:
 * source CHECK enum conflicts are never silently rewritten;
 * disposable UNIQUE-key rewriting is table-scoped;
 * dependency fixture creation requires one exact source GET/HEAD resolver path;
-  a fabricated ``/{dependency}`` path is not resolver authority; and
 * automatic fixture creation requires one unique POST candidate and one unique
-  actor authority. Source-order "first POST" or "first executable actor" is not
-  a business fact.
+  actor authority; and
+* ownership identity materialization must consume the compile-sealed owner actor.
+  Legacy/unsealed ownership rows and any mismatch with the core's historical
+  first-account iteration are blocked before fixture transport.
 """
 from __future__ import annotations
 
 import re
 from copy import deepcopy
+import hashlib
 from typing import Any
 
 from . import experiment_fixture_materializer_core as _core
 from . import experiment_fixture_materializer_with_preconditions as _composed
+from .actor_scoped_query_binding import resolve_actor_runtime_identity
 from .cleanup_identity_authority import strict_observed_resource_identity
 from .real_id_resolver import collection_path, normalize_path_placeholders
 from .schema_unique_materialization_authority import (
@@ -43,6 +46,9 @@ _original_source_backed_dependency_fixture_setup = (
 )
 _original_auto_fixture_create_for_binding_target = (
     _core._auto_fixture_create_for_binding_target
+)
+_original_composed_materialize_experiment_fixtures = (
+    _composed.materialize_experiment_fixtures
 )
 
 
@@ -248,8 +254,6 @@ def _auto_create_candidates(
 
     target_path = normalize_path_placeholders(_text(binding.get("target_path")))
     if target_path.startswith("/"):
-        # Target-path hints are accepted only when that path itself belongs to a
-        # declared source operation. A fabricated /{dependency} never qualifies.
         if any(
             normalize_path_placeholders(
                 _text(op.get("path") or op.get("raw_path"))
@@ -359,6 +363,159 @@ def _auto_fixture_create_for_binding_target(
     return result
 
 
+def _binding_rows(exp: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = _dict(exp).get("binding_plan")
+    if isinstance(raw, dict):
+        return [
+            {**_dict(value), "target": _text(_dict(value).get("target") or key)}
+            for key, value in raw.items()
+            if isinstance(value, dict)
+        ]
+    return [dict(row) for row in _list(raw) if isinstance(row, dict)]
+
+
+def _ownership_runtime_preflight(
+    *,
+    exp: dict[str, Any],
+    actors: dict[str, dict[str, Any]],
+    tokens: dict[str, str],
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Prove the legacy core will consume the compile-sealed owner, not actor order."""
+
+    governed_actors = deepcopy(actors)
+    rows: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    ownership_bindings = [
+        row
+        for row in _binding_rows(exp)
+        if _text(row.get("source_priority")) == "ownership_identity_param"
+    ]
+    for binding in ownership_bindings:
+        target = _text(binding.get("target"))
+        scope = _text(binding.get("ownership_binding_scope"))
+        owner_actor_ref = _text(binding.get("owner_actor_ref"))
+        base = {
+            "target": target,
+            "scope": scope,
+            "owner_actor_ref": owner_actor_ref,
+            "source_order_selection_allowed": False,
+            "identity_value_persisted": False,
+        }
+        if scope != "shared_control_resource_owner" or not owner_actor_ref:
+            issue = {
+                **base,
+                "status": "BLOCKED",
+                "reason_code": "OWNERSHIP_RUNTIME_SCOPE_UNSEALED",
+            }
+            issues.append(issue)
+            rows.append(issue)
+            continue
+
+        identity = resolve_actor_runtime_identity(
+            owner_actor_ref,
+            actors=governed_actors,
+            tokens=tokens,
+        )
+        if _text(identity.get("status")) != "RESOLVED":
+            issue = {
+                **base,
+                "status": "BLOCKED",
+                "reason_code": _text(identity.get("reason_code"))
+                or "OWNERSHIP_RUNTIME_OWNER_IDENTITY_UNRESOLVED",
+            }
+            issues.append(issue)
+            rows.append(issue)
+            continue
+
+        # The historical mechanics consumes actor.account_id only. Enrich the
+        # exact sealed owner on a call-local catalog so JWT/user_id authority can
+        # be consumed without mutating Behavior IR or persisting the raw value.
+        owner_copy = dict(_dict(governed_actors.get(owner_actor_ref)))
+        owner_copy["account_id"] = _text(identity.get("identity_value"))
+        governed_actors[owner_actor_ref] = owner_copy
+
+        first_core_actor = ""
+        for planned in [
+            *_list(exp.get("control_plan")),
+            *_list(exp.get("treatment_plan")),
+        ]:
+            if not isinstance(planned, dict):
+                continue
+            actor_ref = _text(planned.get("actor_ref"))
+            actor = _dict(governed_actors.get(actor_ref))
+            if _text(actor.get("account_id")):
+                first_core_actor = actor_ref
+                break
+        if first_core_actor != owner_actor_ref:
+            issue = {
+                **base,
+                "status": "BLOCKED",
+                "reason_code": "OWNERSHIP_CORE_SELECTION_NOT_SEALED_OWNER",
+                "core_first_actor_ref": first_core_actor,
+            }
+            issues.append(issue)
+            rows.append(issue)
+            continue
+
+        rows.append(
+            {
+                **base,
+                "status": "READY",
+                "reason_code": "",
+                "identity_authority": _text(identity.get("authority")),
+                "identity_fingerprint": _text(
+                    identity.get("identity_fingerprint")
+                )
+                or hashlib.sha256(
+                    _text(identity.get("identity_value")).encode("utf-8")
+                ).hexdigest()[:16],
+                "core_consumption_aligned": True,
+            }
+        )
+
+    return governed_actors, {
+        "schema_version": "qualibug.ownership-runtime-materialization.v1",
+        "status": "BLOCKED" if issues else "READY",
+        "binding_count": len(ownership_bindings),
+        "rows": rows,
+        "issues": issues,
+        "source_order_selection_allowed": False,
+        "identity_value_persisted": False,
+    }
+
+
+def _ownership_terminal(kwargs: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:
+    issues = _list(receipt.get("issues"))
+    detail = ";".join(
+        f"{_text(_dict(row).get('target'))}:{_text(_dict(row).get('reason_code'))}"
+        for row in issues[:8]
+    )
+    reason = "BLOCKED_MISSING_BINDING"
+    return {
+        "status": "terminal",
+        "result": {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": _text(kwargs.get("eid")),
+            "obligation_id": _text(kwargs.get("oid")),
+            "status": "BLOCKED",
+            "reason_code": reason,
+            "detail": "ownership_runtime_materialization:" + detail,
+            "steps": [],
+            "fixture_receipts": [],
+            "binding_materialization_receipts": [],
+            "finding": None,
+            "cleanup_failures": 0,
+            "ownership_runtime_materialization_receipt": receipt,
+            "execution_receipt": {
+                "status": "BLOCKED",
+                "reason_code": reason,
+                "detail": "ownership_runtime_materialization_not_authoritative",
+                "cleanup_failures": 0,
+            },
+        },
+    }
+
+
 # Replace exact core authorities. The core materializer resolves these globals at
 # call time, so neither synthetic dependency paths nor first-candidate fixture
 # choices can bypass the public facade.
@@ -371,7 +528,30 @@ _core._auto_fixture_create_for_binding_target = _auto_fixture_create_for_binding
 _composed._strict_validate_fixture_preconditions = (
     _strict_validate_fixture_preconditions
 )
-materialize_experiment_fixtures = _composed.materialize_experiment_fixtures
+
+
+def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
+    governed_actors, ownership_receipt = _ownership_runtime_preflight(
+        exp=_dict(kwargs.get("exp")),
+        actors=_dict(kwargs.get("actors")),
+        tokens=_dict(kwargs.get("tokens")),
+    )
+    if _text(ownership_receipt.get("status")) == "BLOCKED":
+        return _ownership_terminal(kwargs, ownership_receipt)
+    state = _dict(
+        _original_composed_materialize_experiment_fixtures(
+            **{**kwargs, "actors": governed_actors}
+        )
+    )
+    state["ownership_runtime_materialization_receipt"] = ownership_receipt
+    terminal_result = _dict(state.get("result"))
+    if terminal_result:
+        terminal_result["ownership_runtime_materialization_receipt"] = (
+            ownership_receipt
+        )
+        state["result"] = terminal_result
+    return state
+
 
 __all__ = sorted(
     name
