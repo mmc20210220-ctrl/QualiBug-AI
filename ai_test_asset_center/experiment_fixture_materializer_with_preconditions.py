@@ -5,17 +5,19 @@ projects the frozen FlowDataRequirement into the core's supported node schema,
 proves the result, then executes compiled preconditions before measured business
 steps. Any block preserves cleanup context and clears measurement plans.
 
-Activation reconciliation is diagnostic only. A fixture required by the Oracle
-but never processed by the fixture DAG is a contract drift, not evidence that
-the fixture was resolved. Synthetic ``activation_requirement_reconciliation``
-rows are therefore converted into a fail-closed DAG drift before preconditions
-or measured business steps may run.
+Two truth boundaries are enforced before any measured step:
+* activation reconciliation is diagnostic only; a fixture the DAG never
+  executed cannot be rewritten into ``resolved`` evidence;
+* fixture preconditions are real gates. Missing structured response evidence or
+  an explicit precondition validation failure cannot coexist with a synthetic
+  ``resolved`` fixture receipt.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
 
+from . import experiment_fixture_materializer_core as _materializer_core
 from .experiment_fixture_materializer_core import (
     materialize_experiment_fixtures as _materialize_experiment_fixtures,
 )
@@ -26,6 +28,10 @@ from .flow_data_materialization import (
 )
 from .flow_data_materializer_projection import (
     project_flow_data_materializer_dag,
+)
+
+_original_validate_fixture_preconditions = (
+    _materializer_core._validate_fixture_preconditions
 )
 
 
@@ -39,6 +45,51 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _declared_fixture_precondition_fields(exp: dict[str, Any], target: str) -> list[str]:
+    fields: set[str] = set()
+    for raw in _list(_dict(exp).get("assertions")):
+        assertion = _dict(raw)
+        for term in _list(assertion.get("terms")):
+            field = _text(_dict(term).get("field"))
+            if field:
+                fields.add(field)
+        for key in ("from_field", "to_field", "state_field", "field"):
+            field = _text(assertion.get(key))
+            if field:
+                fields.add(field)
+    token = "{" + _text(target) + "}"
+    for raw in _list(_dict(exp).get("treatment_plan")):
+        body = _dict(_dict(raw).get("body"))
+        for key, value in body.items():
+            if isinstance(value, str) and token in value:
+                fields.add(_text(key))
+    return sorted(field for field in fields if field)
+
+
+def _strict_validate_fixture_preconditions(
+    exp: dict[str, Any],
+    fixture_response_body: Any,
+    target: str,
+) -> list[dict[str, str]]:
+    """Missing structured response evidence is unknown, never a passed fixture."""
+
+    required = _declared_fixture_precondition_fields(exp, target)
+    if required and not isinstance(fixture_response_body, dict):
+        return [
+            {
+                "field": field,
+                "reason": "fixture_precondition_response_unstructured",
+                "target": _text(target),
+            }
+            for field in required
+        ]
+    return _original_validate_fixture_preconditions(
+        exp,
+        fixture_response_body,
+        target,
+    )
 
 
 def _block_measurement(
@@ -71,19 +122,26 @@ def _block_measurement(
     return state
 
 
+def _remove_fake_fixture_contract_evidence(
+    state: dict[str, Any], affected_ids: set[str]
+) -> None:
+    state["contract_evidence_receipts"] = [
+        row
+        for row in _list(state.get("contract_evidence_receipts"))
+        if not (
+            isinstance(row, dict)
+            and _text(row.get("kind")) == "fixture"
+            and _text(row.get("subject_id")) in affected_ids
+        )
+    ]
+
+
 def _reject_synthetic_activation_reconciliation(
     *,
     exp: dict[str, Any],
     state: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Turn non-executed fixture reconciliation into visible DAG drift.
-
-    The historical core added ``resolved`` fixture receipts when an activation
-    requirement was absent from the execution order (and even when no DAG node
-    existed). That row was later converted into a Contract Evidence ``OBSERVED``
-    receipt. Reconciliation may explain the mismatch, but it cannot satisfy the
-    fixture requirement.
-    """
+    """Turn non-executed fixture reconciliation into visible DAG drift."""
 
     fixture_receipts = [
         dict(row) if isinstance(row, dict) else row
@@ -117,18 +175,7 @@ def _reject_synthetic_activation_reconciliation(
 
     state["fixture_receipts"] = fixture_receipts
     affected = set(affected_ids)
-    # Remove the fake fixture Contract Evidence receipt already authored by the
-    # historical core.  Absence is deliberate: downstream activation must see
-    # that the required fixture has no observed proof, never a rewritten proof.
-    state["contract_evidence_receipts"] = [
-        row
-        for row in _list(state.get("contract_evidence_receipts"))
-        if not (
-            isinstance(row, dict)
-            and _text(row.get("kind")) == "fixture"
-            and _text(row.get("subject_id")) in affected
-        )
-    ]
+    _remove_fake_fixture_contract_evidence(state, affected)
     receipt = {
         "schema_version": "qualibug.fixture-activation-reconciliation-gate.v1",
         "status": "BLOCKED",
@@ -150,9 +197,84 @@ def _reject_synthetic_activation_reconciliation(
     )
 
 
+def _reject_failed_fixture_preconditions(
+    *,
+    exp: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Make the core's PRECONDITION_FAILED diagnostic an actual fixture gate."""
+
+    fixture_receipts = [
+        dict(row) if isinstance(row, dict) else row
+        for row in _list(state.get("fixture_receipts"))
+    ]
+    failed_nodes = {
+        _text(row.get("node_id"))
+        for row in fixture_receipts
+        if isinstance(row, dict)
+        and _text(row.get("kind")) == "fixture_precondition_validation"
+        and _text(row.get("status")).upper() == "FAILED"
+        and _text(row.get("node_id"))
+    }
+    failed_bindings = [
+        dict(row)
+        for row in _list(state.get("binding_materialization_receipts"))
+        if isinstance(row, dict)
+        and _text(row.get("status")).upper() == "PRECONDITION_FAILED"
+    ]
+    if not failed_nodes and not failed_bindings:
+        return None
+
+    # The core may have appended a later generic ``resolved`` row for the same
+    # node after recording the failed validation. Withdraw that synthetic
+    # resolution and retain the explicit failure as the only authoritative row.
+    for row in fixture_receipts:
+        if not isinstance(row, dict):
+            continue
+        node_id = _text(row.get("node_id"))
+        if node_id not in failed_nodes:
+            continue
+        if _text(row.get("kind")) == "fixture_precondition_validation":
+            row["reason_code"] = "BLOCKED_FIXTURE_CONTRACT_FAILED"
+            continue
+        if _text(row.get("status")).lower() in {"resolved", "ready", "completed", "bound"}:
+            row.update({
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_FIXTURE_CONTRACT_FAILED",
+                "detail": "fixture_precondition_not_proven",
+            })
+    state["fixture_receipts"] = fixture_receipts
+    _remove_fake_fixture_contract_evidence(state, failed_nodes)
+    receipt = {
+        "schema_version": "qualibug.fixture-precondition-gate.v1",
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_FIXTURE_CONTRACT_FAILED",
+        "failed_fixture_ids": sorted(failed_nodes),
+        "failed_bindings": failed_bindings,
+        "precondition_failure_is_diagnostic_only": False,
+    }
+    return _block_measurement(
+        exp=exp,
+        state=state,
+        reason_code="BLOCKED_FIXTURE_CONTRACT_FAILED",
+        detail=(
+            "fixture_precondition_not_proven:"
+            + ",".join(sorted(failed_nodes))
+        ),
+        phase="fixture_precondition",
+        receipt=receipt,
+    )
+
+
 def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     exp = _dict(kwargs.get("exp"))
     projected_exp, projection_receipt = project_flow_data_materializer_dag(exp)
+
+    # The core materializer resolves this helper from its own module globals.
+    # Install the strict tri-state validator before the core executes.
+    _materializer_core._validate_fixture_preconditions = (
+        _strict_validate_fixture_preconditions
+    )
     state = _dict(
         _materialize_experiment_fixtures(
             **{
@@ -177,6 +299,13 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     )
     if reconciliation_block is not None:
         return reconciliation_block
+
+    precondition_block = _reject_failed_fixture_preconditions(
+        exp=exp,
+        state=state,
+    )
+    if precondition_block is not None:
+        return precondition_block
 
     flow_data_receipt = validate_flow_data_materialization(exp, state)
     state["flow_data_materialization_receipt"] = flow_data_receipt
