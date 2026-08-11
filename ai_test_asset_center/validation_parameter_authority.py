@@ -10,9 +10,9 @@ agree on one truth boundary:
   a valid negative probe, not a request-build failure; and
 * path/header mutations remain subject to the existing wire-capability gate.
 
-The installer patches the existing module globals so the established compiler,
-protocol and request-contract implementations remain the only engines.  No
-parallel compiler or transport path is introduced.
+The request-only installer is deliberately separate from the compile installer:
+a fresh runtime needs only the RequestBuildContract query rule and must not pull
+validation-expander/protocol modules into execution just to rebuild a fingerprint.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from copy import deepcopy
 from typing import Any
 
 _INSTALLED = False
+_REQUEST_INSTALLED = False
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -45,12 +46,7 @@ def _required_flag(value: Any) -> bool:
 def declared_parameter_control_value(
     parameter: dict[str, Any],
 ) -> tuple[bool, Any, str]:
-    """Return one source-declared concrete control value, never a guess.
-
-    ``0`` and ``False`` are valid declared examples/defaults. ``None`` is not
-    used as a transport control value because its wire representation depends on
-    parameter serialization rules that this authority does not invent.
-    """
+    """Return one source-declared concrete control value, never a guess."""
 
     row = _dict(parameter)
     schema = _dict(row.get("schema"))
@@ -79,14 +75,7 @@ def declared_parameter_control_value(
 
 
 def strict_parameter_entries(operation: dict[str, Any]) -> list[dict[str, Any]]:
-    """Normalize only source-materializable request parameters.
-
-    The historical expander fabricated ``example`` / ``1`` from a declared
-    schema type and also invented ``1`` for undeclared path placeholders. That
-    made a control request look valid without any source or runtime authority.
-    Such rows are omitted here; without a concrete control value no exact
-    parameter validation variant is executable.
-    """
+    """Normalize only source-materializable request parameters."""
 
     entries: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -197,8 +186,6 @@ def strict_parameter_constraint_material(
         treatment.pop(name, None)
         operator = "remove_required_parameter"
     else:
-        # Reuse the established JSON-Schema mutation implementation. This
-        # authority changes only how the valid control is sourced.
         from . import experiment_protocols_privacy_base as _privacy
 
         ok, invalid_value, operator = _privacy._invalid_constraint_value(
@@ -233,8 +220,6 @@ def _declared_required_parameter_removals(
     *,
     location: str,
 ) -> set[str]:
-    """Return exact intentionally-absent required parameters for one step."""
-
     mutation = _dict(_dict(step).get("mutation"))
     if not (
         _text(mutation.get("parameter_location")).lower() == location
@@ -318,23 +303,34 @@ def query_contract_with_declared_required_removal(
     return result
 
 
-def install_validation_parameter_authority() -> None:
-    """Install one authority into the three established validation stages."""
+def install_request_parameter_contract_authority() -> None:
+    """Install only the RequestBuildContract query rule; safe for runtime."""
 
-    global _INSTALLED
-    if _INSTALLED:
+    global _REQUEST_INSTALLED
+    if _REQUEST_INSTALLED:
         return
-
-    from . import _validation_obligation_expander_core as _expander
-    from . import experiment_protocols_privacy_base as _privacy
     from . import request_build_contract as _request
-
-    _expander._parameter_entries = strict_parameter_entries
-    _privacy._parameter_constraint_material = strict_parameter_constraint_material
 
     if not hasattr(_request, "_qualibug_original_query_contract"):
         _request._qualibug_original_query_contract = _request._query_contract
     _request._query_contract = query_contract_with_declared_required_removal
+    _REQUEST_INSTALLED = True
+
+
+def install_validation_parameter_authority() -> None:
+    """Install compile-time expander/protocol authority plus request authority."""
+
+    global _INSTALLED
+    if _INSTALLED:
+        install_request_parameter_contract_authority()
+        return
+
+    from . import _validation_obligation_expander_core as _expander
+    from . import experiment_protocols_privacy_base as _privacy
+
+    _expander._parameter_entries = strict_parameter_entries
+    _privacy._parameter_constraint_material = strict_parameter_constraint_material
+    install_request_parameter_contract_authority()
     _INSTALLED = True
 
 
@@ -343,5 +339,6 @@ __all__ = [
     "strict_parameter_entries",
     "strict_parameter_constraint_material",
     "query_contract_with_declared_required_removal",
+    "install_request_parameter_contract_authority",
     "install_validation_parameter_authority",
 ]
