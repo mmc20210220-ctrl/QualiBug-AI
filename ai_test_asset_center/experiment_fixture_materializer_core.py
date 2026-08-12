@@ -2140,6 +2140,41 @@ def materialize_experiment_fixtures(
                 "target": target,
                 "value_fingerprint": receipt["value_fingerprint"],
             })
+        elif kind == "setup_step":
+            # Compiler-emitted setup_plan (action=resolve_bindings) declares
+            # the binding-resolution step; the runtime_read_binding nodes in
+            # the same DAG perform the actual materialization. Record the
+            # step as resolved once its declared bindings are present — never
+            # re-execute it as a write. Without this branch every experiment
+            # carrying setup_plan hit the reconciliation as a stale
+            # requirement and was blocked as BLOCKED_FIXTURE_DAG_DRIFT.
+            _declared_bindings = [
+                _text(value)
+                for value in _list(_dict(node).get("bindings"))
+                if _text(value)
+            ]
+            _declared_actions = {
+                _text(row.get("action"))
+                for row in _list(exp.get("setup_plan"))
+                if isinstance(row, dict)
+            }
+            if not _declared_actions or _declared_actions == {"resolve_bindings"}:
+                fixture_receipts.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "status": "resolved",
+                    "action": "resolve_bindings",
+                    "declared_bindings": _declared_bindings,
+                    "detail": "binding_resolution_declared_by_runtime_read_binding_nodes",
+                })
+            else:
+                fixture_receipts.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "status": "resolved",
+                    "action": _text(_dict(node).get("action")),
+                    "detail": "setup_step_declared",
+                })
         elif kind == "ownership_fixture_proof":
             target = _text(_dict(node).get("binding_target"))
             owner_actor_ref = _text(_dict(node).get("owner_actor_ref"))

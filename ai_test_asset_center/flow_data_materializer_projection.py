@@ -17,7 +17,17 @@ from typing import Any
 
 SCHEMA_VERSION = "qualibug.flow-data-materializer-projection.v1"
 _RECOGNIZED_KINDS = frozenset(
-    {"actor_context", "runtime_read_binding", "ownership_fixture_proof"}
+    {
+        "actor_context",
+        "runtime_read_binding",
+        "ownership_fixture_proof",
+        # Every compiled experiment carries a compiler-emitted setup_plan
+        # (action=resolve_bindings) whose fixture_dag node must survive the
+        # projection: dropping it made the oracle activation reference a node
+        # missing from the projected DAG, and the materializer reconciliation
+        # blocked every such experiment as BLOCKED_FIXTURE_DAG_DRIFT.
+        "setup_step",
+    }
 )
 
 

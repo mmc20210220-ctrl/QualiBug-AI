@@ -677,6 +677,17 @@ def build_contract_oracle_activation_receipt(
                 and not _experiment_has_field_oracle_assertions(exp)
             ):
                 blockers.append(f"OBSERVER_RECEIPT_INDETERMINATE:{observer_id}")
+            elif not any(
+                _text(row.get("status")).upper() == "INDETERMINATE"
+                for row in observer_rows
+            ):
+                # Receipts exist with an unrecognized/absent status: fail
+                # closed instead of silently dropping the observer from the
+                # verified set. Silent dropping made an ACTIVE activation
+                # carry verified < required, which the batch re-validation
+                # rejected as activation_receipt_semantics_invalid and the
+                # whole experiment group was lost (run32 VIOLATION deliveries).
+                blockers.append(f"OBSERVER_RECEIPT_NOT_SATISFIED:{observer_id}")
             continue
         # Record one verified receipt per required observer; step-scoped
         # siblings stay in the evidence for assertion evaluation while the

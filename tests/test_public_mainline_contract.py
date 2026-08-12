@@ -450,6 +450,133 @@ def test_divergent_fixture_dag_orders_still_execute_business_steps(
     )
 
 
+def test_setup_step_survives_projection_and_materializes(monkeypatch, tmp_path) -> None:
+    """Compiler-emitted setup_plan (action=resolve_bindings) nodes must survive
+    the flow-data DAG projection and materialize without drift.
+
+    run28/29/30: every experiment carries setup_plan, the projection dropped
+    the setup_step node (not in _RECOGNIZED_KINDS), the core had no setup_step
+    branch, and the activation reconciliation blocked every such experiment as
+    BLOCKED_FIXTURE_DAG_DRIFT (198-222 per run, 0 executed).
+    """
+    from ai_test_asset_center.flow_data_materializer_projection import (
+        project_flow_data_materializer_dag,
+    )
+
+    projection_exp = {
+        "fixture_dag": {
+            "status": "READY",
+            "setup_order": ["fix-actor", "fix-setup"],
+            "nodes": [
+                {"node_id": "fix-actor", "kind": "actor_context", "actor_ref": "m"},
+                {
+                    "node_id": "fix-setup",
+                    "kind": "setup_step",
+                    "action": "resolve_bindings",
+                    "constructible": True,
+                },
+            ],
+        },
+        "setup_plan": [{"action": "resolve_bindings", "bindings": ["thingId"]}],
+        "binding_plan": [{"target": "thingId", "status": "bound"}],
+    }
+    projected, _ = project_flow_data_materializer_dag(projection_exp)
+    projected_kinds = [
+        (n.get("node_id"), n.get("kind"))
+        for n in (projected.get("fixture_dag") or {}).get("nodes", [])
+    ]
+    assert ("fix-setup", "setup_step") in projected_kinds, (
+        "setup_step must survive the flow-data projection"
+    )
+    assert "fix-setup" in (projected.get("fixture_dag") or {}).get(
+        "setup_order", []
+    )
+
+    experiment, ir = _compile_experiment(with_clerk=False)
+    experiment["safety_contract"] = {"environment_type": "test"}
+    experiment["setup_plan"] = [
+        {"action": "resolve_bindings", "bindings": ["thingId"]}
+    ]
+    experiment["fixture_dag"] = {
+        "status": "READY",
+        "fixture_dag_id": "dag-setup-step",
+        "setup_order": ["node-actor", "node-thing", "node-setup"],
+        "nodes": [
+            {"node_id": "node-actor", "kind": "actor_context", "actor_ref": "manager"},
+            {
+                "node_id": "node-thing",
+                "kind": "runtime_read_binding",
+                "target": "thingId",
+                "actor_ref": "manager",
+            },
+            {
+                "node_id": "node-setup",
+                "kind": "setup_step",
+                "action": "resolve_bindings",
+                "bindings": ["thingId"],
+                "constructible": True,
+            },
+        ],
+    }
+    experiment["fixture_dependency_dag"] = {
+        "execution_order": ["node-actor", "node-thing"],
+        "nodes": [
+            {"node_id": "node-actor", "kind": "actor_context", "actor_ref": "manager"},
+            {
+                "node_id": "node-thing",
+                "kind": "runtime_read_binding",
+                "target": "thingId",
+            },
+        ],
+    }
+    experiment["binding_plan"] = [
+        {
+            "target": "thingId",
+            "status": "bound",
+            "source_priority": "source_declared_path_example",
+            "materialized_value": "thing-1",
+        },
+        *[
+            row
+            for row in (experiment.get("binding_plan") or [])
+            if not str(row.get("target") or "").startswith("actor:")
+        ],
+    ]
+    _mock_transport(monkeypatch, 200, {"items": []})
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract=_runtime_contract(),
+        campaign_id="campaign",
+        execution_id="execution-setup-step",
+        actor_tokens={"secret://manager": "tok-m"},
+    )
+
+    assert result.get("status") == "EXECUTED", result.get("detail")
+    required = set(result.get("required_step_ids") or [])
+    executed = set(result.get("executed_step_ids") or [])
+    assert required <= executed, (
+        f"required business steps missing: required={sorted(required)} "
+        f"executed={sorted(executed)}"
+    )
+    fixture_receipts = result.get("fixture_receipts") or []
+    assert not any(
+        isinstance(row, dict)
+        and row.get("reason_code") == "BLOCKED_FIXTURE_DAG_DRIFT"
+        for row in fixture_receipts
+    ), "setup_step must not be blocked as DAG drift"
+    assert any(
+        isinstance(row, dict)
+        and row.get("node_id") == "node-setup"
+        and row.get("status") == "resolved"
+        for row in fixture_receipts
+    ), "setup_step must be resolved by the materializer"
+
+
 def _all_observation_receipt_ids(result: dict) -> list[str]:
     """Observer + contract-evidence receipt ids, exactly as the batch projects.
 
