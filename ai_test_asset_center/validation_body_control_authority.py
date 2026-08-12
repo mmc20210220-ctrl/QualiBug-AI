@@ -2,8 +2,8 @@
 
 Validation may use a body assembled from JSON Schema/OpenAPI only when every
 required value is concretely declared by the source (example/default/const or
-one unambiguous enum literal). Type information alone never authorizes a
-synthetic value. This authority is validation-scoped: normal request-body
+one unambiguous enum literal).  Type information alone never authorizes a
+synthetic value.  This authority is validation-scoped: normal request-body
 materialization keeps its existing source/observed-data rules.
 """
 from __future__ import annotations
@@ -52,9 +52,7 @@ def _direct_value(schema: dict[str, Any]) -> tuple[Any, str]:
     ):
         if key in schema and schema.get(key) is not None:
             return deepcopy(schema.get(key)), authority
-    enum_values = [
-        deepcopy(value) for value in _l(schema.get("enum")) if value is not None
-    ]
+    enum_values = [deepcopy(value) for value in _l(schema.get("enum")) if value is not None]
     if len(enum_values) == 1:
         return enum_values[0], "schema_singleton_enum"
     return _MISSING, ""
@@ -161,9 +159,7 @@ def install_validation_body_control_authority() -> None:
         expander._qualibug_original_request_example = expander._request_example
     original_request_example = expander._qualibug_original_request_example
 
-    def _request_example_with_declared_schema(
-        operation: dict[str, Any],
-    ) -> dict[str, Any]:
+    def _request_example_with_declared_schema(operation: dict[str, Any]) -> dict[str, Any]:
         existing = original_request_example(operation)
         if isinstance(existing, dict) and existing:
             return existing
