@@ -99,7 +99,6 @@ def operation_has_source_declared_anonymous_access(operation: dict[str, Any]) ->
 def _json_pointer_token(value: Any) -> str:
     return _t(value).replace("~", "~0").replace("/", "~1")
 
-
 def stamp_openapi_operation_security(
     rows: Iterable[dict[str, Any]],
     document: dict[str, Any],
