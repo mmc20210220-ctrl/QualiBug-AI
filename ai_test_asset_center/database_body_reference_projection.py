@@ -8,6 +8,7 @@ from .database_body_reference_projection_common import (
     _approved_request_field_bindings, _authoritative_fk, _parent_table_entity,
 )
 from .database_body_reference_source_fk import _project_source_bound_operation_fk_relations
+from .database_body_reference_semantic_label import project_exact_description_anchor_relations
 
 def project_database_body_reference_relations(
     model: dict[str, Any],
@@ -99,6 +100,17 @@ def project_database_body_reference_relations(
         seen.add(identity)
         receipts.append(projected)
 
+    for projected in project_exact_description_anchor_relations(result, receipts):
+        identity = (
+            _text(projected.get("operation_ref")),
+            _text(projected.get("body_path")),
+            _text(projected.get("target_entity_ref")),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        receipts.append(projected)
+
     result["body_reference_relations"] = sorted(
         receipts,
         key=lambda row: (_text(row.get("operation_ref")), _text(row.get("body_path")), _text(row.get("target_entity_ref"))),
@@ -113,6 +125,11 @@ def project_database_body_reference_relations(
             1
             for row in receipts
             if _text(row.get("authority")) == "source_bound_operation_entity+database_model_exact_fk"
+        ),
+        "source_description_anchor_reference_count": sum(
+            1
+            for row in receipts
+            if _text(row.get("authority")) == "source_exact_body_description+resolved_relation_anchor"
         ),
         "field_name_inference_allowed": False,
         "route_shape_inference_allowed": False,
