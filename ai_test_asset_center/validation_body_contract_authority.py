@@ -96,7 +96,26 @@ def body_contract_with_schema_presence(
                     "reason_code": "",
                 }
             )
+    placeholders = [
+        dict(row) for row in _l(result.get("placeholders")) if isinstance(row, dict)
+    ]
+    for row in placeholders:
+        receipt = _d(row.get("target_receipt"))
+        if (
+            _t(row.get("status")) == request.STATUS_DEFERRED
+            and _t(receipt.get("status")) == "RESOLVED"
+            and _t(receipt.get("binding_status")).lower() == "bound"
+            and _t(receipt.get("authority")) == "sealed_materialized_value"
+        ):
+            row.update(
+                {
+                    "status": request.STATUS_READY,
+                    "authority": "sealed_materialized_value",
+                    "reason_code": "",
+                }
+            )
     result["required"] = rows
+    result["placeholders"] = placeholders
     return _recompute_body_status(result, request)
 
 

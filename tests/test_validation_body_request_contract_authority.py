@@ -71,3 +71,34 @@ def test_truly_absent_required_key_remains_blocked() -> None:
     metadata = next(row for row in body["required"] if row["field"] == "metadata")
     assert metadata["status"] == STATUS_BLOCKED
     assert metadata["reason_code"] == "REQUEST_REQUIRED_BODY_FIELD_MISSING"
+
+
+def test_sealed_body_placeholder_is_ready_without_runtime_deferral() -> None:
+    operation = {
+        "id": "op-create",
+        "method": "POST",
+        "path": "/resources",
+        "request_schema": {
+            "type": "object",
+            "required": ["resourceId"],
+            "properties": {"resourceId": {"type": "string"}},
+        },
+    }
+    experiment = _experiment({"resourceId": "{resourceId}"})
+    experiment["binding_plan"] = [
+        {
+            "target": "resourceId",
+            "status": "bound",
+            "source_priority": "source_value",
+            "materialized_value": "resource-1",
+        }
+    ]
+    contract = build_request_build_contract(
+        experiment,
+        behavior_ir={"operations": [operation]},
+        flow_execution_contract={},
+    )
+    assert contract["status"] == STATUS_READY
+    body = contract["steps"][0]["components"][3]
+    assert body["status"] == STATUS_READY
+    assert body["placeholders"][0]["authority"] == "sealed_materialized_value"

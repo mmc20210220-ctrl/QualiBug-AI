@@ -228,20 +228,24 @@ def governed_build_request_build_contract(
             operation_ref=operation_ref,
         )
         operation = _dict(operations.get(operation_ref))
-        components = [
-            deepcopy(component)
-            for component in _list(row.get("components"))
-            if isinstance(component, dict)
-            and _text(component.get("component")) != "header"
-        ]
-        components.append(
-            build_step_header_contract(
-                step=step,
-                operation=operation,
-                experiment=experiment,
-                behavior_ir=behavior_ir,
-            )
+        rebuilt_header = build_step_header_contract(
+            step=step,
+            operation=operation,
+            experiment=experiment,
+            behavior_ir=behavior_ir,
         )
+        components: list[dict[str, Any]] = []
+        header_replaced = False
+        for component in _list(row.get("components")):
+            if not isinstance(component, dict):
+                continue
+            if _text(component.get("component")) == "header":
+                components.append(deepcopy(rebuilt_header))
+                header_replaced = True
+            else:
+                components.append(deepcopy(component))
+        if not header_replaced:
+            components.append(deepcopy(rebuilt_header))
         blocked_components = [
             component
             for component in components
