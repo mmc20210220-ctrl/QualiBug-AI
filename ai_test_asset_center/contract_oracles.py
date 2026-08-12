@@ -138,6 +138,26 @@ def _validate_posthoc_semantics(row: dict[str, Any]) -> None:
     delivery_gate = _text(row.get("authorization_delivery_gate")).upper()
     if delivery_gate:
         if delivery_gate != "INDETERMINATE":
+            # Diagnostic-only capture: dump the rejected receipt so a bounded
+            # run exposes the exact authorization_delivery_gate value and the
+            # full row (never affects product behavior).
+            import os as _diag_os
+
+            _diag_path = str(
+                _diag_os.environ.get("QUALIBUG_ORACLE_DIAG_PATH") or ""
+            ).strip()
+            if _diag_path:
+                try:
+                    import json as _diag_json
+
+                    with open(_diag_path, "a", encoding="utf-8") as _diag_fh:
+                        _diag_fh.write(_diag_json.dumps({
+                            "event": "DELIVERY_GATE_VALUE_INVALID",
+                            "delivery_gate_value": row.get("authorization_delivery_gate"),
+                            "oracle_verdict": row,
+                        }, ensure_ascii=False, default=str) + "\n")
+                except OSError:
+                    pass
             raise ValueError("contract_oracle_delivery_gate_invalid")
         if not _text(row.get("authorization_delivery_reason")):
             raise ValueError("contract_oracle_delivery_reason_missing")
