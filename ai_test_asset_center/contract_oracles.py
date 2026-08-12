@@ -165,9 +165,25 @@ def _restore_pre_gate_oracle(row: dict[str, Any]) -> dict[str, Any]:
         for field in _DELIVERY_FIELDS:
             base.pop(field, None)
         if delivery_gate == "INDETERMINATE":
-            base["status"] = "VIOLATION"
-            base["verdict"] = "customer_deliverable_defect_candidate"
-            base["customer_deliverable_candidate"] = True
+            activation_status = _text(
+                _dict(base.get("activation_receipt")).get("status")
+            )
+            if activation_status == "ACTIVE":
+                base["status"] = "VIOLATION"
+                base["verdict"] = "customer_deliverable_defect_candidate"
+                base["customer_deliverable_candidate"] = True
+            else:
+                # Delivery evidence invalid while the control arm was not
+                # proven (activation BLOCKED/HARNESS_FAILED): keep the BLOCKED
+                # semantics — no candidate is fabricated. Restoring VIOLATION
+                # unconditionally made the strict validator see a VIOLATION
+                # base with a BLOCKED activation and, on the gate-stripped
+                # base, no annotation to justify the override, so it raised
+                # contract_oracle_semantics_invalid and the reseal chain
+                # crashed (run35 finalization).
+                base["status"] = "BLOCKED"
+                base["verdict"] = "blocked_experiment"
+                base["customer_deliverable_candidate"] = False
 
     # Oracle validity runs after authorization causality.  Its pre-verdict
     # snapshot contains the sealed semantic fields that it changed.  Restore
