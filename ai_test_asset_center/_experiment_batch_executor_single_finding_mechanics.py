@@ -743,7 +743,32 @@ def execute_selected_experiments(
             _text(oracle_verdict.get("schema_version")) or _text(oracle_verdict.get("receipt_id"))
         )
         if oracle_verdict and not _is_gate_block:
-            validated_oracle = validate_contract_oracle_receipt(oracle_verdict)
+            try:
+                validated_oracle = validate_contract_oracle_receipt(oracle_verdict)
+            except Exception as _oracle_validate_exc:
+                # Diagnostic-only capture: dump the rejected receipt so a
+                # bounded run exposes the exact schema/activation mismatch
+                # (never affects product behavior).
+                import os as _diag_os
+
+                _diag_path = str(
+                    _diag_os.environ.get("QUALIBUG_ORACLE_DIAG_PATH") or ""
+                ).strip()
+                if _diag_path:
+                    try:
+                        import json as _diag_json
+
+                        with open(_diag_path, "a", encoding="utf-8") as _diag_fh:
+                            _diag_fh.write(_diag_json.dumps({
+                                "event": "ORACLE_RECEIPT_REJECTED",
+                                "error": f"{type(_oracle_validate_exc).__name__}:{_oracle_validate_exc}",
+                                "obligation_id": _text(exp.get("obligation_id")),
+                                "experiment_id": _text(exp.get("experiment_id")),
+                                "oracle_verdict": oracle_verdict,
+                            }, ensure_ascii=False, default=str) + "\n")
+                    except OSError:
+                        pass
+                raise
             oracle_receipt_id = _text(validated_oracle.get("receipt_id"))
             outcome["oracle_verdict"] = validated_oracle
         status = _text(outcome.get("status")).upper()
