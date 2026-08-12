@@ -323,6 +323,10 @@ def install_validation_parameter_authority() -> None:
     global _INSTALLED
     if _INSTALLED:
         install_request_parameter_contract_authority()
+        from .validation_body_control_authority import (
+            install_validation_body_control_authority,
+        )
+        install_validation_body_control_authority()
         return
 
     from . import _validation_obligation_expander_core as _expander
@@ -330,6 +334,10 @@ def install_validation_parameter_authority() -> None:
 
     _expander._parameter_entries = strict_parameter_entries
     _privacy._parameter_constraint_material = strict_parameter_constraint_material
+    from .validation_body_control_authority import (
+        install_validation_body_control_authority,
+    )
+    install_validation_body_control_authority()
     install_request_parameter_contract_authority()
     _INSTALLED = True
 

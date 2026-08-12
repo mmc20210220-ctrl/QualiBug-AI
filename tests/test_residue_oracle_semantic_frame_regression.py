@@ -160,8 +160,9 @@ def test_residue_accepted_with_wrong_reason_remains_fail_closed() -> None:
 def test_semantic_rule_frame_rejects_marker_only_tail_without_behavior() -> None:
     assert _semantic_rule_frame("403 角色或数据范围不允许") == {}
     assert _semantic_rule_frame("当前资源仅限") == {}
+    assert _semantic_rule_frame("required:") == {}
     assert _rules_from_text(
-        "403 角色或数据范围不允许。\n当前资源仅限。",
+        "403 角色或数据范围不允许。\n当前资源仅限。\nrequired:",
         "src_api_contract",
         "business_rules",
     ) == []
