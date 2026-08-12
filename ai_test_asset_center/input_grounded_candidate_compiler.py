@@ -11,6 +11,7 @@ for _name in dir(_base):
         globals()[_name] = getattr(_base, _name)
 
 _original_parse_openapi_endpoints = _base.parse_openapi_endpoints
+_original_rule_lookup = _base._rule_lookup
 
 
 def _d(value: Any) -> dict[str, Any]:
@@ -48,7 +49,24 @@ def parse_openapi_endpoints(input_dir):
     return endpoints
 
 
+def _rule_lookup(rules):
+    """Return the concrete rule object expected by candidate generation.
+
+    The mainline helper groups duplicate rule codes into lists, while the
+    candidate loop reads ``rule_text`` directly from the lookup result.  That
+    type mismatch silently erased rule text from every focused business-rule
+    probe.  Preserve first-source ordering and expose the concrete rule here;
+    supporting citations still retain all matching rules through ``_rule_quotes``.
+    """
+    grouped = _original_rule_lookup(rules)
+    return {
+        code: (matches[0] if isinstance(matches, list) and matches else matches)
+        for code, matches in grouped.items()
+    }
+
+
 _base.parse_openapi_endpoints = parse_openapi_endpoints
+_base._rule_lookup = _rule_lookup
 
 
 def __getattr__(name: str) -> Any:

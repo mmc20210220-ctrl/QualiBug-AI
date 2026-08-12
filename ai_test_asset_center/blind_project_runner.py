@@ -1,17 +1,27 @@
 """Blind-runner facade preserving source security through OpenAPI round trips."""
 from __future__ import annotations
 
+import json
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from . import blind_project_runner_mainline_base as _base
 from .openapi_security_authority import openapi_operation_security_facts
+from .runtime_input_authority import (
+    derive_auth_flow as _derive_auth_flow_authority,
+    enrich_probe_config_services,
+    load_recursive_openapi,
+    parse_document_accounts,
+)
 
 for _name in dir(_base):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_base, _name)
 
 _original_merge_openapi_with_knowledge_asset = _base._merge_openapi_with_knowledge_asset
+_original_load_openapi_yaml_or_json = _base._load_openapi_yaml_or_json
+_original_build_input_only_probe_config = _base._build_input_only_probe_config
 
 
 def _t(value: Any) -> str:
@@ -168,7 +178,67 @@ def _merge_openapi_with_knowledge_asset(
     return merged
 
 
+def _load_openapi_yaml_or_json(input_dir: Path) -> tuple[dict[str, Any], str]:
+    # Preserve canonical top-level contracts when present. Otherwise prefer real
+    # nested structured contracts over a lossy Markdown reconstruction.
+    for name in ("openapi.json", "swagger.json", "openapi.yaml", "openapi.yml", "swagger.yaml", "swagger.yml"):
+        if (Path(input_dir) / name).exists():
+            return _original_load_openapi_yaml_or_json(Path(input_dir))
+    merged, source = load_recursive_openapi(Path(input_dir))
+    if merged:
+        return merged, source
+    return _original_load_openapi_yaml_or_json(Path(input_dir))
+
+
+def _parse_doc_accounts(input_dir: Path) -> dict[str, dict[str, str]]:
+    return parse_document_accounts(
+        Path(input_dir),
+        role_key_resolver=_base._account_role_keys,
+    )
+
+
+def _derive_auth_flow(api_doc: str, openapi: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from .auto_test_data_factory import _markdown_request_example
+    except Exception:
+        _markdown_request_example = None
+    return _derive_auth_flow_authority(
+        api_doc,
+        openapi,
+        markdown_request_example=_markdown_request_example,
+    )
+
+
+def _build_input_only_probe_config(
+    project: str,
+    root: Path,
+    base_url: str,
+    api_doc: str,
+    openapi: dict[str, Any],
+    allow_write_sandbox: bool,
+) -> tuple[Path | None, str]:
+    config_path, approval_id = _original_build_input_only_probe_config(
+        project,
+        root,
+        base_url,
+        api_doc,
+        openapi,
+        allow_write_sandbox,
+    )
+    if config_path is not None:
+        enrich_probe_config_services(
+            config_path,
+            input_dir=root / "platform_inputs" / _base._safe_project_id(project),
+            base_url=base_url,
+        )
+    return config_path, approval_id
+
+
 _base._merge_openapi_with_knowledge_asset = _merge_openapi_with_knowledge_asset
+_base._load_openapi_yaml_or_json = _load_openapi_yaml_or_json
+_base._parse_doc_accounts = _parse_doc_accounts
+_base._derive_auth_flow = _derive_auth_flow
+_base._build_input_only_probe_config = _build_input_only_probe_config
 
 
 def __getattr__(name: str) -> Any:
