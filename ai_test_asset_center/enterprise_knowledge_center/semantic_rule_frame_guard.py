@@ -1,51 +1,40 @@
-"""Reject incomplete semantic rule frames before Behavior IR validation."""
+"""Reject incomplete semantic rule frames at every parsing authority boundary.
+
+The public ``_parsing`` facade copies symbols from ``_parsing_mechanics`` during
+import.  Guarding only that copied facade function leaves direct mechanics
+callers unprotected, so marker-only lines such as OpenAPI ``required:`` or a
+403 response description can still enter the knowledge asset with an empty
+behavior and later abort the whole Behavior IR build.
+
+Install the same fail-closed wrapper on both the facade and its mechanics
+authority.  No behavior is invented: an incomplete frame is simply rejected.
+"""
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 
-def _guarded_semantic_rule_frame(
-    current: Callable[[str], dict[str, Any]],
-    *,
-    norm: Callable[[Any], str],
-) -> Callable[[str], dict[str, Any]]:
+def _install_one(target: Any) -> None:
+    current = getattr(target, "_semantic_rule_frame", None)
+    if not callable(current):
+        return
     if getattr(current, "_qualibug_rejects_empty_behavior", False):
-        return current
+        return
 
     def _semantic_rule_frame(statement: str) -> dict[str, Any]:
         frame = current(statement)
-        if frame and not norm(frame.get("behavior")):
+        if frame and not target._norm(frame.get("behavior")):
             return {}
         return frame
 
-    _semantic_rule_frame._qualibug_rejects_empty_behavior = True  # type: ignore[attr-defined]
-    return _semantic_rule_frame
+    _semantic_rule_frame._qualibug_rejects_empty_behavior = True
+    target._semantic_rule_frame = _semantic_rule_frame
 
 
 def install_semantic_rule_frame_guard(parsing: Any) -> None:
-    """Install the guard on both the facade and its mechanics globals.
+    """Install the guard on the facade and the underlying mechanics module."""
 
-    ``_parsing`` re-exports functions from ``_parsing_mechanics``. Replacing only
-    ``_parsing._semantic_rule_frame`` protects direct callers but does not alter
-    the global looked up by ``_parsing_mechanics._rules_from_text``. That import
-    split let empty frames from OpenAPI YAML (for example ``required:``) bypass
-    the guard and later abort the entire Behavior IR build.
-    """
-
-    norm = parsing._norm
-    parsing._semantic_rule_frame = _guarded_semantic_rule_frame(
-        parsing._semantic_rule_frame,
-        norm=norm,
-    )
-
-    rules_from_text = getattr(parsing, "_rules_from_text", None)
-    rule_globals = getattr(rules_from_text, "__globals__", None)
-    if not isinstance(rule_globals, dict):
-        return
-    mechanics_current = rule_globals.get("_semantic_rule_frame")
-    if not callable(mechanics_current):
-        return
-    rule_globals["_semantic_rule_frame"] = _guarded_semantic_rule_frame(
-        mechanics_current,
-        norm=norm,
-    )
+    _install_one(parsing)
+    core = getattr(parsing, "_core", None)
+    if core is not None:
+        _install_one(core)

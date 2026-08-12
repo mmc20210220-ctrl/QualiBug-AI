@@ -1,132 +1,148 @@
-# registry-refresh: 2026-08-12
 name: Connector mainline
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'tools/.one_shot/qualibug_main_optimization_20260812/**'
+  pull_request_target:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
   statuses: write
 
 concurrency:
-  group: qualibug-main-optimization-20260812
-  cancel-in-progress: false
+  group: online-source-target-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  deliver-verified-main-optimization:
+  deliver-online-source-root-fix:
+    if: >-
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'online-source-ingestion-root-fix' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
-      - name: Checkout latest main
+      - name: Checkout trusted PR branch
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: online-source-ingestion-root-fix
           fetch-depth: 0
 
+      - name: Determine whether delivery is pending
+        id: delivery
+        shell: bash
+        run: |
+          if [[ -f .github/patches/online_source_ingestion_root_fix.patch.gz.b64 ]]; then
+            echo 'required=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'required=false' >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.delivery.outputs.required == 'true'
         with:
-          python-version: '3.11'
+          python-version: "3.12"
           cache: pip
 
-      - name: Reassemble and verify optimization patch
+      - name: Decode and apply verified root fix
+        if: steps.delivery.outputs.required == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          cat \
-            tools/.one_shot/qualibug_main_optimization_20260812/part-00 \
-            tools/.one_shot/qualibug_main_optimization_20260812/part-01 \
-            tools/.one_shot/qualibug_main_optimization_20260812/part-02 \
-            tools/.one_shot/qualibug_main_optimization_20260812/part-03 \
-            tools/.one_shot/qualibug_main_optimization_20260812/part-04 \
-            > /tmp/qualibug-main-optimization.patch
-          echo '5a9616483fdbfe15bfdacc3c85bdd6b78ac6329a1111749bc4ced5e1fa8dfa1b  /tmp/qualibug-main-optimization.patch' | sha256sum -c -
-          git apply --check /tmp/qualibug-main-optimization.patch
-          git apply /tmp/qualibug-main-optimization.patch
+          base64 -d .github/patches/online_source_ingestion_root_fix.patch.gz.b64 \
+            | gzip -d > /tmp/online-source-root-fix.patch
+          echo '1b047903842952c8750440abbe2fb2c38af3e958bcbdd7063b373fb68ba6d079  /tmp/online-source-root-fix.patch' \
+            | sha256sum -c -
+          git apply --check /tmp/online-source-root-fix.patch
+          git apply /tmp/online-source-root-fix.patch
           git diff --check
 
-      - name: Verify exact optimization scope
+      - name: Verify exact online-source scope
+        if: steps.delivery.outputs.required == 'true'
         shell: bash
         run: |
           set -euo pipefail
           cat > /tmp/expected-files.txt <<'EOF'
-          ai_test_asset_center/_runtime_binding_graph_mechanics.py
-          ai_test_asset_center/_runtime_binding_graph_semantic_mechanics.py
-          ai_test_asset_center/behavior_ir_core.py
-          ai_test_asset_center/enterprise_knowledge_center/_parsing_mechanics.py
-          ai_test_asset_center/obligation_compiler_base.py
-          ai_test_asset_center/universal_api_parser.py
-          pyproject.toml
-          tests/test_effect_observer_source_authority.py
-          tests/test_runtime_binding_collection_response_resolver.py
-          tests/test_universal_api_parser_content_path_guard.py
+          ai_test_asset_center/connector_source_ingestion.py
+          ai_test_asset_center/connector_sync_authority.py
+          ai_test_asset_center/enterprise_knowledge_center/_crud.py
+          ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py
+          ai_test_asset_center/feishu_connector_adapter.py
+          tests/test_feishu_connector_adapter.py
           EOF
           git diff --name-only | sort > /tmp/actual-files.txt
           sort -o /tmp/expected-files.txt /tmp/expected-files.txt
           diff -u /tmp/expected-files.txt /tmp/actual-files.txt
-          git rev-parse HEAD > /tmp/tested-base-sha
 
-      - name: Compile changed Python sources
-        shell: bash
+      - name: Install package and tests
+        if: steps.delivery.outputs.required == 'true'
         run: |
-          set -euo pipefail
-          python -m py_compile \
-            ai_test_asset_center/universal_api_parser.py \
-            ai_test_asset_center/enterprise_knowledge_center/_parsing_mechanics.py \
-            ai_test_asset_center/_runtime_binding_graph_mechanics.py \
-            ai_test_asset_center/_runtime_binding_graph_semantic_mechanics.py \
-            ai_test_asset_center/obligation_compiler_base.py \
-            ai_test_asset_center/behavior_ir_core.py \
-            tests/test_universal_api_parser_content_path_guard.py \
-            tests/test_runtime_binding_collection_response_resolver.py \
-            tests/test_effect_observer_source_authority.py
-
-      - name: Install package and test dependency
-        shell: bash
-        run: |
-          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
 
-      - name: Run focused regression suite
-        shell: bash
+      - name: Compile online-source authorities
+        if: steps.delivery.outputs.required == 'true'
         run: |
-          set -euo pipefail
-          python -m pytest -q \
-            tests/test_universal_api_parser_content_path_guard.py \
-            tests/test_runtime_binding_collection_response_resolver.py \
-            tests/test_effect_observer_source_authority.py \
-            tests/test_residue_oracle_semantic_frame_regression.py
+          python -m py_compile \
+            ai_test_asset_center/enterprise_knowledge_center/_crud.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_observation.py \
+            ai_test_asset_center/connector_source_ingestion.py \
+            ai_test_asset_center/connector_sync_authority.py \
+            ai_test_asset_center/feishu_connector_adapter.py
 
-      - name: Commit verified optimization and restore workflow
+      - name: Run complete enterprise online-source regression
+        if: steps.delivery.outputs.required == 'true'
+        env:
+          QUALIBUG_JWT_SECRET: ci-online-source-secret
+          QUALIBUG_LOCAL_DEV_ACTOR: '1'
+          QUALIBUG_ALLOW_PUBLIC_BIND: '0'
+        run: |
+          python -m pytest -q \
+            tests/test_connector_auto_sync.py \
+            tests/test_connector_auto_sync_recovery_probe.py \
+            tests/test_connector_configuration_service.py \
+            tests/test_connector_connection_profiles.py \
+            tests/test_connector_fencing_public_projection.py \
+            tests/test_connector_profile_transaction_authority.py \
+            tests/test_connector_source_ingestion_compatibility.py \
+            tests/test_connector_source_occurrence_ingestion.py \
+            tests/test_connector_supervisor_lifecycle_authority.py \
+            tests/test_connector_sync_authority.py \
+            tests/test_connector_sync_fencing.py \
+            tests/test_connector_sync_locking.py \
+            tests/test_connector_sync_ownership.py \
+            tests/test_connector_workspace_maintenance.py \
+            tests/test_connector_workspace_maintenance_security.py \
+            tests/test_feishu_connector_adapter.py \
+            tests/test_frontend_materials_mainline.py \
+            tests/test_private_pilot_connector_handlers.py \
+            tests/test_source_occurrence_archive_lifecycle.py \
+            tests/test_source_occurrence_content_identity.py \
+            tests/test_source_occurrence_lifecycle.py \
+            tests/test_source_occurrence_projection.py
+
+      - name: Commit verified source to PR branch
+        if: steps.delivery.outputs.required == 'true'
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'QualiBug Automation'
           git config user.email 'automation@qualibug.local'
-          git cat-file blob f629a6b58ba199a8657d165066af808ef2f6adb4 > .github/workflows/connector-mainline.yml
-          git rm -r tools/.one_shot/qualibug_main_optimization_20260812
-          git rm .github/workflows/apply-qualibug-main-optimization-20260812.yml
-          git add -A
-          git diff --cached --check
-          git commit -m 'fix(core): harden planning and runtime binding' \
-            -m 'Accept large compact OpenAPI content safely, reject marker-only semantic rules, restore source-backed runtime identity resolvers and effect observers, keep compensation inference fail-closed, preserve Behavior IR v2 compatibility, and install zstandard for the default artifact compression path.'
-
-      - name: Rebase safely if main moved, re-verify, and push
-        shell: bash
-        run: |
-          set -euo pipefail
-          tested_base="$(cat /tmp/tested-base-sha)"
-          git fetch origin main
-          latest_main="$(git rev-parse origin/main)"
-          if [[ "${latest_main}" != "${tested_base}" ]]; then
-            git rebase origin/main
-            python -m pytest -q \
-              tests/test_universal_api_parser_content_path_guard.py \
-              tests/test_runtime_binding_collection_response_resolver.py \
-              tests/test_effect_observer_source_authority.py \
-              tests/test_residue_oracle_semantic_frame_regression.py
-          fi
-          git push origin HEAD:main
+          git cat-file blob bd44bc55393855bbe4e99ccac6027f79cb9a5857 \
+            > .github/workflows/connector-mainline.yml
+          git rm \
+            .github/workflows/deliver-online-source-root-fix.yml \
+            .github/patches/online_source_ingestion_root_fix.patch.gz.b64 \
+            .github/online-source-delivery.trigger \
+            ai_test_asset_center/connector_online_source_delivery_trigger.py
+          git add \
+            .github/workflows/connector-mainline.yml \
+            ai_test_asset_center/connector_source_ingestion.py \
+            ai_test_asset_center/connector_sync_authority.py \
+            ai_test_asset_center/enterprise_knowledge_center/_crud.py \
+            ai_test_asset_center/enterprise_knowledge_center/source_occurrence_core.py \
+            ai_test_asset_center/feishu_connector_adapter.py \
+            tests/test_feishu_connector_adapter.py
+          git commit -m 'perf(ingestion): batch and skip unchanged online sources' \
+            -m 'Reuse the existing atomic ingestion, occurrence, observation, coordinator, checkpoint, and fencing authorities as one batch. Export only remotely changed Feishu resources and preserve full-snapshot deletion safety.'
+          git push origin HEAD:online-source-ingestion-root-fix
