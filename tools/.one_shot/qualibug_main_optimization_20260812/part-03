@@ -1,0 +1,210 @@
++import json
++
++from ai_test_asset_center.universal_api_parser import parse_to_openapi
++
++
++def test_compact_large_openapi_json_is_content_not_a_filesystem_path() -> None:
++    """A one-line OpenAPI payload may be much longer than PATH_MAX.
++
++    This is the shape produced by an internal normalize/render hop for large
++    customer contracts.  Parsing it must never attempt ``stat(payload)``.
++    """
++
++    paths = {
++        f"/api/resources/{index}": {
++            "get": {
++                "operationId": f"getResource{index}",
++                "responses": {"200": {"description": "ok"}},
++            }
++        }
++        for index in range(180)
++    }
++    compact = json.dumps(
++        {
++            "openapi": "3.0.3",
++            "info": {"title": "large contract", "version": "1.0.0"},
++            "paths": paths,
++        },
++        separators=(",", ":"),
++    )
++
++    assert "\n" not in compact
++    assert len(compact) > 4096
++
++    parsed = parse_to_openapi(compact)
++
++    assert parsed["openapi"] == "3.0.3"
++    assert len(parsed["paths"]) == 180
++    assert parsed["paths"]["/api/resources/179"]["get"]["operationId"] == "getResource179"
+--- /dev/null
++++ b/tests/test_runtime_binding_collection_response_resolver.py
+@@ -0,0 +1,98 @@
++from __future__ import annotations
++
++from ai_test_asset_center.runtime_binding_graph import declared_runtime_read_resolvers
++
++
++def _object_response(schema_name: str) -> dict:
++    return {
++        "200": {
++            "content": {
++                "application/json": {
++                    "schema": {"$ref": f"#/components/schemas/{schema_name}"}
++                }
++            }
++        }
++    }
++
++
++def _array_response(schema_name: str) -> dict:
++    return {
++        "200": {
++            "content": {
++                "application/json": {
++                    "schema": {
++                        "type": "array",
++                        "items": {"$ref": f"#/components/schemas/{schema_name}"},
++                    }
++                }
++            }
++        }
++    }
++
++
++def test_action_path_uses_source_declared_sibling_array_of_same_resource() -> None:
++    target = {
++        "id": "approve",
++        "method": "POST",
++        "path": "/api/resources/{id}/approve",
++        "response_schema": _object_response("Ack"),
++    }
++    behavior_ir = {
++        "operations": [
++            target,
++            {
++                "id": "read-resource",
++                "method": "GET",
++                "path": "/api/resources/{id}",
++                "response_schema": _object_response("Resource"),
++            },
++            {
++                "id": "health",
++                "method": "GET",
++                "path": "/api/resources/health",
++                "response_schema": _object_response("Health"),
++            },
++            {
++                "id": "admin-list",
++                "method": "GET",
++                "path": "/api/resources/admin/all",
++                "response_schema": _array_response("Resource"),
++            },
++            {
++                "id": "wrong-subresource-list",
++                "method": "GET",
++                "path": "/api/resources/locks/list",
++                "response_schema": _array_response("ResourceLock"),
++            },
++        ]
++    }
++
++    assert declared_runtime_read_resolvers(target, behavior_ir=behavior_ir) == [
++        {
++            "operation_ref": "admin-list",
++            "method": "GET",
++            "path": "/api/resources/admin/all",
++        }
++    ]
++
++
++def test_shared_prefix_array_of_different_schema_is_not_identity_authority() -> None:
++    target = {
++        "id": "read-inventory",
++        "method": "GET",
++        "path": "/api/inventory/{sku}",
++        "response_schema": _object_response("Inventory"),
++    }
++    behavior_ir = {
++        "operations": [
++            target,
++            {
++                "id": "lock-list",
++                "method": "GET",
++                "path": "/api/inventory/locks/list",
++                "response_schema": _array_response("InventoryLock"),
++            },
++        ]
++    }
++
++    assert declared_runtime_read_resolvers(target, behavior_ir=behavior_ir) == []
+--- /dev/null
++++ b/tests/test_effect_observer_source_authority.py
+@@ -0,0 +1,82 @@
++from __future__ import annotations
++
++from ai_test_asset_center.runtime_binding_graph import declared_effect_observers
++
++
++def test_identity_action_uses_exact_parent_detail_read() -> None:
++    write = {"id": "approve", "method": "POST", "path": "/api/resources/{id}/approve"}
++    detail = {"id": "detail", "method": "GET", "path": "/api/resources/{id}"}
++    health = {"id": "health", "method": "GET", "path": "/api/resources/health"}
++
++    assert declared_effect_observers(
++        write,
++        behavior_ir={"operations": [write, detail, health], "relations": []},
++        max_candidates=1,
++    ) == [{"operation_ref": "detail", "method": "GET", "path": "/api/resources/{id}"}]
++
++
++def test_body_placeholder_read_requires_literal_body_key_and_collection_ancestor() -> None:
++    write = {
++        "id": "adjust",
++        "method": "POST",
++        "path": "/api/inventory/admin/adjust",
++        "request_example": {"sku": "SKU-1", "delta": 1},
++    }
++    matching = {"id": "by-sku", "method": "GET", "path": "/api/inventory/{sku}"}
++    wrong_key = {"id": "by-id", "method": "GET", "path": "/api/inventory/{id}"}
++
++    assert declared_effect_observers(
++        write,
++        behavior_ir={"operations": [write, wrong_key, matching], "relations": []},
++        max_candidates=1,
++    ) == [{"operation_ref": "by-sku", "method": "GET", "path": "/api/inventory/{sku}"}]
++
++
++def test_collection_create_detail_read_requires_matching_success_response_ref() -> None:
++    create = {
++        "id": "create-refund",
++        "method": "POST",
++        "path": "/api/refunds",
++        "response_schema": {
++            "201": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Refund"}}}}
++        },
++    }
++    detail = {
++        "id": "read-refund",
++        "method": "GET",
++        "path": "/api/refunds/{id}",
++        "response_schema": {
++            "200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Refund"}}}}
++        },
++    }
++
++    assert declared_effect_observers(
++        create,
++        behavior_ir={"operations": [create, detail], "relations": []},
++        max_candidates=1,
++    ) == [{"operation_ref": "read-refund", "method": "GET", "path": "/api/refunds/{id}"}]
++
++
++def test_collection_create_rejects_same_path_shape_for_different_response_model() -> None:
++    create = {
++        "id": "create-refund",
++        "method": "POST",
++        "path": "/api/refunds",
++        "response_schema": {
++            "201": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Refund"}}}}
++        },
++    }

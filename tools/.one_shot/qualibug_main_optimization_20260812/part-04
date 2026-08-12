@@ -1,0 +1,14 @@
++    wrong_detail = {
++        "id": "read-audit",
++        "method": "GET",
++        "path": "/api/refunds/{id}",
++        "response_schema": {
++            "200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditLog"}}}}
++        },
++    }
++
++    assert declared_effect_observers(
++        create,
++        behavior_ir={"operations": [create, wrong_detail], "relations": []},
++        max_candidates=1,
++    ) == []

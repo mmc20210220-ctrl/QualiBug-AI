@@ -1,0 +1,210 @@
++        governed_authority[key] = authority
+         governed.append(
+             {
+                 "operation_ref": key[0],
+@@ -418,8 +566,27 @@
+             }
+         )
+ 
++    priority = {
++        "exact_transport_path": 0,
++        "exact_parent_resource_path": 1,
++        "request_body_placeholder_path": 2,
++        "matching_response_resource_ref": 3,
++        "frozen_identity_output": 4,
++        "source_relation_chain": 5,
++    }
+     governed.sort(
+         key=lambda row: (
++            priority.get(
++                governed_authority.get(
++                    (
++                        _text(row.get("operation_ref")),
++                        _text(row.get("method")),
++                        _text(row.get("path")),
++                    ),
++                    "",
++                ),
++                99,
++            ),
+             _text(row.get("operation_ref")),
+             _text(row.get("method")),
+             _text(row.get("path")),
+--- a/ai_test_asset_center/obligation_compiler_base.py
++++ b/ai_test_asset_center/obligation_compiler_base.py
+@@ -975,6 +975,12 @@
+     ir = _dict(behavior_ir)
+     if _text(ir.get("schema_version")) != BEHAVIOR_IR_SCHEMA:
+         raise BehaviorIRError("behavior_ir_v2_required")
++    # ``ui_specs`` was added to Behavior IR v2 after the original v2 contract
++    # shipped.  Older persisted/external v2 payloads legitimately omit it; an
++    # absent collection means "no UI specification supplied", not malformed
++    # behavior.  Backfill only this additive collection so the validator keeps
++    # enforcing every other required v2 surface.
++    ir.setdefault("ui_specs", [])
+     validation_errors = validate_behavior_ir(ir, require_explicit_relations=True)
+     if validation_errors:
+         raise BehaviorIRError("behavior_ir_v2_invalid:" + ",".join(validation_errors))
+--- a/ai_test_asset_center/behavior_ir_core.py
++++ b/ai_test_asset_center/behavior_ir_core.py
+@@ -2113,61 +2113,12 @@
+     return derived
+ 
+ 
+-# Path-terminal verbs that source APIs use as identity-bound reverse actions.
+-# Only verbs whose semantics ARE a reversal of creation stay here: a lifecycle
+-# verb (cancel/abort/revoke/release/withdraw/…) mutates an existing resource
+-# and never proves it compensates a create — inferring one would authorize an
+-# uncompensated write. Forward lifecycle verbs (ship/confirm/approve/…) are
+-# intentionally excluded; ambiguous multi-candidate sets stay fail-closed with
+-# no derived relation.
+-_COMPENSATION_ACTION_PATH_VERBS = frozenset({
+-    "undo",
+-    "void",
+-    "rollback",
+-    "reverse",
+-    "compensate",
+-    "unbook",
+-    "rescind",
+-    # Cross-industry reverse-action vocabulary: cancelling a created order,
+-    # terminating a created subscription, revoking a created entitlement,
+-    # withdrawing a submitted request, aborting a started process and closing
+-    # a created record are the standard compensating action for the matching
+-    # collection create in every domain (orders, bookings, entitlements,
+-    # requests, jobs). The compensation relation still requires the exact
+-    # ``{collection}/{id}/{verb}`` shape against the create operation, so the
+-    # vocabulary only opens the reverse-action family, never a free-for-all.
+-    "cancel",
+-    "close",
+-    "terminate",
+-    "revoke",
+-    "withdraw",
+-    "abort",
+-    "annul",
+-    "nullify",
+-    "invalidate",
+-})
+-
+-
+-def _is_identity_bound_compensation_action(
+-    *,
+-    create_shape: str,
+-    compensation_shape: str,
+-) -> bool:
+-    """Return True for ``{collection}/{id}/{reverse-verb}`` or ``{collection}/{reverse-verb}/{id}``."""
+-    create = create_shape.rstrip("/")
+-    compensation = compensation_shape.rstrip("/")
+-    if not create or not compensation or not compensation.startswith(create + "/"):
+-        return False
+-    remainder = compensation[len(create):].strip("/")
+-    segments = [part for part in remainder.split("/") if part]
+-    if len(segments) != 2:
+-        return False
+-    first, second = segments[0], segments[1]
+-    return (
+-        (first == "{}" and second in _COMPENSATION_ACTION_PATH_VERBS)
+-        or (first in _COMPENSATION_ACTION_PATH_VERBS and second == "{}")
+-    )
+-
++# Action-style routes such as ``/{id}/cancel`` or ``/{id}/close`` are NOT
++# compensation authority by themselves.  They may be lifecycle transitions,
++# irreversible business actions, or cleanup only under additional domain
++# preconditions.  Action compensators therefore enter Behavior IR only through
++# explicit, source-backed ``compensates`` relations.  The structural derivation
++# below is intentionally limited to the conventional collection DELETE shape.
+ 
+ def _dedupe_compensation_candidates(
+     candidates: list[dict[str, Any]],
+@@ -2201,8 +2152,8 @@
+             list(compensation.get("source_refs") or [])
+             + list(create_operation.get("source_refs") or [])
+         )[:5]
+-        # Path-shape derivation is itself source-grounded (OpenAPI/route facts).
+-        # Stamp a derivation receipt so downstream compensator lookups that
++        # The DELETE collection/item path shape is source-grounded in the API
++        # contract. Stamp a derivation receipt so downstream compensator lookups that
+         # require source_refs still see an explicit provenance row.
+         if not source_refs:
+             source_refs = [{
+@@ -2239,52 +2190,32 @@
+         if _debug_comp:
+             logger.debug("[COMP-DEBUG] CREATE %s: POST %s shape=%s", _text(create_operation.get('id')), create_operation.get('path'), create_shape)
+         delete_candidates: list[dict[str, Any]] = []
+-        action_candidates: list[dict[str, Any]] = []
+         for candidate in operations:
+             candidate_method = _text(candidate.get("method")).upper()
+-            compensation_shape = _path_shape(candidate.get("path")).rstrip("/")
+-            if candidate_method == "DELETE":
+-                segments = compensation_shape.split("/")
+-                if not segments or segments[-1] != "{}":
+-                    continue
+-                collection_shape = "/".join(segments[:-1]).rstrip("/")
+-                if collection_shape == create_shape:
+-                    if _debug_comp:
+-                        logger.debug(
+-                            "[COMP-DEBUG]   MATCH DELETE %s: %s collection=%s",
+-                            _text(candidate.get("id")),
+-                            candidate.get("path"),
+-                            collection_shape,
+-                        )
+-                    delete_candidates.append(candidate)
++            if candidate_method != "DELETE":
+                 continue
+-            if candidate_method not in {"POST", "PUT", "PATCH"}:
++            compensation_shape = _path_shape(candidate.get("path")).rstrip("/")
++            segments = compensation_shape.split("/")
++            if not segments or segments[-1] != "{}":
+                 continue
+-            if _is_identity_bound_compensation_action(
+-                create_shape=create_shape,
+-                compensation_shape=compensation_shape,
+-            ):
++            collection_shape = "/".join(segments[:-1]).rstrip("/")
++            if collection_shape == create_shape:
+                 if _debug_comp:
+                     logger.debug(
+-                        "[COMP-DEBUG]   MATCH ACTION %s: %s %s",
++                        "[COMP-DEBUG]   MATCH DELETE %s: %s collection=%s",
+                         _text(candidate.get("id")),
+-                        candidate_method,
+                         candidate.get("path"),
++                        collection_shape,
+                     )
+-                action_candidates.append(candidate)
+-        # Prefer DELETE over action-based compensation (POST …/cancel).
+-        # Multiple ops of the same shape collapse to highest confidence; distinct
+-        # shapes remain ambiguous and emit no relation.
+-        pool = (
+-            _dedupe_compensation_candidates(delete_candidates)
+-            if delete_candidates
+-            else _dedupe_compensation_candidates(action_candidates)
+-        )
++                delete_candidates.append(candidate)
++        # DELETE ``{collection}/{id}`` is the only compensation relation inferred
++        # from route structure.  Action routes require an explicit source-backed
++        # ``compensates`` relation; path vocabulary never authorizes cleanup.
++        pool = _dedupe_compensation_candidates(delete_candidates)
+         if _debug_comp:
+             logger.debug(
+-                "[COMP-DEBUG]   POOL delete=%d action=%d chosen=%d",
++                "[COMP-DEBUG]   POOL delete=%d chosen=%d",
+                 len(delete_candidates),
+-                len(action_candidates),
+                 len(pool),
+             )
+         if len(pool) == 1:
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -28,6 +28,7 @@
+     "requests>=2.28.0,<3.0.0",
+     "rich>=13.0.0,<14.0.0",
+     "uvicorn>=0.30.0,<1.0.0",
++    "zstandard>=0.22.0,<1.0.0",
+ ]
+ classifiers = [
+     "Development Status :: 4 - Beta",
+--- /dev/null
++++ b/tests/test_universal_api_parser_content_path_guard.py
+@@ -0,0 +1,40 @@
++from __future__ import annotations
++

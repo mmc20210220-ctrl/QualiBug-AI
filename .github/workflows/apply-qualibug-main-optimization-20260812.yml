@@ -1,0 +1,88 @@
+name: Apply QualiBug main optimization 20260812
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qualibug-main-optimization-20260812
+  cancel-in-progress: false
+
+jobs:
+  apply-optimization:
+    if: github.event.issue.title == 'RUN_QUALIBUG_MAIN_OPTIMIZATION_20260812'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply verified optimization patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            tools/.one_shot/qualibug_main_optimization_20260812/part-00 \
+            tools/.one_shot/qualibug_main_optimization_20260812/part-01 \
+            tools/.one_shot/qualibug_main_optimization_20260812/part-02 \
+            tools/.one_shot/qualibug_main_optimization_20260812/part-03 \
+            tools/.one_shot/qualibug_main_optimization_20260812/part-04 \
+            > /tmp/qualibug-main-optimization.patch
+          git apply --check /tmp/qualibug-main-optimization.patch
+          git apply /tmp/qualibug-main-optimization.patch
+          git diff --check
+          python -m py_compile \
+            ai_test_asset_center/universal_api_parser.py \
+            ai_test_asset_center/enterprise_knowledge_center/_parsing_mechanics.py \
+            ai_test_asset_center/_runtime_binding_graph_mechanics.py \
+            ai_test_asset_center/_runtime_binding_graph_semantic_mechanics.py \
+            ai_test_asset_center/obligation_compiler_base.py \
+            ai_test_asset_center/behavior_ir_core.py \
+            tests/test_universal_api_parser_content_path_guard.py \
+            tests/test_runtime_binding_collection_response_resolver.py \
+            tests/test_effect_observer_source_authority.py
+
+      - name: Run focused regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e .
+          python -m pip install pytest
+          pytest -q \
+            tests/test_universal_api_parser_content_path_guard.py \
+            tests/test_runtime_binding_collection_response_resolver.py \
+            tests/test_effect_observer_source_authority.py \
+            tests/test_residue_oracle_semantic_frame_regression.py
+
+      - name: Commit optimization to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'qualibug-mainline-bot'
+          git config user.email 'qualibug-mainline-bot@users.noreply.github.com'
+          git rm -r tools/.one_shot/qualibug_main_optimization_20260812
+          git rm .github/workflows/apply-qualibug-main-optimization-20260812.yml
+          git add \
+            ai_test_asset_center/universal_api_parser.py \
+            ai_test_asset_center/enterprise_knowledge_center/_parsing_mechanics.py \
+            ai_test_asset_center/_runtime_binding_graph_mechanics.py \
+            ai_test_asset_center/_runtime_binding_graph_semantic_mechanics.py \
+            ai_test_asset_center/obligation_compiler_base.py \
+            ai_test_asset_center/behavior_ir_core.py \
+            pyproject.toml \
+            tests/test_universal_api_parser_content_path_guard.py \
+            tests/test_runtime_binding_collection_response_resolver.py \
+            tests/test_effect_observer_source_authority.py
+          git diff --cached --check
+          git commit -m 'fix(core): harden planning and runtime binding'
+          git pull --rebase origin main
+          git push origin HEAD:main
