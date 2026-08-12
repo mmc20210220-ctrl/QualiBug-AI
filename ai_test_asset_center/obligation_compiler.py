@@ -17,10 +17,6 @@ def compile_obligations_from_behavior_ir(
     return _base.compile_obligations_from_behavior_ir(behavior_ir, root=root, project=project)
 
 
-# Lazy callers resolving through the preserved facade see the compatible entry.
-_base.compile_obligations_from_behavior_ir = compile_obligations_from_behavior_ir
-
-
 def __getattr__(name: str) -> Any:
     return getattr(_base, name)
 
