@@ -308,6 +308,15 @@ def install_request_header_transport_authority() -> None:
         )
     _request.build_request_build_contract = governed_build_request_build_contract
 
+    # Validation requests may deliberately violate a source-declared body
+    # constraint. Install the narrow body authority anywhere the formal
+    # request contract is installed so compile-time and runtime rebuilds share
+    # identical semantics.
+    from .validation_body_contract_authority import (
+        install_validation_body_contract_authority,
+    )
+    install_validation_body_contract_authority()
+
     # ``validate_request_build_contract`` resolves the module global at call time,
     # but facade modules may have imported the builder by value. Refresh only the
     # known formal compile/runtime owners if already loaded.
