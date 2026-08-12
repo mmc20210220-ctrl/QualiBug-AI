@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .behavior_ir_core import _infer_operation_effect
+from .behavior_ir_core import _infer_operation_effect, _operation_declares_public_access
 
 
 def _d(value: Any) -> dict[str, Any]:
@@ -40,6 +40,25 @@ def _operation_effect(operation: dict[str, Any]) -> str:
             _t(operation.get("method")).upper(),
         )
     ).lower()
+
+
+
+def _operation_declares_anonymous_execution(operation: dict[str, Any]) -> bool:
+    # Behavior IR currently normalizes a missing security field to [], so an
+    # empty list cannot prove that OpenAPI explicitly declared anonymous
+    # access. Use only the operation's own source-backed public-access text.
+    return _operation_declares_public_access(_d(operation))
+
+
+def _ensure_source_declared_anonymous_actor(ir: dict[str, Any]) -> None:
+    if not any(
+        isinstance(operation, dict) and _operation_declares_anonymous_execution(operation)
+        for operation in _l(ir.get("operations"))
+    ):
+        return
+    from .credential_boundary_guard import _ensure_anonymous_actor
+
+    _ensure_anonymous_actor(ir)
 
 
 def _schema_probe_has_source_variants(operation: dict[str, Any], core: Any) -> bool:
@@ -81,6 +100,7 @@ def append_operation_schema_validation_seeds(
 
     core = _core(compiler_base)
     ir = _d(behavior_ir)
+    _ensure_source_declared_anonymous_actor(ir)
     operations = core._accepted(_l(ir.get("operations")))
     actors = core._active_actors(core._accepted(_l(ir.get("actors"))))
     relations = core._accepted(_l(ir.get("relations")))
@@ -143,11 +163,14 @@ def append_operation_schema_validation_seeds(
         permit_relations = core._relations_for_operation(
             relations, operation_ref, {"permits"}
         )
+        explicit_anonymous = _operation_declares_anonymous_execution(operation)
         permitted_actor_refs = sorted({
             core._relation_actor_ref(relation)
             for relation in permit_relations
             if core._relation_actor_ref(relation) in active_by_id
         })
+        if explicit_anonymous and "anonymous" in active_by_id:
+            permitted_actor_refs = ["anonymous"]
         if not permitted_actor_refs:
             blocked_operation_refs.add(operation_ref)
             if not permit_relations:
@@ -204,6 +227,11 @@ def append_operation_schema_validation_seeds(
                 "require_control_success": True,
                 "schema_validation_seed_authority": "operation_request_contract",
                 "operation_effect": effect,
+                "actor_execution_authority": (
+                    "operation_public_access_contract"
+                    if explicit_anonymous
+                    else "source_permits_relation"
+                ),
             },
             required_actors=[actor_ref],
             required_operations=[operation_ref],
