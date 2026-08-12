@@ -100,7 +100,7 @@ def test_runtime_materializer_accepts_only_core_alignment_with_sealed_owner() ->
     assert "U-OWNER" not in repr(runtime_receipt)
 
 
-def test_unrelated_first_account_actor_blocks_instead_of_becoming_owner() -> None:
+def test_unrelated_first_account_actor_never_becomes_owner() -> None:
     from ai_test_asset_center.experiment_fixture_materializer import (
         _ownership_runtime_preflight,
     )
@@ -145,10 +145,15 @@ def test_unrelated_first_account_actor_blocks_instead_of_becoming_owner() -> Non
         tokens={},
     )
 
-    assert runtime_receipt["status"] == "BLOCKED"
-    issue = runtime_receipt["issues"][0]
-    assert issue["reason_code"] == "OWNERSHIP_CORE_SELECTION_NOT_SEALED_OWNER"
-    assert issue["core_first_actor_ref"] == "unrelated-actor"
+    # The core materializer consumes the compile-sealed owner_actor_ref
+    # directly — actor/plan/dict order never decides the owner. The unrelated
+    # actor appearing first in the plan neither becomes the owner nor blocks
+    # the legitimate ownership experiment.
+    assert runtime_receipt["status"] == "READY"
+    row = runtime_receipt["rows"][0]
+    assert row["owner_actor_ref"] == "owner-actor"
+    assert row["core_consumption_aligned"] is True
+    assert row["reason_code"] == ""
 
 
 def test_legacy_unsealed_ownership_binding_is_blocked_before_fixture_transport() -> None:

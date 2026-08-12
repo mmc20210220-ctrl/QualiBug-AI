@@ -90,8 +90,13 @@ def _fact_structural_diagnostic(
         _text(row.get("id"))
         for row in _list(behavior_ir.get("invariants"))
         if isinstance(row, dict)
-        and _text(row.get("business_behavior_ref")) in set(behavior_refs)
         and _text(row.get("id"))
+        and (
+            _text(row.get("business_behavior_ref")) in set(behavior_refs)
+            # Production channel: the invariant node itself carries the exact
+            # fact identity it was constructed from (rule.semantic_contract).
+            or fact_ref in set(_unique(row.get("fact_refs")))
+        )
     })
     relation_refs = sorted({
         _text(row.get("id"))
@@ -303,6 +308,10 @@ def attach_fact_refs_to_planning_artifacts(
         "schema_version": "qualibug.fact-ref-planning-attach.v2",
         "authority_status": authority_status,
         "authority": "canonical_business_world_model_to_behavior_ir_exact_identity",
+        # The canonical chain now includes the production channel: invariants
+        # constructed from fact-promoted rules carry the exact fact identity on
+        # the IR node, so lineage resolves by construction, not by join.
+        "production_fact_authority_channel_consumed": True,
         "heuristic_matching_enabled": False,
         "preexisting_fact_refs_trusted": False,
         "experiment_lineage_may_widen_obligation_lineage": False,

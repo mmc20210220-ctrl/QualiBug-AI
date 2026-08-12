@@ -54,7 +54,10 @@ def test_response_receipt_cannot_self_authorize_observation() -> None:
         target_reached=True,
     )
 
-    assert ledger.executed_step_ids() == []
+    # Transport-executed (the step reached a real response); the observer
+    # receipt that merely repeats the response id is self-authorization and
+    # never observation evidence.
+    assert ledger.executed_step_ids() == ["treatment_1"]
     assert step_ids_with_observation_evidence(ledger) == []
 
     observations: dict = {}

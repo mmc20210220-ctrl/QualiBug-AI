@@ -347,6 +347,11 @@ def _compute_scan_score(confirmed: list[dict[str, Any]], candidates: list[dict[s
     Previously hardcoded to 0.0 regardless of outcome. Score rewards confirmed
     findings weighted by evidence strength; coverage reflects the share of
     executed work that reached a confirmed verdict.
+
+    ``confirmed`` must contain ONLY this run's formal deliveries (verified
+    archive hold-overs are reported separately). A run with zero formal
+    deliveries scores 0.0/0.0 — archive entries must never manufacture a
+    score=100 / coverage=1 headline.
     """
     if execution_status != "completed" and not confirmed:
         return 0.0, 0.0
@@ -358,7 +363,7 @@ def _compute_scan_score(confirmed: list[dict[str, Any]], candidates: list[dict[s
         total += strength_weight.get(strength, 0.6)
     score = round(min(100.0, total * 10.0), 2)
     denom = len(confirmed) + len(candidates)
-    coverage = round(len(confirmed) / denom, 4) if denom else (1.0 if confirmed else 0.0)
+    coverage = round(len(confirmed) / denom, 4) if denom else 0.0
     return score, coverage
 
 

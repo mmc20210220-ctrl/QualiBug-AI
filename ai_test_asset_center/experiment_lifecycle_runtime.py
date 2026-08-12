@@ -355,7 +355,13 @@ def _attach_projection_to_result(
     row["process_step_semantic_projection"] = projection
     row["recorded_step_ids"] = projection["recorded_step_ids"]
     row["accepted_step_ids"] = projection["accepted_step_ids"]
-    row["executed_step_ids"] = projection["completed_step_ids"]
+    # Executed stays the TRANSPORT-executed set (required control/treatment
+    # steps that reached a real response, including failed prior writes);
+    # semantic completion is the strict set under completed_step_ids. Aliasing
+    # executed to the strict completion set erased every business step that ran
+    # without an explicit semantic verdict, so a genuinely executed experiment
+    # reported an empty executed ledger.
+    row["executed_step_ids"] = projection["executed_step_ids"]
     row["completed_step_ids"] = projection["completed_step_ids"]
     row["failed_step_ids"] = projection["failed_step_ids"]
     row["pending_semantic_step_ids"] = projection[

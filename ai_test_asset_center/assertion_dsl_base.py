@@ -371,17 +371,15 @@ def _state_token(value: Any) -> str:
         # generic cross-industry names first, then any scalar string field as
         # a fail-closed fallback (an unrelated field still yields a mismatch,
         # which stays INDETERMINATE rather than inventing a verdict).
+        # Industry field names (order_status, payment_status, …) are never
+        # hardcoded — the scalar fallback covers them on any industry schema.
         for key in (
             "status",
             "state",
-            "order_status",
-            "orderStatus",
             "lifecycle_status",
             "lifecycleStatus",
             "approval_status",
             "approvalStatus",
-            "payment_status",
-            "paymentStatus",
         ):
             if key in value and value[key] is not None:
                 value = value[key]

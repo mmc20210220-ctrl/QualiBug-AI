@@ -405,6 +405,7 @@ def make_obligation(
     cleanup_requirement: dict[str, Any] | None = None,
     source_refs: list[dict[str, Any]] | None = None,
     relation_refs: list[str] | None = None,
+    fact_refs: list[str] | None = None,
     confidence: float = 0.5,
     compile_status: str = "PENDING",
     obligation_id: str | None = None,
@@ -442,6 +443,7 @@ def make_obligation(
         "cleanup_requirement": dict(cleanup_requirement or {}),
         "source_refs": list(source_refs or []),
         "relation_refs": [_text(x) for x in (relation_refs or []) if _text(x)],
+        "fact_refs": [_text(x) for x in (fact_refs or []) if _text(x)],
         "confidence": max(0.0, min(1.0, float(confidence))),
         "compile_status": status,
         "block_reason": (

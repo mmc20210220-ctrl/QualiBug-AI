@@ -113,7 +113,11 @@ def test_semantic_view_keeps_execution_separate_from_completion() -> None:
     _record(ledger)
     view = ProcessStepSemanticView(ledger)
 
-    assert view.executed_step_ids() == ["step-1"]
+    # The raw ledger keeps transport execution; the view's strict semantic set
+    # requires an explicit scoped verdict receipt, so execution and business
+    # completion stay separate facts.
+    assert ledger.executed_step_ids() == ["step-1"]
+    assert view.executed_step_ids() == []
     assert view.completed_step_ids() == []
 
 

@@ -30,7 +30,10 @@ def test_http_error_cannot_be_completed_or_target_reached() -> None:
     assert row["target_reached"] is None
     assert row["step_completed"] is False
     assert row["step_failed"] is True
-    assert ledger.executed_step_ids() == []
+    # Transport-executed: the step reached a real response (a 4xx/5xx is still
+    # an execution attempt), while business completion stays separate.
+    assert ledger.executed_step_ids() == ["step-1"]
+    assert ledger.completed_step_ids() == []
 
 
 def test_successful_http_response_does_not_prove_business_state() -> None:
@@ -51,7 +54,10 @@ def test_successful_http_response_does_not_prove_business_state() -> None:
     assert row["semantic_step_status"] == "PENDING_OBSERVATION"
     assert row["step_completed"] is False
     assert row["step_failed"] is False
-    assert ledger.executed_step_ids() == []
+    # Executed at transport level; business state is NOT proven without an
+    # independent observation (executed ≠ completed).
+    assert ledger.executed_step_ids() == ["step-1"]
+    assert ledger.completed_step_ids() == []
 
 
 def test_explicit_target_without_independent_observation_is_not_proof() -> None:
@@ -112,7 +118,9 @@ def test_target_not_reached_is_failed_but_never_completed() -> None:
     assert row["semantic_step_status"] == "TARGET_NOT_REACHED"
     assert row["step_completed"] is False
     assert row["step_failed"] is True
-    assert ledger.executed_step_ids() == []
+    # Transport-executed; business completion is false (never completed).
+    assert ledger.executed_step_ids() == ["step-1"]
+    assert ledger.completed_step_ids() == []
 
 
 def test_process_completion_fails_when_semantic_step_failed() -> None:

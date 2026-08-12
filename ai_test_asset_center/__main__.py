@@ -414,6 +414,21 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         campaign=campaign,
         findings=confirmed,
     )
+    # ── Report split: current formal / archive / candidate ──
+    # Score, coverage, the headline findings count and the grade may only
+    # reflect THIS run's formal deliveries. Verified-archive hold-overs
+    # (archive_entry=True) are reported separately — counting them made a
+    # delivery-less run show score=100 / coverage=1 / findings=120.
+    archive_findings = [
+        finding
+        for finding in confirmed
+        if isinstance(finding, dict) and finding.get("archive_entry") is True
+    ]
+    current_formal_findings = [
+        finding
+        for finding in confirmed
+        if not (isinstance(finding, dict) and finding.get("archive_entry") is True)
+    ]
     delivery_occurrences = list(canonical_scope["delivery_occurrences"])
     canonical_registry = dict(canonical_scope["canonical_defect_registry"])
     dedupe_input_count = int(
@@ -632,7 +647,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     # stubbed pipeline returning phases.execution.status == "skipped") still
     # grades "inconclusive" unless execution was genuinely blocked/plan_only.
     _rc_status = str(runtime_contract.get("status") or "")
-    grade = "blocked" if _rc_status == "blocked" or execution_status == "blocked" or execution_status == "plan_only" else ("inconclusive" if not confirmed else "evidence_ready")
+    grade = "blocked" if _rc_status == "blocked" or execution_status == "blocked" or execution_status == "plan_only" else ("inconclusive" if not current_formal_findings else "evidence_ready")
     # ── 主链 4/5 覆盖诚实性守卫: never report a clean completion while high-value
     # (permission/isolation/money/concurrency) slices were silently unexecuted. ──
     coverage_honesty, grade = _apply_coverage_honesty_guard(v12, grade, execution_status)
@@ -654,7 +669,11 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     else:
         db_verification = {"status": "plan_only" if schema_text else "blocked", "reason": "source_bound_observation_contract_required" if schema_text else "database_schema_source_missing", "findings": []}
     # ── Score/coverage wired to real findings instead of a constant 0.0 ──
-    score, coverage = _compute_scan_score(confirmed, candidates, execution_status)
+    # Only THIS run's formal deliveries may feed the headline score — verified
+    # archive hold-overs are counted separately (total_archive_findings).
+    score, coverage = _compute_scan_score(
+        current_formal_findings, candidates, execution_status
+    )
     # Product runtime may expose only GT-free coverage. Hidden-ground-truth
     # scoring belongs to the evaluator process and must never run in scan().
     benchmark_metrics: dict[str, Any] = {}
@@ -731,7 +750,9 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     discovery_funnel["pipeline_health"] = pipeline_health
     result: dict[str, Any] = {
         "success": True, "scan_id": scan_id, "project": project, "grade": grade, "score": score, "coverage": coverage,
-        "total_findings": len(confirmed), "total_candidates": len(candidates), "total_ms": duration_ms,
+        "total_findings": len(current_formal_findings),
+        "total_archive_findings": len(archive_findings),
+        "total_candidates": len(candidates), "total_ms": duration_ms,
         "layers": {
             "source_grounded_discovery": {"tool": "V12 enterprise campaign", "findings": len(confirmed), "candidates": len(candidates), "ms": int(v12.get("total_duration_ms") or duration_ms), "execution_status": execution_status, "campaign_id": campaign.get("campaign_id", "")},
             "external_signals": {
@@ -758,6 +779,11 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "legacy_domain_layers": {"tool": "disabled", "findings": 0, "candidates": 0, "ms": 0, "reason": "source_bound_scope_fixture_actor_cleanup_contract_required" if multi_layer else "not_requested"},
         },
         "findings": confirmed, "candidate_findings": candidates, "db_findings": [], "e2e_findings": [], "ui_findings": ui_findings, "ui_candidate_findings": ui_candidate_findings, "ui_high_confidence_candidates": ui_high_confidence_candidates, "external_findings": external_findings, "deep_findings": [], "spectrum": {},
+        # Strict current-formal / archive split: the merged ``findings`` list
+        # keeps archive_entry markers for consumers that need the hold-over
+        # view; the headline counts and score never mix them.
+        "current_formal_findings": current_formal_findings,
+        "archive_findings": archive_findings,
         "mainline_run": v12.get("mainline_run"),
         "obligation_attempt_ledger": v12.get("obligation_attempt_ledger"),
         # Fact ledger is promoted by discovery_mainline onto the v12 result;

@@ -17,7 +17,10 @@ from .process_step_receipt_scope import (
     receipt_id as _scope_receipt_id,
     synchronize_scoped_receipts_from_observations,
 )
-from .process_step_semantic_projection import apply_semantic_verdict, project_step_sets
+from .process_step_semantic_projection import (
+    apply_semantic_verdict,
+    project_step_sets,
+)
 
 
 _VERDICT_KEYS = (
@@ -179,7 +182,15 @@ class ProcessStepSemanticView:
     def _publish_receipt_declarations(self) -> tuple[list[dict[str, Any]], str]:
         """Publish reconstructable ledger declarations on every receipt."""
 
-        projection = self._projection()
+        self._synchronize()
+        # Raw projection: the published ``executed_step_ids`` stays the
+        # TRANSPORT-executed set (required control/treatment steps that reached
+        # a real response, including failed prior writes) so bundle activation
+        # and executed accounting never lose business steps that ran without an
+        # explicit semantic verdict. The strict semantic completion set is
+        # published separately under ``completed_step_ids`` (and remains the
+        # answer of this view's own ``executed_step_ids()`` method).
+        projection = project_step_sets(self._ledger)
         fact_snapshot = self._ledger.build_fact_snapshot()
         ledger_hash = self._ledger.compute_hash()
         declaration = {

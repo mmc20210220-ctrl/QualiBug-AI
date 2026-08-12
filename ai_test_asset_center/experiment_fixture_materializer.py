@@ -11,9 +11,10 @@ becoming fixture facts:
 * dependency fixture creation requires one exact source GET/HEAD resolver path;
 * automatic fixture creation requires one unique POST candidate and one unique
   actor authority; and
-* ownership identity materialization must consume the compile-sealed owner actor.
-  Legacy/unsealed ownership rows and any mismatch with the core's historical
-  first-account iteration are blocked before fixture transport.
+* ownership identity materialization consumes the compile-sealed owner actor.
+  Legacy/unsealed ownership rows are blocked before fixture transport; the
+  core materializer reads the sealed ``owner_actor_ref`` directly, so actor,
+  plan, and dictionary order never decide the owner identity.
 """
 from __future__ import annotations
 
@@ -434,29 +435,10 @@ def _ownership_runtime_preflight(
         owner_copy["account_id"] = _text(identity.get("identity_value"))
         governed_actors[owner_actor_ref] = owner_copy
 
-        first_core_actor = ""
-        for planned in [
-            *_list(exp.get("control_plan")),
-            *_list(exp.get("treatment_plan")),
-        ]:
-            if not isinstance(planned, dict):
-                continue
-            actor_ref = _text(planned.get("actor_ref"))
-            actor = _dict(governed_actors.get(actor_ref))
-            if _text(actor.get("account_id")):
-                first_core_actor = actor_ref
-                break
-        if first_core_actor != owner_actor_ref:
-            issue = {
-                **base,
-                "status": "BLOCKED",
-                "reason_code": "OWNERSHIP_CORE_SELECTION_NOT_SEALED_OWNER",
-                "core_first_actor_ref": first_core_actor,
-            }
-            issues.append(issue)
-            rows.append(issue)
-            continue
-
+        # The core materializer consumes the compile-sealed owner_actor_ref
+        # directly (source-order-free by construction — actor/plan/dict order
+        # never selects the owner). No plan-order prediction is needed; the
+        # enriched catalog above is what the core reads.
         rows.append(
             {
                 **base,
@@ -530,7 +512,53 @@ _composed._strict_validate_fixture_preconditions = (
 )
 
 
+def _cleanup_preflight_terminal(
+    kwargs: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> dict[str, Any]:
+    reason = (
+        _text(issues[0].get("kind"))
+        if issues
+        else "FIXTURE_CLEANUP_AUTHORITY"
+    )
+    return {
+        "status": "terminal",
+        "result": {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": _text(kwargs.get("eid")),
+            "obligation_id": _text(kwargs.get("oid")),
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_MISSING_BINDING",
+            "detail": "fixture_cleanup_authority:" + reason,
+            "steps": [],
+            "fixture_receipts": [],
+            "binding_materialization_receipts": [],
+            "finding": None,
+            "cleanup_failures": 0,
+            "cleanup_contract_issues": issues,
+            "execution_receipt": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": "fixture_cleanup_authority_not_unique",
+                "cleanup_failures": 0,
+            },
+        },
+    }
+
+
 def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
+    # Cleanup unique authority is resolved BEFORE any fixture write: a fixture
+    # create may only be written when its cleanup route is uniquely authorized
+    # (one exact cleanup operation matching the declared contract, or an
+    # explicitly accepted residue). Ambiguity, contract drift, or a stale
+    # authority receipt blocks here — never resolved by source order at write
+    # time.
+    _cleanup_issues = _cleanup_contract_issues(
+        _dict(kwargs.get("exp")),
+        _dict(kwargs.get("ops")),
+    )
+    if _cleanup_issues:
+        return _cleanup_preflight_terminal(kwargs, _cleanup_issues)
     governed_actors, ownership_receipt = _ownership_runtime_preflight(
         exp=_dict(kwargs.get("exp")),
         actors=_dict(kwargs.get("actors")),

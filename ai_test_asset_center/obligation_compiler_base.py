@@ -955,6 +955,61 @@ def _append_gap_once(coverage_gaps: list[dict[str, Any]], gap: dict[str, Any]) -
     coverage_gaps.append(gap)
 
 
+def _seed_obligation_fact_refs(
+    obligations: list[dict[str, Any]],
+    invariants: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Carry exact accepted-fact identity from IR nodes onto obligations.
+
+    Invariants produced from fact-promoted rules carry ``fact_refs`` at IR
+    construction (behavior_ir_core attaches rule.semantic_contract.fact_id).
+    Obligations compiled from those nodes inherit the identity here — inside
+    the obligation production function, so compile/selection/execution see the
+    fact authority by construction, never through a post-hoc planning join.
+    Relations resolve through their single incident invariant. ``fact_refs``
+    are never inferred: an obligation with no fact-carrying node simply keeps
+    an empty list.
+    """
+    invariant_fact_refs: dict[str, tuple[str, ...]] = {}
+    for row in invariants:
+        if not isinstance(row, dict) or not _text(row.get("id")):
+            continue
+        refs = tuple(sorted({
+            _text(value) for value in _list(row.get("fact_refs")) if _text(value)
+        }))
+        if refs:
+            invariant_fact_refs[_text(row.get("id"))] = refs
+    relation_fact_refs: dict[str, tuple[str, ...]] = {}
+    for row in relations:
+        if not isinstance(row, dict) or not _text(row.get("id")):
+            continue
+        incident = {
+            ref
+            for ref in (_text(row.get("from_ref")), _text(row.get("to_ref")))
+            if ref in invariant_fact_refs
+        }
+        if len(incident) != 1:
+            continue
+        relation_fact_refs[_text(row.get("id"))] = invariant_fact_refs[
+            next(iter(incident))
+        ]
+    for obligation in obligations:
+        if not isinstance(obligation, dict):
+            continue
+        prop = _dict(obligation.get("property"))
+        candidates: set[str] = set()
+        invariant_ref = _text(prop.get("invariant_ref"))
+        if invariant_ref in invariant_fact_refs:
+            candidates.update(invariant_fact_refs[invariant_ref])
+        for relation_ref in _list(obligation.get("relation_refs")):
+            if relation_ref in relation_fact_refs:
+                candidates.update(relation_fact_refs[relation_ref])
+        if candidates:
+            obligation["fact_refs"] = sorted(candidates)
+    return obligations
+
+
 def compile_obligations_from_behavior_ir(
     behavior_ir: dict[str, Any],
     *,
@@ -2242,7 +2297,9 @@ def compile_obligations_from_behavior_ir(
                             ),
                         ))
 
-    deduped = dedupe_obligations(obligations)
+    deduped = dedupe_obligations(
+        _seed_obligation_fact_refs(obligations, invariants, relations)
+    )
     return {
         "schema_version": "qualibug.obligation-compile.v1",
         "behavior_ir_model_id": _text(ir.get("model_id")),

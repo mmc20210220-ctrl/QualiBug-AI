@@ -650,6 +650,14 @@ def compile_obligations_from_behavior_ir(
     from .coverage_unit_registry import attach_canonical_obligation_keys
 
     obligations = attach_canonical_obligation_keys(obligations, behavior_ir=normalized_ir)
+    # Production fact lineage survives the facade merge: privacy variants and
+    # SOD obligations carry fact identity from their invariant/relation nodes
+    # exactly like the base compile does (never inferred, never post-hoc).
+    obligations = _pair._base._seed_obligation_fact_refs(
+        obligations,
+        _pair._base._accepted(_list(normalized_ir.get("invariants"))),
+        _pair._base._accepted(_list(normalized_ir.get("relations"))),
+    )
     gaps = []
     for gap in _list(output.get("coverage_gaps")):
         if not isinstance(gap, dict):

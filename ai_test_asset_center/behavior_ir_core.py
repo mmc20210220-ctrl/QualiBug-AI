@@ -2965,21 +2965,24 @@ CANONICAL_FIELD_SEMANTIC_TYPES = frozenset({
     "UNKNOWN",
 })
 
-_CF_IDENTITY_TOKENS = {"id", "code", "number", "key", "identifier", "uuid", "ref", "reference", "no", "num", "sku", "coupon"}
+_CF_IDENTITY_TOKENS = {"id", "code", "number", "key", "identifier", "uuid", "ref", "reference", "no", "num"}
 _CF_STATE_TOKENS = {"status", "state", "lifecycle", "phase", "stage", "condition", "disposition"}
 _CF_TENANT_TOKENS = {"tenant", "tenant_id", "org", "organization", "company", "client_id"}
 _CF_OWNER_TOKENS = {"owner", "owner_id", "user_id", "created_by", "creator", "author", "assignee", "assigned_to"}
 _CF_VERSION_TOKENS = {"version", "revision", "etag", "row_version", "concurrency_token"}
 _CF_TIMESTAMP_TOKENS = {"created_at", "updated_at", "deleted_at", "timestamp", "time", "date", "_at", "_time", "expires"}
-_CF_AMOUNT_TOKENS = {"amount", "price", "total", "sum", "balance", "cost", "fee", "subtotal", "discount", "tax", "payment", "revenue", "credit", "debit", "delta", "payable"}
-_CF_QUANTITY_TOKENS = {"quantity", "qty", "count", "units", "stock", "inventory", "capacity", "limit"}
+# Field-semantics vocabularies are generic business language only. Industry
+# terms (sku/coupon, payment/revenue/wallet, stock/inventory/on_hand) are
+# deliberately NOT here: the classifier must work on any industry's schema,
+# and a lexicon naming one industry's objects biases classification away from
+# every other industry (AGENTS.md: no domain keyword tables in product code).
+_CF_AMOUNT_TOKENS = {"amount", "price", "total", "sum", "balance", "cost", "fee", "subtotal", "discount", "tax", "delta"}
+_CF_QUANTITY_TOKENS = {"quantity", "qty", "count", "units", "limit"}
 _CF_QUANTITY_BALANCE_TOKENS = {
-    "available", "locked", "reserved", "allocated", "on_hand", "onhand",
-    "physical", "safety", "balance", "stock", "inventory", "capacity",
+    "available", "locked", "reserved", "allocated", "balance",
 }
 _CF_AMOUNT_BALANCE_TOKENS = {
-    "balance", "total", "subtotal", "payable", "receivable", "outstanding",
-    "revenue", "wallet", "deposit",
+    "balance", "total", "subtotal",
 }
 _CF_IDEMPOTENCY_TOKENS = {"idempotency", "idempotency_key", "request_id", "correlation_id", "dedup_key"}
 _CF_AUDIT_TOKENS = {"created_by", "updated_by", "modified_by", "deleted_by", "audit", "log", "trace", "reason", "remark", "note", "comment", "detail"}
@@ -3064,9 +3067,6 @@ def _classify_field_semantics(
             return "QUANTITY_BALANCE", 0.9
         if any(tok in fn for tok in ("delta", "adjust", "change", "increment", "decrement")):
             return "QUANTITY_DELTA", 0.85
-        # Bare qty/quantity on a stock-like entity defaults to balance.
-        if any(tok in entity_name.lower() for tok in ("inventory", "stock", "warehouse", "sku")):
-            return "QUANTITY_BALANCE", 0.8
         return "QUANTITY_DELTA", 0.7
     if _has_amount_token:
         if any(tok in fn for tok in _CF_AMOUNT_BALANCE_TOKENS):
@@ -5888,6 +5888,27 @@ def build_behavior_ir_from_knowledge_asset(
                 if _text(value)
             )),
         }
+        # Production fact lineage: a rule promoted from an accepted fact embeds
+        # the whole fact (semantic_contract.fact_id is the canonical fact
+        # identity). Attaching it at IR construction makes the fact→invariant
+        # link part of the production chain — obligations compiled from this
+        # invariant inherit exact fact authority by construction, never by a
+        # post-hoc planning join.
+        _production_fact_refs = list(dict.fromkeys(
+            _text(value)
+            for value in [
+                _dict(rule.get("semantic_contract")).get("fact_id"),
+                rule.get("fact_id"),
+                *(
+                    _list(rule.get("fact_refs"))
+                    if isinstance(rule.get("fact_refs"), list)
+                    else [rule.get("fact_refs")]
+                ),
+            ]
+            if _text(value)
+        ))
+        if _production_fact_refs:
+            _inv_typed["fact_refs"] = _production_fact_refs
         if _inv_field_ids:
             _inv_typed["field_ids"] = _inv_field_ids
         if _semantic_frame:

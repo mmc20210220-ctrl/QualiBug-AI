@@ -1166,12 +1166,42 @@ def finalize_experiment_execution(
         _env_restored = True  # read-only: no cleanup needed
 
     finding = None
-    # Execution status reflects actual HTTP activity, not oracle assessment.
-    # Oracle verdict is advisory evidence quality metadata.
-    has_http = any(
-        isinstance(s, dict) and isinstance(s.get("status_code"), int) and s["status_code"] > 0
-        for s in steps_out
+    # Execution status reflects actual REQUIRED BUSINESS-STEP activity, not
+    # any HTTP traffic. Fixture/binding materialization requests are timeline
+    # events, never process-step ledger rows, so they can never make an
+    # experiment "executed" (run27 reported 21 EXECUTED with zero business-step
+    # ledger rows and only binding GETs). Only required control/treatment steps
+    # recorded in the process-step ledger count; when a plan declares no
+    # required steps, a real control/treatment-phase response is the fallback
+    # evidence and binding/fixture phases still never count.
+    _status_source = observations.get("process_step_ledger")
+    _status_ledger = None
+    if _status_source is not None:
+        _status_ledger = (
+            getattr(_status_source, "source_ledger", None) or _status_source
+        )
+    _required_steps_for_status = (
+        set(getattr(_status_ledger, "required_step_ids", []) or [])
+        if _status_ledger is not None
+        else set()
     )
+    if _required_steps_for_status:
+        has_http = (
+            bool(
+                _required_steps_for_status
+                & set(_status_ledger.executed_step_ids())
+            )
+            if hasattr(_status_ledger, "executed_step_ids")
+            else False
+        )
+    else:
+        has_http = any(
+            isinstance(s, dict)
+            and isinstance(s.get("status_code"), int)
+            and s["status_code"] > 0
+            and str(s.get("phase") or "").strip() in {"control", "treatment"}
+            for s in steps_out
+        )
     # Defense in depth: governed writes blocked after a real before-GET leave
     # write status_code=0. Without lifting those reasons into the pre-transport
     # block list, finalize used to seal HARNESS_CONNECTION_FAILED even though
@@ -1580,6 +1610,19 @@ def finalize_experiment_execution(
     _process_ledger = observations.get("process_step_ledger")
     # V1.6.2-R1: hydrate step id sets from live ledger when observation keys empty.
     # Required ids stay compile/plan authority — never forged from executed responses.
+    # V1.6.2-R1: hydrate step id sets from live ledger when observation keys empty.
+    # Required ids stay compile/plan authority — never forged from executed responses.
+    # Executed/attempted sets come from the SOURCE ledger (transport semantics:
+    # required control/treatment steps that reached a real response, including
+    # failed prior writes). The semantic view's strict completion set is for
+    # TRUE_COMPLETED derivation, not for the executed accounting that gates
+    # bundle activation — a run whose business steps ran but carried no
+    # explicit semantic verdict must not lose its executed status.
+    _executed_source_ledger = (
+        getattr(_process_ledger, "source_ledger", None)
+        if _process_ledger is not None
+        else None
+    ) or _process_ledger
     _ledger_id = _text(
         observations.get("process_step_ledger_id")
         or getattr(_process_ledger, "ledger_id", "")
@@ -1592,10 +1635,16 @@ def finalize_experiment_execution(
             else ""
         )
     )
-    if _process_ledger is not None and hasattr(_process_ledger, "executed_step_ids"):
+    if _executed_source_ledger is not None and hasattr(
+        _executed_source_ledger, "executed_step_ids"
+    ):
         if not _list(observations.get("executed_step_ids")):
-            observations["executed_step_ids"] = list(_process_ledger.executed_step_ids())
-        _req = list(getattr(_process_ledger, "required_step_ids", []) or [])
+            observations["executed_step_ids"] = list(
+                _executed_source_ledger.executed_step_ids()
+            )
+        _req = list(
+            getattr(_executed_source_ledger, "required_step_ids", []) or []
+        )
         if not _list(observations.get("required_step_ids")):
             observations["required_step_ids"] = list(_req)
         if not _list(observations.get("planned_step_ids")):
@@ -1607,16 +1656,39 @@ def finalize_experiment_execution(
             _ledger_id = live_id
             observations["process_step_ledger_id"] = _ledger_id
         if hasattr(_process_ledger, "compute_hash"):
-            live_hash = _text(_process_ledger.compute_hash())
-            # Empty live ledger identity is a missing-ledger fault; do not
-            # mis-attribute a stale observation hash as HASH_MISMATCH.
-            if live_id and _ledger_hash and live_hash and _ledger_hash != live_hash:
-                observations["finalizer_block_reason"] = (
-                    "PROCESS_STEP_LEDGER_HASH_MISMATCH"
-                )
-            elif live_id and not _ledger_hash and live_hash:
-                _ledger_hash = live_hash
-                observations["process_step_ledger_hash"] = _ledger_hash
+            if _text(observations.get("process_step_ledger_view")) in {
+                "semantic_completion",
+                "exact_scope_finalizer",
+            }:
+                # View-backed ledger: receipts keep arriving while the finalizer
+                # runs (observers, oracle, cleanup), and the view's first
+                # projection consumes them into the live ledger, so a seal taken
+                # before that point can never match the final state — comparing
+                # them reported a spurious PROCESS_STEP_LEDGER_HASH_MISMATCH on
+                # every run that carried scoped receipts. Seal through the view
+                # HERE (after the first full sync) and verify the published
+                # state is stable across recomputation. Attached-seal tamper
+                # detection is owned by the scope wrapper against the
+                # execution-end state.
+                live_hash = _text(_process_ledger.compute_hash())
+                observations["process_step_ledger_hash"] = live_hash
+                if live_id:
+                    _recheck_hash = _text(_process_ledger.compute_hash())
+                    if _recheck_hash and _recheck_hash != live_hash:
+                        observations["finalizer_block_reason"] = (
+                            "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+                        )
+            else:
+                # Raw ledger: the attached hash is a true pre-seal; drift is
+                # genuine tampering or a broken recording path.
+                live_hash = _text(_process_ledger.compute_hash())
+                if live_id and _ledger_hash and live_hash and _ledger_hash != live_hash:
+                    observations["finalizer_block_reason"] = (
+                        "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+                    )
+                elif live_id and not _ledger_hash and live_hash:
+                    _ledger_hash = live_hash
+                    observations["process_step_ledger_hash"] = _ledger_hash
         obs_id = _text(observations.get("process_step_ledger_id"))
         if obs_id and live_id and obs_id != live_id:
             observations["finalizer_block_reason"] = (

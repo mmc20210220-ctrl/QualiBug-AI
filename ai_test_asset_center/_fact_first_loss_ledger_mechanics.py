@@ -864,6 +864,24 @@ def _canonical_fact_authority_by_ir_ref(
         if isinstance(row, dict) and _text(row.get("id")):
             invariants_by_id.setdefault(_text(row.get("id")), []).append(row)
 
+    # Production channel: an invariant built from a fact-promoted rule carries
+    # the canonical fact identity on the node itself (behavior_ir_core attaches
+    # rule.semantic_contract.fact_id at IR construction). The rule→fact
+    # construction link is exact identity — the rule literally IS the fact —
+    # so it resolves even when the world-model binding chain is absent, and it
+    # must agree with any world-model resolution (conflict fails closed).
+    production_invariant_fact_refs: dict[str, tuple[str, ...]] = {}
+    for invariant_ref, rows in invariants_by_id.items():
+        if len(rows) != 1:
+            continue
+        refs = tuple(sorted({
+            _text(value)
+            for value in _list(rows[0].get("fact_refs"))
+            if _text(value) and _text(value) in accepted_fact_refs
+        }))
+        if refs:
+            production_invariant_fact_refs[invariant_ref] = refs
+
     invariant_fact_refs: dict[str, tuple[str, ...]] = {}
     invariant_authority_refs: dict[str, set[str]] = {}
     for invariant_ref, rows in invariants_by_id.items():
@@ -875,6 +893,18 @@ def _canonical_fact_authority_by_ir_ref(
         behavior_ref = _text(invariant.get("business_behavior_ref"))
         fact_refs = behavior_fact_refs.get(behavior_ref)
         api_binding_refs = _unique(invariant.get("implementation_binding_refs"))
+        production_refs = production_invariant_fact_refs.get(invariant_ref)
+        if production_refs:
+            if fact_refs and set(fact_refs) != set(production_refs):
+                reasons["INVARIANT_FACT_AUTHORITY_CHANNEL_CONFLICT"] += 1
+                ambiguous_ir_refs.add(invariant_ref)
+                continue
+            invariant_fact_refs[invariant_ref] = production_refs
+            invariant_authority_refs[invariant_ref] = {
+                behavior_ref,
+                *api_binding_refs,
+            } if behavior_ref or api_binding_refs else {f"invariant:{invariant_ref}"}
+            continue
         if not behavior_ref or not fact_refs or not api_binding_refs:
             continue
         if any(

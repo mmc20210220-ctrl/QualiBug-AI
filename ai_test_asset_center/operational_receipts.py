@@ -1057,22 +1057,33 @@ def derive_execution_lifecycle(
                                 elif bundle["protocol_mismatch_receipt_ids"]:
                                     lifecycle_state = LIFECYCLE_PROTOCOL_MISMATCH
                                     reason_code = "PROCESS_RECEIPT_PROTOCOL_MISMATCH"
-                                elif bundle[
-                                    "process_step_ledger_hash_mismatch_receipt_ids"
-                                ]:
-                                    lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
-                                    reason_code = "PROCESS_STEP_LEDGER_HASH_MISMATCH"
-                                elif bundle[
-                                    "process_step_fact_hash_mismatch_receipt_ids"
-                                ]:
-                                    lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
-                                    reason_code = "PROCESS_STEP_FACT_HASH_MISMATCH"
                                 elif (
+                                    # A step-set or invariant break is the more
+                                    # specific diagnosis: rows were removed,
+                                    # reclassified or re-hashed, which also
+                                    # changes the ledger hash. Reporting the
+                                    # generic HASH_MISMATCH first would hide
+                                    # the actual set tampering.
                                     bundle["process_step_set_mismatch_fields"]
                                     or bundle["process_step_invariant_errors"]
                                 ):
                                     lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
                                     reason_code = "PROCESS_STEP_SET_MISMATCH"
+                                elif bundle[
+                                    # A step FACT hash break is more specific
+                                    # than a whole-ledger hash drift: a row's
+                                    # fact content was tampered (the ledger hash
+                                    # changes as a consequence, not as the
+                                    # cause).
+                                    "process_step_fact_hash_mismatch_receipt_ids"
+                                ]:
+                                    lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
+                                    reason_code = "PROCESS_STEP_FACT_HASH_MISMATCH"
+                                elif bundle[
+                                    "process_step_ledger_hash_mismatch_receipt_ids"
+                                ]:
+                                    lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
+                                    reason_code = "PROCESS_STEP_LEDGER_HASH_MISMATCH"
                                 elif (
                                     not bundle["provided"]
                                     or not bundle["schema_valid"]

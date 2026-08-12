@@ -18,6 +18,7 @@ from ai_test_asset_center.process_step_execution import (
     FINALIZER_PROCESS_STEP_LEDGER_MISSING,
     FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED,
     FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED,
+    PROCESS_STEP_CLEANUP_SET_INCOMPLETE,
     PROCESS_STEP_LEDGER_HASH_MISMATCH,
     PROCESS_STEP_OBSERVATION_SET_INCOMPLETE,
     PROCESS_STEP_ORACLE_SET_INCOMPLETE,
@@ -229,6 +230,10 @@ class TestLedgerProductionPropagation:
         led = ProcessStepLedger("exp_f", fixture_id="fix_x", required_step_ids=["fixture_setup", "treatment_1"])
         led.record_step_execution(step_id="fixture_setup", phase="fixture", operation_ref="op_f", actor_ref="a", status_code=201)
         led.record_step_execution(step_id="treatment_1", phase="treatment", operation_ref="op_t", actor_ref="a", status_code=200)
+        # Transport-executed: every recorded step that reached a real response
+        # is listed (execution accounting), while business-state proof and
+        # semantic completion stay separate facts. In the formal mainline
+        # fixture/binding requests are timeline events, never ledger rows.
         assert led.executed_step_ids() == ["fixture_setup", "treatment_1"]
 
     def test_03_business_step_retained(self):
@@ -508,8 +513,10 @@ class TestStepSetBalance:
             oracle_step_ids=["a"],
             cleanup_step_ids=[],
         )
-        # empty cleanup list means cleanup gate not asserted
-        assert bal["balanced"] is True
+        # An explicitly provided cleanup set is ASSERTED: an empty list means
+        # cleanup was checked and no executed step satisfies it (fail closed).
+        assert bal["balanced"] is False
+        assert bal["reason_code"] == PROCESS_STEP_CLEANUP_SET_INCOMPLETE
 
     def test_38_unexecuted_not_requiring_cleanup(self):
         bal = validate_required_actual_step_balance(
@@ -529,7 +536,12 @@ class TestStepSetBalance:
             status_code=500, final_status="FAILED",
         )
         assert led.successful_write_step_ids() == ["s1"]
-        assert "s2" in led.executed_step_ids()
+        # The failed prior write is retained for compensation/accounting under
+        # attempted/failed, never silently dropped — but it is not a successful
+        # execution (final_status FAILED is not an EXECUTED attempt).
+        assert "s2" in led.attempted_step_ids()
+        assert "s2" in led.failed_step_ids()
+        assert led.executed_step_ids() == ["s1"]
 
 
 # ── 26.5 TRUE_COMPLETED ───────────────────────────────────────────────────────
@@ -757,11 +769,16 @@ class TestExtras:
             response_receipt_id="resp_body_fp_1",
             transport_receipt_id="tr_1",
             observer_receipt_ids=[],
+            after_state_receipt_id="after_state_1",
             status_code=200,
             final_status="EXECUTED",
             target_reached=True,
         )
         assert led.get_step_row("treatment_1")["observer_receipt_ids"] == []
+        # Observation evidence is INDEPENDENT business evidence: the governance
+        # after-state receipt (which the formal mainline plan executor writes
+        # from its before/after observations) counts; the response body
+        # fingerprint alone never does — a step cannot observe itself.
         assert step_ids_with_observation_evidence(led) == ["treatment_1"]
 
     def test_67_mainline_balance_without_hand_seeded_observer_ids(self):
@@ -789,12 +806,29 @@ class TestExtras:
             request_receipt_id="req_1",
             response_receipt_id="resp_1",
             transport_receipt_id="tr_1",
+            # The formal mainline plan executor writes the governance
+            # after-state receipt on every real business step; with it the
+            # step is a proven executed business step even though no observer
+            # ids were hand-seeded at creation.
+            after_state_receipt_id="after_1",
             status_code=200,
             final_status="EXECUTED",
             target_reached=True,
         )
-        led.append_receipt_ref("treatment_1", "oracle_receipt_ids", "oracle_1")
-        led.append_receipt_ref("treatment_1", "cleanup_receipt_ids", "cleanup_1")
+        # Late evidence is bound through the exact-scoped authority
+        # (append_receipt_ref rejects evidence-list fields by contract).
+        led.append_scoped_receipt_ref(
+            step_id="treatment_1",
+            receipt_step_id="treatment_1",
+            field="oracle_receipt_ids",
+            receipt_id="oracle_1",
+        )
+        led.append_scoped_receipt_ref(
+            step_id="treatment_1",
+            receipt_step_id="treatment_1",
+            field="cleanup_receipt_ids",
+            receipt_id="cleanup_1",
+        )
         bal = validate_required_actual_step_balance(
             required_step_ids=led.required_step_ids,
             executed_step_ids=led.executed_step_ids(),

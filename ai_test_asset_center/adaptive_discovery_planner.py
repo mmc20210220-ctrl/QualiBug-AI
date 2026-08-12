@@ -240,6 +240,12 @@ def plan_obligation_round(
             compile_status = _text(obl.get("compile_status")).upper()
         if compile_status != "COMPILED":
             continue
+        if obl.get("pre_transport_executable") is False:
+            # Pre-transport executability proof: a compiled obligation whose
+            # binding dimensions are incomplete cannot reach transport and must
+            # not consume a budget slot; it stays in the plan with its reason
+            # code, never silently dropped.
+            continue
         path_prefix, operation_key, _resolved_path = _resolve_operation_path(
             obl,
             experiments_by_obligation=experiments,
@@ -671,6 +677,11 @@ def plan_coverage_unit_round(
         if row["compile_status"] != "COMPILED":
             continue
         representative = obligations_by_id[row["obligation_id"]]
+        if representative.get("pre_transport_executable") is False:
+            # Pre-transport executability proof: a compiled unit whose binding
+            # dimensions are incomplete cannot reach transport and must not
+            # consume a budget slot; it stays in the plan with its reason code.
+            continue
         score = score_obligation(
             representative,
             covered_keys=covered,

@@ -604,9 +604,15 @@ class ProcessStepLedger:
     def executed_step_ids(self) -> list[str]:
         """Steps that received a real target response.
 
-        This is deliberately independent from semantic completion. A 4xx/5xx
-        response is still a real execution attempt and must remain available to
-        Oracle, evidence-completeness, and bug-discovery accounting.
+        Transport-level by contract: a 4xx/5xx response is still a real
+        execution attempt and must remain available to Oracle,
+        evidence-completeness, compensation, and bug-discovery accounting.
+        Acceptance, business-state proof, and semantic completion are separate
+        facts (``accepted_step_ids`` / ``target_state_observed`` /
+        ``completed_step_ids``); a failed prior write is listed under
+        ``failed_step_ids`` and ``attempted_step_ids``, never silently dropped.
+        Fixture/binding materialization requests are timeline events, never
+        ledger rows, so they can never enter this set in the formal mainline.
         """
         return [
             sid
@@ -693,6 +699,15 @@ def _independent_observation_receipt_ids(row: dict[str, Any]) -> list[str]:
 def step_ids_with_observation_evidence(
     ledger: ProcessStepLedger,
 ) -> list[str]:
+    """Steps with INDEPENDENT observation evidence.
+
+    The response body fingerprint is transport evidence, never business
+    observation: a step cannot observe itself (a response receipt or an
+    observer receipt that merely repeats the response id is self-authorization
+    and is excluded). The formal mainline supplies independent evidence through
+    the governance before/after state receipts and typed observer receipts
+    attached via the exact-scoped sync.
+    """
     return [
         _text(row.get("step_id"))
         for row in ledger.all_rows()
@@ -841,6 +856,9 @@ def validate_required_actual_step_balance(
             "reason_code": PROCESS_STEP_ORACLE_SET_INCOMPLETE,
             "missing_oracle": sorted(required_set - oracle),
         }
+    # An explicitly provided cleanup set is asserted: None means the gate was
+    # not requested, an empty list means cleanup was checked and nothing
+    # satisfies it (fail closed).
     if cleanup_step_ids is not None:
         cleanup = set(_unique_texts(cleanup_step_ids))
         if executed_set - cleanup:

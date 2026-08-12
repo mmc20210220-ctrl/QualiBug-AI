@@ -31,9 +31,13 @@ from .process_step_semantic_view import ProcessStepSemanticView
 
 
 _NOT_APPLICABLE = "NOT_APPLICABLE"
+# Derived step sets are re-derived after exact-scoped receipt synchronization.
+# ``process_step_ledger_hash`` is deliberately NOT in this list: it is the
+# SEAL that must be verified, not a set that can be re-derived. Popping it
+# erased a stale/tampered seal before the core could compare it (a genuine
+# tamper was silently re-sealed and the run reported no HASH_MISMATCH).
 _DERIVED_STEP_SNAPSHOT_FIELDS = (
     "process_step_receipts",
-    "process_step_ledger_hash",
     "process_step_semantic_projection",
     "recorded_step_ids",
     "attempted_step_ids",
@@ -559,6 +563,42 @@ def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
         if isinstance(ledger, ProcessStepSemanticView)
         else ProcessStepSemanticView(ledger, observations=observations)
     )
+    # The attached hash seals the ledger BEFORE exact-scoped receipts were
+    # synchronized. Sync mutates the live ledger (scoped receipt refs), so the
+    # pre-sync seal can never match the post-sync live hash — comparing them in
+    # the core reported a spurious PROCESS_STEP_LEDGER_HASH_MISMATCH and
+    # blocked receipt-bundle activation on every run that carried scoped
+    # receipts. Re-seal through the same object the core compares, AFTER the
+    # sync, but only when the attached seal still matches the pre-sync live
+    # ledger: a stale or tampered seal must stay visible so the core fails
+    # closed.
+    _source_ledger = semantic_view.source_ledger
+    _attached_seal = _text(observations.get("process_step_ledger_hash"))
+    _pre_sync_hash = _text(_source_ledger.compute_hash())
+    # A missing ledger identity is the more fundamental fault (the core fails
+    # closed with PROCESS_STEP_LEDGER_MISSING); never mask it as hash tamper —
+    # clearing the id legitimately changes the hash.
+    _ledger_identity_present = bool(
+        _text(observations.get("process_step_ledger_id"))
+        or _text(getattr(_source_ledger, "ledger_id", ""))
+    )
+    if (
+        _ledger_identity_present
+        and _attached_seal
+        and _pre_sync_hash
+        and _attached_seal != _pre_sync_hash
+    ):
+        # The attached seal no longer matches the execution-end ledger state:
+        # genuine drift or tampering. Fail closed here — receipts appended
+        # during finalization will legitimately move the live hash, so the core
+        # must not re-derive over this stale seal and mask the break.
+        observations["finalizer_block_reason"] = (
+            "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+        )
+    else:
+        observations["process_step_ledger_hash"] = _text(
+            semantic_view.compute_hash()
+        )
     synchronize_scoped_receipts_from_observations(
         semantic_view.source_ledger,
         observations,

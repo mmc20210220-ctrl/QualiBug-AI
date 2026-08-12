@@ -443,6 +443,112 @@ def _auto_fixture_create_for_binding_target(
     }
 
 
+def _cleanup_contract_issues(
+    experiment: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pre-write cleanup authority check for every declared fixture setup.
+
+    A fixture create may only be written when its cleanup route is uniquely
+    authorized: one exact cleanup operation matching the declared source
+    contract, or an explicitly accepted residue. Multiple cleanup candidates,
+    method/path drift against the declared operation, or a stale authority
+    receipt all block BEFORE transport. The cleanup list is never resolved by
+    source order.
+    """
+    issues: list[dict[str, Any]] = []
+    exp = _dict(experiment)
+    setups: list[dict[str, Any]] = []
+    if _dict(exp.get("fixture_setup")):
+        setups.append(_dict(exp.get("fixture_setup")))
+    raw_binding = exp.get("binding_plan")
+    if isinstance(raw_binding, dict):
+        binding_rows = [
+            {**_dict(value), "target": _text(_dict(value).get("target") or key)}
+            for key, value in raw_binding.items()
+            if isinstance(value, dict)
+        ]
+    else:
+        binding_rows = [
+            dict(row) for row in _list(raw_binding) if isinstance(row, dict)
+        ]
+    for row in binding_rows:
+        if _dict(row.get("fixture_setup")):
+            setups.append(_dict(row.get("fixture_setup")))
+    for setup in setups:
+        cleanup_ops = [
+            _dict(row)
+            for row in _list(setup.get("cleanup_operations"))
+            if isinstance(row, dict)
+        ]
+        refs = list(dict.fromkeys(
+            _text(row.get("operation_ref") or row.get("operation_id"))
+            for row in cleanup_ops
+            if _text(row.get("operation_ref") or row.get("operation_id"))
+        ))
+        if not refs:
+            # No cleanup route: legitimate only as explicitly accepted residue.
+            if not (
+                setup.get("accepted_residue_allowed") is True
+                and setup.get("cleanup_required") is False
+            ):
+                continue
+            continue
+        authority = _dict(setup.get("cleanup_operation_authority_receipt"))
+        authority_op = _dict(authority.get("cleanup_operation"))
+        authority_ref = _text(authority_op.get("operation_ref"))
+        if authority_ref:
+            if authority_ref not in refs:
+                issues.append({
+                    "kind": "FIXTURE_CLEANUP_AUTHORITY_RECEIPT_MISMATCH",
+                    "operation_ref": refs[0],
+                    "authority_operation_ref": authority_ref,
+                })
+            selected = authority_op
+        elif len(refs) > 1:
+            issues.append({
+                "kind": "FIXTURE_CLEANUP_OPERATION_AMBIGUOUS",
+                "candidate_operation_ids": list(refs),
+            })
+            continue
+        else:
+            selected = cleanup_ops[0]
+        selected_ref = _text(selected.get("operation_ref"))
+        if not selected_ref:
+            continue
+        declared = _dict(operations.get(selected_ref))
+        if not declared:
+            issues.append({
+                "kind": "FIXTURE_CLEANUP_OPERATION_CONTRACT_DRIFT",
+                "operation_ref": selected_ref,
+                "reason": "declared_operation_missing",
+            })
+            continue
+        declared_method = _text(declared.get("method")).upper()
+        supplied_method = _text(selected.get("method")).upper()
+        declared_path = normalize_path_placeholders(
+            _text(declared.get("path") or declared.get("raw_path"))
+        )
+        supplied_path = normalize_path_placeholders(
+            _text(selected.get("path"))
+        )
+        if (
+            declared_method not in {"DELETE", "PUT", "PATCH", "POST"}
+            or supplied_method and supplied_method != declared_method
+            or not declared_path.startswith("/")
+            or supplied_path != declared_path
+        ):
+            issues.append({
+                "kind": "FIXTURE_CLEANUP_OPERATION_CONTRACT_DRIFT",
+                "operation_ref": selected_ref,
+                "declared_method": declared_method,
+                "supplied_method": supplied_method,
+                "declared_path": declared_path,
+                "supplied_path": supplied_path,
+            })
+    return issues
+
+
 def materialize_experiment_fixtures(
     *,
     exp: dict[str, Any],
@@ -486,6 +592,39 @@ def materialize_experiment_fixtures(
         _text(exp.get("environment_type"))
     )
 
+    # ── P0-3: Cleanup authority preflight — before ANY fixture write ──
+    # A fixture create may only be written when its cleanup route is uniquely
+    # authorized (one exact cleanup operation matching the declared contract,
+    # or an explicitly accepted residue). Multiple cleanup candidates, contract
+    # drift, or a stale authority receipt block before transport; the cleanup
+    # list is never resolved by source order at write time.
+    _cleanup_issues = _cleanup_contract_issues(exp, _dict(ops))
+    if _cleanup_issues:
+        _cleanup_reason = _text(_cleanup_issues[0].get("kind"))
+        return {
+            "status": "terminal",
+            "result": {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": f"fixture_cleanup_authority:{_cleanup_reason}",
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "steps": steps_out,
+                "fixture_receipts": fixture_receipts,
+                "binding_materialization_receipts": binding_materialization_receipts,
+                "finding": None,
+                "cleanup_failures": 0,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": "fixture_cleanup_authority_not_unique",
+                },
+                "cleanup_contract_issues": _cleanup_issues,
+            },
+        }
+
     # Fixture DAG: actor contexts are resolved via tokens; disposable fixtures
     # without a concrete create path remain BLOCKED (already caught in preflight
     # when constructible=false). Record READY nodes as resolved receipts.
@@ -493,7 +632,21 @@ def materialize_experiment_fixtures(
     # ── SPEC v1.2.1 §8: Use fixture_dependency_dag.execution_order if available ──
     v12_fixture_dag = _dict(exp.get("fixture_dependency_dag"))
     v12_execution_order = _list(v12_fixture_dag.get("execution_order")) or _list(v12_fixture_dag.get("topological_order"))
-    setup_order = v12_execution_order if v12_execution_order else _list(dag.get("setup_order"))
+    # The oracle activation reads fixture_dag.setup_order while this loop used
+    # to iterate ONLY the v12 execution order. When the two diverge, an
+    # activation-required fixture was reconciled into a synthetic receipt and
+    # the precondition wrapper blocked the whole experiment as
+    # BLOCKED_FIXTURE_DAG_DRIFT. Iterate the UNION (order-preserving, deduped:
+    # v12 order first, then any setup_order-only ids) so every
+    # activation-required fixture is genuinely processed with evidence;
+    # reconciliation then only ever sees ids that exist in no DAG (true drift).
+    _dag_setup_order = [
+        _text(item) for item in _list(dag.get("setup_order")) if _text(item)
+    ]
+    setup_order = list(dict.fromkeys([
+        *[_text(item) for item in v12_execution_order if _text(item)],
+        *_dag_setup_order,
+    ]))
     for node_id in setup_order:
         node = next((n for n in _list(dag.get("nodes")) if _text(_dict(n).get("node_id")) == node_id), {})
         kind = _text(_dict(node).get("kind"))
@@ -803,20 +956,37 @@ def materialize_experiment_fixtures(
             ):
                 _identity_value = ""
                 _identity_source = "arm_actor_account_id"
-                for _plan_step in [
-                    *_list(exp.get("control_plan")),
-                    *_list(exp.get("treatment_plan")),
-                ]:
-                    if not isinstance(_plan_step, dict):
-                        continue
-                    _step_actor = actors.get(
-                        _text(_plan_step.get("actor_ref")) or ""
-                    ) or {}
-                    _step_identity = _text(_step_actor.get("account_id"))
-                    if not _step_identity:
-                        continue
-                    _identity_value = _step_identity
-                    break
+                # Sealed owner authority: the binding's owner_actor_ref is the
+                # compile-sealed owner. Actor/plan/dict order must never decide
+                # which identity fills an ownership param — the first plan step
+                # with an account_id is not the owner. A sealed owner with no
+                # resolved identity fails closed; the plan-scan fallback exists
+                # only for legacy shapes WITHOUT a sealed owner.
+                _sealed_owner_ref = _text(
+                    binding.get("owner_actor_ref")
+                    or binding.get("fixture_owner_actor_ref")
+                )
+                if _sealed_owner_ref:
+                    _owner_actor = _dict(actors.get(_sealed_owner_ref))
+                    _sealed_identity = _text(_owner_actor.get("account_id"))
+                    if _sealed_identity:
+                        _identity_value = _sealed_identity
+                        _identity_source = "sealed_owner_actor_account_id"
+                else:
+                    for _plan_step in [
+                        *_list(exp.get("control_plan")),
+                        *_list(exp.get("treatment_plan")),
+                    ]:
+                        if not isinstance(_plan_step, dict):
+                            continue
+                        _step_actor = actors.get(
+                            _text(_plan_step.get("actor_ref")) or ""
+                        ) or {}
+                        _step_identity = _text(_step_actor.get("account_id"))
+                        if not _step_identity:
+                            continue
+                        _identity_value = _step_identity
+                        break
                 if not _identity_value:
                     # Fall back to the identity already observed for this
                     # experiment's actors (the /me read the binding machinery
@@ -1744,7 +1914,34 @@ def materialize_experiment_fixtures(
                                 "ownership_proof_ref": _text(governed_setup.get("after_ref")),
                             })
                             _cleanup_ops = _list(fixture_setup.get("cleanup_operations"))
-                            _first_cleanup = _cleanup_ops[0] if len(_cleanup_ops) > 0 else {}
+                            # Unique cleanup authority: the sealed
+                            # cleanup_operation_authority_receipt decides when
+                            # present; otherwise exactly one cleanup candidate
+                            # may be used. Source order never selects — the
+                            # entry preflight already blocked ambiguity before
+                            # transport; this is defense in depth for
+                            # direct-core callers (a bypass leaves the cleanup
+                            # entry empty and the missing cleanup is reported
+                            # fail-visible downstream).
+                            _cleanup_auth_receipt = _dict(
+                                fixture_setup.get("cleanup_operation_authority_receipt")
+                            )
+                            _cleanup_auth_op = _dict(
+                                _cleanup_auth_receipt.get("cleanup_operation")
+                            )
+                            _first_cleanup = (
+                                _cleanup_auth_op
+                                if _text(_cleanup_auth_op.get("operation_ref"))
+                                else {}
+                            )
+                            if not _text(_first_cleanup.get("operation_ref")):
+                                _cleanup_refs = list(dict.fromkeys(
+                                    _text(_dict(op).get("operation_ref"))
+                                    for op in _cleanup_ops
+                                    if _text(_dict(op).get("operation_ref"))
+                                ))
+                                if len(_cleanup_refs) == 1:
+                                    _first_cleanup = _dict(_cleanup_ops[0])
                             # The cleanup route may carry a placeholder that
                             # differs from the binding target (a sellerId
                             # binding whose DELETE compensator deletes by

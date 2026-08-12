@@ -1599,6 +1599,70 @@ def build_discovery_plan(
         "probe_status": _probe_status,
     }
 
+    # ── P0-1: Pre-transport executability proof (before budget selection) ──
+    # Compile status alone does not prove an experiment can reach transport:
+    # binding dimensions may stay incomplete even when the compile receipt says
+    # COMPILED (run27: budget slots spent on obligations whose required
+    # business steps never ran because bindings could not materialize). The
+    # binding completeness gate is therefore applied to COMPILED obligations as
+    # an EXECUTABILITY PROOF, and budget selection may only spend slots on
+    # obligations that pass it. Non-executable obligations remain in the plan
+    # with an explicit reason code — never silently dropped, never occupying a
+    # budget slot.
+    from .binding_completeness_gate import (
+        check_binding_completeness as _binding_exec_check,
+    )
+
+    _pre_transport_blocked: list[dict[str, Any]] = []
+    _pre_transport_checked = 0
+    for _g_oid, _g_obl in zip(
+        [_text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)],
+        [o for o in obligations if isinstance(o, dict)],
+    ):
+        if not _g_oid:
+            continue
+        _g_exp = by_obligation.get(_g_oid)
+        if not isinstance(_g_exp, dict):
+            continue
+        _g_compile = _dict(_g_exp.get("compile_receipt"))
+        _g_status = _text(_g_compile.get("status")).upper()
+        if _g_status != "COMPILED":
+            continue
+        _pre_transport_checked += 1
+        _exec_check = _binding_exec_check(
+            _binding_ledger, obligation=_g_obl, behavior_ir=behavior_ir
+        )
+        if _exec_check.get("gate_passed") is False:
+            _blocked_dims = _list(_exec_check.get("blocked_dimensions"))
+            _reason = ";".join(
+                f"{_text(_dict(d).get('dimension'))}:{_text(_dict(d).get('reason'))}"
+                for d in _blocked_dims[:5]
+            ) or "BINDING_INCOMPLETE"
+            _g_obl["pre_transport_executable"] = False
+            _g_obl["pre_transport_block_reason"] = _reason
+            _g_exp["pre_transport_executable"] = False
+            _g_exp["pre_transport_block_reason"] = _reason
+            _pre_transport_blocked.append({
+                "obligation_id": _g_oid,
+                "reason": _reason,
+                "blocked_dimensions": [
+                    {
+                        "dimension": _text(_dict(d).get("dimension")),
+                        "reason": _text(_dict(d).get("reason")),
+                    }
+                    for d in _blocked_dims
+                ],
+            })
+    _pre_transport_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.pre-transport-executability.v1",
+        "compiled_checked": _pre_transport_checked,
+        "executable_count": _pre_transport_checked - len(_pre_transport_blocked),
+        "blocked_count": len(_pre_transport_blocked),
+        "blocked_obligations": _pre_transport_blocked[:100],
+        "authority": "binding_completeness_gate",
+        "changes_budget_selection": True,
+    }
+
     campaign_budget = int(getattr(campaign, "slice_budget", 0) or 0)
     if campaign_budget <= 0:
         raise MainlineContractError("obligation_budget_invalid")
@@ -1874,8 +1938,14 @@ def build_discovery_plan(
         experiments_by_obligation=by_obligation,
         behavior_ir=behavior_ir,
     )
-    # Non-authoritative fact_ref projection for first-loss join. Must not alter
-    # compile/selection/execution decisions.
+    # Fact lineage is produced in the mainline: invariants carry the exact
+    # fact identity at IR construction (rule.semantic_contract.fact_id) and
+    # obligations inherit it inside the obligation compiler. This attach is the
+    # authoritative verification pass — it rebuilds refs from the exact
+    # structural chain (now including the production channel), records
+    # first-loss diagnostics for every accepted fact, and never widens
+    # lineage. It runs after selection so it cannot alter decisions; the
+    # production-side refs are what compile/selection/execution see.
     from .fact_first_loss_ledger import attach_fact_refs_to_planning_artifacts
 
     _fact_exp_ledger = _dict(asset.get("fact_experimentability_ledger"))
@@ -1909,6 +1979,7 @@ def build_discovery_plan(
             "by_obligation": by_obligation,
             "obligation_plan": obligation_plan,
             "planning_budget_receipt": budget_receipt,
+            "pre_transport_executability_receipt": _pre_transport_receipt,
             "agent_intent_plan": agent_intent_plan,
             "coverage_unit_receipt": coverage_unit_receipt,
             "coverage_unit_compile_receipt": representative_compile_receipt,

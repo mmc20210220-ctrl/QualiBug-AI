@@ -154,6 +154,17 @@ def _actor_execution_plan(
         ).hexdigest()
         if not expected_hash or expected_hash != actual_hash:
             return {}, "actor_execution_plan_hash_mismatch"
+        # A sealed exploration plan over several required operations must not
+        # silently pick the first source-order operation: the primary operation
+        # is ambiguous unless the property explicitly selects one member of the
+        # required set (or the set has exactly one member).
+        if not _unique_primary_operation_ref(experiment):
+            if len([
+                _text(value)
+                for value in _list(_dict(experiment).get("required_operations"))
+                if _text(value)
+            ]) > 1:
+                return {}, "actor_exploration_primary_operation_ambiguous"
         return direct, ""
 
     legacy_locations = []
@@ -183,17 +194,46 @@ def _actor_execution_plan(
     return {}, ""
 
 
+def _unique_primary_operation_ref(experiment: dict[str, Any]) -> str:
+    """Resolve the single primary operation without source-order bias.
+
+    ``required_operations`` is the compiled operation set. A unique primary
+    exists only when the property explicitly selects one member of the set, or
+    the set has exactly one member. Multiple required operations without an
+    explicit selection are AMBIGUOUS — the first source-order item is never
+    promoted (input order must not change what an authorization experiment
+    tests); an explicit selection outside the required set is ambiguous too.
+    """
+    required = list(dict.fromkeys(
+        _text(value)
+        for value in _list(_dict(experiment).get("required_operations"))
+        if _text(value)
+    ))
+    property_ref = _text(_experiment_property(experiment).get("operation_ref"))
+    if property_ref:
+        return property_ref if property_ref in required else ""
+    return required[0] if len(required) == 1 else ""
+
+
 def _primary_operation_ref(
     experiment: dict[str, Any],
     semantic_property: dict[str, Any],
 ) -> str:
+    """Resolve the single primary operation from sealed authority.
+
+    ``required_operations`` is the compiled set: a unique primary exists only
+    when the property explicitly selects one member (or the set has exactly one
+    member). Source order never decides — ``required[0]`` selection is removed.
+    Without ``required_operations`` the established property/plan-step
+    fallbacks remain for legacy experiment shapes.
+    """
     required = [
         _text(value)
         for value in _list(_dict(experiment).get("required_operations"))
         if _text(value)
     ]
     if required:
-        return required[0]
+        return _unique_primary_operation_ref(experiment)
     property_ref = _text(semantic_property.get("operation_ref"))
     if property_ref:
         return property_ref

@@ -17,6 +17,7 @@ SURFACE = "process_timeline"
 ADAPTER = "http_api"
 EVIDENCE_KEY = "process_step_timeline"
 KIND_SEQUENCE_ORDER = "step_sequence_order"
+KIND_PROCESS_COMPLETION = "process_completion"
 
 _BUSINESS_PHASES = frozenset({"control", "treatment"})
 _EXECUTION_EVENTS = frozenset(
@@ -243,6 +244,91 @@ def evaluate_step_sequence_order(envelope: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def evaluate_process_completion(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Verdict for the multi-step process protocol's completion assertion.
+
+    Every declared expected step must have been observed reaching transport;
+    when an expected order is declared, the observed order of the declared
+    steps must match it exactly. Missing steps, steps that never reached
+    transport, or an order break are explicit verdicts — never a silent pass.
+    """
+    spec = _dict(envelope.get("spec"))
+    expected_steps = [
+        _text(item)
+        for item in _list(_declared(spec, "expected_steps"))
+        if _text(item)
+    ]
+    expected_order = [
+        _text(item)
+        for item in _list(_declared(spec, "expected_order"))
+        if _text(item)
+    ]
+    payload = _dict(_dict(envelope.get("observations")).get(EVIDENCE_KEY))
+    observed_order = [
+        _text(item) for item in _list(payload.get("observed_order")) if _text(item)
+    ]
+    if not expected_steps:
+        return {
+            "passed": None,
+            "reason_code": "PROCESS_EXPECTED_STEPS_NOT_DECLARED",
+            "expected": None,
+            "actual": None,
+        }
+    if not observed_order:
+        return {
+            "passed": None,
+            "reason_code": "PROCESS_TIMELINE_ABSENT",
+            "expected": {"expected_steps": expected_steps},
+            "actual": None,
+        }
+    missing = [
+        step_id for step_id in expected_steps if step_id not in observed_order
+    ]
+    if missing:
+        return {
+            "passed": None,
+            "reason_code": "DECLARED_STEP_NOT_OBSERVED",
+            "expected": {"expected_steps": expected_steps},
+            "actual": {"observed_order": observed_order, "missing": missing},
+        }
+    if _list(payload.get("steps_not_reaching_transport")):
+        return {
+            "passed": None,
+            "reason_code": "PROCESS_COVERAGE_INCOMPLETE",
+            "expected": {"expected_steps": expected_steps},
+            "actual": {
+                "observed_order": observed_order,
+                "steps_not_reaching_transport": list(
+                    payload["steps_not_reaching_transport"]
+                ),
+            },
+        }
+    if expected_order:
+        expected_set = set(expected_order)
+        observed_declared = [
+            step_id for step_id in observed_order if step_id in expected_set
+        ]
+        if observed_declared != expected_order:
+            return {
+                "passed": False,
+                "reason_code": "PROCESS_STEP_ORDER_VIOLATION",
+                "expected": {
+                    "expected_steps": expected_steps,
+                    "expected_order": expected_order,
+                },
+                "actual": {"observed_order": observed_declared},
+            }
+    return {
+        "passed": True,
+        "reason_code": "",
+        "expected": {
+            "expected_steps": expected_steps,
+            "expected_order": expected_order,
+        },
+        "actual": {"observed_order": observed_order},
+    }
+
+
 def install_process_step_surface() -> dict[str, str]:
     """Install the observer and ordering assertion through existing registries."""
     from .assertion_dsl_base import register_assertion_kind, registered_assertion_kinds
@@ -266,6 +352,14 @@ def install_process_step_surface() -> dict[str, str]:
         installed[KIND_SEQUENCE_ORDER] = register_assertion_kind(
             KIND_SEQUENCE_ORDER,
             evaluator=evaluate_step_sequence_order,
+            required_evidence_keys=(EVIDENCE_KEY,),
+        )
+    if KIND_PROCESS_COMPLETION in set(registered_assertion_kinds()):
+        installed[KIND_PROCESS_COMPLETION] = KIND_PROCESS_COMPLETION
+    else:
+        installed[KIND_PROCESS_COMPLETION] = register_assertion_kind(
+            KIND_PROCESS_COMPLETION,
+            evaluator=evaluate_process_completion,
             required_evidence_keys=(EVIDENCE_KEY,),
         )
     logger.info("process step surface installed: %s", installed)
