@@ -768,6 +768,12 @@ def build_contract_oracle_activation_receipt(
         },
         "source_refs": source_refs,
     }
+    # Single-arm read contracts (response_field_absent / row-state filter /
+    # ui_state_consistency) legitimately activate with an empty treatment set;
+    # the validator mirrors this exemption instead of rejecting ACTIVE with
+    # required.treatment empty (activation_receipt_semantics_invalid).
+    if not required["treatment"] and not _requires_treatment:
+        payload["single_arm_read"] = True
     if field_oracle_soft:
         # Optional enrichment — Trace-before-cleanup soft activation.
         payload["field_oracle_soft_activation"] = True
@@ -792,7 +798,10 @@ def validate_contract_oracle_activation_receipt(
         "source_refs",
     }
     if set(row) != required_fields:
-        optional_fields = {"field_oracle_soft_activation"}
+        optional_fields = {
+            "field_oracle_soft_activation",
+            "single_arm_read",
+        }
         unexpected = sorted(set(row) - required_fields - optional_fields)
         absent = sorted(required_fields - set(row))
         if unexpected or absent:
@@ -845,13 +854,17 @@ def validate_contract_oracle_activation_receipt(
     status = _text(row.get("status"))
     reason_codes = [_text(item) for item in _list(row.get("reason_codes"))]
     soft_field_oracle = row.get("field_oracle_soft_activation") is True
+    # Single-arm read contracts (response_field_absent / row-state filter /
+    # ui_state_consistency) activate with an empty treatment set; the builder
+    # stamps single_arm_read and this validator mirrors the exemption.
+    single_arm_read = row.get("single_arm_read") is True
     if (
         (status == "ACTIVE" and reason_codes)
         or (status != "ACTIVE" and not reason_codes)
         or (
             status == "ACTIVE"
             and (
-                not required["treatment"]
+                (not required["treatment"] and not single_arm_read)
                 or not row.get("source_refs")
                 or any(
                     len(verified[key]) != len(required[key])

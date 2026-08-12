@@ -186,6 +186,18 @@ def _restore_pre_gate_oracle(row: dict[str, Any]) -> dict[str, Any]:
     if causality_pre:
         for field, value in causality_pre.items():
             base[field] = value
+        # The causality snapshot seals only the semantic fields it changed
+        # (status/verdict/receipt_id/…); customer_deliverable_candidate is not
+        # captured, so copying only snapshot fields left the restored VIOLATION
+        # base carrying the demoted candidate=False. The strict validator then
+        # saw a VIOLATION row with candidate=False and the override check on
+        # the gate-stripped base raised contract_oracle_semantics_invalid
+        # (run34: 73 receipts rejected, experiment groups lost). Restore the
+        # VIOLATION delivery-candidate semantics explicitly, exactly as the
+        # authorization-delivery restore below does.
+        if _text(causality_pre.get("status")).upper() == "VIOLATION":
+            base["customer_deliverable_candidate"] = True
+            base["customer_deliverable"] = False
 
     return base
 
