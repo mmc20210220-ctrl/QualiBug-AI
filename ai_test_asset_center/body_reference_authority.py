@@ -77,7 +77,61 @@ def _operation_entity_refs(
 
 # Target resolution inside the mechanics module resolves this helper dynamically.
 _core._operation_entity_refs = _operation_entity_refs
-resolve_body_reference = _core.resolve_body_reference
+_original_resolve_body_reference = _core.resolve_body_reference
+
+
+def _normalize_body_path(value: Any) -> str:
+    raw = _text(value)
+    return raw[2:] if raw.startswith("$.") else raw
+
+
+def resolve_body_reference(
+    operation: dict[str, Any],
+    body_path: str,
+    *,
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    receipt = _original_resolve_body_reference(
+        operation, body_path, behavior_ir=behavior_ir
+    )
+    if _text(receipt.get("status")) == "RESOLVED":
+        return receipt
+    operation_ref = _text(operation.get("id") or operation.get("operation_id"))
+    matches = [
+        _dict(row)
+        for row in _list(_dict(behavior_ir).get("body_reference_relations"))
+        if _text(_dict(row).get("operation_ref")) == operation_ref
+        and _normalize_body_path(_dict(row).get("body_path")) == _normalize_body_path(body_path)
+        and _text(_dict(row).get("status")) == "RESOLVED"
+        and _text(_dict(row).get("target_entity_ref"))
+        and _list(_dict(row).get("source_refs"))
+    ]
+    targets = {_text(row.get("target_entity_ref")) for row in matches}
+    if len(matches) != 1 or len(targets) != 1:
+        return receipt
+    row = matches[0]
+    target_entity_ref = next(iter(targets))
+    if target_entity_ref not in {
+        _text(entity.get("id"))
+        for entity in _list(_dict(behavior_ir).get("entities"))
+        if isinstance(entity, dict)
+    }:
+        return receipt
+    return {
+        "schema_version": _core.SCHEMA_VERSION,
+        "status": "RESOLVED",
+        "reason_code": "",
+        "operation_ref": operation_ref,
+        "body_path": _text(body_path),
+        "target_entity_ref": target_entity_ref,
+        "authorities": [
+            "body_reference_relation:" + (_text(row.get("authority")) or "source_backed")
+        ],
+        "body_reference_relation_id": _text(row.get("id")),
+    }
+
+
+_core.resolve_body_reference = resolve_body_reference
 
 __all__ = sorted(
     {
