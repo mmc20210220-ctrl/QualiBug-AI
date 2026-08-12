@@ -4,12 +4,15 @@ A request contract belongs to the operation that declares it. Testing explicit
 JSON Schema/OpenAPI constraints therefore must not depend on a separate
 operation<->entity relation. Actor execution authority does not move: a seed is
 created only when a source-backed ``permits`` relation resolves to an active
-runtime actor. Public/no-permit operations remain a visible coverage gap until
-public execution is source-declared by a dedicated authority.
+runtime actor. Read-only probes require no cleanup; write probes retain the
+canonical cleanup requirement. Public/no-permit operations remain a visible
+coverage gap until public execution is source-declared by a dedicated authority.
 """
 from __future__ import annotations
 
 from typing import Any
+
+from .behavior_ir_core import _infer_operation_effect
 
 
 def _d(value: Any) -> dict[str, Any]:
@@ -30,10 +33,19 @@ def _core(compiler_base: Any) -> Any:
     return core or compiler_base
 
 
+def _operation_effect(operation: dict[str, Any]) -> str:
+    return _t(
+        _infer_operation_effect(
+            operation,
+            _t(operation.get("method")).upper(),
+        )
+    ).lower()
+
+
 def _schema_probe_has_source_variants(operation: dict[str, Any], core: Any) -> bool:
     """Ask the canonical expander whether this operation has executable schema targets."""
 
-    from ._validation_obligation_expander_core import expand_validation_obligation
+    from .validation_obligation_expander import expand_validation_obligation
 
     probe = core.make_obligation(
         risk_family="validation",
@@ -65,7 +77,7 @@ def append_operation_schema_validation_seeds(
     behavior_ir: dict[str, Any],
     compiler_base: Any,
 ) -> dict[str, Any]:
-    """Return compiled obligations plus source-backed operation schema seeds."""
+    """Return compiled obligations plus source-backed operation contract seeds."""
 
     core = _core(compiler_base)
     ir = _d(behavior_ir)
@@ -122,7 +134,8 @@ def append_operation_schema_validation_seeds(
 
     for operation_ref in sorted(operations_by_id):
         operation = operations_by_id[operation_ref]
-        if _t(operation.get("read_write") or operation.get("side_effect_class")) != "write":
+        effect = _operation_effect(operation)
+        if effect not in {"read", "write"}:
             continue
         if not _schema_probe_has_source_variants(operation, core):
             continue
@@ -144,7 +157,7 @@ def append_operation_schema_validation_seeds(
                 gap = dict(gap)
                 gap["description"] = (
                     "Operation declares request-schema validation constraints but no "
-                    "source-backed permits relation authorizes a write probe"
+                    "source-backed permits relation authorizes an executable probe"
                 )
                 _append_gap(gap)
             else:
@@ -175,6 +188,11 @@ def append_operation_schema_validation_seeds(
             for relation in permit_relations
             if core._relation_actor_ref(relation) == actor_ref
         ]
+        cleanup_requirement = (
+            core._cleanup_requirement(operation, operations, relations, required=True)
+            if effect == "write"
+            else {"required": False}
+        )
         additions.append(core.make_obligation(
             risk_family="validation",
             subject_refs=[operation_ref, actor_ref],
@@ -185,13 +203,12 @@ def append_operation_schema_validation_seeds(
                 "operation_path_prefix": core._operation_path_prefix(operation),
                 "require_control_success": True,
                 "schema_validation_seed_authority": "operation_request_contract",
+                "operation_effect": effect,
             },
             required_actors=[actor_ref],
             required_operations=[operation_ref],
             required_observers=["http_response"],
-            cleanup_requirement=core._cleanup_requirement(
-                operation, operations, relations, required=True
-            ),
+            cleanup_requirement=cleanup_requirement,
             source_refs=core._combined_source_refs(
                 operation, actor, *actor_relations
             ),
