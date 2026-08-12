@@ -1,8 +1,11 @@
 name: Apply QualiBug main optimization 20260812
 
 on:
-  issues:
-    types: [opened]
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-qualibug-main-optimization-20260812.yml'
+      - 'tools/.one_shot/qualibug_main_optimization_20260812/**'
 
 permissions:
   contents: write
@@ -13,7 +16,6 @@ concurrency:
 
 jobs:
   apply-optimization:
-    if: github.event.issue.title == 'RUN_QUALIBUG_MAIN_OPTIMIZATION_20260812'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
