@@ -70,6 +70,13 @@ def pytest_configure(config) -> None:
     # this variable explicitly. An explicit export always wins (setdefault).
     os.environ.setdefault("QUALIBUG_MAINLINE_REASONER_DISABLED", "1")
 
+    # 1c) The other two governed LLM comprehension channels (rule→interface
+    # semantic linking, and open-semantic business-rule recall) are default-ON in
+    # production but must stay out of the deterministic test suite for the same
+    # reason. Tests that exercise their activation delete these vars explicitly.
+    os.environ.setdefault("QUALIBUG_AGENT_SEMANTIC_LINKING_DISABLED", "1")
+    os.environ.setdefault("QUALIBUG_SEMANTIC_EXTRACTION_DISABLED", "1")
+
     # 2) Unique per-session basetemp to avoid stale-dir safe-delete cascade.
     if config.option.basetemp:
         return

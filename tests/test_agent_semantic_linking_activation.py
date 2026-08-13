@@ -22,9 +22,10 @@ def _enabled_config() -> ReasoningConfig:
     )
 
 
-def test_deep_scan_auto_enables_governed_semantic_linker_when_provider_exists(
+def test_scan_auto_enables_governed_semantic_linker_when_provider_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("QUALIBUG_AGENT_SEMANTIC_LINKING_DISABLED", raising=False)
     monkeypatch.setattr(
         binding.ReasoningConfig,
         "from_env",
@@ -39,12 +40,16 @@ def test_deep_scan_auto_enables_governed_semantic_linker_when_provider_exists(
     assert resolved.campaign_context["agent_semantic_linking_enabled"] is True
     assert resolved.campaign_context[
         "agent_semantic_linking_enablement_basis"
-    ] == "auto_enabled_configured_provider_approved_sandbox"
+    ] == "auto_enabled_configured_provider_comprehension_only"
 
 
-def test_read_only_scan_does_not_auto_spend_semantic_provider_budget(
+def test_read_only_scan_still_enables_comprehension_linker_when_provider_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Comprehension-only linking issues no target request and does not touch the
+    # write boundary, so it stays ON even under the read-only kill switch. The
+    # linker consumes LLM provider budget, never target budget.
+    monkeypatch.delenv("QUALIBUG_AGENT_SEMANTIC_LINKING_DISABLED", raising=False)
     monkeypatch.setattr(
         binding.ReasoningConfig,
         "from_env",
@@ -55,10 +60,10 @@ def test_read_only_scan_does_not_auto_spend_semantic_provider_budget(
         _Inputs(campaign_context={"execution_mode": "safe_read_only"})
     )
 
-    assert resolved.campaign_context["agent_semantic_linking_enabled"] is False
+    assert resolved.campaign_context["agent_semantic_linking_enabled"] is True
     assert resolved.campaign_context[
         "agent_semantic_linking_enablement_basis"
-    ] == "execution_mode_not_approved_sandbox"
+    ] == "auto_enabled_configured_provider_comprehension_only"
 
 
 def test_explicit_semantic_linker_kill_switch_always_wins(

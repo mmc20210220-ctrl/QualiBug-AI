@@ -530,12 +530,20 @@ def _filter_low_quality_hypotheses(hypotheses: list[dict[str, Any]]) -> list[dic
         has_vm = isinstance(vm, dict) and any(
             str(vm.get(k, "") or "").strip() for k in ("path", "step1", "step2", "step3")
         )
+        # Deep-comprehension fields (cascade_chain/source_state/cascade_check)
+        # are structured comprehension even when the single-step verification
+        # path is incomplete. A hypothesis that reasoned across entities must
+        # not be filtered out simply because its first step has no endpoint.
+        has_depth = any(
+            h.get(k) not in (None, "", [], {})
+            for k in ("cascade_chain", "cascade_summary", "source_state", "cascade_check")
+        )
         evidence = h.get("evidence", "")
         has_evidence = bool(evidence) and (not isinstance(evidence, (dict, list)) or len(str(evidence)) > 10)
         title = str(h.get("title", "") or "").strip()
         has_title = len(title) > 3
 
-        if has_title and (has_vm or has_evidence):
+        if has_title and (has_vm or has_depth or has_evidence):
             filtered.append(h)
         elif has_title and not str(h.get("description", "") or "").strip():
             h.setdefault("execution_block", "missing_executable_binding")
@@ -556,11 +564,20 @@ def _hypothesis_quality_score(hypothesis: dict[str, Any]) -> tuple[int, int, int
         vm = {}
     step_count = sum(1 for key in ("path", "step1", "step2", "step3") if str(vm.get(key, "") or "").strip())
     explicit_binding = 1 if step_count > 0 else 0
+    # Deep-comprehension evidence counts alongside executable steps: a
+    # cross-entity cascade chain is comprehension the single-step score would
+    # otherwise not reward, so depth-bearing hypotheses no longer lose ranking
+    # to flat single-assertion hypotheses.
+    depth_weight = sum(
+        1
+        for key in ("cascade_chain", "cascade_summary", "source_state", "cascade_check")
+        if hypothesis.get(key) not in (None, "", [], {})
+    )
     local_source = 1 if hypothesis.get("_hypothesis_source") == "local_analyzer" else 0
     evidence_weight = len(str(hypothesis.get("evidence", "") or "")) + len(str(hypothesis.get("description", "") or ""))
     severity = str(hypothesis.get("severity", "") or "").upper()
     severity_weight = {"P0": 4, "P1": 3, "P2": 2, "P3": 1}.get(severity, 0)
-    return explicit_binding, step_count, local_source + severity_weight, evidence_weight
+    return explicit_binding, step_count, local_source + severity_weight + depth_weight, evidence_weight
 
 
 def _merge_verification_method(primary: Any, secondary: Any) -> dict[str, Any]:

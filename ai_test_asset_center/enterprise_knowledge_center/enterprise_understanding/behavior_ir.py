@@ -657,6 +657,11 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         ),
         "state_effects": state_effects,
         "data_effects": data_effects,
+        "conservation_linkages": [
+            dict(row)
+            for row in as_list(fact.get("conservation_linkages"))
+            if isinstance(row, dict)
+        ],
         "permission_decision": permission_decision,
         "authorization_semantics_explicit": bool(authorization.get("authority_declared")),
         "authorization_semantic_kind": text(authorization.get("semantic_kind")) or "NONE",

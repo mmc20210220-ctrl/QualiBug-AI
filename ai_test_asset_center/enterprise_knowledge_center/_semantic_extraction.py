@@ -95,8 +95,13 @@ _EXAMPLE_LEAD_RE = re.compile("|".join(_EXAMPLE_LEAD_PATTERNS))
 # off      : never call the LLM for rule candidates; formal output is regex-only.
 # shadow   : call, validate, record candidates — never touch formal rule output.
 # augment  : validated LLM-only candidates enter the existing governance chain.
-#            NOT IMPLEMENTED in this phase; resolves to shadow with a visible
-#            fallback_reason until the promotion gates are met.
+#            Default ON when the provider is configured. Promotion itself is
+#            deterministically gated at merge time (promote_rule_candidates_to_rules
+#            + rule_promotion_gates_met): only llm+explicit+non-conflicted
+#            candidates carrying anchored evidence are promoted; nothing is
+#            promoted without evidence. An operator explicit
+#            rule_promotion_gates_met=False is the kill switch and resolves to
+#            shadow with promotion_gates_not_met.
 # required : the comprehension stage fails when the LLM is unavailable.
 SEMANTIC_RULE_EXTRACTION_MODES = ("off", "shadow", "augment", "required")
 _RULE_MODE_RECEIPT_SCHEMA = "qualibug.semantic-rule-extraction-mode.v1"
@@ -116,9 +121,14 @@ def resolve_semantic_rule_extraction_mode(
     """Resolve the effective rule-extraction mode with an explicit receipt.
 
     Never silently degrades: every fallback is named in the receipt
-    (SPEC §12.5). ``augment`` is not yet enabled — it resolves to ``shadow``
-    with fallback_reason ``augment_not_yet_enabled`` so no phase-one run can
-    accidentally change formal Canonical Rule output.
+    (SPEC §12.5). ``augment`` is default-ON when the provider is configured:
+    promotion safety is enforced deterministically at merge time by
+    ``promote_rule_candidates_to_rules`` + ``rule_promotion_gates_met`` (only
+    llm+explicit+non-conflicted candidates with anchored evidence are promoted),
+    never by this mode flag. An operator explicit
+    ``promotion_gates_met=False`` is the kill switch and resolves to ``shadow``
+    with ``promotion_gates_not_met``; an unavailable provider fails closed to
+    ``off``/``required`` with ``missing_credentials``.
     """
     requested = _text(requested_mode).lower()
     if requested not in SEMANTIC_RULE_EXTRACTION_MODES:
@@ -140,7 +150,10 @@ def resolve_semantic_rule_extraction_mode(
     elif requested == "augment":
         if provider_ok:
             gates = _dict(governance_policy)
-            if gates.get("promotion_gates_met") is True:
+            # An explicit ``False`` is the only thing that suppresses augment;
+            # an absent or ``True`` value keeps the default-ON behavior. The
+            # real evidence/no-conflict/traceability gates run at merge time.
+            if gates.get("promotion_gates_met") is not False:
                 effective = "augment"
                 fallback_reason = ""
             else:
@@ -152,7 +165,7 @@ def resolve_semantic_rule_extraction_mode(
     elif requested == "required":
         if provider_ok:
             gates = _dict(governance_policy)
-            if gates.get("promotion_gates_met") is True:
+            if gates.get("promotion_gates_met") is not False:
                 effective = "augment"
                 fallback_reason = ""
             else:
@@ -656,7 +669,15 @@ _SYSTEM_PROMPT = """\
 你是企业资料结构化抽取器。输入可能是中文 PRD、制度、实施说明、接口说明、
 数据字典、权限矩阵或中英文混合资料。
 
-只抽取原文明确出现的候选实体、字段、关系、状态和业务角色。
+你的首要任务是从原文中抽取出两类一等候选：
+
+一、业务规则（kind=rule）——这是最重要的抽取目标。凡是原文明确表达的
+   约束、许可、禁止、条件、状态变化、不变量、阈值、时间限制、金额/库存/
+   数量守恒关系，都必须抽取为 rule 候选。原文里的每一条规则都要逐条输出，
+   一条都不能漏。
+
+二、实体、字段、关系、状态和业务角色（kind=entity/field/relation/state/actor）
+   ——这些是规则的组成部分，作为辅助候选抽取。
 
 严格规则：
 1. 中文是事实语言。保留原始中文名称，不得先翻译成英文，不得用英文改写中文术语。
@@ -665,7 +686,7 @@ _SYSTEM_PROMPT = """\
 4. 区分 entity、field、relation、state、actor，不得把角色、状态、字段都标成实体。
 5. source_locator 使用输入提供的章节或字符范围；不确定时原样返回输入 locator。
 6. 只输出合法 JSON：{"candidates": [...]}。
-7. 每个候选格式：
+7. 实体/字段/关系/状态/角色候选格式：
    {"kind":"entity|field|relation|state|actor",
     "name":"原文名称",
     "source_locator":"章节或字符范围",
@@ -674,7 +695,7 @@ _SYSTEM_PROMPT = """\
 8. 没有可抽取内容时返回 {"candidates": []}。
 9. 不得推断、翻译、归纳或创造业务事实。
 
-业务规则抽取（kind=rule）额外规则：
+业务规则候选（kind=rule）格式与约束：
 10. 找出明确表达约束、许可、禁止、条件、状态变化、不变量、阈值、时间限制的原文，
     输出 kind=rule 候选。每个 rule 候选格式：
     {"kind":"rule",
@@ -717,6 +738,13 @@ _SYSTEM_PROMPT = """\
 
 _USER_PROMPT_TEMPLATE = """\
 从下面的企业资料片段中抽取结构化候选。
+
+优先抽取业务规则（kind=rule）：把原文中每一条明确表达的约束、许可、禁止、
+条件、状态变化、不变量、阈值、时间限制、金额/库存/数量守恒关系，都逐条输出
+为独立的 rule 候选。不要因为规则数量多就省略或合并；一条规则 = 一个候选。
+
+同时抽取规则涉及到的实体、字段、关系、状态、业务角色作为辅助候选。
+
 Source ID: {source_id}
 Filename: {filename}
 Source locator: {locator}
@@ -953,6 +981,18 @@ def run_semantic_extraction(
         from ..llm_reasoning import _get_client
 
         client = _get_client()
+        # ── Reasoning-model output budget floor ──
+        # DeepSeek V4 (and other reasoning models) emit a long
+        # ``reasoning_content`` BEFORE ``content``. A low max_tokens (the
+        # 4096 default) is consumed entirely by reasoning, so ``content``
+        # returns empty and every rule candidate is silently lost
+        # (``LLM response did not include JSON content``). The discovery
+        # engine and agent_semantic_linker already enforce a ≥32768 floor;
+        # the extraction channel must match, otherwise the same provider
+        # recalls rules for binding but not for open-semantic extraction.
+        client.config.max_tokens = max(
+            int(getattr(client.config, "max_tokens", 0) or 0), 32768
+        )
     except Exception as exc:
         receipt.status = "FAILED_CLIENT_UNAVAILABLE"
         receipt.error = (
@@ -1183,14 +1223,24 @@ def run_semantic_extraction(
 
 
 def _extraction_cache_path(source_id: str, text: str) -> Path | None:
-    """Cache file for (source_id, text digest), under the semantic cache dir."""
+    """Cache file for (source_id, text digest, prompt fingerprint).
+
+    The prompt is a first-class extraction variable: changing the system/user
+    prompt changes what the model should recall, so a cache key that ignores it
+    would return stale receipts after a prompt edit (the measured "changed the
+    prompt, output unchanged" failure). The prompt fingerprint is folded into
+    the digest so any prompt change naturally invalidates prior entries.
+    """
     cache_root = str(os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR") or "").strip()
     if not cache_root:
         return None
     import hashlib as _hashlib
 
+    prompt_fingerprint = _hashlib.sha256(
+        f"{_SYSTEM_PROMPT}\n{_USER_PROMPT_TEMPLATE}".encode("utf-8")
+    ).hexdigest()[:16]
     digest = _hashlib.sha256(
-        f"{source_id}\n{text}".encode("utf-8")
+        f"{source_id}\n{text}\n{prompt_fingerprint}".encode("utf-8")
     ).hexdigest()
     return Path(cache_root) / "semantic_extraction" / f"{digest}.json"
 

@@ -987,10 +987,10 @@ def build_enterprise_business_knowledge_asset(
         or os.getenv("QUALIBUG_SEMANTIC_EXTRACTION", "").strip() in {"1", "true", "yes"}
     )
     _rule_mode_receipt = resolve_semantic_rule_extraction_mode(
-        requested_mode=str(options.get("semantic_rule_extraction_mode") or "shadow"),
+        requested_mode=str(options.get("semantic_rule_extraction_mode") or "augment"),
         provider_status_value=provider_status(),
         governance_policy={
-            "promotion_gates_met": options.get("rule_promotion_gates_met") is True
+            "promotion_gates_met": options.get("rule_promotion_gates_met")
         },
     )
     _rule_mode_active = _rule_mode_receipt["effective_mode"] in {
@@ -1128,6 +1128,7 @@ def build_enterprise_business_knowledge_asset(
             from ._semantic_extraction import (
                 build_rule_candidate_ledger,
                 promote_rule_candidates_to_rules,
+                rule_promotion_gates_met,
             )
 
             _regex_rules_by_source: dict[str, list[dict[str, Any]]] = {}
@@ -1142,6 +1143,7 @@ def build_enterprise_business_knowledge_asset(
                         ).append(_r)
                         break
             _promoted_all: list[dict[str, Any]] = []
+            _promo_receipts: list[dict[str, Any]] = []
             for _cand in _llm_rule_candidates:
                 _src = str(_cand.get("source_id") or "").strip()
                 if not _src:
@@ -1162,6 +1164,7 @@ def build_enterprise_business_knowledge_asset(
                     source_id=_src,
                 )
                 _promoted_all.extend(_promoted)
+                _promo_receipts.append(_promo_receipt)
             if _promoted_all:
                 _existing_rule_ids = {
                     str(row.get("rule_id") or "").strip() for row in rules
@@ -1174,6 +1177,27 @@ def build_enterprise_business_knowledge_asset(
                         not in _existing_rule_ids
                     ]
                 )
+            # Persist the promotion receipts and SPEC §19 gates so the actual
+            # "how many LLM rules were promoted" is observable (previously this
+            # branch promoted rows but wrote no receipt, so the comprehension
+            # authority reported promoted_rules=0).
+            _rule_promotion_receipts = _promo_receipts
+            _rule_promotion_gates = rule_promotion_gates_met(
+                _promo_receipts,
+                ledger_stats={"regex_entry_count": len(rules)},
+            )
+        else:
+            _rule_promotion_receipts = []
+            _rule_promotion_gates = {
+                "gates_met": False,
+                "checks": {"promoted_rules": 0},
+            }
+    else:
+        _rule_promotion_receipts = []
+        _rule_promotion_gates = {
+            "gates_met": False,
+            "checks": {"promoted_rules": 0},
+        }
     industry_oracles = list(industry.get("industry_oracles") or []) + dsl_oracles
     objects = list(industry.get("business_objects") or [])
     object_names = {str(row.get("object") or "") for row in objects if isinstance(row, dict)}
@@ -1321,6 +1345,8 @@ def build_enterprise_business_knowledge_asset(
         "semantic_candidates": semantic_candidates,
         "semantic_extraction_availability": _sem_availability,
         "semantic_extraction_receipts": semantic_receipts,
+        "rule_promotion_receipts": _rule_promotion_receipts,
+        "rule_promotion_gates": _rule_promotion_gates,
         "candidate_validation_receipt": _candidate_receipt.to_dict(),
         "oracle_library": oracles,
         "governance": {

@@ -516,6 +516,44 @@ def test_inventory_restore_rule_preserves_field_data_effects() -> None:
     assert rule["postconditions"]
 
 
+def test_field_level_conservation_linkage_is_source_backed_only() -> None:
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "conservation-link-1",
+            "filename": "inventory-rules.md",
+            "text": "订单取消时，应减少 locked_qty 并恢复 available_qty",
+        },
+        asset=_asset(),
+    )
+    rule = next(fact for fact in facts if fact.get("kind") == "RULE")
+    linkages = rule.get("conservation_linkages") or []
+    assert len(linkages) == 1
+    linkage = linkages[0]
+    assert linkage["kind"] == "CONSERVATION_LINKAGE"
+    assert linkage["dec_verb"] == "减少"
+    assert linkage["dec_field"] == "locked_qty"
+    assert linkage["inc_verb"] == "恢复"
+    assert linkage["inc_field"] == "available_qty"
+    assert linkage["source_backed"] is True
+
+
+def test_conservation_linkage_declines_single_effect() -> None:
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "conservation-link-2",
+            "filename": "inventory-rules.md",
+            "text": "订单取消时，应锁定库存",
+        },
+        asset={**_asset(), "business_objects": [{"object": "订单"}, {"object": "库存"}]},
+    )
+    rule = next(fact for fact in facts if fact.get("kind") == "RULE")
+    # A single effect without a coupled increment/decrement is NOT a linkage;
+    # the extraction must never invent a field pair the source did not state.
+    assert (rule.get("conservation_linkages") or []) == []
+    # The newly recognized resource verb is still a data effect.
+    assert any(e.get("action") == "锁定" for e in rule.get("data_effects") or [])
+
+
 def test_only_if_permission_is_allow_not_unspecified() -> None:
     from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.behavior_ir import (
         _behavior_from_fact,

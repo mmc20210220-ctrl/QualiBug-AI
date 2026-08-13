@@ -21,6 +21,7 @@ those symbols with stable additive wrappers:
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import replace
 from typing import Any
@@ -395,19 +396,35 @@ def _planning_inputs_with_declared_adapters(inputs: Any) -> Any:
         context["_runtime_contract"] = runtime
 
     if "agent_semantic_linking_enabled" not in context:
+        # Governed business-semantic linking (rule → documented interface) is a
+        # comprehension-only authority: it sends prompts to the reasoning provider
+        # and emits source-identity relationships, but it never issues a target
+        # request or touches the write boundary.  Default it ON whenever the
+        # provider is configured, so the measured comprehension ceiling
+        # (invariants with operation_refs == [] → MISSING_PRIMARY_OPERATION) is
+        # actually exercised on every scan instead of only under deep-scan write
+        # approval.  The operator kill switch (explicit False) still wins, an
+        # unavailable provider fails closed to source-only planning, and the
+        # test-suite kill switch keeps deterministic unit tests out of live LLM
+        # calls (mirrors QUALIBUG_MAINLINE_REASONER_DISABLED).
         provider_available, provider_basis = _semantic_provider_availability()
-        approved_deep_scan = (
-            _text(context.get("execution_mode")) == "approved_sandbox_write"
+        env_disabled = (
+            str(os.environ.get("QUALIBUG_AGENT_SEMANTIC_LINKING_DISABLED") or "")
+            .strip()
+            .lower()
+            in {"1", "true", "yes"}
         )
         context["agent_semantic_linking_enabled"] = bool(
-            provider_available and approved_deep_scan
+            provider_available and not env_disabled
         )
+        # Provider unavailability is the most actionable fact and wins the basis;
+        # the test-suite kill switch is reported only when the provider exists.
         context["agent_semantic_linking_enablement_basis"] = (
-            "auto_enabled_configured_provider_approved_sandbox"
-            if provider_available and approved_deep_scan
-            else "execution_mode_not_approved_sandbox"
-            if provider_available
-            else provider_basis
+            provider_basis
+            if not provider_available
+            else "test_suite_disabled"
+            if env_disabled
+            else "auto_enabled_configured_provider_comprehension_only"
         )
     elif isinstance(context.get("agent_semantic_linking_enabled"), bool):
         context.setdefault(

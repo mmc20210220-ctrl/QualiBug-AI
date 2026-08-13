@@ -217,11 +217,13 @@ _GENERIC_TERM_SUFFIX_RE = re.compile(r"(?:单据|对象|记录|数据|实体|术
 _TRIGGER_THEN_EFFECT_RE = re.compile(
     r"(?P<trigger>[^，,；;。]{1,48}?)(?:之后|以后|后)"
     r"(?P<effect>(?:自动|必须|应当|需要|应)?"
-    r"(?:生成|创建|新建|写入|更新|删除|释放|扣减|增加|发送|通知|补偿|回滚|冲正|冲销|红冲|退款)"
+    r"(?:生成|创建|新建|写入|更新|删除|释放|扣减|减少|增加|恢复|"
+    r"锁定|冻结|预留|占用|消耗|核销|发送|通知|补偿|回滚|冲正|冲销|红冲|退款)"
     r"[^，,；;。]{0,40})"
 )
 _DATA_EFFECT_RE = re.compile(
-    r"(?:自动)?(?P<action>生成|创建|新建|写入|更新|删除|释放|扣减|减少|增加|恢复|发送|通知)"
+    r"(?:自动)?(?P<action>生成|创建|新建|写入|更新|删除|释放|扣减|减少|增加|恢复|"
+    r"锁定|冻结|预留|占用|消耗|核销|发送|通知)"
     r"\s*"
     r"(?P<object>[\u4e00-\u9fffA-Za-z0-9_-]{1,24})"
 )
@@ -596,6 +598,76 @@ def _compensations(text: str) -> list[str]:
         value = _text(match.group("raw"))
         if value and value not in rows:
             rows.append(value)
+    return rows
+
+
+# ── Field-level conservation linkage ─────────────────────────────────────────
+# A conservation linkage is the source-stated coupling "decrement X and
+# increment Y" (this-eats-that: 扣减 available_qty 并增加 locked_qty, 锁定库存,
+# 释放锁定恢复可用). These are the enterprise meaning of "conservation" — a
+# quantity does not disappear, it moves between fields/objects. The generic
+# Chinese resource verbs below are language forms, not industry vocabulary.
+_DECREMENT_VERBS = r"扣减|扣除|减少|扣|减去|减|消耗|核销"
+_INCREMENT_VERBS = r"增加|加|恢复|返还|归还|释放|回补|转入|锁定|冻结|预留|占用"
+_LINKAGE_FIELD_TOKEN = r"[\u4e00-\u9fffA-Za-z0-9_.-]{1,30}"
+_LINKAGE_RE = re.compile(
+    r"(?P<dec_verb>" + _DECREMENT_VERBS + r")\s*"
+    r"(?P<dec_field>" + _LINKAGE_FIELD_TOKEN + r")"
+    r"\s*(?P<glue>(?:并|并且|且|同时|以及|然后|，|,|；|;))?\s*"
+    r"(?P<inc_verb>" + _INCREMENT_VERBS + r")\s*"
+    r"(?P<inc_field>" + _LINKAGE_FIELD_TOKEN + r")"
+)
+# Reverse order: 增加 Y 并扣减 X (restore-on-cancel).
+_LINKAGE_REVERSE_RE = re.compile(
+    r"(?P<inc_verb>" + _INCREMENT_VERBS + r")\s*"
+    r"(?P<inc_field>" + _LINKAGE_FIELD_TOKEN + r")"
+    r"\s*(?P<glue>(?:并|并且|且|同时|以及|然后|，|,|；|;))?\s*"
+    r"(?P<dec_verb>" + _DECREMENT_VERBS + r")\s*"
+    r"(?P<dec_field>" + _LINKAGE_FIELD_TOKEN + r")"
+)
+
+
+def _conservation_linkages(text: str) -> list[dict[str, Any]]:
+    """Extract source-stated field-level conservation linkages.
+
+    Only pairs of verb+field that are written in the source, joined by a
+    conjunction, become a linkage. Field names are read verbatim; nothing is
+    inferred. A linkage states "field A and field B move in opposite directions"
+    — the conservation obligation can then assert their coupled change without
+    guessing either field name.
+    """
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+
+    def _emit(match: "re.Match[str]") -> None:
+        dec_field = _clean_term(match.group("dec_field"))
+        inc_field = _clean_term(match.group("inc_field"))
+        dec_verb = _text(match.group("dec_verb"))
+        inc_verb = _text(match.group("inc_verb"))
+        # Reject a linkage against the same term, and drop noun-suffix fragments.
+        if not dec_field or not inc_field or dec_field == inc_field:
+            return
+        if _ACTION_NOUN_SUFFIX_RE.match(dec_field) or _ACTION_NOUN_SUFFIX_RE.match(inc_field):
+            return
+        key = (dec_verb, dec_field, inc_verb, inc_field)
+        if key in seen:
+            return
+        seen.add(key)
+        rows.append({
+            "kind": "CONSERVATION_LINKAGE",
+            "dec_verb": dec_verb,
+            "dec_field": dec_field,
+            "inc_verb": inc_verb,
+            "inc_field": inc_field,
+            "direction": "dec_then_inc",
+            "statement": _text(match.group(0)),
+            "source_backed": True,
+        })
+
+    for match in _LINKAGE_RE.finditer(text):
+        _emit(match)
+    for match in _LINKAGE_REVERSE_RE.finditer(text):
+        _emit(match)
     return rows
 
 
@@ -1335,6 +1407,7 @@ def _fact_from_unit(
     )
     compensation = _compensations(raw)
     postconditions = _postconditions(raw, data_effects=data_effects, compensations=compensation)
+    conservation_linkages = _conservation_linkages(raw)
     scope = _scope(raw)
 
     # When source states "trigger后 effect", prefer the trigger action as the operation
@@ -1445,6 +1518,7 @@ def _fact_from_unit(
         "postconditions": postconditions,
         "state_effects": states,
         "data_effects": data_effects,
+        "conservation_linkages": conservation_linkages,
         "temporal_constraints": temporal,
         "quantity_constraints": quantity_constraints,
         "time_window_constraints": time_window_constraints,

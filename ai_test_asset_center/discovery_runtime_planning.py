@@ -424,21 +424,44 @@ def build_discovery_plan(
         project_knowledge_world_model,
     )
 
+    # Test-suite kill switch for the semantic recall channel: mirrors
+    # QUALIBUG_MAINLINE_REASONER_DISABLED and QUALIBUG_AGENT_SEMANTIC_LINKING_DISABLED
+    # so deterministic unit tests never reach a live provider. Production default
+    # remains augment (default-ON) when the env var is absent.
+    _semantic_recall_disabled = (
+        str(os.environ.get("QUALIBUG_SEMANTIC_EXTRACTION_DISABLED") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes"}
+    )
+
     asset = build_enterprise_business_knowledge_asset(
         inputs.project,
         inputs.root,
         options={
-            # SPEC §12/§13: rule-extraction mode and promotion-gate confirmation
-            # are operator-declared via campaign context; default shadow.
-            "semantic_rule_extraction_mode": _text(
-                inputs.campaign_context.get("semantic_rule_extraction_mode")
-            )
-            or "shadow",
-            "rule_promotion_gates_met": (
-                inputs.campaign_context.get("rule_promotion_gates_met") is True
+            # SPEC §12/§13: rule-extraction mode is operator-declared via
+            # campaign context. Default augment (default-ON comprehension):
+            # validated explicit LLM rule candidates are promoted through the
+            # deterministic evidence/no-conflict/traceability gates. An explicit
+            # rule_promotion_gates_met=False is the kill switch → shadow.
+            "semantic_rule_extraction_mode": (
+                "off"
+                if _semantic_recall_disabled
+                else _text(
+                    inputs.campaign_context.get("semantic_rule_extraction_mode")
+                )
+                or "augment"
             ),
-            "enable_semantic_extraction": bool(
-                inputs.campaign_context.get("enable_semantic_extraction")
+            "rule_promotion_gates_met": inputs.campaign_context.get(
+                "rule_promotion_gates_met"
+            ),
+            "enable_semantic_extraction": (
+                False
+                if _semantic_recall_disabled
+                else inputs.campaign_context.get("enable_semantic_extraction")
+                if inputs.campaign_context.get("enable_semantic_extraction")
+                is not None
+                else True
             ),
         },
     )
@@ -1956,6 +1979,33 @@ def build_discovery_plan(
         behavior_ir=behavior_ir,
         knowledge_asset=asset,
     )
+    # ── Unified LLM comprehension authority (observation layer) ──
+    # The three comprehension channels (semantic-link binding, semantic rule
+    # recall, mainline reasoner) each emit their own receipt. Fold them into one
+    # ``qualibug.llm-comprehension-authority.v1`` record so the whole
+    # comprehension funnel is observable in one place. Pure aggregation over
+    # already-produced receipts; never calls the LLM or mutates the asset.
+    comprehension_authority_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.llm-comprehension-authority.v1",
+        "status": "NOT_BUILT",
+    }
+    try:
+        from .llm_comprehension_authority import (
+            build_comprehension_authority_receipt,
+        )
+
+        comprehension_authority_receipt = build_comprehension_authority_receipt(
+            knowledge_asset=asset,
+            semantic_link_receipt=agent_semantic_link_receipt,
+            mainline_reasoner_report=mainline_reasoner_report,
+        )
+    except Exception as exc:
+        comprehension_authority_receipt = {
+            "schema_version": "qualibug.llm-comprehension-authority.v1",
+            "status": "FAILED",
+            "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
     return DiscoveryPlanningBundle(
         mainline_run=contract,
         behavior_ir=behavior_ir,
@@ -1986,6 +2036,7 @@ def build_discovery_plan(
             "coverage_unit_arm_receipt": arm_receipt,
             "planning_authority": planning_authority,
             "agent_semantic_link_receipt": agent_semantic_link_receipt,
+            "comprehension_authority_receipt": comprehension_authority_receipt,
             "runtime_source_overlay_receipt": dict(
                 _dict(asset.get("runtime_source_overlay"))
             ),

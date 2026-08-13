@@ -645,6 +645,42 @@ def _source_refs(hypothesis: dict[str, Any], origin: str) -> list[dict[str, str]
     return refs
 
 
+def _depth_fields(hypothesis: dict[str, Any]) -> dict[str, Any]:
+    """Preserve the deep-comprehension fields the bridge would otherwise drop.
+
+    Reasoner hypotheses carry cross-entity cascade chains, lifecycle source
+    states, and multi-step verification intent. The single-operation obligation
+    model cannot express all of them, but discarding them silently is a
+    comprehension loss. These fields ride along on the candidate so the depth
+    stays observable and can be turned into an explicit coverage gap instead of
+    disappearing.
+    """
+    depth: dict[str, Any] = {}
+    for key in (
+        "cascade_chain",
+        "cascade_check",
+        "cascade_summary",
+        "source_state",
+        "target_entity",
+        "symptoms_if_broken",
+        "adversarial_angle",
+        "negative_space_findings",
+    ):
+        value = hypothesis.get(key)
+        if value not in (None, "", [], {}):
+            depth[key] = value
+    vm = hypothesis.get("verification_method")
+    if isinstance(vm, dict):
+        steps = {
+            key: _text(vm.get(key))
+            for key in ("step1", "step2", "step3", "step4", "check1", "check2", "check3")
+            if _text(vm.get(key))
+        }
+        if steps:
+            depth["verification_steps"] = steps
+    return depth
+
+
 def _priority(hypothesis: dict[str, Any]) -> float:
     for key in ("priority", "confidence", "confidence_score", "exploit_potential"):
         raw = hypothesis.get(key)
@@ -744,12 +780,16 @@ def hypotheses_to_source_candidates(
                 hypothesis.get("_reasoner_engine") or hypothesis.get("engine")
             ),
         }
+        depth = _depth_fields(hypothesis)
+        if depth:
+            candidate["depth"] = depth
         candidates.append(candidate)
         by_origin[origin_key]["bound"] += 1
 
     funnel_stats = {
         "input": len(items),
         "bound": len(candidates),
+        "depth_preserved": sum(1 for c in candidates if c.get("depth")),
         "dropped_no_endpoint": dropped,
         "dropped_reason_counts": dict(sorted(dropped_reason_counts.items())),
         "dropped_samples": dropped_samples,

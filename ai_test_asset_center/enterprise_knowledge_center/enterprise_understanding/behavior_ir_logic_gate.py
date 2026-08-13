@@ -268,7 +268,11 @@ def _data_outcome_type(row: dict[str, Any]) -> str:
         return "ENTITY_DELETED"
     if re.search(r"发送|通知|emit|publish|notify", action):
         return "EVENT_EMITTED"
-    if re.search(r"增加|扣减|释放|increase|decrease|increment|decrement", action):
+    # Resource-movement verbs are field deltas: they move a quantity between
+    # fields/objects (锁定/冻结/预留/占用/消耗/核销 move quantity the same way
+    # 扣减/增加/释放 do), never create or delete an entity.
+    if re.search(r"增加|扣减|释放|锁定|冻结|预留|占用|消耗|核销|"
+                 r"increase|decrease|increment|decrement|lock|reserve|consume", action):
         return "FIELD_DELTA"
     if re.search(r"更新|写入|修改|update|write|set", action):
         return "FIELD_ASSIGNMENT"

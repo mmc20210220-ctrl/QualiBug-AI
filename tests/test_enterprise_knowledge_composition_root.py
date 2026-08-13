@@ -7,6 +7,7 @@ def _open_gates() -> dict:
     return {
         "scenario_planning_gate": {"scenario_planning_allowed": True},
         "scenario_ir_gate": {"entry_allowed": True},
+        "binding_identity_gate": {"entry_allowed": True},
         "scenario_execution_contract_gate": {"entry_allowed": True},
         "runtime_plan_gate": {"entry_allowed": True},
         "runtime_materialization_gate": {"entry_allowed": True},
@@ -75,6 +76,12 @@ def test_zero_probe_budget_is_strict_at_base_authority() -> None:
                 "relation": "rule_to_interface",
                 "status": "accepted",
                 "derivation": "exact_source_section",
+                # _relationship_is_authoritative requires non-empty, non-token
+                # evidence: a rule→interface edge without structured evidence is
+                # no longer authoritative (evidence-completeness contract).
+                "evidence": {
+                    "exact_source_section": "prd-source#L12",
+                },
             }
         ],
     }

@@ -752,15 +752,17 @@ def test_prompt_restricts_links_to_candidate_shortlist() -> None:
 
 
 class _PartialFailClient:
-    """Fails the first rule batch, links two rules of the second batch."""
+    """Fails the rule-0 batch, links rule-40/41 of the second batch.
 
-    def __init__(self) -> None:
-        self.calls = 0
+    Failure is decided by prompt content, not by call order: Tier-2 batches run
+    concurrently, so a shared call counter is a data race that made this test
+    flaky (the first batch's ``self.calls == 1`` guard only held when the
+    scheduler happened to reach it before the second batch).
+    """
 
     def complete_json(self, **kwargs: object) -> dict:
-        self.calls += 1
         prompt = str(kwargs["user_prompt"])
-        if "rule-0" in prompt and self.calls == 1:
+        if "rule-0" in prompt:
             raise ValueError("provider down for batch 1")
         if "rule-40" in prompt:
             return {

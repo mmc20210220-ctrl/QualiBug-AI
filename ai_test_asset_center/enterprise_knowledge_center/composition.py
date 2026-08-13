@@ -1123,19 +1123,21 @@ def _incremental_run_semantic_extraction(
         semantic_extraction_availability,
     )
 
-    # SPEC §12/§13: four-mode rule extraction. Default shadow — candidates are
-    # validated and recorded but never touch formal Canonical Rule output.
-    # Augment activates only when the operator explicitly confirms the SPEC §19
-    # promotion gates (governance_policy), never by default.
+    # SPEC §12/§13: four-mode rule extraction. Default augment — validated
+    # explicit LLM-only rule candidates are promoted into formal Canonical Rule
+    # output through the deterministic promotion gate (promote_rule_candidates_to_rules
+    # + rule_promotion_gates_met): only llm+explicit+non-conflicted candidates
+    # carrying anchored evidence are promoted; nothing is promoted without
+    # evidence. An operator explicit rule_promotion_gates_met=False is the kill
+    # switch and resolves to shadow (promotion_gates_not_met). Degradation is
+    # never silent.
     rule_mode_receipt = resolve_semantic_rule_extraction_mode(
         requested_mode=_incremental_text(
-            options.get("semantic_rule_extraction_mode") or "shadow"
+            options.get("semantic_rule_extraction_mode") or "augment"
         ),
         provider_status_value=provider_status(),
         governance_policy={
-            "promotion_gates_met": (
-                options.get("rule_promotion_gates_met") is True
-            )
+            "promotion_gates_met": options.get("rule_promotion_gates_met")
         },
     )
     should_run_llm = requested or rule_mode_receipt["effective_mode"] in {

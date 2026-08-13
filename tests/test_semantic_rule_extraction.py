@@ -403,12 +403,12 @@ def test_mode_shadow_degrades_visibly_without_provider() -> None:
     assert receipt["fallback_mode"] == "regex_only"
 
 
-def test_mode_augment_without_gates_resolves_to_shadow() -> None:
+def test_mode_augment_defaults_on_without_explicit_kill_switch() -> None:
     receipt = semantic.resolve_semantic_rule_extraction_mode(
         requested_mode="augment", provider_status_value="configured"
     )
-    assert receipt["effective_mode"] == "shadow"
-    assert receipt["fallback_reason"] == "promotion_gates_not_met"
+    assert receipt["effective_mode"] == "augment"
+    assert receipt["fallback_reason"] == ""
 
 
 def test_mode_required_fails_visibly_without_provider() -> None:
@@ -790,7 +790,7 @@ def test_promotion_gates_require_evidence_and_traceability() -> None:
     assert bad["checks"]["promoted_without_evidence"] == 1
 
 
-def test_augment_mode_requires_gates_met() -> None:
+def test_augment_mode_requires_explicit_kill_switch_to_degrade() -> None:
     gated = semantic.resolve_semantic_rule_extraction_mode(
         requested_mode="augment",
         provider_status_value="configured",
@@ -851,7 +851,13 @@ def test_extraction_cache_reuses_result_without_llm(monkeypatch, tmp_path):
         _semantic_extraction as se,
     )
 
-    os.environ["QUALIBUG_SEMANTIC_CACHE_DIR"] = str(tmp_path)
+    # Use monkeypatch.setenv (not a bare os.environ assignment): this variable is
+    # the shared cache-directory switch for THREE modules (semantic extraction,
+    # agent_semantic_linker, reasoner_response_cache). A leaked assignment turns
+    # every later test's in-memory link cache into a file-backed cache that
+    # persists across tests, and tests sharing one asset fingerprint then read
+    # each other's stale responses.
+    monkeypatch.setenv("QUALIBUG_SEMANTIC_CACHE_DIR", str(tmp_path))
     calls = {"n": 0}
 
     class FakeClient:
