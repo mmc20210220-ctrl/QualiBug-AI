@@ -1,15 +1,16 @@
 """Safe public facade for the universal API parser.
 
 The historical implementation is preserved byte-for-byte in
-``universal_api_parser_mainline_base``.  This boundary only makes string path
-probing fail-soft so compact OpenAPI JSON is never sent to ``stat(2)`` as a
-multi-kilobyte filename.
+``universal_api_parser_mainline_base``.  This boundary makes string path
+probing fail-soft and preserves OpenAPI security declaration provenance before
+operation records enter Behavior IR.
 """
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
 from . import universal_api_parser_mainline_base as _base
+from .openapi_security_authority import stamp_openapi_operation_security
 
 for _name in dir(_base):
     if not _name.startswith("__"):
@@ -69,6 +70,32 @@ def parse_to_openapi(text_or_path: str | Path) -> dict[str, Any]:
 
 # Functions defined in the preserved module resolve this global dynamically.
 _base.parse_to_openapi = parse_to_openapi
+_original_build_api_operations_from_text = _base.build_api_operations_from_text
+
+
+def build_api_operations_from_text(
+    api_spec_text: str,
+    *,
+    submitted_source_text: str = "",
+) -> list[dict[str, Any]]:
+    operations = _original_build_api_operations_from_text(
+        api_spec_text,
+        submitted_source_text=submitted_source_text,
+    )
+    source_documents = [("api_spec", str(api_spec_text or "").strip())]
+    submitted = str(submitted_source_text or "").strip()
+    if submitted and submitted != source_documents[0][1]:
+        source_documents.append(("submitted_api_spec", submitted))
+    for source_id, source_text in source_documents:
+        if not source_text:
+            continue
+        spec = parse_to_openapi(source_text)
+        scoped = [row for row in operations if str(row.get("source_id") or "") == source_id]
+        stamp_openapi_operation_security(scoped, spec)
+    return operations
+
+
+_base.build_api_operations_from_text = build_api_operations_from_text
 
 
 def __getattr__(name: str) -> Any:

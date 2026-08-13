@@ -5,6 +5,7 @@ from typing import Any
 from . import behavior_ir_mainline_base as _base
 from .compensation_derivation_authority import install_compensation_derivation_authority
 from .database_body_reference_projection import project_database_body_reference_relations
+from .openapi_security_authority import project_operation_security_provenance
 
 install_compensation_derivation_authority(_base._core)
 
@@ -33,6 +34,11 @@ def build_behavior_ir_from_knowledge_asset(
         available_surfaces=available_surfaces,
     )
     model = project_database_body_reference_relations(model, asset)
+    model = project_operation_security_provenance(
+        model,
+        asset=asset,
+        api_operations=api_operations,
+    )
     model["model_id"] = _base._core._content_addressed_id(model)
     return model
 
