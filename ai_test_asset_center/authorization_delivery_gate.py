@@ -563,13 +563,14 @@ def attach_authorization_delivery_evidence(
             target = _text(row.get("target") or row.get("binding_target"))
             if target not in targets:
                 continue
-            # The causal receipt commits to a provenance-aware resource
-            # identity (value fingerprint + resolver path/status + source
-            # authority), not the raw (possibly truncated) value fingerprint.
-            # ``_binding_proof_fingerprint`` recomputes sha256 over the proofs'
-            # value_fingerprint, so the proof must carry the exact same
-            # provenance hash the causal side sealed — otherwise a fresh
-            # authorization finding is rejected as a historical contradiction.
+            # Validate the binding source provenance (authoritative source
+            # priority, resolver path/status, sealed materialization identity
+            # receipt) before accepting the proof — that is the security value
+            # of the provenance check. The proof's value_fingerprint stays the
+            # raw content-addressed fingerprint, matching the causal receipt
+            # (which commits to the raw value_fingerprint, not a provenance
+            # hash), so the delivery gate and the historical quarantine can
+            # both re-derive the fingerprint from the 4-field proof alone.
             provenance, problem = _binding_parent_provenance(row)
             if problem:
                 raise AuthorizationDeliveryGateError(
@@ -580,7 +581,7 @@ def attach_authorization_delivery_evidence(
                 "receipt_id": _text(provenance.get("materialization_receipt_id")),
                 "target": _text(provenance.get("target")),
                 "status": "BOUND",
-                "value_fingerprint": _sha256(provenance),
+                "value_fingerprint": _text(provenance.get("value_fingerprint")),
             })
         proofs.sort(key=lambda value: value["target"])
     finding["authorization_causality_receipt"] = validated

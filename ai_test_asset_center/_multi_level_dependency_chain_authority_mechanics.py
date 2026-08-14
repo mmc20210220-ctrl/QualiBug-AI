@@ -175,7 +175,19 @@ def _create_actor_authority(
     behavior_ir: dict[str, Any],
     actor_refs: list[str],
 ) -> tuple[str, str, list[str]]:
-    """Return one operation-permitted actor; caller order is never authority."""
+    """Return one operation-permitted actor; caller order is never authority.
+
+    A single source-declared role is represented twice in the IR — once as the
+    role-level actor node (``_stable_id("actor", role)``) and once per runtime
+    account (``_stable_id("actor_account", ref)``). Both carry the same
+    ``role_key`` and both receive a ``permits`` edge, so the raw declared list
+    inflates one role into several refs and makes a unique authority look
+    ambiguous (or, when the caller holds the other spelling, missing). Collapse
+    both the declared set and the caller set by ``role_key`` (preferring an
+    account-bound, executable actor) so one role resolves to exactly one
+    authority; distinct roles stay distinct and multi-role callers still fail
+    closed.
+    """
 
     actors = {
         _text(row.get("id") or row.get("actor_id")): row
@@ -183,7 +195,34 @@ def _create_actor_authority(
         if isinstance(row, dict)
         and _text(row.get("id") or row.get("actor_id"))
     }
-    declared = list(
+
+    def _role_key(actor_id: str) -> str:
+        row = _dict(actors.get(actor_id))
+        role = _text(row.get("role_key") or row.get("role")).lower()
+        # Actors without a declared role are each their own authority (no
+        # role to collapse on); the actor id is the fallback identity key.
+        return role or actor_id
+
+    def _collapse(actor_ids: list[str]) -> dict[str, str]:
+        """Map role_key -> preferred actor id (account-bound actor wins)."""
+        by_role: dict[str, str] = {}
+        for actor_id in actor_ids:
+            role_key = _role_key(actor_id)
+            if not role_key:
+                continue
+            current = by_role.get(role_key)
+            if current is None:
+                by_role[role_key] = actor_id
+                continue
+            current_row = _dict(actors.get(current))
+            row = _dict(actors.get(actor_id))
+            if _text(row.get("account_ref")) and not _text(
+                current_row.get("account_ref")
+            ):
+                by_role[role_key] = actor_id
+        return by_role
+
+    declared_ids = list(
         dict.fromkeys(
             actor_id
             for actor_id in _core._declared_fixture_actor_refs(
@@ -193,18 +232,29 @@ def _create_actor_authority(
             if actor_id in actors
         )
     )
-    caller = {
+    caller_ids = [
         _text(actor_id)
         for actor_id in actor_refs
         if _text(actor_id) and _text(actor_id) in actors
-    }
-    eligible = [
-        actor_id for actor_id in declared if not caller or actor_id in caller
     ]
-    if len(eligible) == 1:
-        return eligible[0], "operation_permits_unique", eligible
-    if len(eligible) > 1:
-        return "", "operation_permits_ambiguous", eligible
+
+    declared_by_role = _collapse(declared_ids)
+    caller_by_role = _collapse(caller_ids)
+
+    if caller_by_role:
+        eligible_roles = [
+            role_key for role_key in declared_by_role if role_key in caller_by_role
+        ]
+    else:
+        eligible_roles = list(declared_by_role)
+
+    if len(eligible_roles) == 1:
+        actor_id = declared_by_role[eligible_roles[0]]
+        return actor_id, "operation_permits_unique", [actor_id]
+    if len(eligible_roles) > 1:
+        return "", "operation_permits_ambiguous", [
+            declared_by_role[role_key] for role_key in eligible_roles
+        ]
     return "", "operation_permits_missing", []
 
 

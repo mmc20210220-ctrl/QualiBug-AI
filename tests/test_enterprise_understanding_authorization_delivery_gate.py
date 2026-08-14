@@ -386,7 +386,7 @@ def test_execution_packaging_embeds_receipt_and_exact_binding_proof() -> None:
             "receipt_id": order_row["materialization_receipt_id"],
             "target": "order_id",
             "status": "BOUND",
-            "value_fingerprint": _sha(provenance),
+            "value_fingerprint": "order-42-fingerprint",
         }
     ]
 

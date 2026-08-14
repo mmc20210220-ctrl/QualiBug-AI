@@ -169,11 +169,16 @@ def _binding_proof(
         receipt_id = _text(provenance.get("materialization_receipt_id"))
         if receipt_id:
             receipt_ids.append(receipt_id)
-        # The causal resource identity is now value + provenance, not just the
-        # value fingerprint.  This remains content-addressed and deterministic.
-        proven_by_target[target] = hashlib.sha256(
-            _canonical(provenance).encode("utf-8")
-        ).hexdigest()
+        # The provenance check above already rejects unproven binding sources
+        # (non-authoritative source_priority, missing resolver path, invalid
+        # 2xx resolver status, etc.). The causal fingerprint itself commits to
+        # the sealed value_fingerprint only, so the delivery gate and the
+        # historical quarantine can re-derive it content-addressed from the
+        # 4-field binding proof alone. Folding the full provenance dict into
+        # the fingerprint made the proof unverifiable downstream: the
+        # quarantine only holds the proof, never the source materialization
+        # rows it would need to reconstruct provenance.
+        proven_by_target[target] = _text(provenance.get("value_fingerprint"))
 
     if reasons:
         return "", sorted(set(receipt_ids)), reasons
