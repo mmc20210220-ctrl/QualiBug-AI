@@ -160,3 +160,49 @@ def test_caller_actor_restriction_can_make_permits_unique() -> None:
     assert actor == "actor-b"
     assert authority == "operation_permits_unique"
     assert eligible == ["actor-b"]
+
+
+def test_single_collection_create_is_preferred_over_flow_create() -> None:
+    """A canonical collection POST wins over a specialized produces-relation
+    create (direct create vs. from-cart flow) — never a first-item pick.
+
+    Duplicate collection POSTs and multiple produces-only creates stay
+    ambiguous and fail closed; only a UNIQUE collection POST disambiguates.
+    """
+    from ai_test_asset_center.multi_level_dependency_chain import (
+        _resolve_create_operation_candidates,
+    )
+
+    entity = _entity()
+    behavior_ir = {
+        "entities": [entity],
+        "operations": [
+            _create("create-address"),
+            {
+                "id": "create-address-from-cart",
+                "method": "POST",
+                "path": "/api/addresses/from-cart",
+                "request_example": {"line1": "fixture"},
+            },
+        ],
+        "relations": [
+            {
+                "relation_type": "produces",
+                "from_ref": "create-address-from-cart",
+                "to_ref": "entity-address",
+                "source_refs": [{"source_id": "prd"}],
+                "status": "accepted",
+            }
+        ],
+    }
+
+    candidates = _resolve_create_operation_candidates(behavior_ir, entity)
+    # Both authorities are present (collection + produces), so the caller-level
+    # disambiguation must reduce to exactly the collection POST.
+    collection = [
+        row
+        for row in candidates
+        if "entity_collection" in row["_create_authorities"]
+    ]
+    assert len(collection) == 1
+    assert collection[0]["id"] == "create-address"

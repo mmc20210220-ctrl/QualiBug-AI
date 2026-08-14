@@ -138,12 +138,34 @@ def _resolve_create_operation_candidates(
     return rows
 
 
+def _canonical_collection_create(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefer the entity's own collection POST when exactly one exists.
+
+    A real enterprise entity often has both a canonical collection create
+    (``POST /api/orders``, authority ``entity_collection``) and one or more
+    flow creates (``POST /api/orders/from-cart``, authority
+    ``explicit_produces_relation``).  The collection POST is the canonical
+    establishment path — it names the entity's collection exactly and needs no
+    upstream flow dependency.  When exactly ONE collection candidate exists it
+    wins; duplicate collection POSTs and multiple produces-only creates stay
+    ambiguous and fail closed (never a first-item or source-order pick).
+    """
+    collection = [
+        row
+        for row in candidates
+        if "entity_collection" in _list(row.get("_create_authorities"))
+    ]
+    return collection if len(collection) == 1 else candidates
+
+
 def _resolve_create_operation(
     behavior_ir: dict[str, Any],
     entity: dict[str, Any],
     reference_field: str,
 ) -> dict[str, Any]:
-    candidates = _resolve_create_operation_candidates(behavior_ir, entity)
+    candidates = _canonical_collection_create(
+        _resolve_create_operation_candidates(behavior_ir, entity)
+    )
     return dict(candidates[0]) if len(candidates) == 1 else {}
 
 
@@ -241,7 +263,9 @@ def _plan_level(
             environment_type=environment_type,
         )
 
-    candidates = _resolve_create_operation_candidates(behavior_ir, entity)
+    candidates = _canonical_collection_create(
+        _resolve_create_operation_candidates(behavior_ir, entity)
+    )
     primary_field = _text(reference_fields[0] if reference_fields else "")
     if len(candidates) > 1:
         return {
