@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .scan_result_store import load_scan_result
+from .scan_result_store import is_sharded_scan_result, load_scan_result
 
 
 def _read_json_safe(path: Path, default: Any) -> Any:
@@ -22,10 +22,14 @@ def _read_json_safe(path: Path, default: Any) -> Any:
 def _read_json_artifact(path: Path) -> Any:
     """Read a present JSON artifact or fail with its identity in the error.
 
-    scan_result 分片 store 自动组装；普通 JSON 文件行为与 json.loads 一致。
+    scan_result 分片 store 自动组装；普通 JSON 文件行为与 json.loads 一致，
+    并保留原生顶层类型（dict / list），因为非 scan_result 产物（如
+    performance/baseline.json 是历史基线 list）本就不受 dict-only 约束。
     """
     try:
-        return load_scan_result(path, keys=None)
+        if is_sharded_scan_result(path):
+            return load_scan_result(path, keys=None)
+        return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid JSON artifact: {path}") from exc
 
