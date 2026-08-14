@@ -1837,6 +1837,7 @@ def enrich_knowledge_asset_with_agent_relationships(
     rejected_invalid_evidence = 0
     rejected_duplicates = 0
     rejected_rule_limit = 0
+    rejected_inconsistent_disposition = 0
     existing_count = 0
     proposal_count = 0
 
@@ -1872,14 +1873,20 @@ def enrich_knowledge_asset_with_agent_relationships(
         """Validate one assessment's relationships under the shared contract.
 
         Returns ``(accepted_count, handled)``. ``handled=False`` means the
-        assessment was identity-invalid or a duplicate, so the caller must not
-        count it toward the provider-completeness check. Every rejection is
-        receipted; malformed output raises instead of degrading silently.
+        assessment was identity-invalid, a duplicate, or disposition-
+        inconsistent, so the caller must not count it toward the
+        provider-completeness check. Single-assessment defects (unknown
+        identity, duplicates, disposition/relationships mismatch) are receipted
+        as rejections; only structural schema violations (invalid disposition
+        token, missing reason, relationships not a list, wrong relationship
+        field set, invalid confidence/evidence shape) raise, because those mean
+        the provider output contract itself is untrustworthy.
         """
         nonlocal proposal_count, rejected_low_confidence
         nonlocal rejected_invalid_identity, rejected_non_candidate
         nonlocal rejected_invalid_evidence
         nonlocal rejected_duplicates, rejected_rule_limit, existing_count
+        nonlocal rejected_inconsistent_disposition
         if disposition not in _DISPOSITIONS:
             raise AgentSemanticLinkerError(
                 f"agent_semantic_disposition_invalid:{assessment_index}"
@@ -1893,13 +1900,28 @@ def enrich_knowledge_asset_with_agent_relationships(
                 f"agent_semantic_relationships_not_list:{assessment_index}"
             )
         if disposition == "LINKED" and not relationships:
-            raise AgentSemanticLinkerError(
-                f"agent_semantic_linked_relationship_missing:{assessment_index}"
+            # A single assessment self-contradiction (LINKED with no
+            # relationship) is a per-assessment quality defect, not a batch
+            # schema failure. Isolating it as a receipted rejection preserves
+            # every other valid edge; raising here aborted the whole 153-edge
+            # link set and degraded the comprehension channel to source-only.
+            rejected_inconsistent_disposition += 1
+            reject(
+                assessment_index,
+                -1,
+                raw_assessment,
+                "LINKED_WITHOUT_RELATIONSHIPS",
             )
+            return 0, False
         if disposition != "LINKED" and relationships:
-            raise AgentSemanticLinkerError(
-                f"agent_semantic_unlinked_relationship_present:{assessment_index}"
+            rejected_inconsistent_disposition += 1
+            reject(
+                assessment_index,
+                -1,
+                raw_assessment,
+                "UNLINKED_WITH_RELATIONSHIPS",
             )
+            return 0, False
         if subject_id not in expected_ids:
             rejected_invalid_identity += 1
             reject(
@@ -2374,6 +2396,7 @@ def enrich_knowledge_asset_with_agent_relationships(
         "rejected_invalid_evidence_count": rejected_invalid_evidence,
         "rejected_duplicate_count": rejected_duplicates,
         "rejected_rule_limit_count": rejected_rule_limit,
+        "rejected_inconsistent_disposition_count": rejected_inconsistent_disposition,
         "existing_relationship_count": existing_count,
         "no_executable_interface_count": sum(
             row["disposition"] == "NO_EXECUTABLE_INTERFACE"

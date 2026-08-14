@@ -412,3 +412,48 @@ def test_agent_semantic_linker_rejects_invented_supporting_fact() -> None:
     assert enriched["relationships"] == []
     assert receipt["rejected_invalid_evidence_count"] == 2
     assert receipt["rejections"][0]["reason_code"] == "UNKNOWN_EVIDENCE_REF"
+
+
+def test_linked_without_relationships_is_isolated_not_whole_batch_abort() -> None:
+    # A single self-contradictory assessment (disposition=LINKED but empty
+    # relationships) used to raise and abort the whole link set, degrading the
+    # comprehension channel to source-only. It must now be receipted as an
+    # isolated rejection while every other valid edge survives.
+    response = _linked_response()
+    response["assessments"] = [
+        {
+            "rule_id": "rule-conservation",
+            "disposition": "LINKED",
+            "reason": "The operation changes the quantity.",
+            "relationships": [],  # self-contradictory
+        },
+        {
+            "rule_id": "rule-conservation",
+            "disposition": "LINKED",
+            "reason": "The operation changes the quantity.",
+            "relationships": [{
+                "interface_id": "api:POST:/transfers",
+                "confidence": 0.91,
+                "reason": "The write carries the governed quantity.",
+                "evidence_refs": [
+                    "rule-conservation",
+                    "api:POST:/transfers",
+                    "table:transfers",
+                ],
+            }],
+        },
+    ]
+
+    enriched, receipt = enrich_knowledge_asset_with_agent_relationships(
+        _asset(),
+        client=FakeAgentClient(response),
+    )
+
+    # The valid transition edge and the valid rule edge both survive.
+    assert receipt["accepted_relationship_count"] == 2
+    assert receipt["rejected_inconsistent_disposition_count"] == 1
+    assert any(
+        row.get("reason_code") == "LINKED_WITHOUT_RELATIONSHIPS"
+        for row in receipt["rejections"]
+    )
+    assert receipt["status"] == "VERIFIED_WITH_REJECTIONS"
