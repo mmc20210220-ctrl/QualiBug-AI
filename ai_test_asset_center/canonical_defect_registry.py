@@ -102,7 +102,19 @@ def _with_authorization_causal_dimension(
             f"CANONICAL_AUTHORIZATION_CAUSALITY_INVALID:{exc}"
         ) from exc
 
-    if _text(receipt.get("status")).upper() != "PASSED":
+    receipt_status = _text(receipt.get("status")).upper()
+    if receipt_status == "NOT_APPLICABLE":
+        # No comparison contract: causal delivery is not required, so there is
+        # no causal dimension to add to canonical identity. This is a valid,
+        # sealed state (validate_authorization_causality_receipt accepts it) —
+        # not an incomplete one. A finding that simultaneously claims causal
+        # proof is self-contradictory and stays fail-closed.
+        if referenced_receipt_id or claims_proven:
+            raise _core._incomplete("authorization.causality_reference")
+        return evidence
+    if receipt_status != "PASSED":
+        # INDETERMINATE denotes genuinely incomplete causal proof; keep
+        # fail-closed.
         raise _core._incomplete("authorization.causality_status")
     dimension = _text(receipt.get("comparison_dimension")).upper()
     if dimension not in _AUTHORIZATION_COMPARISON_DIMENSIONS:

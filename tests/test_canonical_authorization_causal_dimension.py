@@ -70,6 +70,66 @@ def _base_evidence() -> dict:
     }
 
 
+def _not_applicable_receipt() -> dict:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "NOT_APPLICABLE",
+        "experiment_id": "exp-1",
+        "obligation_id": "obl-1",
+        "campaign_id": "campaign-1",
+        "execution_id": "exec-1",
+        "reason_codes": [],
+        "comparison_contract_fingerprint": "",
+        "runtime_resource_identity_fingerprint": "",
+        "verified_receipt_ids": [],
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return {
+        **payload,
+        "receipt_id": "auth_causality_"
+        + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24],
+    }
+
+
+def _indeterminate_receipt() -> dict:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "INDETERMINATE",
+        "experiment_id": "exp-1",
+        "obligation_id": "obl-1",
+        "campaign_id": "campaign-1",
+        "execution_id": "exec-1",
+        "reason_codes": ["AUTHORIZATION_CAUSAL_OBSERVER_INDETERMINATE"],
+        "comparison_dimension": "ROLE_PERMISSION",
+        "comparison_contract_fingerprint": "a" * 64,
+        "compile_binding_graph_fingerprint": "b" * 64,
+        "runtime_resource_identity_fingerprint": "c" * 64,
+        "control_target_reached": True,
+        "treatment_target_reached": True,
+        "single_identity_dimension_proven": False,
+        "same_resource_proven": False,
+        "verified_receipt_ids": [],
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return {
+        **payload,
+        "receipt_id": "auth_causality_"
+        + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24],
+    }
+
+
 def test_receipted_comparison_dimension_enters_stable_identity() -> None:
     role = registry._with_authorization_causal_dimension(
         _base_evidence(),
@@ -117,3 +177,67 @@ def test_non_authorization_identity_stays_unchanged() -> None:
         evidence,
         attempt={"delivery_evidence_bundle": {"finding": {}}},
     ) == evidence
+
+
+def test_not_applicable_causality_returns_unchanged_identity() -> None:
+    # No comparison contract → NOT_APPLICABLE receipt → no causal dimension.
+    attempt = {
+        "delivery_evidence_bundle": {
+            "finding": {
+                "authorization_causality_receipt": _not_applicable_receipt(),
+                "oracle": {},
+            }
+        }
+    }
+    evidence = _base_evidence()
+    result = registry._with_authorization_causal_dimension(
+        evidence,
+        attempt=attempt,
+    )
+    assert result == evidence
+    assert "comparison_dimension" not in result.get("actor_relation", {})
+
+
+def test_not_applicable_causality_with_claimed_proof_fails_closed() -> None:
+    # NOT_APPLICABLE receipt but the finding simultaneously claims causal proof
+    # is self-contradictory → still fail closed.
+    receipt = _not_applicable_receipt()
+    attempt = {
+        "delivery_evidence_bundle": {
+            "finding": {
+                "authorization_causality_receipt": receipt,
+                "oracle": {
+                    "authorization_causality_proven": True,
+                    "authorization_causality_receipt_id": receipt["receipt_id"],
+                },
+            }
+        }
+    }
+    with pytest.raises(
+        registry.CanonicalDefectRegistryError,
+        match="authorization.causality_reference",
+    ):
+        registry._with_authorization_causal_dimension(
+            _base_evidence(),
+            attempt=attempt,
+        )
+
+
+def test_indeterminate_causality_still_fails_closed() -> None:
+    # INDETERMINATE denotes genuinely incomplete causal proof; keep failing.
+    attempt = {
+        "delivery_evidence_bundle": {
+            "finding": {
+                "authorization_causality_receipt": _indeterminate_receipt(),
+                "oracle": {},
+            }
+        }
+    }
+    with pytest.raises(
+        registry.CanonicalDefectRegistryError,
+        match="authorization.causality_status",
+    ):
+        registry._with_authorization_causal_dimension(
+            _base_evidence(),
+            attempt=attempt,
+        )

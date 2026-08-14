@@ -810,6 +810,24 @@ def semantic_extraction_availability(requested: bool = True) -> dict[str, Any]:
                 "QUALIBUG_SEMANTIC_EXTRACTION=1"
             ),
         }
+    # Test-suite kill switch (mirrors QUALIBUG_MAINLINE_REASONER_DISABLED and
+    # QUALIBUG_AGENT_SEMANTIC_LINKING_DISABLED): deterministic unit tests must
+    # never reach a live provider. The connector sync semantic-refresh path
+    # enters this channel directly (outside the discovery planner that already
+    # honors the flag), so the switch must be enforced here at the single
+    # availability choke point. Production default remains augment (default-ON)
+    # when the env var is absent.
+    if (
+        str(os.environ.get("QUALIBUG_SEMANTIC_EXTRACTION_DISABLED") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes"}
+    ):
+        return {
+            "available": False,
+            "reason": "disabled_by_environment",
+            "detail": "QUALIBUG_SEMANTIC_EXTRACTION_DISABLED is set",
+        }
     try:
         from ..llm_reasoning import _get_client
 

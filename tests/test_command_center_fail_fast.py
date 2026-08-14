@@ -31,7 +31,7 @@ def test_present_but_invalid_json_artifact_fails_with_path(tmp_path: Path) -> No
 def test_present_non_object_json_fails_in_object_reader(tmp_path: Path) -> None:
     artifact = _write(tmp_path / "scan_result.json", "[]")
 
-    with pytest.raises(ValueError, match=r"scan_result must be an object: .*scan_result\.json"):
+    with pytest.raises(ValueError, match=r"JSON artifact must be an object: .*scan_result\.json"):
         PrivatePilotHandler._read_json_dict(artifact)
 
 
