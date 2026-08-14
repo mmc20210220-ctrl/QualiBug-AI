@@ -1166,16 +1166,26 @@ def build_binding_plan(
             # BLOCKED_MISSING_BINDING.
             if (
                 name in _operation_declared_ownership_params
-                and name not in path_placeholders
                 and (
-                    (
-                        _text(obl.get("risk_family")) == "authorization"
-                        and _dict(obl.get("property")).get("require_same_resource") is True
-                    )
-                    or _ownership_binder_location(op, name=name) == "query"
+                    # Path-located caller-scoped identity param (GET /api/
+                    # reports/customer/{userId}/sales — 普通用户只能使用自己的
+                    # ID): the path identity is the arm actor's own runtime-
+                    # observed identity, never a collection row. Resolve through
+                    # the same ownership channel as query/body ownership params.
+                    _ownership_binder_location(op, name=name) == "path"
                     or (
-                        _text(obl.get("risk_family")) == "validation"
-                        and _ownership_binder_location(op, name=name) == "body"
+                        name not in path_placeholders
+                        and (
+                            (
+                                _text(obl.get("risk_family")) == "authorization"
+                                and _dict(obl.get("property")).get("require_same_resource") is True
+                            )
+                            or _ownership_binder_location(op, name=name) == "query"
+                            or (
+                                _text(obl.get("risk_family")) == "validation"
+                                and _ownership_binder_location(op, name=name) == "body"
+                            )
+                        )
                     )
                 )
             ):
