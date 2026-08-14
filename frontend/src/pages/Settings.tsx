@@ -27,7 +27,7 @@ function createSecureTemporaryPassword(length = 24): string {
 }
 
 export function Settings() {
-  usePageTitle('设置');
+  usePageTitle('系统与环境');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { switchProject } = useProjectNavigation();

@@ -154,7 +154,7 @@ function CoverageBar({ value }: { value: unknown }) {
 }
 
 export function CoverageMatrix() {
-  usePageTitle('风险覆盖矩阵');
+  usePageTitle('覆盖矩阵');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { data, loading, error, refetch } = usePipelineData(project);

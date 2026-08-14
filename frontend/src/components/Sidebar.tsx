@@ -10,7 +10,7 @@ const sections: NavSection[] = [
   {
     label: '主流程',
     items: [
-      { to: 'dashboard', icon: 'overview', label: '系统总览' },
+      { to: 'dashboard', icon: 'overview', label: '价值总览' },
       { to: 'campaigns', icon: 'campaign', label: '运行中心' },
       { to: 'findings', icon: 'bug', label: '问题清单', badgeKey: 'findings' },
       { to: 'evidence', icon: 'shield', label: '证据中心' },

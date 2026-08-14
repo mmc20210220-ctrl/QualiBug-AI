@@ -35,7 +35,7 @@ function connectorIsJobSource(connector: ConnectorRecord): boolean {
 }
 
 export function SystemJobs() {
-  usePageTitle('系统 Job 与异步任务');
+  usePageTitle('后台任务');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const [asset, setAsset] = useState<JsonRecord>({});
