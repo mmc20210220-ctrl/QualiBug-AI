@@ -1589,7 +1589,21 @@ def execute_non_barrier_plans(
                     # observation. The HTTP response IS the evidence.
                     observation_path = normalize_path_placeholders(path_template)
                 if not observation_path:
-                    reason_code = "BLOCKED_MISSING_OBSERVER"
+                    # Which effect observer demanded the readback, and on which
+                    # phase, was previously lost to a bare
+                    # ``BLOCKED_MISSING_OBSERVER`` — the DIAG line could not tell
+                    # an operator (or an auditor) which observer failed to bind.
+                    # Carry the exact observer ids + phase so the block is
+                    # countable by observer instead of an anonymous gap.  The
+                    # classification token stays ``BLOCKED_MISSING_OBSERVER``
+                    # (matched by ``"OBSERVER"`` in the reason-code derivation).
+                    _missing_observer_ids = ",".join(
+                        sorted(_exp_observer_ids & _EFFECT_OBSERVER_IDS_RT)
+                    ) or "effect_observation"
+                    reason_code = (
+                        "BLOCKED_MISSING_OBSERVER:"
+                        f"{_missing_observer_ids}:no_readback_path:{phase}"
+                    )
                     pre_transport_block_reasons.append(reason_code)
                     contract_evidence_receipts.append(
                         build_contract_evidence_receipt(
