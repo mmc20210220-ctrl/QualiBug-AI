@@ -44,10 +44,15 @@ def test_allow_internal_preflight_for_exact_approved_nonproduction_target(monkey
 
 
 def test_redirect_handler_preserves_call_specific_internal_grant(monkeypatch):
-    validations: list[tuple[str, bool | None]] = []
+    validations: list[tuple[str, bool | None, str]] = []
 
-    def record_validation(url: str, *, allow_internal: bool | None = None) -> str:
-        validations.append((url, allow_internal))
+    def record_validation(
+        url: str,
+        *,
+        allow_internal: bool | None = None,
+        approved_host: str = "",
+    ) -> str:
+        validations.append((url, allow_internal, approved_host))
         return url
 
     monkeypatch.setattr(ssrf_guard, "validate_url", record_validation)
@@ -67,7 +72,7 @@ def test_redirect_handler_preserves_call_specific_internal_grant(monkeypatch):
     )
 
     assert result == "redirect-ok"
-    assert validations == [("http://127.0.0.1:8080/next", True)]
+    assert validations == [("http://127.0.0.1:8080/next", True, "")]
 
 
 def test_run_preflight_prefers_configured_default_test_credential(monkeypatch):
