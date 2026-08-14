@@ -17,8 +17,11 @@ import hashlib
 import json
 from typing import Any
 
-from . import behavior_ir as _bir
-
+# NOTE: ``behavior_ir`` is imported lazily inside the functions that use it
+# (see _resolve_operation / _gap / bind_source_ui_contracts). A top-level
+# ``from . import behavior_ir`` creates a circular import: behavior_ir ->
+# enterprise_understanding -> binding_identity_projection -> this module,
+# which fails during collection of enterprise-knowledge tests.
 BINDING_RECEIPT_SCHEMA = "qualibug.source-ui-contract-binding.v1"
 _EXPECTATION_ACTIONS = frozenset({"expect_text", "expect_url"})
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -84,6 +87,8 @@ def _resolve_operation(
     contract: dict[str, Any],
     operations: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, str]:
+    from . import behavior_ir as _bir
+
     explicit = _text(contract.get("operation_ref") or contract.get("operation_id"))
     method = _text(contract.get("method") or contract.get("http_method")).upper()
     path = _text(
@@ -194,6 +199,8 @@ def _gap(
     reason_code: str,
     detail: str = "",
 ) -> dict[str, Any]:
+    from . import behavior_ir as _bir
+
     contract_id = _text(contract.get("contract_id")) or "unknown_ui_contract"
     return _bir._fact_node(
         node_id=_stable_id("gap", "formal_ui_contract", contract_id, reason_code),
@@ -216,6 +223,8 @@ def bind_source_ui_contracts(
     asset: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Add exact formal-UI invariants and relations to an already built IR."""
+    from . import behavior_ir as _bir
+
     model = copy.deepcopy(_dict(behavior_ir))
     contracts = _contracts(_dict(asset))
     operations = [
