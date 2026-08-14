@@ -830,16 +830,65 @@ class EnterpriseCredentialManager:
         return result
 
     def login_all_services(self, timeout: int = 10) -> dict[str, dict[str, bool]]:
-        """Attempt login for all services × roles."""
+        """Attempt login for all services × roles, idempotently.
+
+        Two enterprise topologies must both work without hardcoding either:
+
+        1. per-service auth (every service exposes its own login route), and
+        2. centralized auth (one auth service issues a token that every business
+           service accepts; business services expose no login route of their own).
+
+        A service×role that already holds a valid token is never re-logged in, and
+        a service whose login already failed this process is negative-cached so it
+        is not re-probed on every subsequent experiment (the probe itself, 8 paths
+        per service, was what pushed a reachable target into connection-abort
+        churn). A business service that cannot log in on its own then reuses the
+        first successful token of the same role — the centralized-auth case.
+        """
         results: dict[str, dict[str, bool]] = {}
-        for cred in self.store.all():
+        creds = list(self.store.all())
+
+        # Pass 1 — login only what needs it.
+        for cred in creds:
             svc, role = cred.service, cred.role
             results.setdefault(svc, {})
             if cred.bearer_token or cred.api_key:
                 results[svc][role] = True  # Pre-configured, skip login
+                continue
+            if cred.is_valid():
+                results[svc][role] = True  # Idempotent: already holds a live token
+                continue
+            if (cred.resolved_login_shape or {}).get("login_failure"):
+                # Negative cache: this service×role already failed this process.
+                # Re-probing the same absent login route on every experiment only
+                # multiplies 404s; defer to shared-token reuse in pass 2.
+                results[svc][role] = False
+                continue
+            result = self.login(svc, role, timeout)
+            if result is not None and result.token:
+                results[svc][role] = True
             else:
-                result = self.login(svc, role, timeout)
-                results[svc][role] = result is not None and result.token != ""
+                cred.resolved_login_shape["login_failure"] = "1"
+                self.store.set(cred)
+                results[svc][role] = False
+
+        # Pass 2 — centralized-auth shared-token reuse. A business service with
+        # no login route of its own reuses the first live token of the same role.
+        role_token: dict[str, str] = {}
+        for cred in creds:
+            if cred.token and not role_token.get(cred.role):
+                role_token[cred.role] = cred.token
+        for cred in creds:
+            svc, role = cred.service, cred.role
+            if results[svc].get(role):
+                continue
+            shared = role_token.get(role, "")
+            if shared and not cred.token:
+                cred.token = shared
+                (cred.resolved_login_shape or {}).pop("login_failure", None)
+                self.store.set(cred)
+                results[svc][role] = True
+
         return results
 
     # ── Auth header resolution ──
