@@ -42,7 +42,8 @@ const [
   topologySection,
   metadataSection,
   llmSection,
-  infoSection,
+  advancedToolsSection,
+  runPreflightPresentation,
   ingestHandler,
   projectAssets,
   understandingPreflight,
@@ -63,7 +64,8 @@ const [
   source('src/components/settings/SettingsTopologySection.tsx'),
   source('src/components/settings/SettingsMetadataSection.tsx'),
   source('src/components/settings/SettingsLlmSection.tsx'),
-  source('src/components/settings/SettingsInfoSection.tsx'),
+  source('src/components/settings/SettingsAdvancedToolsSection.tsx'),
+  source('src/lib/run-preflight-presentation.ts'),
   source('../ai_test_asset_center/private_pilot_ingest_handlers.py'),
   source('../ai_test_asset_center/private_pilot_project_assets.py'),
   source('../ai_test_asset_center/private_pilot_understanding_preflight.py'),
@@ -99,7 +101,6 @@ requireAll(runCenter, [
 forbidAll(runCenter, ['localStorage', 'sessionStorage'], 'run center');
 
 requireAll(campaignsPage, [
-  '开始企业系统验证',
   '后台会自动选择目标服务、有效资料快照、登录方式、测试数据方案和可执行场景',
   '<details className="card mb-4">',
   '异常覆盖与安全熔断',
@@ -109,11 +110,16 @@ requireAll(campaignsPage, [
 ], 'campaigns page');
 forbidAll(campaignsPage, ['测试数据策略', 'type DataStrategy', 'buildTestDataContract'], 'campaigns page');
 
+requireAll(runPreflightPresentation, [
+  "primaryActionLabel: '开始企业系统验证'",
+], 'run preflight presentation');
+
 requireAll(dashboardPage, [
   'import { EnterpriseUnderstandingPanel }',
   'const knowledgeSummary = asRecord(record.knowledge_summary);',
   '<EnterpriseUnderstandingPanel',
-  "navigateToProjectPath('/settings', project)",
+  "path: '/settings'",
+  'navigateToProjectPath(nextAction.path, project)',
 ], 'dashboard understanding projection');
 
 requireAll(dashboardUnderstanding, [
@@ -143,16 +149,14 @@ requireAll(serviceForm, [
 ], 'service onboarding form');
 
 requireAll(customerSection, [
-  '客户与企业资料',
-  '用户不需要判断资料类型、选择解析策略、维护版本或逐项绑定场景',
-  '选择文件后立即导入',
-  'type="file"',
-  'multiple',
-  'void handleFilesSelected(files)',
-  '<EnterpriseUnderstandingReceipt',
-  '查看后台识别的资料来源',
+  '这里仅负责选择或创建客户工作区',
+  '在线资料源作为主入口持续同步，文件上传只用于补充在线来源没有覆盖的资料',
+  '优先连接企业在线资料',
+  'Settings 不维护第二套资料流程',
+  "navigateToProjectPath('/materials', project)",
+  '连接企业资料',
 ], 'customer and materials section');
-forbidAll(customerSection, ['setSelectedSourceType', 'onDeleteKnowledge', 'onConfirmUnderstanding'], 'customer and materials section');
+forbidAll(customerSection, ['type="file"', 'multiple', 'handleFilesSelected', '<EnterpriseUnderstandingReceipt'], 'customer section must not duplicate the canonical materials surface');
 
 requireAll(understandingReceipt, [
   '已有知识资产的只读投影',
@@ -260,11 +264,11 @@ requireAll(llmSection, [
   '属于部署级能力，不应成为每个客户项目的日常维护项',
 ], 'LLM section');
 
-requireAll(infoSection, [
+requireAll(advancedToolsSection, [
   '<details className="section-card settings-span-2">',
   '正常客户流程不需要维护',
   '应优先由后台从企业资料、页面结构和执行轨迹自动生成',
-], 'internal governance section');
+], 'advanced tools and governance section');
 
 requireAll(sidebar, [
   "label: '主流程'",

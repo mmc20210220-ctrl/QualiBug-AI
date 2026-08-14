@@ -8,7 +8,7 @@ import { SettingsCustomerSection } from '../components/settings/SettingsCustomer
 import { SettingsMetadataSection } from '../components/settings/SettingsMetadataSection';
 import { SettingsTopologySection } from '../components/settings/SettingsTopologySection';
 import { SettingsLlmSection } from '../components/settings/SettingsLlmSection';
-import { SettingsInfoSection } from '../components/settings/SettingsInfoSection';
+import { SettingsAdvancedToolsSection } from '../components/settings/SettingsAdvancedToolsSection';
 import { SettingsServiceForm } from '../components/settings/SettingsServiceForm';
 import { buildSettingsTopologyViewModel } from '../lib/settings-topology';
 import {
@@ -584,7 +584,8 @@ export function Settings() {
           onLlmKeyChange={setLlmKey}
           onSaveAndVerify={handleSaveLlmSettings}
         />
-        <SettingsInfoSection
+        <SettingsAdvancedToolsSection
+          project={project}
           productVersion={pv}
           serviceStatus={ss}
           auditStatus={as}

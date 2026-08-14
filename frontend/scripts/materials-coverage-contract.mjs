@@ -7,7 +7,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const frontendRoot = path.resolve(scriptDir, '..');
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(frontendRoot, relativePath), 'utf8');
+  return fs.readFileSync(path.join(frontendRoot, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function requireText(source, expected, context) {
@@ -16,8 +16,15 @@ function requireText(source, expected, context) {
   }
 }
 
-const api = read('src/api/knowledge-connectors.ts');
-const page = read('src/pages/Materials.tsx');
+const api = [
+  read('src/api/knowledge-connectors.ts'),
+  read('src/api/knowledge-connector-types.ts'),
+  read('src/api/knowledge-connector-parsers.ts'),
+].join('\n');
+const page = [
+  read('src/pages/Materials.tsx'),
+  read('src/lib/materials-presentation.ts'),
+].join('\n');
 const panel = read('src/components/ConnectorCoverage.tsx');
 
 for (const field of [

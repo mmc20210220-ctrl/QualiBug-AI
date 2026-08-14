@@ -5,7 +5,7 @@ import process from 'node:process';
 const root = process.cwd();
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+  return fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function assert(condition, message) {
@@ -189,7 +189,7 @@ assert(advancedNavBlock.includes("to: 'coverage'") && advancedNavBlock.includes(
 assert(sidebar.includes("import { useLiveStatus, useProjectSummary } from '../api/data';"), 'sidebar status must consume real scan materialization state');
 assert(sidebar.includes('const { scanActive, hasMaterializedMetrics } = useLiveStatus(project, 15_000);'), 'sidebar must distinguish an active or completed scan from a never-run project');
 assert(sidebar.includes("? '检测进行中'"), 'sidebar must expose an active scan before defect summary states');
-assert(sidebar.includes("? '本轮暂无已确认问题'\n              : '等待首次验证'"), 'clean materialized scans must not be mislabeled as never verified');
+assert(sidebar.includes("? '本轮暂无已确认问题'\n              : '等待首次验证';"), 'clean materialized scans must not be mislabeled as never verified');
 
 assert(runCenter.includes('const preflightReady = Boolean(preflight?.ready);'), 'run center must keep backend preflight as execution authority');
 assert(runCenter.includes('if (!preflightReady) {'), 'run center handler must remain fail-closed after frontend onboarding completion');

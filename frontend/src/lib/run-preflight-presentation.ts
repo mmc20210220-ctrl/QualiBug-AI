@@ -258,7 +258,7 @@ export function deriveRunPreflightPresentation(input: Input): RunPreflightPresen
       : '扫描提交后仍可能由后端安全门禁产生阻断、仅计划或部分覆盖，结果会如实展示。',
     blockerCount: 0,
     primaryAction: 'run',
-    primaryActionLabel: '执行标准扫描',
+    primaryActionLabel: '开始企业系统验证',
     submissionAllowed,
     facts,
   };

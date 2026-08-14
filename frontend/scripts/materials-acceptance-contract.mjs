@@ -7,7 +7,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const frontendRoot = path.resolve(scriptDir, '..');
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(frontendRoot, relativePath), 'utf8');
+  return fs.readFileSync(path.join(frontendRoot, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function requireText(source, expected, context) {

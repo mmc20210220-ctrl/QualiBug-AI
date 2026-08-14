@@ -1,25 +1,43 @@
 import { SettingsAccessibilitySection } from './SettingsAccessibilitySection';
 import { SettingsBrowserMatrixSection } from './SettingsBrowserMatrixSection';
 import { SettingsComplexInteractionSection } from './SettingsComplexInteractionSection';
+import { SettingsIdentityAnnotationWorkflow } from './SettingsIdentityAnnotationWorkflow';
+import { SettingsIdentityBenchmarkSection } from './SettingsIdentityBenchmarkSection';
 import { SettingsUploadFixtureSection } from './SettingsUploadFixtureSection';
 import { SettingsUploadScenarioSection } from './SettingsUploadScenarioSection';
+import { SettingsVisualBaselineContractSection } from './SettingsVisualBaselineContractSection';
+import { SettingsVisualBaselineSection } from './SettingsVisualBaselineSection';
 
-type SettingsInfoSectionProps = {
+type SettingsAdvancedToolsSectionProps = {
+  project: string;
   productVersion: string;
   serviceStatus: string;
   auditStatus: string;
   statusToneClass: string;
 };
 
-export function SettingsInfoSection({ productVersion, serviceStatus, auditStatus, statusToneClass }: SettingsInfoSectionProps) {
+/**
+ * 「高级工具与治理」收敛入口。
+ *
+ * 身份标注、身份基准、视觉基线、浏览器矩阵、无障碍规则、上传 Fixture、
+ * 上传场景与复杂交互合同都由后台从企业资料、页面结构和执行轨迹自动生成；
+ * 这里只在自动识别失败、历史项目迁移或安全审计时打开，不作为开始验证前的必填项。
+ */
+export function SettingsAdvancedToolsSection({
+  project,
+  productVersion,
+  serviceStatus,
+  auditStatus,
+  statusToneClass,
+}: SettingsAdvancedToolsSectionProps) {
   return (
     <details className="section-card settings-span-2">
       <summary>
-        <strong>内部治理与兼容工具</strong>
+        <strong>高级工具与治理</strong>
         <span className="muted">正常客户流程不需要维护</span>
       </summary>
       <div className="settings-card-note settings-mt-10">
-        浏览器矩阵、无障碍规则、上传 Fixture、上传场景和复杂交互合同应优先由后台从企业资料、页面结构和执行轨迹自动生成。
+        身份标注、身份基准、视觉基线、浏览器矩阵、无障碍规则、上传 Fixture、上传场景和复杂交互合同应优先由后台从企业资料、页面结构和执行轨迹自动生成。
         这里仅保留给自动识别失败、历史项目迁移或安全审计排查，不作为开始验证前的必填步骤。
       </div>
 
@@ -44,6 +62,10 @@ export function SettingsInfoSection({ productVersion, serviceStatus, auditStatus
         </div>
       </div>
 
+      <SettingsIdentityAnnotationWorkflow project={project} />
+      <SettingsIdentityBenchmarkSection project={project} />
+      <SettingsVisualBaselineSection project={project} />
+      <SettingsVisualBaselineContractSection project={project} />
       <SettingsBrowserMatrixSection />
       <SettingsAccessibilitySection />
       <SettingsUploadFixtureSection />

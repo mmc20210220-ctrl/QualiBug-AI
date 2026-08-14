@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 const root = path.resolve(process.cwd());
-const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8').replace(/\r\n/g, '\n');
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
@@ -25,7 +25,7 @@ assert(settings.includes('password: temporaryPassword'), '安全临时密码必�
 assert(settings.includes('login(tenantId, temporaryPassword)'), '安全临时密码必须贯通自动登录');
 assert(settings.includes('onBearerTokenChange={setCBearerToken}'), 'Bearer Token 表单绑定不得回归');
 
-const toast = read('src/components/Toast.tsx');
+const toastMessage = read('src/lib/toast-message.ts');
 for (const readable of [
   '请先粘贴一个在线资料入口 URL',
   '请输入有效的 HTTP(S) URL',
@@ -33,8 +33,9 @@ for (const readable of [
   '连接器 Manifest 未声明可用的 URL 范围字段',
   '当前没有声明 URL 入口的连接器 Manifest',
 ]) {
-  assert(toast.includes(readable), `缺少乱码兼容文案：${readable}`);
+  assert(toastMessage.includes(readable), `缺少乱码兼容文案：${readable}`);
 }
+const toast = read('src/components/Toast.tsx');
 assert(toast.includes('normalizeToastMessage'), 'Toast 必须统一规范化历史乱码消息');
 
 const readme = read('README.md');

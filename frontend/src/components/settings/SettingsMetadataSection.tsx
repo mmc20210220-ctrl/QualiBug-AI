@@ -1,10 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getProjectMetadata, saveProjectMetadata, type ProjectMetadata } from '../../api/client';
-import { SettingsIdentityAnnotationWorkflow } from './SettingsIdentityAnnotationWorkflow';
-import { SettingsIdentityBenchmarkSection } from './SettingsIdentityBenchmarkSection';
 import { SettingsOnboardingGuide } from './SettingsOnboardingGuide';
-import { SettingsVisualBaselineContractSection } from './SettingsVisualBaselineContractSection';
-import { SettingsVisualBaselineSection } from './SettingsVisualBaselineSection';
 
 type SettingsMetadataSectionProps = {
   project: string;
@@ -161,14 +157,7 @@ export function SettingsMetadataSection({ project }: SettingsMetadataSectionProp
 
         {status && <p className="settings-inline-feedback">{status}</p>}
 
-        <details className="settings-auth-section settings-mt-10">
-          <summary><strong>视觉基线兼容工具</strong> <span className="muted">仅用于历史基线迁移或自动识别失败</span></summary>
-          <SettingsVisualBaselineSection project={project} />
-          <SettingsVisualBaselineContractSection project={project} />
-        </details>
       </details>
-      <SettingsIdentityAnnotationWorkflow project={project} />
-      <SettingsIdentityBenchmarkSection project={project} />
     </>
   );
 }

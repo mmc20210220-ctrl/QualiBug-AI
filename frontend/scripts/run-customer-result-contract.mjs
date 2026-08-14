@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 const root = process.cwd();
-const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 const summary = read('src/components/run/RunCustomerResultSummary.tsx');

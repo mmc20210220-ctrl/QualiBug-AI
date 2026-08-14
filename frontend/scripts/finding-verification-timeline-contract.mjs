@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 const root = process.cwd();
-const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 const verification = read('src/lib/finding-verification.ts');
@@ -31,9 +31,9 @@ assert(verification.includes("outcome: 'unknown'"), 'inconclusive history must r
 assert(verification.includes('export function buildFindingVerificationTimeline(finding: Finding)'), 'verification timeline builder missing');
 assert(verification.includes("kind: 'baseline'"), 'timeline must start from original finding baseline');
 assert(verification.includes(".sort((left, right) => String(left.generated_at || '').localeCompare(String(right.generated_at || '')))"), 'history must be chronological');
-assert(verification.includes("const isKnownOutcome = presentation.outcome === 'fixed' || presentation.outcome === 'open';"), 'only fixed/open may change conclusion');
+assert(verification.includes('const isKnownOutcome = isKnownVerificationOutcome(presentation.outcome);'), 'only fixed/open may change conclusion');
 assert(verification.includes('const changedConclusion = isKnownOutcome && presentation.outcome !== lastKnownOutcome;'), 'conclusion changes require a terminal transition');
-assert(verification.includes('if (isKnownOutcome) lastKnownOutcome = presentation.outcome;'), 'unknown must not overwrite last known conclusion');
+assert(verification.includes('if (isKnownVerificationOutcome(presentation.outcome)) {'), 'unknown must not overwrite last known conclusion');
 
 // Exact focused run truth remains owned by the original shared interpreter.
 assert(verification.includes('export function deriveFocusedVerificationRunSummary('), 'exact focused run helper missing');

@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 const root = process.cwd();
-const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 const release = read('src/pages/ReleaseGate.tsx');
@@ -38,8 +38,11 @@ assert(release.includes('该失败状态直接参与当前发布结论'), 'faile
 assert(release.includes('单次回归通过不等于项目级 Gate 放行'), 'passed regression must not independently release the project');
 assert(release.includes('没有前一版发布快照时，前端也不会声称“发布结论已被改变”'), 'release page must not fabricate a before/after release transition without a real prior snapshot');
 
-for (const label of ['项目级发布结论', '真实项目级 Gate', '最新修复后回归', '现在最应该做']) {
+for (const label of ['项目级发布结论', '现在最应该做']) {
   assert(snapshot.includes(label), `release decision snapshot missing customer-first label: ${label}`);
+}
+for (const label of ['真实项目级 Gate', '最新修复后回归']) {
+  assert(release.includes(label), `release page missing customer-first fact label: ${label}`);
 }
 assert(snapshot.includes('绿色只来自共享 Release Presentation 对真实项目级 Gate 的明确通过结论'), 'release snapshot must state the green-release authority');
 assert(snapshot.includes('单条 Finding 与单次回归都不能独立覆盖项目级发布门禁'), 'release snapshot must preserve project-level authority');

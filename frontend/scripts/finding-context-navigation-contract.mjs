@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 const root = process.cwd();
-const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 const dashboard = read('src/pages/Dashboard.tsx');
@@ -65,7 +65,7 @@ assert(releaseGate.includes("navigateToProjectPath('/evidence', project, finding
 assert(releaseGate.includes('deriveReleasePresentation({'), 'release decision must remain driven by the existing project-level release presentation authority');
 
 assert(responsive.includes('.focus-card .settings-actions {'), 'dashboard focus actions must wrap on narrow layouts');
-assert(responsive.includes('.focus-card .settings-actions .btn {'), 'dashboard focus buttons must become touch-friendly at the mobile breakpoint');
+assert(responsive.includes('.focus-card .settings-actions .btn,'), 'dashboard focus buttons must become touch-friendly at the mobile breakpoint');
 assert(packageJson.includes('"test:finding-context-navigation": "node scripts/finding-context-navigation-contract.mjs"'), 'package script missing finding context navigation contract');
 assert(ciGate.includes('"test:finding-context-navigation"'), 'ci gate missing finding context navigation contract');
 
