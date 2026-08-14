@@ -450,6 +450,33 @@ def test_adapter_drops_unregistered_family_as_gap_not_crash() -> None:
     assert "quantum_entanglement" in result["coverage_gaps"][0]["detail"]
 
 
+def test_adapter_preserves_declared_family_through_alias() -> None:
+    """An aliased family keeps its declared name + reason code end to end.
+
+    The adapter used to pass only the canonical family into make_obligation,
+    silently erasing the alias (and the reason the family was narrowed) from the
+    obligation.  The declared name and resolution reason must survive so the
+    narrowing is countable in run data instead of collapsing into the canonical
+    rewrite (AGENTS.md — no silent coercion).  'audit' is the bridge spelling
+    of the audit_trail capability gap and resolves to canonical validation.
+    """
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-audit-declared",
+            "risk_family": "audit",
+            "method": "POST",
+            "path": "/resources",
+            "source_refs": [{"source_id": "SRC-1"}],
+        }],
+        _adapter_ir(),
+    )
+    assert result["obligations"]
+    obligation = result["obligations"][0]
+    assert obligation["risk_family"] == "validation"
+    assert obligation["declared_risk_family"] == "audit"
+    assert obligation["risk_family_resolution"]["reason_code"]
+
+
 def test_bridge_audit_vocabulary_resolves_through_registry() -> None:
     """The Reasoner emits 'audit'; the registry owns its resolution.
 

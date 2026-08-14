@@ -141,15 +141,19 @@ def _declared_risk_family(candidate: dict[str, Any]) -> str:
     ).lower()
 
 
-def _risk_family(candidate: dict[str, Any]) -> str:
+def _risk_family(candidate: dict[str, Any]) -> dict[str, Any]:
     """Resolve through the single registry authority in test_obligation.
 
     This used to apply a private _FAMILY_ALIASES map and then silently rewrite
     anything unrecognized to "validation" -- a second, divergent taxonomy. The
     registry now owns aliasing, and make_obligation records the declared family
-    plus a reason code, so the narrowing is visible in the obligation.
+    plus a reason code, so the narrowing is visible in the obligation.  Return
+    the full resolution (not just the canonical) so the caller can pass the
+    *declared* family into make_obligation and preserve the reason code end to
+    end instead of collapsing an alias/promotion/unknown into an invisible
+    canonical rewrite.
     """
-    return resolve_risk_family(_declared_risk_family(candidate))["canonical"]
+    return resolve_risk_family(_declared_risk_family(candidate))
 
 
 def _stable_gap(
@@ -339,6 +343,7 @@ def _make_grounded_obligations(
     *,
     candidate_id: str,
     family: str,
+    declared_family: str,
     operation: dict[str, Any],
     relations: list[dict[str, Any]],
     actors_by_id: dict[str, dict[str, Any]],
@@ -460,7 +465,7 @@ def _make_grounded_obligations(
                 "require_ownership_evidence": True,
             })
         obligations.append(make_obligation(
-            risk_family=family,
+            risk_family=declared_family,
             subject_refs=[candidate_id, operation_ref, *actor_refs],
             property_spec=candidate_property,
             required_actors=actor_refs,
@@ -533,7 +538,9 @@ def adapt_source_candidates_to_obligations(
             continue
         operation = matches[0]
         operation_ref = _text(operation.get("id"))
-        family = _risk_family(candidate)
+        family_resolution = _risk_family(candidate)
+        family = family_resolution["canonical"]
+        declared_family = family_resolution["declared"] or family
         if family not in _RELATION_TYPES_BY_FAMILY:
             # A candidate whose family is not in the adapter's supported set
             # (an unknown or capability-gap family such as audit_trail, or a
@@ -582,6 +589,7 @@ def adapt_source_candidates_to_obligations(
             candidate,
             candidate_id=candidate_id,
             family=family,
+            declared_family=declared_family,
             operation=operation,
             relations=joined_relations,
             actors_by_id=actors_by_id,

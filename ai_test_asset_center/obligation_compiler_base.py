@@ -1527,6 +1527,13 @@ def compile_obligations_from_behavior_ir(
             )
             continue
         family = "validation"
+        # A family left at "validation" with neither grounded frame evidence
+        # nor a recognized kind token is a silent coercion (AGENTS.md: a closed
+        # family enumeration may not silently coerce an unknown family).  The
+        # fallback is receipted as a coverage gap below; execution is unchanged
+        # so today's compile surface is preserved while the coercion becomes
+        # countable.
+        _family_resolved = False
         # P0-E phase-3 frame-confirmation: a grounded frame's structured
         # frame_type is the SSOT family signal. Only when no grounded frame
         # family evidence exists does the legacy kind-token detection run —
@@ -1540,12 +1547,15 @@ def compile_obligations_from_behavior_ir(
         _mapped_family = _FRAME_TYPE_FAMILY.get(_frame_family_type) if _frame_family_type else ""
         if _mapped_family:
             family = _mapped_family
+            _family_resolved = True
         else:
             _cjk_family_hit = any(token in kind for token in _CJK_FAMILY_TOKENS)
             if any(token in kind for token in ("idempot", "exactly_once", "deduplic")):
                 family = "idempotency"
+                _family_resolved = True
             elif any(token in kind for token in ("concurr", "race", "atomic")):
                 family = "concurrency"
+                _family_resolved = True
             elif any(
                 token in kind
                 for token in (
@@ -1559,10 +1569,13 @@ def compile_obligations_from_behavior_ir(
                 )
             ):
                 family = "conservation"
+                _family_resolved = True
             elif any(token in kind for token in ("privacy", "pii", "mask", "隐私")):
                 family = "privacy"
+                _family_resolved = True
             elif any(token in kind for token in ("time", "expir", "temporal", "过期")):
                 family = "temporal"
+                _family_resolved = True
             elif any(
                 token in kind
                 for token in (
@@ -1579,10 +1592,13 @@ def compile_obligations_from_behavior_ir(
                 )
             ):
                 family = "visibility"
+                _family_resolved = True
             elif any(token in kind for token in ("state_machine", "state", "状态", "status_")):
                 family = "state"
+                _family_resolved = True
             elif any(token in kind for token in ("postcondition", "must_become", "must_create", "因果", "后置")):
                 family = "state"
+                _family_resolved = True
             if _cjk_family_hit:
                 _count_legacy_cjk_kind(
                     _legacy_fallback_kind_counts(ir), "CJK_FAMILY_TOKEN_FALLBACK"
@@ -1705,6 +1721,32 @@ def compile_obligations_from_behavior_ir(
                 "schema_version": _text(ir.get("schema_version")),
             })
             continue
+        if not _family_resolved:
+            # The invariant carried no grounded frame family and no recognized
+            # kind token; the compiler's historical behavior was to silently
+            # coerce it to the validation family.  Keep execution identical but
+            # make the coercion countable: an unknown family is a named coverage
+            # gap, not an invisible collapse (AGENTS.md — no silent coercion).
+            _append_gap_once(
+                coverage_gaps,
+                {
+                    **_compile_gap(
+                        subject_ref=_text(inv.get("id")),
+                        relation_types={"unknown"},
+                    ),
+                    "code": "FAMILY_UNRESOLVED_COERCED_TO_VALIDATION",
+                    "description": (
+                        "Invariant family was not resolved by grounded frame "
+                        "evidence or a recognized kind token; compiled under the "
+                        "validation fallback family"
+                    ),
+                    "source_refs": [
+                        dict(row)
+                        for row in _list(inv.get("source_refs"))
+                        if isinstance(row, dict)
+                    ],
+                },
+            )
         relation_types = {
             "idempotency": {"observes", "produces", "consumes", "transitions"},
             "concurrency": {"observes", "produces", "consumes", "transitions"},
