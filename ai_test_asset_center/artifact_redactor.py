@@ -196,13 +196,17 @@ def _redact_value(
     key_l = str(key or "")
     sensitive_key = bool(SENSITIVE_KEY_RE.search(key_l)) and not bool(SAFE_META_KEY_RE.search(key_l))
     # Identity/structure keys (*_id, *_ref, *_receipt_id, *_dimension, *_ids,
-    # *_count, *_status, *_fingerprint) hold hashes and structural identifiers,
-    # never plaintext secrets. Key-name redaction rewrites them to <REDACTED>,
-    # breaking the content-addressed associations the evaluator's exact gate
-    # scope check depends on (finding_id/receipt_id links). Value-pattern
-    # redaction still protects real secrets inside payloads.
+    # *_count, *_status, *_gate, *_fingerprint) hold hashes, structural
+    # identifiers, and gate-status enums, never plaintext secrets. Key-name
+    # redaction rewrites them to <REDACTED>, breaking the content-addressed
+    # associations the evaluator's exact gate scope check depends on
+    # (finding_id/receipt_id links). ``*_gate`` carries oracle post-hoc gate
+    # enums (PASSED/INDETERMINATE/NOT_APPLICABLE); redacting them to <REDACTED>
+    # made reseal fail with contract_oracle_causality_gate_invalid on any
+    # authorization-executing scan. Value-pattern redaction still protects real
+    # secrets inside payloads.
     if re.search(
-        r"(?:_id|_ref|_receipt_id|_fingerprint|_dimension|_count|_status|_ids)$",
+        r"(?:_id|_ref|_receipt_id|_fingerprint|_dimension|_count|_status|_ids|_gate)$",
         key_l,
         re.I,
     ):
@@ -303,7 +307,7 @@ def scan_for_secrets(payload: Any) -> dict[str, Any]:
 
     def _identity_key(key_l: str) -> bool:
         return bool(re.search(
-            r"(?:_id|_ref|_receipt_id|_fingerprint|_dimension|_count|_status|_ids)$",
+            r"(?:_id|_ref|_receipt_id|_fingerprint|_dimension|_count|_status|_ids|_gate)$",
             key_l,
             re.I,
         ))

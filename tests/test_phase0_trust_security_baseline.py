@@ -108,6 +108,34 @@ def test_redact_removes_jwt_password_and_bearer() -> None:
     assert scan["safe"] is True
 
 
+def test_redact_preserves_gate_enum_fields_but_still_redacts_secrets() -> None:
+    # ``*_gate`` fields hold oracle post-hoc gate enums (PASSED/INDETERMINATE/
+    # NOT_APPLICABLE). Redacting them to <REDACTED> made reseal fail with
+    # contract_oracle_causality_gate_invalid on any authorization-executing
+    # scan. They must survive redaction, while a real secret under an
+    # ``authorization`` key is still redacted.
+    payload = {
+        "oracle_receipt": {
+            "authorization_causality_gate": "PASSED",
+            "authorization_delivery_gate": "INDETERMINATE",
+            "oracle_validity_gate": "NOT_APPLICABLE",
+            "authorization_secret": "sk-live-abcdefghijklmnop",
+        },
+    }
+    redacted, _receipt = redact_artifact(payload)
+    oracle = redacted["oracle_receipt"]
+    assert oracle["authorization_causality_gate"] == "PASSED"
+    assert oracle["authorization_delivery_gate"] == "INDETERMINATE"
+    assert oracle["oracle_validity_gate"] == "NOT_APPLICABLE"
+    assert oracle["authorization_secret"] == "<REDACTED>"
+    # The post-redaction scanner must agree: a gate enum is not a residual
+    # secret (the scanner previously flagged ``authorization_causality_gate``
+    # as ``sensitive_key_unredacted`` and failed scan_result persistence).
+    scan = scan_for_secrets(redacted)
+    assert scan["safe"] is True
+    assert scan["issue_count"] == 0
+
+
 def test_write_json_redacted_rejects_residual_secret(tmp_path: Path) -> None:
     # Craft a value that survives naive key-based redaction but is caught by scanner
     # by embedding JWT in a non-sensitive key after partial failure path.
