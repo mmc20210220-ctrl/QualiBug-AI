@@ -18,15 +18,43 @@ Contract:
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
 FACT_BLOCK_HEADER = "\n\n[GROUNDED BUSINESS FACTS (source-anchored)]\n"
 
-MAX_FACTS = 48
-MAX_BLOCK_CHARS = 8000
+# The source-anchored fact block is the ONLY channel that carries the
+# world-model projection's documented_rules into the Reasoner with correct
+# semantics (the reader_json JSON-prefix slices only surface the first few
+# rules and drop state_machines/entities/relationships entirely because they
+# sit later in the serialized dict).  The rule cap was a hardcoded silent
+# truncation; it is now an operator-visible, env-overridable budget with a
+# floor (breadth is a floor, never a ceiling).  The emitted-vs-total split is
+# receipted so the truncation is countable instead of invisible.
+MAX_FACTS = 96
+MAX_BLOCK_CHARS = 24000
 MAX_FACT_CHARS = 220
-_MAX_ITEMS_PER_SECTION = 24
+_MAX_ITEMS_PER_SECTION = 64
+
+_MAX_RULES_DEFAULT = 64
+_MAX_RULES_FLOOR = 24
+
+
+def _max_rules() -> int:
+    """Operator-visible source-rule budget for the grounded fact block.
+
+    ``QUALIBUG_GROUNDED_FACT_MAX_RULES`` overrides the default; the floor
+    guarantees an operator override can never narrow comprehension below the
+    historical 24-rule baseline.
+    """
+    raw = (os.environ.get("QUALIBUG_GROUNDED_FACT_MAX_RULES") or "").strip()
+    if not raw:
+        return _MAX_RULES_DEFAULT
+    try:
+        return max(int(raw), _MAX_RULES_FLOOR)
+    except ValueError:
+        return _MAX_RULES_DEFAULT
 
 _SECRET_RE = re.compile(
     r"(?i)(?:bearer\s+[a-z0-9._~+\-/=]+|(?:api[_\s-]?key|token|secret|password|credential)\s*[:=]\s*[^\s,;]+|sk-[a-z0-9_-]{8,})"
@@ -67,7 +95,7 @@ def _source_ref(fact: dict[str, Any]) -> str:
     return _text(raw)[:160]
 
 
-def _extract_rules(payload: dict[str, Any]) -> list[str]:
+def _extract_rules(payload: dict[str, Any]) -> tuple[list[str], int]:
     """Business rules / invariants with source refs. Only verbatim text.
 
     Accepts both the Behavior-IR-shaped model dict (``business_rules`` /
@@ -76,8 +104,13 @@ def _extract_rules(payload: dict[str, Any]) -> list[str]:
     Without the ``documented_rules`` key the reasoner's world-model bridge
     silently starved the source-anchored fact block — the two layers used
     different key names for the same declared rules.
+
+    Returns ``(lines, rules_total)`` so the caller can receipt emitted-vs-total
+    instead of silently dropping the overflow.
     """
     lines: list[str] = []
+    rules_total = 0
+    max_rules = _max_rules()
     for key in ("business_rules", "rules", "invariants", "rule_library", "documented_rules"):
         for item in _list(payload.get(key)):
             item_dict = _dict(item)
@@ -90,11 +123,14 @@ def _extract_rules(payload: dict[str, Any]) -> list[str]:
                 # Advisory/inferred rules stay out of the grounded block; only
                 # explicit or unmarked source-declared rules qualify.
                 continue
+            rules_total += 1
+            if len(lines) >= max_rules:
+                continue
             ref = _source_ref(item_dict)
             lines.append(f"- [rule] {_bounded(text)}" + (f" (source: {ref})" if ref else ""))
-            if len(lines) >= _MAX_ITEMS_PER_SECTION:
-                return lines
-    return lines
+            if len(lines) >= max_rules:
+                continue
+    return lines, rules_total
 
 
 def _extract_state_machines(payload: dict[str, Any]) -> list[str]:
@@ -212,7 +248,8 @@ def retrieve_grounded_facts(
         return "", receipt
     try:
         lines: list[str] = []
-        lines.extend(_extract_rules(payload))
+        rule_lines, rules_total = _extract_rules(payload)
+        lines.extend(rule_lines)
         lines.extend(_extract_state_machines(payload))
         lines.extend(_extract_relations(payload))
         lines.extend(_extract_entities(payload))
@@ -224,7 +261,7 @@ def retrieve_grounded_facts(
                 break
             bounded_lines.append(line)
             chars += len(line) + 1
-            if len(bounded_lines) >= max(1, min(int(max_facts or MAX_FACTS), 64)):
+            if len(bounded_lines) >= max(1, min(int(max_facts or MAX_FACTS), 128)):
                 break
             if chars >= max_chars:
                 break
@@ -234,6 +271,12 @@ def retrieve_grounded_facts(
             "reason": "source_anchored_fact_retrieval",
             "facts": len(bounded_lines),
             "chars": len(block),
+            # The source-rule budget is operator-visible: emitted-vs-total makes
+            # any truncation countable instead of silently dropping the overflow.
+            "rules_total": rules_total,
+            "rules_emitted": len(rule_lines),
+            "rules_truncated": max(0, rules_total - len(rule_lines)),
+            "max_rules": _max_rules(),
         }
         return block, receipt
     except Exception as exc:

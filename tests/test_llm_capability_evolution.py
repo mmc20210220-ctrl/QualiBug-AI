@@ -119,6 +119,24 @@ def test_retrieval_reads_world_model_documented_rules_and_relationships() -> Non
     assert "orders -belongs_to-> users" in block
 
 
+def test_retrieval_receipts_rule_truncation_instead_of_silent_drop() -> None:
+    # The source-rule budget is operator-visible: emitted-vs-total is receipted
+    # so a rule set larger than the budget is countable, never silently dropped.
+    payload = {
+        "documented_rules": [
+            {"rule": f"规则 {i}", "source": f"src:{i}"} for i in range(200)
+        ],
+    }
+    block, receipt = retrieve_grounded_facts(payload)
+    assert receipt["status"] == "CONSUMED"
+    assert receipt["rules_total"] == 200
+    assert receipt["rules_emitted"] >= 64  # default budget, not a legacy 24 cap
+    assert receipt["rules_truncated"] == 200 - receipt["rules_emitted"]
+    assert receipt["max_rules"] == receipt["rules_emitted"] or receipt["rules_emitted"] < receipt["rules_total"]
+    # The default rule budget must clear the historical 24-rule ceiling.
+    assert receipt["max_rules"] >= 64
+
+
 def test_retrieval_redacts_credentials() -> None:
     block, _ = retrieve_grounded_facts(
         {"business_rules": [{"normalized_text": "用 bearer sk-abc12345 连接", "source_refs": []}]}
