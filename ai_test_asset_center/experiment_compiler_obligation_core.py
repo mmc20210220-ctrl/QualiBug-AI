@@ -1471,6 +1471,7 @@ def compile_experiment_for_obligation(
                 actor_refs=[_text(a) for a in required_actors if _text(a)],
                 property_spec=prop,
                 family=family,
+                environment_type=environment_type,
             )
             _money_chain_status = _text(_money_chain.get("status"))
             if _money_chain_status == _MONEY_CHAIN_PLANNED:
@@ -2936,6 +2937,34 @@ def compile_experiment_for_obligation(
                 == _money_create_op_ref
                 for row in cleanup_plan
             ):
+                continue
+            # Accepted-residue fixture step: the create was planned without a
+            # source-declared compensator on a declared non-production target.
+            # Emit the matching accepted-residue cleanup entry (RESIDUE_ACCEPTED
+            # at cleanup time) instead of leaving the create uncompensated.
+            _money_create_step = next(
+                (
+                    row
+                    for row in _precondition_plan
+                    if isinstance(row, dict)
+                    and _text(row.get("operation_ref")) == _money_create_op_ref
+                ),
+                {},
+            )
+            _money_residue = _dict(_money_create_step.get("accepted_residue"))
+            if _text(_money_residue.get("mode")) == "accepted_residue_no_cleanup":
+                cleanup_plan = [
+                    *cleanup_plan,
+                    {
+                        "action": "accepted_residue",
+                        "mode": "accepted_residue_no_cleanup",
+                        "compensates_operation_ref": _money_create_op_ref,
+                        "residue_notice": _text(
+                            _money_residue.get("residue_notice")
+                        )
+                        or f"no_source_compensator:{_money_create_op_ref}",
+                    },
+                ]
                 continue
             from .runtime_binding_graph import _declared_cleanup_operations
 

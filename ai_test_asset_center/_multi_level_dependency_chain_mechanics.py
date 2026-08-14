@@ -65,6 +65,7 @@ from .runtime_binding_graph import (
     _declared_reads_for_paths as _declared_reads_for_paths,
     _request_example as _tokenized_request_example,
 )
+from .target_policy import is_nonproduction_environment
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +353,7 @@ def _plan_level(
     planned_entities: set[str],
     steps_out: list[dict[str, Any]],
     unresolved_nested: list[dict[str, Any]],
+    environment_type: str = "",
 ) -> dict[str, Any]:
     """Plan establishment for one entity; ``ok`` or a named fail-closed reason.
 
@@ -458,12 +460,23 @@ def _plan_level(
 
     create_path = _text(create_op.get("path") or create_op.get("raw_path"))
     cleanup = _declared_cleanup_operations(create_path, behavior_ir=behavior_ir)
+    # Accepted-residue degradation (declared non-production targets only): a
+    # fixture create without a source-declared compensator is no longer held
+    # hostage by cleanup guarantees.  On a non-production target the create is
+    # still planned and its step carries an accepted-residue marker so the
+    # cleanup phase emits a RESIDUE_ACCEPTED receipt (environment reset), never
+    # a disguised real cleanup.  Production / unknown environments stay
+    # fail-closed with the named reason.
+    residue_allowed = False
     if not cleanup:
-        return {
-            "status": "blocked",
-            "reason_code": REASON_NO_CLEANUP,
-            "detail": {"entity_ref": entity_id, "create_operation_ref": create_op_id},
-        }
+        if is_nonproduction_environment(environment_type):
+            residue_allowed = True
+        else:
+            return {
+                "status": "blocked",
+                "reason_code": REASON_NO_CLEANUP,
+                "detail": {"entity_ref": entity_id, "create_operation_ref": create_op_id},
+            }
 
     # ── Nested references of the create example (recursive dependency) ──
     example = _tokenized_request_example(create_op)
@@ -512,6 +525,7 @@ def _plan_level(
             planned_entities=planned_entities,
             steps_out=steps_out,
             unresolved_nested=unresolved_nested,
+            environment_type=environment_type,
         )
         if _text(child_result.get("status")) != "ok":
             if (
@@ -573,6 +587,17 @@ def _plan_level(
             "source_authority": "behavior_ir.entities.identity_fields",
         },
     }
+    if residue_allowed:
+        # Accepted-residue marker: the create's cleanup was not source-declared
+        # and the target is a declared non-production environment.  The cleanup
+        # phase emits a RESIDUE_ACCEPTED receipt (environment reset) instead of
+        # a disguised real cleanup; the marker is consumed by the compiler's
+        # money-chain cleanup derivation to build the matching accepted-residue
+        # cleanup plan.
+        step["accepted_residue"] = {
+            "mode": "accepted_residue_no_cleanup",
+            "residue_notice": f"no_source_compensator:{create_op_id}",
+        }
     if entry_state:
         step["to_state"] = entry_state
         step["state_field"] = _text(
@@ -628,6 +653,7 @@ def plan_multi_level_dependency_chain(
     actor_refs: list[str],
     family: str = "",
     multi_service_contract_count: int = 0,
+    environment_type: str = "",
 ) -> dict[str, Any]:
     """Plan the full dependency DAG establishing ``entity_id``.
 
@@ -658,6 +684,7 @@ def plan_multi_level_dependency_chain(
         planned_entities=planned_entities,
         steps_out=steps_out,
         unresolved_nested=unresolved_nested,
+        environment_type=environment_type,
     )
     if _text(result.get("status")) != "ok":
         detail = _dict(result.get("detail"))

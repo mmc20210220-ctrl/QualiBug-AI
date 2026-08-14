@@ -41,6 +41,7 @@ from .runtime_binding_graph import (
     _declared_cleanup_operations as _declared_cleanup_operations,
     _declared_fixture_actor_refs as _declared_fixture_actor_refs,
 )
+from .target_policy import is_nonproduction_environment
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +363,7 @@ def plan_money_family_precondition(
     actor_refs: list[str],
     property_spec: dict[str, Any] | None = None,
     family: str = "",
+    environment_type: str = "",
 ) -> dict[str, Any]:
     """Plan a fixture-phase subject-establishment chain for a money write.
 
@@ -374,6 +376,7 @@ def plan_money_family_precondition(
     observed-body fallback.
     """
     ir = _dict(behavior_ir)
+    nonproduction = is_nonproduction_environment(environment_type)
     example = _request_example(operation)
     subject_pairs = _subject_entities_from_example(example, ir)
     if not subject_pairs:
@@ -434,7 +437,7 @@ def plan_money_family_precondition(
             _text(create_op.get("path") or create_op.get("raw_path")),
             behavior_ir=ir,
         )
-        if not cleanup:
+        if not cleanup and not nonproduction:
             unresolved_reasons.append({
                 "entity_ref": entity_id,
                 "reference_field": reference_field,
@@ -462,6 +465,7 @@ def plan_money_family_precondition(
             reference_field=reference_field,
             actor_refs=chain_actors,
             family=_text(family),
+            environment_type=environment_type,
         )
         if _text(chain_result.get("status")) == _ML_CHAIN_BLOCKED:
             return {

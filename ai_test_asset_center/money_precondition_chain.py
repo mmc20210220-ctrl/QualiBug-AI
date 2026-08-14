@@ -197,6 +197,7 @@ def plan_money_family_precondition(
     actor_refs: list[str],
     property_spec: dict[str, Any] | None = None,
     family: str = "",
+    environment_type: str = "",
 ) -> dict[str, Any]:
     ambiguous = _ambiguous_subjects(
         behavior_ir=behavior_ir,
@@ -224,6 +225,7 @@ def plan_money_family_precondition(
         actor_refs=actor_refs,
         property_spec=property_spec,
         family=family,
+        environment_type=environment_type,
     )
 
 

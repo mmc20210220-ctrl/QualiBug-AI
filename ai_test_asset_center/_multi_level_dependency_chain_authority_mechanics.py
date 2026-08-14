@@ -214,6 +214,7 @@ def _plan_level(
     planned_entities: set[str],
     steps_out: list[dict[str, Any]],
     unresolved_nested: list[dict[str, Any]],
+    environment_type: str = "",
 ) -> dict[str, Any]:
     """Apply target/create/actor gates, then delegate DAG mechanics unchanged."""
 
@@ -237,6 +238,7 @@ def _plan_level(
             planned_entities=planned_entities,
             steps_out=steps_out,
             unresolved_nested=unresolved_nested,
+            environment_type=environment_type,
         )
 
     candidates = _resolve_create_operation_candidates(behavior_ir, entity)
@@ -308,6 +310,7 @@ def _plan_level(
         planned_entities=planned_entities,
         steps_out=steps_out,
         unresolved_nested=unresolved_nested,
+        environment_type=environment_type,
     )
 
 
