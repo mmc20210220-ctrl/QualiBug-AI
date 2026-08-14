@@ -42,6 +42,7 @@ from .runtime_binding_graph import (
     _declared_fixture_actor_refs as _declared_fixture_actor_refs,
 )
 from .target_policy import is_nonproduction_environment
+from .validation_read_side_protocol import is_ownership_key as _is_ownership_key
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,15 @@ def _subject_entities_from_example(
     resolved: list[tuple[str, str]] = []
     for field, value in example.items():
         if not _is_reference_field(field):
+            continue
+        # Caller-scoped ownership identity fields (userId/ownerId/fromUserId/
+        # accountId …) resolve from the arm actor's runtime-observed identity
+        # (the ownership_identity_param channel), never from a fixture-phase
+        # create.  Treating them as establishable subjects makes the chain try
+        # to create a user account (which has no source-declared POST) and
+        # block with MONEY_PRECONDITION_CREATE_OPERATION_MISSING — the exact
+        # first-loss observed on the refund/balance write examples.
+        if _is_ownership_key(field):
             continue
         candidate = _identity_suffix_candidate(field)
         entity = by_name.get(candidate)
