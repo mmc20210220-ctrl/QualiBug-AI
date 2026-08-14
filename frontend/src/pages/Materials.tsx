@@ -475,12 +475,6 @@ export function Materials() {
           <span className="panel-kicker">Enterprise Materials</span>
           <h1>企业资料</h1>
           <p>连接一次，系统自动读取、识别、去重、更新和恢复；日常无需维护。</p>
-          <div className="page-summary-strip">
-            <span className="summary-pill strong">在线来源 {connectors.length}</span>
-            <span className="summary-pill">在线资料 {onlineSources.length}</span>
-            <span className="summary-pill">上传补充 {uploadedSources.length}</span>
-            <span className="summary-pill">资料总数 {sources.length}</span>
-          </div>
         </div>
         <button className="btn btn-primary" type="button" onClick={openCreateForm}>
           接入在线资料
