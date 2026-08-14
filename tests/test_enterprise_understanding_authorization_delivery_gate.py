@@ -307,24 +307,61 @@ def test_missing_verified_observer_reference_blocks_publication() -> None:
 
 
 def test_execution_packaging_embeds_receipt_and_exact_binding_proof() -> None:
-    receipt = _causality_receipt()
-    result = {
-        "finding": _finding(),
-        "authorization_causality_receipt": receipt,
+    from ai_test_asset_center.binding_materialization_identity_receipt import (
+        seal_binding_materialization_receipts,
+    )
+    from ai_test_asset_center.authorization_oracle_causality import (
+        _binding_parent_provenance,
+        _binding_proof,
+    )
+
+    # Runtime shape: _finalize_result seals materialization receipts before the
+    # causal receipt is built, so attach_authorization_delivery_evidence reads
+    # the sealed rows (materialization_identity_receipt + provenance fields).
+    sealed = seal_binding_materialization_receipts({
         "binding_materialization_receipts": [
             {
-                "receipt_id": "binding:order-id",
                 "target": "order_id",
-                "status": "BOUND",
+                "source_priority": "observed_reuse_priority",
+                "status": "bound",
                 "value_fingerprint": "order-42-fingerprint",
+                "resolver_path": "/orders/order-42",
             },
             {
-                "receipt_id": "binding:unrelated",
                 "target": "customer_id",
-                "status": "BOUND",
+                "source_priority": "observed_reuse_priority",
+                "status": "bound",
                 "value_fingerprint": "customer-7-fingerprint",
+                "resolver_path": "/customers/customer-7",
             },
         ],
+    })["binding_materialization_receipts"]
+
+    contract = {"resource_identity_binding_targets": ["order_id"]}
+    # The causal receipt seals the provenance-aware fingerprint of the selected
+    # target only; the unrelated customer_id binding never enters the proof.
+    causal_fingerprint, _receipt_ids, _reasons = _binding_proof(contract, sealed)
+    receipt = _causality_receipt()
+    receipt["runtime_resource_identity_fingerprint"] = causal_fingerprint
+    # Re-seal the receipt id so the content address still matches the mutated
+    # runtime fingerprint.
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_id"}
+    receipt["receipt_id"] = "auth_causality_" + hashlib.sha256(
+        _canonical(unsigned).encode("utf-8")
+    ).hexdigest()[:24]
+
+    finding = _finding()
+    finding["authorization_causality_receipt"] = receipt
+    finding["oracle"]["authorization_causality_receipt_id"] = receipt["receipt_id"]
+    finding["evidence"]["runtime_resource_identity_fingerprint"] = (
+        causal_fingerprint
+    )
+    finding.pop("authorization_causality_binding_proofs", None)
+
+    result = {
+        "finding": finding,
+        "authorization_causality_receipt": receipt,
+        "binding_materialization_receipts": sealed,
     }
     experiment = {
         "authorization_comparison_contract": {
@@ -338,14 +375,18 @@ def test_execution_packaging_embeds_receipt_and_exact_binding_proof() -> None:
         experiment=experiment,
     )
 
+    order_row = sealed[0]
+    provenance, problem = _binding_parent_provenance(order_row)
+    assert problem == ""
+
     assert result == snapshot
     assert output["finding"]["authorization_causality_receipt"] == receipt
     assert output["finding"]["authorization_causality_binding_proofs"] == [
         {
-            "receipt_id": "binding:order-id",
+            "receipt_id": order_row["materialization_receipt_id"],
             "target": "order_id",
             "status": "BOUND",
-            "value_fingerprint": "order-42-fingerprint",
+            "value_fingerprint": _sha(provenance),
         }
     ]
 

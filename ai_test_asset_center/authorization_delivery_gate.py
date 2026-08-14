@@ -18,6 +18,7 @@ from typing import Any
 
 from .authorization_oracle_causality import (
     SCHEMA_VERSION,
+    _binding_parent_provenance,
     authorization_resource_identity_proof_targets,
     build_authorization_observer_binding_proofs,
 )
@@ -401,6 +402,74 @@ def validate_authorization_delivery_finding(
         _list(finding_row.get("authorization_causality_binding_proofs"))
     )
     if binding_fingerprint != _causal_fingerprint:
+        import os as _diag_os
+
+        _diag_path = _text(
+            _diag_os.environ.get("QUALIBUG_AUTH_BINDING_DIAG_PATH") or ""
+        ).strip()
+        if _diag_path:
+            try:
+                _bundle = _dict(attempt_row.get("delivery_evidence_bundle"))
+                with open(_diag_path, "a", encoding="utf-8") as _diag_fh:
+                    _diag_fh.write(
+                        json.dumps(
+                            {
+                                "event": "AUTH_BINDING_FINGERPRINT_MISMATCH",
+                                "finding_id": _text(
+                                    finding_row.get("finding_id")
+                                    or finding_row.get("id")
+                                ),
+                                "causal_fingerprint": _causal_fingerprint,
+                                "binding_fingerprint": binding_fingerprint,
+                                "binding_proofs": _list(
+                                    finding_row.get(
+                                        "authorization_causality_binding_proofs"
+                                    )
+                                ),
+                                "receipt_runtime_identity_fingerprint": _text(
+                                    receipt.get(
+                                        "runtime_resource_identity_fingerprint"
+                                    )
+                                ),
+                                "receipt_comparison_dimension": _text(
+                                    receipt.get("comparison_dimension")
+                                ),
+                                "receipt_verified_receipt_ids": _list(
+                                    receipt.get("verified_receipt_ids")
+                                ),
+                                "receipt_same_resource_proven": receipt.get(
+                                    "same_resource_proven"
+                                ),
+                                "receipt_single_identity_dimension_proven": receipt.get(
+                                    "single_identity_dimension_proven"
+                                ),
+                                "bundle_materialization_receipts": _list(
+                                    _bundle.get("binding_materialization_receipts")
+                                ),
+                                "bundle_observer_receipts": [
+                                    {
+                                        k: v
+                                        for k, v in _dict(row).items()
+                                        if k
+                                        in {
+                                            "observer_id",
+                                            "receipt_id",
+                                            "status",
+                                            "campaign_id",
+                                            "execution_id",
+                                            "evidence",
+                                        }
+                                    }
+                                    for row in _list(_bundle.get("observer_receipts"))
+                                ],
+                            },
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        + "\n"
+                    )
+            except OSError:
+                pass
         raise AuthorizationDeliveryGateError(
             "authorization_delivery_binding_fingerprint_mismatch"
         )
@@ -494,13 +563,24 @@ def attach_authorization_delivery_evidence(
             target = _text(row.get("target") or row.get("binding_target"))
             if target not in targets:
                 continue
+            # The causal receipt commits to a provenance-aware resource
+            # identity (value fingerprint + resolver path/status + source
+            # authority), not the raw (possibly truncated) value fingerprint.
+            # ``_binding_proof_fingerprint`` recomputes sha256 over the proofs'
+            # value_fingerprint, so the proof must carry the exact same
+            # provenance hash the causal side sealed — otherwise a fresh
+            # authorization finding is rejected as a historical contradiction.
+            provenance, problem = _binding_parent_provenance(row)
+            if problem:
+                raise AuthorizationDeliveryGateError(
+                    "authorization_delivery_binding_provenance_invalid:"
+                    f"{target}:{problem}"
+                )
             proofs.append({
-                "receipt_id": _text(
-                    row.get("receipt_id") or row.get("materialization_receipt_id")
-                ),
-                "target": target,
-                "status": _text(row.get("status")).upper(),
-                "value_fingerprint": _text(row.get("value_fingerprint")),
+                "receipt_id": _text(provenance.get("materialization_receipt_id")),
+                "target": _text(provenance.get("target")),
+                "status": "BOUND",
+                "value_fingerprint": _sha256(provenance),
             })
         proofs.sort(key=lambda value: value["target"])
     finding["authorization_causality_receipt"] = validated

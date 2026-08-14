@@ -307,6 +307,40 @@ def _binding_proof(
     if reasons:
         return "", receipt_ids, reasons
     fingerprint = hashlib.sha256(_canonical(values).encode("utf-8")).hexdigest()
+    import os as _diag_os
+
+    _diag_path = _text(
+        _diag_os.environ.get("QUALIBUG_AUTH_BINDING_DIAG_PATH") or ""
+    ).strip()
+    if _diag_path:
+        try:
+            with open(_diag_path, "a", encoding="utf-8") as _diag_fh:
+                _diag_fh.write(
+                    json.dumps(
+                        {
+                            "event": "CAUSAL_BINDING_PROOF",
+                            "targets": targets,
+                            "values": values,
+                            "fingerprint": fingerprint,
+                            "rows": [
+                                {
+                                    "target": _text(row.get("target")),
+                                    "status": _text(row.get("status")),
+                                    "value_fingerprint": _text(
+                                        row.get("value_fingerprint")
+                                    ),
+                                }
+                                for row in rows
+                                if _dict(row).get("target") in targets
+                            ],
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    + "\n"
+                )
+        except OSError:
+            pass
     return fingerprint, receipt_ids, []
 
 
