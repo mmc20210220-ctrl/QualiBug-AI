@@ -1037,8 +1037,18 @@ def run_semantic_extraction(
     rejected_all: list[dict[str, Any]] = []
     chunk_failures = 0
 
-    for chunk in chunks:
-        receipt.chunks_attempted += 1
+    # ── Chunk extraction is the slow path (~130s/chunk on DeepSeek under the
+    # "逐条输出" directive), so chunks are processed concurrently. The shared
+    # client is thread-safe (usage accounting and observation ledgers are
+    # lock-guarded and config is read-only during extraction), so no per-worker
+    # client copy is needed — this also keeps the injected test double visible.
+    # Results are re-ordered by chunk index so receipt order and candidate order
+    # stay deterministic regardless of the completion order. Worker count is
+    # bounded to the reasoner's own 4-worker ceiling so we never push the
+    # provider past its rate limit. ──
+    _chunk_worker_count = min(4, max(1, len(chunks)))
+
+    def _process_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
         locator = _text(chunk.get("locator"))
         user_prompt = _USER_PROMPT_TEMPLATE.format(
             source_id=source_id,
@@ -1065,27 +1075,42 @@ def run_semantic_extraction(
                 tier="light",
             )
         except Exception as exc:
-            chunk_failures += 1
             chunk_receipt["status"] = "FAILED_LLM_ERROR"
             chunk_receipt["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
-            receipt.chunk_receipts.append(chunk_receipt)
-            continue
+            return {
+                "chunk_index": chunk.get("index"),
+                "receipt": chunk_receipt,
+                "ok": False,
+                "raw": [],
+                "validated": [],
+                "rejected": [],
+            }
 
         if not isinstance(result, dict):
-            chunk_failures += 1
             chunk_receipt["status"] = "FAILED_MALFORMED_RESPONSE"
             chunk_receipt["error"] = (
                 f"LLM returned non-dict: {type(result).__name__}"
             )
-            receipt.chunk_receipts.append(chunk_receipt)
-            continue
+            return {
+                "chunk_index": chunk.get("index"),
+                "receipt": chunk_receipt,
+                "ok": False,
+                "raw": [],
+                "validated": [],
+                "rejected": [],
+            }
         raw_candidates = result.get("candidates")
         if not isinstance(raw_candidates, list):
-            chunk_failures += 1
             chunk_receipt["status"] = "FAILED_MALFORMED_RESPONSE"
             chunk_receipt["error"] = "LLM response missing 'candidates' list"
-            receipt.chunk_receipts.append(chunk_receipt)
-            continue
+            return {
+                "chunk_index": chunk.get("index"),
+                "receipt": chunk_receipt,
+                "ok": False,
+                "raw": [],
+                "validated": [],
+                "rejected": [],
+            }
 
         bounded_raw = raw_candidates[:_MAX_CANDIDATES_PER_CHUNK]
         enriched_raw: list[dict[str, Any]] = []
@@ -1132,12 +1157,6 @@ def run_semantic_extraction(
             validated.extend(rule_validated)
             rejected = [row for row in rejected if _text(row.get("kind")) != "rule"]
             rejected.extend(rule_rejected)
-        raw_all.extend(
-            candidate for candidate in enriched_raw if isinstance(candidate, dict)
-        )
-        validated_all.extend(validated)
-        rejected_all.extend(rejected)
-        receipt.chunks_completed += 1
         chunk_receipt.update(
             {
                 "status": "COMPLETED",
@@ -1149,6 +1168,36 @@ def run_semantic_extraction(
                 ),
             }
         )
+        return {
+            "chunk_index": chunk.get("index"),
+            "receipt": chunk_receipt,
+            "ok": True,
+            "raw": [candidate for candidate in enriched_raw if isinstance(candidate, dict)],
+            "validated": validated,
+            "rejected": rejected,
+        }
+
+    if len(chunks) == 1:
+        results = [_process_chunk(chunks[0])]
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=_chunk_worker_count) as _pool:
+            _futures = [_pool.submit(_process_chunk, chunk) for chunk in chunks]
+            results = [f.result() for f in as_completed(_futures)]
+
+    # Re-order by chunk index for deterministic receipts and candidate order.
+    results.sort(key=lambda row: (row.get("chunk_index") is None, row.get("chunk_index") or 0))
+    for outcome in results:
+        receipt.chunks_attempted += 1
+        chunk_receipt = outcome["receipt"]
+        if not outcome["ok"]:
+            chunk_failures += 1
+        else:
+            raw_all.extend(outcome["raw"])
+            validated_all.extend(outcome["validated"])
+            rejected_all.extend(outcome["rejected"])
+            receipt.chunks_completed += 1
         receipt.chunk_receipts.append(chunk_receipt)
 
     def identity(candidate: dict[str, Any]) -> tuple[str, str, str, str]:

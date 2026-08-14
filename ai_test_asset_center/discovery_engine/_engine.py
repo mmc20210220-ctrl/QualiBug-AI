@@ -2387,7 +2387,11 @@ class AutonomousDiscoveryEngine:
         frontier_selection: dict[str, Any] | None = None
         graph_sync: dict[str, Any] = {}
         graph_ab_report: dict[str, Any] = {}
-        graph_mode = os.environ.get("QUALIBUG_GRAPH_CONTEXT_MODE", "shadow").strip().lower() or "shadow"
+        graph_mode = (
+            os.environ.get("QUALIBUG_GRAPH_CONTEXT_MODE")
+            or os.environ.get("GRAPH_CONTEXT_MODE")
+            or "shadow"
+        ).strip().lower() or "shadow"
         project_id = os.environ.get("QUALIBUG_PROJECT", "real_project_demo")
         environment_id = os.environ.get("QUALIBUG_ENVIRONMENT", "test")
         discovery_run_id = f"discovery-{int(t0 * 1000)}"

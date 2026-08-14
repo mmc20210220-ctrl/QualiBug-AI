@@ -56,6 +56,21 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _graph_context_mode() -> str:
+    """Resolve the graph context mode from either the canonical env name or the
+    historical operator-facing name.
+
+    ``active`` is operator-declared (an explicit, receipted deployment choice),
+    never an automatic promotion from the A/B evaluator. The default remains
+    ``shadow``: measured but non-authoritative.
+    """
+    return (
+        os.environ.get("QUALIBUG_GRAPH_CONTEXT_MODE")
+        or os.environ.get("GRAPH_CONTEXT_MODE")
+        or "shadow"
+    ).strip().lower() or "shadow"
+
+
 def _norm(value: Any, limit: int = 240) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())[:limit]
 
@@ -750,7 +765,7 @@ class GraphContextComposer:
             "context_refs": refs,
             "graph_ready": bool(nodes),
             "high_risk_write_allowed": bool(nodes) and not env_is_production and (not high_risk_write or all(n["confidence"] in {"confirmed", "evidenced"} for n in nodes)),
-            "graph_mode": os.environ.get("QUALIBUG_GRAPH_CONTEXT_MODE", "shadow").strip().lower() or "shadow",
+            "graph_mode": _graph_context_mode(),
         }
         pack["rendered_context"] = self.render(pack)
         return pack

@@ -13,6 +13,7 @@ Future improvement: score hypotheses by engine reliability history + evidence gr
 import ast, copy, json, logging, os, re, time
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 from .console_output import safe_print as print
@@ -118,6 +119,11 @@ def _reasoner_failure_metadata(value: Any, *, exception_type: str = "") -> dict[
         category, code = "authentication_or_authorization", "http_403"
     elif "http 429" in low or "status 429" in low or "rate limit" in low or "too many requests" in low:
         category, code, retryable = "rate_limit", "http_429", True
+    elif any(token in low for token in ("context length", "maximum context", "reduce the length", "context_length_exceeded", "context overflow")):
+        # Input context overflow is fatal and never retryable: shrinking the
+        # input is the fix, and retrying the same oversized payload only wastes
+        # provider calls across every engine.
+        category, code = "context_overflow", "context_overflow"
     elif any(token in low for token in ("timeout", "timed out", "deadline exceeded")):
         category, code, retryable = "timeout", "timeout", True
     elif "not configured" in low or "unconfigured" in low:
@@ -1119,10 +1125,10 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     max_tokens = _effective_max_tokens(raw_max_tokens)
     retry_delay = get_policy_value("reasoner", "retry_delay_seconds", 2.0)
     truncation_map = get_policy_value("reasoner", "prompt_truncation_chars",
-        {"prd_text": 45000, "api_schema": 50000, "observed_data": 12000,
-         "heuristic_findings": 12000, "reader_json": 20000, "lifecycle_definition": 12000,
-         "requirement_context": 45000, "api_context": 50000,
-         "database_context": 25000, "bug_history_context": 25000})
+        {"prd_text": 12000, "api_schema": 12000, "observed_data": 6000,
+         "heuristic_findings": 6000, "reader_json": 8000, "lifecycle_definition": 6000,
+         "requirement_context": 12000, "api_context": 12000,
+         "database_context": 12000, "bug_history_context": 12000})
     enabled_engines = get_policy_value("reasoner", "enabled_engines", [name for name, _ in engines])
     engine_weights = get_policy_value("reasoner", "engine_weights", {})
 
@@ -1257,8 +1263,27 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     graph_pack = reader_output.get("_graph_evidence_pack") if isinstance(reader_output, dict) else None
     graph_mode = str((graph_pack or {}).get("graph_mode") or reader_output.get("_graph_mode") if isinstance(reader_output, dict) else "off").lower()
     graph_ready = bool((graph_pack or {}).get("graph_ready"))
-    use_graph_context = graph_ready and graph_mode == "active"
     graph_rendered = str((graph_pack or {}).get("rendered_context") or "")[:4500]
+    # Bounded-context authority: graph context replaces raw PRD/API slices when
+    # the operator declares ``active`` mode, OR as a bounded degradation when
+    # the raw corpus is large enough that even token-safe slicing risks a
+    # provider context overflow. The latter is never a silent overflow — the
+    # reason is stamped on the engine report for observability.
+    _corpus_tokens = 0
+    try:
+        from ai_test_asset_center.llm_reasoning import estimate_input_tokens
+        _corpus_tokens = estimate_input_tokens(prd_text or "") + estimate_input_tokens(api_spec or "")
+    except Exception:
+        _corpus_tokens = 0
+    # Conservative threshold: keep the raw-corpus path well under the input
+    # budget even after the shared bounded slice is injected into each engine.
+    corpus_oversize = _corpus_tokens > 240000
+    use_graph_context = graph_ready and (graph_mode == "active" or corpus_oversize)
+    graph_degradation_reason = (
+        "active" if (graph_mode == "active" and graph_ready) else
+        "corpus_oversize_bounded_degradation" if (graph_ready and corpus_oversize) else
+        "off" if not graph_ready else "shadow"
+    )
 
     # The business-world JSON budget is declared by the operator policy
     # (prompt_truncation_chars/reader_json, default 20000).  A hardcoded cap
@@ -1307,10 +1332,15 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     # document fragments instead of relying solely on truncated raw text.
     # This gives each reasoner engine grounded, traceable evidence.
     chunk_evidence = ""
+    chunk_retrieval_receipt: dict = {"status": "SKIPPED", "reason": "no_entities", "fragments": 0, "chars": 0}
     try:
         from .enterprise_source_registry import search_chunks_by_entity
-        from .real_project_onboarding import ROOT as _CHUNK_ROOT
-        _project = os.environ.get("QUALIBUG_PROJECT", "real_project_demo")
+        # Authoritative project identity and workspace root from the engine
+        # (matches the scan project), not the env var / onboarding ROOT, which
+        # drift to ``real_project_demo`` and make retrieval return [] for any
+        # other project. Silence here is a retrieval break, not an honest gap.
+        _project = getattr(self, "_project", "") or os.environ.get("QUALIBUG_PROJECT", "")
+        _chunk_root = Path(getattr(self, "_root", None) or Path(__file__).resolve().parents[1])
         # Extract top entity names from reader output
         _reader_entities = []
         if isinstance(reader_output, dict):
@@ -1324,7 +1354,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         # Search chunks for top entities (bounded to avoid latency)
         _chunk_fragments: list[str] = []
         for ename in _reader_entities[:5]:
-            hits = search_chunks_by_entity(_project, ename, root=_CHUNK_ROOT)
+            hits = search_chunks_by_entity(_project, ename, root=_chunk_root)
             for hit in (hits or [])[:2]:
                 if isinstance(hit, dict):
                     content = str(hit.get("content") or "")[:300]
@@ -1337,8 +1367,15 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
                 "\n\nSOURCE-GROUND EVIDENCE (from document chunks):\n"
                 + "\n".join(_chunk_fragments[:12])
             )[:3000]
-    except Exception:
-        pass  # Chunk enrichment is progressive; never blocks reasoning
+        chunk_retrieval_receipt = {
+            "status": "CONSUMED" if _chunk_fragments else "NO_MATCHES",
+            "entities_queried": _reader_entities[:5],
+            "project": _project,
+            "fragments": len(_chunk_fragments),
+            "chars": len(chunk_evidence),
+        }
+    except Exception as exc:
+        chunk_retrieval_receipt = {"status": "FAILED", "reason": f"{type(exc).__name__}:{str(exc)[:160]}", "fragments": 0, "chars": 0}
 
     # ── Learned risk memory (comprehension layer) ──
     # Consume this project's own prior confirmed-defect observation history
@@ -1792,9 +1829,12 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         "graph_context_mode": graph_mode,
         "graph_context_ready": graph_ready,
         "graph_context_active": use_graph_context,
+        "graph_context_reason": graph_degradation_reason,
         "graph_context_chars": len(graph_rendered),
+        "reasoner_corpus_estimated_tokens": _corpus_tokens,
         "learned_memory_receipt": learned_memory_receipt,
         "fact_retrieval_receipt": fact_receipt,
+        "chunk_retrieval_receipt": chunk_retrieval_receipt,
         "engine_attention_receipt": engine_attention_receipt,
         "semantic_dedup_receipt": semantic_dedup_receipt,
         "semantic_dedup_merged": semantic_deduped_count,

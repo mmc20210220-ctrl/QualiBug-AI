@@ -79,6 +79,13 @@ class ReasoningConfig:
     temperature: float = 0.1
     timeout_seconds: int = 120
     max_tokens: int = 4096
+    # Input/context token budget. ``max_tokens`` is the completion cap only;
+    # this bounds the request messages so an oversized corpus fails fast with a
+    # visible ``context_overflow`` receipt instead of an unbounded provider 400
+    # retried by every engine. Default 900000 stays below DeepSeek's ~1M window
+    # while allowing large-but-legitimate prompts. CJK text can be ~2-4x its
+    # character count, so this is enforced by an estimate, not by char slicing.
+    max_input_tokens: int = 900000
     thinking_mode: str = ""
     response_format: str = ""
     embedding_model: str = ""
@@ -106,6 +113,7 @@ class ReasoningConfig:
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
             timeout_seconds=int(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
+            max_input_tokens=int(os.getenv("LLM_MAX_INPUT_TOKENS", "900000")),
             thinking_mode=thinking_mode,
             response_format=response_format,
             embedding_model=os.getenv("LLM_EMBEDDING_MODEL", "").strip(),
@@ -128,6 +136,25 @@ def _env_float(name: str) -> float | None:
         return float(value)
     except ValueError:
         return None
+
+
+# CJK-aware input-token estimate. OpenAI-style tokenizers treat most CJK
+# ideographs as one token each while ASCII words split further; the widely-used
+# character/4 heuristic drastically *under*-estimates Chinese text, which is
+# exactly why an oversized corpus passed a char-based guard and hit the
+# provider 400. This estimator weights non-ASCII (mostly CJK) as ~1 token per
+# char and ASCII as ~1 token per 4 chars — conservative, dependency-free, and
+# never claims tokenizer precision (it is a guard, not a meter).
+_CJK_RE = re.compile(r"[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef]")
+
+
+def estimate_input_tokens(text: str) -> int:
+    """Conservative dependency-free input-token estimate for a message string."""
+    if not text:
+        return 0
+    cjk_chars = len(_CJK_RE.findall(text))
+    ascii_chars = len(text) - cjk_chars
+    return cjk_chars + int(math.ceil(ascii_chars / 4))
 
 
 # ---------------------------------------------------------------------------
@@ -1443,6 +1470,50 @@ class ReasoningClient:
     ) -> str:
         resolved_model = model or self.config.model
         call_point = call_point or "chat"
+        _prompt_len = len(user_prompt)
+        _system_len = len(system_prompt or SYSTEM_PROMPT)
+        # ── Input-context guard: fail fast before transport when the combined
+        # messages exceed the configured input token budget. An oversized
+        # corpus must surface as a visible ``context_overflow`` receipt at the
+        # first engine that trips it, never as a provider 400 repeated by every
+        # engine for the length of the scan.
+        _input_tokens = estimate_input_tokens(user_prompt) + estimate_input_tokens(
+            system_prompt or SYSTEM_PROMPT
+        )
+        if self.config.max_input_tokens > 0 and _input_tokens > self.config.max_input_tokens:
+            _elapsed_ms = 0
+            self._record_observation(
+                call_point=call_point,
+                kind="chat",
+                model=resolved_model,
+                success=False,
+                http_status=None,
+                latency_ms=_elapsed_ms,
+                failure_reason="context_overflow",
+                failure_code="QB-L007",
+                input_tokens=_input_tokens,
+                tokens_estimated=True,
+            )
+            _llm_logger.error(
+                "LLM input context overflow: call_point=%s prompt=%dc system=%dc est_tokens=%d budget=%d",
+                call_point,
+                _prompt_len,
+                _system_len,
+                _input_tokens,
+                self.config.max_input_tokens,
+                extra={"error_code": "QB-L007", "context": {
+                    "call_point": call_point,
+                    "model": resolved_model,
+                    "prompt_chars": _prompt_len,
+                    "system_chars": _system_len,
+                    "estimated_input_tokens": _input_tokens,
+                    "max_input_tokens": self.config.max_input_tokens,
+                }},
+            )
+            raise ReasoningClientError(
+                "LLM input context overflow: "
+                f"estimated {_input_tokens} tokens > budget {self.config.max_input_tokens}"
+            )
         payload = {
             "model": resolved_model,
             "messages": [
@@ -1472,7 +1543,6 @@ class ReasoningClient:
             method="POST",
         )
         _llm_start = time.time()
-        _prompt_len = len(user_prompt)
         # ── Final transport guard: the provider may accept the connection
         # and then never send a byte (half-open stream). Neither urllib's
         # socket timeout nor the application deadline can interrupt a recv
@@ -1563,7 +1633,25 @@ class ReasoningClient:
         except urllib.error.HTTPError as exc:
             _elapsed_ms = int((time.time() - _llm_start) * 1000)
             error_body = exc.read().decode("utf-8", errors="replace")
-            _code = "QB-L006" if exc.code in (401, 403) else ("QB-L002" if exc.code == 429 else "QB-L001")
+            _error_low = error_body.lower()
+            _is_context_overflow = (
+                "context length" in _error_low
+                or "maximum context" in _error_low
+                or "reduce the length" in _error_low
+                or "context_length_exceeded" in _error_low
+            )
+            if _is_context_overflow:
+                _code = "QB-L007"
+                _failure_reason = "context_overflow"
+            elif exc.code in (401, 403):
+                _code = "QB-L006"
+                _failure_reason = "http_error"
+            elif exc.code == 429:
+                _code = "QB-L002"
+                _failure_reason = "rate_limit"
+            else:
+                _code = "QB-L001"
+                _failure_reason = "http_error"
             self._record_observation(
                 call_point=call_point,
                 kind="chat",
@@ -1571,7 +1659,7 @@ class ReasoningClient:
                 success=False,
                 http_status=exc.code,
                 latency_ms=_elapsed_ms,
-                failure_reason="http_error",
+                failure_reason=_failure_reason,
                 failure_code=_code,
             )
             _llm_logger.error(
@@ -1581,6 +1669,7 @@ class ReasoningClient:
                     "http_status": exc.code,
                     "elapsed_ms": _elapsed_ms,
                     "prompt_chars": _prompt_len,
+                    "context_overflow": _is_context_overflow,
                 }},
             )
             raise ReasoningClientError(f"LLM HTTP {exc.code}: {error_body[:500]}") from exc

@@ -71,16 +71,22 @@ class ReasonerPolicy:
     max_hypothesis_chars: int = 500
     retry_delay_seconds: float = 2.0
     prompt_truncation_chars: dict[str, int] = field(default_factory=lambda: {
-        "prd_text": 45000,
-        "api_schema": 50000,
-        "observed_data": 12000,
-        "heuristic_findings": 12000,
-        "reader_json": 20000,
-        "lifecycle_definition": 12000,
-        "requirement_context": 45000,
-        "api_context": 50000,
-        "database_context": 25000,
-        "bug_history_context": 25000,
+        # Token-safe input bounds (CJK-aware). The prior 45000/50000-char caps
+        # were per-slot *character* ceilings that, multiplied across several
+        # placeholder slots re-using the same corpus and through CJK ~1 token
+        # per char, pushed a single reasoner prompt past the provider context
+        # window. These floors stay well above the reader's own 8000-char
+        # bound and remain operator-overridable via the policy registry.
+        "prd_text": 12000,
+        "api_schema": 12000,
+        "observed_data": 6000,
+        "heuristic_findings": 6000,
+        "reader_json": 8000,
+        "lifecycle_definition": 6000,
+        "requirement_context": 12000,
+        "api_context": 12000,
+        "database_context": 12000,
+        "bug_history_context": 12000,
     })
 
     def __post_init__(self) -> None:
