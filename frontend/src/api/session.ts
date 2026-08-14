@@ -303,6 +303,27 @@ export async function fetchWithTenant(url: string, init?: RequestInit): Promise<
   return response.json() as Promise<unknown>;
 }
 
+/**
+ * 统一的受认证 fetch 原语：为请求补充认证头（dev token）与 Cookie，
+ * 并在 401/403 时统一清会话缓存并广播 auth-change。返回原始 Response，
+ * 由调用方自行解析响应体（供需要自定义错误语义的业务模块复用），
+ * 避免每个模块重复实现 Authorization 头与 401 会话失效处理。
+ */
+export async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(url, {
+    ...init,
+    headers: authHeaders(init?.headers),
+    credentials: 'include',
+    cache: init?.cache || 'no-store',
+  });
+  if (response.status === 401 || response.status === 403) {
+    clearAccountCaches();
+    markValidatedSession(false);
+    authStorageEvent();
+  }
+  return response;
+}
+
 export function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return fetchWithTenant(url, init) as Promise<T>;
 }

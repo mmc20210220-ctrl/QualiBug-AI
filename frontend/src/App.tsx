@@ -2,7 +2,8 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'rea
 import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import { ScrollToTop } from './components/ScrollToTop';
-import { isAuthenticated } from './api/client';
+import { AuthProvider } from './components/AuthProvider';
+import { useAuth } from './components/useAuth';
 import { Dashboard } from './pages/Dashboard';
 import { Findings } from './pages/Findings';
 import { EvidenceChain } from './pages/EvidenceChain';
@@ -12,15 +13,41 @@ import { CoverageMatrix } from './pages/CoverageMatrix';
 import { SystemJobs } from './pages/SystemJobs';
 import { Materials } from './pages/Materials';
 import { Settings } from './pages/Settings';
+import { Integration } from './pages/Integration';
+import { FindingDetail } from './pages/FindingDetail';
 import { Login } from './pages/Login';
 import { SharedEvidence } from './pages/SharedEvidence';
 
 function RequireAuth() {
   const location = useLocation();
-  if (!isAuthenticated()) {
+  const { status, error, refresh } = useAuth();
+
+  // 校验中：先展示可感知的加载态，避免把「还没校验完」误判成未登录并跳登录页。
+  if (status === 'checking') {
+    return (
+      <div className="auth-gate" role="status" aria-live="polite">
+        <span className="spinner" aria-hidden="true" />
+        <p>正在校验登录状态…</p>
+      </div>
+    );
+  }
+
+  // 后端不可用 / 5xx：这是 error，不是未登录，禁止跳登录页吞掉真实故障。
+  if (status === 'error') {
+    return (
+      <div className="auth-gate auth-gate-error" role="alert">
+        <h1>服务暂时不可用</h1>
+        <p>{error || '无法连接后端服务，请确认后端已启动后重试。'}</p>
+        <button type="button" className="btn btn-primary" onClick={() => void refresh()}>重新连接</button>
+      </div>
+    );
+  }
+
+  if (status === 'unauthenticated') {
     const next = `${location.pathname}${location.search}`;
     return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
   }
+
   return <Outlet />;
 }
 
@@ -32,26 +59,27 @@ function PreserveSearchRedirect({ to }: { to: string }) {
 export default function App() {
   return (
     <ToastProvider>
-      <BrowserRouter>
-        <ScrollToTop />
-        <Routes>
+      <AuthProvider>
+        <BrowserRouter>
+          <ScrollToTop />
+          <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/shared-evidence" element={<SharedEvidence />} />
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
               <Route path="/" element={<PreserveSearchRedirect to="/dashboard" />} />
-              {/* 成果面 */}
+              {/* 客户主链：总览 / 问题 / 接入 */}
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/findings" element={<Findings />} />
+              <Route path="/findings/:id" element={<FindingDetail />} />
+              <Route path="/integration" element={<Integration />} />
+              {/* 技术/内部页面：退出客户一级导航，保留 URL 直访 */}
               <Route path="/evidence" element={<EvidenceChain />} />
               <Route path="/release" element={<ReleaseGate />} />
-              {/* 企业认知 */}
               <Route path="/materials" element={<Materials />} />
               <Route path="/jobs" element={<SystemJobs />} />
-              {/* 执行面 */}
               <Route path="/campaigns" element={<EnterpriseCampaigns />} />
               <Route path="/coverage" element={<CoverageMatrix />} />
-              {/* 配置 */}
               <Route path="/settings" element={<Settings />} />
               {/* 向后兼容重定向：必须保留 project 等查询上下文 */}
               <Route path="/behavior-space" element={<PreserveSearchRedirect to="/coverage" />} />
@@ -63,7 +91,8 @@ export default function App() {
             </Route>
           </Route>
         </Routes>
-      </BrowserRouter>
+        </BrowserRouter>
+      </AuthProvider>
     </ToastProvider>
   );
 }

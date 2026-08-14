@@ -3,7 +3,7 @@
  * 拆分自 api/knowledge-connectors.ts：承载安全断言、字段收敛、
  * 只读契约校验与请求传输；由 knowledge-connectors.ts 的业务接口复用。
  */
-import { currentToken, getSession } from './client';
+import { fetchWithAuth, getSession } from './client';
 import { asArray, asOptionalNumber, asRecord, asString } from '../lib/value-guards';
 import type { KnowledgeConnectorProfile, ConnectorManifest, ConnectorPermissionScope, KnowledgeConnectorAutoSync, KnowledgeConnectorHealth, KnowledgeConnectorWebhook, KnowledgeConnectorOAuth, KnowledgeConnectorUnsupportedResource, KnowledgeConnectorRemoteLifecycle, KnowledgeConnectorCoverage, KnowledgeConnectorSemanticRefresh, KnowledgeConnectorSyncImpact, KnowledgeConnectorRecord, KnowledgeConnectorAcceptance } from './knowledge-connector-types';
 
@@ -76,15 +76,8 @@ export async function connectorRequest(path: string, init?: RequestInit): Promis
 
   const headers = new Headers(init?.headers);
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  const token = currentToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
 
-  const response = await fetch(path, {
-    ...init,
-    headers,
-    credentials: 'include',
-    cache: 'no-store',
-  });
+  const response = await fetchWithAuth(path, { ...init, headers });
   const raw = await response.text();
   let payload: JsonRecord = {};
   if (raw.trim()) {

@@ -31,7 +31,7 @@ import {
 import type { Finding } from '../types';
 
 export function Dashboard() {
-  usePageTitle('价值总览');
+  usePageTitle('总览');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const { data, loading, error, refetch } = usePipelineData(project);
@@ -286,7 +286,7 @@ export function Dashboard() {
     return (
       <div>
         <RegressionGateBanner record={record} />
-        <div className="page-header"><div><h1>{asText(record.project_name) || project} · 价值总览</h1><p>当前项目还没有形成真实检测数据。企业理解进度与执行准备状态如下。</p></div></div>
+        <div className="page-header"><div><h1>{asText(record.project_name) || project} · 总览</h1><p>当前项目还没有形成真实检测数据。企业理解进度与执行准备状态如下。</p></div></div>
         <EnterpriseUnderstandingPanel
           summary={knowledgeSummary}
           onOpenMaterials={() => navigateToProjectPath('/materials', project)}

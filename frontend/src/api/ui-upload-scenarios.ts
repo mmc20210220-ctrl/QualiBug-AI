@@ -1,4 +1,4 @@
-import { currentToken } from './client';
+import { fetchWithAuth } from './client';
 
 export type UploadScenarioRecord = {
   scenario_id: string;
@@ -72,13 +72,6 @@ type RegistryResult = {
   message?: string;
 };
 
-function headers(extra?: HeadersInit): Headers {
-  const output = new Headers(extra);
-  const token = currentToken();
-  if (token) output.set('Authorization', `Bearer ${token}`);
-  return output;
-}
-
 function endpoint(projectId: string): string {
   const project = projectId.trim();
   if (!project) throw new Error('请先选择客户项目。');
@@ -114,10 +107,7 @@ export async function listUploadScenarios(
   includeRevoked = false,
 ): Promise<UploadScenarioList> {
   const query = includeRevoked ? '?include_revoked=true' : '';
-  const response = await fetch(`${endpoint(projectId)}${query}`, {
-    headers: headers(),
-    credentials: 'include',
-  });
+  const response = await fetchWithAuth(`${endpoint(projectId)}${query}`);
   const payload = await responseJson<UploadScenarioList>(response);
   return {
     ...payload,
@@ -129,10 +119,9 @@ export async function registerUploadScenario(
   projectId: string,
   payload: UploadScenarioInput,
 ): Promise<RegistryResult> {
-  const response = await fetch(endpoint(projectId), {
+  const response = await fetchWithAuth(endpoint(projectId), {
     method: 'POST',
-    headers: headers({ 'Content-Type': 'application/json' }),
-    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'register', payload }),
   });
   return responseJson<RegistryResult>(response);
@@ -144,10 +133,9 @@ async function mutateScenario(
   scenarioId: string,
   reason = '',
 ): Promise<RegistryResult> {
-  const response = await fetch(endpoint(projectId), {
+  const response = await fetchWithAuth(endpoint(projectId), {
     method: 'POST',
-    headers: headers({ 'Content-Type': 'application/json' }),
-    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       action,
       scenario_id: scenarioId,

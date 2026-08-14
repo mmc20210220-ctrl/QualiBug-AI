@@ -1,24 +1,8 @@
 /* ═══════════════════════════════════════════
    QualiBug 风险决策台 — 设计系统
-   直接从产品 mockup 提取，零 Tailwind 依赖
+   设计令牌唯一来源：src/styles/variables.css（本文件不再重复定义 :root）
    ═══════════════════════════════════════════ */
 
-:root {
-  --ink: #0a1220; --muted: #5b6b82; --subtle: #8b9bb0;
-  --bg: #edf2f7; --surface: #fff; --surface-2: #f7fafc; --line: #d7e0ea;
-  --primary: #1f4fd8; --primary-bright: #2f6bff; --primary-muted: #eef3ff;
-  --success: #0c9a6a; --success-muted: #ecfdf5;
-  --warning: #c9780a; --warning-muted: #fff8eb;
-  --danger: #d91f45; --danger-muted: #fff1f3;
-  --side-bg: #0a1422; --side-text: #9fb0c8; --side-active: #e8eefc;
-  --radius: 18px; --radius-sm: 12px;
-  --font: "DM Sans", "Instrument Sans", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
-  --font-display: "Instrument Sans", "DM Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --focus-ring: 0 0 0 3px rgba(31,79,216,.28);
-  --shadow-soft: 0 12px 32px rgba(10, 18, 32, .06);
-  --shadow-medium: 0 18px 44px rgba(10, 18, 32, .10);
-  --ease-out: cubic-bezier(.22, 1, .36, 1);
-}
 *,*::before,*::after { box-sizing:border-box; margin:0; padding:0 }
 body { background:
   radial-gradient(ellipse 80% 50% at 0% -10%, rgba(31,79,216,.10), transparent 55%),

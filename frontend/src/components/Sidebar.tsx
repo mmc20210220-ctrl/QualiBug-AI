@@ -8,27 +8,11 @@ type NavItem = { to: string; icon: string; label: string; badgeKey?: 'findings' 
 
 const sections: NavSection[] = [
   {
-    label: '主流程',
+    label: '主导航',
     items: [
-      { to: 'dashboard', icon: 'overview', label: '价值总览' },
-      { to: 'campaigns', icon: 'campaign', label: '运行中心' },
-      { to: 'findings', icon: 'bug', label: '问题清单', badgeKey: 'findings' },
-      { to: 'evidence', icon: 'shield', label: '证据中心' },
-      { to: 'release', icon: 'release', label: '发布门禁' },
-    ],
-  },
-  {
-    label: '项目接入',
-    items: [
-      { to: 'materials', icon: 'materials', label: '企业资料' },
-      { to: 'settings', icon: 'settings', label: '系统与环境' },
-    ],
-  },
-  {
-    label: '高级视图',
-    items: [
-      { to: 'coverage', icon: 'matrix', label: '覆盖矩阵' },
-      { to: 'jobs', icon: 'workflow', label: '后台任务' },
+      { to: 'dashboard', icon: 'overview', label: '总览' },
+      { to: 'findings', icon: 'bug', label: '问题', badgeKey: 'findings' },
+      { to: 'integration', icon: 'materials', label: '接入' },
     ],
   },
 ];

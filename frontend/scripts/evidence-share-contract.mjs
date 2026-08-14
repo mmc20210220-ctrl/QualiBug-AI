@@ -16,12 +16,13 @@ const handler = read('../ai_test_asset_center/private_pilot_finding_collaboratio
 const packageJson = read('package.json');
 const ciGate = read('scripts/ci-gate.mjs');
 
-assert(api.includes("fetch('/api/v1/findings/evidence-shares'"), 'authenticated share creation endpoint is missing');
-assert(api.includes("fetch('/api/v1/findings/evidence-shares/revoke'"), 'share revoke endpoint is missing');
+assert(api.includes("fetchWithAuth('/api/v1/findings/evidence-shares'"), 'authenticated share creation endpoint is missing');
+assert(api.includes("fetchWithAuth('/api/v1/findings/evidence-shares/revoke'"), 'share revoke endpoint is missing');
 assert(api.includes("fetch('/api/public/v1/evidence-share/resolve'"), 'public share resolution endpoint is missing');
 assert(api.includes("credentials: 'omit'"), 'public share resolution must not send the user session');
-assert(api.includes("credentials: 'include'"), 'share creation/revocation must use the authenticated session');
-assert(api.includes("cache: 'no-store'"), 'share APIs must be non-cacheable');
+const sessionLayer = read('src/api/session.ts');
+assert(sessionLayer.includes("credentials: 'include'"), 'share creation/revocation must use the authenticated session via the shared transport');
+assert(sessionLayer.includes("cache: init?.cache || 'no-store'"), 'share APIs must be non-cacheable via the shared transport');
 
 assert(drawer.includes('<EvidenceDistributionTools finding={finding} project={project} />'), 'evidence drawer must expose sharing only through the secondary tools surface');
 assert(drawer.indexOf('<FindingDecisionSnapshot finding={finding} compact />') < drawer.indexOf('<EvidenceDistributionTools finding={finding} project={project} />'), 'sharing must not precede the finding decision context');

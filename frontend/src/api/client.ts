@@ -29,6 +29,7 @@ export {
   authStorageEvent,
   clearDevToken,
   currentToken,
+  fetchWithAuth,
   getProjects,
   getSession,
   hasUsableAuth,

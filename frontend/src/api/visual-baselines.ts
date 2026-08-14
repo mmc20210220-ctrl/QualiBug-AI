@@ -1,4 +1,4 @@
-import { currentToken } from './client';
+import { fetchWithAuth } from './client';
 import { asNum, asRecord, asString } from '../lib/value-guards';
 
 export const VISUAL_BASELINES_CHANGED_EVENT = 'qualibug-visual-baselines-change';
@@ -111,14 +111,11 @@ async function visualBaselineRequest(
   init?: RequestInit,
   query = '',
 ): Promise<VisualBaselineEnvelope> {
-  const token = currentToken();
-  if (!token) throw new Error('未登录或会话已失效，请重新登录。');
   const headers = new Headers(init?.headers);
-  headers.set('Authorization', `Bearer ${token}`);
   if (init?.body) headers.set('Content-Type', 'application/json');
-  const response = await fetch(
+  const response = await fetchWithAuth(
     `/api/v1/projects/${encodeURIComponent(project)}/visual-baselines${query}`,
-    { ...init, headers, credentials: 'include' },
+    { ...init, headers },
   );
   const raw = await response.text();
   let payload: VisualBaselineEnvelope = {};

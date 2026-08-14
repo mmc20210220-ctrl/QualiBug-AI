@@ -1,4 +1,4 @@
-import { currentToken, type V12ScanResult } from './client';
+import { fetchWithAuth, type V12ScanResult } from './client';
 import { listUploadScenarios } from './ui-upload-scenarios';
 
 type JsonRecord = Record<string, unknown>;
@@ -158,10 +158,6 @@ export async function runV12ScanFromRunCenter(
     : fixtureIds.length || scenarioIds.length
       ? 'approved_sandbox_write'
       : options.execution_mode;
-  const headers = new Headers({ 'Content-Type': 'application/json' });
-  const token = currentToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-
   const startedAt = Date.now();
   emitRunLifecycle({
     phase: 'submitted',
@@ -171,10 +167,9 @@ export async function runV12ScanFromRunCenter(
   });
 
   try {
-    const response = await fetch('/api/v1/scan', {
+    const response = await fetchWithAuth('/api/v1/scan', {
       method: 'POST',
-      headers,
-      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         project_id: project,
         api_doc: options.api_doc || undefined,

@@ -1,3 +1,4 @@
+import { fetchWithAuth } from './client';
 import { asRecord, asString, asStrictNumber } from '../lib/value-guards';
 
 export type LiveScanOwner = {
@@ -77,11 +78,9 @@ export async function getLiveScanStatus(projectId: string): Promise<LiveScanStat
     };
   }
 
-  const response = await fetch('/api/v1/continuous/status', {
+  const response = await fetchWithAuth('/api/v1/continuous/status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    cache: 'no-store',
     body: JSON.stringify({ project_id: project }),
   });
   if (!response.ok) {

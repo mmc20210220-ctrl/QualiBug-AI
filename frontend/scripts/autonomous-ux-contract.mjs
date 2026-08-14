@@ -217,7 +217,7 @@ requireAll(serviceComposition, [
 ], 'private pilot composition');
 
 requireAll(knowledgeApi, [
-  "fetch('/api/knowledge/ingest'",
+  "fetchWithAuth('/api/knowledge/ingest'",
   'filename: file.name',
   'defer_auto_scan: options.deferAutoScan',
   'finalize_batch: options.finalizeBatch',
@@ -271,8 +271,7 @@ requireAll(advancedToolsSection, [
 ], 'advanced tools and governance section');
 
 requireAll(sidebar, [
-  "label: '主流程'",
-  "label: '高级视图'",
+  "label: '主导航'",
   '少配置 · 自动理解 · 真实验证',
 ], 'sidebar');
 

@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { deriveFindingVerification } from '../../lib/finding-verification';
+import { buildProjectPath } from '../../lib/project-navigation';
 import { FindingDecisionSnapshot } from './FindingDecisionSnapshot';
 import { FindingVerificationPanel } from './FindingVerificationPanel';
 import { FindingVerificationStatus } from './FindingVerificationStatus';
@@ -7,6 +9,7 @@ import type { Finding } from '../../types';
 
 interface FindingCardProps {
   finding: Finding;
+  project: string;
   expanded: boolean;
   onToggle: () => void;
   onViewEvidence: () => void;
@@ -45,6 +48,7 @@ function findingSummary(finding: Finding): string {
 
 export function FindingCard({
   finding,
+  project,
   expanded,
   onToggle,
   onViewEvidence,
@@ -54,6 +58,7 @@ export function FindingCard({
 }: FindingCardProps) {
   const quality = finding.evidence_quality;
   const [copyStatus, setCopyStatus] = useState('');
+  const detailHref = buildProjectPath(`/findings/${encodeURIComponent(finding.id)}`, project);
 
   const copySummary = async () => {
     try {
@@ -79,6 +84,7 @@ export function FindingCard({
           <FindingVerificationStatus finding={finding} compact />
         </div>
         <div className="finding-card-actions" onClick={(event) => event.stopPropagation()}>
+          <Link className="btn btn-secondary btn-sm" to={detailHref}>查看详情</Link>
           <button className="btn btn-secondary btn-sm" onClick={onViewEvidence}>查看证据</button>
           <button className="btn btn-secondary btn-sm" onClick={() => void copySummary()}>复制问题摘要</button>
           <button className="btn btn-secondary btn-sm" onClick={onToggle}>{expanded ? '收起' : '展开详情'}</button>
@@ -122,14 +128,14 @@ export function FindingCard({
             <article className="customer-secondary-card">
               <span className="customer-value-kicker">问题摘要</span>
               <h3>只复制可复现、可验收的信息</h3>
-              <p>摘要只包含 Finding 事实、证据、复现步骤和修复后验证义务，不混入企业内部研发流程。</p>
+              <p>摘要只包含问题事实、证据、复现步骤和修复后验证义务，不混入企业内部研发流程。</p>
               <button type="button" className="btn btn-secondary settings-btn-mini" onClick={() => void copySummary()}>复制问题与验证摘要</button>
             </article>
 
             <article className="customer-secondary-card">
               <span className="customer-value-kicker">产品责任边界</span>
               <h3>只判断验证结果，不管理修复过程</h3>
-              <p>QualiBug 不记录企业内部负责人、修复版本、研发进度或工单流转。客户修复后，QualiBug 只重新执行真实验证并更新 Finding 与发布判断。</p>
+              <p>QualiBug 不记录企业内部负责人、修复版本、研发进度或工单流转。客户修复后，QualiBug 只重新执行真实验证并更新问题与发布判断。</p>
             </article>
           </section>
 

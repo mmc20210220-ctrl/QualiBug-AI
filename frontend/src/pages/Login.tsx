@@ -2,13 +2,13 @@ import {
   type ChangeEventHandler,
   type FocusEventHandler,
   type FormEvent,
-  type MouseEvent,
   type ReactNode,
   useMemo,
   useState,
 } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { isAuthenticated, loginDetailed, register, resetPassword, type RegisterResult } from '../api/client';
+import { loginDetailed, register, resetPassword, type RegisterResult } from '../api/client';
+import { useAuth } from '../components/useAuth';
 import { BrandLogo } from '../components/BrandLogo';
 import { LoginStageCanvas } from '../components/LoginStageCanvas';
 import { PasswordField } from '../components/auth/PasswordField';
@@ -196,6 +196,7 @@ export function Login() {
   usePageTitle('登录');
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const { status, refresh } = useAuth();
   const [mode, setMode] = useState<AuthMode>(initialMode(params.get('mode')));
   const [username, setUsername] = useState(params.get('username') || params.get('project') || '');
   const [password, setPassword] = useState('');
@@ -205,16 +206,20 @@ export function Login() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [pointer, setPointer] = useState({ x: 0.28, y: 0.48 });
   const [fieldFocused, setFieldFocused] = useState(false);
   const nextPath = useMemo(() => cleanNextPath(params.get('next')), [params]);
 
-  if (isAuthenticated()) return <Navigate to={nextPath || '/settings'} replace />;
+  // 已登录（Cookie 会话已校验通过）：进入默认总览，或恢复 next 目标。
+  // 校验中 / 未登录 / 后端不可用都先渲染登录表单（Spec §57：表单第一帧可见），
+  // 避免向已登录用户长期停留表单的同时，也不让会话校验阻塞首帧。
+  if (status === 'authenticated') return <Navigate to={nextPath || '/dashboard'} replace />;
 
   const finishLogin = async (user: string, secret: string): Promise<void> => {
     const result = await loginDetailed(user, secret);
-    if (!result?.token) throw new Error('登录失败，请确认账号凭证或联系系统管理员。');
-    const fallback = `/settings?project=${encodeURIComponent(result.tenantId || user)}`;
+    if (!result?.ok) throw new Error('登录失败，请确认账号凭证或联系系统管理员。');
+    // 确保 AuthProvider 已把状态同步为 authenticated，避免 RequireAuth 误判回退到登录页。
+    await refresh();
+    const fallback = `/dashboard?project=${encodeURIComponent(result.tenantId || user)}`;
     navigate(nextPath || fallback, { replace: true });
   };
 
@@ -311,15 +316,6 @@ export function Login() {
     setFieldFocused(false);
   };
 
-  const onStagePointerMove = (event: MouseEvent<HTMLElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    setPointer({
-      x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
-    });
-  };
-
   const onFieldFocus = () => setFieldFocused(true);
   const onFieldBlur = () => setFieldFocused(false);
   const errorId = error ? 'auth-form-error' : undefined;
@@ -345,13 +341,8 @@ export function Login() {
   return (
     <main
       className={`login-page${fieldFocused ? ' is-focused' : ''}${submitting ? ' is-submitting' : ''}${mode !== 'login' ? ' is-register' : ''}`}
-      onMouseMove={onStagePointerMove}
-      style={{
-        '--login-pointer-x': pointer.x.toFixed(3),
-        '--login-pointer-y': pointer.y.toFixed(3),
-      } as React.CSSProperties}
     >
-      <LoginStageCanvas pointerX={pointer.x} pointerY={pointer.y} focusBoost={fieldFocused || submitting} />
+      <LoginStageCanvas pointerX={0.28} pointerY={0.48} focusBoost={fieldFocused || submitting} />
       <div className="login-aurora" aria-hidden="true" />
       <div className="login-stage-glow" aria-hidden="true" />
       <div
@@ -373,12 +364,7 @@ export function Login() {
           <ServiceHealthBadge />
         </div>
 
-        <div
-          className="login-stage-inner"
-          style={{
-            transform: `translate3d(${(pointer.x - 0.5) * -7}px, ${(pointer.y - 0.5) * -5}px, 0)`,
-          }}
-        >
+        <div className="login-stage-inner">
           <span className="login-stage-kicker">EVIDENCE-DRIVEN QUALITY</span>
           <h1 className="login-stage-title">
             <span className="login-title-line">上线前，先看清</span>

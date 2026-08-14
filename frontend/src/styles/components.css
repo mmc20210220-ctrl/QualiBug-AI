@@ -168,6 +168,24 @@
   opacity: .5;
 }
 
+/* 认证门禁：会话校验中 / 后端不可用（error ≠ 未登录） */
+.auth-gate {
+  min-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--muted);
+}
+.auth-gate h1 { color: var(--ink); margin: 0; }
+.auth-gate p { margin: 0; max-width: 420px; }
+.auth-gate .spinner { margin-bottom: 4px; }
+.auth-gate-error { color: var(--ink); }
+.auth-gate-error p { color: var(--danger, #c0392b); }
+
 /* 响应式 */
 @media (max-width: 640px) {
   .btn { padding: 8px 14px; font-size: 12.5px; }

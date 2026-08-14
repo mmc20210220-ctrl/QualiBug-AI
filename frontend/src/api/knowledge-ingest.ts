@@ -1,4 +1,4 @@
-import { currentToken } from './client';
+import { fetchWithAuth } from './client';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const SUPPORTED_EXTENSIONS = new Set([
@@ -60,14 +60,10 @@ async function ingestKnowledgeFile(
   if (file.size <= 0) throw new Error(`文件为空：${file.name}`);
   if (file.size > MAX_FILE_BYTES) throw new Error(`单个文件不能超过 10 MB：${file.name}`);
 
-  const token = currentToken();
-  const headers = new Headers({ 'Content-Type': 'application/json' });
-  if (token) headers.set('Authorization', `Bearer ${token}`);
   const content = toBase64(await file.arrayBuffer());
-  const response = await fetch('/api/knowledge/ingest', {
+  const response = await fetchWithAuth('/api/knowledge/ingest', {
     method: 'POST',
-    headers,
-    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       project_id: projectId,
       filename: file.name,

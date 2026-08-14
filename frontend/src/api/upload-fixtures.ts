@@ -1,4 +1,4 @@
-import { currentToken } from './client';
+import { fetchWithAuth } from './client';
 
 export type UploadFixtureRecord = {
   fixture_id: string;
@@ -42,11 +42,10 @@ type RegistryResult = {
   message?: string;
 };
 
-function headers(extra?: HeadersInit): Headers {
-  const output = new Headers(extra);
-  const token = currentToken();
-  if (token) output.set('Authorization', `Bearer ${token}`);
-  return output;
+function endpoint(projectId: string, upload = false): string {
+  const project = projectId.trim();
+  if (!project) throw new Error('请先选择客户项目。');
+  return `/api/v1/projects/${encodeURIComponent(project)}/ui-upload-fixtures${upload ? '/upload' : ''}`;
 }
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -73,21 +72,12 @@ async function responseJson<T>(response: Response): Promise<T> {
   return payload as unknown as T;
 }
 
-function endpoint(projectId: string, upload = false): string {
-  const project = projectId.trim();
-  if (!project) throw new Error('请先选择客户项目。');
-  return `/api/v1/projects/${encodeURIComponent(project)}/ui-upload-fixtures${upload ? '/upload' : ''}`;
-}
-
 export async function listUploadFixtures(
   projectId: string,
   includeRevoked = false,
 ): Promise<UploadFixtureList> {
   const query = includeRevoked ? '?include_revoked=true' : '';
-  const response = await fetch(`${endpoint(projectId)}${query}`, {
-    headers: headers(),
-    credentials: 'include',
-  });
+  const response = await fetchWithAuth(`${endpoint(projectId)}${query}`);
   const payload = await responseJson<UploadFixtureList>(response);
   return {
     ...payload,
@@ -104,14 +94,13 @@ export async function uploadFixtureFile(
   if (file.size > 10 * 1024 * 1024) {
     throw new Error('浏览器直接上传上限为 10MiB；更大文件请先放入项目输入目录后登记。');
   }
-  const response = await fetch(endpoint(projectId, true), {
+  const response = await fetchWithAuth(endpoint(projectId, true), {
     method: 'POST',
-    headers: headers({
+    headers: {
       'Content-Type': file.type || 'application/octet-stream',
       'X-QualiBug-Filename': encodeURIComponent(file.name),
       'X-QualiBug-Fixture-Name': encodeURIComponent(fixtureName.trim() || file.name),
-    }),
-    credentials: 'include',
+    },
     body: file,
   });
   return responseJson<RegistryResult>(response);
@@ -123,10 +112,9 @@ async function mutateFixture(
   fixtureId: string,
   reason = '',
 ): Promise<RegistryResult> {
-  const response = await fetch(endpoint(projectId), {
+  const response = await fetchWithAuth(endpoint(projectId), {
     method: 'POST',
-    headers: headers({ 'Content-Type': 'application/json' }),
-    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       action,
       fixture_id: fixtureId,

@@ -1,3 +1,4 @@
+import { fetchWithAuth } from './client';
 import { asRecord, asString } from '../lib/value-guards';
 
 export type FindingHandlingStatus =
@@ -88,11 +89,9 @@ export async function updateFindingCollaboration(
   if (!project) throw new Error('缺少项目 ID，无法保存协作记录。');
   if (!findingId) throw new Error('当前问题未绑定持久化 ID，无法安全保存协作记录。');
 
-  const response = await fetch('/api/v1/findings/collaboration', {
+  const response = await fetchWithAuth('/api/v1/findings/collaboration', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    cache: 'no-store',
     body: JSON.stringify({
       project_id: project,
       finding_persistence_id: findingId,

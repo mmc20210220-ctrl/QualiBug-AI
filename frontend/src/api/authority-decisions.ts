@@ -1,4 +1,4 @@
-import { currentToken } from './client';
+import { fetchWithAuth } from './client';
 import { asArray, asRecord, asString } from '../lib/value-guards';
 
 export const AUTHORITY_DECISIONS_CHANGED_EVENT = 'qualibug-authority-decisions-change';
@@ -119,14 +119,11 @@ async function authorityDecisionRequest(
   project: string,
   init?: RequestInit,
 ): Promise<AuthorityDecisionEnvelope> {
-  const token = currentToken();
-  if (!token) throw new Error('未登录或会话已失效，请重新登录。');
   const headers = new Headers(init?.headers);
-  headers.set('Authorization', `Bearer ${token}`);
   if (init?.body) headers.set('Content-Type', 'application/json');
-  const response = await fetch(
+  const response = await fetchWithAuth(
     `/api/v1/projects/${encodeURIComponent(project)}/authority-decisions`,
-    { ...init, headers, credentials: 'include' },
+    { ...init, headers },
   );
   const raw = await response.text();
   let payload: AuthorityDecisionEnvelope = {};

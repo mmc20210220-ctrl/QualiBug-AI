@@ -1,3 +1,4 @@
+import { fetchWithAuth } from './client';
 import { asRecord, asString, asStrictNumber } from '../lib/value-guards';
 
 export type EvidenceShareMetadata = {
@@ -61,11 +62,9 @@ export async function createEvidenceShare(
   findingPersistenceId: string,
   ttlSeconds = 24 * 60 * 60,
 ): Promise<CreatedEvidenceShare> {
-  const response = await fetch('/api/v1/findings/evidence-shares', {
+  const response = await fetchWithAuth('/api/v1/findings/evidence-shares', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    cache: 'no-store',
     body: JSON.stringify({
       project_id: projectId.trim(),
       finding_persistence_id: findingPersistenceId.trim(),
@@ -97,11 +96,7 @@ export async function listEvidenceShares(
     project: projectId.trim(),
     finding_persistence_id: findingPersistenceId.trim(),
   });
-  const response = await fetch(`/api/v1/findings/evidence-shares?${query.toString()}`, {
-    method: 'GET',
-    credentials: 'include',
-    cache: 'no-store',
-  });
+  const response = await fetchWithAuth(`/api/v1/findings/evidence-shares?${query.toString()}`);
   const payload = await jsonPayload(response);
   if (!response.ok || payload.ok !== true) throw apiError(response, payload, '分享记录读取失败');
   const rows = Array.isArray(payload.items) ? payload.items : [];
@@ -119,11 +114,9 @@ export async function listEvidenceShares(
 }
 
 export async function revokeEvidenceShare(projectId: string, shareId: string): Promise<void> {
-  const response = await fetch('/api/v1/findings/evidence-shares/revoke', {
+  const response = await fetchWithAuth('/api/v1/findings/evidence-shares/revoke', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    cache: 'no-store',
     body: JSON.stringify({ project_id: projectId.trim(), share_id: shareId.trim() }),
   });
   const payload = await jsonPayload(response);

@@ -20,7 +20,7 @@ function moduleName(finding: Finding): string {
 }
 
 export function Findings() {
-  usePageTitle('问题清单');
+  usePageTitle('问题');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const requestedFindingId = params.get('finding')?.trim() || '';
@@ -55,33 +55,23 @@ export function Findings() {
   const failedRegression = verificationRows.filter(({ verification }) => verification.state === 'still_failing');
   const inconclusiveRegression = verificationRows.filter(({ verification }) => verification.state === 'inconclusive');
 
-  const moduleStats = new Map<string, number>();
-  for (const finding of confirmed) {
-    const mod = moduleName(finding);
-    moduleStats.set(mod, (moduleStats.get(mod) || 0) + 1);
-  }
-
+  // 客户问题分类：只基于后端真实派生状态，不制造分类丰富度。
+  // 阻断=P0；待修复=重新验证仍失败；待回归=等待修复后重新验证；已修复=修复验证通过。
   const filterOptions = [
     { label: `全部 (${confirmed.length})`, value: 'all' },
-    { label: `P0 (${bySeverity.P0})`, value: 'P0' },
-    { label: `P1 (${bySeverity.P1})`, value: 'P1' },
-    { label: `P2 (${bySeverity.P2})`, value: 'P2' },
-    { label: `等待验证 (${pendingRegression.length})`, value: 'verify:pending' },
-    { label: `仍失败 (${failedRegression.length})`, value: 'verify:still_failing' },
-    { label: `无法确认 (${inconclusiveRegression.length})`, value: 'verify:inconclusive' },
-    { label: `验证通过 (${passedRegression.length})`, value: 'verify:verified_fixed' },
-    ...Array.from(moduleStats.entries()).slice(0, 4).map(([mod, count]) => ({ label: `${mod} (${count})`, value: `mod:${mod}` })),
+    { label: `阻断 (${bySeverity.P0})`, value: 'P0' },
+    { label: `待修复 (${failedRegression.length})`, value: 'verify:still_failing' },
+    { label: `待回归 (${pendingRegression.length})`, value: 'verify:pending' },
+    { label: `已修复 (${passedRegression.length})`, value: 'verify:verified_fixed' },
   ];
 
   const display = [...confirmed]
     .sort((left, right) => deriveFindingVerification(right).priority - deriveFindingVerification(left).priority)
     .filter((finding) => {
-      if (filter === 'P0' || filter === 'P1' || filter === 'P2') {
-        if (finding.severity !== filter) return false;
+      if (filter === 'P0') {
+        if (finding.severity !== 'P0') return false;
       } else if (filter.startsWith('verify:')) {
         if (deriveFindingVerification(finding).state !== filter.slice('verify:'.length)) return false;
-      } else if (filter.startsWith('mod:')) {
-        if (moduleName(finding) !== filter.slice(4)) return false;
       }
       if (searchQuery.trim()) {
         const query = searchQuery.trim().toLowerCase();
@@ -252,6 +242,7 @@ export function Findings() {
         <FindingCard
           key={finding.id}
           finding={finding}
+          project={project}
           expanded={expandedId === finding.id}
           onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
           onViewEvidence={() => setDrawerFinding(finding)}

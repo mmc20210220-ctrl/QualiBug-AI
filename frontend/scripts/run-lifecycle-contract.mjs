@@ -15,7 +15,7 @@ const ciGate = read('scripts/ci-gate.mjs');
 for (const phase of ["phase: 'submitted'", "phase: 'completed'", "phase: 'failed'"]) {
   assert(runCenter.includes(phase), `scan lifecycle event missing: ${phase}`);
 }
-assert(runCenter.includes("fetch('/api/v1/scan'"), 'run lifecycle must wrap the real scan request');
+assert(runCenter.includes("fetchWithAuth('/api/v1/scan'"), 'run lifecycle must wrap the real scan request');
 assert(runCenter.includes('evidenceCount: evidenceCountOf(record)'), 'completed lifecycle must report real evidence count');
 assert(runCenter.includes('campaignStatus: textOf(campaign.campaign_status)'), 'completed lifecycle must report campaign status');
 assert(runCenter.includes('testDataStatus: textOf(testDataPlan.status)'), 'completed lifecycle must report test data status');

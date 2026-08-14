@@ -1,4 +1,4 @@
-import { currentToken, getSession } from './client';
+import { fetchWithAuth, getSession } from './client';
 import { asArray, asRecord, asStrictNumber, asString } from '../lib/value-guards';
 
 type JsonRecord = Record<string, unknown>;
@@ -120,14 +120,7 @@ async function acceptanceRequest(path: string, init?: RequestInit): Promise<Json
   if (!session) throw new Error('未登录或会话已失效，请重新登录。');
   const headers = new Headers(init?.headers);
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  const token = currentToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(path, {
-    ...init,
-    headers,
-    credentials: 'include',
-    cache: 'no-store',
-  });
+  const response = await fetchWithAuth(path, { ...init, headers });
   const raw = await response.text();
   let payload: JsonRecord = {};
   if (raw.trim()) {

@@ -177,15 +177,16 @@ assert(journey.includes("path: '/campaigns', action: '检查并运行'"), 'first
 assert(journey.includes("title: '查看结果与发布建议'"), 'first-run journey must be result-first after scanning');
 assert(journey.includes("path: '/dashboard', action: '查看价值总览'"), 'first-run result step must lead to dashboard instead of assuming findings exist');
 
-const mainNavStart = sidebar.indexOf("label: '主流程'");
-const projectNavStart = sidebar.indexOf("label: '项目接入'");
-const advancedNavStart = sidebar.indexOf("label: '高级视图'");
-assert(mainNavStart >= 0 && projectNavStart > mainNavStart && advancedNavStart > projectNavStart, 'sidebar navigation sections must keep a stable main/setup/advanced hierarchy');
-const mainNavBlock = sidebar.slice(mainNavStart, projectNavStart);
-const advancedNavBlock = sidebar.slice(advancedNavStart, sidebar.indexOf('];', advancedNavStart));
-assert(mainNavBlock.includes("to: 'release'"), 'release gate must remain a customer main-flow destination');
-assert(!advancedNavBlock.includes("to: 'release'"), 'release gate must not regress back into advanced views');
-assert(advancedNavBlock.includes("to: 'coverage'") && advancedNavBlock.includes("to: 'jobs'"), 'coverage and background jobs belong in advanced views');
+const mainNavStart = sidebar.indexOf("label: '主导航'");
+assert(mainNavStart >= 0, 'sidebar navigation must converge to a single customer navigation section');
+const mainNavBlock = sidebar.slice(mainNavStart, sidebar.indexOf('];', mainNavStart));
+for (const item of ["to: 'dashboard'", "to: 'findings'", "to: 'integration'"]) {
+  assert(mainNavBlock.includes(item), `sidebar must keep the converged customer destination: ${item}`);
+}
+// 技术/内部页面退出客户一级导航（保留 URL 直访），不得再占用侧边栏。
+for (const internal of ["to: 'release'", "to: 'coverage'", "to: 'jobs'", "to: 'campaigns'", "to: 'evidence'", "to: 'materials'", "to: 'settings'"]) {
+  assert(!mainNavBlock.includes(internal), `internal destination must exit customer navigation: ${internal}`);
+}
 assert(sidebar.includes("import { useLiveStatus, useProjectSummary } from '../api/data';"), 'sidebar status must consume real scan materialization state');
 assert(sidebar.includes('const { scanActive, hasMaterializedMetrics } = useLiveStatus(project, 15_000);'), 'sidebar must distinguish an active or completed scan from a never-run project');
 assert(sidebar.includes("? '检测进行中'"), 'sidebar must expose an active scan before defect summary states');

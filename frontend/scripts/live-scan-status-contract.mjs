@@ -19,10 +19,11 @@ const routing = read('../ai_test_asset_center/private_pilot_http_routing.py');
 const packageJson = read('package.json');
 const ciGate = read('scripts/ci-gate.mjs');
 
-assert(api.includes("fetch('/api/v1/continuous/status'"), 'live scan status must reuse the existing server status endpoint');
+assert(api.includes("fetchWithAuth('/api/v1/continuous/status'"), 'live scan status must reuse the existing server status endpoint');
 assert(api.includes("method: 'POST'"), 'live scan status endpoint must use its real POST contract');
-assert(api.includes("credentials: 'include'"), 'live scan status must use the HttpOnly-cookie session');
-assert(api.includes("cache: 'no-store'"), 'live scan status must never serve cached run state');
+const sessionLayer = read('src/api/session.ts');
+assert(sessionLayer.includes("credentials: 'include'"), 'live scan status must use the HttpOnly-cookie session via the shared transport');
+assert(sessionLayer.includes("cache: init?.cache || 'no-store'"), 'live scan status must never serve cached run state via the shared transport');
 assert(api.includes('active_scan_live'), 'live scan API must project the server-confirmed lease fact');
 assert(api.includes('active_scan_elapsed_seconds'), 'live scan API must expose server-side elapsed time');
 assert(api.includes('scan_stage_progress: parseStageProgress(payload.scan_stage_progress)'), 'live scan API must parse the server stage snapshot');
