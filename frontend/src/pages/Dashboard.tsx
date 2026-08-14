@@ -344,32 +344,6 @@ export function Dashboard() {
         evidenceTrust={evidenceTrust}
       />
 
-      <DiscoveryFunnelPanel funnel={record.discovery_funnel} report={record.discovery_funnel_report} />
-
-      <ChainPositioningPanel positioning={record.discovery_chain_positioning} />
-
-      <section className="customer-secondary-grid" aria-label="交付口径">
-        <article className="customer-secondary-card">
-          <span className="customer-value-kicker">交付口径</span>
-          <div className="customer-secondary-meta">
-            <span><em>本轮缺陷</em><b>{currentScanDefects} 条</b></span>
-            <span><em>缺陷货架</em><b>{familyShelfDefects} 条</b></span>
-            <span><em>确认回执</em><b>{campaignConfirmed}</b></span>
-          </div>
-          <div className="customer-secondary-meta">
-            {scopeFacts.map((fact) => (
-              <span key={fact.label} data-tone={fact.tone} title={fact.note}><em>{fact.label}</em><b>{fact.val} 条</b></span>
-            ))}
-          </div>
-          {(campaignCurrentRawFindings > 0 || currentScanFindings > currentScanDefects) && (
-            <div className="customer-secondary-meta">
-              <span><em>内部原始 finding（非客户交付）</em><b>{campaignCurrentRawFindings || Math.max(0, currentScanFindings - currentScanDefects)}</b></span>
-              <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮可交付 {currentScanDefects} → 当前正式范围 {familyShelfDefects}；原始 finding 仅供内部观测</b></span>
-            </div>
-          )}
-        </article>
-      </section>
-
       <DecisionCards cards={[
         { role: 'CTO / 技术VP', title: '发布决策', value: decision.label, detail: decision.advice },
         { role: '测试 / 质量负责人', title: '证据与验收', value: evidencePackCount > 0 ? `${evidencePackCount} 个证据包` : '待生成', detail: evidencePackCount > 0 ? '每个已确认问题都附原始请求、响应与复现路径，可直接用于修复后重新验证' : '形成已确认问题后，这里会出现可回放、可验收的证据包' },
@@ -421,7 +395,30 @@ export function Dashboard() {
       />
 
       <TechnicalDiagnostics>
+        <DiscoveryFunnelPanel funnel={record.discovery_funnel} report={record.discovery_funnel_report} />
+        <ChainPositioningPanel positioning={record.discovery_chain_positioning} />
         <MainChainContractPanel record={record} />
+        <section className="customer-secondary-grid" aria-label="交付口径">
+          <article className="customer-secondary-card">
+            <span className="customer-value-kicker">交付口径</span>
+            <div className="customer-secondary-meta">
+              <span><em>本轮缺陷</em><b>{currentScanDefects} 条</b></span>
+              <span><em>缺陷货架</em><b>{familyShelfDefects} 条</b></span>
+              <span><em>确认回执</em><b>{campaignConfirmed}</b></span>
+            </div>
+            <div className="customer-secondary-meta">
+              {scopeFacts.map((fact) => (
+                <span key={fact.label} data-tone={fact.tone} title={fact.note}><em>{fact.label}</em><b>{fact.val} 条</b></span>
+              ))}
+            </div>
+            {(campaignCurrentRawFindings > 0 || currentScanFindings > currentScanDefects) && (
+              <div className="customer-secondary-meta">
+                <span><em>内部原始 finding（非客户交付）</em><b>{campaignCurrentRawFindings || Math.max(0, currentScanFindings - currentScanDefects)}</b></span>
+                <span><em>口径说明</em><b>回执 {campaignConfirmed} → 本轮可交付 {currentScanDefects} → 当前正式范围 {familyShelfDefects}；原始 finding 仅供内部观测</b></span>
+              </div>
+            )}
+          </article>
+        </section>
         <section className="customer-secondary-grid">
           <article className="customer-secondary-card">
             <span className="customer-value-kicker">本轮检测说明</span>
