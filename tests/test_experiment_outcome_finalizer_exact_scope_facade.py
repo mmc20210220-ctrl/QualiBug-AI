@@ -71,10 +71,12 @@ def test_public_finalizer_file_contains_no_legacy_broadcast_loop() -> None:
 
 def test_legacy_implementation_is_moved_not_duplicated() -> None:
     facade = ROOT / "ai_test_asset_center/experiment_outcome_finalizer.py"
-    core = ROOT / "ai_test_asset_center/experiment_outcome_finalizer_core.py"
+    core = ROOT / "ai_test_asset_center/_experiment_outcome_finalizer_core_mechanics.py"
 
     assert facade.exists()
     assert core.exists()
+    # The durable implementation lives in the core mechanics module; the facade
+    # (and the intermediate core facade) must stay thinner than the real body.
     assert facade.stat().st_size < core.stat().st_size
     # The facade is a thin delegator: it re-exports the exact-scope mechanics
     # layer, which in turn holds the canonical core implementation.

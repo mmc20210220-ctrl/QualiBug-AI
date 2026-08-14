@@ -23,21 +23,27 @@ def test_evaluator_facades_preserve_public_and_private_import_surfaces() -> None
 def test_discovery_facades_preserve_existing_mechanics_surface() -> None:
     import ai_test_asset_center.blocker_attribution as blockers
     import ai_test_asset_center.cleanup_equivalence_core as cleanup
+    import ai_test_asset_center.experiment_cleanup as cleanup_support
     import ai_test_asset_center.experiment_outcome_finalizer_core as finalizer
     import ai_test_asset_center.experiment_protocols as protocols
+    import ai_test_asset_center.experiment_protocols_base as protocols_base
     import ai_test_asset_center.fact_first_loss_ledger as lineage
 
     assert callable(blockers.profile_reason_code)
     assert isinstance(blockers.REASON_CODE_REGISTRY, dict)
 
     assert callable(cleanup.evaluate_cleanup_equivalence)
-    assert callable(cleanup._canonical_json)
+    # _canonical_json moved to the shared cleanup support module during the
+    # cleanup-core/equivalence split; the helper surface is preserved there.
+    assert callable(cleanup_support._canonical_json)
 
     assert callable(finalizer.finalize_experiment_execution)
     assert callable(finalizer._classify_harness_failure)
 
     assert callable(protocols.compile_family_protocol)
-    assert callable(protocols._validation_protocol_material)
+    # _validation_protocol_material is a private helper that lives on the base
+    # protocol mechanics module (the facade re-exports only public names).
+    assert callable(protocols_base._validation_protocol_material)
 
     assert callable(lineage.build_fact_first_loss_ledger)
     assert callable(lineage.attach_fact_refs_to_planning_artifacts)
