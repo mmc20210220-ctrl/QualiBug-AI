@@ -11,7 +11,7 @@ from ai_test_asset_center.experiment_plan_step_executor_core import (
 )
 from ai_test_asset_center.experiment_runtime_support import _unauthorized_actor_role
 
-_SPEC = Path("platform_inputs/benchmark_mall/API_SPEC.md")
+_SPEC = Path("projects/benchmark_mall/input/API_SPEC.md")
 
 
 def _ops_by_key() -> dict[tuple[str, str], dict]:
