@@ -40,7 +40,7 @@ export function SettingsTopologySection({
             只提供系统名称、测试环境地址和可用凭据；模块、服务结构、登录接口和数据关系由后台自动识别。
           </p>
         </div>
-        {project && <button onClick={() => onOpenCreateConnector()} className="btn btn-primary settings-btn-compact">接入系统</button>}
+        {project && systemsCount > 0 && <button onClick={() => onOpenCreateConnector()} className="btn btn-primary settings-btn-compact">接入系统</button>}
       </div>
 
       <div className="settings-mini-stats">

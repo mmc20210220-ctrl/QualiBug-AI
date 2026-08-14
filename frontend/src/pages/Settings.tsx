@@ -15,7 +15,7 @@ import {
   DB_OPTIONS, getDbDefaultPort, getErrorMessage, buildTenantId,
   asRecord, asString, normalizeRoleAccounts,
   extractRoleAccounts, extractAuthType, extractLoginApi, extractBearerToken, extractApiKey,
-  extractDbConfig, hasConfiguredAuthMaterial, hasConfiguredDbMaterial, findMatchingServiceConfig,
+  extractDbConfig, findMatchingServiceConfig,
   type TenantCreateResponse, type SavedServiceConfig,
 } from '../lib/settings-utils';
 
@@ -387,46 +387,12 @@ export function Settings() {
     () => buildSettingsTopologyViewModel(connectors, expSys, hlId, credentialLabel),
     [connectors, expSys, hlId],
   );
-  const tS = topology.systemsCount;
-  const tM = topology.modulesCount;
-  const tV = topology.servicesCount;
   const llmL = useMemo(()=>{ const s=health&&typeof health==='object'?(health as Record<string,unknown>).llm_status:null; return String((s&&typeof s==='object'?(s as Record<string,unknown>).label||(s as Record<string,unknown>).status:'')||'未验证'); },[health]);
   const pv=useMemo(()=>String((health&&typeof health==='object'?(health as Record<string,unknown>).version:'')||'').trim()||'未知',[health]);
   const ss=!project?'未选择客户':scanActive?'扫描运行中':hasMaterializedMetrics?'运行中':'已选择客户 · 暂无数据';
   const as=!project?'未选择客户':hasMaterializedMetrics?'完整':'暂无记录';
   const statusToneClass = hasMaterializedMetrics||scanActive ? 'is-positive' : 'is-neutral';
   const workspaceLabel = workspaceOptions.find((item) => item.id === project)?.label || '未选择客户';
-  const enabledConnectors = topology.enabledConnectors;
-  const disabledConnectors = topology.disabledConnectors;
-  const readinessBackendVerified = Boolean(health);
-  const readinessAuthCount = serviceConfigs.filter((service) => hasConfiguredAuthMaterial(service)).length;
-  const readinessDbCount = serviceConfigs.filter((service) => hasConfiguredDbMaterial(service)).length;
-  const readinessChecks = [
-    {
-      label: '后端联通',
-      value: readinessBackendVerified ? '已验证' : '待验证',
-      note: readinessBackendVerified ? '当前页面已通过真实健康检查拿到后端状态。' : '尚未通过真实健康检查确认服务在线。',
-      tone: readinessBackendVerified ? 'success' : 'warning',
-    },
-    {
-      label: '接入服务',
-      value: enabledConnectors > 0 ? `${enabledConnectors} 个已启用` : '待配置',
-      note: enabledConnectors > 0 ? '已登记的服务可用于标准扫描和受控执行。' : '请先维护被测服务 URL 和模块信息。',
-      tone: enabledConnectors > 0 ? 'success' : 'warning',
-    },
-    {
-      label: '鉴权材料',
-      value: readinessAuthCount > 0 ? `${readinessAuthCount} 组可复用` : '待配置',
-      note: readinessAuthCount > 0 ? '已保存账号、Token 或 API Key，可直接复用执行。' : '未发现可复用鉴权信息，真实执行易被登录阻断。',
-      tone: readinessAuthCount > 0 ? 'success' : 'warning',
-    },
-    {
-      label: '数据库校验',
-      value: readinessDbCount > 0 ? `${readinessDbCount} 组已配置` : '可选',
-      note: readinessDbCount > 0 ? '可为证据链补充 DB 一致性验证。' : '未配置数据库时仅做接口或页面侧验证。',
-      tone: readinessDbCount > 0 ? 'success' : 'neutral',
-    },
-  ];
   const llmHealthy = llmStatus === 'ok' || llmL.includes('online') || llmL.includes('OK');
   const llmStateText = llmStatus==='verifying'
     ? '检测中...'
@@ -499,51 +465,10 @@ export function Settings() {
     <div>
       <div className="page-header">
         <div>
-          <span className="panel-kicker">治理配置</span>
-          <h1>设置</h1>
-          <p>围绕客户、系统接入、引擎连接与运行状态，统一管理当前项目的基础配置。</p>
-          <div className="page-summary-strip">
-            <span className="summary-pill strong">当前客户 {workspaceLabel}</span>
-            <span className="summary-pill">已接入服务 {enabledConnectors}</span>
-            <span className="summary-pill">停用服务 {disabledConnectors}</span>
-            <span className="summary-pill">智能引擎 {llmHealthy ? '已连接' : '待验证'}</span>
-          </div>
+          <span className="panel-kicker">项目接入</span>
+          <h1>系统与环境</h1>
+          <p>选择客户、接入被测系统，其余结构由后台自动理解。</p>
         </div>
-      </div>
-
-      <section className="settings-hero mb-4">
-        <div className="settings-hero-main">
-          <span className="settings-hero-kicker">当前概况</span>
-          <h2>{project ? `${workspaceLabel} · 配置治理台` : '等待选择客户'}</h2>
-          <p>
-            {project
-              ? `当前已纳管 ${tS} 个系统、${tM} 个模块和 ${tV} 个服务接入。这里的配置只承载真实项目数据，不混入演示信息。`
-              : '请选择客户后继续管理接入服务、引擎配置和系统运行状态。'}
-          </p>
-        </div>
-        <div className="settings-hero-stats">
-          {[
-            { label: '客户状态', value: project ? '已选择' : '待选择' },
-            { label: '服务接入', value: `${enabledConnectors}/${tV || 0}` },
-            { label: '智能引擎', value: llmHealthy ? '已连接' : '待验证' },
-            { label: '产品版本', value: pv },
-          ].map((item) => (
-            <div key={item.label} className="settings-hero-stat">
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <div className="customer-summary-grid mb-4">
-        {readinessChecks.map((item) => (
-          <article key={item.label} className={`customer-summary-card tone-${item.tone}`}>
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-            <small>{item.note}</small>
-          </article>
-        ))}
       </div>
 
       <div className="settings-layout">

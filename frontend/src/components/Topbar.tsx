@@ -14,7 +14,7 @@ const pageLabels: Record<string, string> = {
   '/materials': '企业资料',
   '/campaigns': '运行中心',
   '/release': '发布门禁',
-  '/settings': '项目设置',
+  '/settings': '系统与环境',
   '/products': '产品矩阵',
   '/coverage': '覆盖矩阵',
   '/test-tasks': '测试任务',
